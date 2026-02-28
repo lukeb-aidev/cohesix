@@ -128,6 +128,7 @@ const PCI_MSIX_CTL_OFFSET: usize = 0x02;
 const PCI_MSIX_CTL_ENABLE: u16 = 1 << 15;
 const FRAMEBUFFER_MAP_EXACT_ATTEMPT_CAP: usize = 2048;
 const XHCI_MMIO_MAP_EXACT_ATTEMPT_CAP: usize = 4096;
+const XHCI_MMIO_PRESEED_BYTES: usize = 0x10000;
 const EXACT_MAP_LOG_INITIAL_RETRIES: usize = 8;
 const EXACT_MAP_LOG_STRIDE: usize = 128;
 const FB_BYTES_PER_PIXEL: usize = mem::size_of::<u32>();
@@ -149,6 +150,13 @@ const MAX_FB_MAP_PAGES: usize = MAX_FB_BYTES / PAGE_SIZE;
 static VL805_RESET_NOTIFIED: AtomicBool = AtomicBool::new(false);
 static VL805_RESET_BYPASSED_LOGGED: AtomicBool = AtomicBool::new(false);
 static USB_DMA_RANGE_WARNED: AtomicBool = AtomicBool::new(false);
+static PINNED_XHCI_MMIO: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
+
+struct PinnedMmioWindow {
+    phys_start: usize,
+    length: usize,
+    virt_start: usize,
+}
 
 /// Optional DT/firmware framebuffer hint for Pi4 HDMI output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +231,7 @@ impl Pi4LocalSeat {
     /// Initialize the Pi4 local-seat backend.
     pub fn new(hal: &mut KernelHal<'_>, hints: Pi4LocalSeatHints) -> Result<Self, Pi4SeatError> {
         let mut display = HdmiTextSink::new(hal, hints.framebuffer_hint)?;
+        prime_pinned_xhci_window(hal, hints.xhci_mmio_hint);
 
         let mut display_line = heapless::String::<128>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -384,6 +393,122 @@ fn map_device_exact(
     }
 
     Err(error)
+}
+
+fn pinned_xhci_window_lookup(phys: usize, size: usize) -> Option<usize> {
+    if size == 0 {
+        return None;
+    }
+    let request_end = phys.checked_add(size)?;
+    let pinned = PINNED_XHCI_MMIO.lock();
+    let window = pinned.as_ref()?;
+    let window_end = window.phys_start.checked_add(window.length)?;
+    if phys < window.phys_start || request_end > window_end {
+        return None;
+    }
+    let offset = phys.checked_sub(window.phys_start)?;
+    window.virt_start.checked_add(offset)
+}
+
+fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usize>) {
+    if PINNED_XHCI_MMIO.lock().is_some() {
+        return;
+    }
+
+    let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
+    let mut candidate_count = 0usize;
+    let mut push_candidate = |mmio: usize| {
+        if mmio == 0 || candidate_count >= candidates.len() {
+            return;
+        }
+        if (mmio & PAGE_MASK) != 0 {
+            return;
+        }
+        if candidates[..candidate_count].contains(&mmio) {
+            return;
+        }
+        candidates[candidate_count] = mmio;
+        candidate_count = candidate_count.saturating_add(1);
+    };
+
+    if let Some(hint) = xhci_mmio_hint {
+        push_candidate(hint);
+    }
+    for fallback in RPI4_XHCI_MMIO_FALLBACKS {
+        push_candidate(fallback);
+    }
+
+    for &mmio in &candidates[..candidate_count] {
+        if pin_xhci_mmio_window(hal, mmio, XHCI_MMIO_PRESEED_BYTES).is_ok() {
+            let mut line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci mmio preseeded mmio=0x{mmio:016x} bytes=0x{bytes:05x}",
+                    bytes = XHCI_MMIO_PRESEED_BYTES
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return;
+        }
+    }
+}
+
+fn pin_xhci_mmio_window(
+    hal: &mut KernelHal<'_>,
+    phys_start: usize,
+    length: usize,
+) -> Result<(), Pi4SeatError> {
+    if length == 0 || (phys_start & PAGE_MASK) != 0 {
+        return Err(Pi4SeatError::XhciInit);
+    }
+    let page_count = div_ceil(length, PAGE_SIZE);
+    if page_count == 0 {
+        return Err(Pi4SeatError::XhciInit);
+    }
+
+    let mut prefix_frames = Vec::new();
+    let first = map_device_exact(
+        hal,
+        phys_start,
+        XHCI_MMIO_MAP_EXACT_ATTEMPT_CAP,
+        "xhci-preseed",
+        Pi4SeatError::XhciInit,
+        &mut prefix_frames,
+    )?;
+    let first_virt = first.ptr().as_ptr() as usize;
+
+    let mut frames = Vec::with_capacity(page_count);
+    frames.push(first);
+    for page in 1..page_count {
+        let paddr = phys_start
+            .checked_add(page.checked_mul(PAGE_SIZE).ok_or(Pi4SeatError::XhciInit)?)
+            .ok_or(Pi4SeatError::XhciInit)?;
+        let frame = hal.map_device(paddr).map_err(|_| Pi4SeatError::XhciInit)?;
+        let got = frame.ptr().as_ptr() as usize;
+        let expected = first_virt
+            .checked_add(page.checked_mul(PAGE_SIZE).ok_or(Pi4SeatError::XhciInit)?)
+            .ok_or(Pi4SeatError::XhciInit)?;
+        if got != expected || frame.paddr() != paddr {
+            return Err(Pi4SeatError::XhciInit);
+        }
+        frames.push(frame);
+    }
+
+    // Keep mapped xHCI MMIO frames alive for the lifetime of the root-task so
+    // runtime keyboard attach can reuse them even after device coverage
+    // metadata is unavailable.
+    for frame in frames {
+        core::mem::forget(frame);
+    }
+
+    let mut pinned = PINNED_XHCI_MMIO.lock();
+    *pinned = Some(PinnedMmioWindow {
+        phys_start,
+        length,
+        virt_start: first_virt,
+    });
+    Ok(())
 }
 
 impl Mailbox {
@@ -1289,7 +1414,9 @@ impl UsbKeyboard {
             if mmio == 0 || candidate_count >= candidates.len() {
                 return;
             }
-            if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none() {
+            if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none()
+                && pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_none()
+            {
                 let mut line = heapless::String::<192>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
@@ -2093,6 +2220,9 @@ impl SeatDma {
         }
         if size > XHCI_MMIO_MAX_BYTES {
             return None;
+        }
+        if let Some(mapped) = pinned_xhci_window_lookup(phys, size) {
+            return Some(mapped);
         }
         let request_end = phys.checked_add(size)?;
 
