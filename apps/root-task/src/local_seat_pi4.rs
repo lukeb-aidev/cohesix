@@ -201,6 +201,9 @@ impl Pi4SeatError {
 pub struct Pi4LocalSeat {
     display: HdmiTextSink,
     keyboard: Option<UsbKeyboard>,
+    keyboard_init_attempted: bool,
+    xhci_mmio_hint: Option<usize>,
+    hal_ptr: usize,
 }
 
 impl core::fmt::Debug for Pi4LocalSeat {
@@ -225,48 +228,14 @@ impl Pi4LocalSeat {
         boot_log::force_uart_line(display_line.as_str());
         display.write_line("[cohesix] local-seat HDMI online");
 
-        let mut keyboard = None;
-        let mut keyboard_error = None;
-        for attempt in 1..=KEYBOARD_ATTACH_ATTEMPTS {
-            match UsbKeyboard::new(hal, hints.xhci_mmio_hint) {
-                Ok(found) => {
-                    keyboard = Some(found);
-                    if attempt > 1 {
-                        let mut line = heapless::String::<160>::new();
-                        let _ = core::fmt::Write::write_fmt(
-                            &mut line,
-                            format_args!("[local-seat] pi4 keyboard attached on retry={attempt}"),
-                        );
-                        boot_log::force_uart_line(line.as_str());
-                    }
-                    break;
-                }
-                Err(err) => {
-                    keyboard_error = Some(err);
-                    if attempt < KEYBOARD_ATTACH_ATTEMPTS {
-                        for _ in 0..KEYBOARD_RETRY_SPINS {
-                            spin_loop();
-                        }
-                    }
-                }
-            }
-        }
-
-        if keyboard.is_some() {
-            display.write_line("[cohesix] local-seat USB keyboard online");
-        } else if let Some(err) = keyboard_error {
-            let mut line = heapless::String::<240>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] pi4 keyboard unavailable detail={} hint=\"UEFI vars: XhciPci=0 XhciReload=1 SystemTableMode=1\"",
-                    err.as_str()
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-            display.write_line("[cohesix] local-seat USB keyboard unavailable");
-        }
-        Ok(Self { display, keyboard })
+        boot_log::force_uart_line("[local-seat] pi4 keyboard init deferred to runtime");
+        Ok(Self {
+            display,
+            keyboard: None,
+            keyboard_init_attempted: false,
+            xhci_mmio_hint: hints.xhci_mmio_hint,
+            hal_ptr: hal as *mut _ as usize,
+        })
     }
 
     /// Mirror one rendered line to HDMI.
@@ -276,6 +245,58 @@ impl Pi4LocalSeat {
 
     /// Poll USB keyboard and write canonical bytes into `out`.
     pub fn poll_keyboard_bytes(&mut self, out: &mut [u8]) -> usize {
+        if self.keyboard.is_none() && !self.keyboard_init_attempted {
+            self.keyboard_init_attempted = true;
+            let mut keyboard_error = None;
+            if let Some(hal) = hal_from_ptr(self.hal_ptr) {
+                for attempt in 1..=KEYBOARD_ATTACH_ATTEMPTS {
+                    match UsbKeyboard::new(hal, self.xhci_mmio_hint) {
+                        Ok(found) => {
+                            self.keyboard = Some(found);
+                            if attempt > 1 {
+                                let mut line = heapless::String::<160>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] pi4 keyboard attached on retry={attempt}"
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                            }
+                            break;
+                        }
+                        Err(err) => {
+                            keyboard_error = Some(err);
+                            if attempt < KEYBOARD_ATTACH_ATTEMPTS {
+                                for _ in 0..KEYBOARD_RETRY_SPINS {
+                                    spin_loop();
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                keyboard_error = Some(Pi4SeatError::UsbKeyboardInit);
+            }
+
+            if self.keyboard.is_some() {
+                self.display
+                    .write_line("[cohesix] local-seat USB keyboard online");
+            } else if let Some(err) = keyboard_error {
+                let mut line = heapless::String::<240>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] pi4 keyboard unavailable detail={} hint=\"UEFI vars: XhciPci=0 XhciReload=1 SystemTableMode=1\"",
+                        err.as_str()
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                self.display
+                    .write_line("[cohesix] local-seat USB keyboard unavailable");
+            }
+        }
+
         match self.keyboard.as_mut() {
             Some(keyboard) => keyboard.poll_bytes(out),
             None => 0,
