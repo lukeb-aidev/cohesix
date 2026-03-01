@@ -151,6 +151,9 @@ const XHCI_FORCE_LOW_DMA_PROBE: bool = true;
 // VL805 on Pi4 expects xHCI DMA pointers in the PCIe outbound DMA window
 // address space, not raw CPU physical addresses.
 const XHCI_PCIE_DMA_BUS_ALIAS_ENABLED: bool = true;
+// Probe fallback for ambiguous Pi4/VL805 firmware mappings: try both PCIe bus
+// aliased DMA addresses and raw physical addresses before giving up.
+const XHCI_TRY_RAW_PHYS_DMA_FALLBACK: bool = true;
 const RPI4_PCIE_DMA_BUS_OFFSET: usize = 0x4_0000_0000;
 const XHCI_DMA_MAX_BYTES: usize = 8 * 1024 * 1024;
 // BCM2711 PCIe cannot DMA above the first 3 GiB (see upstream bcm2711.dtsi
@@ -603,7 +606,7 @@ fn probe_xhci_capability_window(
     hal: &mut KernelHal<'_>,
     mmio_base: usize,
 ) -> Result<XhciCapProbe, &'static str> {
-    let dma = SeatDma::new(hal, false);
+    let dma = SeatDma::new(hal, false, XHCI_PCIE_DMA_BUS_ALIAS_ENABLED);
     // SAFETY: Read-only capability probe over candidate xHCI MMIO.
     let init_mmio = unsafe { dma.map_mmio(mmio_base, XHCI_MMIO_INIT_BYTES) }.ok_or("map-init")?;
     // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
@@ -2069,11 +2072,26 @@ impl UsbKeyboard {
             boot_log::force_uart_line("[local-seat] xhci runtime candidate set empty");
         }
         if !XHCI_DMA_POLICY_LOGGED.swap(true, Ordering::AcqRel) {
-            boot_log::force_uart_line(if XHCI_FORCE_LOW_DMA_PROBE {
-                "[local-seat] xhci dma probe policy=low-only"
-            } else {
-                "[local-seat] xhci dma probe policy=low-then-high"
-            });
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci dma probe policy={} bus_addrs={}",
+                    if XHCI_FORCE_LOW_DMA_PROBE {
+                        "low-only"
+                    } else {
+                        "low-then-high"
+                    },
+                    if XHCI_PCIE_DMA_BUS_ALIAS_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
+                        "pcie-alias-then-phys"
+                    } else if XHCI_PCIE_DMA_BUS_ALIAS_ENABLED {
+                        "pcie-alias-only"
+                    } else {
+                        "phys-only"
+                    }
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
         }
 
         let mut saw_controller = false;
@@ -2154,63 +2172,87 @@ impl UsbKeyboard {
                 &[false, true]
             };
             for &prefer_high in dma_probe_order {
-                let mut probe_line = heapless::String::<176>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut probe_line,
-                    format_args!(
-                        "[local-seat] xhci probe begin mmio=0x{mmio:016x} dma={}",
-                        if prefer_high { "high" } else { "low" },
-                        mmio = effective_mmio
-                    ),
-                );
-                boot_log::force_uart_line(probe_line.as_str());
+                let dma_bus_modes: &[bool] =
+                    if XHCI_PCIE_DMA_BUS_ALIAS_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
+                        &[true, false]
+                    } else if XHCI_PCIE_DMA_BUS_ALIAS_ENABLED {
+                        &[true]
+                    } else {
+                        &[false]
+                    };
+                for &pcie_dma_bus_alias in dma_bus_modes {
+                    let mut probe_line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut probe_line,
+                        format_args!(
+                            "[local-seat] xhci probe begin mmio=0x{mmio:016x} dma={} bus={}",
+                            if prefer_high { "high" } else { "low" },
+                            if pcie_dma_bus_alias {
+                                "pcie-alias"
+                            } else {
+                                "phys"
+                            },
+                            mmio = effective_mmio
+                        ),
+                    );
+                    boot_log::force_uart_line(probe_line.as_str());
 
-                let dma = SeatDma::new(hal, prefer_high);
-                let ctrl = match XhciCtrl::new(effective_mmio, dma) {
-                    Ok(ctrl) => {
-                        saw_controller = true;
-                        Arc::new(ctrl)
-                    }
-                    Err(err) => {
-                        let mut line = heapless::String::<192>::new();
-                        let _ = core::fmt::Write::write_fmt(
-                            &mut line,
-                            format_args!(
-                                "[local-seat] xhci probe failed mmio=0x{mmio:016x} dma={} detail={err:?}",
-                                if prefer_high { "high" } else { "low" },
-                                mmio = effective_mmio
-                            ),
-                        );
-                        boot_log::force_uart_line(line.as_str());
-                        continue;
-                    }
-                };
+                    let dma = SeatDma::new(hal, prefer_high, pcie_dma_bus_alias);
+                    let ctrl = match XhciCtrl::new(effective_mmio, dma) {
+                        Ok(ctrl) => {
+                            saw_controller = true;
+                            Arc::new(ctrl)
+                        }
+                        Err(err) => {
+                            let mut line = heapless::String::<224>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci probe failed mmio=0x{mmio:016x} dma={} bus={} detail={err:?}",
+                                    if prefer_high { "high" } else { "low" },
+                                    if pcie_dma_bus_alias {
+                                        "pcie-alias"
+                                    } else {
+                                        "phys"
+                                    },
+                                    mmio = effective_mmio
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            continue;
+                        }
+                    };
 
-                let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
-                let mut connected_mask = 0u32;
-                let mut detect_passes_used = 1usize;
-                for pass in 0..XHCI_PORT_DETECT_PASSES {
-                    detect_passes_used = pass.saturating_add(1);
-                    connected_mask = 0;
-                    for port in 0..max_ports {
-                        if ctrl.port_connected(port as u8) {
-                            connected_mask |= 1u32 << port;
+                    let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
+                    let mut connected_mask = 0u32;
+                    let mut detect_passes_used = 1usize;
+                    for pass in 0..XHCI_PORT_DETECT_PASSES {
+                        detect_passes_used = pass.saturating_add(1);
+                        connected_mask = 0;
+                        for port in 0..max_ports {
+                            if ctrl.port_connected(port as u8) {
+                                connected_mask |= 1u32 << port;
+                            }
+                        }
+                        if connected_mask != 0 || pass + 1 >= XHCI_PORT_DETECT_PASSES {
+                            break;
+                        }
+                        for _ in 0..XHCI_PORT_DETECT_SETTLE_SPINS {
+                            spin_loop();
                         }
                     }
-                    if connected_mask != 0 || pass + 1 >= XHCI_PORT_DETECT_PASSES {
-                        break;
-                    }
-                    for _ in 0..XHCI_PORT_DETECT_SETTLE_SPINS {
-                        spin_loop();
-                    }
-                }
 
-                let mut line = heapless::String::<224>::new();
-                let _ = core::fmt::Write::write_fmt(
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci online mmio=0x{mmio:016x} dma={} ports={} ctx={} connected_mask=0x{mask:04x} detect_passes={}",
+                        "[local-seat] xhci online mmio=0x{mmio:016x} dma={} bus={} ports={} ctx={} connected_mask=0x{mask:04x} detect_passes={}",
                         if prefer_high { "high" } else { "low" },
+                        if pcie_dma_bus_alias {
+                            "pcie-alias"
+                        } else {
+                            "phys"
+                        },
                         max_ports,
                         ctrl.context_size_bytes(),
                         detect_passes_used,
@@ -2218,35 +2260,40 @@ impl UsbKeyboard {
                         mask = connected_mask,
                     ),
                 );
-                boot_log::force_uart_line(line.as_str());
+                    boot_log::force_uart_line(line.as_str());
 
-                for port in 0..max_ports {
-                    if (connected_mask & (1u32 << port)) == 0 {
-                        continue;
-                    }
+                    for port in 0..max_ports {
+                        if (connected_mask & (1u32 << port)) == 0 {
+                            continue;
+                        }
 
-                    let mut device = match UsbDevice::new(ctrl.clone(), port as u8) {
-                        Ok(device) => device,
-                        Err(err) => {
-                            let mut line = heapless::String::<192>::new();
-                            let _ = core::fmt::Write::write_fmt(
+                        let mut device = match UsbDevice::new(ctrl.clone(), port as u8) {
+                            Ok(device) => device,
+                            Err(err) => {
+                                let mut line = heapless::String::<192>::new();
+                                let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
-                                    "[local-seat] usb root-enum failed port={} stage=address dma={} detail={err:?}",
+                                    "[local-seat] usb root-enum failed port={} stage=address dma={} bus={} detail={err:?}",
                                     port + 1,
                                     if prefer_high { "high" } else { "low" },
+                                    if pcie_dma_bus_alias {
+                                        "pcie-alias"
+                                    } else {
+                                        "phys"
+                                    },
                                 ),
                             );
-                            boot_log::force_uart_line(line.as_str());
-                            if matches!(
-                                err,
-                                UsbError::EnableSlotTimeout
-                                    | UsbError::AddressDeviceTimeout
-                                    | UsbError::CmdFail(_)
-                            ) {
-                                if let UsbError::CmdFail(code) = err {
-                                    let mut cmd_line = heapless::String::<224>::new();
-                                    let _ = core::fmt::Write::write_fmt(
+                                boot_log::force_uart_line(line.as_str());
+                                if matches!(
+                                    err,
+                                    UsbError::EnableSlotTimeout
+                                        | UsbError::AddressDeviceTimeout
+                                        | UsbError::CmdFail(_)
+                                ) {
+                                    if let UsbError::CmdFail(code) = err {
+                                        let mut cmd_line = heapless::String::<224>::new();
+                                        let _ = core::fmt::Write::write_fmt(
                                         &mut cmd_line,
                                         format_args!(
                                             "[local-seat] usb cmd completion detail port={} code={} (0x{code:02x}) name={}",
@@ -2255,11 +2302,11 @@ impl UsbKeyboard {
                                             completion::name(code),
                                         ),
                                     );
-                                    boot_log::force_uart_line(cmd_line.as_str());
-                                }
-                                let diag = ctrl.command_diag_for_port(port as u8);
-                                let mut summary = heapless::String::<224>::new();
-                                let _ = core::fmt::Write::write_fmt(
+                                        boot_log::force_uart_line(cmd_line.as_str());
+                                    }
+                                    let diag = ctrl.command_diag_for_port(port as u8);
+                                    let mut summary = heapless::String::<224>::new();
+                                    let _ = core::fmt::Write::write_fmt(
                                     &mut summary,
                                     format_args!(
                                         "[local-seat] xhci timeout diag port={} usbcmd=0x{usbcmd:08x} usbsts=0x{usbsts:08x} portsc=0x{portsc:08x}",
@@ -2269,10 +2316,10 @@ impl UsbKeyboard {
                                         portsc = diag.portsc,
                                     ),
                                 );
-                                boot_log::force_uart_line(summary.as_str());
+                                    boot_log::force_uart_line(summary.as_str());
 
-                                let mut regs0 = heapless::String::<192>::new();
-                                let _ = core::fmt::Write::write_fmt(
+                                    let mut regs0 = heapless::String::<192>::new();
+                                    let _ = core::fmt::Write::write_fmt(
                                     &mut regs0,
                                     format_args!(
                                         "[local-seat] xhci timeout regs crcr=0x{crcr:016x} dcbaap=0x{dcbaap:016x} iman=0x{iman:08x}",
@@ -2281,10 +2328,10 @@ impl UsbKeyboard {
                                         iman = diag.iman,
                                     ),
                                 );
-                                boot_log::force_uart_line(regs0.as_str());
+                                    boot_log::force_uart_line(regs0.as_str());
 
-                                let mut regs1 = heapless::String::<192>::new();
-                                let _ = core::fmt::Write::write_fmt(
+                                    let mut regs1 = heapless::String::<192>::new();
+                                    let _ = core::fmt::Write::write_fmt(
                                     &mut regs1,
                                     format_args!(
                                         "[local-seat] xhci timeout regs erdp=0x{erdp:016x} erstba=0x{erstba:016x}",
@@ -2292,58 +2339,58 @@ impl UsbKeyboard {
                                         erstba = diag.erstba,
                                     ),
                                 );
-                                boot_log::force_uart_line(regs1.as_str());
+                                    boot_log::force_uart_line(regs1.as_str());
+                                }
+                                continue;
                             }
-                            continue;
-                        }
-                    };
+                        };
 
-                    let device_desc = match device.get_device_descriptor() {
-                        Ok(desc) => desc,
-                        Err(err) => {
-                            let mut line = heapless::String::<192>::new();
-                            let _ = core::fmt::Write::write_fmt(
+                        let device_desc = match device.get_device_descriptor() {
+                            Ok(desc) => desc,
+                            Err(err) => {
+                                let mut line = heapless::String::<192>::new();
+                                let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
                                     "[local-seat] usb root-enum failed port={} stage=device-desc detail={err:?}",
                                     port + 1
                                 ),
                             );
-                            boot_log::force_uart_line(line.as_str());
-                            continue;
-                        }
-                    };
+                                boot_log::force_uart_line(line.as_str());
+                                continue;
+                            }
+                        };
 
-                    let config_blob = match device.get_config_descriptor(0) {
-                        Ok(config_blob) => config_blob,
-                        Err(err) => {
-                            let mut line = heapless::String::<192>::new();
-                            let _ = core::fmt::Write::write_fmt(
+                        let config_blob = match device.get_config_descriptor(0) {
+                            Ok(config_blob) => config_blob,
+                            Err(err) => {
+                                let mut line = heapless::String::<192>::new();
+                                let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
                                     "[local-seat] usb root-enum failed port={} stage=config-desc detail={err:?}",
                                     port + 1
                                 ),
                             );
+                                boot_log::force_uart_line(line.as_str());
+                                continue;
+                            }
+                        };
+                        let Some(config) = read_config_desc(&config_blob) else {
+                            let mut line = heapless::String::<160>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] usb root-enum failed port={} stage=config-parse",
+                                    port + 1
+                                ),
+                            );
                             boot_log::force_uart_line(line.as_str());
                             continue;
-                        }
-                    };
-                    let Some(config) = read_config_desc(&config_blob) else {
-                        let mut line = heapless::String::<160>::new();
-                        let _ = core::fmt::Write::write_fmt(
-                            &mut line,
-                            format_args!(
-                                "[local-seat] usb root-enum failed port={} stage=config-parse",
-                                port + 1
-                            ),
-                        );
-                        boot_log::force_uart_line(line.as_str());
-                        continue;
-                    };
-                    if let Err(err) = device.set_configuration(config.configuration) {
-                        let mut line = heapless::String::<192>::new();
-                        let _ = core::fmt::Write::write_fmt(
+                        };
+                        if let Err(err) = device.set_configuration(config.configuration) {
+                            let mut line = heapless::String::<192>::new();
+                            let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
                                 "[local-seat] usb root-enum failed port={} stage=set-config({}) detail={err:?}",
@@ -2351,25 +2398,26 @@ impl UsbKeyboard {
                                 config.configuration
                             ),
                         );
-                        boot_log::force_uart_line(line.as_str());
-                        continue;
-                    }
+                            boot_log::force_uart_line(line.as_str());
+                            continue;
+                        }
 
-                    let device = Arc::new(device);
-                    if let Some(hid) = Self::probe_device_for_keyboard(
-                        device,
-                        device_desc,
-                        &config_blob,
-                        HUB_ENUM_MAX_DEPTH,
-                        &mut saw_keyboard_init_error,
-                    ) {
-                        hid.device().ctrl().host().seal_runtime();
-                        return Ok(Self {
-                            hid,
-                            last_keys: [0; 6],
-                            poll_error_logged: false,
-                            first_report_logged: false,
-                        });
+                        let device = Arc::new(device);
+                        if let Some(hid) = Self::probe_device_for_keyboard(
+                            device,
+                            device_desc,
+                            &config_blob,
+                            HUB_ENUM_MAX_DEPTH,
+                            &mut saw_keyboard_init_error,
+                        ) {
+                            hid.device().ctrl().host().seal_runtime();
+                            return Ok(Self {
+                                hid,
+                                last_keys: [0; 6],
+                                poll_error_logged: false,
+                                first_report_logged: false,
+                            });
+                        }
                     }
                 }
             }
@@ -2858,6 +2906,7 @@ unsafe impl Sync for SeatDma {}
 struct SeatDmaState {
     hal_ptr: usize,
     prefer_high: bool,
+    pcie_dma_bus_alias: bool,
     sealed: bool,
     regions: Vec<PhysRegion>,
 }
@@ -2877,11 +2926,12 @@ struct PhysRegion {
 }
 
 impl SeatDma {
-    fn new(hal: &mut KernelHal<'_>, prefer_high: bool) -> Self {
+    fn new(hal: &mut KernelHal<'_>, prefer_high: bool, pcie_dma_bus_alias: bool) -> Self {
         Self {
             state: Mutex::new(SeatDmaState {
                 hal_ptr: hal as *mut _ as usize,
                 prefer_high,
+                pcie_dma_bus_alias,
                 sealed: false,
                 regions: Vec::new(),
             }),
@@ -3267,7 +3317,13 @@ impl SeatDma {
                 let offset = va - start;
                 if let Some(phys) = region.phys_start.checked_add(offset) {
                     return match &region.backing {
-                        RegionBacking::Dma(_) => pcie_dma_bus_addr(phys).unwrap_or(phys),
+                        RegionBacking::Dma(_) => {
+                            if state.pcie_dma_bus_alias {
+                                pcie_dma_bus_addr(phys).unwrap_or(phys)
+                            } else {
+                                phys
+                            }
+                        }
                         RegionBacking::Mmio(_) => phys,
                     };
                 }
