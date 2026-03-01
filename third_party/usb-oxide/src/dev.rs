@@ -256,27 +256,21 @@ impl<H: Dma> UsbDevice<H> {
         // Allocate EP0 transfer ring
         let ep0_ring = Ring::new(host, 256)?;
 
-        // Setup Input Context
         let input_base = input_ctx.as_ptr::<u8>();
-        unsafe {
-            // Add flags: Slot Context (bit 0) + EP0 Context (bit 1)
-            *(input_base as *mut u32) = 0;
-            *(input_base.add(4) as *mut u32) = 0b11;
-
-            // Slot Context
-            let mut slot_ctx = SlotContext::new(route, speed, 1, root_hub_port);
-            if let Some(tt) = tt_context {
-                if tt.multi_tt {
-                    slot_ctx.dw0 |= SLOT_DEV_MTT;
-                }
-                slot_ctx.dw2 =
-                    (tt.hub_slot_id as u32) | ((tt.downstream_port as u32) << TT_PORT_SHIFT);
+        let mut slot_ctx_template = SlotContext::new(route, speed, 1, root_hub_port);
+        if let Some(tt) = tt_context {
+            if tt.multi_tt {
+                slot_ctx_template.dw0 |= SLOT_DEV_MTT;
             }
-            *(input_base.add(ctx_stride) as *mut SlotContext) = slot_ctx;
-
+            slot_ctx_template.dw2 =
+                (tt.hub_slot_id as u32) | ((tt.downstream_port as u32) << TT_PORT_SHIFT);
         }
 
         // Set device context in DCBAA
+        unsafe {
+            core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, device_ctx_bytes);
+            core::ptr::write_bytes(input_base, 0, input_ctx_bytes);
+        }
         ctrl.set_device_context(slot_id, device_ctx.phys(host));
         compiler_fence(Ordering::Release);
 
@@ -315,6 +309,17 @@ impl<H: Dma> UsbDevice<H> {
                 .enumerate()
             {
                 unsafe {
+                    // Reinitialize both output and input contexts before each
+                    // Address Device submission so stale controller state
+                    // cannot leak across retries.
+                    core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, device_ctx_bytes);
+                    core::ptr::write_bytes(input_base, 0, input_ctx_bytes);
+                    // Input Control Context:
+                    // - Drop flags (dword 0) = 0
+                    // - Add flags  (dword 1) = Slot + EP0
+                    *(input_base as *mut u32) = 0;
+                    *(input_base.add(4) as *mut u32) = 0b11;
+                    *(input_base.add(ctx_stride) as *mut SlotContext) = slot_ctx_template;
                     *(input_base.add(ctx_stride * 2) as *mut EndpointContext) =
                         EndpointContext::new(
                             4, // Control Bidirectional
@@ -382,6 +387,9 @@ impl<H: Dma> UsbDevice<H> {
                         Err(enable_err) => return Err(enable_err),
                         Ok(new_slot) => new_slot,
                     };
+                    unsafe {
+                        core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, device_ctx_bytes);
+                    }
                     ctrl.set_device_context(slot_id, device_ctx.phys(host));
                     compiler_fence(Ordering::Release);
                     ctrl.emit_diag(0x0314, old_slot as u64, slot_id as u64, 0);
