@@ -232,11 +232,7 @@ impl<H: Dma> UsbDevice<H> {
 
             // EP0 Context (Control endpoint)
             let max_packet = match speed {
-                reg::SPEED_LOW => 8,
-                // xHCI enumeration commonly seeds FS EP0 with 64 bytes.
-                // This matches U-Boot/Linux bring-up behavior and avoids
-                // early control-transfer failures on many FS devices.
-                reg::SPEED_FULL => 64,
+                reg::SPEED_LOW | reg::SPEED_FULL => 8,
                 reg::SPEED_HIGH => 64,
                 reg::SPEED_SUPER => 512,
                 _ => 8,

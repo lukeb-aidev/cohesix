@@ -661,20 +661,6 @@ fn dtb_prop_u64_be(value: &[u8], offset: usize) -> Option<u64> {
     Some((hi << 32) | lo)
 }
 
-fn dtb_node_unit_address(name: &str, marker: &str) -> Option<usize> {
-    let marker_offset = name.find(marker)?;
-    let suffix = &name[marker_offset + marker.len()..];
-    let hex_len = suffix
-        .as_bytes()
-        .iter()
-        .take_while(|byte| byte.is_ascii_hexdigit())
-        .count();
-    if hex_len == 0 {
-        return None;
-    }
-    usize::from_str_radix(&suffix[..hex_len], 16).ok()
-}
-
 fn dtb_first_reg_addr(value: &[u8]) -> Option<usize> {
     if value.len() >= 8 {
         let hi = dtb_prop_u32_be(value, 0)? as u64;
@@ -735,9 +721,6 @@ fn collect_pi4_uefi_xhci_mmio_hint(
         match item {
             bi_extra::StructureItem::BeginNode(name) => {
                 let _ = path.push(name);
-                if hint.is_none() {
-                    hint = dtb_node_unit_address(name, "xhci@");
-                }
             }
             bi_extra::StructureItem::EndNode => {
                 let _ = path.pop();
@@ -2948,7 +2931,9 @@ fn bootstrap<P: Platform>(
         notification_selection.index,
         notification_selection.used_bytes,
     );
-    let mut hal = KernelHal::new(kernel_env);
+    // Keep HAL storage alive for the full root-task lifetime. Local-seat
+    // backends retain a raw HAL pointer for deferred runtime keyboard bring-up.
+    let hal = Box::leak(Box::new(KernelHal::new(kernel_env)));
     if consumed_slots > 0 {
         hal.consume_bootstrap_slots(consumed_slots);
     }
@@ -2957,10 +2942,10 @@ fn bootstrap<P: Platform>(
     // Initialise local-seat before UART MMIO mapping so low Pi4 peripheral
     // pages (e.g. mailbox at 0xfe00_b000) can be reserved before higher UART
     // pages advance the device-untyped cursor.
-    let local_seat_runtime = init_local_seat_runtime(
+    let mut local_seat_runtime = init_local_seat_runtime(
         &mut console,
         hardware,
-        &mut hal,
+        hal,
         extra_bytes,
         extra_range.clone(),
     )?;
@@ -3045,6 +3030,12 @@ fn bootstrap<P: Platform>(
                 console.writeln_prefixed(line.as_str());
             }
         }
+    }
+
+    if let Some(runtime) = local_seat_runtime.as_deref_mut() {
+        boot_log::force_uart_line("[local-seat] runtime preseed hook begin");
+        runtime.preseed_backend_keyboard_mmio();
+        boot_log::force_uart_line("[local-seat] runtime preseed hook end");
     }
 
     if uart_mmio.is_none() {
@@ -3172,7 +3163,7 @@ fn bootstrap<P: Platform>(
                 (None, false, None)
             } else {
                 let config = crate::net::ConsoleNetConfig::default();
-                match init_net_console(&mut hal, config) {
+                match init_net_console(hal, config) {
                     Ok(stack) => {
                         let mac = stack.hardware_address();
                         let ip = stack.ipv4_address();

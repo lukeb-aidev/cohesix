@@ -454,22 +454,50 @@ impl<H: Dma> EventRing<H> {
     }
 
     pub fn try_dequeue(&mut self) -> Option<Trb> {
-        let trb = unsafe {
+        // Read the candidate TRB twice before consuming it. On some firmware /
+        // controller combinations, software can observe an event entry while
+        // the xHC is still writing fields; consuming such a transient entry can
+        // surface as a spurious "Invalid completion code" command failure.
+        let first = unsafe {
             (self.ring.as_ptr::<Trb>())
                 .add(self.dequeue)
                 .read_volatile()
         };
-
-        if trb.cycle() == self.cycle {
-            self.dequeue += 1;
-            if self.dequeue >= self.size {
-                self.dequeue = 0;
-                self.cycle = !self.cycle;
-            }
-            Some(trb)
-        } else {
-            None
+        if first.cycle() != self.cycle {
+            return None;
         }
+
+        let second = unsafe {
+            (self.ring.as_ptr::<Trb>())
+                .add(self.dequeue)
+                .read_volatile()
+        };
+        if second.cycle() != self.cycle {
+            return None;
+        }
+
+        if first.param != second.param
+            || first.status != second.status
+            || first.control != second.control
+        {
+            return None;
+        }
+
+        // Completion-style events should not present `INVALID` completion code.
+        // Treat it as an unstable read and retry.
+        let event_type = second.trb_type() as u32;
+        if (event_type == trb_type::COMMAND_COMPLETION || event_type == trb_type::TRANSFER_EVENT)
+            && second.completion_code() == completion::INVALID
+        {
+            return None;
+        }
+
+        self.dequeue += 1;
+        if self.dequeue >= self.size {
+            self.dequeue = 0;
+            self.cycle = !self.cycle;
+        }
+        Some(second)
     }
 
     pub fn dequeue_ptr(&self, host: &H) -> u64 {

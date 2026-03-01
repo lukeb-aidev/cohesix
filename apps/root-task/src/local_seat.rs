@@ -7,6 +7,8 @@
 
 extern crate alloc;
 
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+use crate::bootstrap::log as boot_log;
 use crate::console::{Command, CommandParser, ConsoleError};
 use crate::generated::{self, HardwareDeviceKind};
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -14,6 +16,13 @@ use crate::local_seat_pi4::{Pi4FramebufferHint, Pi4LocalSeat, Pi4LocalSeatHints,
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+use core::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+static LOCAL_SEAT_POLL_LOGGED: AtomicBool = AtomicBool::new(false);
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+static LOCAL_SEAT_DATA_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Maximum number of queued keyboard bytes retained by the local-seat runtime.
 pub const KEYBOARD_QUEUE_MAX_BYTES: usize = 4_096;
@@ -177,10 +186,21 @@ impl LocalSeatRuntime {
     pub fn poll_backend_keyboard(&mut self) {
         #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
         {
+            if !LOCAL_SEAT_POLL_LOGGED.swap(true, Ordering::AcqRel) {
+                boot_log::force_uart_line("[local-seat] runtime keyboard poll active");
+            }
             let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
             if let Some(backend) = self.backend.as_mut() {
                 let read = backend.poll_keyboard_bytes(&mut chunk);
                 if read > 0 {
+                    if !LOCAL_SEAT_DATA_LOGGED.swap(true, Ordering::AcqRel) {
+                        let mut line = heapless::String::<128>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!("[local-seat] runtime keyboard first-byte read={read}"),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                    }
                     let _ = self.enqueue_keyboard_bytes(&chunk[..read]);
                 }
             }
@@ -204,6 +224,14 @@ impl LocalSeatRuntime {
     #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
     pub fn attach_backend(&mut self, backend: Pi4LocalSeat) {
         self.backend = Some(backend);
+    }
+
+    /// Preseed platform keyboard MMIO windows after core boot mappings settle.
+    pub fn preseed_backend_keyboard_mmio(&mut self) {
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        if let Some(backend) = self.backend.as_mut() {
+            backend.preseed_keyboard_mmio();
+        }
     }
 }
 

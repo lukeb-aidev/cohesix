@@ -10,8 +10,8 @@ use core::panic::Location;
 
 use super::{ipc_bootstrap_trap, IpcSyscallKind};
 use sel4_sys::{
-    seL4_CPtr, seL4_CallWithMRs, seL4_MessageInfo, seL4_NBRecv, seL4_NBSend, seL4_Recv,
-    seL4_Reply, seL4_Send, seL4_Wait, seL4_Word, seL4_Yield,
+    seL4_CPtr, seL4_CallWithMRs, seL4_MessageInfo, seL4_NBRecv, seL4_NBSend, seL4_Recv, seL4_Reply,
+    seL4_Send, seL4_Wait, seL4_Word, seL4_Yield,
 };
 
 extern "C" {

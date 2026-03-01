@@ -2864,13 +2864,10 @@ impl<'a> UntypedCatalog<'a> {
                 {
                     false
                 } else if entry.remaining_bytes() < obj_bytes {
-                    log::debug!(
-                        "[untyped] skip ut=0x{cap:03x} size_bits={bits} used={used}B (insufficient for {need}B)",
-                        cap = self.bootinfo.untyped.start + index as seL4_CPtr,
-                        bits = entry.desc.size_bits,
-                        used = entry.used_bytes,
-                        need = obj_bytes,
-                    );
+                    // Keep allocator selection side-effect free during runtime
+                    // bring-up paths. Emitting logger-backed traces from this
+                    // tight loop can deadlock when called under active console
+                    // logging.
                     false
                 } else {
                     true
@@ -3886,6 +3883,17 @@ impl<'a> KernelEnv<'a> {
         attr: sel4_sys::seL4_ARM_VMAttributes,
         prefer_high: bool,
     ) -> Result<RamFrame, seL4_Error> {
+        let trace_uncached = attr == sel4_sys::seL4_ARM_Page_Uncached;
+        if trace_uncached {
+            let mut line = HeaplessString::<160>::new();
+            let _ = write!(
+                &mut line,
+                "[local-seat] dma-frame begin source={} attr=0x{:08x}",
+                if prefer_high { "high" } else { "low" },
+                attr as u32
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         BOOTINFO_WINDOW_GUARD.check(if prefer_high {
             "alloc_dma_frame_attr"
         } else {
@@ -3897,6 +3905,15 @@ impl<'a> KernelEnv<'a> {
             self.untyped.reserve_ram(PAGE_BITS as u8)
         }
         .ok_or(seL4_NotEnoughMemory)?;
+        if trace_uncached {
+            let mut line = HeaplessString::<176>::new();
+            let _ = write!(
+                &mut line,
+                "[local-seat] dma-frame reserved ut=0x{:04x}",
+                reserved.cap()
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         let frame_slot = self.allocate_slot();
         let mut trace = self.prepare_retype_trace(
             &reserved,
@@ -3907,24 +3924,86 @@ impl<'a> KernelEnv<'a> {
         );
         self.record_retype(trace, RetypeStatus::Pending);
         if let Err(err) = self.retype_page(reserved.cap(), &trace) {
+            if trace_uncached {
+                let mut line = HeaplessString::<192>::new();
+                let _ = write!(
+                    &mut line,
+                    "[local-seat] dma-frame retype failed ut=0x{:04x} slot=0x{:04x} err={} ({})",
+                    reserved.cap(),
+                    frame_slot,
+                    err,
+                    error_name(err)
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
             self.record_retype(trace, RetypeStatus::Err(err));
             self.untyped.release(&reserved);
             return Err(err);
         }
+        if trace_uncached {
+            let mut line = HeaplessString::<176>::new();
+            let _ = write!(
+                &mut line,
+                "[local-seat] dma-frame retype ok slot=0x{:04x}",
+                frame_slot
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         let paddr = match page_get_address(frame_slot) {
             Ok(paddr) => paddr,
             Err(err) => {
+                if trace_uncached {
+                    let mut line = HeaplessString::<192>::new();
+                    let _ = write!(
+                        &mut line,
+                        "[local-seat] dma-frame paddr failed slot=0x{:04x} err={} ({})",
+                        frame_slot,
+                        err,
+                        error_name(err)
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                }
                 self.record_retype(trace, RetypeStatus::Err(err));
                 return Err(err);
             }
         };
+        if trace_uncached {
+            let mut line = HeaplessString::<192>::new();
+            let _ = write!(
+                &mut line,
+                "[local-seat] dma-frame paddr slot=0x{:04x} paddr=0x{:016x}",
+                frame_slot, paddr
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         trace.kind = RetypeKind::DmaPage { paddr };
         self.record_retype(trace, RetypeStatus::Ok);
         let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
         self.dma_cursor = range.end;
+        if trace_uncached {
+            let mut line = HeaplessString::<208>::new();
+            let _ = write!(
+                &mut line,
+                "[local-seat] dma-frame map begin slot=0x{:04x} vaddr=0x{:08x}",
+                frame_slot, range.start
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         self.map_frame(frame_slot, range.start, attr, false)?;
+        if trace_uncached {
+            let mut line = HeaplessString::<176>::new();
+            let _ = write!(
+                &mut line,
+                "[local-seat] dma-frame map ok slot=0x{:04x}",
+                frame_slot
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         let attr_raw: usize = unsafe { core::mem::transmute(attr) };
         record_dma_mapping(paddr, range.start, PAGE_SIZE, attr_raw);
+        if trace_uncached {
+            boot_log::force_uart_line("[local-seat] dma-frame before hal-log");
+        }
         ::log::info!(
             target: "hal",
             "[hal] dma frame mapped source={source} vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
@@ -3933,6 +4012,9 @@ impl<'a> KernelEnv<'a> {
             paddr = paddr,
             attr = attr_raw,
         );
+        if trace_uncached {
+            boot_log::force_uart_line("[local-seat] dma-frame after hal-log");
+        }
         Ok(RamFrame {
             cap: frame_slot,
             paddr,

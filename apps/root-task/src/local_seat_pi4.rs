@@ -13,14 +13,14 @@ use core::cmp;
 use core::hint::spin_loop;
 use core::mem;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use font8x8::legacy::BASIC_LEGACY;
 use spin::Mutex;
 use usb_oxide::{
-    class, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature, hub_protocol,
-    request, scancode_to_ascii, ConfigDesc, DeviceDesc, Dma, HidDevice, HubDesc, SetupPacket,
-    TtContext, UsbDevice, UsbError, XhciCtrl,
+    class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
+    hub_protocol, regs, request, scancode_to_ascii, set_xhci_diag_hook, ConfigDesc, DeviceDesc,
+    Dma, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice, UsbError, XhciCtrl,
 };
 
 use crate::bootstrap::log as boot_log;
@@ -66,14 +66,22 @@ const TAB_WIDTH: usize = 4;
 
 const FG_COLOR: u32 = 0xFFFF_FFFF;
 const BG_COLOR: u32 = 0xFF00_0000;
+const RPI4_XHCI_MMIO_HIGH_CANDIDATE: usize = 0x0000_0006_0000_0000;
+const RPI4_XHCI_MMIO_PRIMARY_CANDIDATE: usize = 0x0000_0000_FE98_0000;
+const RPI4_XHCI_MMIO_SECONDARY_CANDIDATE: usize = 0x0000_0000_7E98_0000;
 
-// When DTB hints are unavailable in bootinfo extra payloads, prefer the Pi4
-// UEFI/VL805 high MMIO aperture observed in successful boots before trying
-// legacy low aliases.
+// Runtime xHCI probing fallbacks prefer the high UEFI aperture first, then
+// legacy aliases.
 const RPI4_XHCI_MMIO_FALLBACKS: [usize; 3] = [
-    0x0000_0006_0000_0000,
-    0x0000_0000_FE98_0000,
-    0x0000_0000_7E98_0000,
+    RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+    RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+    RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
+];
+// Boot-time xHCI pinning must only target controller BAR aliases.
+const RPI4_XHCI_MMIO_PRESEED_CANDIDATES: [usize; 3] = [
+    RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+    RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+    RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
 ];
 // Pi4 UEFI + seL4 can raise a fatal asynchronous external abort if we touch
 // some legacy ECAM aliases during early boot. Restrict probing to the
@@ -102,6 +110,15 @@ const VL805_NOTIFY_SETTLE_SPINS: usize = 50_000;
 // interrupt before IRQ handlers are installed, stalling boot at local-seat
 // bring-up. Keep it disabled for now.
 const VL805_RESET_NOTIFY_BEFORE_USB_PROBE: bool = false;
+// Touching VL805 PCI config space during early bootstrap has correlated with
+// fatal IRQ 27 entries on Pi4/seL4. Keep preseed writes disabled.
+const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
+// Runtime cfg-space touches can still trigger fatal IRQ 27 on some Pi4 UEFI
+// paths. Keep this disabled until we have a proven non-faulting ECAM path.
+const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = false;
+const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
+const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
+const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
 const VL805_PCI_VENDOR_ID: u16 = 0x1106;
 const VL805_PCI_DEVICE_ID: u16 = 0x3483;
 const VL805_EXPECTED_CLASS_CODE: u32 = 0x0C03_30;
@@ -109,23 +126,12 @@ const VL805_ECAM_WINDOW_BYTES: usize = 0x0100_0000;
 const PCI_CFG_VENDOR_DEVICE: usize = 0x00;
 const PCI_CFG_COMMAND_STATUS: usize = 0x04;
 const PCI_CFG_CLASS_REVISION: usize = 0x08;
-const PCI_CFG_CAP_PTR: usize = 0x34;
 const PCI_CFG_BAR0: usize = 0x10;
 const PCI_CFG_BAR1: usize = 0x14;
-const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
-const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
-const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
 const PCI_BAR_IO_SPACE: u32 = 1 << 0;
 const PCI_BAR_TYPE_MASK: u32 = 0b110;
 const PCI_BAR_TYPE_64: u32 = 0b100;
 const PCI_BAR_ADDR_MASK: u64 = !0xFu64;
-const PCI_CAP_ID_MSI: u8 = 0x05;
-const PCI_CAP_ID_MSIX: u8 = 0x11;
-const PCI_CAP_SCAN_LIMIT: usize = 32;
-const PCI_MSI_CTL_OFFSET: usize = 0x02;
-const PCI_MSI_CTL_ENABLE: u16 = 1 << 0;
-const PCI_MSIX_CTL_OFFSET: usize = 0x02;
-const PCI_MSIX_CTL_ENABLE: u16 = 1 << 15;
 const FRAMEBUFFER_MAP_EXACT_ATTEMPT_CAP: usize = 2048;
 const XHCI_MMIO_MAP_EXACT_ATTEMPT_CAP: usize = 4096;
 const EXACT_MAP_LOG_INITIAL_RETRIES: usize = 8;
@@ -134,6 +140,18 @@ const FB_BYTES_PER_PIXEL: usize = mem::size_of::<u32>();
 const XHCI_MMIO_MAX_BYTES: usize = 2 * 1024 * 1024;
 const XHCI_MMIO_INIT_BYTES: usize = PAGE_SIZE;
 const XHCI_MMIO_PRESEED_BYTES_FALLBACK: usize = 0x10000;
+const XHCI_MMIO_PRESEED_BYTES_MAX: usize = 0x40000;
+const XHCI_MMIO_ALIAS_SCAN_PAGES: usize = XHCI_MMIO_PRESEED_BYTES_MAX / PAGE_SIZE;
+const XHCI_HCI_VERSION_MIN: u16 = 0x0090;
+const XHCI_HCI_VERSION_MAX: u16 = 0x0200;
+// High-address DMA allocation has repeatedly stalled during Pi4 runtime xHCI
+// bring-up. Force low DMA pool probing until high-path allocator faults are
+// fully resolved.
+const XHCI_FORCE_LOW_DMA_PROBE: bool = true;
+// VL805 on Pi4 expects xHCI DMA pointers in the PCIe outbound DMA window
+// address space, not raw CPU physical addresses.
+const XHCI_PCIE_DMA_BUS_ALIAS_ENABLED: bool = true;
+const RPI4_PCIE_DMA_BUS_OFFSET: usize = 0x4_0000_0000;
 const XHCI_DMA_MAX_BYTES: usize = 8 * 1024 * 1024;
 // BCM2711 PCIe cannot DMA above the first 3 GiB (see upstream bcm2711.dtsi
 // pcie0 dma-ranges). Keep VL805/xHCI buffers under this ceiling.
@@ -151,7 +169,17 @@ const MAX_FB_MAP_PAGES: usize = MAX_FB_BYTES / PAGE_SIZE;
 static VL805_RESET_NOTIFIED: AtomicBool = AtomicBool::new(false);
 static VL805_RESET_BYPASSED_LOGGED: AtomicBool = AtomicBool::new(false);
 static USB_DMA_RANGE_WARNED: AtomicBool = AtomicBool::new(false);
+static VL805_CFG_SAFE_MODE_LOGGED: AtomicBool = AtomicBool::new(false);
+static XHCI_PRESEED_ALREADY_PINNED_LOGGED: AtomicBool = AtomicBool::new(false);
+static KEYBOARD_PRESEED_LOGGED: AtomicBool = AtomicBool::new(false);
+static KEYBOARD_RUNTIME_INIT_LOGGED: AtomicBool = AtomicBool::new(false);
+static XHCI_DIAG_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+static XHCI_MMIO_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
+static XHCI_DMA_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
+static VL805_CFG_VIRT: AtomicUsize = AtomicUsize::new(0);
+static VL805_XHCI_MMIO_HINT: AtomicUsize = AtomicUsize::new(0);
 static PINNED_XHCI_MMIO: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
+static PINNED_VL805_CFG: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
 
 struct PinnedMmioWindow {
     phys_start: usize,
@@ -231,8 +259,9 @@ impl core::fmt::Debug for Pi4LocalSeat {
 impl Pi4LocalSeat {
     /// Initialize the Pi4 local-seat backend.
     pub fn new(hal: &mut KernelHal<'_>, hints: Pi4LocalSeatHints) -> Result<Self, Pi4SeatError> {
+        boot_log::force_uart_line("[local-seat] pi4 display init begin");
         let mut display = HdmiTextSink::new(hal, hints.framebuffer_hint)?;
-        prime_pinned_xhci_window(hal, hints.xhci_mmio_hint);
+        boot_log::force_uart_line("[local-seat] pi4 display init ok");
 
         let mut display_line = heapless::String::<128>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -244,6 +273,7 @@ impl Pi4LocalSeat {
         );
         boot_log::force_uart_line(display_line.as_str());
         display.write_line("[cohesix] local-seat HDMI online");
+        boot_log::force_uart_line("[local-seat] pi4 hdmi banner emitted");
 
         boot_log::force_uart_line("[local-seat] pi4 keyboard init deferred to runtime");
         Ok(Self {
@@ -255,6 +285,33 @@ impl Pi4LocalSeat {
         })
     }
 
+    /// Preseed keyboard MMIO windows once UART bring-up has completed.
+    pub fn preseed_keyboard_mmio(&mut self) {
+        let Some(hal) = hal_from_ptr(self.hal_ptr) else {
+            return;
+        };
+        let first_preseed = !KEYBOARD_PRESEED_LOGGED.swap(true, Ordering::AcqRel);
+        if first_preseed {
+            boot_log::force_uart_line("[local-seat] pi4 keyboard preseed begin");
+        }
+        // Keep bootstrap preseed side-effect free: pin mapping windows only.
+        if VL805_CFG_PRESEED_TOUCH_ENABLED {
+            prime_pinned_vl805_cfg_window(hal);
+        } else if !VL805_CFG_SAFE_MODE_LOGGED.swap(true, Ordering::AcqRel) {
+            boot_log::force_uart_line("[local-seat] vl805 pci cfg touch disabled (safe-mode)");
+        }
+        if first_preseed {
+            boot_log::force_uart_line("[local-seat] pi4 xhci preseed begin");
+        }
+        prime_pinned_xhci_window(hal, self.xhci_mmio_hint);
+        if first_preseed {
+            boot_log::force_uart_line("[local-seat] pi4 xhci preseed end");
+        }
+        if first_preseed {
+            boot_log::force_uart_line("[local-seat] pi4 keyboard preseed end");
+        }
+    }
+
     /// Mirror one rendered line to HDMI.
     pub fn write_line(&mut self, line: &str) {
         self.display.write_line(line);
@@ -264,9 +321,18 @@ impl Pi4LocalSeat {
     pub fn poll_keyboard_bytes(&mut self, out: &mut [u8]) -> usize {
         if self.keyboard.is_none() && !self.keyboard_init_attempted {
             self.keyboard_init_attempted = true;
+            boot_log::force_uart_line("[local-seat] pi4 keyboard runtime init begin");
+            self.preseed_keyboard_mmio();
+            boot_log::force_uart_line("[local-seat] pi4 keyboard runtime init after preseed");
             let mut keyboard_error = None;
             if let Some(hal) = hal_from_ptr(self.hal_ptr) {
                 for attempt in 1..=KEYBOARD_ATTACH_ATTEMPTS {
+                    let mut line = heapless::String::<144>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!("[local-seat] pi4 keyboard probe attempt={attempt}"),
+                    );
+                    boot_log::force_uart_line(line.as_str());
                     match UsbKeyboard::new(hal, self.xhci_mmio_hint) {
                         Ok(found) => {
                             self.keyboard = Some(found);
@@ -299,6 +365,7 @@ impl Pi4LocalSeat {
             if self.keyboard.is_some() {
                 self.display
                     .write_line("[cohesix] local-seat USB keyboard online");
+                boot_log::force_uart_line("[local-seat] pi4 keyboard runtime init result=online");
             } else if let Some(err) = keyboard_error {
                 let mut line = heapless::String::<240>::new();
                 let _ = core::fmt::Write::write_fmt(
@@ -311,6 +378,9 @@ impl Pi4LocalSeat {
                 boot_log::force_uart_line(line.as_str());
                 self.display
                     .write_line("[cohesix] local-seat USB keyboard unavailable");
+                boot_log::force_uart_line(
+                    "[local-seat] pi4 keyboard runtime init result=unavailable",
+                );
             }
         }
 
@@ -411,18 +481,398 @@ fn pinned_xhci_window_lookup(phys: usize, size: usize) -> Option<usize> {
     window.virt_start.checked_add(offset)
 }
 
+fn pinned_vl805_cfg_lookup(phys: usize, size: usize) -> Option<usize> {
+    if size == 0 {
+        return None;
+    }
+    let request_end = phys.checked_add(size)?;
+    let pinned = PINNED_VL805_CFG.lock();
+    let window = pinned.as_ref()?;
+    let window_end = window.phys_start.checked_add(window.length)?;
+    if phys < window.phys_start || request_end > window_end {
+        return None;
+    }
+    let offset = phys.checked_sub(window.phys_start)?;
+    window.virt_start.checked_add(offset)
+}
+
+#[inline]
+fn in_vl805_ecam_window(mmio: usize) -> bool {
+    for &ecam_base in &VL805_ECAM_BASE_CANDIDATES {
+        let ecam_end = ecam_base.saturating_add(VL805_ECAM_WINDOW_BYTES);
+        if (ecam_base..ecam_end).contains(&mmio) {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline]
+fn xhci_mmio_candidate_valid(mmio: usize) -> bool {
+    if mmio == 0 || (mmio & PAGE_MASK) != 0 {
+        return false;
+    }
+    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
+        return true;
+    }
+    if in_vl805_ecam_window(mmio) {
+        return false;
+    }
+    for &ecam_base in &VL805_ECAM_BASE_CANDIDATES {
+        let Some(vl805_cfg) = ecam_base.checked_add(VL805_PCI_DEV_ADDR as usize) else {
+            continue;
+        };
+        if mmio == vl805_cfg {
+            return false;
+        }
+    }
+    true
+}
+
+fn remember_vl805_cfg_virt(config_virt: usize) {
+    if config_virt != 0 {
+        VL805_CFG_VIRT.store(config_virt, Ordering::Release);
+    }
+}
+
+fn current_vl805_cfg_virt() -> Option<usize> {
+    let cfg = VL805_CFG_VIRT.load(Ordering::Acquire);
+    if cfg == 0 {
+        None
+    } else {
+        Some(cfg)
+    }
+}
+
+#[inline]
+fn vl805_cfg_command() -> Option<u16> {
+    let cfg_virt = current_vl805_cfg_virt()?;
+    Some((pci_cfg_read_u32(cfg_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16)
+}
+
+#[inline]
+fn vl805_cfg_bus_master_ready() -> bool {
+    let Some(command) = vl805_cfg_command() else {
+        return false;
+    };
+    (command & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER))
+        == (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
+}
+
+fn remember_vl805_xhci_mmio_hint(mmio: usize) {
+    if mmio != 0 {
+        VL805_XHCI_MMIO_HINT.store(mmio, Ordering::Release);
+    }
+}
+
+fn current_vl805_xhci_mmio_hint() -> Option<usize> {
+    let mmio = VL805_XHCI_MMIO_HINT.load(Ordering::Acquire);
+    if mmio == 0 {
+        None
+    } else {
+        Some(mmio)
+    }
+}
+
+fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
+    let mut line = heapless::String::<176>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] xhci.diag stage=0x{stage:04x} a=0x{a:016x} b=0x{b:016x} c=0x{c:016x}"
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+}
+
+#[derive(Clone, Copy)]
+struct XhciCapProbe {
+    cap_length: u8,
+    hci_version: u16,
+    hcs1: u32,
+    hcs2: u32,
+    db_offset: u32,
+    rts_offset: u32,
+    max_slots: u8,
+    max_ports: u8,
+    max_scratchpad: u16,
+    mmio_size: usize,
+}
+
+fn probe_xhci_capability_window(
+    hal: &mut KernelHal<'_>,
+    mmio_base: usize,
+) -> Result<XhciCapProbe, &'static str> {
+    let dma = SeatDma::new(hal, false);
+    // SAFETY: Read-only capability probe over candidate xHCI MMIO.
+    let init_mmio = unsafe { dma.map_mmio(mmio_base, XHCI_MMIO_INIT_BYTES) }.ok_or("map-init")?;
+    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
+    let cap_length = unsafe { ptr::read_volatile((init_mmio + regs::CAPLENGTH) as *const u8) };
+    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
+    let hci_version =
+        unsafe { ptr::read_volatile((init_mmio + regs::CAPLENGTH + 2) as *const u16) };
+    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
+    let hcs1 = unsafe { ptr::read_volatile((init_mmio + regs::HCSPARAMS1) as *const u32) };
+    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
+    let hcs2 = unsafe { ptr::read_volatile((init_mmio + regs::HCSPARAMS2) as *const u32) };
+    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
+    let db_offset = unsafe { ptr::read_volatile((init_mmio + regs::DBOFF) as *const u32) };
+    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
+    let rts_offset = unsafe { ptr::read_volatile((init_mmio + regs::RTSOFF) as *const u32) };
+    // SAFETY: `init_mmio` came from `map_mmio` above.
+    unsafe {
+        dma.unmap_mmio(init_mmio, XHCI_MMIO_INIT_BYTES);
+    }
+
+    let max_slots = (hcs1 & 0xff) as u8;
+    let max_ports = ((hcs1 >> 24) & 0xff) as u8;
+    let max_scratchpad = (((hcs2 >> 27) & 0x1f) | (((hcs2 >> 21) & 0x1f) << 5)) as u16;
+    let mmio_size = (rts_offset as usize + 0x20 + 0x20)
+        .max(db_offset as usize + (max_slots as usize + 1) * 4)
+        .max(0x10000);
+    Ok(XhciCapProbe {
+        cap_length,
+        hci_version,
+        hcs1,
+        hcs2,
+        db_offset,
+        rts_offset,
+        max_slots,
+        max_ports,
+        max_scratchpad,
+        mmio_size,
+    })
+}
+
+fn validate_xhci_capability_window(probe: &XhciCapProbe) -> Result<(), &'static str> {
+    if probe.cap_length < 0x20
+        || (probe.cap_length as usize) >= XHCI_MMIO_INIT_BYTES
+        || (probe.cap_length & 0x3) != 0
+    {
+        return Err("caplength");
+    }
+    if !(XHCI_HCI_VERSION_MIN..=XHCI_HCI_VERSION_MAX).contains(&probe.hci_version) {
+        return Err("hciver");
+    }
+    if probe.max_slots == 0 || probe.max_ports == 0 || probe.max_scratchpad > 256 {
+        return Err("topology");
+    }
+    if (probe.db_offset & 0x3) != 0 || (probe.rts_offset & 0x1f) != 0 {
+        return Err("offset-align");
+    }
+    if probe.db_offset < probe.cap_length as u32 || probe.rts_offset < probe.cap_length as u32 {
+        return Err("offset-range");
+    }
+    if !(XHCI_MMIO_INIT_BYTES..=XHCI_MMIO_MAX_BYTES).contains(&probe.mmio_size) {
+        return Err("span");
+    }
+    Ok(())
+}
+
+fn probe_xhci_capability_with_alias_scan(
+    hal: &mut KernelHal<'_>,
+    mmio_base: usize,
+) -> Result<(usize, XhciCapProbe), &'static str> {
+    let probe = probe_xhci_capability_window(hal, mmio_base)?;
+    if validate_xhci_capability_window(&probe).is_ok() {
+        return Ok((mmio_base, probe));
+    }
+
+    // The Pi4 firmware/UEFI path can expose the VL805 xHCI block at an
+    // offset inside legacy FE98 or high PCIe apertures. Probe nearby pages
+    // to recover.
+    if mmio_base != RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && mmio_base != RPI4_XHCI_MMIO_PRIMARY_CANDIDATE
+        && mmio_base != RPI4_XHCI_MMIO_SECONDARY_CANDIDATE
+    {
+        return Err("cap-invalid");
+    }
+
+    let mut scan_line = heapless::String::<176>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut scan_line,
+        format_args!(
+            "[local-seat] xhci cap scan base=0x{base:016x} pages={pages}",
+            base = mmio_base,
+            pages = XHCI_MMIO_ALIAS_SCAN_PAGES
+        ),
+    );
+    boot_log::force_uart_line(scan_line.as_str());
+
+    for page in 1..XHCI_MMIO_ALIAS_SCAN_PAGES {
+        let Some(candidate) = mmio_base.checked_add(page.saturating_mul(PAGE_SIZE)) else {
+            break;
+        };
+        if !xhci_mmio_candidate_valid(candidate) {
+            continue;
+        }
+        let scanned = match probe_xhci_capability_window(hal, candidate) {
+            Ok(scanned) => scanned,
+            Err(_) => continue,
+        };
+        if validate_xhci_capability_window(&scanned).is_ok() {
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci cap relocated base=0x{base:016x} scan=0x{scan:016x} page={page}",
+                    base = mmio_base,
+                    scan = candidate
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return Ok((candidate, scanned));
+        }
+    }
+
+    let mut exhausted = heapless::String::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut exhausted,
+        format_args!(
+            "[local-seat] xhci cap scan exhausted base=0x{base:016x} pages={pages}",
+            base = mmio_base,
+            pages = XHCI_MMIO_ALIAS_SCAN_PAGES
+        ),
+    );
+    boot_log::force_uart_line(exhausted.as_str());
+
+    Err("cap-invalid")
+}
+
+fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>) {
+    if PINNED_VL805_CFG.lock().is_some() {
+        return;
+    }
+
+    let mut prefix_frames = Vec::new();
+    for &ecam_base in &VL805_ECAM_BASE_CANDIDATES {
+        let Some(config_paddr) = ecam_base.checked_add(VL805_PCI_DEV_ADDR as usize) else {
+            continue;
+        };
+        let config_page = config_paddr & !PAGE_MASK;
+        let frame = match map_device_exact(
+            hal,
+            config_page,
+            VL805_PCI_CFG_ATTEMPT_CAP,
+            "vl805-preseed",
+            Pi4SeatError::XhciInit,
+            &mut prefix_frames,
+        ) {
+            Ok(frame) => frame,
+            Err(_) => continue,
+        };
+        let virt = frame.ptr().as_ptr() as usize;
+        let config_page_offset = (VL805_PCI_DEV_ADDR as usize) & PAGE_MASK;
+        let config_virt = match virt.checked_add(config_page_offset) {
+            Some(cfg) => cfg,
+            None => continue,
+        };
+        remember_vl805_cfg_virt(config_virt);
+
+        let vendor_device = pci_cfg_read_u32(config_virt, PCI_CFG_VENDOR_DEVICE);
+        let class_revision = pci_cfg_read_u32(config_virt, PCI_CFG_CLASS_REVISION);
+        let command_before =
+            (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
+        // Keep VL805 INTx masked during bring-up to avoid fatal IRQ 27 storms
+        // while still enabling memory decode + DMA for xHCI rings.
+        let command_required = command_before
+            | PCI_COMMAND_MEMORY_SPACE
+            | PCI_COMMAND_BUS_MASTER
+            | PCI_COMMAND_INTERRUPT_DISABLE;
+        if command_required != command_before {
+            pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_required);
+        }
+        let command_after = (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
+        let bar0 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR0);
+        let bar1 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR1);
+        let bar_mmio = decode_pci_mmio_bar(bar0, bar1);
+        core::mem::forget(frame);
+
+        let mut pinned = PINNED_VL805_CFG.lock();
+        *pinned = Some(PinnedMmioWindow {
+            phys_start: config_page,
+            length: PAGE_SIZE,
+            virt_start: virt,
+        });
+
+        let mut line = heapless::String::<240>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 pci cfg preseeded ecam=0x{ecam:016x} cfg=0x{cfg:016x} mode=read-mostly cfg_id=0x{cfg_id:08x} class=0x{class:06x} cmd=0x{before:04x}->0x{after:04x} bar0=0x{bar0:08x}",
+                ecam = ecam_base,
+                cfg = config_paddr,
+                cfg_id = vendor_device,
+                class = (class_revision >> 8) & 0x00ff_ffff,
+                before = command_before,
+                after = command_after,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        let mut bar_line = heapless::String::<176>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut bar_line,
+            format_args!("[local-seat] vl805 pci cfg bar bar0=0x{bar0:08x} bar1=0x{bar1:08x}"),
+        );
+        boot_log::force_uart_line(bar_line.as_str());
+        if let Some(mmio) = bar_mmio {
+            let mut hint = heapless::String::<176>::new();
+            if xhci_mmio_candidate_valid(mmio) {
+                remember_vl805_xhci_mmio_hint(mmio);
+                let _ = core::fmt::Write::write_fmt(
+                    &mut hint,
+                    format_args!("[local-seat] vl805 pci cfg hint mmio=0x{mmio:016x}"),
+                );
+            } else {
+                let _ = core::fmt::Write::write_fmt(
+                    &mut hint,
+                    format_args!(
+                        "[local-seat] vl805 pci cfg hint rejected mmio=0x{mmio:016x} reason=invalid-candidate"
+                    ),
+                );
+            }
+            boot_log::force_uart_line(hint.as_str());
+        } else {
+            boot_log::force_uart_line(
+                "[local-seat] vl805 pci cfg hint missing (BAR decode failed)",
+            );
+        }
+        if (command_after & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER))
+            != (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
+        {
+            boot_log::force_uart_line(
+                "[local-seat] vl805 pci cfg warning command bits missing after preseed",
+            );
+        }
+        return;
+    }
+
+    boot_log::force_uart_line("[local-seat] vl805 pci cfg preseed unavailable");
+}
+
 fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usize>) {
     if PINNED_XHCI_MMIO.lock().is_some() {
+        if !XHCI_PRESEED_ALREADY_PINNED_LOGGED.swap(true, Ordering::AcqRel) {
+            boot_log::force_uart_line("[local-seat] xhci preseed skipped (already pinned)");
+        }
         return;
     }
 
     let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
     let mut candidate_count = 0usize;
     let mut push_candidate = |mmio: usize| {
-        if mmio == 0 || candidate_count >= candidates.len() {
+        if candidate_count >= candidates.len() {
             return;
         }
-        if (mmio & PAGE_MASK) != 0 {
+        if !xhci_mmio_candidate_valid(mmio) {
+            let mut line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci preseed ignore mmio=0x{mmio:016x} reason=invalid-candidate"
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             return;
         }
         if candidates[..candidate_count].contains(&mmio) {
@@ -435,20 +885,46 @@ fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usiz
     if let Some(hint) = xhci_mmio_hint {
         push_candidate(hint);
     }
-    for fallback in RPI4_XHCI_MMIO_FALLBACKS {
+    if let Some(hint) = current_vl805_xhci_mmio_hint() {
+        push_candidate(hint);
+    }
+    for fallback in RPI4_XHCI_MMIO_PRESEED_CANDIDATES {
         push_candidate(fallback);
     }
+    let mut plan = heapless::String::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut plan,
+        format_args!(
+            "[local-seat] xhci preseed candidates={} hint={}",
+            candidate_count,
+            if xhci_mmio_hint.is_some() {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
+    );
+    boot_log::force_uart_line(plan.as_str());
 
     for &mmio in &candidates[..candidate_count] {
+        // Keep early preseed small so later critical MMIO mappings (UART, etc.)
+        // are not starved during bootstrap. usb-oxide computes the runtime MMIO
+        // span and this bounded window is enough for capability probing.
         let preseed_lengths = [
-            XHCI_MMIO_MAX_BYTES,
-            0x10_0000,
-            0x08_0000,
-            0x04_0000,
-            0x02_0000,
+            XHCI_MMIO_PRESEED_BYTES_MAX,
+            0x20_000,
             XHCI_MMIO_PRESEED_BYTES_FALLBACK,
         ];
         for &length in &preseed_lengths {
+            let mut attempt = heapless::String::<200>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut attempt,
+                format_args!(
+                    "[local-seat] xhci preseed attempt mmio=0x{mmio:016x} bytes=0x{bytes:05x}",
+                    bytes = length
+                ),
+            );
+            boot_log::force_uart_line(attempt.as_str());
             if pin_xhci_mmio_window(hal, mmio, length).is_ok() {
                 let mut line = heapless::String::<176>::new();
                 let _ = core::fmt::Write::write_fmt(
@@ -461,8 +937,18 @@ fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usiz
                 boot_log::force_uart_line(line.as_str());
                 return;
             }
+            let mut fail = heapless::String::<200>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut fail,
+                format_args!(
+                    "[local-seat] xhci preseed failed mmio=0x{mmio:016x} bytes=0x{bytes:05x}",
+                    bytes = length
+                ),
+            );
+            boot_log::force_uart_line(fail.as_str());
         }
     }
+    boot_log::force_uart_line("[local-seat] xhci preseed exhausted all candidates");
 }
 
 fn pin_xhci_mmio_window(
@@ -474,6 +960,16 @@ fn pin_xhci_mmio_window(
         || length < XHCI_MMIO_INIT_BYTES
         || length > XHCI_MMIO_MAX_BYTES
     {
+        let mut line = heapless::String::<208>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci preseed reject mmio=0x{mmio:016x} bytes=0x{bytes:05x} reason=invalid-range",
+                mmio = phys_start,
+                bytes = length
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
         return Err(Pi4SeatError::XhciInit);
     }
     let mut prefix_frames = Vec::new();
@@ -488,6 +984,7 @@ fn pin_xhci_mmio_window(
     let first_virt = first.ptr().as_ptr() as usize;
     let page_count = div_ceil(length, PAGE_SIZE);
     if page_count == 0 {
+        boot_log::force_uart_line("[local-seat] xhci preseed reject reason=zero-pages");
         return Err(Pi4SeatError::XhciInit);
     }
 
@@ -503,6 +1000,19 @@ fn pin_xhci_mmio_window(
             .checked_add(page.checked_mul(PAGE_SIZE).ok_or(Pi4SeatError::XhciInit)?)
             .ok_or(Pi4SeatError::XhciInit)?;
         if got != expected || frame.paddr() != paddr {
+            let mut line = heapless::String::<240>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci preseed page mismatch page={} want_paddr=0x{want_paddr:016x} got_paddr=0x{got_paddr:016x} want_vaddr=0x{want_vaddr:016x} got_vaddr=0x{got_vaddr:016x}",
+                    page,
+                    want_paddr = paddr,
+                    got_paddr = frame.paddr(),
+                    want_vaddr = expected,
+                    got_vaddr = got
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             return Err(Pi4SeatError::XhciInit);
         }
         frames.push(frame);
@@ -1164,38 +1674,22 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
         };
         let config_page = config_paddr & !PAGE_MASK;
         let config_page_offset = config_paddr & PAGE_MASK;
-        if hal
-            .device_coverage(config_page, crate::sel4::PAGE_BITS)
-            .is_none()
+        let mut _config_frame: Option<crate::sel4::DeviceFrame> = None;
+        let mut cfg_src = "mapped";
+        let config_page_virt = if let Some(mapped) = pinned_vl805_cfg_lookup(config_page, PAGE_SIZE)
         {
-            let mut line = heapless::String::<176>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] vl805 pci skip ecam=0x{ecam:016x} cfg=0x{cfg:016x} reason=no-device-coverage",
-                    ecam = ecam_base,
-                    cfg = config_paddr
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-            continue;
-        }
-
-        let frame = match map_device_exact(
-            hal,
-            config_page,
-            VL805_PCI_CFG_ATTEMPT_CAP,
-            "vl805-pci",
-            Pi4SeatError::XhciInit,
-            &mut prefix_maps,
-        ) {
-            Ok(frame) => frame,
-            Err(_) => {
-                let mut line = heapless::String::<192>::new();
+            cfg_src = "pinned";
+            mapped
+        } else {
+            if hal
+                .device_coverage(config_page, crate::sel4::PAGE_BITS)
+                .is_none()
+            {
+                let mut line = heapless::String::<176>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] vl805 pci skip ecam=0x{ecam:016x} cfg=0x{cfg:016x} reason=map-exact-failed",
+                        "[local-seat] vl805 pci skip ecam=0x{ecam:016x} cfg=0x{cfg:016x} reason=no-device-coverage",
                         ecam = ecam_base,
                         cfg = config_paddr
                     ),
@@ -1203,9 +1697,35 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
                 boot_log::force_uart_line(line.as_str());
                 continue;
             }
+
+            let frame = match map_device_exact(
+                hal,
+                config_page,
+                VL805_PCI_CFG_ATTEMPT_CAP,
+                "vl805-pci",
+                Pi4SeatError::XhciInit,
+                &mut prefix_maps,
+            ) {
+                Ok(frame) => frame,
+                Err(_) => {
+                    let mut line = heapless::String::<192>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] vl805 pci skip ecam=0x{ecam:016x} cfg=0x{cfg:016x} reason=map-exact-failed",
+                            ecam = ecam_base,
+                            cfg = config_paddr
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    continue;
+                }
+            };
+            let virt = frame.ptr().as_ptr() as usize;
+            _config_frame = Some(frame);
+            virt
         };
-        let Some(config_virt) = (frame.ptr().as_ptr() as usize).checked_add(config_page_offset)
-        else {
+        let Some(config_virt) = config_page_virt.checked_add(config_page_offset) else {
             continue;
         };
 
@@ -1256,8 +1776,8 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
             continue;
         };
 
-        let ecam_end = ecam_base.saturating_add(VL805_ECAM_WINDOW_BYTES);
-        if (ecam_base..ecam_end).contains(&mmio) {
+        if in_vl805_ecam_window(mmio) && mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE {
+            let ecam_end = ecam_base.saturating_add(VL805_ECAM_WINDOW_BYTES);
             let mut reject_line = heapless::String::<192>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut reject_line,
@@ -1265,6 +1785,17 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
                     "[local-seat] vl805 pci reject mmio=0x{mmio:016x} reason=bar-points-to-ecam ecam=[0x{base:016x}..0x{end:016x})",
                     base = ecam_base,
                     end = ecam_end
+                ),
+            );
+            boot_log::force_uart_line(reject_line.as_str());
+            continue;
+        }
+        if !xhci_mmio_candidate_valid(mmio) {
+            let mut reject_line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut reject_line,
+                format_args!(
+                    "[local-seat] vl805 pci reject mmio=0x{mmio:016x} reason=invalid-candidate"
                 ),
             );
             boot_log::force_uart_line(reject_line.as_str());
@@ -1281,7 +1812,9 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
             continue;
         }
 
-        if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none() {
+        if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none()
+            && pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_none()
+        {
             let mut reject_line = heapless::String::<176>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut reject_line,
@@ -1293,87 +1826,61 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
             continue;
         }
 
-        let command_status = pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS);
-        let command_before = (command_status & 0xffff) as u16;
-        let command_target = command_before
+        let command_before =
+            (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
+        // Keep VL805 INTx masked during bring-up to avoid fatal IRQ 27 storms
+        // while still enabling memory decode + DMA for xHCI rings.
+        let command_required = command_before
             | PCI_COMMAND_MEMORY_SPACE
             | PCI_COMMAND_BUS_MASTER
             | PCI_COMMAND_INTERRUPT_DISABLE;
-        if command_target != command_before {
-            let command_updated = (command_status & !0xffff) | command_target as u32;
-            pci_cfg_write_u32(config_virt, PCI_CFG_COMMAND_STATUS, command_updated);
+        if command_required != command_before {
+            pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_required);
         }
-        let (msi_disabled, msix_disabled) = disable_pci_interrupt_caps(config_virt);
         let command_after = (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
 
-        let mut line = heapless::String::<256>::new();
+        let mut line = heapless::String::<288>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 pci selected ecam=0x{ecam:016x} cfg=0x{cfg:016x} vid:did={vid:04x}:{did:04x} class=0x{class_code:06x} cmd=0x{before:04x}->0x{after:04x} msi_off={msi} msix_off={msix} bar0=0x{bar0:08x}",
+                "[local-seat] vl805 pci selected ecam=0x{ecam:016x} cfg=0x{cfg:016x} cfg_src={cfg_src} mode=rw-cmd vid:did={vid:04x}:{did:04x} class=0x{class_code:06x} cmd=0x{before:04x}->0x{after:04x} bar0=0x{bar0:08x}",
                 ecam = ecam_base,
                 cfg = config_paddr,
                 vid = vendor_id,
                 did = device_id,
                 before = command_before,
                 after = command_after,
-                msi = if msi_disabled { "yes" } else { "no" },
-                msix = if msix_disabled { "yes" } else { "no" },
+                cfg_src = cfg_src,
             ),
         );
         boot_log::force_uart_line(line.as_str());
+        if (command_after & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER))
+            != (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
+        {
+            let mut warn_line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut warn_line,
+                format_args!(
+                    "[local-seat] vl805 pci command bits missing ecam=0x{ecam:016x} cmd=0x{cmd:04x} required=0x{required:04x}",
+                    ecam = ecam_base,
+                    cmd = command_after,
+                    required = PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER
+                ),
+            );
+            boot_log::force_uart_line(warn_line.as_str());
+        }
+        remember_vl805_cfg_virt(config_virt);
 
         return Some(mmio);
     }
     None
 }
 
-fn disable_pci_interrupt_caps(config_base: usize) -> (bool, bool) {
-    let mut msi_disabled = false;
-    let mut msix_disabled = false;
-    let mut ptr = (pci_cfg_read_u8(config_base, PCI_CFG_CAP_PTR) as usize) & !0x3;
-    let mut scanned = 0usize;
-    while ptr >= 0x40 && ptr + 4 <= PAGE_SIZE && scanned < PCI_CAP_SCAN_LIMIT {
-        let cap_id = pci_cfg_read_u8(config_base, ptr);
-        let next = (pci_cfg_read_u8(config_base, ptr + 1) as usize) & !0x3;
-        match cap_id {
-            PCI_CAP_ID_MSI if ptr + PCI_MSI_CTL_OFFSET + 2 <= PAGE_SIZE => {
-                let ctl = pci_cfg_read_u16(config_base, ptr + PCI_MSI_CTL_OFFSET);
-                if (ctl & PCI_MSI_CTL_ENABLE) != 0 {
-                    pci_cfg_write_u16(
-                        config_base,
-                        ptr + PCI_MSI_CTL_OFFSET,
-                        ctl & !PCI_MSI_CTL_ENABLE,
-                    );
-                }
-                msi_disabled = true;
-            }
-            PCI_CAP_ID_MSIX if ptr + PCI_MSIX_CTL_OFFSET + 2 <= PAGE_SIZE => {
-                let ctl = pci_cfg_read_u16(config_base, ptr + PCI_MSIX_CTL_OFFSET);
-                if (ctl & PCI_MSIX_CTL_ENABLE) != 0 {
-                    pci_cfg_write_u16(
-                        config_base,
-                        ptr + PCI_MSIX_CTL_OFFSET,
-                        ctl & !PCI_MSIX_CTL_ENABLE,
-                    );
-                }
-                msix_disabled = true;
-            }
-            _ => {}
-        }
-        if next == ptr {
-            break;
-        }
-        ptr = next;
-        scanned = scanned.saturating_add(1);
-    }
-    (msi_disabled, msix_disabled)
-}
-
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
     last_keys: [u8; 6],
     poll_error_logged: bool,
+    first_report_logged: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1411,34 +1918,91 @@ impl HubPortStatus {
 
 impl UsbKeyboard {
     fn new(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usize>) -> Result<Self, Pi4SeatError> {
+        if !KEYBOARD_RUNTIME_INIT_LOGGED.swap(true, Ordering::AcqRel) {
+            boot_log::force_uart_line("[local-seat] usb keyboard init path entered");
+        }
+        if !XHCI_DIAG_HOOK_INSTALLED.swap(true, Ordering::AcqRel) {
+            set_xhci_diag_hook(Some(xhci_diag_hook));
+            boot_log::force_uart_line("[local-seat] xhci diag hook installed");
+        }
+        if VL805_CFG_RUNTIME_TOUCH_ENABLED {
+            if current_vl805_cfg_virt().is_some() {
+                boot_log::force_uart_line("[local-seat] vl805 cfg present stage=usb-init-entry");
+            } else {
+                boot_log::force_uart_line("[local-seat] vl805 cfg missing stage=usb-init-entry");
+            }
+        } else if !VL805_CFG_SAFE_MODE_LOGGED.swap(true, Ordering::AcqRel) {
+            boot_log::force_uart_line("[local-seat] vl805 pci cfg touch disabled (safe-mode)");
+        }
+
         if VL805_RESET_NOTIFY_BEFORE_USB_PROBE {
             notify_vl805_reset_once(hal);
         } else if !VL805_RESET_BYPASSED_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] vl805 reset notify=bypassed");
         }
-        let vl805_pci_mmio = prepare_vl805_pci(hal);
-        if vl805_pci_mmio.is_none() {
-            boot_log::force_uart_line("[local-seat] vl805 pci preflight=none");
-        }
+        let (vl805_pci_mmio, pci_cfg_ready) = if VL805_CFG_RUNTIME_TOUCH_ENABLED {
+            let vl805_pci_mmio = prepare_vl805_pci(hal);
+            if vl805_pci_mmio.is_none() {
+                boot_log::force_uart_line("[local-seat] vl805 pci preflight=none");
+            }
+            let pci_cfg_ready = vl805_cfg_bus_master_ready();
+            if !pci_cfg_ready {
+                let mut line = heapless::String::<192>::new();
+                let command = vl805_cfg_command().unwrap_or(0);
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] vl805 cfg unavailable; xhci probe forced no-bus-master cmd=0x{command:04x}"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+            (vl805_pci_mmio, pci_cfg_ready)
+        } else {
+            (None, false)
+        };
 
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
         let mut consider_candidate = |mmio: usize| {
-            if mmio == 0 || candidate_count >= candidates.len() {
+            if candidate_count >= candidates.len() {
+                return;
+            }
+            if !xhci_mmio_candidate_valid(mmio) {
+                let mut line = heapless::String::<184>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci candidate ignored mmio=0x{mmio:016x} reason=invalid-candidate"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
                 return;
             }
             if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none()
                 && pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_none()
             {
-                let mut line = heapless::String::<192>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-device-coverage"
-                    ),
-                );
-                boot_log::force_uart_line(line.as_str());
-                return;
+                if mmio == RPI4_XHCI_MMIO_PRIMARY_CANDIDATE || mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+                {
+                    let mut line = heapless::String::<208>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci candidate forcing probe mmio=0x{mmio:016x} reason=no-device-coverage"
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                } else {
+                    let mut line = heapless::String::<192>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-device-coverage"
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    return;
+                }
             }
             if candidates[..candidate_count].contains(&mmio) {
                 return;
@@ -1467,18 +2031,142 @@ impl UsbKeyboard {
                 if let Some(hint) = xhci_mmio_hint {
                     consider_candidate(hint);
                 }
+                if let Some(hint) = current_vl805_xhci_mmio_hint() {
+                    consider_candidate(hint);
+                }
                 for fallback in RPI4_XHCI_MMIO_FALLBACKS {
                     consider_candidate(fallback);
                 }
             }
         }
+        let mut summary = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut summary,
+            format_args!(
+                "[local-seat] xhci runtime candidates={} hint={} pci_cfg_ready={}",
+                candidate_count,
+                if xhci_mmio_hint.is_some() {
+                    "yes"
+                } else {
+                    "no"
+                },
+                if pci_cfg_ready { "yes" } else { "no" }
+            ),
+        );
+        boot_log::force_uart_line(summary.as_str());
+        for (index, &mmio) in candidates[..candidate_count].iter().enumerate() {
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci runtime candidate[{}]=0x{mmio:016x}",
+                    index
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+        if candidate_count == 0 {
+            boot_log::force_uart_line("[local-seat] xhci runtime candidate set empty");
+        }
+        if !XHCI_DMA_POLICY_LOGGED.swap(true, Ordering::AcqRel) {
+            boot_log::force_uart_line(if XHCI_FORCE_LOW_DMA_PROBE {
+                "[local-seat] xhci dma probe policy=low-only"
+            } else {
+                "[local-seat] xhci dma probe policy=low-then-high"
+            });
+        }
 
         let mut saw_controller = false;
         let mut saw_keyboard_init_error = false;
-        for prefer_high in [false, true] {
-            for &mmio_base in &candidates[..candidate_count] {
+        for &mmio_base in &candidates[..candidate_count] {
+            let raw_probe = match probe_xhci_capability_window(hal, mmio_base) {
+                Ok(probe) => probe,
+                Err(reason) => {
+                    let mut line = heapless::String::<192>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci cap probe failed mmio=0x{mmio:016x} detail={reason}",
+                            mmio = mmio_base
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    continue;
+                }
+            };
+
+            let mut cap_line = heapless::String::<320>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut cap_line,
+                format_args!(
+                    "[local-seat] xhci cap mmio=0x{mmio:016x} caplen=0x{caplen:02x} hciver=0x{hciver:04x} hcs1=0x{hcs1:08x} hcs2=0x{hcs2:08x} dboff=0x{dboff:08x} rtsoff=0x{rtsoff:08x} slots={} ports={} scratch={} span=0x{span:05x}",
+                    raw_probe.max_slots,
+                    raw_probe.max_ports,
+                    raw_probe.max_scratchpad,
+                    mmio = mmio_base,
+                    caplen = raw_probe.cap_length,
+                    hciver = raw_probe.hci_version,
+                    hcs1 = raw_probe.hcs1,
+                    hcs2 = raw_probe.hcs2,
+                    dboff = raw_probe.db_offset,
+                    rtsoff = raw_probe.rts_offset,
+                    span = raw_probe.mmio_size,
+                ),
+            );
+            boot_log::force_uart_line(cap_line.as_str());
+
+            let (effective_mmio, _cap_probe) = match validate_xhci_capability_window(&raw_probe) {
+                Ok(()) => (mmio_base, raw_probe),
+                Err(reason) => match probe_xhci_capability_with_alias_scan(hal, mmio_base) {
+                    Ok((candidate, scanned_probe)) => {
+                        let mut line = heapless::String::<224>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci candidate shifted base=0x{base:016x} selected=0x{selected:016x}",
+                                base = mmio_base,
+                                selected = candidate
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        (candidate, scanned_probe)
+                    }
+                    Err(_) => {
+                        let mut line = heapless::String::<208>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci candidate rejected mmio=0x{mmio:016x} detail={reason}",
+                                mmio = mmio_base
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        continue;
+                    }
+                },
+            };
+
+            // Keep probe order deterministic so field logs are directly
+            // comparable across boots.
+            let dma_probe_order: &[bool] = if XHCI_FORCE_LOW_DMA_PROBE {
+                &[false]
+            } else {
+                &[false, true]
+            };
+            for &prefer_high in dma_probe_order {
+                let mut probe_line = heapless::String::<176>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut probe_line,
+                    format_args!(
+                        "[local-seat] xhci probe begin mmio=0x{mmio:016x} dma={}",
+                        if prefer_high { "high" } else { "low" },
+                        mmio = effective_mmio
+                    ),
+                );
+                boot_log::force_uart_line(probe_line.as_str());
+
                 let dma = SeatDma::new(hal, prefer_high);
-                let ctrl = match XhciCtrl::new(mmio_base, dma) {
+                let ctrl = match XhciCtrl::new(effective_mmio, dma) {
                     Ok(ctrl) => {
                         saw_controller = true;
                         Arc::new(ctrl)
@@ -1490,7 +2178,7 @@ impl UsbKeyboard {
                             format_args!(
                                 "[local-seat] xhci probe failed mmio=0x{mmio:016x} dma={} detail={err:?}",
                                 if prefer_high { "high" } else { "low" },
-                                mmio = mmio_base
+                                mmio = effective_mmio
                             ),
                         );
                         boot_log::force_uart_line(line.as_str());
@@ -1525,7 +2213,7 @@ impl UsbKeyboard {
                         if prefer_high { "high" } else { "low" },
                         max_ports,
                         detect_passes_used,
-                        mmio = mmio_base,
+                        mmio = effective_mmio,
                         mask = connected_mask,
                     ),
                 );
@@ -1549,7 +2237,25 @@ impl UsbKeyboard {
                                 ),
                             );
                             boot_log::force_uart_line(line.as_str());
-                            if matches!(err, UsbError::EnableSlotTimeout) {
+                            if matches!(
+                                err,
+                                UsbError::EnableSlotTimeout
+                                    | UsbError::AddressDeviceTimeout
+                                    | UsbError::CmdFail(_)
+                            ) {
+                                if let UsbError::CmdFail(code) = err {
+                                    let mut cmd_line = heapless::String::<224>::new();
+                                    let _ = core::fmt::Write::write_fmt(
+                                        &mut cmd_line,
+                                        format_args!(
+                                            "[local-seat] usb cmd completion detail port={} code={} (0x{code:02x}) name={}",
+                                            port + 1,
+                                            code,
+                                            completion::name(code),
+                                        ),
+                                    );
+                                    boot_log::force_uart_line(cmd_line.as_str());
+                                }
                                 let diag = ctrl.command_diag_for_port(port as u8);
                                 let mut summary = heapless::String::<224>::new();
                                 let _ = core::fmt::Write::write_fmt(
@@ -1661,6 +2367,7 @@ impl UsbKeyboard {
                             hid,
                             last_keys: [0; 6],
                             poll_error_logged: false,
+                            first_report_logged: false,
                         });
                     }
                 }
@@ -1755,6 +2462,17 @@ impl UsbKeyboard {
                 *saw_keyboard_init_error = true;
                 continue;
             }
+            let mut line = heapless::String::<208>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] usb hid keyboard ready slot={} iface={} ep=0x{:02x}",
+                    device.slot_id(),
+                    iface.interface_number,
+                    ep_in.endpoint_address
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             return Some(hid);
         }
         None
@@ -2072,6 +2790,24 @@ impl UsbKeyboard {
         let report = match self.hid.poll_keyboard_checked() {
             Ok(Some(report)) => {
                 self.poll_error_logged = false;
+                if !self.first_report_logged {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] usb hid first report shift={} keys={:02x},{:02x},{:02x},{:02x},{:02x},{:02x}",
+                            report.shift() as u8,
+                            report.keys[0],
+                            report.keys[1],
+                            report.keys[2],
+                            report.keys[3],
+                            report.keys[4],
+                            report.keys[5]
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    self.first_report_logged = true;
+                }
                 report
             }
             Ok(None) => return 0,
@@ -2159,31 +2895,116 @@ impl SeatDma {
 
     fn alloc_dma_locked(state: &mut SeatDmaState, size: usize, align: usize) -> Option<usize> {
         if state.sealed || size == 0 {
+            let mut line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci dma alloc reject size=0x{size:x} align=0x{align:x} reason={}",
+                    if state.sealed { "sealed" } else { "zero-size" }
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             return None;
         }
         if size > XHCI_DMA_MAX_BYTES {
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci dma alloc reject size=0x{size:x} align=0x{align:x} reason=too-large limit=0x{limit:x}",
+                    limit = XHCI_DMA_MAX_BYTES
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             return None;
         }
         if !align.is_power_of_two() {
+            let mut line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci dma alloc reject size=0x{size:x} align=0x{align:x} reason=bad-align"
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             return None;
         }
 
         let page_count = div_ceil(size, PAGE_SIZE);
         let hal = hal_from_ptr(state.hal_ptr)?;
+        let mut begin_line = heapless::String::<208>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut begin_line,
+            format_args!(
+                "[local-seat] xhci dma alloc begin size=0x{size:x} align=0x{align:x} pages={} mode={}",
+                page_count,
+                if state.prefer_high { "high" } else { "low" }
+            ),
+        );
+        boot_log::force_uart_line(begin_line.as_str());
 
         let mut frames = Vec::with_capacity(page_count);
         let mut expected_phys = 0usize;
         let mut expected_virt = 0usize;
         for idx in 0..page_count {
-            let frame = if state.prefer_high {
+            let mut req_line = heapless::String::<192>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut req_line,
+                format_args!(
+                    "[local-seat] xhci dma frame request idx={} pages={} mode={}",
+                    idx,
+                    page_count,
+                    if state.prefer_high { "high" } else { "low" }
+                ),
+            );
+            boot_log::force_uart_line(req_line.as_str());
+            let frame = match if state.prefer_high {
                 hal.alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Uncached)
-                    .ok()?
             } else {
                 hal.alloc_dma_frame_low_attr(sel4_sys::seL4_ARM_Page_Uncached)
-                    .ok()?
+            } {
+                Ok(frame) => frame,
+                Err(err) => {
+                    let mut line = heapless::String::<224>::new();
+                    match err {
+                        crate::hal::HalError::Sel4(sel4_err) => {
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci dma frame alloc failed idx={} mode={} err={} ({})",
+                                    idx,
+                                    if state.prefer_high { "high" } else { "low" },
+                                    sel4_err,
+                                    crate::sel4::error_name(sel4_err),
+                                ),
+                            );
+                        }
+                        _ => {
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci dma frame alloc failed idx={} mode={} err={err:?}",
+                                    idx,
+                                    if state.prefer_high { "high" } else { "low" },
+                                ),
+                            );
+                        }
+                    }
+                    boot_log::force_uart_line(line.as_str());
+                    return None;
+                }
             };
             let phys = frame.paddr();
             let virt = frame.ptr().as_ptr() as usize;
+            let mut got_line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut got_line,
+                format_args!(
+                    "[local-seat] xhci dma frame ready idx={} paddr=0x{phys:016x} vaddr=0x{virt:016x}",
+                    idx
+                ),
+            );
+            boot_log::force_uart_line(got_line.as_str());
             if phys >= RPI4_PCIE_DMA_LIMIT {
                 if !USB_DMA_RANGE_WARNED.swap(true, Ordering::AcqRel) {
                     let mut line = heapless::String::<192>::new();
@@ -2206,6 +3027,17 @@ impl SeatDma {
                 let next_phys = expected_phys.checked_add(off)?;
                 let next_virt = expected_virt.checked_add(off)?;
                 if phys != next_phys || virt != next_virt {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci dma frame reject idx={} reason=non-contiguous got_paddr=0x{phys:016x} want_paddr=0x{want_phys:016x} got_vaddr=0x{virt:016x} want_vaddr=0x{want_virt:016x}",
+                            idx,
+                            want_phys = next_phys,
+                            want_virt = next_virt,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
                     return None;
                 }
             }
@@ -2213,6 +3045,15 @@ impl SeatDma {
         }
 
         if (expected_virt & (align - 1)) != 0 {
+            let mut line = heapless::String::<208>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci dma alloc reject size=0x{size:x} align=0x{align:x} vaddr=0x{vaddr:016x} reason=unaligned",
+                    vaddr = expected_virt
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             return None;
         }
 
@@ -2224,20 +3065,66 @@ impl SeatDma {
             align,
             backing: RegionBacking::Dma(frames),
         });
+        let mut done_line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut done_line,
+            format_args!(
+                "[local-seat] xhci dma alloc done size=0x{size:x} align=0x{align:x} pages={} paddr=0x{paddr:016x} vaddr=0x{vaddr:016x}",
+                page_count,
+                paddr = expected_phys,
+                vaddr = expected_virt
+            ),
+        );
+        boot_log::force_uart_line(done_line.as_str());
         Some(expected_virt)
     }
 
     fn map_mmio_locked(state: &mut SeatDmaState, phys: usize, size: usize) -> Option<usize> {
         if state.sealed || size == 0 {
+            if !XHCI_MMIO_DIAG_LOGGED.swap(true, Ordering::AcqRel) {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci mmio map reject phys=0x{phys:016x} size=0x{size:06x} reason={}",
+                        if state.sealed { "sealed" } else { "zero-size" }
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
             return None;
         }
         if size > XHCI_MMIO_MAX_BYTES {
+            let mut line = heapless::String::<208>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci mmio map reject phys=0x{phys:016x} size=0x{size:06x} reason=too-large limit=0x{limit:06x}",
+                    limit = XHCI_MMIO_MAX_BYTES
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             return None;
         }
         if let Some(mapped) = pinned_xhci_window_lookup(phys, size) {
             return Some(mapped);
         }
         let request_end = phys.checked_add(size)?;
+        if let Some(window) = PINNED_XHCI_MMIO.lock().as_ref() {
+            let window_end = window.phys_start.checked_add(window.length)?;
+            if phys >= window.phys_start && phys < window_end && request_end > window_end {
+                let mut line = heapless::String::<240>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci mmio pinned-insufficient phys=0x{phys:016x} size=0x{size:06x} pinned=[0x{start:016x}..0x{end:016x})",
+                        start = window.phys_start,
+                        end = window_end
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+        }
 
         let mut extend_index: Option<usize> = None;
         for (index, region) in state.regions.iter().enumerate() {
@@ -2269,11 +3156,38 @@ impl SeatDma {
             let mut mapped_end =
                 mapped_base_phys.checked_add(frames.len().checked_mul(PAGE_SIZE)?)?;
             while mapped_end < request_end {
-                let frame = hal.map_device(mapped_end).ok()?;
+                let frame = match hal.map_device(mapped_end) {
+                    Ok(frame) => frame,
+                    Err(_) => {
+                        let mut line = heapless::String::<224>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci mmio extend failed base=0x{base:016x} need_end=0x{need:016x} fail_page=0x{page:016x}",
+                                base = mapped_base_phys,
+                                need = request_end,
+                                page = mapped_end
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        return None;
+                    }
+                };
                 let expected_virt =
                     mapped_base_virt.checked_add(frames.len().checked_mul(PAGE_SIZE)?)?;
                 let actual_virt = frame.ptr().as_ptr() as usize;
                 if actual_virt != expected_virt {
+                    let mut line = heapless::String::<240>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci mmio extend mismatch page=0x{page:016x} want_vaddr=0x{want:016x} got_vaddr=0x{got:016x}",
+                            page = mapped_end,
+                            want = expected_virt,
+                            got = actual_virt
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
                     return None;
                 }
                 frames.push(frame);
@@ -2311,6 +3225,17 @@ impl SeatDma {
             } else {
                 let next_virt = first_virt.checked_add(idx.checked_mul(PAGE_SIZE)?)?;
                 if virt != next_virt {
+                    let mut line = heapless::String::<240>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci mmio map mismatch page={} page_phys=0x{page_phys:016x} want_vaddr=0x{want:016x} got_vaddr=0x{got:016x}",
+                            idx,
+                            want = next_virt,
+                            got = virt
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
                     return None;
                 }
             }
@@ -2340,7 +3265,10 @@ impl SeatDma {
             if (start..end).contains(&va) {
                 let offset = va - start;
                 if let Some(phys) = region.phys_start.checked_add(offset) {
-                    return phys;
+                    return match &region.backing {
+                        RegionBacking::Dma(_) => pcie_dma_bus_addr(phys).unwrap_or(phys),
+                        RegionBacking::Mmio(_) => phys,
+                    };
                 }
             }
         }
@@ -2459,6 +3387,14 @@ fn phys_to_bus(phys: usize, alias_base: u32) -> Option<u32> {
         return None;
     }
     Some((phys as u32 & VC_BUS_MASK) | alias_base)
+}
+
+#[inline]
+fn pcie_dma_bus_addr(phys: usize) -> Option<usize> {
+    if !XHCI_PCIE_DMA_BUS_ALIAS_ENABLED {
+        return Some(phys);
+    }
+    phys.checked_add(RPI4_PCIE_DMA_BUS_OFFSET)
 }
 
 #[inline]

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the guards module for root-task.
 // Author: Lukas Bower
@@ -123,7 +123,18 @@ pub fn trip_before_indirect(tag: &str, addr: usize) {
         hi = bounds.end
     );
     #[cfg(feature = "kernel")]
-    crate::sel4::debug_halt();
+    {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[guard] non-fatal indirect-call reject tag={tag} addr=0x{addr:x} text=[0x{lo:x}..0x{hi:x})",
+                lo = bounds.start,
+                hi = bounds.end
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+    }
 }
 
 #[cfg(test)]
