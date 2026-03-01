@@ -360,17 +360,22 @@ pub(crate) struct Ring<H: Dma> {
 
 impl<H: Dma> Ring<H> {
     pub fn new(host: &H, trb_count: usize) -> Result<Self> {
+        if trb_count < 2 {
+            return Err(UsbError::NotSupported);
+        }
         let mem = PhysMem::alloc(
             host,
             trb_count * core::mem::size_of::<Trb>(),
             core::mem::align_of::<Trb>(),
         )?;
-        Ok(Self {
+        let mut ring = Self {
             mem,
             enqueue: 0,
             cycle: true,
             size: trb_count,
-        })
+        };
+        ring.init_link_trb(host);
+        Ok(ring)
     }
 
     pub fn phys(&self, host: &H) -> u64 {
@@ -398,6 +403,15 @@ impl<H: Dma> Ring<H> {
         }
 
         addr
+    }
+
+    fn init_link_trb(&mut self, host: &H) {
+        let last = self.size - 1;
+        let mut link = Trb::new();
+        link.param = self.mem.phys(host);
+        link.control = (trb_type::LINK << 10) | 2; // Toggle cycle
+        link.set_cycle(self.cycle);
+        self.trbs()[last] = link;
     }
 
     pub fn free(self, host: &H) {

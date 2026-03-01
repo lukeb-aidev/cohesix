@@ -724,7 +724,7 @@ impl<H: Dma> Drop for UsbDevice<H> {
         drop(ep_rings);
 
         // Free EP0 ring
-        let ep0_ring = core::mem::replace(&mut *self.ep0_ring.lock(), Ring::new(host, 1).unwrap());
+        let ep0_ring = core::mem::replace(&mut *self.ep0_ring.lock(), Ring::new(host, 2).unwrap());
         ep0_ring.free(host);
     }
 }
