@@ -174,6 +174,7 @@ pub struct XhciCtrl<H: Dma> {
     op_base: usize,
     rt_base: usize,
     db_offset: u32,
+    ctx_size_bytes: usize,
     max_slots: u8,
     max_ports: u8,
     dcbaa: PhysMem<H>,
@@ -271,6 +272,8 @@ impl<H: Dma> XhciCtrl<H> {
         let cap_length = unsafe { (init_mmio as *const u8).read_volatile() };
         let hcs1: u32 = unsafe { ((init_mmio + reg::HCSPARAMS1) as *const u32).read_volatile() };
         let hcs2: u32 = unsafe { ((init_mmio + reg::HCSPARAMS2) as *const u32).read_volatile() };
+        let hccparams1: u32 =
+            unsafe { ((init_mmio + reg::HCCPARAMS1) as *const u32).read_volatile() };
         let db_offset: u32 = unsafe { ((init_mmio + reg::DBOFF) as *const u32).read_volatile() };
         let rts_offset: u32 = unsafe { ((init_mmio + reg::RTSOFF) as *const u32).read_volatile() };
         emit_xhci_diag(
@@ -289,6 +292,7 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0103, 0, 0, 0);
             return Err(UsbError::MapFail);
         };
+        let ctx_size_bytes = if (hccparams1 & (1 << 2)) != 0 { 64 } else { 32 };
         emit_xhci_diag(
             0x0104,
             ((max_slots as u64) << 32) | max_ports as u64,
@@ -361,6 +365,7 @@ impl<H: Dma> XhciCtrl<H> {
             op_base,
             rt_base,
             db_offset,
+            ctx_size_bytes,
             max_slots,
             max_ports,
             dcbaa,
@@ -848,6 +853,11 @@ impl<H: Dma> XhciCtrl<H> {
         self.max_ports
     }
 
+    /// Returns the xHCI context stride in bytes (32 or 64).
+    pub fn context_size_bytes(&self) -> usize {
+        self.ctx_size_bytes
+    }
+
     /// Captures key command/event-ring registers for timeout debugging.
     pub fn command_diag_for_port(&self, port: u8) -> XhciCommandDiag {
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
@@ -861,6 +871,11 @@ impl<H: Dma> XhciCtrl<H> {
             erstba: self.read_reg_u64(int_base + reg::ERSTBA),
             portsc: self.port_status(port),
         }
+    }
+
+    /// Emits an xHCI diagnostic sample through the configured hook.
+    pub(crate) fn emit_diag(&self, stage: u16, a: u64, b: u64, c: u64) {
+        emit_xhci_diag(stage, a, b, c);
     }
 }
 

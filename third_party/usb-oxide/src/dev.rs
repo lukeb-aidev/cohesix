@@ -13,6 +13,7 @@ use crate::{
 
 use alloc::{sync::Arc, vec::Vec};
 use core::hint::spin_loop;
+use core::sync::atomic::{Ordering, compiler_fence};
 use spin::Mutex;
 
 const CONTROL_XFER_WAIT_SPINS: usize = 20_000_000;
@@ -20,6 +21,10 @@ const ROUTE_STRING_MASK: u32 = 0x000f_ffff;
 const ROOT_HUB_PORT_SHIFT: u32 = 16;
 const SLOT_DEV_MTT: u32 = 1 << 25;
 const TT_PORT_SHIFT: u32 = 8;
+const CONTEXT_ALIGN_BYTES: usize = 64;
+const MAX_ENDPOINT_CONTEXTS: usize = 31;
+const DEVICE_CONTEXT_ENTRIES: usize = 1 + MAX_ENDPOINT_CONTEXTS;
+const INPUT_CONTEXT_ENTRIES: usize = 2 + MAX_ENDPOINT_CONTEXTS;
 
 /// xHCI Slot Context (32 bytes).
 ///
@@ -175,6 +180,32 @@ impl<H: Dma> UsbDevice<H> {
         Self::new_with_topology(ctrl, port, route, root_hub_port, speed, tt_context)
     }
 
+    #[inline]
+    fn ctx_stride(&self) -> usize {
+        self.ctrl.context_size_bytes()
+    }
+
+    #[inline]
+    fn input_drop_flags_ptr(&self) -> *mut u32 {
+        self.input_ctx.as_ptr::<u32>()
+    }
+
+    #[inline]
+    fn input_add_flags_ptr(&self) -> *mut u32 {
+        // Input Control Context: dword 1
+        self.input_ctx.as_ptr::<u8>().wrapping_add(4).cast::<u32>()
+    }
+
+    #[inline]
+    fn input_ep_ctx_ptr(&self, ep_ctx_index: usize) -> *mut EndpointContext {
+        // EP context index 0 == EP0, 1 == EP1 OUT, 2 == EP1 IN, ...
+        let offset = (2 + ep_ctx_index).saturating_mul(self.ctx_stride());
+        self.input_ctx
+            .as_ptr::<u8>()
+            .wrapping_add(offset)
+            .cast::<EndpointContext>()
+    }
+
     fn new_with_topology(
         ctrl: Arc<XhciCtrl<H>>,
         port: u8,
@@ -198,26 +229,39 @@ impl<H: Dma> UsbDevice<H> {
         // Enable slot
         let slot_id = ctrl.enable_slot()?;
 
-        // Allocate contexts
+        let ctx_stride = ctrl.context_size_bytes();
+        if ctx_stride != 32 && ctx_stride != 64 {
+            return Err(UsbError::NotSupported);
+        }
+
+        // Allocate contexts using controller-reported context stride.
+        let device_ctx_bytes = DEVICE_CONTEXT_ENTRIES
+            .checked_mul(ctx_stride)
+            .ok_or(UsbError::OoRam)?;
+        let input_ctx_bytes = INPUT_CONTEXT_ENTRIES
+            .checked_mul(ctx_stride)
+            .ok_or(UsbError::OoRam)?;
+
         let device_ctx = PhysMem::alloc(
             host,
-            core::mem::size_of::<DeviceContext>(),
-            core::mem::align_of::<DeviceContext>(),
+            device_ctx_bytes,
+            CONTEXT_ALIGN_BYTES,
         )?;
         let input_ctx = PhysMem::alloc(
             host,
-            core::mem::size_of::<InputContext>(),
-            core::mem::align_of::<InputContext>(),
+            input_ctx_bytes,
+            CONTEXT_ALIGN_BYTES,
         )?;
 
         // Allocate EP0 transfer ring
         let ep0_ring = Ring::new(host, 256)?;
 
         // Setup Input Context
-        let input = input_ctx.as_ptr::<InputContext>();
+        let input_base = input_ctx.as_ptr::<u8>();
         unsafe {
             // Add flags: Slot Context (bit 0) + EP0 Context (bit 1)
-            (*input).input_control[1] = 0b11;
+            *(input_base as *mut u32) = 0;
+            *(input_base.add(4) as *mut u32) = 0b11;
 
             // Slot Context
             let mut slot_ctx = SlotContext::new(route, speed, 1, root_hub_port);
@@ -228,37 +272,103 @@ impl<H: Dma> UsbDevice<H> {
                 slot_ctx.dw2 =
                     (tt.hub_slot_id as u32) | ((tt.downstream_port as u32) << TT_PORT_SHIFT);
             }
-            (*input).slot = slot_ctx;
+            *(input_base.add(ctx_stride) as *mut SlotContext) = slot_ctx;
 
-            // EP0 Context (Control endpoint)
-            let max_packet = match speed {
-                reg::SPEED_LOW | reg::SPEED_FULL => 8,
-                reg::SPEED_HIGH => 64,
-                reg::SPEED_SUPER => 512,
-                _ => 8,
-            };
-            (*input).endpoints[0] = EndpointContext::new(
-                4, // Control Bidirectional
-                max_packet,
-                0,
-                0,
-                ep0_ring.phys(host),
-            );
         }
 
         // Set device context in DCBAA
         ctrl.set_device_context(slot_id, device_ctx.phys(host));
+        compiler_fence(Ordering::Release);
 
-        // Address Device command
-        let trb = Trb {
-            param: input_ctx.phys(host),
-            status: 0,
-            control: (trb_type::ADDRESS_DEVICE << 10) | ((slot_id as u32) << 24),
+        // Build EP0 max-packet candidates. Some controllers/devices are strict
+        // about the initial EP0 MPS used during Address Device.
+        let mut ep0_mps_candidates = [0u16; 3];
+        let mut candidate_count = 0usize;
+        let mut push_candidate = |mps: u16| {
+            if !ep0_mps_candidates[..candidate_count].contains(&mps) && candidate_count < 3 {
+                ep0_mps_candidates[candidate_count] = mps;
+                candidate_count += 1;
+            }
         };
-        match ctrl.submit_command(trb) {
-            Err(UsbError::Timeout) => return Err(UsbError::AddressDeviceTimeout),
-            Err(err) => return Err(err),
-            Ok(_) => {}
+        match speed {
+            reg::SPEED_LOW => push_candidate(8),
+            reg::SPEED_FULL => {
+                push_candidate(64);
+                push_candidate(8);
+            }
+            reg::SPEED_HIGH => push_candidate(64),
+            reg::SPEED_SUPER | reg::SPEED_SUPER_PLUS => push_candidate(512),
+            _ => {
+                push_candidate(64);
+                push_candidate(8);
+                push_candidate(512);
+            }
+        }
+
+        let mut last_ctx_state_err: Option<UsbError> = None;
+        for (attempt_idx, max_packet) in ep0_mps_candidates[..candidate_count]
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            unsafe {
+                *(input_base.add(ctx_stride * 2) as *mut EndpointContext) = EndpointContext::new(
+                    4, // Control Bidirectional
+                    max_packet,
+                    0,
+                    0,
+                    ep0_ring.phys(host),
+                );
+            }
+            compiler_fence(Ordering::Release);
+
+            // xHCI diagnostics: address-attempt and programmed slot/ep0 context.
+            let slot_ctx = unsafe { *(input_base.add(ctx_stride) as *const SlotContext) };
+            let ep0_ctx = unsafe { *(input_base.add(ctx_stride * 2) as *const EndpointContext) };
+            ctrl.emit_diag(
+                0x0310,
+                ((attempt_idx as u64) << 32) | speed as u64,
+                max_packet as u64,
+                0,
+            );
+            ctrl.emit_diag(
+                0x0311,
+                ((slot_ctx.dw0 as u64) << 32) | slot_ctx.dw1 as u64,
+                ((slot_ctx.dw2 as u64) << 32) | slot_ctx.dw3 as u64,
+                0,
+            );
+            ctrl.emit_diag(
+                0x0312,
+                ((ep0_ctx.dw0 as u64) << 32) | ep0_ctx.dw1 as u64,
+                ((ep0_ctx.tr_dequeue_hi as u64) << 32) | ep0_ctx.tr_dequeue_lo as u64,
+                ep0_ctx.dw4 as u64,
+            );
+
+            // Address Device command
+            let trb = Trb {
+                param: input_ctx.phys(host),
+                status: 0,
+                control: (trb_type::ADDRESS_DEVICE << 10) | ((slot_id as u32) << 24),
+            };
+            match ctrl.submit_command(trb) {
+                Ok(_) => {
+                    last_ctx_state_err = None;
+                    break;
+                }
+                Err(UsbError::Timeout) => return Err(UsbError::AddressDeviceTimeout),
+                Err(UsbError::CmdFail(code))
+                    if code == completion::CONTEXT_STATE_ERROR
+                        && attempt_idx + 1 < candidate_count =>
+                {
+                    last_ctx_state_err = Some(UsbError::CmdFail(code));
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        if let Some(err) = last_ctx_state_err {
+            return Err(err);
         }
 
         // Allocate ep_rings on heap to reduce stack usage
@@ -457,10 +567,9 @@ impl<H: Dma> UsbDevice<H> {
         let ring_phys = ring.phys(host);
 
         // Update input context
-        let input = self.input_ctx.as_ptr::<InputContext>();
         unsafe {
-            (*input).input_control[0] = 0; // Drop flags
-            (*input).input_control[1] = (1 << dci) | 1; // Add flags: this EP + Slot
+            *self.input_drop_flags_ptr() = 0; // Drop flags
+            *self.input_add_flags_ptr() = (1 << dci) | 1; // Add flags: this EP + Slot
 
             // xHCI endpoint type encoding
             let xhci_ep_type = match (ep_type, is_in) {
@@ -489,7 +598,7 @@ impl<H: Dma> UsbDevice<H> {
                 log2_ceil + 3
             };
 
-            (*input).endpoints[ring_idx] =
+            *self.input_ep_ctx_ptr(ring_idx) =
                 EndpointContext::new(xhci_ep_type, ep.max_packet_size, 0, interval, ring_phys);
         }
 
@@ -504,6 +613,7 @@ impl<H: Dma> UsbDevice<H> {
             status: 0,
             control: (trb_type::CONFIGURE_ENDPOINT << 10) | ((self.slot_id as u32) << 24),
         };
+        compiler_fence(Ordering::Release);
         self.ctrl.submit_command(trb)?;
 
         Ok(())

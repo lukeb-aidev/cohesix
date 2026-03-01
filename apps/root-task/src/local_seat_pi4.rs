@@ -2209,9 +2209,10 @@ impl UsbKeyboard {
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci online mmio=0x{mmio:016x} dma={} ports={} connected_mask=0x{mask:04x} detect_passes={}",
+                        "[local-seat] xhci online mmio=0x{mmio:016x} dma={} ports={} ctx={} connected_mask=0x{mask:04x} detect_passes={}",
                         if prefer_high { "high" } else { "low" },
                         max_ports,
+                        ctrl.context_size_bytes(),
                         detect_passes_used,
                         mmio = effective_mmio,
                         mask = connected_mask,
