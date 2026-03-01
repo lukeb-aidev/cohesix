@@ -366,6 +366,7 @@ stage_sd_payload() {
     local mkimage_bin="$1"
     local sel4_image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
     local stage_overlays="${STAGE_DIR}/overlays"
+    local fallback_image="${STAGE_DIR}/${SEL4_UPSTREAM_IMAGE_NAME}"
 
     require_file "$sel4_image"
     require_file "$U_BOOT_BIN"
@@ -381,6 +382,9 @@ stage_sd_payload() {
     cp -f "${FIRMWARE_DIR}/overlays/upstream-pi4.dtbo" "${stage_overlays}/upstream-pi4.dtbo"
     cp -f "$U_BOOT_BIN" "${STAGE_DIR}/u-boot.bin"
     cp -f "$sel4_image" "${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
+    # Keep legacy fallback filename in sync with the staged Cohesix image so a
+    # fallback boot path cannot silently run stale bits.
+    cp -f "${STAGE_DIR}/${COHESIX_IMAGE_NAME}" "$fallback_image"
 
     cat > "${STAGE_DIR}/config.txt" <<'EOF'
 arm_64bit=1
@@ -446,9 +450,13 @@ flash_sd_card() {
     sync
 
     local stage_hash sd_hash
+    local stage_fallback_hash sd_fallback_hash
     stage_hash="$(shasum -a 256 "${STAGE_DIR}/${COHESIX_IMAGE_NAME}" | awk '{print $1}')"
     sd_hash="$(shasum -a 256 "${volume}/${COHESIX_IMAGE_NAME}" | awk '{print $1}')"
     [[ "$stage_hash" == "$sd_hash" ]] || fail "rootserver image hash mismatch after flash"
+    stage_fallback_hash="$(shasum -a 256 "${STAGE_DIR}/${SEL4_UPSTREAM_IMAGE_NAME}" | awk '{print $1}')"
+    sd_fallback_hash="$(shasum -a 256 "${volume}/${SEL4_UPSTREAM_IMAGE_NAME}" | awk '{print $1}')"
+    [[ "$stage_fallback_hash" == "$sd_fallback_hash" ]] || fail "fallback image hash mismatch after flash"
 
     diskutil unmount "$volume" >/dev/null
     log "Flash complete and unmounted: ${disk}"

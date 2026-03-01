@@ -682,10 +682,24 @@ impl<H: Dma> UsbDevice<H> {
     pub fn control_transfer(
         &self,
         setup: &SetupPacket,
+        data: Option<&mut [u8]>,
+    ) -> Result<usize> {
+        self.control_transfer_with_wait_spins(setup, data, CONTROL_XFER_WAIT_SPINS)
+    }
+
+    /// Perform a control transfer with a custom poll-spin wait budget.
+    ///
+    /// This is intended for callers that must avoid long stalls on optional or
+    /// best-effort control requests (e.g. hub-class feature/status queries).
+    pub fn control_transfer_with_wait_spins(
+        &self,
+        setup: &SetupPacket,
         mut data: Option<&mut [u8]>,
+        wait_spins: usize,
     ) -> Result<usize> {
         let host = self.ctrl.host();
         let mut ep0_ring = self.ep0_ring.lock();
+        let wait_limit = wait_spins.max(1);
 
         let data_dir = (setup.request_type & 0x80) != 0; // true = IN
         let data_len = data.as_ref().map(|d| d.len()).unwrap_or(0);
@@ -936,7 +950,7 @@ impl<H: Dma> UsbDevice<H> {
                 }
             }
             waited = waited.saturating_add(1);
-            if waited >= CONTROL_XFER_WAIT_SPINS {
+            if waited >= wait_limit {
                 self.ctrl.emit_diag(
                     0x033a,
                     ((setup.request_type as u64) << 56)
@@ -944,7 +958,7 @@ impl<H: Dma> UsbDevice<H> {
                         | ((setup.value as u64) << 32)
                         | (setup.index as u64),
                     ((setup.length as u64) << 48) | (data_len as u64),
-                    waited as u64,
+                    wait_limit as u64,
                 );
                 self.recover_ep0_after_failure(status_trb_addr, 0xff, 0);
                 self.emit_control_failure_context(
