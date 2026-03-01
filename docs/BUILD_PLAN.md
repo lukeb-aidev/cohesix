@@ -6192,6 +6192,25 @@ Checks:
   - Console attach/tail/test flows are unchanged except for profile-gated backend/address selection.
 Deliverables:
   - Reproducible Pi 4 U-Boot network bring-up evidence and updated docs.
+
+Title/ID: m26a-nettest-profile-gate
+Goal: Extend `nettest` so the same command works on QEMU `dev-virt` and Pi 4 static IPv4 without changing console grammar.
+Inputs: apps/root-task/src/net/*, apps/root-task/src/event/mod.rs, docs/INTERFACES.md, docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/root-task/src/net/stack.rs — remove `dev-virt`-only assumptions from self-test target selection and bind probe/echo targets to the active profile-gated interface config (including Pi 4 static IPv4/gateway paths).
+  - apps/root-task/src/net/mod.rs — expose deterministic nettest target/report fields required by both QEMU and Pi 4 backends.
+  - apps/root-task/src/event/mod.rs — update `help`/`netstats` lines so `nettest` no longer appears `dev-virt`-only when built for Pi 4 profiles.
+  - docs/INTERFACES.md + docs/USERLAND_AND_CLI.md — document backend-agnostic `nettest` behavior and expected output fields.
+Commands:
+  - cargo check -p root-task
+  - cargo test -p root-task net:: -- --nocapture
+  - scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
+Checks:
+  - `nettest` remains unchanged for QEMU (`127.0.0.1:{31338,31339}` hostfwd workflows still valid).
+  - Pi 4 static IPv4 profile can run `nettest` and produce deterministic pass/fail evidence with no new in-VM listeners.
+  - ACK/ERR/END console grammar and existing command names remain unchanged.
+Deliverables:
+  - Single `nettest` path that is profile-gated by backend/address config and validated on both QEMU and Pi 4 static IPv4.
 ```
 
 ---
@@ -6329,6 +6348,26 @@ Checks:
   - Existing QEMU fixtures on macOS/Linux remain passing with no operator-facing behavior regressions.
 Deliverables:
   - Auditable compatibility evidence for the Pi 4 bare-metal rollout milestones.
+
+Title/ID: m26b-nettest-interface-policy
+Goal: Extend `nettest` to honor 26b network policy (`wired|wifi|auto`) while enforcing a single active control-plane interface at runtime.
+Inputs: apps/root-task/src/net/*, tools/coh-rtc/src/*, apps/root-task/src/generated/*, docs/INTERFACES.md, docs/HARDWARE_BRINGUP.md.
+Changes:
+  - apps/root-task/src/net/mod.rs + apps/root-task/src/net/stack.rs — add policy-aware interface selection for self-test execution and report active/standby interface state in `netstats`.
+  - apps/root-task/src/net/dhcp.rs — surface bounded lease/state signals needed by `nettest` diagnostics for DHCP paths.
+  - tools/coh-rtc/src/* + apps/root-task/src/generated/* — emit and validate nettest-relevant policy fields (`mode`, `interface`, retry/timing bounds) for `pi4-uboot-aarch64`.
+  - docs/INTERFACES.md + docs/HARDWARE_BRINGUP.md — codify deterministic single-active-interface behavior and failover evidence requirements for `auto`.
+Commands:
+  - cargo check -p root-task
+  - cargo test -p root-task net:: -- --nocapture
+  - cargo test -p coh-rtc
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+Checks:
+  - `nettest` on `wired` and `wifi` policies executes against only the selected interface.
+  - `auto` policy uses deterministic priority/failover, with at most one active TCP console interface at any moment.
+  - Existing QEMU `nettest` behavior and host workflows remain backward compatible with no required command changes.
+Deliverables:
+  - Policy-driven `nettest` behavior for Pi 4 DHCP milestones with explicit single-active-interface guarantees and compatibility evidence.
 ```
 
 ---
