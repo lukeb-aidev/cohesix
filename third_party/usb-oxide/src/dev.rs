@@ -227,7 +227,7 @@ impl<H: Dma> UsbDevice<H> {
         let host = ctrl.host();
 
         // Enable slot
-        let slot_id = ctrl.enable_slot()?;
+        let mut slot_id = ctrl.enable_slot()?;
 
         let ctx_stride = ctrl.context_size_bytes();
         if ctx_stride != 32 && ctx_stride != 64 {
@@ -293,82 +293,103 @@ impl<H: Dma> UsbDevice<H> {
         match speed {
             reg::SPEED_LOW => push_candidate(8),
             reg::SPEED_FULL => {
-                push_candidate(64);
                 push_candidate(8);
+                push_candidate(64);
             }
             reg::SPEED_HIGH => push_candidate(64),
             reg::SPEED_SUPER | reg::SPEED_SUPER_PLUS => push_candidate(512),
             _ => {
-                push_candidate(64);
                 push_candidate(8);
+                push_candidate(64);
                 push_candidate(512);
             }
         }
 
-        let mut last_ctx_state_err: Option<UsbError> = None;
-        for (attempt_idx, max_packet) in ep0_mps_candidates[..candidate_count]
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            unsafe {
-                *(input_base.add(ctx_stride * 2) as *mut EndpointContext) = EndpointContext::new(
-                    4, // Control Bidirectional
-                    max_packet,
-                    0,
-                    0,
-                    ep0_ring.phys(host),
-                );
-            }
-            compiler_fence(Ordering::Release);
-
-            // xHCI diagnostics: address-attempt and programmed slot/ep0 context.
-            let slot_ctx = unsafe { *(input_base.add(ctx_stride) as *const SlotContext) };
-            let ep0_ctx = unsafe { *(input_base.add(ctx_stride * 2) as *const EndpointContext) };
-            ctrl.emit_diag(
-                0x0310,
-                ((attempt_idx as u64) << 32) | speed as u64,
-                max_packet as u64,
-                0,
-            );
-            ctrl.emit_diag(
-                0x0311,
-                ((slot_ctx.dw0 as u64) << 32) | slot_ctx.dw1 as u64,
-                ((slot_ctx.dw2 as u64) << 32) | slot_ctx.dw3 as u64,
-                0,
-            );
-            ctrl.emit_diag(
-                0x0312,
-                ((ep0_ctx.dw0 as u64) << 32) | ep0_ctx.dw1 as u64,
-                ((ep0_ctx.tr_dequeue_hi as u64) << 32) | ep0_ctx.tr_dequeue_lo as u64,
-                ep0_ctx.dw4 as u64,
-            );
-
-            // Address Device command
-            let trb = Trb {
-                param: input_ctx.phys(host),
-                status: 0,
-                control: (trb_type::ADDRESS_DEVICE << 10) | ((slot_id as u32) << 24),
-            };
-            match ctrl.submit_command(trb) {
-                Ok(_) => {
-                    last_ctx_state_err = None;
-                    break;
+        const MAX_SLOT_RECYCLES: usize = 1;
+        let mut slot_recycles = 0usize;
+        'address_attempt: loop {
+            let mut last_ctx_state_err: Option<UsbError> = None;
+            for (attempt_idx, max_packet) in ep0_mps_candidates[..candidate_count]
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                unsafe {
+                    *(input_base.add(ctx_stride * 2) as *mut EndpointContext) =
+                        EndpointContext::new(
+                            4, // Control Bidirectional
+                            max_packet,
+                            0,
+                            0,
+                            ep0_ring.phys(host),
+                        );
                 }
-                Err(UsbError::Timeout) => return Err(UsbError::AddressDeviceTimeout),
-                Err(UsbError::CmdFail(code))
-                    if code == completion::CONTEXT_STATE_ERROR
-                        && attempt_idx + 1 < candidate_count =>
-                {
-                    last_ctx_state_err = Some(UsbError::CmdFail(code));
+                compiler_fence(Ordering::Release);
+
+                // xHCI diagnostics: address-attempt and programmed slot/ep0 context.
+                let slot_ctx = unsafe { *(input_base.add(ctx_stride) as *const SlotContext) };
+                let ep0_ctx =
+                    unsafe { *(input_base.add(ctx_stride * 2) as *const EndpointContext) };
+                ctrl.emit_diag(
+                    0x0310,
+                    ((attempt_idx as u64) << 32) | speed as u64,
+                    ((slot_id as u64) << 32) | max_packet as u64,
+                    slot_recycles as u64,
+                );
+                ctrl.emit_diag(
+                    0x0311,
+                    ((slot_ctx.dw0 as u64) << 32) | slot_ctx.dw1 as u64,
+                    ((slot_ctx.dw2 as u64) << 32) | slot_ctx.dw3 as u64,
+                    0,
+                );
+                ctrl.emit_diag(
+                    0x0312,
+                    ((ep0_ctx.dw0 as u64) << 32) | ep0_ctx.dw1 as u64,
+                    ((ep0_ctx.tr_dequeue_hi as u64) << 32) | ep0_ctx.tr_dequeue_lo as u64,
+                    ep0_ctx.dw4 as u64,
+                );
+
+                // Address Device command
+                let trb = Trb {
+                    param: input_ctx.phys(host),
+                    status: 0,
+                    control: (trb_type::ADDRESS_DEVICE << 10) | ((slot_id as u32) << 24),
+                };
+                match ctrl.submit_command(trb) {
+                    Ok(_) => break 'address_attempt,
+                    Err(UsbError::Timeout) => return Err(UsbError::AddressDeviceTimeout),
+                    Err(UsbError::CmdFail(code)) if code == completion::CONTEXT_STATE_ERROR => {
+                        last_ctx_state_err = Some(UsbError::CmdFail(code));
+                        if attempt_idx + 1 < candidate_count {
+                            continue;
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+
+            if let Some(err) = last_ctx_state_err {
+                if slot_recycles < MAX_SLOT_RECYCLES {
+                    let old_slot = slot_id;
+                    slot_recycles = slot_recycles.saturating_add(1);
+                    ctrl.emit_diag(0x0313, old_slot as u64, slot_recycles as u64, 0);
+
+                    ctrl.set_device_context(old_slot, 0);
+                    let _ = ctrl.disable_slot(old_slot);
+
+                    slot_id = match ctrl.enable_slot() {
+                        Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
+                        Err(enable_err) => return Err(enable_err),
+                        Ok(new_slot) => new_slot,
+                    };
+                    ctrl.set_device_context(slot_id, device_ctx.phys(host));
+                    compiler_fence(Ordering::Release);
+                    ctrl.emit_diag(0x0314, old_slot as u64, slot_id as u64, 0);
                     continue;
                 }
-                Err(err) => return Err(err),
+                return Err(err);
             }
-        }
-
-        if let Some(err) = last_ctx_state_err {
-            return Err(err);
+            return Err(UsbError::CmdFail(completion::CONTEXT_STATE_ERROR));
         }
 
         // Allocate ep_rings on heap to reduce stack usage
