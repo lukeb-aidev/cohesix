@@ -99,6 +99,7 @@ const HUB_PORT_STATUS_BYTES: usize = 4;
 const HUB_PORT_STATUS_RETRY_LOOPS: usize = 64;
 const HUB_PORT_STATUS_QUICK_RETRIES: usize = 4;
 const HUB_SET_FEATURE_RETRIES: usize = 3;
+const HUB_DISCONNECTED_RECOVERY_POWER_RETRIES: usize = 2;
 const HUB_POST_CONFIG_SETTLE_MS: u64 = 250;
 const HUB_POWER_SETTLE_MIN_MS: u64 = 200;
 const HUB_RESET_SETTLE_MS: u64 = 50;
@@ -2866,6 +2867,8 @@ impl UsbKeyboard {
         let mut attempted_ports = 0usize;
         let mut unavailable_pre_reset = 0usize;
         let mut disconnected_pre_reset = 0usize;
+        let mut disconnected_unpowered_pre_reset = 0usize;
+        let mut disconnected_recovered = 0usize;
         let mut reset_feature_failed = 0usize;
         let mut ready_timeout = 0usize;
         let mut blind_probe_attempted = 0usize;
@@ -2892,12 +2895,81 @@ impl UsbKeyboard {
                 );
                 if !status.connected() {
                     disconnected_pre_reset = disconnected_pre_reset.saturating_add(1);
-                    Self::log_hub_port_terminal(
-                        device.slot_id(),
+                    if !status.powered() {
+                        disconnected_unpowered_pre_reset =
+                            disconnected_unpowered_pre_reset.saturating_add(1);
+                    }
+                    if Self::recover_disconnected_hub_port(
+                        device.as_ref(),
+                        hub_interface_number,
+                        hub_protocol_code,
+                        hub_desc.power_switching_mode(),
+                        hub_desc.pwr_on_2_pwr_good,
                         downstream_port,
-                        "disconnected-pre-reset",
-                    );
-                    continue;
+                        reset_feature,
+                        status,
+                    ) {
+                        disconnected_recovered = disconnected_recovered.saturating_add(1);
+                        if let Some(status_after_recovery) = Self::hub_port_status_with_retry(
+                            device.as_ref(),
+                            hub_interface_number,
+                            downstream_port,
+                            "post-disconnected-recovery",
+                        ) {
+                            Self::log_hub_port_status(
+                                device.slot_id(),
+                                downstream_port,
+                                "post-disconnected-recovery",
+                                status_after_recovery,
+                            );
+                            Self::clear_hub_port_change_bits(
+                                device.as_ref(),
+                                hub_interface_number,
+                                downstream_port,
+                                status_after_recovery,
+                                hub_protocol_code,
+                            );
+                        } else {
+                            Self::log_hub_port_status_unavailable(
+                                device.slot_id(),
+                                downstream_port,
+                                "post-disconnected-recovery",
+                            );
+                        }
+                    } else {
+                        blind_probe_attempted = blind_probe_attempted.saturating_add(1);
+                        match Self::probe_hub_child_without_port_status(
+                            &device,
+                            downstream_port,
+                            hub_multi_tt,
+                            depth_remaining,
+                            saw_keyboard_init_error,
+                            "disconnected-pre-reset",
+                        ) {
+                            HubChildProbeResult::Keyboard(hid) => {
+                                blind_probe_succeeded = blind_probe_succeeded.saturating_add(1);
+                                return Some(hid);
+                            }
+                            HubChildProbeResult::ProbedNoKeyboard => {
+                                continue;
+                            }
+                            HubChildProbeResult::Failed => {}
+                        }
+                        Self::log_hub_port_exact_fault(
+                            device.slot_id(),
+                            hub_interface_number,
+                            downstream_port,
+                            "disconnected-pre-reset-no-recovery",
+                            status,
+                            hub_desc.power_switching_mode(),
+                        );
+                        Self::log_hub_port_terminal(
+                            device.slot_id(),
+                            downstream_port,
+                            "disconnected-pre-reset",
+                        );
+                        continue;
+                    }
                 }
             } else {
                 unavailable_pre_reset = unavailable_pre_reset.saturating_add(1);
@@ -2921,6 +2993,7 @@ impl UsbKeyboard {
                     hub_multi_tt,
                     depth_remaining,
                     saw_keyboard_init_error,
+                    "pre-status-unavailable",
                 ) {
                     HubChildProbeResult::Keyboard(hid) => {
                         blind_probe_succeeded = blind_probe_succeeded.saturating_add(1);
@@ -3056,12 +3129,14 @@ impl UsbKeyboard {
         let _ = core::fmt::Write::write_fmt(
             &mut summary,
             format_args!(
-                "[local-seat] hub scan summary slot={} iface={} attempted_ports={} pre_status_unavailable={} disconnected_pre_reset={} reset_feature_failed={} ready_timeout={} blind_probe_attempted={} blind_probe_succeeded={}",
+                "[local-seat] hub scan summary slot={} iface={} attempted_ports={} pre_status_unavailable={} disconnected_pre_reset={} disconnected_unpowered_pre_reset={} disconnected_recovered={} reset_feature_failed={} ready_timeout={} blind_probe_attempted={} blind_probe_succeeded={}",
                 device.slot_id(),
                 hub_interface_number,
                 attempted_ports,
                 unavailable_pre_reset,
                 disconnected_pre_reset,
+                disconnected_unpowered_pre_reset,
+                disconnected_recovered,
                 reset_feature_failed,
                 ready_timeout,
                 blind_probe_attempted,
@@ -3069,6 +3144,29 @@ impl UsbKeyboard {
             ),
         );
         boot_log::force_uart_line(summary.as_str());
+        if attempted_ports > 0
+            && disconnected_pre_reset == attempted_ports
+            && disconnected_recovered == 0
+        {
+            let reason = if disconnected_unpowered_pre_reset == attempted_ports {
+                "all-ports-unpowered-pre-reset"
+            } else {
+                "all-ports-disconnected-pre-reset"
+            };
+            let mut line = heapless::String::<256>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] hub exact-fault slot={} iface={} reason={} mode={} attempted_ports={}",
+                    device.slot_id(),
+                    hub_interface_number,
+                    reason,
+                    hub_desc.power_switching_mode(),
+                    attempted_ports,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
 
         None
     }
@@ -3079,6 +3177,7 @@ impl UsbKeyboard {
         hub_multi_tt: bool,
         depth_remaining: usize,
         saw_keyboard_init_error: &mut bool,
+        source: &str,
     ) -> HubChildProbeResult {
         let Some(route) = append_route_segment(device.route(), downstream_port) else {
             Self::log_hub_port_terminal(device.slot_id(), downstream_port, "route-overflow");
@@ -3095,10 +3194,11 @@ impl UsbKeyboard {
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] hub blind-probe slot={} port={} route=0x{route:05x} speed={} source=pre-status-unavailable",
+                    "[local-seat] hub blind-probe slot={} port={} route=0x{route:05x} speed={} source={}",
                     device.slot_id(),
                     downstream_port,
-                    child_speed
+                    child_speed,
+                    source,
                 ),
             );
             boot_log::force_uart_line(line.as_str());
@@ -3516,6 +3616,166 @@ impl UsbKeyboard {
         }
     }
 
+    #[inline]
+    const fn hub_mode_supports_port_power(power_mode: u8) -> bool {
+        power_mode == 0 || power_mode == 1
+    }
+
+    fn recover_disconnected_hub_port(
+        device: &UsbDevice<SeatDma>,
+        hub_interface_number: u8,
+        hub_protocol_code: u8,
+        hub_power_mode: u8,
+        pwr_on_2_pwr_good: u8,
+        port: u8,
+        reset_feature: u16,
+        pre_status: HubPortStatus,
+    ) -> bool {
+        let mut begin = heapless::String::<256>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut begin,
+            format_args!(
+                "[local-seat] hub disconnected recover slot={} iface={} port={} mode={} pre_status=0x{:04x} pre_change=0x{:04x} pre_pwr={}",
+                device.slot_id(),
+                hub_interface_number,
+                port,
+                hub_power_mode,
+                pre_status.status,
+                pre_status.change,
+                pre_status.powered() as u8,
+            ),
+        );
+        boot_log::force_uart_line(begin.as_str());
+
+        let mut power_kick_sent = false;
+        let mut post_power_status = None;
+        if !pre_status.powered() && Self::hub_mode_supports_port_power(hub_power_mode) {
+            power_kick_sent = Self::hub_set_feature_with_retry(
+                device,
+                hub_interface_number,
+                port,
+                hub_feature::PORT_POWER,
+                "disconnected-kick-power",
+                HUB_DISCONNECTED_RECOVERY_POWER_RETRIES,
+            );
+            if power_kick_sent {
+                let pwr_good_ms = (pwr_on_2_pwr_good as u64).saturating_mul(2);
+                wait_ms(cmp::max(pwr_good_ms, HUB_PORT_STATUS_QUICK_RETRY_DELAY_MS));
+                post_power_status = Self::hub_port_status_with_retry(
+                    device,
+                    hub_interface_number,
+                    port,
+                    "disconnected-post-power",
+                );
+                if let Some(status) = post_power_status {
+                    Self::log_hub_port_status(
+                        device.slot_id(),
+                        port,
+                        "disconnected-post-power",
+                        status,
+                    );
+                    Self::clear_hub_port_change_bits(
+                        device,
+                        hub_interface_number,
+                        port,
+                        status,
+                        hub_protocol_code,
+                    );
+                    if status.connected() {
+                        Self::log_hub_port_exact_fault(
+                            device.slot_id(),
+                            hub_interface_number,
+                            port,
+                            "recovered-after-power-kick",
+                            status,
+                            hub_power_mode,
+                        );
+                        return true;
+                    }
+                } else {
+                    Self::log_hub_port_status_unavailable(
+                        device.slot_id(),
+                        port,
+                        "disconnected-post-power",
+                    );
+                }
+            }
+        }
+
+        let reset_sent = Self::hub_set_feature_with_retry(
+            device,
+            hub_interface_number,
+            port,
+            reset_feature,
+            "disconnected-force-reset",
+            1,
+        );
+        if reset_sent {
+            wait_ms(HUB_RESET_SETTLE_MS);
+        }
+        let post_reset_status = Self::hub_port_status_with_retry(
+            device,
+            hub_interface_number,
+            port,
+            "disconnected-post-reset",
+        );
+        if let Some(status) = post_reset_status {
+            Self::log_hub_port_status(device.slot_id(), port, "disconnected-post-reset", status);
+            Self::clear_hub_port_change_bits(
+                device,
+                hub_interface_number,
+                port,
+                status,
+                hub_protocol_code,
+            );
+            if status.connected() {
+                Self::log_hub_port_exact_fault(
+                    device.slot_id(),
+                    hub_interface_number,
+                    port,
+                    "recovered-after-force-reset",
+                    status,
+                    hub_power_mode,
+                );
+                return true;
+            }
+        } else {
+            Self::log_hub_port_status_unavailable(
+                device.slot_id(),
+                port,
+                "disconnected-post-reset",
+            );
+        }
+
+        let (post_power_raw_status, post_power_raw_change) = post_power_status
+            .map(|status| (status.status, status.change))
+            .unwrap_or((0xffff, 0xffff));
+        let (post_reset_raw_status, post_reset_raw_change) = post_reset_status
+            .map(|status| (status.status, status.change))
+            .unwrap_or((0xffff, 0xffff));
+        let mut line = heapless::String::<384>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] hub exact-fault slot={} iface={} port={} reason=disconnected-stuck mode={} pre=0x{:04x}/0x{:04x} post_power=0x{:04x}/0x{:04x} post_reset=0x{:04x}/0x{:04x} power_kick_sent={} reset_sent={}",
+                device.slot_id(),
+                hub_interface_number,
+                port,
+                hub_power_mode,
+                pre_status.status,
+                pre_status.change,
+                post_power_raw_status,
+                post_power_raw_change,
+                post_reset_raw_status,
+                post_reset_raw_change,
+                power_kick_sent as u8,
+                reset_sent as u8,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        false
+    }
+
     fn hub_power_on_ports(
         device: &UsbDevice<SeatDma>,
         max_ports: usize,
@@ -3524,9 +3784,9 @@ impl UsbKeyboard {
         pwr_on_2_pwr_good: u8,
     ) {
         let mut powered_ports = 0usize;
-        // Only individual-switched hubs (mode 1) need per-port PORT_POWER
-        // commands. Issuing PORT_POWER to ganged/no-switching hubs can stall
-        // on some Pi4 topologies and break downstream status/reset probing.
+        // Only individual-switched hubs (mode 1) are powered eagerly here.
+        // Ganged hubs (mode 0) are power-kicked on-demand when a downstream
+        // port reports disconnected + unpowered during scan.
         if power_mode == 1 {
             for downstream in 1..=max_ports {
                 let port = downstream as u8;
@@ -3543,7 +3803,7 @@ impl UsbKeyboard {
             }
         } else {
             let reason = if power_mode == 0 {
-                "ganged-port-power"
+                "ganged-port-power-deferred"
             } else {
                 "no-port-power-switching"
             };
@@ -3637,7 +3897,7 @@ impl UsbKeyboard {
         reset_feature: u16,
     ) -> bool {
         let mut prepared = false;
-        if hub_power_mode == 1
+        if Self::hub_mode_supports_port_power(hub_power_mode)
             && Self::hub_set_feature_with_retry(
                 device,
                 hub_interface_number,
@@ -3981,6 +4241,35 @@ impl UsbKeyboard {
             format_args!(
                 "[local-seat] hub port terminal slot={} port={} reason={}",
                 slot_id, port, reason
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+    }
+
+    fn log_hub_port_exact_fault(
+        slot_id: u8,
+        hub_interface_number: u8,
+        port: u8,
+        reason: &str,
+        status: HubPortStatus,
+        hub_power_mode: u8,
+    ) {
+        let mut line = heapless::String::<288>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] hub exact-fault slot={} iface={} port={} reason={} mode={} status=0x{:04x} change=0x{:04x} conn={} ena={} rst={} pwr={}",
+                slot_id,
+                hub_interface_number,
+                port,
+                reason,
+                hub_power_mode,
+                status.status,
+                status.change,
+                status.connected() as u8,
+                status.enabled() as u8,
+                status.reset() as u8,
+                status.powered() as u8,
             ),
         );
         boot_log::force_uart_line(line.as_str());
