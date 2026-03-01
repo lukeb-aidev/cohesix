@@ -436,6 +436,16 @@ pub struct ConfigDesc {
 }
 
 impl ConfigDesc {
+    /// Returns `bConfigurationValue` used by SET_CONFIGURATION.
+    pub fn configuration_value(&self) -> u8 {
+        self.config_value
+    }
+
+    /// Returns `iConfiguration` string descriptor index.
+    pub fn configuration_string_index(&self) -> u8 {
+        self.configuration
+    }
+
     /// Returns true if the device is self-powered in this configuration.
     pub fn self_powered(&self) -> bool {
         (self.attributes & 0x40) != 0
@@ -967,6 +977,14 @@ impl SetupPacket {
         )
     }
 
+    /// Creates a SET_HUB_DEPTH request (USB 3.x hubs).
+    ///
+    /// `depth` is the number of external hubs between the root hub and this
+    /// hub. A root-hub child has depth 0.
+    pub fn hub_set_depth(depth: u8) -> Self {
+        Self::new(0x20, 0x0c, depth as u16, 0, 0)
+    }
+
     // Mass Storage class requests
 
     /// Creates a GET_MAX_LUN request (Mass Storage class).
@@ -1062,4 +1080,18 @@ pub mod lang_id {
     pub const ZH_CN: u16 = 0x0804;
     /// Chinese (Traditional)
     pub const ZH_TW: u16 = 0x0404;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConfigDesc;
+
+    #[test]
+    fn config_desc_parses_b_configuration_value_separately_from_i_configuration() {
+        let raw = [9u8, 2, 0x19, 0x00, 0x01, 0x01, 0x2a, 0xe0, 0x32];
+        // SAFETY: `raw` contains exactly one packed USB configuration descriptor.
+        let parsed = unsafe { core::ptr::read_unaligned(raw.as_ptr().cast::<ConfigDesc>()) };
+        assert_eq!(parsed.configuration_value(), 0x01);
+        assert_eq!(parsed.configuration_string_index(), 0x2a);
+    }
 }

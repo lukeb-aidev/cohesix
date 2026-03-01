@@ -1106,6 +1106,15 @@ impl<H: Dma> UsbDevice<H> {
         Ok(())
     }
 
+    /// Set hub depth for a configured SuperSpeed hub.
+    ///
+    /// `depth` is the number of external hubs between root hub and this hub.
+    pub fn set_hub_depth(&self, depth: u8) -> Result<()> {
+        let setup = SetupPacket::hub_set_depth(depth);
+        self.control_transfer(&setup, None)?;
+        Ok(())
+    }
+
     /// Configure an endpoint (after SET_CONFIGURATION)
     pub fn configure_endpoint(&self, ep: &EndpointDesc) -> Result<()> {
         let host = self.ctrl.host();

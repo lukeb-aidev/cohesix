@@ -205,7 +205,7 @@ fn usb_progress_emit(dots: usize) {
         return;
     }
     let mut line = heapless::String::<160>::new();
-    let _ = line.push_str("[cohesix] starting USB subsystem ");
+    let _ = line.push_str("[cohesix] starting USB subsystem");
     for _ in 0..dots.min(USB_PROGRESS_MAX_DOTS) {
         let _ = line.push('.');
     }
@@ -2576,14 +2576,28 @@ impl UsbKeyboard {
                             boot_log::force_uart_line(line.as_str());
                             continue;
                         };
-                        if let Err(err) = device.set_configuration(config.configuration) {
+                        let Some(config_value) = config_value_for_set(config) else {
+                            let mut line = heapless::String::<224>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] usb root-enum failed port={} stage=set-config-value detail=invalid bConfigurationValue=0x{:02x} iConfiguration=0x{:02x}",
+                                    port + 1,
+                                    config.configuration_value(),
+                                    config.configuration_string_index()
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            continue;
+                        };
+                        if let Err(err) = device.set_configuration(config_value) {
                             let mut line = heapless::String::<192>::new();
                             let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
                                 "[local-seat] usb root-enum failed port={} stage=set-config({}) detail={err:?}",
                                 port + 1,
-                                config.configuration
+                                config_value
                             ),
                         );
                             boot_log::force_uart_line(line.as_str());
@@ -2716,15 +2730,6 @@ impl UsbKeyboard {
     }
 
     fn hub_interface_info(device_desc: DeviceDesc, config_blob: &[u8]) -> Option<HubInterfaceInfo> {
-        if device_desc.device_class == class::HUB {
-            let protocol = device_desc.device_protocol;
-            return Some(HubInterfaceInfo {
-                protocol,
-                multi_tt: protocol == hub_protocol::HI_SPEED_MULTI_TT,
-                interface_number: 0,
-            });
-        }
-
         let mut offset = 0usize;
         while offset + 2 <= config_blob.len() {
             let len = config_blob[offset] as usize;
@@ -2753,6 +2758,14 @@ impl UsbKeyboard {
             }
             offset += len;
         }
+        if device_desc.device_class == class::HUB {
+            let protocol = device_desc.device_protocol;
+            return Some(HubInterfaceInfo {
+                protocol,
+                multi_tt: protocol == hub_protocol::HI_SPEED_MULTI_TT,
+                interface_number: 0,
+            });
+        }
         None
     }
 
@@ -2764,6 +2777,38 @@ impl UsbKeyboard {
         depth_remaining: usize,
         saw_keyboard_init_error: &mut bool,
     ) -> Option<HidDevice<SeatDma>> {
+        if hub_protocol_code == hub_protocol::SUPER_SPEED {
+            let hub_depth = cmp::min(route_depth(device.route()), 4);
+            match device.set_hub_depth(hub_depth) {
+                Ok(()) => {
+                    let mut line = heapless::String::<192>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] ss hub depth set slot={} route=0x{route:05x} depth={}",
+                            device.slot_id(),
+                            hub_depth,
+                            route = device.route(),
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                }
+                Err(err) => {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] ss hub depth set failed slot={} route=0x{route:05x} depth={} detail={err:?}",
+                            device.slot_id(),
+                            hub_depth,
+                            route = device.route(),
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                }
+            }
+        }
+
         let hub_desc = match Self::read_hub_descriptor(
             device.as_ref(),
             hub_protocol_code,
@@ -2860,6 +2905,14 @@ impl UsbKeyboard {
                     device.slot_id(),
                     downstream_port,
                     "pre-reset",
+                );
+                let _ = Self::hub_prepare_port_without_status(
+                    device.as_ref(),
+                    hub_interface_number,
+                    hub_protocol_code,
+                    hub_desc.power_switching_mode(),
+                    downstream_port,
+                    reset_feature,
                 );
                 blind_probe_attempted = blind_probe_attempted.saturating_add(1);
                 match Self::probe_hub_child_without_port_status(
@@ -3206,7 +3259,25 @@ impl UsbKeyboard {
             Self::log_hub_port_terminal(device.slot_id(), downstream_port, "config-parse-fail");
             return HubChildProbeResult::Failed;
         };
-        if let Err(err) = child.set_configuration(config.configuration) {
+        let Some(config_value) = config_value_for_set(config) else {
+            let mut line = heapless::String::<272>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] hub child failed slot={} port={} stage=set-config-value speed={} source={} detail=invalid bConfigurationValue=0x{:02x} iConfiguration=0x{:02x}",
+                    device.slot_id(),
+                    downstream_port,
+                    child_speed,
+                    source,
+                    config.configuration_value(),
+                    config.configuration_string_index()
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            Self::log_hub_port_terminal(device.slot_id(), downstream_port, "set-config-value-fail");
+            return HubChildProbeResult::Failed;
+        };
+        if let Err(err) = child.set_configuration(config_value) {
             let mut line = heapless::String::<272>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
@@ -3214,7 +3285,7 @@ impl UsbKeyboard {
                     "[local-seat] hub child failed slot={} port={} stage=set-config({}) speed={} source={} detail={err:?}",
                     device.slot_id(),
                     downstream_port,
-                    config.configuration,
+                    config_value,
                     child_speed,
                     source
                 ),
@@ -3250,33 +3321,78 @@ impl UsbKeyboard {
         } else {
             desc_type::HUB
         };
-        let setup = SetupPacket::new(
+        let descriptor_value = (descriptor_type as u16) << 8;
+        let request_len = blob.len() as u16;
+        let primary_setup = SetupPacket::new(
             0xA0,
             request::GET_DESCRIPTOR,
-            (descriptor_type as u16) << 8,
+            descriptor_value,
             // Linux and USB hub class requests issue hub descriptor reads
             // against the hub device with wIndex=0.
             0,
-            blob.len() as u16,
+            request_len,
         );
-        let transferred = match device.control_transfer(&setup, Some(&mut blob)) {
+        let transferred = match device.control_transfer(&primary_setup, Some(&mut blob)) {
             Ok(transferred) => transferred,
-            Err(err) => {
-                let mut line = heapless::String::<288>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] hub desc read fail slot={} iface={} req=(bm=0xa0,b=0x{:02x},wValue=0x{:04x},wIndex=0x{:04x},wLen=0x{:04x}) detail={err:?}",
-                        device.slot_id(),
-                        hub_interface_number,
-                        request::GET_DESCRIPTOR,
-                        (descriptor_type as u16) << 8,
-                        0,
-                        blob.len() as u16
-                    ),
+            Err(primary_err) => {
+                let Some(alt_index) = Self::hub_interface_windex(hub_interface_number) else {
+                    let mut line = heapless::String::<288>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] hub desc read fail slot={} iface={} req=(bm=0xa0,b=0x{:02x},wValue=0x{:04x},wIndex=0x{:04x},wLen=0x{:04x}) detail={primary_err:?}",
+                            device.slot_id(),
+                            hub_interface_number,
+                            request::GET_DESCRIPTOR,
+                            descriptor_value,
+                            0,
+                            request_len
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    return None;
+                };
+                let alt_setup = SetupPacket::new(
+                    0xA0,
+                    request::GET_DESCRIPTOR,
+                    descriptor_value,
+                    alt_index,
+                    request_len,
                 );
-                boot_log::force_uart_line(line.as_str());
-                return None;
+                match device.control_transfer(&alt_setup, Some(&mut blob)) {
+                    Ok(transferred) => {
+                        let mut line = heapless::String::<256>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] hub desc fallback slot={} iface={} wIndex=0x{:04x} detail=primary-failed({primary_err:?})",
+                                device.slot_id(),
+                                hub_interface_number,
+                                alt_index
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        transferred
+                    }
+                    Err(err) => {
+                        let mut line = heapless::String::<320>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] hub desc read fail slot={} iface={} req=(bm=0xa0,b=0x{:02x},wValue=0x{:04x},wIndex=0x{:04x}/0x{:04x},wLen=0x{:04x}) detail={err:?}",
+                                device.slot_id(),
+                                hub_interface_number,
+                                request::GET_DESCRIPTOR,
+                                descriptor_value,
+                                0,
+                                alt_index,
+                                request_len
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        return None;
+                    }
+                }
             }
         };
         let mut raw_line = heapless::String::<320>::new();
@@ -3322,9 +3438,32 @@ impl UsbKeyboard {
     }
 
     #[inline]
-    const fn hub_port_index(_interface_number: u8, port: u8) -> u16 {
+    const fn hub_port_index(port: u8) -> u16 {
         // Port-recipient hub requests encode the downstream port in wIndex.
         port as u16
+    }
+
+    #[inline]
+    const fn hub_port_index_with_interface(interface_number: u8, port: u8) -> u16 {
+        ((interface_number as u16) << 8) | (port as u16)
+    }
+
+    #[inline]
+    const fn hub_interface_windex(interface_number: u8) -> Option<u16> {
+        if interface_number == 0 {
+            None
+        } else {
+            Some(interface_number as u16)
+        }
+    }
+
+    #[inline]
+    const fn hub_port_alt_index(interface_number: u8, port: u8) -> Option<u16> {
+        if interface_number == 0 {
+            None
+        } else {
+            Some(Self::hub_port_index_with_interface(interface_number, port))
+        }
     }
 
     fn hub_set_feature(
@@ -3333,16 +3472,39 @@ impl UsbKeyboard {
         feature: u16,
         port: u8,
     ) -> core::result::Result<(), UsbError> {
-        let setup = SetupPacket::new(
-            0x23,
-            request::SET_FEATURE,
-            feature,
-            Self::hub_port_index(hub_interface_number, port),
-            0,
-        );
-        device
-            .control_transfer_with_wait_spins(&setup, None, HUB_CLASS_CONTROL_WAIT_SPINS)
-            .map(|_| ())
+        let primary_index = Self::hub_port_index(port);
+        let setup = SetupPacket::new(0x23, request::SET_FEATURE, feature, primary_index, 0);
+        match device.control_transfer_with_wait_spins(&setup, None, HUB_CLASS_CONTROL_WAIT_SPINS) {
+            Ok(_) => Ok(()),
+            Err(primary_err) => {
+                let Some(alt_index) = Self::hub_port_alt_index(hub_interface_number, port) else {
+                    return Err(primary_err);
+                };
+                let alt_setup = SetupPacket::new(0x23, request::SET_FEATURE, feature, alt_index, 0);
+                match device.control_transfer_with_wait_spins(
+                    &alt_setup,
+                    None,
+                    HUB_CLASS_CONTROL_WAIT_SPINS,
+                ) {
+                    Ok(_) => {
+                        let mut line = heapless::String::<256>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] hub ctl fallback slot={} iface={} port={} stage=set-feature wIndex=0x{:04x} detail=primary-failed({primary_err:?})",
+                                device.slot_id(),
+                                hub_interface_number,
+                                port,
+                                alt_index
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+        }
     }
 
     #[inline]
@@ -3466,22 +3628,100 @@ impl UsbKeyboard {
         false
     }
 
+    fn hub_prepare_port_without_status(
+        device: &UsbDevice<SeatDma>,
+        hub_interface_number: u8,
+        hub_protocol_code: u8,
+        hub_power_mode: u8,
+        port: u8,
+        reset_feature: u16,
+    ) -> bool {
+        let mut prepared = false;
+        if hub_power_mode == 1
+            && Self::hub_set_feature_with_retry(
+                device,
+                hub_interface_number,
+                port,
+                hub_feature::PORT_POWER,
+                "blind-set-power",
+                1,
+            )
+        {
+            prepared = true;
+        }
+
+        if Self::hub_set_feature_with_retry(
+            device,
+            hub_interface_number,
+            port,
+            reset_feature,
+            "blind-reset",
+            HUB_SET_FEATURE_RETRIES,
+        ) {
+            prepared = true;
+            wait_ms(HUB_RESET_SETTLE_MS);
+            let reset_change_feature = if hub_protocol_code == hub_protocol::SUPER_SPEED {
+                hub_feature::C_BH_PORT_RESET
+            } else {
+                hub_feature::C_PORT_RESET
+            };
+            let _ =
+                Self::hub_clear_feature(device, hub_interface_number, reset_change_feature, port);
+        }
+
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] hub blind-prepare slot={} iface={} port={} prepared={} reset_feature=0x{:04x}",
+                device.slot_id(),
+                hub_interface_number,
+                port,
+                prepared as u8,
+                reset_feature
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        prepared
+    }
+
     fn hub_clear_feature(
         device: &UsbDevice<SeatDma>,
         hub_interface_number: u8,
         feature: u16,
         port: u8,
     ) -> bool {
-        let setup = SetupPacket::new(
-            0x23,
-            request::CLEAR_FEATURE,
-            feature,
-            Self::hub_port_index(hub_interface_number, port),
-            0,
-        );
-        device
+        let primary_index = Self::hub_port_index(port);
+        let setup = SetupPacket::new(0x23, request::CLEAR_FEATURE, feature, primary_index, 0);
+        if device
             .control_transfer_with_wait_spins(&setup, None, HUB_CLASS_CONTROL_WAIT_SPINS)
             .is_ok()
+        {
+            return true;
+        }
+        let Some(alt_index) = Self::hub_port_alt_index(hub_interface_number, port) else {
+            return false;
+        };
+        let alt_setup = SetupPacket::new(0x23, request::CLEAR_FEATURE, feature, alt_index, 0);
+        if device
+            .control_transfer_with_wait_spins(&alt_setup, None, HUB_CLASS_CONTROL_WAIT_SPINS)
+            .is_ok()
+        {
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] hub ctl fallback slot={} iface={} port={} stage=clear-feature wIndex=0x{:04x}",
+                    device.slot_id(),
+                    hub_interface_number,
+                    port,
+                    alt_index
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return true;
+        }
+        false
     }
 
     fn hub_port_status_read(
@@ -3489,23 +3729,75 @@ impl UsbKeyboard {
         hub_interface_number: u8,
         port: u8,
     ) -> Result<HubPortStatus, HubPortStatusReadError> {
+        let primary_index = Self::hub_port_index(port);
+        let alt_index = Self::hub_port_alt_index(hub_interface_number, port);
         let mut bytes = [0u8; HUB_PORT_STATUS_BYTES];
-        let setup = SetupPacket::new(
-            0xA3,
-            request::GET_STATUS,
-            0,
-            Self::hub_port_index(hub_interface_number, port),
-            HUB_PORT_STATUS_BYTES as u16,
-        );
-        let transferred = match device.control_transfer_with_wait_spins(
-            &setup,
-            Some(&mut bytes),
-            HUB_CLASS_CONTROL_WAIT_SPINS,
-        ) {
+        let read_for_index = |index: u16, bytes: &mut [u8; HUB_PORT_STATUS_BYTES]| {
+            let setup = SetupPacket::new(
+                0xA3,
+                request::GET_STATUS,
+                0,
+                index,
+                HUB_PORT_STATUS_BYTES as u16,
+            );
+            device.control_transfer_with_wait_spins(
+                &setup,
+                Some(bytes),
+                HUB_CLASS_CONTROL_WAIT_SPINS,
+            )
+        };
+        let transferred = match read_for_index(primary_index, &mut bytes) {
             Ok(transferred) => transferred,
-            Err(err) => return Err(HubPortStatusReadError::Control(err)),
+            Err(primary_err) => {
+                let Some(alt_index) = alt_index else {
+                    return Err(HubPortStatusReadError::Control(primary_err));
+                };
+                match read_for_index(alt_index, &mut bytes) {
+                    Ok(transferred) => {
+                        let mut line = heapless::String::<256>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] hub status fallback slot={} iface={} port={} wIndex=0x{:04x} detail=primary-failed({primary_err:?})",
+                                device.slot_id(),
+                                hub_interface_number,
+                                port,
+                                alt_index
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        transferred
+                    }
+                    Err(_) => return Err(HubPortStatusReadError::Control(primary_err)),
+                }
+            }
         };
         if transferred < HUB_PORT_STATUS_BYTES {
+            if let Some(alt_index) = alt_index {
+                if alt_index != primary_index {
+                    match read_for_index(alt_index, &mut bytes) {
+                        Ok(retry_transferred) if retry_transferred >= HUB_PORT_STATUS_BYTES => {
+                            let mut line = heapless::String::<256>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] hub status fallback slot={} iface={} port={} wIndex=0x{:04x} detail=primary-short({transferred})",
+                                    device.slot_id(),
+                                    hub_interface_number,
+                                    port,
+                                    alt_index
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            return Ok(HubPortStatus {
+                                status: u16::from_le_bytes([bytes[0], bytes[1]]),
+                                change: u16::from_le_bytes([bytes[2], bytes[3]]),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
             return Err(HubPortStatusReadError::ShortTransfer { transferred, bytes });
         }
         Ok(HubPortStatus {
@@ -3703,7 +3995,7 @@ impl UsbKeyboard {
         max_attempts: usize,
         err: HubPortStatusReadError,
     ) {
-        let w_index = Self::hub_port_index(hub_interface_number, port);
+        let w_index = Self::hub_port_index(port);
         let mut line = heapless::String::<320>::new();
         match err {
             HubPortStatusReadError::Control(control_err) => {
@@ -4493,17 +4785,23 @@ const fn div_ceil(value: usize, divisor: usize) -> usize {
 
 #[inline]
 fn append_route_segment(route: u32, downstream_port: u8) -> Option<u32> {
-    let mut depth = 0u32;
-    let mut rem = route & 0x000f_ffff;
-    while rem != 0 {
-        depth = depth.saturating_add(1);
-        rem >>= 4;
-    }
+    let depth = route_depth(route) as u32;
     if depth >= 5 {
         return None;
     }
     let segment = cmp::min(downstream_port, 15) as u32;
     Some((route & 0x000f_ffff) | (segment << (depth * 4)))
+}
+
+#[inline]
+fn route_depth(route: u32) -> u8 {
+    let mut depth = 0u8;
+    let mut rem = route & 0x000f_ffff;
+    while rem != 0 {
+        depth = depth.saturating_add(1);
+        rem >>= 4;
+    }
+    depth
 }
 
 #[inline]
@@ -4513,6 +4811,17 @@ fn read_config_desc(config_blob: &[u8]) -> Option<ConfigDesc> {
     }
     // SAFETY: The descriptor bytes may be unaligned in the returned USB blob.
     Some(unsafe { ptr::read_unaligned(config_blob.as_ptr().cast::<ConfigDesc>()) })
+}
+
+#[inline]
+fn config_value_for_set(config: ConfigDesc) -> Option<u8> {
+    // USB SET_CONFIGURATION expects bConfigurationValue, not iConfiguration.
+    let value = config.configuration_value();
+    if value == 0 {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn validate_framebuffer_geometry(
@@ -4540,7 +4849,7 @@ fn validate_framebuffer_geometry(
 
 #[cfg(test)]
 mod tests {
-    use super::decode_pci_mmio_bar;
+    use super::{config_value_for_set, decode_pci_mmio_bar, ConfigDesc};
 
     #[test]
     fn decode_pci_mmio_bar_rejects_io_bar() {
@@ -4557,5 +4866,25 @@ mod tests {
         let low = 0x0000_0004;
         let high = 0x0000_0006;
         assert_eq!(decode_pci_mmio_bar(low, high), Some(0x0000_0006_0000_0000));
+    }
+
+    #[test]
+    fn config_value_for_set_uses_b_configuration_value() {
+        let config = ConfigDesc {
+            config_value: 1,
+            configuration: 42,
+            ..ConfigDesc::default()
+        };
+        assert_eq!(config_value_for_set(config), Some(1));
+    }
+
+    #[test]
+    fn config_value_for_set_rejects_zero_b_configuration_value() {
+        let config = ConfigDesc {
+            config_value: 0,
+            configuration: 1,
+            ..ConfigDesc::default()
+        };
+        assert_eq!(config_value_for_set(config), None);
     }
 }
