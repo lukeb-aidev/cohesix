@@ -25,6 +25,8 @@ const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
 const PORT_ENABLE_WAIT_SPINS: usize = 10_000_000;
 const PORT_SETTLE_SPINS: usize = 100_000;
+const PORT_POST_ACK_WAIT_SPINS: usize = 1_000_000;
+const PORT_POST_ACK_TRANSITION_LOGS: usize = 8;
 const DROP_HALT_WAIT_SPINS: usize = 1_000_000;
 const USBSTS_CLEAR_MASK: u32 =
     reg::USBSTS_EINT | reg::USBSTS_PCD | reg::USBSTS_HSE | reg::USBSTS_HCE;
@@ -52,8 +54,10 @@ const PORT_CHANGE_BITS: u32 = reg::PORTSC_CSC
     | reg::PORTSC_PRC
     | reg::PORTSC_PLC
     | reg::PORTSC_CEC;
+// Keep only bits that are safe to mirror back across maintenance writes.
+// PORTSC_PED must not be mirrored: on some USB2 paths it is RW1CS and writing
+// a sampled 1 can clear the enabled state immediately after reset/ACK.
 const PORTSC_NEUTRAL_MASK: u32 = reg::PORTSC_CCS
-    | reg::PORTSC_PED
     | reg::PORTSC_OCA
     | reg::PORTSC_PLS_MASK
     | reg::PORTSC_PP
@@ -123,6 +127,15 @@ fn ring_write_barrier() {
 #[inline]
 const fn port_state_neutral(portsc: u32) -> u32 {
     portsc & PORTSC_NEUTRAL_MASK
+}
+
+#[inline]
+const fn encode_port_diag(portsc: u32) -> u64 {
+    let speed = reg::portsc_speed(portsc) as u64;
+    let pls = reg::portsc_pls(portsc) as u64;
+    let ped = ((portsc & reg::PORTSC_PED) != 0) as u64;
+    let ccs = ((portsc & reg::PORTSC_CCS) != 0) as u64;
+    (speed << 56) | (pls << 48) | (ped << 40) | (ccs << 32) | portsc as u64
 }
 
 fn parse_controller_params(
@@ -659,8 +672,12 @@ impl<H: Dma> XhciCtrl<H> {
         self.write_op(reg::USBSTS, reg::USBSTS_EINT);
     }
 
-    /// Wait for command completion
-    pub fn wait_command(&self) -> Result<Trb> {
+    /// Wait for command completion.
+    ///
+    /// When `expected_cmd_trb` is provided, completion events for other
+    /// command TRBs are ignored (with diagnostic breadcrumbs) until the
+    /// expected command completes.
+    pub fn wait_command(&self, expected_cmd_trb: Option<u64>) -> Result<Trb> {
         let mut waited = 0usize;
         loop {
             let trb = {
@@ -673,6 +690,27 @@ impl<H: Dma> XhciCtrl<H> {
 
                 if trb.trb_type() == trb_type::COMMAND_COMPLETION as u8 {
                     let code = trb.completion_code();
+                    let completion_ptr = trb.param & !0x0f;
+                    if let Some(expected_ptr_raw) = expected_cmd_trb {
+                        let expected_ptr = expected_ptr_raw & !0x0f;
+                        let ptr_match = completion_ptr == expected_ptr;
+                        emit_xhci_diag(
+                            0x0304,
+                            completion_ptr,
+                            expected_ptr,
+                            if ptr_match { 1 } else { 0 },
+                        );
+                        if !ptr_match {
+                            emit_xhci_diag(
+                                0x0305,
+                                self.read_op_u64(reg::CRCR),
+                                ((self.read_op::<u32>(reg::USBCMD) as u64) << 32)
+                                    | self.read_op::<u32>(reg::USBSTS) as u64,
+                                trb.control as u64,
+                            );
+                            continue;
+                        }
+                    }
                     emit_xhci_diag(
                         0x0301,
                         trb.param,
@@ -680,6 +718,13 @@ impl<H: Dma> XhciCtrl<H> {
                         code as u64,
                     );
                     if code != completion::SUCCESS {
+                        emit_xhci_diag(
+                            0x0306,
+                            self.read_op_u64(reg::CRCR),
+                            self.read_op_u64(reg::DCBAAP),
+                            ((self.read_op::<u32>(reg::USBCMD) as u64) << 32)
+                                | self.read_op::<u32>(reg::USBSTS) as u64,
+                        );
                         emit_xhci_diag(
                             0x0302,
                             code as u64,
@@ -720,10 +765,18 @@ impl<H: Dma> XhciCtrl<H> {
             0,
         );
         let mut cmd_ring = self.cmd_ring.lock();
-        cmd_ring.enqueue(&*self.host, trb);
+        let (enqueue_before, cycle_before) = cmd_ring.debug_state();
+        let cmd_addr = cmd_ring.enqueue(&*self.host, trb);
+        let (enqueue_after, cycle_after) = cmd_ring.debug_state();
+        emit_xhci_diag(
+            0x0303,
+            cmd_addr,
+            ((enqueue_before as u64) << 32) | enqueue_after as u64,
+            ((cycle_before as u64) << 1) | (cycle_after as u64),
+        );
         drop(cmd_ring);
         self.ring_cmd_doorbell();
-        self.wait_command()
+        self.wait_command(Some(cmd_addr))
     }
 
     /// Enable a device slot
@@ -752,6 +805,39 @@ impl<H: Dma> XhciCtrl<H> {
         Ok(())
     }
 
+    /// Reset a halted endpoint context.
+    pub fn reset_endpoint(&self, slot_id: u8, endpoint_id: u8) -> Result<()> {
+        let trb = Trb {
+            param: 0,
+            status: 0,
+            control: (trb_type::RESET_ENDPOINT << 10)
+                | ((endpoint_id as u32) << 16)
+                | ((slot_id as u32) << 24),
+        };
+        self.submit_command(trb)?;
+        Ok(())
+    }
+
+    /// Update the transfer-ring dequeue pointer for an endpoint.
+    pub fn set_tr_dequeue(
+        &self,
+        slot_id: u8,
+        endpoint_id: u8,
+        dequeue_ptr: u64,
+        dcs: bool,
+    ) -> Result<()> {
+        let trb = Trb {
+            // Bits [63:4] are the dequeue pointer, bit [0] is the DCS bit.
+            param: (dequeue_ptr & !0x0f) | u64::from(dcs),
+            status: 0,
+            control: (trb_type::SET_TR_DEQUEUE << 10)
+                | ((endpoint_id as u32) << 16)
+                | ((slot_id as u32) << 24),
+        };
+        self.submit_command(trb)?;
+        Ok(())
+    }
+
     /// Read port status
     pub fn port_status(&self, port: u8) -> u32 {
         let offset = reg::port_reg_base(self.cap_length, port);
@@ -768,17 +854,28 @@ impl<H: Dma> XhciCtrl<H> {
     pub fn reset_port(&self, port: u8) -> Result<()> {
         let offset = reg::port_reg_base(self.cap_length, port);
         let mut portsc: u32 = self.read_reg(offset);
+        emit_xhci_diag(0x0280, port as u64, encode_port_diag(portsc), 0);
         if (portsc & reg::PORTSC_CCS) == 0 {
+            emit_xhci_diag(0x028f, port as u64, encode_port_diag(portsc), 0);
             return Err(UsbError::DeviceNotFound);
         }
 
-        // Clear stale change bits before asserting reset.
-        self.write_reg(offset, port_state_neutral(portsc) | PORT_CHANGE_BITS);
+        // Clear stale change bits before asserting reset while preserving the
+        // controller-owned neutral port state (power/link ownership bits).
+        let clear_changes = port_state_neutral(portsc) | PORT_CHANGE_BITS;
+        self.write_reg(offset, clear_changes);
         portsc = self.read_reg(offset);
+        emit_xhci_diag(0x0281, port as u64, encode_port_diag(portsc), clear_changes as u64);
 
         // Keep power enabled while requesting reset.
         let reset = port_state_neutral(portsc) | reg::PORTSC_PP | reg::PORTSC_PR;
         self.write_reg(offset, reset);
+        emit_xhci_diag(
+            0x0282,
+            port as u64,
+            reset as u64,
+            encode_port_diag(self.read_reg(offset)),
+        );
 
         // Wait for reset to complete
         let mut waited = 0usize;
@@ -789,10 +886,22 @@ impl<H: Dma> XhciCtrl<H> {
             }
             waited = waited.saturating_add(1);
             if waited >= PORT_RESET_WAIT_SPINS {
+                emit_xhci_diag(
+                    0x028e,
+                    port as u64,
+                    encode_port_diag(portsc),
+                    waited as u64,
+                );
                 return Err(UsbError::PortResetTimeout);
             }
             spin_loop();
         }
+        emit_xhci_diag(
+            0x0283,
+            port as u64,
+            encode_port_diag(portsc),
+            waited as u64,
+        );
 
         // Wait for the link to settle and expose either PED or speed bits.
         waited = 0;
@@ -803,16 +912,111 @@ impl<H: Dma> XhciCtrl<H> {
             }
             waited = waited.saturating_add(1);
             if waited >= PORT_ENABLE_WAIT_SPINS {
+                emit_xhci_diag(
+                    0x028d,
+                    port as u64,
+                    encode_port_diag(portsc),
+                    waited as u64,
+                );
                 return Err(UsbError::PortEnableTimeout);
             }
             spin_loop();
         }
+        emit_xhci_diag(
+            0x0284,
+            port as u64,
+            encode_port_diag(portsc),
+            waited as u64,
+        );
 
-        // Acknowledge port status change bits after reset.
-        self.write_reg(offset, port_state_neutral(portsc) | PORT_CHANGE_BITS);
+        // Acknowledge port status change bits after reset using RW1C bits only,
+        // then ensure the port remains enumeration-ready.
+        let portsc_before_ack = portsc;
+        let ack_changes = port_state_neutral(portsc_before_ack) | PORT_CHANGE_BITS;
+        self.write_reg(offset, ack_changes);
+        portsc = self.read_reg(offset);
+        emit_xhci_diag(
+            0x0285,
+            port as u64,
+            encode_port_diag(portsc),
+            ack_changes as u64,
+        );
+        let ack_write_flags = ((ack_changes & reg::PORTSC_PED != 0) as u64)
+            | (((ack_changes & reg::PORTSC_PP != 0) as u64) << 1)
+            | (((ack_changes & reg::PORTSC_LWS != 0) as u64) << 2)
+            | (((ack_changes & reg::PORTSC_PR != 0) as u64) << 3)
+            | (((ack_changes & reg::PORTSC_WPR != 0) as u64) << 4);
+        emit_xhci_diag(
+            0x028a,
+            port as u64,
+            ((portsc_before_ack as u64) << 32) | ack_changes as u64,
+            ack_write_flags,
+        );
+        emit_xhci_diag(
+            0x0288,
+            port as u64,
+            ((portsc_before_ack as u64) << 32) | portsc as u64,
+            (portsc_before_ack ^ portsc) as u64,
+        );
+        emit_xhci_diag(
+            0x0289,
+            port as u64,
+            ((portsc_before_ack as u64) << 32) | portsc as u64,
+            (((portsc_before_ack & PORT_CHANGE_BITS) as u64) << 32)
+                | (portsc & PORT_CHANGE_BITS) as u64,
+        );
+
+        let mut post_waited = 0usize;
+        let mut transition_logs = 0usize;
+        let mut last_post = portsc;
+        loop {
+            portsc = self.read_reg(offset);
+            let major_change = reg::portsc_speed(portsc) != reg::portsc_speed(last_post)
+                || reg::portsc_pls(portsc) != reg::portsc_pls(last_post)
+                || (portsc & (reg::PORTSC_PED | reg::PORTSC_CCS))
+                    != (last_post & (reg::PORTSC_PED | reg::PORTSC_CCS));
+            if major_change && transition_logs < PORT_POST_ACK_TRANSITION_LOGS {
+                emit_xhci_diag(
+                    0x028b,
+                    port as u64,
+                    ((last_post as u64) << 32) | portsc as u64,
+                    post_waited as u64,
+                );
+                transition_logs = transition_logs.saturating_add(1);
+            }
+            last_post = portsc;
+            if port_ready_for_enumeration(portsc) {
+                break;
+            }
+            post_waited = post_waited.saturating_add(1);
+            if post_waited >= PORT_POST_ACK_WAIT_SPINS {
+                emit_xhci_diag(
+                    0x028c,
+                    port as u64,
+                    encode_port_diag(portsc),
+                    post_waited as u64,
+                );
+                return Err(UsbError::PortEnableTimeout);
+            }
+            spin_loop();
+        }
+        emit_xhci_diag(
+            0x0286,
+            port as u64,
+            encode_port_diag(portsc),
+            post_waited as u64,
+        );
+
         for _ in 0..PORT_SETTLE_SPINS {
             spin_loop();
         }
+        let settled = self.read_reg(offset);
+        emit_xhci_diag(
+            0x0287,
+            port as u64,
+            encode_port_diag(settled),
+            PORT_SETTLE_SPINS as u64,
+        );
 
         Ok(())
     }
@@ -836,6 +1040,11 @@ impl<H: Dma> XhciCtrl<H> {
                 .add(slot as usize)
                 .write_volatile(phys);
         }
+    }
+
+    /// Reads the current DCBAA slot entry for diagnostics.
+    pub fn device_context_entry(&self, slot: u8) -> u64 {
+        unsafe { self.dcbaa.as_ptr::<u64>().add(slot as usize).read_volatile() }
     }
 
     /// Get host reference

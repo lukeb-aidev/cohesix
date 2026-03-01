@@ -5,7 +5,7 @@
 
 use crate::{
     Dma, Result, UsbError,
-    desc::{ConfigDesc, DeviceDesc, EndpointDesc, SetupPacket, desc_type},
+    desc::{DeviceDesc, EndpointDesc, SetupPacket, desc_type},
     reg,
     ring::{PhysMem, Ring, Trb, completion, trb_type},
     xhci::XhciCtrl,
@@ -13,6 +13,7 @@ use crate::{
 
 use alloc::{sync::Arc, vec::Vec};
 use core::hint::spin_loop;
+use core::ptr;
 use core::sync::atomic::{Ordering, compiler_fence};
 use spin::Mutex;
 
@@ -22,6 +23,9 @@ const ROOT_HUB_PORT_SHIFT: u32 = 16;
 const SLOT_DEV_MTT: u32 = 1 << 25;
 const TT_PORT_SHIFT: u32 = 8;
 const CONTEXT_ALIGN_BYTES: usize = 64;
+const CONFIG_DESC_MIN_LEN: usize = 9;
+const CONFIG_DESC_MAX_LEN: usize = 4096;
+const CONFIG_DESC_HEADER_RETRIES: usize = 3;
 const MAX_ENDPOINT_CONTEXTS: usize = 31;
 const DEVICE_CONTEXT_ENTRIES: usize = 1 + MAX_ENDPOINT_CONTEXTS;
 const INPUT_CONTEXT_ENTRIES: usize = 2 + MAX_ENDPOINT_CONTEXTS;
@@ -206,6 +210,130 @@ impl<H: Dma> UsbDevice<H> {
             .cast::<EndpointContext>()
     }
 
+    #[inline]
+    fn output_slot_ctx_ptr(&self) -> *const SlotContext {
+        self.device_ctx.as_ptr::<SlotContext>()
+    }
+
+    #[inline]
+    fn output_ep0_ctx_ptr(&self) -> *const EndpointContext {
+        self.device_ctx
+            .as_ptr::<u8>()
+            .wrapping_add(self.ctx_stride())
+            .cast::<EndpointContext>()
+    }
+
+    fn emit_control_failure_context(
+        &self,
+        setup: &SetupPacket,
+        data_len: usize,
+        completion_ptr: u64,
+        completion_code: u8,
+        stage: u8,
+        waited: usize,
+    ) {
+        // SAFETY: Output slot/endpoint contexts are controller-owned memory
+        // allocated by this device and remain mapped for the device lifetime.
+        let slot_ctx = unsafe { ptr::read_volatile(self.output_slot_ctx_ptr()) };
+        // SAFETY: See slot context safety note above.
+        let ep0_ctx = unsafe { ptr::read_volatile(self.output_ep0_ctx_ptr()) };
+        let slot_state = ((slot_ctx.dw3 >> 27) & 0x1f) as u64;
+        let ep0_state = (ep0_ctx.dw0 & 0x7) as u64;
+        let waited_clamped = core::cmp::min(waited, u32::MAX as usize) as u64;
+        self.ctrl.emit_diag(
+            0x033b,
+            completion_ptr,
+            ((completion_code as u64) << 56)
+                | ((stage as u64) << 48)
+                | ((slot_state as u64) << 40)
+                | ((ep0_state as u64) << 32)
+                | waited_clamped,
+            ((setup.request_type as u64) << 56)
+                | ((setup.request as u64) << 48)
+                | ((setup.value as u64) << 32)
+                | (setup.index as u64),
+        );
+        self.ctrl.emit_diag(
+            0x033c,
+            ((setup.length as u64) << 48) | (data_len as u64),
+            self.ctrl.device_context_entry(self.slot_id),
+            ((ep0_ctx.tr_dequeue_hi as u64) << 32) | ep0_ctx.tr_dequeue_lo as u64,
+        );
+        self.ctrl.emit_diag(
+            0x033d,
+            ((slot_ctx.dw0 as u64) << 32) | slot_ctx.dw1 as u64,
+            ((slot_ctx.dw2 as u64) << 32) | slot_ctx.dw3 as u64,
+            ((ep0_ctx.dw0 as u64) << 32) | ep0_ctx.dw1 as u64,
+        );
+        self.ctrl.emit_diag(
+            0x033e,
+            ep0_ctx.dw4 as u64,
+            self.device_ctx.phys(self.ctrl.host()),
+            self.input_ctx.phys(self.ctrl.host()),
+        );
+    }
+
+    fn recover_ep0_after_failure(
+        &self,
+        completion_ptr: u64,
+        completion_code: u8,
+        stage: u8,
+    ) {
+        let host = self.ctrl.host();
+        let (enqueue_idx, producer_cycle, dequeue_ptr) = {
+            let ep0_ring = self.ep0_ring.lock();
+            let (enqueue_idx, producer_cycle) = ep0_ring.debug_state();
+            (
+                enqueue_idx,
+                producer_cycle,
+                ep0_ring.phys(host) + (enqueue_idx * 16) as u64,
+            )
+        };
+
+        self.ctrl.emit_diag(
+            0x033f,
+            completion_ptr,
+            ((completion_code as u64) << 56)
+                | ((stage as u64) << 48)
+                | ((self.slot_id as u64) << 40)
+                | (1u64 << 32) // EP0 xHCI endpoint ID
+                | enqueue_idx as u64,
+            ((producer_cycle as u64) << 63) | dequeue_ptr,
+        );
+
+        let reset_result = self.ctrl.reset_endpoint(self.slot_id, 1);
+        self.ctrl.emit_diag(
+            0x0340,
+            ((self.slot_id as u64) << 32) | 1u64,
+            dequeue_ptr,
+            match reset_result {
+                Ok(()) => 0,
+                Err(UsbError::CmdFail(code)) => (1u64 << 32) | code as u64,
+                Err(UsbError::Timeout) => 2u64 << 32,
+                Err(_) => 3u64 << 32,
+            },
+        );
+
+        if reset_result.is_err() {
+            return;
+        }
+
+        let dequeue_result = self
+            .ctrl
+            .set_tr_dequeue(self.slot_id, 1, dequeue_ptr, producer_cycle);
+        self.ctrl.emit_diag(
+            0x0341,
+            ((self.slot_id as u64) << 32) | 1u64,
+            dequeue_ptr,
+            match dequeue_result {
+                Ok(()) => 0,
+                Err(UsbError::CmdFail(code)) => (1u64 << 32) | code as u64,
+                Err(UsbError::Timeout) => 2u64 << 32,
+                Err(_) => 3u64 << 32,
+            },
+        );
+    }
+
     fn new_with_topology(
         ctrl: Arc<XhciCtrl<H>>,
         port: u8,
@@ -225,9 +353,11 @@ impl<H: Dma> UsbDevice<H> {
         }
 
         let host = ctrl.host();
+        let tt_ctx = tt_context;
 
         // Enable slot
         let mut slot_id = ctrl.enable_slot()?;
+        let enumerated_speed = speed;
 
         let ctx_stride = ctrl.context_size_bytes();
         if ctx_stride != 32 && ctx_stride != 64 {
@@ -257,14 +387,18 @@ impl<H: Dma> UsbDevice<H> {
         let ep0_ring = Ring::new(host, 256)?;
 
         let input_base = input_ctx.as_ptr::<u8>();
-        let mut slot_ctx_template = SlotContext::new(route, speed, 1, root_hub_port);
-        if let Some(tt) = tt_context {
-            if tt.multi_tt {
-                slot_ctx_template.dw0 |= SLOT_DEV_MTT;
+        let build_slot_ctx = |slot_speed: u8| {
+            let mut slot_ctx = SlotContext::new(route, slot_speed, 1, root_hub_port);
+            if let Some(tt) = tt_ctx {
+                if tt.multi_tt {
+                    slot_ctx.dw0 |= SLOT_DEV_MTT;
+                }
+                slot_ctx.dw2 =
+                    (tt.hub_slot_id as u32) | ((tt.downstream_port as u32) << TT_PORT_SHIFT);
             }
-            slot_ctx_template.dw2 =
-                (tt.hub_slot_id as u32) | ((tt.downstream_port as u32) << TT_PORT_SHIFT);
-        }
+            slot_ctx
+        };
+        let slot_ctx_template = build_slot_ctx(enumerated_speed);
 
         // Set device context in DCBAA
         unsafe {
@@ -273,31 +407,48 @@ impl<H: Dma> UsbDevice<H> {
         }
         ctrl.set_device_context(slot_id, device_ctx.phys(host));
         compiler_fence(Ordering::Release);
+        ctrl.emit_diag(
+            0x0320,
+            ((slot_id as u64) << 32) | port as u64,
+            device_ctx.phys(host),
+            ctrl.device_context_entry(slot_id),
+        );
 
         // Build EP0 max-packet candidates. Some controllers/devices are strict
         // about the initial EP0 MPS used during Address Device.
-        let mut ep0_mps_candidates = [0u16; 3];
-        let mut candidate_count = 0usize;
-        let mut push_candidate = |mps: u16| {
-            if !ep0_mps_candidates[..candidate_count].contains(&mps) && candidate_count < 3 {
-                ep0_mps_candidates[candidate_count] = mps;
-                candidate_count += 1;
+        let build_ep0_mps_candidates = |slot_speed: u8| {
+            let mut candidates = [0u16; 3];
+            let mut count = 0usize;
+            let mut push_candidate = |mps: u16| {
+                if !candidates[..count].contains(&mps) && count < 3 {
+                    candidates[count] = mps;
+                    count += 1;
+                }
+            };
+            match slot_speed {
+                reg::SPEED_LOW => push_candidate(8),
+                reg::SPEED_FULL => {
+                    push_candidate(8);
+                    push_candidate(64);
+                }
+                reg::SPEED_HIGH => push_candidate(64),
+                reg::SPEED_SUPER | reg::SPEED_SUPER_PLUS => push_candidate(512),
+                _ => {
+                    push_candidate(8);
+                    push_candidate(64);
+                    push_candidate(512);
+                }
             }
+            (candidates, count)
         };
-        match speed {
-            reg::SPEED_LOW => push_candidate(8),
-            reg::SPEED_FULL => {
-                push_candidate(8);
-                push_candidate(64);
-            }
-            reg::SPEED_HIGH => push_candidate(64),
-            reg::SPEED_SUPER | reg::SPEED_SUPER_PLUS => push_candidate(512),
-            _ => {
-                push_candidate(8);
-                push_candidate(64);
-                push_candidate(512);
-            }
-        }
+        let (ep0_mps_candidates, candidate_count) = build_ep0_mps_candidates(enumerated_speed);
+        let encode_port_state = |portsc: u32| -> u64 {
+            let speed = reg::portsc_speed(portsc) as u64;
+            let pls = reg::portsc_pls(portsc) as u64;
+            let ped = ((portsc & reg::PORTSC_PED) != 0) as u64;
+            let ccs = ((portsc & reg::PORTSC_CCS) != 0) as u64;
+            (speed << 56) | (pls << 48) | (ped << 40) | (ccs << 32) | portsc as u64
+        };
 
         const MAX_SLOT_RECYCLES: usize = 1;
         let mut slot_recycles = 0usize;
@@ -337,7 +488,7 @@ impl<H: Dma> UsbDevice<H> {
                     unsafe { *(input_base.add(ctx_stride * 2) as *const EndpointContext) };
                 ctrl.emit_diag(
                     0x0310,
-                    ((attempt_idx as u64) << 32) | speed as u64,
+                    ((attempt_idx as u64) << 32) | enumerated_speed as u64,
                     ((slot_id as u64) << 32) | max_packet as u64,
                     slot_recycles as u64,
                 );
@@ -353,6 +504,41 @@ impl<H: Dma> UsbDevice<H> {
                     ((ep0_ctx.tr_dequeue_hi as u64) << 32) | ep0_ctx.tr_dequeue_lo as u64,
                     ep0_ctx.dw4 as u64,
                 );
+                let input_ctrl = unsafe { core::slice::from_raw_parts(input_base as *const u32, 8) };
+                let portsc_before_addr = ctrl.port_status(port);
+                ctrl.emit_diag(
+                    0x0315,
+                    input_ctx.phys(host),
+                    device_ctx.phys(host),
+                    ep0_ring.phys(host),
+                );
+                ctrl.emit_diag(
+                    0x0316,
+                    ((input_ctrl[0] as u64) << 32) | input_ctrl[1] as u64,
+                    ((input_ctrl[2] as u64) << 32) | input_ctrl[3] as u64,
+                    ((input_ctrl[4] as u64) << 32) | input_ctrl[5] as u64,
+                );
+                ctrl.emit_diag(
+                    0x0317,
+                    ((input_ctrl[6] as u64) << 32) | input_ctrl[7] as u64,
+                    ((portsc_before_addr as u64) << 32) | slot_id as u64,
+                    ((route as u64) << 32)
+                        | ((root_hub_port as u64) << 16)
+                        | ((enumerated_speed as u64) << 8)
+                        | port as u64,
+                );
+                ctrl.emit_diag(
+                    0x0322,
+                    port as u64,
+                    encode_port_state(portsc_before_addr),
+                    ((slot_id as u64) << 32) | attempt_idx as u64,
+                );
+                ctrl.emit_diag(
+                    0x0321,
+                    input_ctx.phys(host),
+                    device_ctx.phys(host),
+                    ctrl.device_context_entry(slot_id),
+                );
 
                 // Address Device command
                 let trb = Trb {
@@ -364,6 +550,67 @@ impl<H: Dma> UsbDevice<H> {
                     Ok(_) => break 'address_attempt,
                     Err(UsbError::Timeout) => return Err(UsbError::AddressDeviceTimeout),
                     Err(UsbError::CmdFail(code)) if code == completion::CONTEXT_STATE_ERROR => {
+                        let diag = ctrl.command_diag_for_port(port);
+                        let out_base = device_ctx.as_ptr::<u8>();
+                        let out_slot_ctx = unsafe { *(out_base as *const SlotContext) };
+                        let out_ep0_ctx =
+                            unsafe { *(out_base.add(ctx_stride) as *const EndpointContext) };
+                        let input_ctrl =
+                            unsafe { core::slice::from_raw_parts(input_base as *const u32, 8) };
+                        ctrl.emit_diag(
+                            0x0318,
+                            ((diag.usbcmd as u64) << 32) | diag.usbsts as u64,
+                            ((diag.portsc as u64) << 32)
+                                | ((code as u64) << 16)
+                                | attempt_idx as u64,
+                            ((slot_id as u64) << 32) | max_packet as u64,
+                        );
+                        ctrl.emit_diag(
+                            0x0323,
+                            port as u64,
+                            encode_port_state(diag.portsc),
+                            ((slot_id as u64) << 32) | attempt_idx as u64,
+                        );
+                        ctrl.emit_diag(
+                            0x0319,
+                            diag.crcr,
+                            diag.dcbaap,
+                            ((diag.iman as u64) << 32) | (diag.portsc as u64),
+                        );
+                        ctrl.emit_diag(0x031a, diag.erdp, diag.erstba, 0);
+                        let out_slot_state = ((out_slot_ctx.dw3 >> 27) & 0x1f) as u64;
+                        let out_ep0_state = (out_ep0_ctx.dw0 & 0x7) as u64;
+                        ctrl.emit_diag(
+                            0x0324,
+                            ((out_slot_state as u64) << 32) | out_ep0_state as u64,
+                            ctrl.device_context_entry(slot_id),
+                            ((diag.portsc as u64) << 32) | code as u64,
+                        );
+                        ctrl.emit_diag(
+                            0x031b,
+                            ((out_slot_ctx.dw0 as u64) << 32) | out_slot_ctx.dw1 as u64,
+                            ((out_slot_ctx.dw2 as u64) << 32) | out_slot_ctx.dw3 as u64,
+                            0,
+                        );
+                        ctrl.emit_diag(
+                            0x031c,
+                            ((out_ep0_ctx.dw0 as u64) << 32) | out_ep0_ctx.dw1 as u64,
+                            ((out_ep0_ctx.tr_dequeue_hi as u64) << 32)
+                                | out_ep0_ctx.tr_dequeue_lo as u64,
+                            out_ep0_ctx.dw4 as u64,
+                        );
+                        ctrl.emit_diag(
+                            0x031d,
+                            ((input_ctrl[0] as u64) << 32) | input_ctrl[1] as u64,
+                            ((input_ctrl[2] as u64) << 32) | input_ctrl[3] as u64,
+                            ((input_ctrl[4] as u64) << 32) | input_ctrl[5] as u64,
+                        );
+                        ctrl.emit_diag(
+                            0x031e,
+                            ((input_ctrl[6] as u64) << 32) | input_ctrl[7] as u64,
+                            input_ctx.phys(host),
+                            device_ctx.phys(host),
+                        );
                         last_ctx_state_err = Some(UsbError::CmdFail(code));
                         if attempt_idx + 1 < candidate_count {
                             continue;
@@ -378,6 +625,12 @@ impl<H: Dma> UsbDevice<H> {
                     let old_slot = slot_id;
                     slot_recycles = slot_recycles.saturating_add(1);
                     ctrl.emit_diag(0x0313, old_slot as u64, slot_recycles as u64, 0);
+                    ctrl.emit_diag(
+                        0x0326,
+                        old_slot as u64,
+                        ctrl.device_context_entry(old_slot),
+                        slot_recycles as u64,
+                    );
 
                     ctrl.set_device_context(old_slot, 0);
                     let _ = ctrl.disable_slot(old_slot);
@@ -393,6 +646,12 @@ impl<H: Dma> UsbDevice<H> {
                     ctrl.set_device_context(slot_id, device_ctx.phys(host));
                     compiler_fence(Ordering::Release);
                     ctrl.emit_diag(0x0314, old_slot as u64, slot_id as u64, 0);
+                    ctrl.emit_diag(
+                        0x0327,
+                        ((old_slot as u64) << 32) | slot_id as u64,
+                        ctrl.device_context_entry(old_slot),
+                        ctrl.device_context_entry(slot_id),
+                    );
                     continue;
                 }
                 return Err(err);
@@ -430,6 +689,15 @@ impl<H: Dma> UsbDevice<H> {
 
         let data_dir = (setup.request_type & 0x80) != 0; // true = IN
         let data_len = data.as_ref().map(|d| d.len()).unwrap_or(0);
+        self.ctrl.emit_diag(
+            0x0339,
+            ((setup.request_type as u64) << 56)
+                | ((setup.request as u64) << 48)
+                | ((setup.value as u64) << 32)
+                | (setup.index as u64),
+            ((setup.length as u64) << 48) | (data_len as u64),
+            self.slot_id as u64,
+        );
 
         // Allocate data buffer if needed
         // Use 64-byte alignment for DMA efficiency (cache line size)
@@ -448,9 +716,23 @@ impl<H: Dma> UsbDevice<H> {
             None
         };
 
+        let value = setup.value.to_le_bytes();
+        let index = setup.index.to_le_bytes();
+        let length = setup.length.to_le_bytes();
+        let setup_immediate = u64::from_le_bytes([
+            setup.request_type,
+            setup.request,
+            value[0],
+            value[1],
+            index[0],
+            index[1],
+            length[0],
+            length[1],
+        ]);
+
         // Setup Stage TRB
         let setup_trb = Trb {
-            param: unsafe { *(setup as *const SetupPacket as *const u64) },
+            param: setup_immediate,
             status: 8, // Transfer length = 8
             control: (trb_type::SETUP << 10)
                 | (1 << 6) // IDT (Immediate Data)
@@ -460,10 +742,10 @@ impl<H: Dma> UsbDevice<H> {
                     0 // No data stage
                 },
         };
-        ep0_ring.enqueue(host, setup_trb);
+        let setup_trb_addr = ep0_ring.enqueue(host, setup_trb);
 
         // Data Stage TRB (if needed)
-        if let Some(ref buf) = data_buf {
+        let data_trb_addr = if let Some(ref buf) = data_buf {
             let data_trb = Trb {
                 param: buf.phys(host),
                 status: setup.length as u32,
@@ -471,8 +753,10 @@ impl<H: Dma> UsbDevice<H> {
                     | if data_dir { 1 << 16 } else { 0 } // DIR
                     | (1 << 5), // IOC for debugging
             };
-            ep0_ring.enqueue(host, data_trb);
-        }
+            Some(ep0_ring.enqueue(host, data_trb))
+        } else {
+            None
+        };
 
         // Status Stage TRB
         let status_trb = Trb {
@@ -482,7 +766,13 @@ impl<H: Dma> UsbDevice<H> {
                 | if data_len > 0 && setup.length > 0 && data_dir { 0 } else { 1 << 16 } // DIR
                 | (1 << 5), // IOC
         };
-        ep0_ring.enqueue(host, status_trb);
+        let status_trb_addr = ep0_ring.enqueue(host, status_trb);
+        self.ctrl.emit_diag(
+            0x0334,
+            setup_trb_addr,
+            data_trb_addr.unwrap_or(0),
+            status_trb_addr,
+        );
 
         drop(ep0_ring);
 
@@ -491,16 +781,111 @@ impl<H: Dma> UsbDevice<H> {
 
         // Wait for completion
         let mut waited = 0usize;
+        let mut data_stage_remaining: Option<u32> = None;
         loop {
             if let Some(evt) = self.ctrl.poll_event()
                 && evt.trb_type() == trb_type::TRANSFER_EVENT as u8
                 && evt.slot_id() == self.slot_id
             {
+                let completion_ptr = evt.param & !0x0f;
+                let ep_id = evt.endpoint_id();
+                let stage = if completion_ptr == setup_trb_addr {
+                    1u8
+                } else if data_trb_addr == Some(completion_ptr) {
+                    2u8
+                } else if completion_ptr == status_trb_addr {
+                    3u8
+                } else {
+                    0u8
+                };
                 let code = evt.completion_code();
+                self.ctrl.emit_diag(
+                    0x0335,
+                    completion_ptr,
+                    ((code as u64) << 56)
+                        | ((stage as u64) << 48)
+                        | ((ep_id as u64) << 40)
+                        | evt.transfer_length() as u64,
+                    evt.control as u64,
+                );
+                if ep_id != 1 {
+                    continue;
+                }
+
+                if stage == 1 {
+                    continue;
+                }
+
+                if stage == 2 {
+                    data_stage_remaining = Some(evt.transfer_length());
+                    match code {
+                        completion::SUCCESS | completion::SHORT_PACKET => continue,
+                        completion::STALL_ERROR => {
+                            self.recover_ep0_after_failure(completion_ptr, code, stage);
+                            self.emit_control_failure_context(
+                                setup,
+                                data_len,
+                                completion_ptr,
+                                code,
+                                stage,
+                                waited,
+                            );
+                            if let Some(buf) = data_buf {
+                                buf.free(host);
+                            }
+                            return Err(UsbError::Stall);
+                        }
+                        _ => {
+                            self.recover_ep0_after_failure(completion_ptr, code, stage);
+                            self.emit_control_failure_context(
+                                setup,
+                                data_len,
+                                completion_ptr,
+                                code,
+                                stage,
+                                waited,
+                            );
+                            if let Some(buf) = data_buf {
+                                buf.free(host);
+                            }
+                            return Err(UsbError::XferFail(code));
+                        }
+                    }
+                }
+
+                if stage != 3 {
+                    continue;
+                }
+
                 match code {
                     completion::SUCCESS | completion::SHORT_PACKET => {
-                        let transferred =
-                            (setup.length as usize).saturating_sub(evt.transfer_length() as usize);
+                        let transferred = if data_len > 0 {
+                            let remaining =
+                                data_stage_remaining.unwrap_or_else(|| evt.transfer_length());
+                            if data_stage_remaining.is_none() {
+                                let mut sample = [0u8; 8];
+                                let sample_len = core::cmp::min(sample.len(), data_len);
+                                if let Some(buf) = &data_buf {
+                                    unsafe {
+                                        core::ptr::copy_nonoverlapping(
+                                            buf.as_ptr::<u8>(),
+                                            sample.as_mut_ptr(),
+                                            sample_len,
+                                        );
+                                    }
+                                }
+                                self.ctrl.emit_diag(
+                                    0x0336,
+                                    ((setup.length as u64) << 32)
+                                        | (evt.transfer_length() as u64),
+                                    remaining as u64,
+                                    u64::from_le_bytes(sample),
+                                );
+                            }
+                            (setup.length as usize).saturating_sub(remaining as usize)
+                        } else {
+                            0
+                        };
 
                         // Copy data back for IN transfers
                         if data_dir && let (Some(buf), Some(d)) = (&data_buf, &mut data) {
@@ -519,12 +904,30 @@ impl<H: Dma> UsbDevice<H> {
                         return Ok(transferred);
                     }
                     completion::STALL_ERROR => {
+                        self.recover_ep0_after_failure(completion_ptr, code, stage);
+                        self.emit_control_failure_context(
+                            setup,
+                            data_len,
+                            completion_ptr,
+                            code,
+                            stage,
+                            waited,
+                        );
                         if let Some(buf) = data_buf {
                             buf.free(host);
                         }
                         return Err(UsbError::Stall);
                     }
                     _ => {
+                        self.recover_ep0_after_failure(completion_ptr, code, stage);
+                        self.emit_control_failure_context(
+                            setup,
+                            data_len,
+                            completion_ptr,
+                            code,
+                            stage,
+                            waited,
+                        );
                         if let Some(buf) = data_buf {
                             buf.free(host);
                         }
@@ -534,6 +937,24 @@ impl<H: Dma> UsbDevice<H> {
             }
             waited = waited.saturating_add(1);
             if waited >= CONTROL_XFER_WAIT_SPINS {
+                self.ctrl.emit_diag(
+                    0x033a,
+                    ((setup.request_type as u64) << 56)
+                        | ((setup.request as u64) << 48)
+                        | ((setup.value as u64) << 32)
+                        | (setup.index as u64),
+                    ((setup.length as u64) << 48) | (data_len as u64),
+                    waited as u64,
+                );
+                self.recover_ep0_after_failure(status_trb_addr, 0xff, 0);
+                self.emit_control_failure_context(
+                    setup,
+                    data_len,
+                    status_trb_addr,
+                    0xff,
+                    0,
+                    waited,
+                );
                 if let Some(buf) = data_buf {
                     buf.free(host);
                 }
@@ -547,7 +968,30 @@ impl<H: Dma> UsbDevice<H> {
     pub fn get_device_descriptor(&mut self) -> Result<DeviceDesc> {
         let mut buf = [0u8; 18];
         let setup = SetupPacket::get_descriptor(desc_type::DEVICE, 0, 18);
-        self.control_transfer(&setup, Some(&mut buf))?;
+        let transferred = self.control_transfer(&setup, Some(&mut buf))?;
+        self.ctrl.emit_diag(
+            0x0337,
+            transferred as u64,
+            u64::from_le_bytes([
+                buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+            ]),
+            u64::from_le_bytes([
+                buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
+            ]),
+        );
+        self.ctrl.emit_diag(
+            0x0338,
+            ((buf[16] as u64) << 8) | (buf[17] as u64),
+            ((buf[0] as u64) << 56)
+                | ((buf[1] as u64) << 48)
+                | ((buf[2] as u64) << 40)
+                | ((buf[3] as u64) << 32)
+                | ((buf[4] as u64) << 24)
+                | ((buf[5] as u64) << 16)
+                | ((buf[6] as u64) << 8)
+                | (buf[7] as u64),
+            0,
+        );
 
         let desc = unsafe { *(buf.as_ptr() as *const DeviceDesc) };
         self.device_desc = Some(desc);
@@ -556,20 +1000,89 @@ impl<H: Dma> UsbDevice<H> {
 
     /// Get configuration descriptor (full, with interfaces and endpoints)
     pub fn get_config_descriptor(&self, index: u8) -> Result<Vec<u8>> {
-        // First, get just the config descriptor to find total length
-        let mut buf = [0u8; 9];
-        let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, 9);
-        self.control_transfer(&setup, Some(&mut buf))?;
+        // First, read just the configuration header to discover total length.
+        let mut header = [0u8; CONFIG_DESC_MIN_LEN];
+        for attempt in 0..CONFIG_DESC_HEADER_RETRIES {
+            let setup = SetupPacket::get_descriptor(
+                desc_type::CONFIGURATION,
+                index,
+                CONFIG_DESC_MIN_LEN as u16,
+            );
+            let header_xfer = self.control_transfer(&setup, Some(&mut header))?;
+            let total_len = u16::from_le_bytes([header[2], header[3]]) as usize;
+            let header_lo = u64::from_le_bytes([
+                header[0], header[1], header[2], header[3], header[4], header[5], header[6],
+                header[7],
+            ]);
+            self.ctrl.emit_diag(
+                0x0330,
+                ((attempt as u64) << 32) | (header_xfer as u64),
+                header_lo,
+                ((header[8] as u64) << 56)
+                    | ((header[0] as u64) << 48)
+                    | ((header[1] as u64) << 40)
+                    | ((total_len as u64) & 0xffff_ffff),
+            );
 
-        let config = unsafe { *(buf.as_ptr() as *const ConfigDesc) };
-        let total_len = config.total_length as usize;
+            let header_valid = header_xfer >= 4
+                && header[0] as usize >= CONFIG_DESC_MIN_LEN
+                && header[1] == desc_type::CONFIGURATION
+                && (CONFIG_DESC_MIN_LEN..=CONFIG_DESC_MAX_LEN).contains(&total_len);
+            if !header_valid {
+                self.ctrl.emit_diag(
+                    0x0331,
+                    ((attempt as u64) << 32) | (header_xfer as u64),
+                    total_len as u64,
+                    ((header[0] as u64) << 8) | (header[1] as u64),
+                );
+                if attempt + 1 < CONFIG_DESC_HEADER_RETRIES {
+                    continue;
+                }
+                return Err(UsbError::InvalidDescriptor);
+            }
 
-        // Now get the full descriptor
-        let mut full_buf = alloc::vec![0u8; total_len];
-        let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, total_len as u16);
-        self.control_transfer(&setup, Some(&mut full_buf))?;
+            // Now read the reported configuration payload.
+            let mut full_buf = alloc::vec![0u8; total_len];
+            let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, total_len as u16);
+            let full_xfer = self.control_transfer(&setup, Some(&mut full_buf))?;
+            self.ctrl.emit_diag(
+                0x0332,
+                ((full_xfer as u64) << 32) | (total_len as u64),
+                full_buf
+                    .get(0)
+                    .copied()
+                    .map_or(0, |b0| (b0 as u64) << 56)
+                    | full_buf
+                        .get(1)
+                        .copied()
+                        .map_or(0, |b1| (b1 as u64) << 48)
+                    | full_buf
+                        .get(2)
+                        .copied()
+                        .map_or(0, |b2| (b2 as u64) << 40)
+                    | full_buf
+                        .get(3)
+                        .copied()
+                        .map_or(0, |b3| (b3 as u64) << 32),
+                ((header[0] as u64) << 24) | ((header[1] as u64) << 16) | (index as u64),
+            );
+            if full_xfer < CONFIG_DESC_MIN_LEN {
+                self.ctrl.emit_diag(
+                    0x0333,
+                    ((attempt as u64) << 32) | (full_xfer as u64),
+                    total_len as u64,
+                    0,
+                );
+                if attempt + 1 < CONFIG_DESC_HEADER_RETRIES {
+                    continue;
+                }
+                return Err(UsbError::InvalidDescriptor);
+            }
+            full_buf.truncate(full_xfer);
+            return Ok(full_buf);
+        }
 
-        Ok(full_buf)
+        Err(UsbError::InvalidDescriptor)
     }
 
     /// Set configuration

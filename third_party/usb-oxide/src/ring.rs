@@ -405,6 +405,11 @@ impl<H: Dma> Ring<H> {
         addr
     }
 
+    /// Returns `(enqueue_index, producer_cycle)` for diagnostics.
+    pub fn debug_state(&self) -> (usize, bool) {
+        (self.enqueue, self.cycle)
+    }
+
     fn init_link_trb(&mut self, host: &H) {
         let last = self.size - 1;
         let mut link = Trb::new();
