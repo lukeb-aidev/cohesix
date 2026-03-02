@@ -294,63 +294,24 @@ write_boot_cmd() {
     local fallback_image="$3"
     cat >"$out" <<'EOF'
 echo "[cohesix] pi4 autoboot script"
+setenv bootdelay 0
 setenv coh_image __COH_IMAGE__
 setenv coh_image_fallback __COH_IMAGE_FALLBACK__
 setenv coh_addr 0x10000000
-setenv coh_state_addr 0x13000000
-setenv coh_state_size 0
-setenv cohesix_boot_bytes 0
-setenv cohesix_boot_image ${coh_image}
-setenv coh_write_state 'if env export -t ${coh_state_addr} cohesix_boot_stage cohesix_boot_bytes cohesix_boot_image; then setexpr coh_state_size ${filesize} - 1; fatwrite mmc 0:1 ${coh_state_addr} cohesix_boot_state.txt ${coh_state_size}; fi'
-
-setenv cohesix_boot_stage pre_load
-setenv cohesix_boot_bytes 0
-setenv cohesix_boot_image ${coh_image}
-run coh_write_state
 
 if fatload mmc 0:1 ${coh_addr} ${coh_image}; then
-    setenv cohesix_boot_stage loaded
-    setenv cohesix_boot_bytes ${filesize}
-    setenv cohesix_boot_image ${coh_image}
-    run coh_write_state
-
     echo "[cohesix] loaded ${coh_image} to ${coh_addr}; jumping"
-    setenv cohesix_boot_stage before_go
-    setenv cohesix_boot_image ${coh_image}
-    run coh_write_state
-
     go ${coh_addr}
-
-    setenv cohesix_boot_stage returned_from_go
-    setenv cohesix_boot_image ${coh_image}
-    run coh_write_state
     echo "[cohesix] returned from image"
 else
     echo "[cohesix] primary image load failed: ${coh_image}"
     if fatload mmc 0:1 ${coh_addr} ${coh_image_fallback}; then
         setenv coh_image ${coh_image_fallback}
-        setenv cohesix_boot_stage loaded_legacy_fallback
-        setenv cohesix_boot_bytes ${filesize}
-        setenv cohesix_boot_image ${coh_image}
-        run coh_write_state
 
         echo "[cohesix] loaded fallback ${coh_image} to ${coh_addr}; jumping"
-        setenv cohesix_boot_stage before_go
-        setenv cohesix_boot_image ${coh_image}
-        run coh_write_state
-
         go ${coh_addr}
-
-        setenv cohesix_boot_stage returned_from_go
-        setenv cohesix_boot_image ${coh_image}
-        run coh_write_state
         echo "[cohesix] returned from image"
     else
-        setenv cohesix_boot_stage load_failed
-        setenv cohesix_boot_bytes 0
-        setenv cohesix_boot_image ${coh_image}
-        run coh_write_state
-
         echo "[cohesix] ERROR: failed to load ${coh_image} or fallback ${coh_image_fallback} from mmc 0:1"
         echo "[cohesix] manual: fatls mmc 0:1"
         echo "[cohesix] manual: fatload mmc 0:1 0x10000000 ${coh_image}"

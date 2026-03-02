@@ -2834,6 +2834,37 @@ impl UsbKeyboard {
         if max_ports == 0 {
             return None;
         }
+        let hub_tt_think_time = hub_desc.tt_think_time();
+        match device.configure_hub(max_ports as u8, hub_multi_tt) {
+            Ok(()) => {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub slot configured slot={} iface={} ports={} mtt={}",
+                        device.slot_id(),
+                        hub_interface_number,
+                        max_ports,
+                        hub_multi_tt as u8
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+            Err(err) => {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub slot config failed slot={} iface={} ports={} mtt={} detail={err:?}",
+                        device.slot_id(),
+                        hub_interface_number,
+                        max_ports,
+                        hub_multi_tt as u8
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+        }
 
         let mut hub_line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -2942,6 +2973,7 @@ impl UsbKeyboard {
                             &device,
                             downstream_port,
                             hub_multi_tt,
+                            hub_tt_think_time,
                             depth_remaining,
                             saw_keyboard_init_error,
                             "disconnected-pre-reset",
@@ -2991,6 +3023,7 @@ impl UsbKeyboard {
                     &device,
                     downstream_port,
                     hub_multi_tt,
+                    hub_tt_think_time,
                     depth_remaining,
                     saw_keyboard_init_error,
                     "pre-status-unavailable",
@@ -3116,12 +3149,41 @@ impl UsbKeyboard {
                 route,
                 child_speed,
                 hub_multi_tt,
+                hub_tt_think_time,
                 depth_remaining,
                 saw_keyboard_init_error,
                 "status-path",
             ) {
                 HubChildProbeResult::Keyboard(hid) => return Some(hid),
-                HubChildProbeResult::ProbedNoKeyboard | HubChildProbeResult::Failed => continue,
+                HubChildProbeResult::ProbedNoKeyboard => continue,
+                HubChildProbeResult::Failed => {
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] hub status-path fallback slot={} port={} route=0x{route:05x} speed={} detail=address-fail",
+                            device.slot_id(),
+                            downstream_port,
+                            child_speed,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    match Self::probe_hub_child_with_speed_fallback(
+                        &device,
+                        downstream_port,
+                        route,
+                        child_speed,
+                        hub_multi_tt,
+                        hub_tt_think_time,
+                        depth_remaining,
+                        saw_keyboard_init_error,
+                    ) {
+                        HubChildProbeResult::Keyboard(hid) => return Some(hid),
+                        HubChildProbeResult::ProbedNoKeyboard | HubChildProbeResult::Failed => {
+                            continue;
+                        }
+                    }
+                }
             }
         }
 
@@ -3175,6 +3237,7 @@ impl UsbKeyboard {
         device: &Arc<UsbDevice<SeatDma>>,
         downstream_port: u8,
         hub_multi_tt: bool,
+        hub_tt_think_time: u8,
         depth_remaining: usize,
         saw_keyboard_init_error: &mut bool,
         source: &str,
@@ -3209,6 +3272,7 @@ impl UsbKeyboard {
                 route,
                 child_speed,
                 hub_multi_tt,
+                hub_tt_think_time,
                 depth_remaining,
                 saw_keyboard_init_error,
                 "blind-pre-status",
@@ -3234,12 +3298,79 @@ impl UsbKeyboard {
         HubChildProbeResult::Failed
     }
 
+    fn probe_hub_child_with_speed_fallback(
+        device: &Arc<UsbDevice<SeatDma>>,
+        downstream_port: u8,
+        route: u32,
+        primary_speed: u8,
+        hub_multi_tt: bool,
+        hub_tt_think_time: u8,
+        depth_remaining: usize,
+        saw_keyboard_init_error: &mut bool,
+    ) -> HubChildProbeResult {
+        const SPEED_CANDIDATES: [u8; 3] = [
+            usb_oxide::regs::SPEED_HIGH,
+            usb_oxide::regs::SPEED_FULL,
+            usb_oxide::regs::SPEED_LOW,
+        ];
+        for child_speed in SPEED_CANDIDATES {
+            if child_speed == primary_speed {
+                continue;
+            }
+
+            let mut line = heapless::String::<256>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] hub status-fallback slot={} port={} route=0x{route:05x} speed={} primary_speed={}",
+                    device.slot_id(),
+                    downstream_port,
+                    child_speed,
+                    primary_speed,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+
+            match Self::probe_hub_child_with_route_and_speed(
+                device,
+                downstream_port,
+                route,
+                child_speed,
+                hub_multi_tt,
+                hub_tt_think_time,
+                depth_remaining,
+                saw_keyboard_init_error,
+                "status-fallback",
+            ) {
+                HubChildProbeResult::Keyboard(hid) => return HubChildProbeResult::Keyboard(hid),
+                HubChildProbeResult::ProbedNoKeyboard => {
+                    return HubChildProbeResult::ProbedNoKeyboard;
+                }
+                HubChildProbeResult::Failed => {}
+            }
+        }
+
+        let mut line = heapless::String::<256>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] hub status-fallback failed slot={} port={} route=0x{route:05x} primary_speed={}",
+                device.slot_id(),
+                downstream_port,
+                primary_speed,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        HubChildProbeResult::Failed
+    }
+
     fn probe_hub_child_with_route_and_speed(
         device: &Arc<UsbDevice<SeatDma>>,
         downstream_port: u8,
         route: u32,
         child_speed: u8,
         hub_multi_tt: bool,
+        hub_tt_think_time: u8,
         depth_remaining: usize,
         saw_keyboard_init_error: &mut bool,
         source: &str,
@@ -3251,6 +3382,7 @@ impl UsbKeyboard {
             Some(TtContext {
                 hub_slot_id: device.slot_id(),
                 downstream_port,
+                tt_think_time: hub_tt_think_time,
                 multi_tt: hub_multi_tt,
             })
         } else {
@@ -3266,15 +3398,30 @@ impl UsbKeyboard {
         ) {
             Ok(child) => child,
             Err(err) => {
+                let (tt_slot, tt_port, tt_ttt, tt_multi) = if let Some(tt) = tt_context {
+                    (
+                        tt.hub_slot_id as u16,
+                        tt.downstream_port as u16,
+                        tt.tt_think_time as u16,
+                        tt.multi_tt as u16,
+                    )
+                } else {
+                    (0xffff, 0xffff, 0xffff, 0)
+                };
                 let mut line = heapless::String::<256>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] hub child failed slot={} port={} stage=address speed={} source={} detail={err:?}",
+                        "[local-seat] hub child failed slot={} port={} stage=address speed={} source={} route=0x{route:05x} root_port={} tt=slot:{} port:{} ttt:{} mtt:{} detail={err:?}",
                         device.slot_id(),
                         downstream_port,
                         child_speed,
-                        source
+                        source,
+                        device.root_hub_port(),
+                        tt_slot,
+                        tt_port,
+                        tt_ttt,
+                        tt_multi,
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());

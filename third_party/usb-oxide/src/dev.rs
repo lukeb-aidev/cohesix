@@ -21,7 +21,11 @@ const CONTROL_XFER_WAIT_SPINS: usize = 20_000_000;
 const ROUTE_STRING_MASK: u32 = 0x000f_ffff;
 const ROOT_HUB_PORT_SHIFT: u32 = 16;
 const SLOT_DEV_MTT: u32 = 1 << 25;
+const SLOT_DEV_HUB: u32 = 1 << 26;
+const SLOT_NUM_PORTS_SHIFT: u32 = 24;
+const SLOT_NUM_PORTS_MASK: u32 = 0xff << SLOT_NUM_PORTS_SHIFT;
 const TT_PORT_SHIFT: u32 = 8;
+const TT_THINK_TIME_SHIFT: u32 = 16;
 const CONTEXT_ALIGN_BYTES: usize = 64;
 const CONFIG_DESC_MIN_LEN: usize = 9;
 const CONFIG_DESC_MAX_LEN: usize = 4096;
@@ -29,6 +33,97 @@ const CONFIG_DESC_HEADER_RETRIES: usize = 3;
 const MAX_ENDPOINT_CONTEXTS: usize = 31;
 const DEVICE_CONTEXT_ENTRIES: usize = 1 + MAX_ENDPOINT_CONTEXTS;
 const INPUT_CONTEXT_ENTRIES: usize = 2 + MAX_ENDPOINT_CONTEXTS;
+
+#[inline]
+const fn encode_tt_info(tt: TtContext) -> u32 {
+    let tt_think_time = (tt.tt_think_time & 0x03) as u32;
+    (tt.hub_slot_id as u32)
+        | ((tt.downstream_port as u32) << TT_PORT_SHIFT)
+        | (tt_think_time << TT_THINK_TIME_SHIFT)
+}
+
+#[inline]
+const fn clamp_tt_context(tt: TtContext) -> TtContext {
+    let tt_think_time = match tt.tt_think_time & 0x03 {
+        0 => 0u8,
+        1 => 1u8,
+        _ => 2u8,
+    };
+    TtContext {
+        hub_slot_id: tt.hub_slot_id,
+        downstream_port: tt.downstream_port,
+        tt_think_time,
+        multi_tt: tt.multi_tt,
+    }
+}
+
+#[inline]
+const fn single_tt_profile(tt: TtContext) -> TtContext {
+    TtContext {
+        hub_slot_id: tt.hub_slot_id,
+        // Single-TT hubs expose one translator shared across downstream ports.
+        downstream_port: 1,
+        tt_think_time: clamp_tt_context(tt).tt_think_time,
+        multi_tt: false,
+    }
+}
+
+#[inline]
+const fn slot_ctx_with_hub_info(
+    mut slot_ctx: SlotContext,
+    speed: u8,
+    num_ports: u8,
+    multi_tt: bool,
+) -> SlotContext {
+    slot_ctx.dw0 |= SLOT_DEV_HUB;
+    if speed == reg::SPEED_HIGH && multi_tt {
+        slot_ctx.dw0 |= SLOT_DEV_MTT;
+    } else {
+        slot_ctx.dw0 &= !SLOT_DEV_MTT;
+    }
+    slot_ctx.dw1 =
+        (slot_ctx.dw1 & !SLOT_NUM_PORTS_MASK) | ((num_ports as u32) << SLOT_NUM_PORTS_SHIFT);
+    slot_ctx
+}
+
+#[inline]
+const fn should_retry_with_clamped_tt(
+    completion_code: u8,
+    tt_ctx: Option<TtContext>,
+    already_retried: bool,
+) -> bool {
+    if completion_code != completion::PARAMETER_ERROR || already_retried {
+        return false;
+    }
+    match tt_ctx {
+        Some(tt) => (tt.tt_think_time & 0x03) > 2,
+        None => false,
+    }
+}
+
+#[inline]
+const fn should_retry_with_single_tt_profile(
+    completion_code: u8,
+    tt_ctx: Option<TtContext>,
+    already_retried: bool,
+) -> bool {
+    if completion_code != completion::PARAMETER_ERROR || already_retried {
+        return false;
+    }
+    match tt_ctx {
+        Some(tt) => tt.multi_tt || tt.downstream_port != 1,
+        None => false,
+    }
+}
+
+#[inline]
+const fn should_retry_without_tt_context(
+    completion_code: u8,
+    tt_ctx: Option<TtContext>,
+    already_retried: bool,
+) -> bool {
+    completion_code == completion::PARAMETER_ERROR && tt_ctx.is_some() && !already_retried
+}
 
 /// xHCI Slot Context (32 bytes).
 ///
@@ -70,8 +165,94 @@ pub struct TtContext {
     pub hub_slot_id: u8,
     /// Downstream hub port number (USB numbering, starts at 1).
     pub downstream_port: u8,
+    /// Hub TT think time (0=8, 1=16, 2=24, 3=32 FS bit times).
+    pub tt_think_time: u8,
     /// Whether the parent hub advertises Multi-TT support.
     pub multi_tt: bool,
+}
+
+/// Ensures a slot enabled during probe is cleaned up on early-return errors.
+struct SlotCleanup<H: Dma> {
+    ctrl: Arc<XhciCtrl<H>>,
+    slot_id: u8,
+    armed: bool,
+}
+
+impl<H: Dma> SlotCleanup<H> {
+    fn new(ctrl: Arc<XhciCtrl<H>>, slot_id: u8) -> Self {
+        Self {
+            ctrl,
+            slot_id,
+            armed: true,
+        }
+    }
+
+    fn set_slot(&mut self, slot_id: u8) {
+        self.slot_id = slot_id;
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl<H: Dma> Drop for SlotCleanup<H> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.ctrl.set_device_context(self.slot_id, 0);
+        let _ = self.ctrl.disable_slot(self.slot_id);
+    }
+}
+
+fn recycle_slot_after_address_failure<H: Dma>(
+    ctrl: &Arc<XhciCtrl<H>>,
+    slot_cleanup: &mut SlotCleanup<H>,
+    slot_id: &mut u8,
+    device_ctx: &PhysMem<H>,
+    device_ctx_bytes: usize,
+    slot_recycles: &mut usize,
+    max_slot_recycles: usize,
+) -> Result<bool> {
+    if *slot_recycles >= max_slot_recycles {
+        return Ok(false);
+    }
+
+    let old_slot = *slot_id;
+    *slot_recycles = slot_recycles.saturating_add(1);
+    ctrl.emit_diag(0x0313, old_slot as u64, *slot_recycles as u64, 0);
+    ctrl.emit_diag(
+        0x0326,
+        old_slot as u64,
+        ctrl.device_context_entry(old_slot),
+        *slot_recycles as u64,
+    );
+
+    ctrl.set_device_context(old_slot, 0);
+    let _ = ctrl.disable_slot(old_slot);
+
+    *slot_id = match ctrl.enable_slot() {
+        Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
+        Err(enable_err) => return Err(enable_err),
+        Ok(new_slot) => new_slot,
+    };
+    slot_cleanup.set_slot(*slot_id);
+
+    unsafe {
+        core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, device_ctx_bytes);
+    }
+    ctrl.set_device_context(*slot_id, device_ctx.phys(ctrl.host()));
+    compiler_fence(Ordering::Release);
+
+    ctrl.emit_diag(0x0314, old_slot as u64, *slot_id as u64, 0);
+    ctrl.emit_diag(
+        0x0327,
+        ((old_slot as u64) << 32) | *slot_id as u64,
+        ctrl.device_context_entry(old_slot),
+        ctrl.device_context_entry(*slot_id),
+    );
+    Ok(true)
 }
 
 /// xHCI Endpoint Context (32 bytes).
@@ -357,6 +538,7 @@ impl<H: Dma> UsbDevice<H> {
 
         // Enable slot
         let mut slot_id = ctrl.enable_slot()?;
+        let mut slot_cleanup = SlotCleanup::new(ctrl.clone(), slot_id);
         let enumerated_speed = speed;
 
         let ctx_stride = ctrl.context_size_bytes();
@@ -387,18 +569,16 @@ impl<H: Dma> UsbDevice<H> {
         let ep0_ring = Ring::new(host, 256)?;
 
         let input_base = input_ctx.as_ptr::<u8>();
-        let build_slot_ctx = |slot_speed: u8| {
+        let build_slot_ctx = |slot_speed: u8, slot_tt_ctx: Option<TtContext>| {
             let mut slot_ctx = SlotContext::new(route, slot_speed, 1, root_hub_port);
-            if let Some(tt) = tt_ctx {
+            if let Some(tt) = slot_tt_ctx {
                 if tt.multi_tt {
                     slot_ctx.dw0 |= SLOT_DEV_MTT;
                 }
-                slot_ctx.dw2 =
-                    (tt.hub_slot_id as u32) | ((tt.downstream_port as u32) << TT_PORT_SHIFT);
+                slot_ctx.dw2 = encode_tt_info(tt);
             }
             slot_ctx
         };
-        let slot_ctx_template = build_slot_ctx(enumerated_speed);
 
         // Set device context in DCBAA
         unsafe {
@@ -450,8 +630,12 @@ impl<H: Dma> UsbDevice<H> {
             (speed << 56) | (pls << 48) | (ped << 40) | (ccs << 32) | portsc as u64
         };
 
-        const MAX_SLOT_RECYCLES: usize = 1;
+        const MAX_SLOT_RECYCLES: usize = 3;
         let mut slot_recycles = 0usize;
+        let mut active_tt_ctx = tt_ctx;
+        let mut tt_clamp_fallback_used = false;
+        let mut tt_single_profile_fallback_used = false;
+        let mut tt_without_ctx_fallback_used = false;
         'address_attempt: loop {
             let mut last_ctx_state_err: Option<UsbError> = None;
             for (attempt_idx, max_packet) in ep0_mps_candidates[..candidate_count]
@@ -459,6 +643,7 @@ impl<H: Dma> UsbDevice<H> {
                 .copied()
                 .enumerate()
             {
+                let slot_ctx_template = build_slot_ctx(enumerated_speed, active_tt_ctx);
                 unsafe {
                     // Reinitialize both output and input contexts before each
                     // Address Device submission so stale controller state
@@ -549,6 +734,104 @@ impl<H: Dma> UsbDevice<H> {
                 match ctrl.submit_command(trb) {
                     Ok(_) => break 'address_attempt,
                     Err(UsbError::Timeout) => return Err(UsbError::AddressDeviceTimeout),
+                    Err(UsbError::CmdFail(code))
+                        if should_retry_with_clamped_tt(
+                            code,
+                            active_tt_ctx,
+                            tt_clamp_fallback_used,
+                        ) =>
+                    {
+                        if let Some(tt) = active_tt_ctx {
+                            let clamped_tt = clamp_tt_context(tt);
+                            ctrl.emit_diag(
+                                0x0328,
+                                ((slot_id as u64) << 32) | attempt_idx as u64,
+                                encode_tt_info(tt) as u64,
+                                ((encode_tt_info(clamped_tt) as u64) << 32)
+                                    | ((max_packet as u64) << 16)
+                                    | code as u64,
+                            );
+                            active_tt_ctx = Some(clamped_tt);
+                        }
+                        tt_clamp_fallback_used = true;
+                        if !recycle_slot_after_address_failure(
+                            &ctrl,
+                            &mut slot_cleanup,
+                            &mut slot_id,
+                            &device_ctx,
+                            device_ctx_bytes,
+                            &mut slot_recycles,
+                            MAX_SLOT_RECYCLES,
+                        )? {
+                            return Err(UsbError::CmdFail(code));
+                        }
+                        continue 'address_attempt;
+                    }
+                    Err(UsbError::CmdFail(code))
+                        if should_retry_with_single_tt_profile(
+                            code,
+                            active_tt_ctx,
+                            tt_single_profile_fallback_used,
+                        ) =>
+                    {
+                        if let Some(tt) = active_tt_ctx {
+                            let single_tt = single_tt_profile(tt);
+                            ctrl.emit_diag(
+                                0x032a,
+                                ((slot_id as u64) << 32) | attempt_idx as u64,
+                                encode_tt_info(tt) as u64,
+                                ((encode_tt_info(single_tt) as u64) << 32)
+                                    | ((max_packet as u64) << 16)
+                                    | code as u64,
+                            );
+                            active_tt_ctx = Some(single_tt);
+                        }
+                        tt_single_profile_fallback_used = true;
+                        if !recycle_slot_after_address_failure(
+                            &ctrl,
+                            &mut slot_cleanup,
+                            &mut slot_id,
+                            &device_ctx,
+                            device_ctx_bytes,
+                            &mut slot_recycles,
+                            MAX_SLOT_RECYCLES,
+                        )? {
+                            return Err(UsbError::CmdFail(code));
+                        }
+                        continue 'address_attempt;
+                    }
+                    Err(UsbError::CmdFail(code))
+                        if should_retry_without_tt_context(
+                            code,
+                            active_tt_ctx,
+                            tt_without_ctx_fallback_used,
+                        ) =>
+                    {
+                        if let Some(tt) = active_tt_ctx {
+                            ctrl.emit_diag(
+                                0x0329,
+                                ((slot_id as u64) << 32) | attempt_idx as u64,
+                                encode_tt_info(tt) as u64,
+                                ((max_packet as u64) << 32)
+                                    | ((slot_recycles as u64) << 16)
+                                    | code as u64,
+                            );
+                        }
+                        active_tt_ctx = None;
+                        tt_without_ctx_fallback_used = true;
+                        if !recycle_slot_after_address_failure(
+                            &ctrl,
+                            &mut slot_cleanup,
+                            &mut slot_id,
+                            &device_ctx,
+                            device_ctx_bytes,
+                            &mut slot_recycles,
+                            MAX_SLOT_RECYCLES,
+                        )? {
+                            return Err(UsbError::CmdFail(code));
+                        }
+                        continue 'address_attempt;
+                    }
                     Err(UsbError::CmdFail(code)) if code == completion::CONTEXT_STATE_ERROR => {
                         let diag = ctrl.command_diag_for_port(port);
                         let out_base = device_ctx.as_ptr::<u8>();
@@ -621,37 +904,15 @@ impl<H: Dma> UsbDevice<H> {
             }
 
             if let Some(err) = last_ctx_state_err {
-                if slot_recycles < MAX_SLOT_RECYCLES {
-                    let old_slot = slot_id;
-                    slot_recycles = slot_recycles.saturating_add(1);
-                    ctrl.emit_diag(0x0313, old_slot as u64, slot_recycles as u64, 0);
-                    ctrl.emit_diag(
-                        0x0326,
-                        old_slot as u64,
-                        ctrl.device_context_entry(old_slot),
-                        slot_recycles as u64,
-                    );
-
-                    ctrl.set_device_context(old_slot, 0);
-                    let _ = ctrl.disable_slot(old_slot);
-
-                    slot_id = match ctrl.enable_slot() {
-                        Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
-                        Err(enable_err) => return Err(enable_err),
-                        Ok(new_slot) => new_slot,
-                    };
-                    unsafe {
-                        core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, device_ctx_bytes);
-                    }
-                    ctrl.set_device_context(slot_id, device_ctx.phys(host));
-                    compiler_fence(Ordering::Release);
-                    ctrl.emit_diag(0x0314, old_slot as u64, slot_id as u64, 0);
-                    ctrl.emit_diag(
-                        0x0327,
-                        ((old_slot as u64) << 32) | slot_id as u64,
-                        ctrl.device_context_entry(old_slot),
-                        ctrl.device_context_entry(slot_id),
-                    );
+                if recycle_slot_after_address_failure(
+                    &ctrl,
+                    &mut slot_cleanup,
+                    &mut slot_id,
+                    &device_ctx,
+                    device_ctx_bytes,
+                    &mut slot_recycles,
+                    MAX_SLOT_RECYCLES,
+                )? {
                     continue;
                 }
                 return Err(err);
@@ -662,6 +923,7 @@ impl<H: Dma> UsbDevice<H> {
         // Allocate ep_rings on heap to reduce stack usage
         let mut ep_rings = Vec::with_capacity(31);
         ep_rings.resize_with(31, || None);
+        slot_cleanup.disarm();
 
         Ok(Self {
             ctrl,
@@ -1115,6 +1377,42 @@ impl<H: Dma> UsbDevice<H> {
         Ok(())
     }
 
+    /// Program the slot context hub fields before enumerating downstream ports.
+    ///
+    /// This issues `EVALUATE_CONTEXT` with Slot Context updates so routed
+    /// children can be addressed reliably behind multi-level hub topologies.
+    pub fn configure_hub(&self, num_ports: u8, multi_tt: bool) -> Result<()> {
+        if num_ports == 0 {
+            return Err(UsbError::InvPort);
+        }
+
+        let host = self.ctrl.host();
+        let ctx_stride = self.ctx_stride();
+        let input_ctx_bytes = INPUT_CONTEXT_ENTRIES
+            .checked_mul(ctx_stride)
+            .ok_or(UsbError::OoRam)?;
+        unsafe {
+            // Rebuild a clean input context containing only Slot Context updates.
+            core::ptr::write_bytes(self.input_ctx.as_ptr::<u8>(), 0, input_ctx_bytes);
+            *self.input_drop_flags_ptr() = 0;
+            *self.input_add_flags_ptr() = 1; // Slot Context
+
+            let current_slot_ctx = *self.output_slot_ctx_ptr();
+            let updated_slot_ctx =
+                slot_ctx_with_hub_info(current_slot_ctx, self.speed, num_ports, multi_tt);
+            *(self.input_ctx.as_ptr::<u8>().add(ctx_stride) as *mut SlotContext) = updated_slot_ctx;
+        }
+        compiler_fence(Ordering::Release);
+
+        let trb = Trb {
+            param: self.input_ctx.phys(host),
+            status: 0,
+            control: (trb_type::EVALUATE_CONTEXT << 10) | ((self.slot_id as u32) << 24),
+        };
+        self.ctrl.submit_command(trb)?;
+        Ok(())
+    }
+
     /// Configure an endpoint (after SET_CONFIGURATION)
     pub fn configure_endpoint(&self, ep: &EndpointDesc) -> Result<()> {
         let host = self.ctrl.host();
@@ -1262,5 +1560,197 @@ impl<H: Dma> Drop for UsbDevice<H> {
         // Free EP0 ring
         let ep0_ring = core::mem::replace(&mut *self.ep0_ring.lock(), Ring::new(host, 2).unwrap());
         ep0_ring.free(host);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_tt_info_sets_slot_port_and_think_time() {
+        let info = encode_tt_info(TtContext {
+            hub_slot_id: 0x34,
+            downstream_port: 0x12,
+            tt_think_time: 0x03,
+            multi_tt: true,
+        });
+        assert_eq!(info & 0x00ff, 0x0034);
+        assert_eq!((info >> TT_PORT_SHIFT) & 0x00ff, 0x0012);
+        assert_eq!((info >> TT_THINK_TIME_SHIFT) & 0x0003, 0x0003);
+    }
+
+    #[test]
+    fn encode_tt_info_preserves_low_ttt_values() {
+        for ttt in 0u8..=2 {
+            let info = encode_tt_info(TtContext {
+                hub_slot_id: 1,
+                downstream_port: 1,
+                tt_think_time: ttt,
+                multi_tt: false,
+            });
+            assert_eq!((info >> TT_THINK_TIME_SHIFT) & 0x0003, ttt as u32);
+        }
+    }
+
+    #[test]
+    fn clamp_tt_context_caps_ttt_to_two() {
+        let tt = TtContext {
+            hub_slot_id: 1,
+            downstream_port: 2,
+            tt_think_time: 3,
+            multi_tt: true,
+        };
+        let clamped = clamp_tt_context(tt);
+        assert_eq!(clamped.hub_slot_id, 1);
+        assert_eq!(clamped.downstream_port, 2);
+        assert_eq!(clamped.tt_think_time, 2);
+        assert!(clamped.multi_tt);
+    }
+
+    #[test]
+    fn single_tt_profile_forces_single_translator_encoding() {
+        let tt = TtContext {
+            hub_slot_id: 2,
+            downstream_port: 4,
+            tt_think_time: 3,
+            multi_tt: true,
+        };
+        let single = single_tt_profile(tt);
+        assert_eq!(single.hub_slot_id, 2);
+        assert_eq!(single.downstream_port, 1);
+        assert_eq!(single.tt_think_time, 2);
+        assert!(!single.multi_tt);
+    }
+
+    #[test]
+    fn should_retry_with_clamped_tt_only_for_ttt_three_parameter_error() {
+        let tt = Some(TtContext {
+            hub_slot_id: 1,
+            downstream_port: 1,
+            tt_think_time: 3,
+            multi_tt: false,
+        });
+        assert!(should_retry_with_clamped_tt(
+            completion::PARAMETER_ERROR,
+            tt,
+            false
+        ));
+        assert!(!should_retry_with_clamped_tt(
+            completion::PARAMETER_ERROR,
+            tt,
+            true
+        ));
+        assert!(!should_retry_with_clamped_tt(
+            completion::USB_TRANSACTION_ERROR,
+            tt,
+            false
+        ));
+        assert!(!should_retry_with_clamped_tt(
+            completion::PARAMETER_ERROR,
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn should_retry_with_single_tt_profile_on_parameter_error_for_mtt_or_non1_port() {
+        let mtt = Some(TtContext {
+            hub_slot_id: 3,
+            downstream_port: 4,
+            tt_think_time: 2,
+            multi_tt: true,
+        });
+        assert!(should_retry_with_single_tt_profile(
+            completion::PARAMETER_ERROR,
+            mtt,
+            false
+        ));
+        assert!(!should_retry_with_single_tt_profile(
+            completion::PARAMETER_ERROR,
+            mtt,
+            true
+        ));
+        assert!(!should_retry_with_single_tt_profile(
+            completion::USB_TRANSACTION_ERROR,
+            mtt,
+            false
+        ));
+
+        let stt_non1 = Some(TtContext {
+            hub_slot_id: 3,
+            downstream_port: 2,
+            tt_think_time: 1,
+            multi_tt: false,
+        });
+        assert!(should_retry_with_single_tt_profile(
+            completion::PARAMETER_ERROR,
+            stt_non1,
+            false
+        ));
+
+        let stt_port1 = Some(TtContext {
+            hub_slot_id: 3,
+            downstream_port: 1,
+            tt_think_time: 1,
+            multi_tt: false,
+        });
+        assert!(!should_retry_with_single_tt_profile(
+            completion::PARAMETER_ERROR,
+            stt_port1,
+            false
+        ));
+    }
+
+    #[test]
+    fn should_retry_without_tt_context_only_once_on_parameter_error() {
+        let tt = Some(TtContext {
+            hub_slot_id: 1,
+            downstream_port: 1,
+            tt_think_time: 1,
+            multi_tt: false,
+        });
+        assert!(should_retry_without_tt_context(
+            completion::PARAMETER_ERROR,
+            tt,
+            false
+        ));
+        assert!(!should_retry_without_tt_context(
+            completion::PARAMETER_ERROR,
+            tt,
+            true
+        ));
+        assert!(!should_retry_without_tt_context(
+            completion::PARAMETER_ERROR,
+            None,
+            false
+        ));
+        assert!(!should_retry_without_tt_context(
+            completion::USB_TRANSACTION_ERROR,
+            tt,
+            false
+        ));
+    }
+
+    #[test]
+    fn slot_ctx_with_hub_info_sets_hub_bit_and_port_count() {
+        let base = SlotContext::new(0x12345, reg::SPEED_FULL, 1, 3);
+        let updated = slot_ctx_with_hub_info(base, reg::SPEED_FULL, 7, false);
+        assert_ne!(updated.dw0 & SLOT_DEV_HUB, 0);
+        assert_eq!((updated.dw1 >> SLOT_NUM_PORTS_SHIFT) & 0xff, 7);
+        assert_eq!(updated.dw1 & 0x00ff_ffff, base.dw1 & 0x00ff_ffff);
+    }
+
+    #[test]
+    fn slot_ctx_with_hub_info_sets_mtt_only_for_high_speed_hubs() {
+        let base = SlotContext::new(0, reg::SPEED_HIGH, 1, 1);
+        let hs_mtt = slot_ctx_with_hub_info(base, reg::SPEED_HIGH, 4, true);
+        assert_ne!(hs_mtt.dw0 & SLOT_DEV_MTT, 0);
+
+        let fs = slot_ctx_with_hub_info(base, reg::SPEED_FULL, 4, true);
+        assert_eq!(fs.dw0 & SLOT_DEV_MTT, 0);
+
+        let hs_stt = slot_ctx_with_hub_info(base, reg::SPEED_HIGH, 4, false);
+        assert_eq!(hs_stt.dw0 & SLOT_DEV_MTT, 0);
     }
 }
