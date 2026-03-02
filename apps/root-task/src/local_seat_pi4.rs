@@ -125,9 +125,13 @@ const VL805_RESET_NOTIFY_BEFORE_USB_PROBE: bool = false;
 // Touching VL805 PCI config space during early bootstrap has correlated with
 // fatal IRQ 27 entries on Pi4/seL4. Keep preseed writes disabled.
 const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
-// Runtime cfg-space touches can still trigger fatal IRQ 27 on some Pi4 UEFI
-// paths. Keep this disabled until we have a proven non-faulting ECAM path.
-const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = false;
+// Runtime VL805 PCI preflight must ensure MEMORY_SPACE + BUS_MASTER are set
+// before xHCI bring-up. Without this, controller RUN can stall in HCH with
+// USBSTS.HSE set (observed as stage 0x0272 timeout on Pi4 local-seat boots).
+// However, on firmware paths without a DTB-backed xHCI hint, probing ECAM can
+// trigger a fatal IRQ 27. Runtime code must gate actual cfg-space touching
+// using `vl805_runtime_cfg_touch_allowed`.
+const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = true;
 const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
 const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
@@ -185,6 +189,7 @@ static VL805_RESET_NOTIFIED: AtomicBool = AtomicBool::new(false);
 static VL805_RESET_BYPASSED_LOGGED: AtomicBool = AtomicBool::new(false);
 static USB_DMA_RANGE_WARNED: AtomicBool = AtomicBool::new(false);
 static VL805_CFG_SAFE_MODE_LOGGED: AtomicBool = AtomicBool::new(false);
+static VL805_CFG_RUNTIME_GATED_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_PRESEED_ALREADY_PINNED_LOGGED: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_PRESEED_LOGGED: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_RUNTIME_INIT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -654,6 +659,15 @@ fn current_vl805_xhci_mmio_hint() -> Option<usize> {
     } else {
         Some(mmio)
     }
+}
+
+#[inline]
+const fn vl805_runtime_cfg_touch_allowed(
+    runtime_enabled: bool,
+    has_xhci_hint: bool,
+    has_cfg_window: bool,
+) -> bool {
+    runtime_enabled && (has_xhci_hint || has_cfg_window)
 }
 
 fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
@@ -2058,11 +2072,23 @@ impl UsbKeyboard {
             set_xhci_diag_hook(Some(xhci_diag_hook));
             boot_log::force_uart_line("[local-seat] xhci diag hook installed");
         }
-        if VL805_CFG_RUNTIME_TOUCH_ENABLED {
-            if current_vl805_cfg_virt().is_some() {
+        let cfg_window_present = current_vl805_cfg_virt().is_some();
+        let runtime_cfg_touch_enabled = vl805_runtime_cfg_touch_allowed(
+            VL805_CFG_RUNTIME_TOUCH_ENABLED,
+            xhci_mmio_hint.is_some(),
+            cfg_window_present,
+        );
+        if runtime_cfg_touch_enabled {
+            if cfg_window_present {
                 boot_log::force_uart_line("[local-seat] vl805 cfg present stage=usb-init-entry");
             } else {
                 boot_log::force_uart_line("[local-seat] vl805 cfg missing stage=usb-init-entry");
+            }
+        } else if VL805_CFG_RUNTIME_TOUCH_ENABLED {
+            if !VL805_CFG_RUNTIME_GATED_LOGGED.swap(true, Ordering::AcqRel) {
+                boot_log::force_uart_line(
+                    "[local-seat] vl805 pci cfg runtime preflight skipped reason=no-dtb-xhci-hint",
+                );
             }
         } else if !VL805_CFG_SAFE_MODE_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] vl805 pci cfg touch disabled (safe-mode)");
@@ -2073,7 +2099,7 @@ impl UsbKeyboard {
         } else if !VL805_RESET_BYPASSED_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] vl805 reset notify=bypassed");
         }
-        let (vl805_pci_mmio, pci_cfg_ready) = if VL805_CFG_RUNTIME_TOUCH_ENABLED {
+        let (vl805_pci_mmio, pci_cfg_ready) = if runtime_cfg_touch_enabled {
             let vl805_pci_mmio = prepare_vl805_pci(hal);
             if vl805_pci_mmio.is_none() {
                 boot_log::force_uart_line("[local-seat] vl805 pci preflight=none");
@@ -2870,15 +2896,30 @@ impl UsbKeyboard {
         let _ = core::fmt::Write::write_fmt(
             &mut hub_line,
             format_args!(
-                "[local-seat] hub desc slot={} iface={} ports={} pwr_mode={} pwr2good={}",
+                "[local-seat] hub desc slot={} iface={} ports={} pwr_mode={} pwr2good={} mtt={} ttt={}",
                 device.slot_id(),
                 hub_interface_number,
                 max_ports,
                 hub_desc.power_switching_mode(),
                 hub_desc.pwr_on_2_pwr_good,
+                hub_multi_tt as u8,
+                hub_tt_think_time & 0x03,
             ),
         );
         boot_log::force_uart_line(hub_line.as_str());
+        let hub_chars = hub_desc.hub_characteristics;
+        let mut hub_raw_line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut hub_raw_line,
+            format_args!(
+                "[local-seat] hub desc raw slot={} iface={} proto={} chars=0x{:04x}",
+                device.slot_id(),
+                hub_interface_number,
+                hub_protocol_code,
+                hub_chars,
+            ),
+        );
+        boot_log::force_uart_line(hub_raw_line.as_str());
 
         boot_log::force_uart_line("[local-seat] hub settle begin");
         wait_ms(HUB_POST_CONFIG_SETTLE_MS);
@@ -3168,13 +3209,41 @@ impl UsbKeyboard {
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
+                    let rearmed_primary_speed = match Self::rearm_hub_port_after_address_failure(
+                        device.as_ref(),
+                        hub_interface_number,
+                        downstream_port,
+                        hub_protocol_code,
+                        "status-path",
+                    ) {
+                        Some(rearmed_status) => {
+                            let observed =
+                                Self::speed_from_hub_port_status(rearmed_status, hub_protocol_code);
+                            let mut speed_line = heapless::String::<256>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                    &mut speed_line,
+                                    format_args!(
+                                        "[local-seat] hub fallback speed-refresh slot={} port={} route=0x{route:05x} prev={} observed={}",
+                                        device.slot_id(),
+                                        downstream_port,
+                                        child_speed,
+                                        observed
+                                    ),
+                                );
+                            boot_log::force_uart_line(speed_line.as_str());
+                            observed
+                        }
+                        None => child_speed,
+                    };
                     match Self::probe_hub_child_with_speed_fallback(
                         &device,
                         downstream_port,
                         route,
-                        child_speed,
+                        rearmed_primary_speed,
                         hub_multi_tt,
                         hub_tt_think_time,
+                        hub_interface_number,
+                        hub_protocol_code,
                         depth_remaining,
                         saw_keyboard_init_error,
                     ) {
@@ -3305,6 +3374,8 @@ impl UsbKeyboard {
         primary_speed: u8,
         hub_multi_tt: bool,
         hub_tt_think_time: u8,
+        hub_interface_number: u8,
+        hub_protocol_code: u8,
         depth_remaining: usize,
         saw_keyboard_init_error: &mut bool,
     ) -> HubChildProbeResult {
@@ -3316,6 +3387,43 @@ impl UsbKeyboard {
         for child_speed in SPEED_CANDIDATES {
             if child_speed == primary_speed {
                 continue;
+            }
+
+            let observed_speed = Self::rearm_hub_port_after_address_failure(
+                device.as_ref(),
+                hub_interface_number,
+                downstream_port,
+                hub_protocol_code,
+                "status-fallback",
+            )
+            .map(|status| Self::speed_from_hub_port_status(status, hub_protocol_code));
+            if let Some(observed) = observed_speed {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub fallback candidate slot={} port={} route=0x{route:05x} candidate_speed={} observed_speed={} primary_speed={}",
+                        device.slot_id(),
+                        downstream_port,
+                        child_speed,
+                        observed,
+                        primary_speed
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            } else {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub fallback candidate slot={} port={} route=0x{route:05x} candidate_speed={} detail=rearm-unavailable primary_speed={}",
+                        device.slot_id(),
+                        downstream_port,
+                        child_speed,
+                        primary_speed
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
             }
 
             let mut line = heapless::String::<256>::new();
@@ -3375,19 +3483,95 @@ impl UsbKeyboard {
         saw_keyboard_init_error: &mut bool,
         source: &str,
     ) -> HubChildProbeResult {
+        let mut tt_port_raw = 0u8;
+        let mut tt_ttt_raw = 0u8;
         let tt_context = if (child_speed == usb_oxide::regs::SPEED_LOW
             || child_speed == usb_oxide::regs::SPEED_FULL)
             && device.speed() == usb_oxide::regs::SPEED_HIGH
         {
+            tt_port_raw = downstream_port;
+            tt_ttt_raw = hub_tt_think_time & 0x03;
+            let (tt_port, tt_ttt) =
+                normalize_hub_tt_profile(downstream_port, hub_multi_tt, hub_tt_think_time);
+            if tt_port != tt_port_raw || tt_ttt != tt_ttt_raw {
+                let mut line = heapless::String::<320>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub tt normalized slot={} port={} route=0x{route:05x} root_port={} speed={} source={} mtt={} tt_port_raw={} tt_port={} ttt_raw={} ttt={}",
+                        device.slot_id(),
+                        downstream_port,
+                        device.root_hub_port(),
+                        child_speed,
+                        source,
+                        hub_multi_tt as u8,
+                        tt_port_raw,
+                        tt_port,
+                        tt_ttt_raw,
+                        tt_ttt
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
             Some(TtContext {
                 hub_slot_id: device.slot_id(),
-                downstream_port,
-                tt_think_time: hub_tt_think_time,
+                downstream_port: tt_port,
+                tt_think_time: tt_ttt,
                 multi_tt: hub_multi_tt,
             })
         } else {
             None
         };
+        let (tt_slot, tt_port, tt_ttt, tt_multi, tt_port_orig, tt_ttt_orig) =
+            if let Some(tt) = tt_context {
+                (
+                    tt.hub_slot_id as u16,
+                    tt.downstream_port as u16,
+                    tt.tt_think_time as u16,
+                    tt.multi_tt as u16,
+                    tt_port_raw as u16,
+                    tt_ttt_raw as u16,
+                )
+            } else {
+                (0xffff, 0xffff, 0xffff, 0, 0xffff, 0xffff)
+            };
+        let mut begin_line = heapless::String::<320>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut begin_line,
+            format_args!(
+                "[local-seat] hub child address begin slot={} port={} source={} speed={} route=0x{route:05x} root_port={} tt=slot:{} port:{} ttt:{} mtt:{} raw_port:{} raw_ttt:{}",
+                device.slot_id(),
+                downstream_port,
+                source,
+                child_speed,
+                device.root_hub_port(),
+                tt_slot,
+                tt_port,
+                tt_ttt,
+                tt_multi,
+                tt_port_orig,
+                tt_ttt_orig,
+            ),
+        );
+        boot_log::force_uart_line(begin_line.as_str());
+        let mut begin_tt_line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut begin_tt_line,
+            format_args!(
+                "[local-seat] hub child tt slot={} port={} speed={} src={} tt={}:{}/{} mtt={} raw={}/{}",
+                device.slot_id(),
+                downstream_port,
+                child_speed,
+                source,
+                tt_slot,
+                tt_port,
+                tt_ttt,
+                tt_multi,
+                tt_port_orig,
+                tt_ttt_orig,
+            ),
+        );
+        boot_log::force_uart_line(begin_tt_line.as_str());
 
         let mut child = match UsbDevice::new_routed(
             device.ctrl().clone(),
@@ -3398,21 +3582,46 @@ impl UsbKeyboard {
         ) {
             Ok(child) => child,
             Err(err) => {
-                let (tt_slot, tt_port, tt_ttt, tt_multi) = if let Some(tt) = tt_context {
-                    (
-                        tt.hub_slot_id as u16,
-                        tt.downstream_port as u16,
-                        tt.tt_think_time as u16,
-                        tt.multi_tt as u16,
-                    )
-                } else {
-                    (0xffff, 0xffff, 0xffff, 0)
-                };
-                let mut line = heapless::String::<256>::new();
+                if let UsbError::CmdFail(code) = err {
+                    let mut cmd_line = heapless::String::<240>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut cmd_line,
+                        format_args!(
+                            "[local-seat] hub child address cmd-fail slot={} port={} speed={} source={} code={} name={}",
+                            device.slot_id(),
+                            downstream_port,
+                            child_speed,
+                            source,
+                            code,
+                            completion::name(code),
+                        ),
+                    );
+                    boot_log::force_uart_line(cmd_line.as_str());
+                    let mut cmd_tt_line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut cmd_tt_line,
+                        format_args!(
+                            "[local-seat] hub child cmdfail-tt slot={} port={} speed={} src={} route=0x{route:05x} root_port={} tt={}:{}/{} mtt={} raw={}/{}",
+                            device.slot_id(),
+                            downstream_port,
+                            child_speed,
+                            source,
+                            device.root_hub_port(),
+                            tt_slot,
+                            tt_port,
+                            tt_ttt,
+                            tt_multi,
+                            tt_port_orig,
+                            tt_ttt_orig,
+                        ),
+                    );
+                    boot_log::force_uart_line(cmd_tt_line.as_str());
+                }
+                let mut line = heapless::String::<320>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] hub child failed slot={} port={} stage=address speed={} source={} route=0x{route:05x} root_port={} tt=slot:{} port:{} ttt:{} mtt:{} detail={err:?}",
+                        "[local-seat] hub child failed slot={} port={} stage=address speed={} source={} route=0x{route:05x} root_port={} tt=slot:{} port:{} ttt:{} mtt:{} raw_port:{} raw_ttt:{} detail={err:?}",
                         device.slot_id(),
                         downstream_port,
                         child_speed,
@@ -3422,6 +3631,8 @@ impl UsbKeyboard {
                         tt_port,
                         tt_ttt,
                         tt_multi,
+                        tt_port_orig,
+                        tt_ttt_orig,
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -3555,6 +3766,89 @@ impl UsbKeyboard {
         }
         Self::log_hub_port_terminal(device.slot_id(), downstream_port, "not-keyboard");
         HubChildProbeResult::ProbedNoKeyboard
+    }
+
+    fn rearm_hub_port_after_address_failure(
+        device: &UsbDevice<SeatDma>,
+        hub_interface_number: u8,
+        downstream_port: u8,
+        hub_protocol_code: u8,
+        source: &str,
+    ) -> Option<HubPortStatus> {
+        let reset_feature = Self::hub_reset_feature(hub_protocol_code);
+        let mut begin = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut begin,
+            format_args!(
+                "[local-seat] hub rearm begin slot={} iface={} port={} source={}",
+                device.slot_id(),
+                hub_interface_number,
+                downstream_port,
+                source
+            ),
+        );
+        boot_log::force_uart_line(begin.as_str());
+
+        if !Self::hub_set_feature_with_retry(
+            device,
+            hub_interface_number,
+            downstream_port,
+            reset_feature,
+            "rearm-set-feature",
+            HUB_SET_FEATURE_RETRIES,
+        ) {
+            let mut fail = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut fail,
+                format_args!(
+                    "[local-seat] hub rearm fail slot={} iface={} port={} source={} stage=set-feature",
+                    device.slot_id(),
+                    hub_interface_number,
+                    downstream_port,
+                    source
+                ),
+            );
+            boot_log::force_uart_line(fail.as_str());
+            return None;
+        }
+
+        wait_ms(HUB_RESET_SETTLE_MS);
+        let Some(status) = Self::wait_hub_port_ready(
+            device,
+            hub_interface_number,
+            downstream_port,
+            hub_protocol_code,
+        ) else {
+            let mut fail = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut fail,
+                format_args!(
+                    "[local-seat] hub rearm fail slot={} iface={} port={} source={} stage=wait-ready",
+                    device.slot_id(),
+                    hub_interface_number,
+                    downstream_port,
+                    source
+                ),
+            );
+            boot_log::force_uart_line(fail.as_str());
+            return None;
+        };
+        Self::clear_hub_port_change_bits(
+            device,
+            hub_interface_number,
+            downstream_port,
+            status,
+            hub_protocol_code,
+        );
+        let final_status = Self::hub_port_status_with_retry(
+            device,
+            hub_interface_number,
+            downstream_port,
+            "rearm",
+        )
+        .unwrap_or(status);
+        Self::log_hub_port_status(device.slot_id(), downstream_port, "rearm", final_status);
+        Some(final_status)
     }
 
     fn read_hub_descriptor(
@@ -5241,6 +5535,22 @@ fn route_depth(route: u32) -> u8 {
 }
 
 #[inline]
+const fn normalize_hub_tt_profile(
+    downstream_port: u8,
+    _hub_multi_tt: bool,
+    hub_tt_think_time: u8,
+) -> (u8, u8) {
+    let tt_port = if downstream_port == 0 {
+        1
+    } else {
+        downstream_port
+    };
+    let tt_ttt_raw = hub_tt_think_time & 0x03;
+    let tt_ttt = if tt_ttt_raw > 2 { 2 } else { tt_ttt_raw };
+    (tt_port, tt_ttt)
+}
+
+#[inline]
 fn read_config_desc(config_blob: &[u8]) -> Option<ConfigDesc> {
     if config_blob.len() < mem::size_of::<ConfigDesc>() {
         return None;
@@ -5285,7 +5595,10 @@ fn validate_framebuffer_geometry(
 
 #[cfg(test)]
 mod tests {
-    use super::{config_value_for_set, decode_pci_mmio_bar, ConfigDesc};
+    use super::{
+        config_value_for_set, decode_pci_mmio_bar, normalize_hub_tt_profile,
+        vl805_runtime_cfg_touch_allowed, ConfigDesc,
+    };
 
     #[test]
     fn decode_pci_mmio_bar_rejects_io_bar() {
@@ -5322,5 +5635,30 @@ mod tests {
             ..ConfigDesc::default()
         };
         assert_eq!(config_value_for_set(config), None);
+    }
+
+    #[test]
+    fn vl805_runtime_cfg_touch_requires_hint_or_cfg_window() {
+        assert!(vl805_runtime_cfg_touch_allowed(true, true, false));
+        assert!(vl805_runtime_cfg_touch_allowed(true, false, true));
+        assert!(vl805_runtime_cfg_touch_allowed(true, true, true));
+        assert!(!vl805_runtime_cfg_touch_allowed(true, false, false));
+    }
+
+    #[test]
+    fn vl805_runtime_cfg_touch_respects_global_disable() {
+        assert!(!vl805_runtime_cfg_touch_allowed(false, true, true));
+    }
+
+    #[test]
+    fn normalize_hub_tt_profile_preserves_single_tt_port_and_clamps_ttt() {
+        assert_eq!(normalize_hub_tt_profile(4, false, 1), (4, 1));
+        assert_eq!(normalize_hub_tt_profile(0, false, 3), (1, 2));
+    }
+
+    #[test]
+    fn normalize_hub_tt_profile_preserves_multi_tt_port_and_clamps_ttt() {
+        assert_eq!(normalize_hub_tt_profile(4, true, 1), (4, 1));
+        assert_eq!(normalize_hub_tt_profile(4, true, 3), (4, 2));
     }
 }

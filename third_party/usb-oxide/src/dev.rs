@@ -33,6 +33,29 @@ const CONFIG_DESC_HEADER_RETRIES: usize = 3;
 const MAX_ENDPOINT_CONTEXTS: usize = 31;
 const DEVICE_CONTEXT_ENTRIES: usize = 1 + MAX_ENDPOINT_CONTEXTS;
 const INPUT_CONTEXT_ENTRIES: usize = 2 + MAX_ENDPOINT_CONTEXTS;
+const ADDRESS_RETRY_PATH_CLAMP_TT: u8 = 1;
+const ADDRESS_RETRY_PATH_SINGLE_TT: u8 = 2;
+const ADDRESS_RETRY_PATH_REDUCE_TTT: u8 = 3;
+const ADDRESS_RETRY_PATH_KEEP_TT_RECYCLE: u8 = 4;
+const ADDRESS_RETRY_PATH_CONTEXT_STATE: u8 = 5;
+const ADDRESS_RETRY_PATH_DIRECT_FAIL: u8 = 6;
+
+#[inline]
+const fn encode_retry_state(
+    path: u8,
+    code: u8,
+    clamp_used: bool,
+    single_used: bool,
+    reduce_count: usize,
+    keep_tt_used: bool,
+) -> u64 {
+    ((path as u64) << 56)
+        | ((code as u64) << 48)
+        | ((clamp_used as u64) << 40)
+        | ((single_used as u64) << 32)
+        | ((reduce_count as u64) << 16)
+        | (keep_tt_used as u64)
+}
 
 #[inline]
 const fn encode_tt_info(tt: TtContext) -> u32 {
@@ -61,10 +84,30 @@ const fn clamp_tt_context(tt: TtContext) -> TtContext {
 const fn single_tt_profile(tt: TtContext) -> TtContext {
     TtContext {
         hub_slot_id: tt.hub_slot_id,
-        // Single-TT hubs expose one translator shared across downstream ports.
-        downstream_port: 1,
+        // TT Port Number remains the physical downstream port where
+        // the FS/LS device is attached, regardless of STT/MTT mode.
+        downstream_port: if tt.downstream_port == 0 {
+            1
+        } else {
+            tt.downstream_port
+        },
         tt_think_time: clamp_tt_context(tt).tt_think_time,
         multi_tt: false,
+    }
+}
+
+#[inline]
+const fn reduced_tt_think_time_profile(tt: TtContext) -> Option<TtContext> {
+    let clamped = clamp_tt_context(tt);
+    if clamped.tt_think_time == 0 {
+        None
+    } else {
+        Some(TtContext {
+            hub_slot_id: clamped.hub_slot_id,
+            downstream_port: clamped.downstream_port,
+            tt_think_time: clamped.tt_think_time - 1,
+            multi_tt: clamped.multi_tt,
+        })
     }
 }
 
@@ -111,7 +154,22 @@ const fn should_retry_with_single_tt_profile(
         return false;
     }
     match tt_ctx {
-        Some(tt) => tt.multi_tt || tt.downstream_port != 1,
+        Some(tt) => tt.multi_tt,
+        None => false,
+    }
+}
+
+#[inline]
+const fn should_retry_with_reduced_tt_think_time(
+    completion_code: u8,
+    tt_ctx: Option<TtContext>,
+    reductions_applied: usize,
+) -> bool {
+    if completion_code != completion::PARAMETER_ERROR || reductions_applied >= 2 {
+        return false;
+    }
+    match tt_ctx {
+        Some(tt) => clamp_tt_context(tt).tt_think_time > 0,
         None => false,
     }
 }
@@ -635,7 +693,10 @@ impl<H: Dma> UsbDevice<H> {
         let mut active_tt_ctx = tt_ctx;
         let mut tt_clamp_fallback_used = false;
         let mut tt_single_profile_fallback_used = false;
-        let mut tt_without_ctx_fallback_used = false;
+        let mut tt_think_time_reductions = 0usize;
+        let mut tt_parameter_retry_used = false;
+        let mut context_state_err_count = 0usize;
+        let mut parameter_err_count = 0usize;
         'address_attempt: loop {
             let mut last_ctx_state_err: Option<UsbError> = None;
             for (attempt_idx, max_packet) in ep0_mps_candidates[..candidate_count]
@@ -741,6 +802,23 @@ impl<H: Dma> UsbDevice<H> {
                             tt_clamp_fallback_used,
                         ) =>
                     {
+                        let tt_encode = active_tt_ctx.map(encode_tt_info).unwrap_or(0);
+                        ctrl.emit_diag(
+                            0x032f,
+                            ((slot_id as u64) << 32) | attempt_idx as u64,
+                            ((slot_recycles as u64) << 48)
+                                | ((max_packet as u64) << 32)
+                                | tt_encode as u64,
+                            encode_retry_state(
+                                ADDRESS_RETRY_PATH_CLAMP_TT,
+                                code,
+                                tt_clamp_fallback_used,
+                                tt_single_profile_fallback_used,
+                                tt_think_time_reductions,
+                                tt_parameter_retry_used,
+                            ),
+                        );
+                        parameter_err_count = parameter_err_count.saturating_add(1);
                         if let Some(tt) = active_tt_ctx {
                             let clamped_tt = clamp_tt_context(tt);
                             ctrl.emit_diag(
@@ -774,6 +852,23 @@ impl<H: Dma> UsbDevice<H> {
                             tt_single_profile_fallback_used,
                         ) =>
                     {
+                        let tt_encode = active_tt_ctx.map(encode_tt_info).unwrap_or(0);
+                        ctrl.emit_diag(
+                            0x032f,
+                            ((slot_id as u64) << 32) | attempt_idx as u64,
+                            ((slot_recycles as u64) << 48)
+                                | ((max_packet as u64) << 32)
+                                | tt_encode as u64,
+                            encode_retry_state(
+                                ADDRESS_RETRY_PATH_SINGLE_TT,
+                                code,
+                                tt_clamp_fallback_used,
+                                tt_single_profile_fallback_used,
+                                tt_think_time_reductions,
+                                tt_parameter_retry_used,
+                            ),
+                        );
+                        parameter_err_count = parameter_err_count.saturating_add(1);
                         if let Some(tt) = active_tt_ctx {
                             let single_tt = single_tt_profile(tt);
                             ctrl.emit_diag(
@@ -801,15 +896,84 @@ impl<H: Dma> UsbDevice<H> {
                         continue 'address_attempt;
                     }
                     Err(UsbError::CmdFail(code))
+                        if should_retry_with_reduced_tt_think_time(
+                            code,
+                            active_tt_ctx,
+                            tt_think_time_reductions,
+                        ) =>
+                    {
+                        let tt_encode = active_tt_ctx.map(encode_tt_info).unwrap_or(0);
+                        ctrl.emit_diag(
+                            0x032f,
+                            ((slot_id as u64) << 32) | attempt_idx as u64,
+                            ((slot_recycles as u64) << 48)
+                                | ((max_packet as u64) << 32)
+                                | tt_encode as u64,
+                            encode_retry_state(
+                                ADDRESS_RETRY_PATH_REDUCE_TTT,
+                                code,
+                                tt_clamp_fallback_used,
+                                tt_single_profile_fallback_used,
+                                tt_think_time_reductions,
+                                tt_parameter_retry_used,
+                            ),
+                        );
+                        parameter_err_count = parameter_err_count.saturating_add(1);
+                        if let Some(tt) = active_tt_ctx {
+                            if let Some(reduced_tt) = reduced_tt_think_time_profile(tt) {
+                                ctrl.emit_diag(
+                                    0x032e,
+                                    ((slot_id as u64) << 32) | attempt_idx as u64,
+                                    encode_tt_info(tt) as u64,
+                                    ((encode_tt_info(reduced_tt) as u64) << 32)
+                                        | ((tt_think_time_reductions as u64) << 16)
+                                        | code as u64,
+                                );
+                                active_tt_ctx = Some(reduced_tt);
+                                tt_think_time_reductions =
+                                    tt_think_time_reductions.saturating_add(1);
+                            }
+                        }
+                        if !recycle_slot_after_address_failure(
+                            &ctrl,
+                            &mut slot_cleanup,
+                            &mut slot_id,
+                            &device_ctx,
+                            device_ctx_bytes,
+                            &mut slot_recycles,
+                            MAX_SLOT_RECYCLES,
+                        )? {
+                            return Err(UsbError::CmdFail(code));
+                        }
+                        continue 'address_attempt;
+                    }
+                    Err(UsbError::CmdFail(code))
                         if should_retry_without_tt_context(
                             code,
                             active_tt_ctx,
-                            tt_without_ctx_fallback_used,
+                            tt_parameter_retry_used,
                         ) =>
                     {
+                        let tt_encode = active_tt_ctx.map(encode_tt_info).unwrap_or(0);
+                        ctrl.emit_diag(
+                            0x032f,
+                            ((slot_id as u64) << 32) | attempt_idx as u64,
+                            ((slot_recycles as u64) << 48)
+                                | ((max_packet as u64) << 32)
+                                | tt_encode as u64,
+                            encode_retry_state(
+                                ADDRESS_RETRY_PATH_KEEP_TT_RECYCLE,
+                                code,
+                                tt_clamp_fallback_used,
+                                tt_single_profile_fallback_used,
+                                tt_think_time_reductions,
+                                tt_parameter_retry_used,
+                            ),
+                        );
+                        parameter_err_count = parameter_err_count.saturating_add(1);
                         if let Some(tt) = active_tt_ctx {
                             ctrl.emit_diag(
-                                0x0329,
+                                0x032d,
                                 ((slot_id as u64) << 32) | attempt_idx as u64,
                                 encode_tt_info(tt) as u64,
                                 ((max_packet as u64) << 32)
@@ -817,8 +981,10 @@ impl<H: Dma> UsbDevice<H> {
                                     | code as u64,
                             );
                         }
-                        active_tt_ctx = None;
-                        tt_without_ctx_fallback_used = true;
+                        // Keep TT context intact for FS/LS devices behind HS hubs.
+                        // Retrying after slot recycle without TT can provoke
+                        // context-state failures on Pi4/vl805.
+                        tt_parameter_retry_used = true;
                         if !recycle_slot_after_address_failure(
                             &ctrl,
                             &mut slot_cleanup,
@@ -833,6 +999,23 @@ impl<H: Dma> UsbDevice<H> {
                         continue 'address_attempt;
                     }
                     Err(UsbError::CmdFail(code)) if code == completion::CONTEXT_STATE_ERROR => {
+                        let tt_encode = active_tt_ctx.map(encode_tt_info).unwrap_or(0);
+                        ctrl.emit_diag(
+                            0x032f,
+                            ((slot_id as u64) << 32) | attempt_idx as u64,
+                            ((slot_recycles as u64) << 48)
+                                | ((max_packet as u64) << 32)
+                                | tt_encode as u64,
+                            encode_retry_state(
+                                ADDRESS_RETRY_PATH_CONTEXT_STATE,
+                                code,
+                                tt_clamp_fallback_used,
+                                tt_single_profile_fallback_used,
+                                tt_think_time_reductions,
+                                tt_parameter_retry_used,
+                            ),
+                        );
+                        context_state_err_count = context_state_err_count.saturating_add(1);
                         let diag = ctrl.command_diag_for_port(port);
                         let out_base = device_ctx.as_ptr::<u8>();
                         let out_slot_ctx = unsafe { *(out_base as *const SlotContext) };
@@ -894,10 +1077,43 @@ impl<H: Dma> UsbDevice<H> {
                             input_ctx.phys(host),
                             device_ctx.phys(host),
                         );
+                        let tt_encode = active_tt_ctx.map(encode_tt_info).unwrap_or(0);
+                        ctrl.emit_diag(
+                            0x032b,
+                            ((context_state_err_count as u64) << 32) | parameter_err_count as u64,
+                            ((route as u64) << 32)
+                                | ((root_hub_port as u64) << 16)
+                                | ((enumerated_speed as u64) << 8)
+                                | port as u64,
+                            ((slot_recycles as u64) << 48)
+                                | ((slot_id as u64) << 40)
+                                | ((attempt_idx as u64) << 32)
+                                | ((max_packet as u64) << 16)
+                                | tt_encode as u64,
+                        );
                         last_ctx_state_err = Some(UsbError::CmdFail(code));
                         if attempt_idx + 1 < candidate_count {
                             continue;
                         }
+                    }
+                    Err(UsbError::CmdFail(code)) => {
+                        let tt_encode = active_tt_ctx.map(encode_tt_info).unwrap_or(0);
+                        ctrl.emit_diag(
+                            0x0342,
+                            ((slot_id as u64) << 32) | attempt_idx as u64,
+                            ((slot_recycles as u64) << 48)
+                                | ((max_packet as u64) << 32)
+                                | tt_encode as u64,
+                            encode_retry_state(
+                                ADDRESS_RETRY_PATH_DIRECT_FAIL,
+                                code,
+                                tt_clamp_fallback_used,
+                                tt_single_profile_fallback_used,
+                                tt_think_time_reductions,
+                                tt_parameter_retry_used,
+                            ),
+                        );
+                        return Err(UsbError::CmdFail(code));
                     }
                     Err(err) => return Err(err),
                 }
@@ -915,6 +1131,15 @@ impl<H: Dma> UsbDevice<H> {
                 )? {
                     continue;
                 }
+                ctrl.emit_diag(
+                    0x032c,
+                    ((context_state_err_count as u64) << 32) | parameter_err_count as u64,
+                    ((route as u64) << 32)
+                        | ((root_hub_port as u64) << 16)
+                        | ((enumerated_speed as u64) << 8)
+                        | port as u64,
+                    ((slot_recycles as u64) << 32) | slot_id as u64,
+                );
                 return Err(err);
             }
             return Err(UsbError::CmdFail(completion::CONTEXT_STATE_ERROR));
@@ -1618,9 +1843,25 @@ mod tests {
         };
         let single = single_tt_profile(tt);
         assert_eq!(single.hub_slot_id, 2);
-        assert_eq!(single.downstream_port, 1);
+        assert_eq!(single.downstream_port, 4);
         assert_eq!(single.tt_think_time, 2);
         assert!(!single.multi_tt);
+    }
+
+    #[test]
+    fn reduced_tt_think_time_profile_decrements_until_zero() {
+        let tt = TtContext {
+            hub_slot_id: 2,
+            downstream_port: 4,
+            tt_think_time: 2,
+            multi_tt: false,
+        };
+        let reduced_once = reduced_tt_think_time_profile(tt).expect("ttt=2 should reduce");
+        assert_eq!(reduced_once.tt_think_time, 1);
+        let reduced_twice =
+            reduced_tt_think_time_profile(reduced_once).expect("ttt=1 should reduce");
+        assert_eq!(reduced_twice.tt_think_time, 0);
+        assert!(reduced_tt_think_time_profile(reduced_twice).is_none());
     }
 
     #[test]
@@ -1654,7 +1895,7 @@ mod tests {
     }
 
     #[test]
-    fn should_retry_with_single_tt_profile_on_parameter_error_for_mtt_or_non1_port() {
+    fn should_retry_with_single_tt_profile_on_parameter_error_for_mtt_only() {
         let mtt = Some(TtContext {
             hub_slot_id: 3,
             downstream_port: 4,
@@ -1683,7 +1924,7 @@ mod tests {
             tt_think_time: 1,
             multi_tt: false,
         });
-        assert!(should_retry_with_single_tt_profile(
+        assert!(!should_retry_with_single_tt_profile(
             completion::PARAMETER_ERROR,
             stt_non1,
             false
@@ -1699,6 +1940,42 @@ mod tests {
             completion::PARAMETER_ERROR,
             stt_port1,
             false
+        ));
+    }
+
+    #[test]
+    fn should_retry_with_reduced_tt_think_time_within_budget_only() {
+        let tt = Some(TtContext {
+            hub_slot_id: 3,
+            downstream_port: 4,
+            tt_think_time: 2,
+            multi_tt: false,
+        });
+        assert!(should_retry_with_reduced_tt_think_time(
+            completion::PARAMETER_ERROR,
+            tt,
+            0
+        ));
+        assert!(should_retry_with_reduced_tt_think_time(
+            completion::PARAMETER_ERROR,
+            tt,
+            1
+        ));
+        assert!(!should_retry_with_reduced_tt_think_time(
+            completion::PARAMETER_ERROR,
+            tt,
+            2
+        ));
+        let zero_tt = Some(TtContext {
+            hub_slot_id: 3,
+            downstream_port: 4,
+            tt_think_time: 0,
+            multi_tt: false,
+        });
+        assert!(!should_retry_with_reduced_tt_think_time(
+            completion::PARAMETER_ERROR,
+            zero_tt,
+            0
         ));
     }
 
@@ -1730,6 +2007,17 @@ mod tests {
             tt,
             false
         ));
+    }
+
+    #[test]
+    fn encode_retry_state_packs_path_code_and_flags() {
+        let encoded = encode_retry_state(3, completion::PARAMETER_ERROR, true, false, 2, true);
+        assert_eq!((encoded >> 56) & 0xff, 3);
+        assert_eq!((encoded >> 48) & 0xff, completion::PARAMETER_ERROR as u64);
+        assert_eq!((encoded >> 40) & 0xff, 1);
+        assert_eq!((encoded >> 32) & 0xff, 0);
+        assert_eq!((encoded >> 16) & 0xffff, 2);
+        assert_eq!(encoded & 0xffff, 1);
     }
 
     #[test]
