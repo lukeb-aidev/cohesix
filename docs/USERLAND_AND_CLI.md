@@ -38,7 +38,7 @@ Use the root console for low-level validation (bootinfo, capability layout, unty
 ## Root Console (PL011 / QEMU Serial)
 ### Access and purpose
 - Brought up once PL011 initialises; exposed on QEMU `-serial mon:stdio`.
-- On `uefi-aarch64`, local-seat keyboard input is routed into the same parser and HDMI mirrors the same output lines with bounded truncation.
+- On `uefi-aarch64`, local-seat keyboard input is routed into the same parser and HDMI mirrors the same output lines with bounded truncation. Kernel debug-syscall text remains serial/UART only.
 - Prompt: `cohesix>` from the in-kernel console loop.【F:apps/root-task/src/console/mod.rs†L216-L305】
 - Intended for local debug/bring-up: verify seL4 bootinfo, CSpace layout, untyped enumeration, and that the root task is alive.
 
@@ -46,7 +46,7 @@ Use the root console for low-level validation (bootinfo, capability layout, unty
 - `help` – list available commands.【F:apps/root-task/src/console/mod.rs†L224-L233】
 - `bi` – bootinfo summary (node bits, empty window, IPC buffer if present).【F:apps/root-task/src/console/mod.rs†L234-L250】
 - `caps` – key capability slots (root CNode, endpoint, UART).【F:apps/root-task/src/console/mod.rs†L252-L263】
-- `smp` – dump SMP scheduler/CPU info in debug builds (prints `ERR reason=unsupported` otherwise).【F:apps/root-task/src/console/mod.rs†L265-L300】
+- `smp` – dump SMP scheduler/CPU info in debug builds (prints `ERR reason=unsupported` otherwise). The command emits mirrored `[smp] ...` probe lines; raw kernel scheduler/CPU dump bodies are serial/UART only.【F:apps/root-task/src/console/mod.rs†L265-L300】
 - `mem` – untyped cap counts with RAM vs device breakdown.【F:apps/root-task/src/console/mod.rs†L265-L283】
 - `ping` – replies `pong` as a liveness check.【F:apps/root-task/src/console/mod.rs†L285-L293】
 - `quit` – currently prints `quit not supported on root console`; the loop continues (no session exit).【F:apps/root-task/src/console/mod.rs†L285-L299】

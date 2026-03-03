@@ -19,8 +19,8 @@ use font8x8::legacy::BASIC_LEGACY;
 use spin::Mutex;
 use usb_oxide::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
-    hub_protocol, regs, request, scancode_to_ascii, set_xhci_diag_hook, ConfigDesc, DeviceDesc,
-    Dma, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice, UsbError, XhciCtrl,
+    hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook, ConfigDesc,
+    DeviceDesc, Dma, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice, UsbError, XhciCtrl,
 };
 
 use crate::bootstrap::log as boot_log;
@@ -102,7 +102,7 @@ const HUB_SET_FEATURE_RETRIES: usize = 3;
 const HUB_DISCONNECTED_RECOVERY_POWER_RETRIES: usize = 2;
 const HUB_POST_CONFIG_SETTLE_MS: u64 = 250;
 const HUB_POWER_SETTLE_MIN_MS: u64 = 200;
-const HUB_RESET_SETTLE_MS: u64 = 50;
+const HUB_RESET_SETTLE_MS: u64 = 100;
 const HUB_PORT_STATUS_RETRY_DELAY_MS: u64 = 20;
 const HUB_PORT_STATUS_QUICK_RETRY_DELAY_MS: u64 = 10;
 const HUB_SET_FEATURE_RETRY_DELAY_MS: u64 = 10;
@@ -1989,7 +1989,9 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
     last_keys: [u8; 6],
+    caps_lock_on: bool,
     poll_error_logged: bool,
+    led_error_logged: bool,
     first_report_logged: bool,
 }
 
@@ -2643,7 +2645,9 @@ impl UsbKeyboard {
                             return Ok(Self {
                                 hid,
                                 last_keys: [0; 6],
+                                caps_lock_on: false,
                                 poll_error_logged: false,
+                                led_error_logged: false,
                                 first_report_logged: false,
                             });
                         }
@@ -3379,6 +3383,33 @@ impl UsbKeyboard {
         depth_remaining: usize,
         saw_keyboard_init_error: &mut bool,
     ) -> HubChildProbeResult {
+        let mut retry_line = heapless::String::<256>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut retry_line,
+            format_args!(
+                "[local-seat] hub status-retry slot={} port={} route=0x{route:05x} speed={}",
+                device.slot_id(),
+                downstream_port,
+                primary_speed
+            ),
+        );
+        boot_log::force_uart_line(retry_line.as_str());
+        match Self::probe_hub_child_with_route_and_speed(
+            device,
+            downstream_port,
+            route,
+            primary_speed,
+            hub_multi_tt,
+            hub_tt_think_time,
+            depth_remaining,
+            saw_keyboard_init_error,
+            "status-retry",
+        ) {
+            HubChildProbeResult::Keyboard(hid) => return HubChildProbeResult::Keyboard(hid),
+            HubChildProbeResult::ProbedNoKeyboard => return HubChildProbeResult::ProbedNoKeyboard,
+            HubChildProbeResult::Failed => {}
+        }
+
         const SPEED_CANDIDATES: [u8; 3] = [
             usb_oxide::regs::SPEED_HIGH,
             usb_oxide::regs::SPEED_FULL,
@@ -4897,11 +4928,16 @@ impl UsbKeyboard {
                 report
             }
             Ok(None) => return 0,
-            Err(_) => {
+            Err(err) => {
                 if !self.poll_error_logged {
-                    boot_log::force_uart_line(
-                        "[local-seat] pi4 keyboard read queue failed detail=usb-queue-read",
+                    let mut line = heapless::String::<192>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] pi4 keyboard read queue failed detail=usb-queue-read err={err:?}"
+                        ),
                     );
+                    boot_log::force_uart_line(line.as_str());
                     self.poll_error_logged = true;
                 }
                 return 0;
@@ -4914,11 +4950,40 @@ impl UsbKeyboard {
             if key == 0 || self.last_keys.contains(&key) {
                 continue;
             }
+            if key == scancode::CAPS_LOCK {
+                self.caps_lock_on = !self.caps_lock_on;
+                let leds = if self.caps_lock_on { led::CAPS_LOCK } else { 0 };
+                if let Err(err) = self.hid.set_leds(leds) {
+                    if !self.led_error_logged {
+                        let mut line = heapless::String::<224>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] pi4 keyboard led sync failed caps={} detail={err:?}",
+                                self.caps_lock_on as u8
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        self.led_error_logged = true;
+                    }
+                } else {
+                    self.led_error_logged = false;
+                }
+                continue;
+            }
             if let Some(ch) = scancode_to_ascii(key, shift) {
                 if written >= out.len() {
                     break;
                 }
-                out[written] = ch as u8;
+                let mut effective = ch;
+                if self.caps_lock_on && effective.is_ascii_alphabetic() {
+                    effective = if shift {
+                        effective.to_ascii_lowercase()
+                    } else {
+                        effective.to_ascii_uppercase()
+                    };
+                }
+                out[written] = effective as u8;
                 written = written.saturating_add(1);
             }
         }

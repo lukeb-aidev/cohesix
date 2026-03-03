@@ -20,7 +20,7 @@ use crate::{
         hid_subclass,
     },
     dev::UsbDevice,
-    ring::PhysMem,
+    ring::{PhysMem, trb_type},
 };
 
 use alloc::sync::Arc;
@@ -642,25 +642,41 @@ impl<H: Dma> HidDevice<H> {
         )
     }
 
+    #[inline]
+    const fn expected_in_endpoint_id(&self) -> u8 {
+        (self.ep_in << 1) | 1
+    }
+
     /// Poll for keyboard report (non-blocking) with transfer re-queue errors surfaced.
     pub fn poll_keyboard_checked(&self) -> Result<Option<KeyboardReport>> {
         if self.hid_type != HidType::Keyboard {
             return Ok(None);
         }
 
-        if let Some(evt) = self.device.ctrl().poll_event()
-            && evt.slot_id() == self.device.slot_id()
-        {
+        // Drain a bounded number of events so unrelated hub chatter does not
+        // indefinitely starve keyboard transfer completions.
+        const HID_EVENT_BUDGET: usize = 128;
+        let expected_ep_id = self.expected_in_endpoint_id();
+        for _ in 0..HID_EVENT_BUDGET {
+            let Some(evt) = self.device.ctrl().poll_event() else {
+                return Ok(None);
+            };
+            if evt.trb_type() != trb_type::TRANSFER_EVENT as u8 {
+                continue;
+            }
+            if evt.slot_id() != self.device.slot_id() || evt.endpoint_id() != expected_ep_id {
+                continue;
+            }
+
             let code = evt.completion_code();
             if code == 1 || code == 13 {
                 // SUCCESS or SHORT_PACKET
                 let report = unsafe { *(self.report_buf.as_ptr::<KeyboardReport>()) };
-
-                // Re-queue for next report
                 self.queue_read()?;
-
                 return Ok(Some(report));
             }
+            let _ = self.queue_read();
+            return Err(UsbError::XferFail(code));
         }
         Ok(None)
     }
@@ -676,18 +692,26 @@ impl<H: Dma> HidDevice<H> {
             return None;
         }
 
-        if let Some(evt) = self.device.ctrl().poll_event()
-            && evt.slot_id() == self.device.slot_id()
-        {
+        const HID_EVENT_BUDGET: usize = 128;
+        let expected_ep_id = self.expected_in_endpoint_id();
+        for _ in 0..HID_EVENT_BUDGET {
+            let Some(evt) = self.device.ctrl().poll_event() else {
+                return None;
+            };
+            if evt.trb_type() != trb_type::TRANSFER_EVENT as u8 {
+                continue;
+            }
+            if evt.slot_id() != self.device.slot_id() || evt.endpoint_id() != expected_ep_id {
+                continue;
+            }
             let code = evt.completion_code();
             if code == 1 || code == 13 {
                 let report = unsafe { *(self.report_buf.as_ptr::<MouseReport>()) };
-
-                // Re-queue for next report
                 let _ = self.queue_read();
-
                 return Some(report);
             }
+            let _ = self.queue_read();
+            return None;
         }
         None
     }

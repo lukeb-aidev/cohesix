@@ -1441,15 +1441,21 @@ pub fn user_image_paddr_range() -> Option<Range<usize>> {
 
 /// Sets the CPU affinity for a TCB when SMP is enabled.
 #[cfg(feature = "kernel")]
-pub fn set_tcb_affinity(tcb_cap: seL4_CPtr, core: u8) -> Result<(), seL4_Error> {
+fn set_tcb_affinity_impl(
+    tcb_cap: seL4_CPtr,
+    core: u8,
+    emit_guard_breadcrumb: bool,
+) -> Result<(), seL4_Error> {
     let guard_stage = "TCB.SetAffinity";
     let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
-    let mut breadcrumb = HeaplessString::<96>::new();
-    let _ = fmt::write(
-        &mut breadcrumb,
-        format_args!("tcb=0x{tcb:04x} core={core}", tcb = guarded_tcb),
-    );
-    sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_SetAffinity", breadcrumb.as_str());
+    if emit_guard_breadcrumb {
+        let mut breadcrumb = HeaplessString::<96>::new();
+        let _ = fmt::write(
+            &mut breadcrumb,
+            format_args!("tcb=0x{tcb:04x} core={core}", tcb = guarded_tcb),
+        );
+        sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_SetAffinity", breadcrumb.as_str());
+    }
 
     #[cfg(target_os = "none")]
     let result = unsafe { sel4_sys::seL4_TCB_SetAffinity(guarded_tcb, core as seL4_Word) };
@@ -1471,6 +1477,21 @@ pub fn set_tcb_affinity(tcb_cap: seL4_CPtr, core: u8) -> Result<(), seL4_Error> 
         );
         Err(result)
     }
+}
+
+/// Sets the CPU affinity for a TCB and emits a guard breadcrumb on UART.
+#[cfg(feature = "kernel")]
+pub fn set_tcb_affinity(tcb_cap: seL4_CPtr, core: u8) -> Result<(), seL4_Error> {
+    set_tcb_affinity_impl(tcb_cap, core, true)
+}
+
+/// Sets the CPU affinity for a TCB without emitting a guard breadcrumb.
+///
+/// Use this when the caller already emits its own mirrored operator-facing lines
+/// and extra UART-only breadcrumbs would create output skew across consoles.
+#[cfg(feature = "kernel")]
+pub fn set_tcb_affinity_silent(tcb_cap: seL4_CPtr, core: u8) -> Result<(), seL4_Error> {
+    set_tcb_affinity_impl(tcb_cap, core, false)
 }
 
 /// Safe projection of `seL4_CNode_Copy` for bootstrap modules.

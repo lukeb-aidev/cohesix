@@ -250,10 +250,13 @@ where
     let tcb = sel4_sys::seL4_CapInitThreadTCB;
     if !policy.enabled {
         emit("[smp] affinity disabled; dumping scheduler once");
+        emit("[smp] note: kernel scheduler/CPU dump text is UART-only");
         crate::sel4::debug_dump_scheduler();
         crate::sel4::debug_dump_cpu_info();
         return;
     }
+
+    emit("[smp] note: kernel scheduler/CPU dump text is UART-only");
 
     let mut seen = [false; 64];
     let mut probe = |core: u8, label: &'static str| {
@@ -270,7 +273,7 @@ where
             format_args!("[smp] affinity probe role={} core={}", label, core),
         );
         emit(line.as_str());
-        if let Err(err) = crate::sel4::set_tcb_affinity(tcb, core) {
+        if let Err(err) = crate::sel4::set_tcb_affinity_silent(tcb, core) {
             let mut err_line = HeaplessString::<96>::new();
             let _ = fmt::write(
                 &mut err_line,
@@ -301,7 +304,7 @@ where
     }
 
     if let Some(core) = policy.authority_core {
-        let _ = crate::sel4::set_tcb_affinity(tcb, core);
+        let _ = crate::sel4::set_tcb_affinity_silent(tcb, core);
     }
 }
 
