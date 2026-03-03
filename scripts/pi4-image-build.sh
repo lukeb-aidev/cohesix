@@ -141,6 +141,49 @@ resolve_mkimage() {
     fail "mkimage not found (install u-boot-tools or build third_party/u-boot/tools/mkimage)"
 }
 
+cpio_supports_reproducible() {
+    local cpio_bin="$1"
+    "$cpio_bin" --help 2>&1 | grep -q -- "--reproducible"
+}
+
+resolve_cpio() {
+    local -a candidates=()
+    local candidate=""
+
+    if command -v cpio >/dev/null 2>&1; then
+        candidates+=("$(command -v cpio)")
+    fi
+    if command -v gcpio >/dev/null 2>&1; then
+        candidates+=("$(command -v gcpio)")
+    fi
+
+    candidates+=(
+        "/opt/homebrew/opt/cpio/bin/cpio"
+        "/usr/local/opt/cpio/bin/cpio"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [[ -x "$candidate" ]] || continue
+        if cpio_supports_reproducible "$candidate"; then
+            printf "%s\n" "$candidate"
+            return 0
+        fi
+    done
+
+    fail "GNU cpio with --reproducible support not found (install Homebrew cpio or ensure gcpio is on PATH)"
+}
+
+configure_cpio_path() {
+    local cpio_bin="$1"
+    local cpio_dir
+    cpio_dir="$(dirname "$cpio_bin")"
+    case ":${PATH}:" in
+        *":${cpio_dir}:"*) ;;
+        *) export PATH="${cpio_dir}:${PATH}" ;;
+    esac
+    log "Using cpio: ${cpio_bin}"
+}
+
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -434,10 +477,14 @@ main() {
     require_dir "$SEL4_BUILD_DIR"
 
     local mkimage_bin
+    local cpio_bin
     mkimage_bin="$(resolve_mkimage)"
     log "Using mkimage: ${mkimage_bin}"
 
     activate_venv
+
+    cpio_bin="$(resolve_cpio)"
+    configure_cpio_path "$cpio_bin"
 
     if [[ "$SKIP_BUILD" -eq 0 ]]; then
         build_pi4_image
