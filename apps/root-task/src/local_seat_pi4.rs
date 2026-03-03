@@ -106,7 +106,11 @@ const HUB_RESET_SETTLE_MS: u64 = 100;
 const HUB_PORT_STATUS_RETRY_DELAY_MS: u64 = 20;
 const HUB_PORT_STATUS_QUICK_RETRY_DELAY_MS: u64 = 10;
 const HUB_SET_FEATURE_RETRY_DELAY_MS: u64 = 10;
-const HUB_CLASS_CONTROL_WAIT_SPINS: usize = 1_000_000;
+// Hub-class requests (SET/CLEAR_FEATURE, GET_STATUS) can be slower on
+// downstream combo hubs than baseline descriptor/control setup transactions.
+// Keep this aligned with usb-oxide's default control wait budget to avoid
+// false timeouts during hub bring-up.
+const HUB_CLASS_CONTROL_WAIT_SPINS: usize = 20_000_000;
 const WAIT_MS_SPINS_PER_MS: usize = 50_000;
 const WAIT_MS_MIN_SPINS: usize = 10_000;
 const WAIT_MS_MAX_SPINS: usize = 25_000_000;
@@ -5703,6 +5707,7 @@ mod tests {
         config_value_for_set, decode_pci_mmio_bar, normalize_hub_tt_profile,
         vl805_runtime_cfg_touch_allowed, ConfigDesc,
     };
+    use super::HUB_CLASS_CONTROL_WAIT_SPINS;
 
     #[test]
     fn decode_pci_mmio_bar_rejects_io_bar() {
@@ -5764,5 +5769,10 @@ mod tests {
     fn normalize_hub_tt_profile_preserves_multi_tt_port_and_clamps_ttt() {
         assert_eq!(normalize_hub_tt_profile(4, true, 1), (4, 1));
         assert_eq!(normalize_hub_tt_profile(4, true, 3), (4, 2));
+    }
+
+    #[test]
+    fn hub_class_control_wait_budget_matches_default_control_budget() {
+        assert_eq!(HUB_CLASS_CONTROL_WAIT_SPINS, 20_000_000);
     }
 }

@@ -20,11 +20,24 @@ use crate::{
         hid_subclass,
     },
     dev::UsbDevice,
-    ring::{PhysMem, trb_type},
+    ring::{PhysMem, completion, trb_type},
 };
 
 use alloc::sync::Arc;
 use core::{hint::spin_loop, ptr};
+
+#[inline]
+const fn has_report_payload(
+    completion_code: u8,
+    request_len: usize,
+    remaining_len: u32,
+    report_len: usize,
+) -> bool {
+    if completion_code != completion::SUCCESS && completion_code != completion::SHORT_PACKET {
+        return false;
+    }
+    request_len.saturating_sub(remaining_len as usize) >= report_len
+}
 
 /// HID Usage Page codes.
 pub mod usage_page {
@@ -669,11 +682,21 @@ impl<H: Dma> HidDevice<H> {
             }
 
             let code = evt.completion_code();
-            if code == 1 || code == 13 {
-                // SUCCESS or SHORT_PACKET
+            if has_report_payload(
+                code,
+                self.ep_max_packet as usize,
+                evt.transfer_length(),
+                core::mem::size_of::<KeyboardReport>(),
+            ) {
+                // SUCCESS/SHORT_PACKET with a complete keyboard report payload.
                 let report = unsafe { *(self.report_buf.as_ptr::<KeyboardReport>()) };
                 self.queue_read()?;
                 return Ok(Some(report));
+            }
+            if code == completion::SUCCESS || code == completion::SHORT_PACKET {
+                // Ignore zero/partial payload completions and keep polling.
+                self.queue_read()?;
+                return Ok(None);
             }
             let _ = self.queue_read();
             return Err(UsbError::XferFail(code));
@@ -705,10 +728,19 @@ impl<H: Dma> HidDevice<H> {
                 continue;
             }
             let code = evt.completion_code();
-            if code == 1 || code == 13 {
+            if has_report_payload(
+                code,
+                self.ep_max_packet as usize,
+                evt.transfer_length(),
+                core::mem::size_of::<MouseReport>(),
+            ) {
                 let report = unsafe { *(self.report_buf.as_ptr::<MouseReport>()) };
                 let _ = self.queue_read();
                 return Some(report);
+            }
+            if code == completion::SUCCESS || code == completion::SHORT_PACKET {
+                let _ = self.queue_read();
+                return None;
             }
             let _ = self.queue_read();
             return None;
@@ -841,4 +873,26 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_report_payload;
+    use crate::ring::completion;
+
+    #[test]
+    fn accepts_short_packet_when_report_bytes_are_complete() {
+        assert!(has_report_payload(completion::SHORT_PACKET, 64, 56, 8));
+    }
+
+    #[test]
+    fn rejects_short_packet_without_enough_bytes() {
+        assert!(!has_report_payload(completion::SHORT_PACKET, 8, 8, 8));
+        assert!(!has_report_payload(completion::SHORT_PACKET, 8, 7, 8));
+    }
+
+    #[test]
+    fn rejects_non_success_completion_codes() {
+        assert!(!has_report_payload(completion::USB_TRANSACTION_ERROR, 8, 0, 8));
+    }
 }
