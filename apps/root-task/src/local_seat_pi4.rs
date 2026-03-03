@@ -1655,9 +1655,48 @@ impl HdmiTextSink {
         self.col = 0;
         self.row = self.row.saturating_add(1);
         if self.row >= self.rows {
-            self.clear_screen();
-            self.row = 0;
+            self.scroll_up_one_text_row();
+            self.row = self.rows.saturating_sub(1);
         }
+    }
+
+    fn scroll_up_one_text_row(&mut self) {
+        let scroll_pixels = cmp::min(CHAR_HEIGHT, self.height);
+        if scroll_pixels == 0 {
+            return;
+        }
+
+        let Some(scroll_bytes) = self.pitch.checked_mul(scroll_pixels) else {
+            self.clear_screen();
+            return;
+        };
+        let Some(total_bytes) = self.pitch.checked_mul(self.height) else {
+            self.clear_screen();
+            return;
+        };
+        if total_bytes == 0 || total_bytes > self.framebuffer_len || scroll_bytes >= total_bytes {
+            self.clear_screen();
+            return;
+        }
+
+        let move_bytes = total_bytes.saturating_sub(scroll_bytes);
+        // SAFETY: The mapped framebuffer is contiguous for `framebuffer_len` bytes,
+        // and both source/destination ranges are within that region.
+        unsafe {
+            ptr::copy(
+                self.framebuffer.add(scroll_bytes),
+                self.framebuffer,
+                move_bytes,
+            );
+        }
+
+        self.fill_rect(
+            0,
+            self.height.saturating_sub(scroll_pixels),
+            self.width,
+            scroll_pixels,
+            BG_COLOR,
+        );
     }
 
     fn draw_char(&mut self, byte: u8) {
