@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::codegen::{cas, hash_bytes};
-use crate::ir::Manifest;
+use crate::ir::{Manifest, NetworkBackendKind};
 use anyhow::{Context, Result};
 use std::fmt::Write as _;
 use std::fs;
@@ -1063,6 +1063,48 @@ impl DocFragments {
         )
         .ok();
         writeln!(schema_md, "- `hw.no_nic`: `{}`", manifest.hw.no_nic).ok();
+        writeln!(
+            schema_md,
+            "- `hw.network.enabled`: `{}`",
+            manifest.hw.network.enabled
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.network.backend`: `{}`",
+            format_network_backend(manifest.hw.network.backend)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.network.static_ipv4.ip`: `{}`",
+            if manifest.hw.network.static_ipv4.ip.trim().is_empty() {
+                "(unset)"
+            } else {
+                manifest.hw.network.static_ipv4.ip.trim()
+            }
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.network.static_ipv4.prefix_len`: `{}`",
+            manifest.hw.network.static_ipv4.prefix_len
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.network.static_ipv4.gateway`: `{}`",
+            manifest
+                .hw
+                .network
+                .static_ipv4
+                .gateway
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("(unset)")
+        )
+        .ok();
         writeln!(
             schema_md,
             "- `hw.attestation.enabled`: `{}`",
@@ -2589,6 +2631,15 @@ fn format_ingest_eviction_policy(
     match policy {
         crate::ir::TelemetryIngestEvictionPolicy::Refuse => "refuse",
         crate::ir::TelemetryIngestEvictionPolicy::EvictOldest => "evict-oldest",
+    }
+}
+
+fn format_network_backend(backend: NetworkBackendKind) -> &'static str {
+    match backend {
+        NetworkBackendKind::Auto => "auto",
+        NetworkBackendKind::Rtl8139 => "rtl8139",
+        NetworkBackendKind::VirtioNet => "virtio-net",
+        NetworkBackendKind::BcmGenetV5 => "bcmgenet-v5",
     }
 }
 

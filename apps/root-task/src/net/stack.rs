@@ -48,18 +48,18 @@ use super::{
     outbound::{OutboundCoalescer, OutboundLane, SendError},
     ConsoleLine, ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent,
     NetCounters, NetDevice, NetDriverError, NetPoller, NetSelfTestReport, NetSelfTestResult,
-    NetStage, NetTelemetry, DEFAULT_NET_BACKEND, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
-    NET_DIAG, NET_STAGE,
+    NetStage, NetTelemetry, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
-#[cfg(not(feature = "net-backend-virtio"))]
+use crate::drivers::bcmgenet::{BcmGenetDevice, DriverError as BcmGenetDriverError};
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
 use crate::hal::{HalError, Hardware};
 use crate::observe::IngestSnapshot;
 use crate::readiness;
+use crate::rust_alloc::boxed::Box;
 use crate::sel4::BOOTINFO_WINDOW_GUARD;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
@@ -97,7 +97,6 @@ const TCP_PROBE_RETRY_MS: u64 = 1_000;
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_PAYLOAD: &[u8] = b"COHESIX-PING\n";
 const NEIGHBOR_CACHE_SIZE: usize = IFACE_NEIGHBOR_CACHE_COUNT;
-const SELF_TEST_ENABLED: bool = cfg!(feature = "dev-virt") || cfg!(feature = "net-selftest");
 const SELF_TEST_BEACON_INTERVAL_MS: u64 = 250;
 const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
 const SELF_TEST_WINDOW_MS: u64 = 15_000;
@@ -106,17 +105,73 @@ const NET_INIT_TAG: &str = "net-console:init";
 static STORAGE_ADDRESS_LOGGED: AtomicBool = AtomicBool::new(false);
 static NET_WATCH_LOGGED: AtomicBool = AtomicBool::new(false);
 
+const fn self_test_enabled_for_backend(backend: NetBackend) -> bool {
+    cfg!(feature = "net-selftest")
+        || backend.uses_dev_virt_defaults()
+        || matches!(backend, NetBackend::BcmGenet)
+}
+
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNetStatic;
-#[cfg(feature = "net-backend-virtio")]
-type DefaultDriverError = VirtioDriverError;
-
 #[cfg(not(feature = "net-backend-virtio"))]
 type DefaultNetDevice = Rtl8139Device;
-#[cfg(not(feature = "net-backend-virtio"))]
-type DefaultDriverError = Rtl8139DriverError;
 
-pub type DefaultNetStack = NetStack<DefaultNetDevice>;
+#[derive(Debug)]
+pub enum DefaultDriverError {
+    Rtl8139(Rtl8139DriverError),
+    BcmGenet(BcmGenetDriverError),
+    #[cfg(feature = "net-backend-virtio")]
+    Virtio(VirtioDriverError),
+}
+
+impl fmt::Display for DefaultDriverError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rtl8139(err) => write!(f, "{err}"),
+            Self::BcmGenet(err) => write!(f, "{err}"),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl NetDriverError for DefaultDriverError {
+    fn is_absent(&self) -> bool {
+        match self {
+            Self::Rtl8139(err) => err.is_absent(),
+            Self::BcmGenet(err) => err.is_absent(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(err) => err.is_absent(),
+        }
+    }
+}
+
+impl From<Rtl8139DriverError> for DefaultDriverError {
+    fn from(value: Rtl8139DriverError) -> Self {
+        Self::Rtl8139(value)
+    }
+}
+
+impl From<BcmGenetDriverError> for DefaultDriverError {
+    fn from(value: BcmGenetDriverError) -> Self {
+        Self::BcmGenet(value)
+    }
+}
+
+#[cfg(feature = "net-backend-virtio")]
+impl From<VirtioDriverError> for DefaultDriverError {
+    fn from(value: VirtioDriverError) -> Self {
+        Self::Virtio(value)
+    }
+}
+
+pub enum DefaultNetStack {
+    Rtl8139(Box<NetStack<Rtl8139Device>>),
+    BcmGenet(Box<NetStack<BcmGenetDevice>>),
+    #[cfg(feature = "net-backend-virtio")]
+    Virtio(Box<NetStack<VirtioNetStatic>>),
+}
+
 pub type DefaultNetStackError = NetStackError<DefaultDriverError>;
 pub type DefaultNetConsoleError = NetConsoleError<DefaultDriverError>;
 
@@ -902,6 +957,7 @@ pub struct NetStack<D: NetDevice> {
     server: TcpConsoleServer,
     outbound: OutboundCoalescer,
     telemetry: NetTelemetry,
+    backend: NetBackend,
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
     prefix_len: u8,
@@ -1093,6 +1149,9 @@ impl SelfTestState {
             enabled: self.enabled,
             running: self.running,
             last_result: self.last_result,
+            backend: "unknown",
+            udp_target: HeaplessString::new(),
+            tcp_target: HeaplessString::new(),
         }
     }
 }
@@ -1421,12 +1480,14 @@ where
 {
     log_socket_tripwire(concat!(file!(), ":", line!()));
 
-    let config = config.with_dev_virt_defaults();
+    let config = config.with_profile_defaults();
     let iface_ip = config.address.ip;
     if config.listen_port == 0 || iface_ip == [0, 0, 0, 0] {
         log::error!(
-            "[net-console] invalid configuration: listen_port={} iface_ip={:?}; disabling net-console",
-            config.listen_port, config.address.ip
+            "[net-console] invalid configuration: backend={} listen_port={} iface_ip={:?}; disabling net-console",
+            config.backend.label(),
+            config.listen_port,
+            config.address.ip
         );
         return Err(NetConsoleError::InvalidConfig(
             "listen_port/ip must be configured",
@@ -1448,7 +1509,8 @@ where
         .unwrap_or(Ipv4Address::UNSPECIFIED);
     let iface_ip = Ipv4Address::new(iface_ip[0], iface_ip[1], iface_ip[2], iface_ip[3]);
     log::info!(
-        "[net-console] config: iface_ip={}/{} gateway={} listen_port={} udp_echo_port={} tcp_smoke_port={}",
+        "[net-console] config: backend={} iface_ip={}/{} gateway={} listen_port={} udp_echo_port={} tcp_smoke_port={}",
+        config.backend.label(),
         iface_ip,
         config.address.prefix_len,
         gateway_label,
@@ -1457,7 +1519,70 @@ where
         TCP_SMOKE_PORT
     );
 
-    NetStack::new(hal, config, DEFAULT_NET_BACKEND).map_err(NetConsoleError::from)
+    let backend = config.backend;
+    match backend {
+        NetBackend::Rtl8139 => NetStack::<Rtl8139Device>::new(hal, config, backend)
+            .map(Box::new)
+            .map(DefaultNetStack::Rtl8139)
+            .map_err(convert_console_error::<Rtl8139DriverError>),
+        NetBackend::BcmGenet => NetStack::<BcmGenetDevice>::new(hal, config, backend)
+            .map(Box::new)
+            .map(DefaultNetStack::BcmGenet)
+            .map_err(convert_console_error::<BcmGenetDriverError>),
+        #[cfg(feature = "net-backend-virtio")]
+        NetBackend::Virtio => NetStack::<VirtioNetStatic>::new(hal, config, backend)
+            .map(Box::new)
+            .map(DefaultNetStack::Virtio)
+            .map_err(convert_console_error::<VirtioDriverError>),
+    }
+}
+
+fn convert_console_error<E>(err: NetStackError<E>) -> DefaultNetConsoleError
+where
+    E: NetDriverError + Into<DefaultDriverError>,
+{
+    match err {
+        NetStackError::Driver(driver_err) => {
+            let driver_err = driver_err.into();
+            if driver_err.is_absent() {
+                NetConsoleError::NoDevice
+            } else {
+                NetConsoleError::Init(NetStackError::Driver(driver_err))
+            }
+        }
+        NetStackError::AlreadyInitialisingOrOnline => {
+            NetConsoleError::Init(NetStackError::AlreadyInitialisingOrOnline)
+        }
+        NetStackError::BootInfoCanary(mark) => {
+            NetConsoleError::Init(NetStackError::BootInfoCanary(mark))
+        }
+        NetStackError::SocketStorageInUse => {
+            NetConsoleError::Init(NetStackError::SocketStorageInUse)
+        }
+        NetStackError::SocketStoragePoisoned => {
+            NetConsoleError::Init(NetStackError::SocketStoragePoisoned)
+        }
+        NetStackError::TcpRxStorageInUse => NetConsoleError::Init(NetStackError::TcpRxStorageInUse),
+        NetStackError::TcpTxStorageInUse => NetConsoleError::Init(NetStackError::TcpTxStorageInUse),
+        NetStackError::TcpSmokeRxStorageInUse => {
+            NetConsoleError::Init(NetStackError::TcpSmokeRxStorageInUse)
+        }
+        NetStackError::TcpSmokeTxStorageInUse => {
+            NetConsoleError::Init(NetStackError::TcpSmokeTxStorageInUse)
+        }
+        NetStackError::UdpBeaconStorageInUse => {
+            NetConsoleError::Init(NetStackError::UdpBeaconStorageInUse)
+        }
+        NetStackError::UdpEchoStorageInUse => {
+            NetConsoleError::Init(NetStackError::UdpEchoStorageInUse)
+        }
+        NetStackError::TcpProbeRxStorageInUse => {
+            NetConsoleError::Init(NetStackError::TcpProbeRxStorageInUse)
+        }
+        NetStackError::TcpProbeTxStorageInUse => {
+            NetConsoleError::Init(NetStackError::TcpProbeTxStorageInUse)
+        }
+    }
 }
 
 impl<D: NetDevice> NetStack<D> {
@@ -1664,9 +1789,11 @@ impl<D: NetDevice> NetStack<D> {
         let forward = self.host_forward_override();
         let direct = render_host_selftest_target(None, port, self.ip);
         let loopback = render_host_selftest_target(Some("127.0.0.1"), port, self.ip);
-        let primary = forward
-            .map(|host| render_host_selftest_target(Some(host), port, self.ip))
-            .unwrap_or_else(|| loopback.clone());
+        let primary = match forward {
+            Some(host) => render_host_selftest_target(Some(host), port, self.ip),
+            None if self.backend.uses_dev_virt_defaults() => loopback.clone(),
+            None => direct.clone(),
+        };
         let forwarded_hint = forward.is_some();
 
         HostCommandTarget {
@@ -1675,6 +1802,16 @@ impl<D: NetDevice> NetStack<D> {
             forwarded_hint,
             loopback,
         }
+    }
+
+    fn selftest_gateway_target(&self) -> Ipv4Address {
+        self.gateway.unwrap_or_else(|| {
+            if self.backend.uses_dev_virt_defaults() {
+                Ipv4Address::from(DEV_VIRT_GATEWAY)
+            } else {
+                self.ip
+            }
+        })
     }
 
     fn peer_parts(
@@ -1966,7 +2103,7 @@ impl<D: NetDevice> NetStack<D> {
         let init_guard = NetStackInitGuard::begin::<D::Error>(NET_INIT_TAG)?;
         info!("[net-console] init: constructing smoltcp stack");
         debug_assert_ne!(config.listen_port, 0, "TCP console port must be non-zero");
-        if cfg!(feature = "dev-virt") {
+        if cfg!(feature = "dev-virt") && backend.uses_dev_virt_defaults() {
             debug_assert_eq!(config.listen_port, super::COHESIX_TCP_CONSOLE_PORT);
             debug_assert_eq!(config.address.ip, DEV_VIRT_IP);
             debug_assert_eq!(config.address.prefix_len, DEV_VIRT_PREFIX);
@@ -2032,7 +2169,7 @@ impl<D: NetDevice> NetStack<D> {
             },
             NetStage::TxOnly => NetStagePolicy {
                 allow_tcp: false,
-                allow_selftest: SELF_TEST_ENABLED,
+                allow_selftest: self_test_enabled_for_backend(backend),
                 allow_outbound_probe: false,
                 allow_console_io: false,
                 tx_only: true,
@@ -2046,7 +2183,7 @@ impl<D: NetDevice> NetStack<D> {
             },
             NetStage::Full => NetStagePolicy {
                 allow_tcp: true,
-                allow_selftest: SELF_TEST_ENABLED,
+                allow_selftest: self_test_enabled_for_backend(backend),
                 allow_outbound_probe: true,
                 allow_console_io: true,
                 tx_only: false,
@@ -2127,6 +2264,7 @@ impl<D: NetDevice> NetStack<D> {
             ),
             outbound: OutboundCoalescer::new(),
             telemetry: NetTelemetry::default(),
+            backend,
             ip,
             gateway,
             prefix_len: prefix,
@@ -2220,7 +2358,7 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn initialise_self_test_sockets(&mut self) -> Result<(), NetStackError<D::Error>> {
-        if !SELF_TEST_ENABLED {
+        if !self.self_test.enabled {
             return Ok(());
         }
 
@@ -2262,8 +2400,10 @@ impl<D: NetDevice> NetStack<D> {
             match echo_socket.bind(echo_endpoint) {
                 Ok(()) => {
                     info!(
-                        "[net-selftest] udp-echo ready on 0.0.0.0:{} (beacon dst=10.0.2.2:{})",
-                        UDP_ECHO_PORT, UDP_ECHO_PORT
+                        "[net-selftest] udp-echo ready on 0.0.0.0:{} (beacon dst={}:{})",
+                        UDP_ECHO_PORT,
+                        self.selftest_gateway_target(),
+                        UDP_ECHO_PORT
                     );
                     self.udp_echo_handle = Some(self.sockets.add(echo_socket));
                     self.log_init_canary("net.init.socket.udp_echo")?;
@@ -2519,7 +2659,7 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn service_self_test(&mut self, now_ms: u64, timestamp: Instant) -> bool {
-        if !SELF_TEST_ENABLED {
+        if !self.self_test.enabled {
             return false;
         }
 
@@ -2594,7 +2734,7 @@ impl<D: NetDevice> NetStack<D> {
             return false;
         }
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
-        let dest = IpEndpoint::new(Ipv4Address::from(DEV_VIRT_GATEWAY).into(), TCP_PROBE_PORT);
+        let dest = IpEndpoint::new(self.selftest_gateway_target().into(), TCP_PROBE_PORT);
         let mut activity = false;
 
         if self.probe_sent {
@@ -2719,7 +2859,7 @@ impl<D: NetDevice> NetStack<D> {
         let Some(handle) = self.udp_beacon_handle else {
             return 0;
         };
-        let gateway_addr = Ipv4Address::from(DEV_VIRT_GATEWAY);
+        let gateway_addr = self.selftest_gateway_target();
         let mut sent = 0;
         let mut request_tx_scan = false;
         {
@@ -3121,12 +3261,10 @@ impl<D: NetDevice> NetStack<D> {
         if !self.self_test.console_probe_done {
             return self.poll_console_listener_selftest(handle, now_ms);
         }
+        let dest_ip = self.selftest_gateway_target();
+        let dest = IpEndpoint::new(dest_ip.into(), TCP_SMOKE_PORT);
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
         let mut activity = false;
-        let dest_ip = self
-            .gateway
-            .unwrap_or_else(|| Ipv4Address::from(DEV_VIRT_GATEWAY));
-        let dest = IpEndpoint::new(dest_ip.into(), TCP_SMOKE_PORT);
 
         if matches!(socket.state(), TcpState::Closed) {
             if now_ms.saturating_sub(self.tcp_smoke_last_attempt_ms) >= 1_000 {
@@ -4550,6 +4688,58 @@ impl<D: NetDevice> NetStack<D> {
     }
 }
 
+impl DefaultNetStack {
+    #[must_use]
+    pub fn hardware_address(&self) -> EthernetAddress {
+        match self {
+            Self::Rtl8139(stack) => stack.hardware_address(),
+            Self::BcmGenet(stack) => stack.hardware_address(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.hardware_address(),
+        }
+    }
+
+    #[must_use]
+    pub fn ipv4_address(&self) -> Ipv4Address {
+        match self {
+            Self::Rtl8139(stack) => stack.ipv4_address(),
+            Self::BcmGenet(stack) => stack.ipv4_address(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.ipv4_address(),
+        }
+    }
+
+    #[must_use]
+    pub fn console_listen_port(&self) -> u16 {
+        match self {
+            Self::Rtl8139(stack) => stack.console_listen_port(),
+            Self::BcmGenet(stack) => stack.console_listen_port(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_listen_port(),
+        }
+    }
+
+    #[must_use]
+    pub fn prefix_len(&self) -> u8 {
+        match self {
+            Self::Rtl8139(stack) => stack.prefix_len(),
+            Self::BcmGenet(stack) => stack.prefix_len(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.prefix_len(),
+        }
+    }
+
+    #[must_use]
+    pub fn gateway(&self) -> Option<Ipv4Address> {
+        match self {
+            Self::Rtl8139(stack) => stack.gateway(),
+            Self::BcmGenet(stack) => stack.gateway(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.gateway(),
+        }
+    }
+}
+
 impl<D: NetDevice> NetPoller for NetStack<D> {
     fn poll(&mut self, now_ms: u64) -> bool {
         self.poll_with_time(now_ms)
@@ -4706,7 +4896,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         if !self.stage_policy.allow_selftest {
             return false;
         }
-        if !SELF_TEST_ENABLED {
+        if !self.self_test.enabled {
             return false;
         }
         if let Some((snapshot, reason)) = readiness::gate() {
@@ -4748,7 +4938,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     "[net-selftest] direct guest access requires bridge/tap networking; guest addr {}",
                     udp_target.direct
                 );
-            } else {
+            } else if self.backend.uses_dev_virt_defaults() {
                 info!(
                     "[net-selftest] qemu user-net without hostfwd → add hostfwd=tcp::31338-:31338,hostfwd=tcp::31339-:31339 and use localhost",
                 );
@@ -4764,6 +4954,19 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     "[net-selftest] direct guest address {} requires bridge/tap networking; skip on slirp",
                     udp_target.direct
                 );
+            } else {
+                info!(
+                    "[net-selftest] static profile target udp={} tcp={}",
+                    udp_target.primary, tcp_target.primary
+                );
+                info!(
+                    "[net-selftest] host udp echo: echo -n \"ping\" | nc -u -w1 {}",
+                    udp_target.primary
+                );
+                info!(
+                    "[net-selftest] host tcp smoke: printf \"hi\" | nc -v {}",
+                    tcp_target.primary
+                );
             }
             true
         } else {
@@ -4776,7 +4979,144 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 
     fn self_test_report(&self) -> NetSelfTestReport {
-        self.self_test.report()
+        let udp_target = self.selftest_host_target(UDP_ECHO_PORT);
+        let tcp_target = self.selftest_host_target(TCP_SMOKE_PORT);
+        NetSelfTestReport {
+            enabled: self.self_test.enabled,
+            running: self.self_test.running,
+            last_result: self.self_test.last_result,
+            backend: self.backend.label(),
+            udp_target: udp_target.primary,
+            tcp_target: tcp_target.primary,
+        }
+    }
+}
+
+impl NetPoller for DefaultNetStack {
+    fn poll(&mut self, now_ms: u64) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.poll(now_ms),
+            Self::BcmGenet(stack) => stack.poll(now_ms),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.poll(now_ms),
+        }
+    }
+
+    fn telemetry(&self) -> NetTelemetry {
+        match self {
+            Self::Rtl8139(stack) => stack.telemetry(),
+            Self::BcmGenet(stack) => stack.telemetry(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.telemetry(),
+        }
+    }
+
+    fn stats(&self) -> NetCounters {
+        match self {
+            Self::Rtl8139(stack) => stack.stats(),
+            Self::BcmGenet(stack) => stack.stats(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.stats(),
+        }
+    }
+
+    fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
+        match self {
+            Self::Rtl8139(stack) => stack.drain_console_lines(now_ms, visitor),
+            Self::BcmGenet(stack) => stack.drain_console_lines(now_ms, visitor),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.drain_console_lines(now_ms, visitor),
+        }
+    }
+
+    fn send_console_line(&mut self, line: &str) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.send_console_line(line),
+            Self::BcmGenet(stack) => stack.send_console_line(line),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.send_console_line(line),
+        }
+    }
+
+    fn request_disconnect(&mut self) {
+        match self {
+            Self::Rtl8139(stack) => stack.request_disconnect(),
+            Self::BcmGenet(stack) => stack.request_disconnect(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.request_disconnect(),
+        }
+    }
+
+    fn drain_console_events(&mut self, visitor: &mut dyn FnMut(NetConsoleEvent)) {
+        match self {
+            Self::Rtl8139(stack) => stack.drain_console_events(visitor),
+            Self::BcmGenet(stack) => stack.drain_console_events(visitor),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.drain_console_events(visitor),
+        }
+    }
+
+    fn ingest_snapshot(&self) -> IngestSnapshot {
+        match self {
+            Self::Rtl8139(stack) => stack.ingest_snapshot(),
+            Self::BcmGenet(stack) => stack.ingest_snapshot(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.ingest_snapshot(),
+        }
+    }
+
+    fn active_console_conn_id(&self) -> Option<u64> {
+        match self {
+            Self::Rtl8139(stack) => stack.active_console_conn_id(),
+            Self::BcmGenet(stack) => stack.active_console_conn_id(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.active_console_conn_id(),
+        }
+    }
+
+    fn inject_console_line(&mut self, line: &str) {
+        match self {
+            Self::Rtl8139(stack) => stack.inject_console_line(line),
+            Self::BcmGenet(stack) => stack.inject_console_line(line),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.inject_console_line(line),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            Self::Rtl8139(stack) => stack.reset(),
+            Self::BcmGenet(stack) => stack.reset(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.reset(),
+        }
+    }
+
+    fn console_listen_port(&self) -> u16 {
+        match self {
+            Self::Rtl8139(stack) => stack.console_listen_port(),
+            Self::BcmGenet(stack) => stack.console_listen_port(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_listen_port(),
+        }
+    }
+
+    fn start_self_test(&mut self, now_ms: u64) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.start_self_test(now_ms),
+            Self::BcmGenet(stack) => stack.start_self_test(now_ms),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.start_self_test(now_ms),
+        }
+    }
+
+    fn self_test_report(&self) -> NetSelfTestReport {
+        match self {
+            Self::Rtl8139(stack) => stack.self_test_report(),
+            Self::BcmGenet(stack) => stack.self_test_report(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.self_test_report(),
+        }
     }
 }
 

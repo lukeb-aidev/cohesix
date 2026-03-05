@@ -5,12 +5,12 @@
 
 # Cohesix Architecture (As-Built)
 
-Cohesix is a control-plane OS for secure orchestration and telemetry of edge GPU nodes using a Queen/Worker hive model. This document describes the current as-built system for the QEMU `aarch64/virt` target, the `uefi-aarch64` manifest profile, and the macOS host; manifest-gated features are called out explicitly.
+Cohesix is a control-plane OS for secure orchestration and telemetry of edge GPU nodes using a Queen/Worker hive model. This document describes the current as-built system for the QEMU `aarch64/virt` target, the Pi 4 U-Boot profile family (`pi4-uboot-aarch64` with legacy alias `uefi-aarch64`), and the macOS host; manifest-gated features are called out explicitly.
 
 ## 1. Scope and Non-Goals
 Scope:
 - Host: macOS 26 on Apple Silicon for build, QEMU, and host tools.
-- Targets: QEMU `aarch64/virt` (GICv3) running upstream seL4 plus UEFI boot packaging (`elfloader.efi` path) for `uefi-aarch64`; userspace is a pure Rust CPIO rootfs.
+- Targets: QEMU `aarch64/virt` (GICv3) for development/CI and Raspberry Pi 4 (`bcm2711`) via `Pi firmware -> U-Boot -> seL4 image -> root-task`; userspace is a pure Rust CPIO rootfs.
 - Control plane: Secure9P namespace plus a deterministic console grammar shared with `cohsh`/`cohsh-core`.
 
 Non-goals:
@@ -77,6 +77,13 @@ Non-goals:
 7. The log buffer (`/log/queen.log`) and NineDoorBridge are initialized.
 8. Serial console starts; TCP console is started only when networking is enabled by profile/policy.
 9. The event pump enters its cooperative loop (serial, timer, networking, IPC, NineDoorBridge), avoiding busy waits.
+
+### 5.1 Profile-gated NIC matrix (Milestone 26a)
+- QEMU/dev-virt flow keeps existing behavior: virtio-net is default when enabled, RTL8139 remains supported, and dev defaults remain `10.0.2.15/24` with gateway `10.0.2.2`.
+- Pi 4 U-Boot flow requires manifest-authoritative static IPv4 with `hw.network.enabled=true`, `hw.network.backend=bcmgenet-v5`, and non-zero `hw.network.static_ipv4.{ip,prefix_len}` (optional non-zero gateway).
+- Legacy `uefi-aarch64` manifests are accepted only as migration alias and emit deterministic diagnostics (`manifest.profile.alias=uefi-aarch64->pi4-uboot-aarch64`).
+- Source of truth is compiler IR (`coh-rtc`) fields under `hw.network.*`; root-task does not hard-code Pi 4 network addresses.
+- GENETv5 design provenance order is Linux `bcmgenet` -> Linux `bcm2711` DT bindings -> U-Boot `bcmgenet`; references are design-only and no source code lift is permitted.
 
 ### CSpace bootstrap invariants
 - Root CNode addressing uses the kernel-advertised radix (`initThreadCNodeSizeBits`), with `seL4_CapInitThreadCNode` as the root and offsets fixed at 0.

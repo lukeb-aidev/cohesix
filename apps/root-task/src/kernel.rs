@@ -61,7 +61,7 @@ use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
 use crate::local_seat::{self, LocalSeatInit};
 #[cfg(all(feature = "net-console", feature = "kernel"))]
-use crate::net::{DefaultNetStack as NetStack, NetPoller, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND};
+use crate::net::{DefaultNetStack as NetStack, CONSOLE_TCP_PORT};
 #[cfg(all(feature = "net-console", not(feature = "kernel")))]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
@@ -3146,23 +3146,22 @@ fn bootstrap<P: Platform>(
 
         check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let net_backend_label = DEFAULT_NET_BACKEND.label();
-        #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let (net_stack, virtio_present, net_init_error) = {
-            use crate::net::{init_net_console, NetConsoleError};
+        let (net_stack, virtio_present, net_init_error, net_backend_label) = {
+            use crate::net::{console_net_config, init_net_console, NetConsoleError};
+            let config = console_net_config();
+            let net_backend_label = config.backend.label();
 
             if hardware.no_nic {
                 boot_log::force_uart_line("[net-console] disabled reason=manifest-no-nic err=0");
                 log::info!("[net-console] disabled by manifest no_nic baseline");
                 let mut detail = heapless::String::<192>::new();
                 let _ = write!(detail, "disabled by manifest hw.no_nic=true");
-                (None, false, Some(detail))
+                (None, false, Some(detail), net_backend_label)
             } else if !sel4::ep_ready() || !sel4::ep_validated() {
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
                 log::warn!("[net-console] skipped: root endpoint not ready");
-                (None, false, None)
+                (None, false, None, net_backend_label)
             } else {
-                let config = crate::net::ConsoleNetConfig::default();
                 match init_net_console(hal, config) {
                     Ok(stack) => {
                         let mac = stack.hardware_address();
@@ -3173,7 +3172,9 @@ fn bootstrap<P: Platform>(
                             write!(ok_line, "[net-console] ready ip={ip} port={port} mac={mac}");
                         boot_log::force_uart_line(ok_line.as_str());
                         boot_guard.record_invariant("net-console.ready");
-                        (Some(stack), cfg!(feature = "net-backend-virtio"), None)
+                        let virtio_selected = cfg!(feature = "net-backend-virtio")
+                            && net_backend_label == "virtio-net";
+                        (Some(stack), virtio_selected, None, net_backend_label)
                     }
                     Err(err) => {
                         let (reason, err_code) = match err {
@@ -3191,10 +3192,11 @@ fn bootstrap<P: Platform>(
                         boot_log::force_uart_line(fail_line.as_str());
                         log::warn!("{} detail={err}", fail_line.as_str());
                         let virtio_present = cfg!(feature = "net-backend-virtio")
+                            && net_backend_label == "virtio-net"
                             && !matches!(err, NetConsoleError::NoDevice);
                         let mut detail = heapless::String::<192>::new();
                         let _ = write!(detail, "{err}");
-                        (None, virtio_present, Some(detail))
+                        (None, virtio_present, Some(detail), net_backend_label)
                     }
                 }
             }

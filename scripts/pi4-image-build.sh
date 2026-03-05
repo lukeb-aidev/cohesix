@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-MANIFEST_PATH="${ROOT_DIR}/configs/root_task_uefi_aarch64.toml"
+MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
 SEL4_BUILD_DIR="${HOME}/seL4/build_UBOOT"
 SEL4_VENV_DIR="${HOME}/seL4/.venv_aarch64"
 U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
@@ -18,7 +18,7 @@ SEL4_UPSTREAM_IMAGE_NAME="sel4test-driver-image-arm-bcm2711"
 COHESIX_IMAGE_NAME="cohesix-image-arm-bcm2711"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
-ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console"
+ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net-console"
 SKIP_BUILD=0
 
 usage() {
@@ -35,8 +35,9 @@ By default this script only builds/stages files under out/pi4-sd.
 To erase and flash an SD card, pass --flash-disk /dev/diskN explicitly.
 
 Options:
-  --manifest <path>         Manifest TOML used for coh-rtc/root-task build
-                            (default: configs/root_task_uefi_aarch64.toml)
+  --manifest <path>         Manifest input for root-task build:
+                            TOML (coh-rtc source) or resolved JSON
+                            (default: configs/root_task_pi4_uboot_aarch64.toml)
   --sel4-build-dir <dir>    seL4 Pi4 build directory (default: ~/seL4/build_UBOOT)
   --venv <dir>              Python venv containing build tooling (default: ~/seL4/.venv_aarch64)
   --u-boot-bin <path>       U-Boot binary (default: third_party/u-boot/u-boot.bin)
@@ -45,7 +46,7 @@ Options:
   --image-name <name>       Staged/boot image filename on FAT partition
                             (default: cohesix-image-arm-bcm2711)
   --root-task-features <f>  Comma-separated root-task feature list
-                            (default: kernel,bootstrap-trace,serial-console)
+                            (default: kernel,bootstrap-trace,serial-console,net-console)
   --skip-build              Skip rebuild and reuse existing seL4 image in sel4 build dir
   --flash-disk <device>     Erase + flash SD card (example: /dev/disk16)
   --disk-label <name>       FAT32 label when flashing (default: COHESIX)
@@ -70,6 +71,27 @@ require_file() {
 require_dir() {
     local path="$1"
     [[ -d "$path" ]] || fail "required directory missing: ${path}"
+}
+
+verify_u_boot_pi4_target() {
+    local u_boot_source_dir="${ROOT_DIR}/third_party/u-boot"
+    local default_u_boot_bin="${u_boot_source_dir}/u-boot.bin"
+    local config_file="${u_boot_source_dir}/.config"
+    local device_tree
+
+    if [[ "${U_BOOT_BIN}" != "${default_u_boot_bin}" ]]; then
+        return 0
+    fi
+
+    if [[ ! -f "${config_file}" ]]; then
+        log "Skipping U-Boot target check (missing ${config_file})"
+        return 0
+    fi
+
+    device_tree="$(awk -F= '/^CONFIG_DEFAULT_DEVICE_TREE=/{gsub(/"/, "", $2); print $2}' "${config_file}" | tail -n 1)"
+    if [[ "${device_tree}" != "bcm2711-rpi-4-b" ]]; then
+        fail "u-boot.bin is not configured for Pi 4 (CONFIG_DEFAULT_DEVICE_TREE=${device_tree:-unset}); run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    fi
 }
 
 resolve_sel4_source_dir() {
@@ -282,6 +304,27 @@ run_coh_rtc_codegen() {
       --cohsh-ticket-policy-doc "${ROOT_DIR}/docs/snippets/cohsh_ticket_policy.md"
 }
 
+sync_resolved_manifest_json() {
+    local manifest_json="${ROOT_DIR}/out/manifests/root_task_resolved.json"
+    local src_real
+    local dst_real
+    mkdir -p "${ROOT_DIR}/out/manifests"
+
+    src_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${MANIFEST_PATH}")"
+    dst_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${manifest_json}")"
+    if [[ "${src_real}" != "${dst_real}" ]]; then
+        cp -f "${MANIFEST_PATH}" "${manifest_json}"
+    fi
+
+    if [[ -f "${MANIFEST_PATH}.sha256" ]]; then
+        src_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${MANIFEST_PATH}.sha256")"
+        dst_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${manifest_json}.sha256")"
+        if [[ "${src_real}" != "${dst_real}" ]]; then
+            cp -f "${MANIFEST_PATH}.sha256" "${manifest_json}.sha256"
+        fi
+    fi
+}
+
 build_pi4_image() {
     local root_task_elf="${ROOT_DIR}/target/aarch64-unknown-none/release/root-task"
     local embedded_rootserver="${SEL4_BUILD_DIR}/elfloader/rootserver"
@@ -297,8 +340,15 @@ build_pi4_image() {
     sel4_source_dir="$(resolve_sel4_source_dir)"
     configure_pi4_sel4_build "$sel4_source_dir"
 
-    log "Regenerating manifest artifacts via coh-rtc"
-    run_coh_rtc_codegen
+    if [[ "${MANIFEST_PATH}" == *.toml ]]; then
+        log "Regenerating manifest artifacts via coh-rtc"
+        run_coh_rtc_codegen
+    elif [[ "${MANIFEST_PATH}" == *.json ]]; then
+        log "Using pre-resolved manifest JSON (${MANIFEST_PATH})"
+        sync_resolved_manifest_json
+    else
+        fail "unsupported --manifest extension (expected .toml or .json): ${MANIFEST_PATH}"
+    fi
 
     log "Building root-task (${ROOT_TASK_FEATURES})"
     cargo build \
@@ -473,6 +523,7 @@ main() {
 
     require_file "$MANIFEST_PATH"
     require_file "$U_BOOT_BIN"
+    verify_u_boot_pi4_target
     require_dir "$FIRMWARE_DIR"
     require_dir "$SEL4_BUILD_DIR"
 

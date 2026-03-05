@@ -8,9 +8,12 @@ use cohsh_core::MAX_LINE_LEN;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 const SCHEMA_VERSION: &str = "1.5";
+const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
+const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
 const MAX_WALK_DEPTH: usize = 8;
 const MAX_MSIZE: u32 = 8192;
 const MAX_SHARD_BITS: u8 = 8;
@@ -59,6 +62,7 @@ const MAX_HW_DEVICES: usize = 32;
 const MAX_HW_DEVICE_ID_LEN: usize = 64;
 const MAX_LOCAL_SEAT_DEVICE_ID_LEN: usize = 64;
 const MAX_LOCAL_SEAT_BUFFER_LINES: u16 = 1024;
+const MAX_HW_NETWORK_IP_LITERAL_LEN: usize = 15;
 const MAX_LIFECYCLE_AUTO_TRANSITIONS: usize = 8;
 const MAX_SCHEDULE_ID_LEN: usize = 64;
 const MAX_SCHEDULE_ROLE_LEN: usize = 16;
@@ -351,6 +355,7 @@ impl Manifest {
         let has_device =
             |kind: HardwareDeviceKind| self.hw.devices.iter().any(|device| device.kind == kind);
         let has_tpm = has_device(HardwareDeviceKind::Tpm);
+        let has_net = has_device(HardwareDeviceKind::Net);
         if attest.enabled {
             match attest.policy {
                 AttestationPolicy::TpmOnly if !has_tpm => {
@@ -362,20 +367,37 @@ impl Manifest {
             }
         }
 
-        if self.profile.name == "uefi-aarch64" {
-            if !self.hw.no_nic {
-                bail!("profile.name=uefi-aarch64 requires hw.no_nic=true for Milestone 26");
-            }
-            if self.features.net_console {
+        let profile_name = self.profile.name.as_str();
+        if self.hw.network.static_ipv4.ip.len() > MAX_HW_NETWORK_IP_LITERAL_LEN {
+            bail!(
+                "hw.network.static_ipv4.ip exceeds max length {}",
+                MAX_HW_NETWORK_IP_LITERAL_LEN
+            );
+        }
+        if let Some(gateway) = self.hw.network.static_ipv4.gateway.as_ref() {
+            if gateway.len() > MAX_HW_NETWORK_IP_LITERAL_LEN {
                 bail!(
-                    "profile.name=uefi-aarch64 requires features.net_console=false for Milestone 26"
+                    "hw.network.static_ipv4.gateway exceeds max length {}",
+                    MAX_HW_NETWORK_IP_LITERAL_LEN
                 );
             }
+        }
+        if self.hw.network.backend == NetworkBackendKind::BcmGenetV5
+            && !self.profile_is_pi4_family()
+        {
+            bail!(
+                "hw.network.backend=bcmgenet-v5 is only valid for profile.name={} (or legacy alias {})",
+                PI4_PROFILE_NAME,
+                PI4_PROFILE_LEGACY_ALIAS
+            );
+        }
+
+        if self.profile_is_pi4_family() {
             if !has_device(HardwareDeviceKind::Uart) {
-                bail!("profile.name=uefi-aarch64 requires hw.devices[] kind=uart");
+                bail!("profile.name={profile_name} requires hw.devices[] kind=uart");
             }
             if !has_device(HardwareDeviceKind::Rtc) {
-                bail!("profile.name=uefi-aarch64 requires hw.devices[] kind=rtc");
+                bail!("profile.name={profile_name} requires hw.devices[] kind=rtc");
             }
             if attest.enabled
                 && matches!(
@@ -385,7 +407,7 @@ impl Manifest {
                 && !has_tpm
             {
                 bail!(
-                    "profile.name=uefi-aarch64 with attestation enabled requires TPM device declaration"
+                    "profile.name={profile_name} with attestation enabled requires TPM device declaration"
                 );
             }
             if local_seat.enabled {
@@ -396,8 +418,108 @@ impl Manifest {
                     bail!("hw.local_seat.enabled requires hw.devices[] kind=display");
                 }
             }
+            if self.hw.no_nic {
+                if self.features.net_console {
+                    bail!(
+                        "profile.name={profile_name} with hw.no_nic=true requires features.net_console=false"
+                    );
+                }
+                if self.hw.network.enabled {
+                    bail!(
+                        "profile.name={profile_name} with hw.no_nic=true requires hw.network.enabled=false"
+                    );
+                }
+            } else if self.features.net_console {
+                self.validate_pi4_static_ipv4_network(profile_name, has_net)?;
+            } else if self.hw.network.enabled {
+                bail!(
+                    "profile.name={profile_name} with hw.network.enabled=true requires features.net_console=true"
+                );
+            }
+        } else {
+            if !self.hw.network.static_ipv4.ip.trim().is_empty() {
+                let _ = Self::parse_ipv4_literal(
+                    "hw.network.static_ipv4.ip",
+                    self.hw.network.static_ipv4.ip.trim(),
+                )?;
+            }
+            if let Some(gateway) = self.hw.network.static_ipv4.gateway.as_ref() {
+                if !gateway.trim().is_empty() {
+                    let _ =
+                        Self::parse_ipv4_literal("hw.network.static_ipv4.gateway", gateway.trim())?;
+                }
+            }
+            if self.hw.network.static_ipv4.prefix_len != 0
+                && !(1..=32).contains(&self.hw.network.static_ipv4.prefix_len)
+            {
+                bail!(
+                    "hw.network.static_ipv4.prefix_len {} must be in 1..=32",
+                    self.hw.network.static_ipv4.prefix_len
+                );
+            }
         }
 
+        Ok(())
+    }
+
+    fn profile_is_pi4_family(&self) -> bool {
+        matches!(
+            self.profile.name.as_str(),
+            PI4_PROFILE_NAME | PI4_PROFILE_LEGACY_ALIAS
+        )
+    }
+
+    fn parse_ipv4_literal(label: &str, value: &str) -> Result<Ipv4Addr> {
+        value
+            .parse::<Ipv4Addr>()
+            .with_context(|| format!("{label} must be a valid IPv4 literal"))
+    }
+
+    fn validate_pi4_static_ipv4_network(
+        &self,
+        profile_name: &str,
+        has_net_device: bool,
+    ) -> Result<()> {
+        if !self.hw.network.enabled {
+            bail!(
+                "profile.name={profile_name} with features.net_console=true requires hw.network.enabled=true"
+            );
+        }
+        if !has_net_device {
+            bail!(
+                "profile.name={profile_name} network-enabled mode requires hw.devices[] kind=net"
+            );
+        }
+        if self.hw.network.backend != NetworkBackendKind::BcmGenetV5 {
+            bail!(
+                "profile.name={profile_name} network-enabled mode requires hw.network.backend=bcmgenet-v5"
+            );
+        }
+        let ip_literal = self.hw.network.static_ipv4.ip.trim();
+        if ip_literal.is_empty() {
+            bail!("hw.network.static_ipv4.ip must be set for profile.name={profile_name}");
+        }
+        let ip = Self::parse_ipv4_literal("hw.network.static_ipv4.ip", ip_literal)?;
+        if ip.is_unspecified() {
+            bail!("hw.network.static_ipv4.ip must not be 0.0.0.0");
+        }
+        let prefix = self.hw.network.static_ipv4.prefix_len;
+        if !(1..=32).contains(&prefix) {
+            bail!(
+                "hw.network.static_ipv4.prefix_len {} must be in 1..=32",
+                prefix
+            );
+        }
+        if let Some(gateway) = self.hw.network.static_ipv4.gateway.as_ref() {
+            let gateway_literal = gateway.trim();
+            if !gateway_literal.is_empty() {
+                let parsed =
+                    Self::parse_ipv4_literal("hw.network.static_ipv4.gateway", gateway_literal)?;
+                if parsed.is_unspecified() {
+                    bail!("hw.network.static_ipv4.gateway must not be 0.0.0.0");
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2199,6 +2321,7 @@ impl Default for AffinityPolicy {
 mod tests {
     use super::{
         load_manifest, AffinityPolicy, AttestationPolicy, HardwareDevice, HardwareDeviceKind,
+        NetworkBackendKind,
     };
     use std::path::PathBuf;
 
@@ -2228,11 +2351,16 @@ mod tests {
             .expect("repo root path")
     }
 
-    fn base_uefi_manifest() -> super::Manifest {
+    fn base_pi4_manifest(profile_name: &str) -> super::Manifest {
         let mut manifest = fixture_manifest();
-        manifest.profile.name = "uefi-aarch64".to_owned();
+        manifest.profile.name = profile_name.to_owned();
         manifest.features.net_console = false;
         manifest.hw.no_nic = true;
+        manifest.hw.network.enabled = false;
+        manifest.hw.network.backend = NetworkBackendKind::Auto;
+        manifest.hw.network.static_ipv4.ip.clear();
+        manifest.hw.network.static_ipv4.prefix_len = 0;
+        manifest.hw.network.static_ipv4.gateway = None;
         manifest.hw.devices = vec![
             HardwareDevice {
                 kind: HardwareDeviceKind::Uart,
@@ -2244,41 +2372,110 @@ mod tests {
                 id: "rtc0".to_owned(),
                 required: true,
             },
+            HardwareDevice {
+                kind: HardwareDeviceKind::Net,
+                id: "bcmgenet0".to_owned(),
+                required: true,
+            },
         ];
         manifest
     }
 
     #[test]
-    fn uefi_requires_no_nic_baseline() {
-        let mut manifest = base_uefi_manifest();
+    fn uefi_alias_accepts_no_nic_baseline() {
+        let manifest = base_pi4_manifest("uefi-aarch64");
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("legacy alias should validate in no-nic baseline mode");
+    }
+
+    #[test]
+    fn pi4_profile_network_enabled_requires_backend_and_static_ipv4() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
         manifest.hw.no_nic = false;
-        let err = manifest
-            .validate()
-            .expect_err("uefi profile without no_nic must fail");
-        assert!(
-            err.to_string()
-                .contains("profile.name=uefi-aarch64 requires hw.no_nic=true"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn uefi_rejects_net_console_flag() {
-        let mut manifest = base_uefi_manifest();
         manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.static_ipv4.prefix_len = 24;
         let err = manifest
             .validate()
-            .expect_err("uefi profile with net_console enabled must fail");
+            .expect_err("missing static IPv4 must fail");
         assert!(
             err.to_string()
-                .contains("profile.name=uefi-aarch64 requires features.net_console=false"),
+                .contains("hw.network.static_ipv4.ip must be set"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn uefi_accepts_minimal_no_nic_hardware_bindings() {
-        let manifest = base_uefi_manifest();
+    fn pi4_profile_network_enabled_rejects_invalid_prefix() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.no_nic = false;
+        manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.static_ipv4.ip = "192.168.2.20".to_owned();
+        manifest.hw.network.static_ipv4.prefix_len = 0;
+        let err = manifest.validate().expect_err("invalid prefix must fail");
+        assert!(
+            err.to_string()
+                .contains("hw.network.static_ipv4.prefix_len 0 must be in 1..=32"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn pi4_profile_network_enabled_rejects_non_bcmgenet_backend() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.no_nic = false;
+        manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::Rtl8139;
+        manifest.hw.network.static_ipv4.ip = "192.168.2.20".to_owned();
+        manifest.hw.network.static_ipv4.prefix_len = 24;
+        let err = manifest
+            .validate()
+            .expect_err("non-bcmgenet backend should fail for pi4 profile");
+        assert!(
+            err.to_string()
+                .contains("requires hw.network.backend=bcmgenet-v5"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn pi4_profile_accepts_static_ipv4_network_configuration() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.no_nic = false;
+        manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.static_ipv4.ip = "192.168.2.20".to_owned();
+        manifest.hw.network.static_ipv4.prefix_len = 24;
+        manifest.hw.network.static_ipv4.gateway = Some("192.168.2.1".to_owned());
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("valid pi4 static IPv4 manifest should validate");
+    }
+
+    #[test]
+    fn uefi_alias_accepts_static_ipv4_migration_path() {
+        let mut manifest = base_pi4_manifest("uefi-aarch64");
+        manifest.hw.no_nic = false;
+        manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.static_ipv4.ip = "10.42.0.9".to_owned();
+        manifest.hw.network.static_ipv4.prefix_len = 24;
+        manifest.hw.network.static_ipv4.gateway = Some("10.42.0.1".to_owned());
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("legacy alias should accept 26a static IPv4 migration path");
+    }
+
+    #[test]
+    fn uefi_alias_accepts_minimal_no_nic_hardware_bindings() {
+        let manifest = base_pi4_manifest("uefi-aarch64");
         manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect("minimal uefi no-nic manifest must validate");
@@ -2385,6 +2582,7 @@ pub struct FeatureToggles {
 pub struct HardwareConfig {
     pub secure_boot: bool,
     pub no_nic: bool,
+    pub network: HardwareNetworkConfig,
     pub attestation: AttestationConfig,
     pub local_seat: LocalSeatConfig,
     pub devices: Vec<HardwareDevice>,
@@ -2456,6 +2654,69 @@ impl Default for LocalSeatConfig {
             display_device: "hdmi0".to_owned(),
             line_bytes: 160,
             buffer_lines: 128,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct HardwareNetworkConfig {
+    pub enabled: bool,
+    pub backend: NetworkBackendKind,
+    pub static_ipv4: StaticIpv4Config,
+}
+
+impl Default for HardwareNetworkConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: NetworkBackendKind::Auto,
+            static_ipv4: StaticIpv4Config::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct StaticIpv4Config {
+    pub ip: String,
+    pub prefix_len: u8,
+    pub gateway: Option<String>,
+}
+
+impl Default for StaticIpv4Config {
+    fn default() -> Self {
+        Self {
+            ip: String::new(),
+            prefix_len: 0,
+            gateway: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NetworkBackendKind {
+    Auto,
+    Rtl8139,
+    VirtioNet,
+    #[serde(rename = "bcmgenet-v5", alias = "bcm-genet-v5")]
+    BcmGenetV5,
+}
+
+impl Default for NetworkBackendKind {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+impl NetworkBackendKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Rtl8139 => "rtl8139",
+            Self::VirtioNet => "virtio-net",
+            Self::BcmGenetV5 => "bcmgenet-v5",
         }
     }
 }

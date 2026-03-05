@@ -434,7 +434,8 @@ pub fn truncate_for_display(line: &str, line_bytes: u16) -> &str {
 mod tests {
     use super::*;
     use crate::generated::{
-        AttestationConfig, AttestationPolicy, HardwareConfig, HardwareDevice, LocalSeatConfig,
+        AttestationConfig, AttestationPolicy, HardwareConfig, HardwareDevice,
+        HardwareNetworkConfig, LocalSeatConfig, NetworkBackendKind, StaticIpv4Config,
     };
 
     const KEYBOARD: HardwareDevice = HardwareDevice {
@@ -453,6 +454,15 @@ mod tests {
         HardwareConfig {
             secure_boot: false,
             no_nic: false,
+            network: HardwareNetworkConfig {
+                enabled: false,
+                backend: NetworkBackendKind::Auto,
+                static_ipv4: StaticIpv4Config {
+                    ip: [0, 0, 0, 0],
+                    prefix_len: 0,
+                    gateway: None,
+                },
+            },
             attestation: AttestationConfig {
                 enabled: false,
                 policy: AttestationPolicy::TpmOrDice,

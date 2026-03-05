@@ -21,6 +21,9 @@
 #[cfg(all(target_os = "none", not(feature = "kernel")))]
 compile_error!("enable the `kernel` feature when building root-task for seL4 targets");
 
+#[cfg(any(feature = "kernel", test))]
+extern crate alloc as rust_alloc;
+
 /// Manifest-driven SMP affinity helpers.
 pub mod affinity;
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]

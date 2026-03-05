@@ -161,13 +161,25 @@ fn is_sha256_hex(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generated::{AttestationConfig, HardwareConfig, LocalSeatConfig};
+    use crate::generated::{
+        AttestationConfig, HardwareConfig, HardwareNetworkConfig, LocalSeatConfig,
+        NetworkBackendKind, StaticIpv4Config,
+    };
 
     #[test]
     fn disabled_attestation_returns_none() {
         let hw = HardwareConfig {
             secure_boot: false,
             no_nic: false,
+            network: HardwareNetworkConfig {
+                enabled: false,
+                backend: NetworkBackendKind::Auto,
+                static_ipv4: StaticIpv4Config {
+                    ip: [0, 0, 0, 0],
+                    prefix_len: 0,
+                    gateway: None,
+                },
+            },
             attestation: AttestationConfig {
                 enabled: false,
                 policy: AttestationPolicy::TpmOrDice,
@@ -197,6 +209,15 @@ mod tests {
         let hw = HardwareConfig {
             secure_boot: false,
             no_nic: false,
+            network: HardwareNetworkConfig {
+                enabled: false,
+                backend: NetworkBackendKind::Auto,
+                static_ipv4: StaticIpv4Config {
+                    ip: [0, 0, 0, 0],
+                    prefix_len: 0,
+                    gateway: None,
+                },
+            },
             attestation: AttestationConfig {
                 enabled: true,
                 policy: AttestationPolicy::TpmOnly,

@@ -95,22 +95,6 @@ impl NetStage {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::AUTH_TIMEOUT_MS;
-
-    #[test]
-    fn auth_timeout_scales_with_timebase() {
-        if cfg!(feature = "timers-arch-counter") {
-            assert_eq!(AUTH_TIMEOUT_MS, 5_000);
-        } else {
-            // In dev-virt the dummy timer advances once per poll; enforce a large enough
-            // auth deadline to avoid spurious WAN/tunnel authentication failures.
-            assert!(AUTH_TIMEOUT_MS >= 10 * 60 * 1000);
-        }
-    }
-}
-
 /// Static IPv4 configuration for the TCP console listener.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NetAddressConfig {
@@ -143,6 +127,8 @@ pub struct ConsoleNetConfig {
     pub idle_timeout_ms: u64,
     /// TCP port exposed by the console listener inside the VM.
     pub listen_port: u16,
+    /// Active NIC backend selected from profile-generated settings.
+    pub backend: NetBackend,
     /// IPv4 configuration for the console interface.
     pub address: NetAddressConfig,
 }
@@ -154,28 +140,56 @@ impl ConsoleNetConfig {
             auth_token: console_auth_token(),
             idle_timeout_ms: IDLE_TIMEOUT_MS,
             listen_port: COHSH_TCP_PORT,
+            backend: DEFAULT_NET_BACKEND,
             address: NetAddressConfig::dev_virt(),
         }
     }
 
-    /// Apply development-friendly defaults for the QEMU `virt` target when
-    /// configuration inputs (e.g. DTB or bootinfo) are absent or incomplete.
+    /// Apply profile-gated networking defaults.
+    ///
+    /// QEMU backends keep dev-virt fallbacks while Pi4 backends require
+    /// manifest-provided static IPv4 fields.
     #[must_use]
-    pub fn with_dev_virt_defaults(mut self) -> Self {
+    pub fn with_profile_defaults(mut self) -> Self {
         if self.listen_port == 0 {
             self.listen_port = COHESIX_TCP_CONSOLE_PORT;
         }
-        if self.address.ip == [0, 0, 0, 0] {
-            self.address.ip = DEV_VIRT_IP;
-            self.address.prefix_len = DEV_VIRT_PREFIX;
-        }
-        if self.address.prefix_len == 0 {
-            self.address.prefix_len = DEV_VIRT_PREFIX;
-        }
-        if self.address.gateway.is_none() {
-            self.address.gateway = Some(DEV_VIRT_GATEWAY);
+        if self.backend.uses_dev_virt_defaults() {
+            if self.address.ip == [0, 0, 0, 0] {
+                self.address.ip = DEV_VIRT_IP;
+                self.address.prefix_len = DEV_VIRT_PREFIX;
+            }
+            if self.address.prefix_len == 0 {
+                self.address.prefix_len = DEV_VIRT_PREFIX;
+            }
+            if self.address.gateway.is_none() {
+                self.address.gateway = Some(DEV_VIRT_GATEWAY);
+            }
         }
         self
+    }
+}
+
+/// Resolve the active TCP console network configuration from generated manifest
+/// artifacts with deterministic profile-gated defaults.
+#[must_use]
+pub fn console_net_config() -> ConsoleNetConfig {
+    #[cfg(feature = "kernel")]
+    {
+        let mut config = ConsoleNetConfig::default();
+        let hardware = crate::generated::hardware_config();
+        let network = hardware.network;
+        config.backend = NetBackend::from_generated(network.backend);
+        config.address = NetAddressConfig {
+            ip: network.static_ipv4.ip,
+            prefix_len: network.static_ipv4.prefix_len,
+            gateway: network.static_ipv4.gateway,
+        };
+        return config.with_profile_defaults();
+    }
+    #[cfg(not(feature = "kernel"))]
+    {
+        ConsoleNetConfig::default().with_profile_defaults()
     }
 }
 
@@ -328,7 +342,7 @@ pub struct NetSelfTestResult {
 }
 
 /// Summary of the self-test subsystem for consoles.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetSelfTestReport {
     /// Indicates whether self-test support is compiled in for the current build.
     pub enabled: bool,
@@ -336,6 +350,25 @@ pub struct NetSelfTestReport {
     pub running: bool,
     /// Last recorded result, if any.
     pub last_result: Option<NetSelfTestResult>,
+    /// Active backend label.
+    pub backend: &'static str,
+    /// Primary host-visible UDP test target.
+    pub udp_target: HeaplessString<48>,
+    /// Primary host-visible TCP test target.
+    pub tcp_target: HeaplessString<48>,
+}
+
+impl Default for NetSelfTestReport {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            running: false,
+            last_result: None,
+            backend: "disabled",
+            udp_target: HeaplessString::new(),
+            tcp_target: HeaplessString::new(),
+        }
+    }
 }
 
 /// Driver-facing abstraction that all NIC backends must implement in order to
@@ -401,6 +434,8 @@ pub trait NetDriverError: core::fmt::Display + core::fmt::Debug {
 pub enum NetBackend {
     /// RTL8139 PCI NIC exposed by QEMU `virt`.
     Rtl8139,
+    /// Broadcom GENETv5 backend used on Raspberry Pi 4.
+    BcmGenet,
     /// Virtio MMIO NIC (kept for experiments and debugging).
     #[cfg(feature = "net-backend-virtio")]
     Virtio,
@@ -412,8 +447,39 @@ impl NetBackend {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Rtl8139 => "rtl8139",
+            Self::BcmGenet => "bcmgenet-v5",
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio => "virtio-net",
+        }
+    }
+
+    #[must_use]
+    pub const fn uses_dev_virt_defaults(self) -> bool {
+        match self {
+            Self::Rtl8139 => true,
+            Self::BcmGenet => false,
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio => true,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[must_use]
+    pub fn from_generated(backend: crate::generated::NetworkBackendKind) -> Self {
+        match backend {
+            crate::generated::NetworkBackendKind::Auto => DEFAULT_NET_BACKEND,
+            crate::generated::NetworkBackendKind::Rtl8139 => Self::Rtl8139,
+            crate::generated::NetworkBackendKind::VirtioNet => {
+                #[cfg(feature = "net-backend-virtio")]
+                {
+                    Self::Virtio
+                }
+                #[cfg(not(feature = "net-backend-virtio"))]
+                {
+                    Self::Rtl8139
+                }
+            }
+            crate::generated::NetworkBackendKind::BcmGenetV5 => Self::BcmGenet,
         }
     }
 }
@@ -552,6 +618,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn auth_timeout_scales_with_timebase() {
+        if cfg!(feature = "timers-arch-counter") {
+            assert_eq!(AUTH_TIMEOUT_MS, 5_000);
+        } else {
+            // In dev-virt the dummy timer advances once per poll; enforce a large enough
+            // auth deadline to avoid spurious WAN/tunnel authentication failures.
+            assert!(AUTH_TIMEOUT_MS >= 10 * 60 * 1000);
+        }
+    }
+
+    #[test]
     fn default_net_config_uses_console_port() {
         let config = ConsoleNetConfig::default();
 
@@ -560,5 +637,25 @@ mod tests {
         assert_eq!(config.address.ip, DEV_VIRT_IP);
         assert_eq!(config.address.prefix_len, DEV_VIRT_PREFIX);
         assert_eq!(config.address.gateway, Some(DEV_VIRT_GATEWAY));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn bcmgenet_profile_does_not_force_dev_virt_defaults() {
+        let config = ConsoleNetConfig {
+            auth_token: "token",
+            idle_timeout_ms: IDLE_TIMEOUT_MS,
+            listen_port: COHSH_TCP_PORT,
+            backend: NetBackend::BcmGenet,
+            address: NetAddressConfig {
+                ip: [192, 168, 10, 42],
+                prefix_len: 24,
+                gateway: Some([192, 168, 10, 1]),
+            },
+        };
+        let resolved = config.with_profile_defaults();
+        assert_eq!(resolved.address.ip, [192, 168, 10, 42]);
+        assert_eq!(resolved.address.prefix_len, 24);
+        assert_eq!(resolved.address.gateway, Some([192, 168, 10, 1]));
     }
 }

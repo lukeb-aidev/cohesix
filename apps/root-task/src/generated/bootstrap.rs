@@ -8,16 +8,17 @@
 use super::{
     AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig,
     ControlPlaneConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind,
-    HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction,
-    HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition,
-    LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, ObservabilityConfig,
-    PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig,
-    ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig,
-    Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig,
-    SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig,
-    TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig,
-    TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig,
-    UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig,
+    HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider,
+    HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig,
+    LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount,
+    NetworkBackendKind, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig,
+    Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig,
+    ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy,
+    SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter,
+    SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig,
+    TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits,
+    TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig,
+    UiUpdatesConfig,
 };
 use cohesix_ticket::Role;
 
@@ -26,7 +27,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "672e5826b7bf7145c87de67e76eeb02681d16edad89034be2e68f17ebf7b52e5";
+    "e19e34454c299e31c23499ca11a83b1a2864250fe6c95729544fa605aeaf941b";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -179,7 +180,7 @@ pub const CAS_CONFIG: CasConfig = CasConfig {
     models_enabled: false,
 };
 
-pub const HARDWARE_DEVICES: [HardwareDevice; 5] = [
+pub const HARDWARE_DEVICES: [HardwareDevice; 6] = [
     HardwareDevice {
         kind: HardwareDeviceKind::Uart,
         id: "uart0",
@@ -188,6 +189,11 @@ pub const HARDWARE_DEVICES: [HardwareDevice; 5] = [
     HardwareDevice {
         kind: HardwareDeviceKind::Rtc,
         id: "rtc0",
+        required: true,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Net,
+        id: "bcmgenet0",
         required: true,
     },
     HardwareDevice {
@@ -209,7 +215,16 @@ pub const HARDWARE_DEVICES: [HardwareDevice; 5] = [
 
 pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {
     secure_boot: false,
-    no_nic: true,
+    no_nic: false,
+    network: HardwareNetworkConfig {
+        enabled: true,
+        backend: NetworkBackendKind::BcmGenetV5,
+        static_ipv4: StaticIpv4Config {
+            ip: [192, 168, 10, 42],
+            prefix_len: 24,
+            gateway: Some([192, 168, 10, 1]),
+        },
+    },
     attestation: AttestationConfig {
         enabled: true,
         policy: AttestationPolicy::TpmOrDice,
@@ -496,12 +511,12 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
     replay_status_max_bytes: 1024,
 };
 
-pub const EVENT_PUMP_FDS: [&str; 4] = ["serial", "timer", "ipc", "ninedoor"];
+pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
-pub const INITIAL_AUDIT_LINES: [&str; 32] = [
+pub const INITIAL_AUDIT_LINES: [&str; 37] = [
     "manifest.schema=1.5",
-    "manifest.profile=uefi-aarch64",
-    "manifest.sha256=a45284de554506d98a95a2a05984838ced7eb3d090b473e29c99d202952d38d9",
+    "manifest.profile=pi4-uboot-aarch64",
+    "manifest.sha256=667af94f6669d2380d0954577430198dddedd2aef2b8b2d4b49cac17727b8f76",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -520,15 +535,20 @@ pub const INITIAL_AUDIT_LINES: [&str; 32] = [
     "manifest.cache.dma_clean=true",
     "manifest.cache.dma_invalidate=true",
     "manifest.cache.unify_instructions=false",
-    "manifest.features.net_console=false",
+    "manifest.features.net_console=true",
     "manifest.hw.secure_boot=false",
-    "manifest.hw.no_nic=true",
+    "manifest.hw.no_nic=false",
+    "manifest.hw.network.enabled=true",
+    "manifest.hw.network.backend=bcmgenet-v5",
     "manifest.hw.attestation.enabled=true",
     "manifest.hw.attestation.policy=tpm-or-dice",
     "manifest.hw.local_seat.enabled=true",
     "manifest.hw.local_seat.required=false",
-    "attestation.bound_manifest_sha256=a45284de554506d98a95a2a05984838ced7eb3d090b473e29c99d202952d38d9",
-    "attestation.evidence_sha256=944ad586a84a9dfa7b434d00dc3ecf8cba8504e3d125bee3c7f2b4ff9aec25e3",
-    "manifest.hw.networking=disabled-m26-baseline",
-    "event_pump.fds=serial,timer,ipc,ninedoor",
+    "manifest.hw.network.static_ipv4.ip=192.168.10.42",
+    "manifest.hw.network.static_ipv4.prefix_len=24",
+    "manifest.hw.network.static_ipv4.gateway=192.168.10.1",
+    "attestation.bound_manifest_sha256=667af94f6669d2380d0954577430198dddedd2aef2b8b2d4b49cac17727b8f76",
+    "attestation.evidence_sha256=74329da038081f526c01e6c67838637eb2d2986d81259de59de44d99fd3eb226",
+    "manifest.hw.networking=enabled-static-ipv4",
+    "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

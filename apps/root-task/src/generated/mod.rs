@@ -336,10 +336,33 @@ pub struct LocalSeatConfig {
     pub buffer_lines: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetworkBackendKind {
+    Auto,
+    Rtl8139,
+    VirtioNet,
+    BcmGenetV5,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StaticIpv4Config {
+    pub ip: [u8; 4],
+    pub prefix_len: u8,
+    pub gateway: Option<[u8; 4]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HardwareNetworkConfig {
+    pub enabled: bool,
+    pub backend: NetworkBackendKind,
+    pub static_ipv4: StaticIpv4Config,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct HardwareConfig {
     pub secure_boot: bool,
     pub no_nic: bool,
+    pub network: HardwareNetworkConfig,
     pub attestation: AttestationConfig,
     pub local_seat: LocalSeatConfig,
     pub devices: &'static [HardwareDevice],
@@ -513,7 +536,7 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
 pub const MANIFEST_SHA256: &str =
-    "a45284de554506d98a95a2a05984838ced7eb3d090b473e29c99d202952d38d9";
+    "667af94f6669d2380d0954577430198dddedd2aef2b8b2d4b49cac17727b8f76";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

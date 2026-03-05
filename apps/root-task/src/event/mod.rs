@@ -1554,7 +1554,7 @@ where
         self.emit_console_line("  mem   - Show untyped summary");
         self.emit_console_line("  ping  - Respond with pong");
         self.emit_console_line("  test  - Self-test (host-only; use cohsh)");
-        self.emit_console_line("  nettest  - Run network self-test (dev-virt)");
+        self.emit_console_line("  nettest  - Run network self-test");
         self.emit_console_line("  netstats - Show network counters");
         self.emit_console_line("  quit  - Exit the console session");
     }
@@ -1568,7 +1568,7 @@ where
         self.emit_serial_line("  mem   - Show untyped summary");
         self.emit_serial_line("  ping  - Respond with pong");
         self.emit_serial_line("  test  - Self-test (host-only; use cohsh)");
-        self.emit_serial_line("  nettest  - Run network self-test (dev-virt)");
+        self.emit_serial_line("  nettest  - Run network self-test");
         self.emit_serial_line("  netstats - Show network counters");
         self.emit_serial_line("  quit  - Exit the console session");
     }
@@ -2143,8 +2143,13 @@ where
                             stats.tx_zero_len_attempt
                         ));
                         let status_line = format_message(format_args!(
-                            "nettest: enabled={} running={} last={:?}",
-                            report.enabled, report.running, report.last_result
+                            "nettest: backend={} enabled={} running={} udp={} tcp={} last={:?}",
+                            report.backend,
+                            report.enabled,
+                            report.running,
+                            report.udp_target,
+                            report.tcp_target,
+                            report.last_result
                         ));
                         self.emit_console_line(line_one.as_str());
                         self.emit_console_line(line_two.as_str());

@@ -6,13 +6,14 @@
 use crate::codegen::hash_bytes;
 use crate::ir::{
     resolve_manifest_relative_path, AttestationPolicy, HardwareDeviceKind, HostProvider,
-    HostTicketAction, HostTicketLifecycleState, Manifest, Role, SidecarLink,
+    HostTicketAction, HostTicketLifecycleState, Manifest, NetworkBackendKind, Role, SidecarLink,
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
+use std::net::Ipv4Addr;
 use std::path::Path;
 
 pub fn emit_rust(
@@ -390,10 +391,33 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub buffer_lines: u16,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum NetworkBackendKind {{")?;
+    writeln!(mod_contents, "    Auto,")?;
+    writeln!(mod_contents, "    Rtl8139,")?;
+    writeln!(mod_contents, "    VirtioNet,")?;
+    writeln!(mod_contents, "    BcmGenetV5,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct StaticIpv4Config {{")?;
+    writeln!(mod_contents, "    pub ip: [u8; 4],")?;
+    writeln!(mod_contents, "    pub prefix_len: u8,")?;
+    writeln!(mod_contents, "    pub gateway: Option<[u8; 4]>,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct HardwareNetworkConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub backend: NetworkBackendKind,")?;
+    writeln!(mod_contents, "    pub static_ipv4: StaticIpv4Config,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct HardwareConfig {{")?;
     writeln!(mod_contents, "    pub secure_boot: bool,")?;
     writeln!(mod_contents, "    pub no_nic: bool,")?;
+    writeln!(mod_contents, "    pub network: HardwareNetworkConfig,")?;
     writeln!(mod_contents, "    pub attestation: AttestationConfig,")?;
     writeln!(mod_contents, "    pub local_seat: LocalSeatConfig,")?;
     writeln!(mod_contents, "    pub devices: &'static [HardwareDevice],")?;
@@ -944,7 +968,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -1170,11 +1194,36 @@ pub fn emit_rust(
         )?;
     }
     writeln!(bootstrap_contents, "];\n")?;
+    let static_ip = parse_optional_ipv4_literal(
+        "hw.network.static_ipv4.ip",
+        manifest.hw.network.static_ipv4.ip.trim(),
+    )?;
+    let static_gateway = manifest
+        .hw
+        .network
+        .static_ipv4
+        .gateway
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| parse_optional_ipv4_literal("hw.network.static_ipv4.gateway", value))
+        .transpose()?
+        .flatten();
+    let static_ip_literal = render_ipv4_octets(static_ip.unwrap_or([0, 0, 0, 0]));
+    let gateway_literal = static_gateway
+        .map(render_ipv4_octets)
+        .map(|value| format!("Some({value})"))
+        .unwrap_or_else(|| "None".to_owned());
     writeln!(
         bootstrap_contents,
-        "pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {{ secure_boot: {}, no_nic: {}, attestation: AttestationConfig {{ enabled: {}, policy: {}, evidence_max_bytes: {} }}, local_seat: LocalSeatConfig {{ enabled: {}, required: {}, keyboard_device: \"{}\", display_device: \"{}\", line_bytes: {}, buffer_lines: {} }}, devices: &HARDWARE_DEVICES }};\n",
+        "pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {{ secure_boot: {}, no_nic: {}, network: HardwareNetworkConfig {{ enabled: {}, backend: {}, static_ipv4: StaticIpv4Config {{ ip: {}, prefix_len: {}, gateway: {} }} }}, attestation: AttestationConfig {{ enabled: {}, policy: {}, evidence_max_bytes: {} }}, local_seat: LocalSeatConfig {{ enabled: {}, required: {}, keyboard_device: \"{}\", display_device: \"{}\", line_bytes: {}, buffer_lines: {} }}, devices: &HARDWARE_DEVICES }};\n",
         manifest.hw.secure_boot,
         manifest.hw.no_nic,
+        manifest.hw.network.enabled,
+        network_backend_to_rust(manifest.hw.network.backend),
+        static_ip_literal,
+        manifest.hw.network.static_ipv4.prefix_len,
+        gateway_literal,
         manifest.hw.attestation.enabled,
         attestation_policy_to_rust(manifest.hw.attestation.policy),
         manifest.hw.attestation.evidence_max_bytes,
@@ -1654,6 +1703,42 @@ fn hw_device_kind_to_rust(kind: HardwareDeviceKind) -> &'static str {
     }
 }
 
+fn network_backend_to_rust(backend: NetworkBackendKind) -> &'static str {
+    match backend {
+        NetworkBackendKind::Auto => "NetworkBackendKind::Auto",
+        NetworkBackendKind::Rtl8139 => "NetworkBackendKind::Rtl8139",
+        NetworkBackendKind::VirtioNet => "NetworkBackendKind::VirtioNet",
+        NetworkBackendKind::BcmGenetV5 => "NetworkBackendKind::BcmGenetV5",
+    }
+}
+
+fn network_backend_label(backend: NetworkBackendKind) -> &'static str {
+    match backend {
+        NetworkBackendKind::Auto => "auto",
+        NetworkBackendKind::Rtl8139 => "rtl8139",
+        NetworkBackendKind::VirtioNet => "virtio-net",
+        NetworkBackendKind::BcmGenetV5 => "bcmgenet-v5",
+    }
+}
+
+fn parse_optional_ipv4_literal(label: &str, value: &str) -> Result<Option<[u8; 4]>> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    let parsed = value
+        .trim()
+        .parse::<Ipv4Addr>()
+        .with_context(|| format!("{label} must be a valid IPv4 literal"))?;
+    Ok(Some(parsed.octets()))
+}
+
+fn render_ipv4_octets(octets: [u8; 4]) -> String {
+    format!(
+        "[{}, {}, {}, {}]",
+        octets[0], octets[1], octets[2], octets[3]
+    )
+}
+
 fn host_provider_to_rust(provider: &HostProvider) -> &'static str {
     match provider {
         HostProvider::Systemd => "HostProvider::Systemd",
@@ -2059,6 +2144,14 @@ fn build_audit_lines(
         format!("manifest.hw.secure_boot={}", manifest.hw.secure_boot),
         format!("manifest.hw.no_nic={}", manifest.hw.no_nic),
         format!(
+            "manifest.hw.network.enabled={}",
+            manifest.hw.network.enabled
+        ),
+        format!(
+            "manifest.hw.network.backend={}",
+            network_backend_label(manifest.hw.network.backend)
+        ),
+        format!(
             "manifest.hw.attestation.enabled={}",
             manifest.hw.attestation.enabled
         ),
@@ -2075,6 +2168,24 @@ fn build_audit_lines(
             manifest.hw.local_seat.required
         ),
     ];
+    if !manifest.hw.network.static_ipv4.ip.trim().is_empty() {
+        lines.push(format!(
+            "manifest.hw.network.static_ipv4.ip={}",
+            manifest.hw.network.static_ipv4.ip.trim()
+        ));
+    }
+    if manifest.hw.network.static_ipv4.prefix_len != 0 {
+        lines.push(format!(
+            "manifest.hw.network.static_ipv4.prefix_len={}",
+            manifest.hw.network.static_ipv4.prefix_len
+        ));
+    }
+    if let Some(gateway) = manifest.hw.network.static_ipv4.gateway.as_ref() {
+        let gateway = gateway.trim();
+        if !gateway.is_empty() {
+            lines.push(format!("manifest.hw.network.static_ipv4.gateway={gateway}"));
+        }
+    }
 
     if manifest.hw.attestation.enabled {
         let evidence_seed = format!(
@@ -2091,8 +2202,15 @@ fn build_audit_lines(
             hash_bytes(evidence_seed.as_bytes())
         ));
     }
-    if manifest.profile.name == "uefi-aarch64" && manifest.hw.no_nic {
+    if manifest.profile.name == "uefi-aarch64" {
+        lines.push("manifest.profile.alias=uefi-aarch64->pi4-uboot-aarch64".to_owned());
+    }
+    if (manifest.profile.name == "pi4-uboot-aarch64" || manifest.profile.name == "uefi-aarch64")
+        && manifest.hw.no_nic
+    {
         lines.push("manifest.hw.networking=disabled-m26-baseline".to_owned());
+    } else if manifest.hw.network.enabled {
+        lines.push("manifest.hw.networking=enabled-static-ipv4".to_owned());
     }
     lines.push(format!("event_pump.fds={}", event_pump_fds.join(",")));
     lines

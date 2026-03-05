@@ -102,7 +102,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Complete |
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Complete |
 | [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | In Progress |
-| [26a](#26a) | Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) | Pending |
+| [26a](#26a) | Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) | Complete |
 | [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | Pending |
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -6080,6 +6080,8 @@ Deliverables:
 
 ## Milestone 26a — Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) <a id="26a"></a>
 [Milestones](#Milestones)
+
+**Status:** Complete — profile-gated GENETv5/static-IPv4 compiler and root-task wiring are in tree, QEMU regression coverage remains green, and the U-Boot smoke + Pi 4 validation command path is documented and reproducible.
 
 **Why now (platform continuity):**  
 Milestone 26 establishes Pi 4 U-Boot boot, identity, and a local diagnostics seat with an intentional no-NIC runtime baseline. Milestone 26a introduces the first Pi 4 native NIC path while preserving the existing root-task networking model and Cohesix control-plane semantics.

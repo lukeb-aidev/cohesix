@@ -8,7 +8,7 @@
 - Cohesix supports two bring-up paths:
 - QEMU `aarch64/virt` (development/CI baseline).
 - Raspberry Pi 4 (`bcm2711`) via upstream-style boot chain: `Pi firmware -> U-Boot -> seL4 image -> root-task`.
-- Milestone 26 keeps a strict no-NIC runtime baseline on Pi 4.
+- Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4.
 
 ## Canonical Pi 4 boot chain
 1. Pi boot firmware loads `start4.elf` and `fixup4.dat`.
@@ -19,10 +19,11 @@
 
 ## Manifest profiles
 - Development profile: `configs/root_task.toml` (`profile.name = "virt-aarch64"`).
-- Pi 4 bare-metal profile: `profile.name = "pi4-uboot-aarch64"` (legacy `uefi-aarch64` accepted only as transition alias while migration completes).
-- `coh-rtc` enforces Milestone 26 gates:
-- `hw.no_nic=true`
-- `features.net_console=false`
+- Pi 4 baseline profile (Milestone 26 no-NIC): `configs/root_task_uefi_aarch64.toml` (`profile.name = "uefi-aarch64"` migration alias).
+- Pi 4 networking profile (Milestone 26a static IPv4): `configs/root_task_pi4_uboot_aarch64.toml` (`profile.name = "pi4-uboot-aarch64"`).
+- `coh-rtc` enforces profile gates:
+- Milestone 26 baseline: `hw.no_nic=true`, `features.net_console=false`.
+- Milestone 26a networking: `hw.network.enabled=true`, `hw.network.backend=bcmgenet-v5`, required `net` device declaration, bounded non-zero static IPv4 (`prefix_len=1..32`).
 - declared `uart` + `rtc` devices
 - local-seat declarations when `hw.local_seat.enabled=true`
 - attestation policy/device requirements when `hw.attestation.enabled=true`
@@ -42,21 +43,35 @@
 - `arm_64bit=1`
 - `enable_uart=1`
 - `kernel=u-boot.bin`
+- `dtoverlay=upstream-pi4`
+- `core_freq=250` (keeps UART handoff deterministic during firmware -> U-Boot transition)
 5. Boot from U-Boot shell:
 - `fatls mmc 0:1`
 - `fatload mmc 0:1 ${loadaddr} cohesix-image-arm-bcm2711`
 - `go ${loadaddr}`
 
 ## U-Boot networking setup (for 26a/26b prep)
-- These settings are pre-boot controls; Milestone 26 runtime remains no-NIC.
+- Milestone 26a uses static IPv4 in runtime and keeps U-Boot env controls deterministic.
 - Typical env setup:
 - `setenv autoload no`
 - `setenv ipaddr <board-ip>`
 - `setenv serverip <host-ip>`
 - `setenv ethact <interface>`
-- `dhcp`
 - `ping ${serverip}`
 - `saveenv`
+
+## Milestone 26a Pi 4 network checklist
+1. Build/validate the QEMU U-Boot harness:
+- `scripts/uboot/qemu-uboot-smoke.sh --net user`
+2. Build Pi 4 payload with 26a manifest defaults:
+- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
+3. Boot on Pi 4 and verify runtime lines include:
+- `manifest.hw.network.enabled=true`
+- `manifest.hw.network.backend=bcmgenet-v5`
+- `manifest.hw.network.static_ipv4.ip=<configured-ip>`
+- `manifest.hw.networking=enabled-static-ipv4`
+4. Validate TCP console reachability from host:
+- `cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
 
 ## macOS U-Boot debug harness (fast iteration)
 - Purpose: validate U-Boot scripts/env/network setup behavior quickly before hardware retest.
@@ -71,10 +86,13 @@
 ## Milestone 26 boot evidence requirements
 - `/proc/boot` must include:
 - `manifest.sha256=...`
-- `manifest.hw.no_nic=true`
-- `manifest.hw.networking=disabled-m26-baseline`
+- Milestone 26 baseline: `manifest.hw.no_nic=true` and `manifest.hw.networking=disabled-m26-baseline`
+- Milestone 26a networking: `manifest.hw.network.enabled=true`, `manifest.hw.network.backend=bcmgenet-v5`, `manifest.hw.networking=enabled-static-ipv4`
 - `attestation.bound_manifest_sha256=...`
 - `attestation.evidence_sha256=...` (when attestation enabled)
+- Keep before/after proof for the same profile family:
+- baseline no-NIC transcript (Milestone 26),
+- NIC-enabled transcript (Milestone 26a).
 - Pi 4 local-seat proof must show:
 - HDMI displays `cohesix>` prompt.
 - USB keyboard input reaches the existing root-console parser.

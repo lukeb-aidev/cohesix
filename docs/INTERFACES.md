@@ -674,6 +674,11 @@ pub trait RootTaskControl {
     rejecting whitespace or malformed values so automation does not leak failed attempts over the wire.
 - Cohesix ships regression scripts in `.coh` format consumed by `coh> test`; see the canonical spec in [USERLAND_AND_CLI.md](./USERLAND_AND_CLI.md#coh-scripts-coh) for syntax and assertion rules.
 - For `dev-virt`, QEMU forwards `127.0.0.1:{31337/tcp,31338/udp,31339/tcp}` to `10.0.2.15` for the console and self-test ports; the virtio-net backend is the default (`net-backend-virtio`), with RTL8139 available as a fallback by removing that feature. Operators generally do not need to care which NIC is active, but the backend label appears in boot logs for diagnostics.
+- For `pi4-uboot-aarch64` (and migration alias `uefi-aarch64`), backend and addressing are manifest-authored through `hw.network.*`; `hw.network.backend=bcmgenet-v5` with static IPv4 is required when networking is enabled.
+- `nettest` and `netstats` remain backend-agnostic console verbs (no grammar changes). `netstats` includes deterministic target fields:
+  `backend=<label> enabled=<bool> running=<bool> udp=<ip:port> tcp=<ip:port> last=<result>`.
+- `nettest` target selection is profile-gated:
+  QEMU keeps existing `127.0.0.1:{31338,31339}` hostfwd semantics; Pi 4 uses manifest static IPv4/gateway-derived targets without introducing new in-VM listeners.
 - `cohsh` is the authoritative implementation of this protocol, and the planned WASM GUI is conceptually another client that wraps the same verbs without introducing a new control surface.
 
 ## 14. Error Surface
