@@ -39,6 +39,186 @@ const fn has_report_payload(
     request_len.saturating_sub(remaining_len as usize) >= report_len
 }
 
+#[inline]
+const fn keyboard_usage_code_valid(code: u8) -> bool {
+    code == 0 || (code >= 0x04 && code <= 0xE7)
+}
+
+#[inline]
+const fn keyboard_keys_valid(keys: &[u8; 6]) -> bool {
+    let mut index = 0usize;
+    while index < keys.len() {
+        if !keyboard_usage_code_valid(keys[index]) {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+#[inline]
+fn decode_boot_keyboard_report_at(buf: &[u8], offset: usize) -> Option<KeyboardReport> {
+    if offset.checked_add(core::mem::size_of::<KeyboardReport>())? > buf.len() {
+        return None;
+    }
+    let report = KeyboardReport {
+        modifiers: buf[offset],
+        reserved: buf[offset + 1],
+        keys: [
+            buf[offset + 2],
+            buf[offset + 3],
+            buf[offset + 4],
+            buf[offset + 5],
+            buf[offset + 6],
+            buf[offset + 7],
+        ],
+    };
+    if report.reserved != 0 || !keyboard_keys_valid(&report.keys) {
+        return None;
+    }
+    Some(report)
+}
+
+#[inline]
+fn decode_compact_keyboard_report_at(buf: &[u8], offset: usize) -> Option<KeyboardReport> {
+    // Some report-protocol keyboards expose `[modifiers, keys[6]]` without the
+    // reserved byte used by the HID Boot protocol keyboard report.
+    if offset.checked_add(7)? > buf.len() {
+        return None;
+    }
+    let report = KeyboardReport {
+        modifiers: buf[offset],
+        reserved: 0,
+        keys: [
+            buf[offset + 1],
+            buf[offset + 2],
+            buf[offset + 3],
+            buf[offset + 4],
+            buf[offset + 5],
+            buf[offset + 6],
+        ],
+    };
+    if !keyboard_keys_valid(&report.keys) {
+        return None;
+    }
+    Some(report)
+}
+
+#[inline]
+fn keyboard_keys_push(keys: &mut [u8; 6], count: &mut usize, usage: u8) {
+    if !keyboard_usage_code_valid(usage) || keys[..*count].contains(&usage) {
+        return;
+    }
+    if *count < keys.len() {
+        keys[*count] = usage;
+        *count += 1;
+    }
+}
+
+#[inline]
+fn decode_bitmap_keyboard_bits(
+    modifiers: u8,
+    bitmap: &[u8],
+    usage_base: u8,
+) -> Option<KeyboardReport> {
+    // Require at least 16 bits of key bitmap payload to reduce false positives.
+    if bitmap.len() < 2 {
+        return None;
+    }
+
+    let mut report = KeyboardReport {
+        modifiers,
+        reserved: 0,
+        keys: [0; 6],
+    };
+    let mut count = 0usize;
+    for (byte_idx, byte) in bitmap.iter().enumerate() {
+        if *byte == 0 {
+            continue;
+        }
+        let Some(base_usage_idx) = byte_idx.checked_mul(8) else {
+            break;
+        };
+        if base_usage_idx > u8::MAX as usize {
+            break;
+        }
+        for bit in 0..8usize {
+            if ((byte >> bit) & 1) == 0 {
+                continue;
+            }
+            let usage_idx = base_usage_idx.saturating_add(bit);
+            if usage_idx > u8::MAX as usize {
+                break;
+            }
+            let usage = usage_base.wrapping_add(usage_idx as u8);
+            if usage < usage_base {
+                break;
+            }
+            keyboard_keys_push(&mut report.keys, &mut count, usage);
+            if count >= report.keys.len() {
+                return Some(report);
+            }
+        }
+    }
+
+    if count == 0 {
+        None
+    } else {
+        Some(report)
+    }
+}
+
+#[inline]
+fn decode_bitmap_keyboard_report_at(buf: &[u8], offset: usize) -> Option<KeyboardReport> {
+    // Only accept the conservative boot-like head shape:
+    // [modifiers, reserved(0), bitmap...]
+    // This avoids decoding arbitrary non-keyboard payloads as bitmap keys.
+    if offset.checked_add(4)? > buf.len() {
+        return None;
+    }
+
+    if buf[offset + 1] != 0 {
+        return None;
+    }
+
+    let modifiers = buf[offset];
+    decode_bitmap_keyboard_bits(modifiers, &buf[offset + 2..], 0)
+}
+
+#[inline]
+fn decode_keyboard_report_payload(buf: &[u8], preferred_offset: usize) -> Option<KeyboardReport> {
+    if buf.len() < 4 {
+        return None;
+    }
+
+    let try_offset = |offset: usize| {
+        decode_boot_keyboard_report_at(buf, offset)
+            .or_else(|| decode_compact_keyboard_report_at(buf, offset))
+            .or_else(|| decode_bitmap_keyboard_report_at(buf, offset))
+    };
+
+    if let Some(report) = try_offset(preferred_offset) {
+        return Some(report);
+    }
+
+    for offset in 0..buf.len() {
+        if offset == preferred_offset {
+            continue;
+        }
+        if let Some(report) = try_offset(offset) {
+            return Some(report);
+        }
+    }
+    None
+}
+
+#[inline]
+const fn keyboard_endpoint_id_matches(ep_num: u8, endpoint_id: u8) -> bool {
+    let dci_in = (ep_num << 1) | 1;
+    let ep_index = ep_num << 1;
+    endpoint_id == dci_in || endpoint_id == ep_index || endpoint_id == ep_num
+}
+
 /// HID Usage Page codes.
 pub mod usage_page {
     /// Generic Desktop Controls (keyboard, mouse, joystick)
@@ -549,6 +729,7 @@ pub struct HidDevice<H: Dma> {
     interface: u8,
     ep_in: u8,
     ep_max_packet: u16,
+    keyboard_report_offset: u8,
     report_buf: PhysMem<H>,
 }
 
@@ -586,6 +767,7 @@ impl<H: Dma> HidDevice<H> {
             interface: iface.interface_number,
             ep_in: ep_in.number(),
             ep_max_packet: ep_in.max_packet_size,
+            keyboard_report_offset: 0,
             report_buf,
         };
 
@@ -660,6 +842,19 @@ impl<H: Dma> HidDevice<H> {
         (self.ep_in << 1) | 1
     }
 
+    #[inline]
+    const fn endpoint_id_matches_keyboard_in(&self, endpoint_id: u8) -> bool {
+        // Different xHCI implementations/reporting paths have surfaced three
+        // encodings for interrupt-IN endpoint IDs in transfer events:
+        // - DCI (spec):      ep_num*2 + 1
+        // - Endpoint index:  ep_num*2
+        // - Endpoint number: ep_num
+        //
+        // Accept all three to keep keyboard polling resilient across firmware
+        // and controller variations seen in Pi4 local-seat bring-up.
+        keyboard_endpoint_id_matches(self.ep_in, endpoint_id)
+    }
+
     /// Poll for keyboard report (non-blocking) with transfer re-queue errors surfaced.
     pub fn poll_keyboard_checked(&self) -> Result<Option<KeyboardReport>> {
         if self.hid_type != HidType::Keyboard {
@@ -669,7 +864,6 @@ impl<H: Dma> HidDevice<H> {
         // Drain a bounded number of events so unrelated hub chatter does not
         // indefinitely starve keyboard transfer completions.
         const HID_EVENT_BUDGET: usize = 128;
-        let expected_ep_id = self.expected_in_endpoint_id();
         for _ in 0..HID_EVENT_BUDGET {
             let Some(evt) = self.device.ctrl().poll_event() else {
                 return Ok(None);
@@ -677,21 +871,33 @@ impl<H: Dma> HidDevice<H> {
             if evt.trb_type() != trb_type::TRANSFER_EVENT as u8 {
                 continue;
             }
-            if evt.slot_id() != self.device.slot_id() || evt.endpoint_id() != expected_ep_id {
+            if evt.slot_id() != self.device.slot_id()
+                || !self.endpoint_id_matches_keyboard_in(evt.endpoint_id())
+            {
                 continue;
             }
 
             let code = evt.completion_code();
+            let payload_len =
+                (self.ep_max_packet as usize).saturating_sub(evt.transfer_length() as usize);
             if has_report_payload(
                 code,
                 self.ep_max_packet as usize,
                 evt.transfer_length(),
-                core::mem::size_of::<KeyboardReport>(),
+                7,
             ) {
-                // SUCCESS/SHORT_PACKET with a complete keyboard report payload.
-                let report = unsafe { *(self.report_buf.as_ptr::<KeyboardReport>()) };
-                self.queue_read()?;
-                return Ok(Some(report));
+                let payload = unsafe {
+                    core::slice::from_raw_parts(
+                        self.report_buf.as_ptr::<u8>(),
+                        payload_len.min(self.ep_max_packet as usize),
+                    )
+                };
+                if let Some(report) =
+                    decode_keyboard_report_payload(payload, usize::from(self.keyboard_report_offset))
+                {
+                    self.queue_read()?;
+                    return Ok(Some(report));
+                }
             }
             if code == completion::SUCCESS || code == completion::SHORT_PACKET {
                 // Ignore zero/partial payload completions and keep polling.
@@ -783,6 +989,28 @@ impl<H: Dma> HidDevice<H> {
     /// Returns the HID device type.
     pub fn hid_type(&self) -> HidType {
         self.hid_type
+    }
+
+    /// Forces keyboard-mode report handling for compatibility paths that
+    /// have already switched the interface into HID Boot protocol.
+    ///
+    /// This is intended for callers that discover keyboard-capable HID
+    /// interfaces that do not advertise Boot keyboard protocol in
+    /// `bInterfaceProtocol` but still accept `SET_PROTOCOL(BOOT)`.
+    pub fn into_forced_keyboard(mut self) -> Self {
+        self.hid_type = HidType::Keyboard;
+        self.keyboard_report_offset = 0;
+        self
+    }
+
+    /// Forces keyboard-mode handling with a one-byte report-ID prefix.
+    ///
+    /// Some non-boot HID keyboards keep report protocol layouts where input
+    /// reports are `[report_id, modifiers, reserved, keys[6], ...]`.
+    pub fn into_forced_keyboard_with_report_id(mut self) -> Self {
+        self.hid_type = HidType::Keyboard;
+        self.keyboard_report_offset = 1;
+        self
     }
 
     /// Returns the interface number.
@@ -877,7 +1105,10 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
 
 #[cfg(test)]
 mod tests {
-    use super::has_report_payload;
+    use super::{
+        decode_keyboard_report_payload, has_report_payload, keyboard_endpoint_id_matches,
+        keyboard_usage_code_valid,
+    };
     use crate::ring::completion;
 
     #[test]
@@ -894,5 +1125,85 @@ mod tests {
     #[test]
     fn rejects_non_success_completion_codes() {
         assert!(!has_report_payload(completion::USB_TRANSACTION_ERROR, 8, 0, 8));
+    }
+
+    #[test]
+    fn keyboard_endpoint_match_accepts_dci_and_legacy_variants() {
+        // Endpoint 1 IN seen as:
+        // - DCI (3)
+        // - endpoint index (2)
+        // - raw endpoint number (1)
+        assert!(keyboard_endpoint_id_matches(1, 3));
+        assert!(keyboard_endpoint_id_matches(1, 2));
+        assert!(keyboard_endpoint_id_matches(1, 1));
+        assert!(!keyboard_endpoint_id_matches(1, 4));
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_reads_boot_layout() {
+        let payload = [0x02u8, 0x00, 0x04, 0, 0, 0, 0, 0];
+        let report = decode_keyboard_report_payload(&payload, 0).expect("decode");
+        assert_eq!(report.modifiers, 0x02);
+        assert_eq!(report.keys[0], 0x04);
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_reads_report_id_prefixed_layout() {
+        let payload = [0x01u8, 0x02, 0x00, 0x04, 0, 0, 0, 0, 0];
+        let report = decode_keyboard_report_payload(&payload, 1).expect("decode");
+        assert_eq!(report.modifiers, 0x02);
+        assert_eq!(report.keys[0], 0x04);
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_reads_compact_layout() {
+        let payload = [0x02u8, 0x04, 0, 0, 0, 0, 0];
+        let report = decode_keyboard_report_payload(&payload, 0).expect("decode");
+        assert_eq!(report.modifiers, 0x02);
+        assert_eq!(report.keys[0], 0x04);
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_reads_bitmap_layout() {
+        // Bit 4 => usage 0x04 ('a')
+        let payload = [0x00u8, 0x00, 0x10, 0x00];
+        let report = decode_keyboard_report_payload(&payload, 0).expect("decode");
+        assert_eq!(report.modifiers, 0x00);
+        assert_eq!(report.keys[0], 0x04);
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_reads_report_id_prefixed_bitmap_layout() {
+        // [report_id, modifiers, reserved, bitmap...], bit 5 => usage 0x05 ('b')
+        let payload = [0x01u8, 0x02, 0x00, 0x20, 0x00, 0x00];
+        let report = decode_keyboard_report_payload(&payload, 1).expect("decode");
+        assert_eq!(report.modifiers, 0x02);
+        assert_eq!(report.keys[0], 0x05);
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_scans_offsets_when_preferred_fails() {
+        // Preferred offset=1 would fail for this payload, but offset=0 should decode.
+        let payload = [0x02u8, 0x00, 0x04, 0, 0, 0, 0, 0];
+        let report = decode_keyboard_report_payload(&payload, 1).expect("decode");
+        assert_eq!(report.keys[0], 0x04);
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_rejects_short_and_invalid_buffers() {
+        assert!(decode_keyboard_report_payload(&[0u8; 6], 0).is_none());
+
+        // Invalid usage code (0x02) should be rejected by layout validation.
+        let payload = [0x00u8, 0x00, 0x02, 0, 0, 0, 0, 0];
+        assert!(decode_keyboard_report_payload(&payload, 0).is_none());
+    }
+
+    #[test]
+    fn keyboard_usage_code_validation_accepts_keyboard_page_range() {
+        assert!(keyboard_usage_code_valid(0));
+        assert!(keyboard_usage_code_valid(0x04));
+        assert!(keyboard_usage_code_valid(0xE7));
+        assert!(!keyboard_usage_code_valid(0x03));
+        assert!(!keyboard_usage_code_valid(0xE8));
     }
 }

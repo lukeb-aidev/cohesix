@@ -20,7 +20,8 @@ use spin::Mutex;
 use usb_oxide::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
     hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook, ConfigDesc,
-    DeviceDesc, Dma, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice, UsbError, XhciCtrl,
+    DeviceDesc, Dma, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice, UsbError,
+    XhciCtrl,
 };
 
 use crate::bootstrap::log as boot_log;
@@ -99,7 +100,12 @@ const HUB_PORT_STATUS_BYTES: usize = 4;
 const HUB_PORT_STATUS_RETRY_LOOPS: usize = 64;
 const HUB_PORT_STATUS_QUICK_RETRIES: usize = 4;
 const HUB_SET_FEATURE_RETRIES: usize = 3;
+const HUB_BLIND_PREPARE_RESET_RETRIES: usize = 1;
 const HUB_DISCONNECTED_RECOVERY_POWER_RETRIES: usize = 2;
+// Some downstream hubs report individual switching but stall on eager
+// PORT_POWER requests during early enum. Keep eager power disabled and
+// prefer status-driven/on-demand recovery for deterministic bring-up.
+const HUB_EAGER_INDIVIDUAL_PORT_POWER: bool = false;
 const HUB_POST_CONFIG_SETTLE_MS: u64 = 250;
 const HUB_POWER_SETTLE_MIN_MS: u64 = 200;
 const HUB_RESET_SETTLE_MS: u64 = 100;
@@ -111,6 +117,7 @@ const HUB_SET_FEATURE_RETRY_DELAY_MS: u64 = 10;
 // Keep this aligned with usb-oxide's default control wait budget to avoid
 // false timeouts during hub bring-up.
 const HUB_CLASS_CONTROL_WAIT_SPINS: usize = 20_000_000;
+const HID_REPORT_DESC_MAX_BYTES: usize = 512;
 const WAIT_MS_SPINS_PER_MS: usize = 50_000;
 const WAIT_MS_MIN_SPINS: usize = 10_000;
 const WAIT_MS_MAX_SPINS: usize = 25_000_000;
@@ -171,9 +178,9 @@ const XHCI_FORCE_LOW_DMA_PROBE: bool = true;
 // VL805 on Pi4 expects xHCI DMA pointers in the PCIe outbound DMA window
 // address space, not raw CPU physical addresses.
 const XHCI_PCIE_DMA_BUS_ALIAS_ENABLED: bool = true;
-// Probe fallback for ambiguous Pi4/VL805 firmware mappings: try both PCIe bus
-// aliased DMA addresses and raw physical addresses before giving up.
-const XHCI_TRY_RAW_PHYS_DMA_FALLBACK: bool = true;
+// Raw-phys DMA fallback is disabled on Pi4 because it consistently times out
+// controller start (stage 0x0272) and adds long startup stalls.
+const XHCI_TRY_RAW_PHYS_DMA_FALLBACK: bool = false;
 const RPI4_PCIE_DMA_BUS_OFFSET: usize = 0x4_0000_0000;
 const XHCI_DMA_MAX_BYTES: usize = 8 * 1024 * 1024;
 // BCM2711 PCIe cannot DMA above the first 3 GiB (see upstream bcm2711.dtsi
@@ -1389,6 +1396,7 @@ impl Mailbox {
 struct HdmiTextSink {
     width: usize,
     height: usize,
+    text_height: usize,
     pitch: usize,
     framebuffer_len: usize,
     cols: usize,
@@ -1479,14 +1487,16 @@ impl HdmiTextSink {
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] fb mailbox bus=0x{bus:08x} phys=0x{phys:08x} end=0x{end:08x} size={size} pitch={pitch} {width}x{height}",
+                "[local-seat] fb mailbox bus=0x{bus:08x} phys=0x{phys:08x} end=0x{end:08x} size={size} pitch={pitch} phys={phys_w}x{phys_h} virt={virt_w}x{virt_h}",
                 bus = fb_bus,
                 phys = fb_phys,
                 end = fb_end,
                 size = fb_size,
                 pitch = pitch[0],
-                width = virt[0],
-                height = virt[1],
+                phys_w = phys[0],
+                phys_h = phys[1],
+                virt_w = virt[0],
+                virt_h = virt[1],
             ),
         );
         boot_log::force_uart_line(line.as_str());
@@ -1505,13 +1515,43 @@ impl HdmiTextSink {
             boot_log::force_uart_line(reject.as_str());
             return Err(Pi4SeatError::FramebufferUnavailable);
         }
+
+        let pitch_bytes = pitch[0] as usize;
+        let Some(raw_width) = mailbox_visible_dimension(phys[0] as usize, virt[0] as usize) else {
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        };
+        let Some(raw_height) = mailbox_visible_dimension(phys[1] as usize, virt[1] as usize) else {
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        };
+        let width = clamp_visible_width(raw_width, pitch_bytes);
+        let height = clamp_visible_height(raw_height, pitch_bytes, fb_size);
+        if width == 0 || height == 0 {
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        }
+        if width != raw_width || height != raw_height {
+            let mut clamp = heapless::String::<256>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut clamp,
+                format_args!(
+                    "[local-seat] fb mailbox viewport clamped raw={}x{} chosen={}x{} pitch={} alloc={}",
+                    raw_width,
+                    raw_height,
+                    width,
+                    height,
+                    pitch_bytes,
+                    fb_size
+                ),
+            );
+            boot_log::force_uart_line(clamp.as_str());
+        }
+
         Self::from_mapped_framebuffer(
             hal,
             fb_phys,
             fb_size,
-            virt[0] as usize,
-            virt[1] as usize,
-            pitch[0] as usize,
+            width,
+            height,
+            pitch_bytes,
             HdmiBackend::MailboxProperty,
         )
     }
@@ -1605,14 +1645,17 @@ impl HdmiTextSink {
         let framebuffer = first
             .checked_add(page_offset)
             .ok_or(Pi4SeatError::FramebufferMap)? as *mut u8;
+        let rows = text_row_count(height);
+        let text_height = text_viewport_height(height, rows);
 
         let mut sink = Self {
             width,
             height,
+            text_height,
             pitch,
             framebuffer_len,
             cols: cmp::max(1, width / CHAR_WIDTH),
-            rows: cmp::max(1, height / CHAR_HEIGHT),
+            rows,
             row: 0,
             col: 0,
             framebuffer,
@@ -1665,38 +1708,76 @@ impl HdmiTextSink {
     }
 
     fn scroll_up_one_text_row(&mut self) {
-        let scroll_pixels = cmp::min(CHAR_HEIGHT, self.height);
+        let scroll_pixels = cmp::min(CHAR_HEIGHT, self.text_height);
         if scroll_pixels == 0 {
             return;
         }
 
+        let Some(visible_row_bytes) = self.width.checked_mul(FB_BYTES_PER_PIXEL) else {
+            self.clear_screen();
+            return;
+        };
         let Some(scroll_bytes) = self.pitch.checked_mul(scroll_pixels) else {
             self.clear_screen();
             return;
         };
-        let Some(total_bytes) = self.pitch.checked_mul(self.height) else {
+        let Some(total_bytes) = self.pitch.checked_mul(self.text_height) else {
             self.clear_screen();
             return;
         };
-        if total_bytes == 0 || total_bytes > self.framebuffer_len || scroll_bytes >= total_bytes {
+        if total_bytes == 0
+            || total_bytes > self.framebuffer_len
+            || scroll_bytes >= total_bytes
+            || visible_row_bytes == 0
+            || visible_row_bytes > self.pitch
+        {
             self.clear_screen();
             return;
         }
 
-        let move_bytes = total_bytes.saturating_sub(scroll_bytes);
-        // SAFETY: The mapped framebuffer is contiguous for `framebuffer_len` bytes,
-        // and both source/destination ranges are within that region.
-        unsafe {
-            ptr::copy(
-                self.framebuffer.add(scroll_bytes),
-                self.framebuffer,
-                move_bytes,
-            );
+        let move_rows = self.text_height.saturating_sub(scroll_pixels);
+        if visible_row_bytes == self.pitch {
+            let move_bytes = total_bytes.saturating_sub(scroll_bytes);
+            // SAFETY: The mapped framebuffer is contiguous for `framebuffer_len` bytes,
+            // and both source/destination ranges are within that region.
+            unsafe {
+                ptr::copy(
+                    self.framebuffer.add(scroll_bytes),
+                    self.framebuffer,
+                    move_bytes,
+                );
+            }
+        } else {
+            // Copy only visible pixels when pitch includes right-side padding.
+            // This reduces per-scroll bandwidth significantly on padded modes.
+            for row in 0..move_rows {
+                let Some(dst_off) = row.checked_mul(self.pitch) else {
+                    self.clear_screen();
+                    return;
+                };
+                let Some(src_row) = row.checked_add(scroll_pixels) else {
+                    self.clear_screen();
+                    return;
+                };
+                let Some(src_off) = src_row.checked_mul(self.pitch) else {
+                    self.clear_screen();
+                    return;
+                };
+                // SAFETY: Source/destination are inside mapped framebuffer, row regions
+                // do not overlap for this direction, and `visible_row_bytes` is bounded.
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        self.framebuffer.add(src_off),
+                        self.framebuffer.add(dst_off),
+                        visible_row_bytes,
+                    );
+                }
+            }
         }
 
         self.fill_rect(
             0,
-            self.height.saturating_sub(scroll_pixels),
+            self.text_height.saturating_sub(scroll_pixels),
             self.width,
             scroll_pixels,
             BG_COLOR,
@@ -1707,18 +1788,56 @@ impl HdmiTextSink {
         let glyph = BASIC_LEGACY[usize::from(byte.min(0x7F))];
         let x0 = self.col.saturating_mul(CHAR_WIDTH);
         let y0 = self.row.saturating_mul(CHAR_HEIGHT);
+        if x0.saturating_add(CHAR_WIDTH) > self.width
+            || y0.saturating_add(CHAR_HEIGHT) > self.height
+        {
+            self.fill_rect(x0, y0, CHAR_WIDTH, CHAR_HEIGHT, BG_COLOR);
+            for (gy, bits) in glyph.iter().enumerate() {
+                for gx in 0..CHAR_WIDTH {
+                    if ((bits >> gx) & 1) == 0 {
+                        continue;
+                    }
+                    let x = x0.saturating_add(gx);
+                    let y = y0.saturating_add(gy.saturating_mul(2));
+                    self.put_pixel(x, y, FG_COLOR);
+                    self.put_pixel(x, y.saturating_add(1), FG_COLOR);
+                }
+            }
+            return;
+        }
 
         self.fill_rect(x0, y0, CHAR_WIDTH, CHAR_HEIGHT, BG_COLOR);
+        let Some(x0_bytes) = x0.checked_mul(FB_BYTES_PER_PIXEL) else {
+            return;
+        };
 
         for (gy, bits) in glyph.iter().enumerate() {
-            for gx in 0..8 {
+            let Some(y_upper) = y0.checked_add(gy.saturating_mul(2)) else {
+                continue;
+            };
+            let Some(row0_off) = y_upper
+                .checked_mul(self.pitch)
+                .and_then(|off| off.checked_add(x0_bytes))
+            else {
+                continue;
+            };
+            let Some(row1_off) = row0_off.checked_add(self.pitch) else {
+                continue;
+            };
+            // SAFETY: Bounds were prevalidated for this character cell and offsets
+            // stay within mapped framebuffer for both duplicated glyph rows.
+            let row0 = unsafe { self.framebuffer.add(row0_off) as *mut u32 };
+            // SAFETY: Same as row0 pointer rationale.
+            let row1 = unsafe { self.framebuffer.add(row1_off) as *mut u32 };
+            for gx in 0..CHAR_WIDTH {
                 if ((bits >> gx) & 1) == 0 {
                     continue;
                 }
-                let x = x0.saturating_add(gx);
-                let y = y0.saturating_add(gy.saturating_mul(2));
-                self.put_pixel(x, y, FG_COLOR);
-                self.put_pixel(x, y.saturating_add(1), FG_COLOR);
+                // SAFETY: `gx < CHAR_WIDTH` and the char cell lies within bounds.
+                unsafe {
+                    ptr::write(row0.add(gx), FG_COLOR);
+                    ptr::write(row1.add(gx), FG_COLOR);
+                }
             }
         }
     }
@@ -1730,10 +1849,33 @@ impl HdmiTextSink {
     fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
         let x_end = cmp::min(self.width, x.saturating_add(w));
         let y_end = cmp::min(self.height, y.saturating_add(h));
+        if x >= x_end || y >= y_end {
+            return;
+        }
+        let Some(start_bytes) = x.checked_mul(FB_BYTES_PER_PIXEL) else {
+            return;
+        };
+        let pixels = x_end.saturating_sub(x);
         for yy in y..y_end {
-            for xx in x..x_end {
-                self.put_pixel(xx, yy, color);
+            let Some(row_off) = yy
+                .checked_mul(self.pitch)
+                .and_then(|off| off.checked_add(start_bytes))
+            else {
+                return;
+            };
+            let Some(row_end) = row_off.checked_add(pixels.saturating_mul(FB_BYTES_PER_PIXEL))
+            else {
+                return;
+            };
+            if row_end > self.framebuffer_len {
+                return;
             }
+            // SAFETY: Row window lies within mapped framebuffer and contains `pixels`
+            // tightly packed u32 pixels.
+            let row = unsafe {
+                core::slice::from_raw_parts_mut(self.framebuffer.add(row_off) as *mut u32, pixels)
+            };
+            row.fill(color);
         }
     }
 
@@ -1766,7 +1908,7 @@ impl HdmiTextSink {
         };
         // SAFETY: `framebuffer` is a mapped writable frame buffer and bounds were checked.
         unsafe {
-            ptr::write_volatile(addr, color);
+            ptr::write(addr, color);
         }
     }
 }
@@ -2770,37 +2912,404 @@ impl UsbKeyboard {
         saw_keyboard_init_error: &mut bool,
     ) -> Option<HidDevice<SeatDma>> {
         let interfaces = find_hid_interfaces(config_blob);
-        for (iface, ep_in) in interfaces {
-            if iface.interface_subclass != hid_subclass::BOOT
-                || iface.interface_protocol != hid_protocol::KEYBOARD
-            {
-                continue;
-            }
-            let hid = match HidDevice::from_interface(device.clone(), &iface, &ep_in) {
-                Ok(hid) => hid,
-                Err(_) => {
-                    *saw_keyboard_init_error = true;
+        let mut protocol_none_candidates = Vec::<(
+            usb_oxide::InterfaceDesc,
+            usb_oxide::EndpointDesc,
+            Option<bool>,
+        )>::new();
+
+        for attach_rank in 0..=1 {
+            for (iface, ep_in) in &interfaces {
+                let Some(candidate_rank) =
+                    hid_keyboard_attach_rank(iface.interface_subclass, iface.interface_protocol)
+                else {
+                    continue;
+                };
+                if candidate_rank == 2 {
+                    if attach_rank == 0 {
+                        let hint = Self::hid_report_descriptor_keyboard_hint(
+                            device.as_ref(),
+                            config_blob,
+                            iface.interface_number,
+                        );
+                        if hint == Some(false) {
+                            let mut line = heapless::String::<256>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] usb hid candidate skip slot={} iface={} ep=0x{:02x} source=protocol-none-fallback reason=report-desc-not-keyboard",
+                                    device.slot_id(),
+                                    iface.interface_number,
+                                    ep_in.endpoint_address,
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                        }
+                        protocol_none_candidates.push((*iface, *ep_in, hint));
+                    }
                     continue;
                 }
-            };
-            if hid.queue_read().is_err() {
-                *saw_keyboard_init_error = true;
-                continue;
+                if candidate_rank != attach_rank {
+                    continue;
+                }
+                let source = hid_keyboard_attach_source(candidate_rank);
+                let require_boot_switch = candidate_rank != 0;
+                let force_keyboard_mode = candidate_rank != 0;
+                let track_failures = candidate_rank != 2;
+                if let Some(hid) = Self::try_attach_hid_keyboard_candidate(
+                    device.clone(),
+                    *iface,
+                    *ep_in,
+                    source,
+                    require_boot_switch,
+                    force_keyboard_mode,
+                    track_failures,
+                    saw_keyboard_init_error,
+                ) {
+                    return Some(hid);
+                }
             }
-            let mut line = heapless::String::<208>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] usb hid keyboard ready slot={} iface={} ep=0x{:02x}",
-                    device.slot_id(),
-                    iface.interface_number,
-                    ep_in.endpoint_address
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-            return Some(hid);
+        }
+
+        for prefer_hint in [true, false] {
+            for (iface, ep_in, hint) in &protocol_none_candidates {
+                if matches!(hint, Some(false)) {
+                    continue;
+                }
+                if prefer_hint {
+                    if !matches!(hint, Some(true)) {
+                        continue;
+                    }
+                } else if hint.is_some() {
+                    continue;
+                }
+                if let Some(hid) = Self::try_attach_hid_keyboard_candidate(
+                    device.clone(),
+                    *iface,
+                    *ep_in,
+                    hid_keyboard_attach_source(2),
+                    true,
+                    true,
+                    false,
+                    saw_keyboard_init_error,
+                ) {
+                    return Some(hid);
+                }
+            }
         }
         None
+    }
+
+    fn hid_report_desc_length_for_interface(
+        config_blob: &[u8],
+        interface_number: u8,
+    ) -> Option<u16> {
+        let mut offset = 0usize;
+        let mut in_target_interface = false;
+        while offset + 2 <= config_blob.len() {
+            let len = config_blob[offset] as usize;
+            let dtype = config_blob[offset + 1];
+            if len == 0 || offset + len > config_blob.len() {
+                break;
+            }
+
+            if dtype == desc_type::INTERFACE && len >= mem::size_of::<usb_oxide::InterfaceDesc>() {
+                // SAFETY: Interface descriptor bytes may be unaligned in the
+                // configuration blob.
+                let iface = unsafe {
+                    ptr::read_unaligned(
+                        config_blob
+                            .as_ptr()
+                            .add(offset)
+                            .cast::<usb_oxide::InterfaceDesc>(),
+                    )
+                };
+                in_target_interface = iface.interface_class == class::HID
+                    && iface.interface_number == interface_number;
+            } else if in_target_interface && dtype == desc_type::HID && len >= 9 {
+                // SAFETY: HID descriptor bytes may be unaligned in the
+                // configuration blob.
+                let hid_desc = unsafe {
+                    ptr::read_unaligned(config_blob.as_ptr().add(offset).cast::<HidDesc>())
+                };
+                if hid_desc.report_desc_type == desc_type::HID_REPORT
+                    && hid_desc.report_desc_length > 0
+                {
+                    return Some(hid_desc.report_desc_length);
+                }
+            }
+
+            offset += len;
+        }
+        None
+    }
+
+    fn hid_usage_indicates_keyboard(usage_page: u32, usage: u32) -> bool {
+        (usage_page == 0x01 && usage == 0x06)
+            || (usage_page == 0x07 && (0x04..=0xE7).contains(&usage))
+    }
+
+    fn hid_usage_range_indicates_keyboard(usage_page: u32, min_usage: u32, max_usage: u32) -> bool {
+        if max_usage < min_usage {
+            return false;
+        }
+        if usage_page == 0x01 {
+            return min_usage <= 0x06 && max_usage >= 0x06;
+        }
+        if usage_page == 0x07 {
+            return min_usage <= 0xE7 && max_usage >= 0x04;
+        }
+        false
+    }
+
+    fn hid_report_descriptor_is_keyboard(report_desc: &[u8]) -> bool {
+        let mut offset = 0usize;
+        let mut usage_page = 0u32;
+        let mut local_keyboard_usage = false;
+        let mut local_usage_min: Option<(u32, u32)> = None;
+        while offset < report_desc.len() {
+            let prefix = report_desc[offset];
+            offset = offset.saturating_add(1);
+            if prefix == 0xFE {
+                if offset + 2 > report_desc.len() {
+                    break;
+                }
+                let long_size = report_desc[offset] as usize;
+                offset = offset.saturating_add(2);
+                if offset + long_size > report_desc.len() {
+                    break;
+                }
+                offset = offset.saturating_add(long_size);
+                continue;
+            }
+
+            let data_len = match prefix & 0x03 {
+                0 => 0usize,
+                1 => 1usize,
+                2 => 2usize,
+                _ => 4usize,
+            };
+            if offset + data_len > report_desc.len() {
+                break;
+            }
+
+            let data = match data_len {
+                0 => 0u32,
+                1 => report_desc[offset] as u32,
+                2 => u16::from_le_bytes([report_desc[offset], report_desc[offset + 1]]) as u32,
+                _ => u32::from_le_bytes([
+                    report_desc[offset],
+                    report_desc[offset + 1],
+                    report_desc[offset + 2],
+                    report_desc[offset + 3],
+                ]),
+            };
+            offset = offset.saturating_add(data_len);
+
+            let item_type = (prefix >> 2) & 0x03;
+            let tag = (prefix >> 4) & 0x0f;
+            match item_type {
+                0x01 => {
+                    if tag == 0x00 {
+                        usage_page = data;
+                    }
+                }
+                0x02 => match tag {
+                    0x00 => {
+                        if Self::hid_usage_indicates_keyboard(usage_page, data) {
+                            local_keyboard_usage = true;
+                        }
+                    }
+                    0x01 => {
+                        local_usage_min = Some((usage_page, data));
+                    }
+                    0x02 => {
+                        if let Some((range_page, min_usage)) = local_usage_min.take() {
+                            if Self::hid_usage_range_indicates_keyboard(range_page, min_usage, data)
+                            {
+                                local_keyboard_usage = true;
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                0x00 => {
+                    if tag == 0x0A {
+                        // Application Collection
+                        if (data & 0xff) == 0x01 && local_keyboard_usage {
+                            return true;
+                        }
+                    }
+                    // Local items apply only to the next main item.
+                    local_keyboard_usage = false;
+                    local_usage_min = None;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn hid_report_descriptor_keyboard_hint(
+        device: &UsbDevice<SeatDma>,
+        config_blob: &[u8],
+        interface_number: u8,
+    ) -> Option<bool> {
+        let report_len = Self::hid_report_desc_length_for_interface(config_blob, interface_number)
+            .map(|len| len as usize)
+            .unwrap_or(HID_REPORT_DESC_MAX_BYTES);
+        let request_len = cmp::min(report_len.max(64), HID_REPORT_DESC_MAX_BYTES);
+        if request_len == 0 {
+            return None;
+        }
+
+        let mut report_desc = alloc::vec![0u8; request_len];
+        let setup = SetupPacket::new(
+            0x81,
+            request::GET_DESCRIPTOR,
+            (desc_type::HID_REPORT as u16) << 8,
+            interface_number as u16,
+            request_len as u16,
+        );
+        let transferred = match device.control_transfer_with_wait_spins(
+            &setup,
+            Some(report_desc.as_mut_slice()),
+            HUB_CLASS_CONTROL_WAIT_SPINS,
+        ) {
+            Ok(transferred) => transferred,
+            Err(err) => {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] usb hid report-desc read failed slot={} iface={} detail={err:?}",
+                        device.slot_id(),
+                        interface_number
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return None;
+            }
+        };
+        let used = cmp::min(transferred, report_desc.len());
+        if used == 0 {
+            return None;
+        }
+        let is_keyboard = Self::hid_report_descriptor_is_keyboard(&report_desc[..used]);
+        let mut line = heapless::String::<256>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] usb hid report-desc slot={} iface={} bytes={} keyboard_hint={}",
+                device.slot_id(),
+                interface_number,
+                used,
+                is_keyboard as u8,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        Some(is_keyboard)
+    }
+
+    fn try_attach_hid_keyboard_candidate(
+        device: Arc<UsbDevice<SeatDma>>,
+        iface: usb_oxide::InterfaceDesc,
+        ep_in: usb_oxide::EndpointDesc,
+        source: &str,
+        require_boot_switch: bool,
+        force_keyboard_mode: bool,
+        track_failures: bool,
+        saw_keyboard_init_error: &mut bool,
+    ) -> Option<HidDevice<SeatDma>> {
+        let mut hid = match HidDevice::from_interface(device.clone(), &iface, &ep_in) {
+            Ok(hid) => hid,
+            Err(err) => {
+                if track_failures {
+                    *saw_keyboard_init_error = true;
+                }
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] usb hid attach failed slot={} iface={} ep=0x{:02x} source={} detail={err:?}",
+                        device.slot_id(),
+                        iface.interface_number,
+                        ep_in.endpoint_address,
+                        source,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return None;
+            }
+        };
+        let mut report_layout = "boot";
+        if require_boot_switch {
+            match hid.set_protocol(0) {
+                Ok(()) => {}
+                Err(_) if force_keyboard_mode => {
+                    // Non-boot keyboard candidates may only support report protocol.
+                    // Keep a compatibility path that treats the first input byte
+                    // as report ID.
+                    report_layout = "report-id";
+                    let mut line = heapless::String::<288>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] usb hid boot-switch failed slot={} iface={} ep=0x{:02x} source={} fallback=report-id",
+                            device.slot_id(),
+                            iface.interface_number,
+                            ep_in.endpoint_address,
+                            source,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    hid = hid.into_forced_keyboard_with_report_id();
+                }
+                Err(_) => {
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] usb hid boot-switch failed slot={} iface={} ep=0x{:02x} source={}",
+                            device.slot_id(),
+                            iface.interface_number,
+                            ep_in.endpoint_address,
+                            source,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    if track_failures {
+                        *saw_keyboard_init_error = true;
+                    }
+                    return None;
+                }
+            }
+        }
+        if force_keyboard_mode && report_layout == "boot" {
+            hid = hid.into_forced_keyboard();
+        }
+        if hid.queue_read().is_err() {
+            if track_failures {
+                *saw_keyboard_init_error = true;
+            }
+            return None;
+        }
+        let mut line = heapless::String::<256>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] usb hid keyboard ready slot={} iface={} ep=0x{:02x} source={} layout={} subclass=0x{:02x} protocol=0x{:02x}",
+                device.slot_id(),
+                iface.interface_number,
+                ep_in.endpoint_address,
+                source,
+                report_layout,
+                iface.interface_subclass,
+                iface.interface_protocol
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        Some(hid)
     }
 
     fn hub_interface_info(device_desc: DeviceDesc, config_blob: &[u8]) -> Option<HubInterfaceInfo> {
@@ -3098,7 +3607,7 @@ impl UsbKeyboard {
                     downstream_port,
                     "pre-reset",
                 );
-                let _ = Self::hub_prepare_port_without_status(
+                let prepared = Self::hub_prepare_port_without_status(
                     device.as_ref(),
                     hub_interface_number,
                     hub_protocol_code,
@@ -3106,6 +3615,24 @@ impl UsbKeyboard {
                     downstream_port,
                     reset_feature,
                 );
+                if !prepared {
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] hub blind-probe fallback slot={} port={} reason=prepare-failed source=pre-status-unavailable",
+                            device.slot_id(),
+                            downstream_port,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    Self::log_hub_port_terminal(
+                        device.slot_id(),
+                        downstream_port,
+                        "pre-status-unavailable-no-prepare",
+                    );
+                    continue;
+                }
                 blind_probe_attempted = blind_probe_attempted.saturating_add(1);
                 match Self::probe_hub_child_without_port_status(
                     &device,
@@ -4136,6 +4663,11 @@ impl UsbKeyboard {
         power_mode == 0 || power_mode == 1
     }
 
+    #[inline]
+    const fn hub_should_eager_port_power(power_mode: u8) -> bool {
+        HUB_EAGER_INDIVIDUAL_PORT_POWER && power_mode == 1
+    }
+
     fn recover_disconnected_hub_port(
         device: &UsbDevice<SeatDma>,
         hub_interface_number: u8,
@@ -4299,10 +4831,10 @@ impl UsbKeyboard {
         pwr_on_2_pwr_good: u8,
     ) {
         let mut powered_ports = 0usize;
-        // Only individual-switched hubs (mode 1) are powered eagerly here.
-        // Ganged hubs (mode 0) are power-kicked on-demand when a downstream
-        // port reports disconnected + unpowered during scan.
-        if power_mode == 1 {
+        let mut power_short_circuit = false;
+        // Eager per-port power can stall some downstream hubs during bring-up.
+        // Default to deferred power and keep this path behind an explicit opt-in.
+        if Self::hub_should_eager_port_power(power_mode) {
             for downstream in 1..=max_ports {
                 let port = downstream as u8;
                 if Self::hub_set_feature_with_retry(
@@ -4314,13 +4846,31 @@ impl UsbKeyboard {
                     HUB_SET_FEATURE_RETRIES,
                 ) {
                     powered_ports = powered_ports.saturating_add(1);
+                    continue;
                 }
+                power_short_circuit = true;
+                let skipped_ports = max_ports.saturating_sub(downstream);
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub power control short-circuit slot={} iface={} mode={} failed_port={} accepted_ports={} skipped_ports={}",
+                        device.slot_id(),
+                        hub_interface_number,
+                        power_mode,
+                        port,
+                        powered_ports,
+                        skipped_ports
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                break;
             }
         } else {
-            let reason = if power_mode == 0 {
-                "ganged-port-power-deferred"
-            } else {
-                "no-port-power-switching"
+            let reason = match power_mode {
+                0 => "ganged-port-power-deferred",
+                1 => "individual-port-power-deferred",
+                _ => "no-port-power-switching",
             };
             let mut line = heapless::String::<224>::new();
             let _ = core::fmt::Write::write_fmt(
@@ -4349,6 +4899,19 @@ impl UsbKeyboard {
             ),
         );
         boot_log::force_uart_line(line.as_str());
+        if power_short_circuit {
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] hub power control fallback slot={} iface={} mode={} detail=continue-without-full-port-power",
+                    device.slot_id(),
+                    hub_interface_number,
+                    power_mode
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
 
         let pwr_good_ms = (pwr_on_2_pwr_good as u64).saturating_mul(2);
         wait_ms(cmp::max(pwr_good_ms, HUB_POWER_SETTLE_MIN_MS));
@@ -4412,7 +4975,7 @@ impl UsbKeyboard {
         reset_feature: u16,
     ) -> bool {
         let mut prepared = false;
-        if Self::hub_mode_supports_port_power(hub_power_mode)
+        if Self::hub_should_eager_port_power(hub_power_mode)
             && Self::hub_set_feature_with_retry(
                 device,
                 hub_interface_number,
@@ -4431,7 +4994,7 @@ impl UsbKeyboard {
             port,
             reset_feature,
             "blind-reset",
-            HUB_SET_FEATURE_RETRIES,
+            HUB_BLIND_PREPARE_RESET_RETRIES,
         ) {
             prepared = true;
             wait_ms(HUB_RESET_SETTLE_MS);
@@ -5014,7 +5577,7 @@ impl UsbKeyboard {
                 }
                 continue;
             }
-            if let Some(ch) = scancode_to_ascii(key, shift) {
+            if let Some(ch) = keyboard_scancode_to_char(key, shift) {
                 if written >= out.len() {
                     break;
                 }
@@ -5613,6 +6176,55 @@ fn framebuffer_phys_window_safe(fb_phys: usize, fb_size: usize) -> bool {
 }
 
 #[inline]
+const fn mailbox_visible_dimension(phys: usize, virt: usize) -> Option<usize> {
+    if phys == 0 {
+        if virt == 0 {
+            None
+        } else {
+            Some(virt)
+        }
+    } else if virt == 0 {
+        Some(phys)
+    } else if phys < virt {
+        Some(phys)
+    } else {
+        Some(virt)
+    }
+}
+
+#[inline]
+const fn clamp_visible_width(width: usize, pitch: usize) -> usize {
+    if width == 0 || pitch == 0 {
+        return 0;
+    }
+    let pitch_pixels = pitch / FB_BYTES_PER_PIXEL;
+    if pitch_pixels == 0 {
+        return 0;
+    }
+    if width > pitch_pixels {
+        pitch_pixels
+    } else {
+        width
+    }
+}
+
+#[inline]
+const fn clamp_visible_height(height: usize, pitch: usize, fb_size: usize) -> usize {
+    if height == 0 || pitch == 0 || fb_size == 0 {
+        return 0;
+    }
+    let max_rows = fb_size / pitch;
+    if max_rows == 0 {
+        return 0;
+    }
+    if height > max_rows {
+        max_rows
+    } else {
+        height
+    }
+}
+
+#[inline]
 const fn div_ceil(value: usize, divisor: usize) -> usize {
     if value == 0 {
         0
@@ -5643,15 +6255,78 @@ fn route_depth(route: u32) -> u8 {
 }
 
 #[inline]
-const fn normalize_hub_tt_profile(
-    downstream_port: u8,
-    _hub_multi_tt: bool,
-    hub_tt_think_time: u8,
-) -> (u8, u8) {
-    let tt_port = if downstream_port == 0 {
+const fn hid_keyboard_attach_rank(interface_subclass: u8, interface_protocol: u8) -> Option<u8> {
+    if interface_subclass == hid_subclass::BOOT && interface_protocol == hid_protocol::KEYBOARD {
+        // Strict USB HID Boot keyboard interface (preferred).
+        Some(0)
+    } else if interface_protocol == hid_protocol::KEYBOARD {
+        // Keyboard protocol advertised but not boot subclass.
+        Some(1)
+    } else if interface_protocol == hid_protocol::NONE {
+        // Legacy/vendor keyboards may hide behind protocol NONE; attempt only
+        // after explicit keyboard protocol candidates fail.
+        Some(2)
+    } else {
+        None
+    }
+}
+
+#[inline]
+const fn hid_keyboard_attach_source(rank: u8) -> &'static str {
+    match rank {
+        0 => "boot-keyboard",
+        1 => "keyboard-protocol",
+        2 => "protocol-none-fallback",
+        _ => "unknown",
+    }
+}
+
+#[inline]
+const fn text_row_count(height: usize) -> usize {
+    let rows = height / CHAR_HEIGHT;
+    if rows == 0 {
         1
     } else {
-        downstream_port
+        rows
+    }
+}
+
+#[inline]
+const fn text_viewport_height(height: usize, rows: usize) -> usize {
+    let viewport = rows.saturating_mul(CHAR_HEIGHT);
+    if viewport > height {
+        height
+    } else {
+        viewport
+    }
+}
+
+#[inline]
+fn keyboard_scancode_to_char(key: u8, shift: bool) -> Option<char> {
+    if key == scancode::KP_ENTER {
+        Some('\n')
+    } else {
+        scancode_to_ascii(key, shift)
+    }
+}
+
+#[inline]
+const fn normalize_hub_tt_profile(
+    downstream_port: u8,
+    hub_multi_tt: bool,
+    hub_tt_think_time: u8,
+) -> (u8, u8) {
+    // xHCI TT Port Number semantics:
+    // - Single-TT hub: must be 1
+    // - Multi-TT hub:  downstream port number
+    let tt_port = if hub_multi_tt {
+        if downstream_port == 0 {
+            1
+        } else {
+            downstream_port
+        }
+    } else {
+        1
     };
     let tt_ttt_raw = hub_tt_think_time & 0x03;
     let tt_ttt = if tt_ttt_raw > 2 { 2 } else { tt_ttt_raw };
@@ -5704,10 +6379,13 @@ fn validate_framebuffer_geometry(
 #[cfg(test)]
 mod tests {
     use super::{
-        config_value_for_set, decode_pci_mmio_bar, normalize_hub_tt_profile,
-        vl805_runtime_cfg_touch_allowed, ConfigDesc,
+        clamp_visible_height, clamp_visible_width, config_value_for_set, decode_pci_mmio_bar,
+        hid_keyboard_attach_rank, hid_keyboard_attach_source, hub_should_eager_port_power,
+        keyboard_scancode_to_char, mailbox_visible_dimension, normalize_hub_tt_profile,
+        text_row_count, text_viewport_height, vl805_runtime_cfg_touch_allowed, ConfigDesc,
+        UsbKeyboard,
     };
-    use super::HUB_CLASS_CONTROL_WAIT_SPINS;
+    use super::{hid_protocol, hid_subclass, scancode, CHAR_HEIGHT, HUB_CLASS_CONTROL_WAIT_SPINS};
 
     #[test]
     fn decode_pci_mmio_bar_rejects_io_bar() {
@@ -5760,8 +6438,8 @@ mod tests {
     }
 
     #[test]
-    fn normalize_hub_tt_profile_preserves_single_tt_port_and_clamps_ttt() {
-        assert_eq!(normalize_hub_tt_profile(4, false, 1), (4, 1));
+    fn normalize_hub_tt_profile_forces_single_tt_port_one_and_clamps_ttt() {
+        assert_eq!(normalize_hub_tt_profile(4, false, 1), (1, 1));
         assert_eq!(normalize_hub_tt_profile(0, false, 3), (1, 2));
     }
 
@@ -5772,7 +6450,107 @@ mod tests {
     }
 
     #[test]
+    fn hid_report_descriptor_detects_keyboard_application_collection() {
+        let keyboard_desc = [0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0xC0];
+        assert!(UsbKeyboard::hid_report_descriptor_is_keyboard(
+            &keyboard_desc
+        ));
+    }
+
+    #[test]
+    fn hid_report_descriptor_rejects_mouse_application_collection() {
+        let mouse_desc = [0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0xC0];
+        assert!(!UsbKeyboard::hid_report_descriptor_is_keyboard(&mouse_desc));
+    }
+
+    #[test]
     fn hub_class_control_wait_budget_matches_default_control_budget() {
         assert_eq!(HUB_CLASS_CONTROL_WAIT_SPINS, 20_000_000);
+    }
+
+    #[test]
+    fn hub_port_power_is_deferred_by_default() {
+        assert!(!hub_should_eager_port_power(0));
+        assert!(!hub_should_eager_port_power(1));
+    }
+
+    #[test]
+    fn mailbox_visible_dimension_prefers_non_zero_and_minimum() {
+        assert_eq!(mailbox_visible_dimension(0, 0), None);
+        assert_eq!(mailbox_visible_dimension(0, 1080), Some(1080));
+        assert_eq!(mailbox_visible_dimension(1920, 0), Some(1920));
+        assert_eq!(mailbox_visible_dimension(1920, 1080), Some(1080));
+        assert_eq!(mailbox_visible_dimension(1080, 1920), Some(1080));
+    }
+
+    #[test]
+    fn clamp_visible_width_respects_pitch_capacity() {
+        assert_eq!(clamp_visible_width(1920, 1920 * 4), 1920);
+        assert_eq!(clamp_visible_width(1920, 1280 * 4), 1280);
+        assert_eq!(clamp_visible_width(640, 0), 0);
+    }
+
+    #[test]
+    fn clamp_visible_height_respects_allocation_capacity() {
+        assert_eq!(clamp_visible_height(1080, 4096, 4096 * 1080), 1080);
+        assert_eq!(clamp_visible_height(1080, 4096, 4096 * 720), 720);
+        assert_eq!(clamp_visible_height(720, 0, 4096 * 720), 0);
+    }
+
+    #[test]
+    fn text_viewport_rounds_down_to_full_text_rows() {
+        let rows = text_row_count(1080);
+        assert_eq!(rows, 67);
+        assert_eq!(text_viewport_height(1080, rows), rows * CHAR_HEIGHT);
+    }
+
+    #[test]
+    fn text_viewport_keeps_single_row_for_small_framebuffers() {
+        let rows = text_row_count(8);
+        assert_eq!(rows, 1);
+        assert_eq!(text_viewport_height(8, rows), 8);
+    }
+
+    #[test]
+    fn keypad_enter_maps_to_newline() {
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::KP_ENTER, false),
+            Some('\n')
+        );
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::KP_ENTER, true),
+            Some('\n')
+        );
+    }
+
+    #[test]
+    fn hid_keyboard_attach_rank_prefers_boot_keyboard() {
+        assert_eq!(
+            hid_keyboard_attach_rank(hid_subclass::BOOT, hid_protocol::KEYBOARD),
+            Some(0)
+        );
+        assert_eq!(hid_keyboard_attach_source(0), "boot-keyboard");
+    }
+
+    #[test]
+    fn hid_keyboard_attach_rank_accepts_relaxed_keyboard_candidates() {
+        assert_eq!(
+            hid_keyboard_attach_rank(hid_subclass::NONE, hid_protocol::KEYBOARD),
+            Some(1)
+        );
+        assert_eq!(
+            hid_keyboard_attach_rank(hid_subclass::NONE, hid_protocol::NONE),
+            Some(2)
+        );
+        assert_eq!(hid_keyboard_attach_source(1), "keyboard-protocol");
+        assert_eq!(hid_keyboard_attach_source(2), "protocol-none-fallback");
+    }
+
+    #[test]
+    fn hid_keyboard_attach_rank_rejects_non_keyboard_protocols() {
+        assert_eq!(
+            hid_keyboard_attach_rank(hid_subclass::BOOT, hid_protocol::MOUSE),
+            None
+        );
     }
 }
