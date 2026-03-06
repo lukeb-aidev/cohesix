@@ -16,7 +16,7 @@ use core::fmt;
 use core::hint::spin_loop;
 use core::ops::Range;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{compiler_fence, fence, Ordering};
 
 use heapless::Vec as HeaplessVec;
 use log::{debug, info, warn};
@@ -120,7 +120,8 @@ const ADVERTISE_1000HALF: u16 = 0x0100;
 const ADVERTISE_1000FULL: u16 = 0x0200;
 const LPA_1000HALF: u16 = 0x0400;
 const LPA_1000FULL: u16 = 0x0800;
-const PHY_LINK_POLL_TRIES: usize = 200_000;
+const PHY_LINK_POLL_TRIES: usize = 2_000;
+const PHY_LINK_POLL_DELAY_SPINS: usize = 50_000;
 
 const DMA_EN: u32 = 1 << 0;
 const DMA_RING_BUF_EN_SHIFT: u32 = 1;
@@ -171,6 +172,9 @@ const TX_STALL_LOG_POLL_THRESHOLD: u32 = 8_192;
 const TX_BACKPRESSURE_LOG_POLL_THRESHOLD: u32 = 8_192;
 const TX_DROP_LOG_INTERVAL: u32 = 512;
 const RX_IDLE_LOG_POLL_THRESHOLD: u32 = 65_536;
+const BCMGENET_DMA_UNCACHED: bool = true;
+// Pi4 UEFI + bcmgenet on this path expects physical DMA addresses (no VC alias).
+const GENET_DMA_USE_BUS_ALIAS: bool = false;
 const GENET_DMA_BUS_ALIAS_BASE: u64 = 0xC000_0000;
 const GENET_DMA_ALIAS_WINDOW_BYTES: u64 = 0x4000_0000;
 
@@ -289,6 +293,7 @@ pub struct BcmGenetDevice {
     rx_cons_index: u16,
     rx_ready: HeaplessVec<HeaplessVec<u8, MAX_FRAME_LEN>, RX_READY_CAP>,
     mac: EthernetAddress,
+    dma_cacheable: bool,
     tx_drops: u32,
     counters: NetDeviceCounters,
     tx_stall_polls: u32,
@@ -318,18 +323,27 @@ impl BcmGenetDevice {
         H: Hardware<Error = HalError>,
     {
         let (mmio_base, regs) = Self::map_registers(hal)?;
+        let dma_attr = if BCMGENET_DMA_UNCACHED {
+            sel4_sys::seL4_ARM_Page_Uncached
+        } else {
+            sel4_sys::seL4_ARM_Page_Default
+        };
+        let dma_cacheable = !BCMGENET_DMA_UNCACHED;
         let mut rx_frames = HeaplessVec::new();
         let mut tx_frames = HeaplessVec::new();
         for _ in 0..RX_RING_DESCS {
             rx_frames
-                .push(hal.alloc_dma_frame_low()?)
+                .push(hal.alloc_dma_frame_low_attr(dma_attr)?)
                 .map_err(|_| DriverError::QueueInit)?;
         }
         for _ in 0..TX_RING_DESCS {
             tx_frames
-                .push(hal.alloc_dma_frame_low()?)
+                .push(hal.alloc_dma_frame_low_attr(dma_attr)?)
                 .map_err(|_| DriverError::QueueInit)?;
         }
+        Self::validate_dma_frames(&rx_frames, &tx_frames)?;
+        let rx_range = Self::dma_frame_range(&rx_frames).ok_or(DriverError::QueueInit)?;
+        let tx_range = Self::dma_frame_range(&tx_frames).ok_or(DriverError::QueueInit)?;
 
         let mut device = Self {
             regs,
@@ -341,6 +355,7 @@ impl BcmGenetDevice {
             rx_cons_index: 0,
             rx_ready: HeaplessVec::new(),
             mac: EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x01]),
+            dma_cacheable,
             tx_drops: 0,
             counters: NetDeviceCounters::default(),
             tx_stall_polls: 0,
@@ -359,16 +374,110 @@ impl BcmGenetDevice {
         device.mac = device.read_or_default_mac();
         device.write_mac(device.mac);
         device.refresh_tx_counters();
+        let dma_attr_raw: usize = dma_attr as usize;
         info!(
-            "[bcmgenet] init complete mmio=0x{:016x} pages={} ring_frames={} mac={} tx_idx={} rx_idx={}",
+            "[bcmgenet][dma] attr=0x{:08x} cacheable={} rx=[0x{:016x}..0x{:016x}) tx=[0x{:016x}..0x{:016x})",
+            dma_attr_raw,
+            dma_cacheable,
+            rx_range.0,
+            rx_range.1,
+            tx_range.0,
+            tx_range.1,
+        );
+        info!(
+            "[bcmgenet] init complete mmio=0x{:016x} pages={} ring_frames={} mac={} tx_idx={} rx_idx={} dma_alias={} dma_cacheable={}",
             device.mmio_base,
             MMIO_PAGE_COUNT,
             TX_RING_DESCS,
             device.mac,
             device.tx_prod_index,
             device.rx_cons_index,
+            if GENET_DMA_USE_BUS_ALIAS {
+                "vc-0xc0000000"
+            } else {
+                "physical"
+            },
+            device.dma_cacheable,
         );
         Ok(device)
+    }
+
+    fn dma_frame_range<const N: usize>(frames: &HeaplessVec<RamFrame, N>) -> Option<(u64, u64)> {
+        let mut start = u64::MAX;
+        let mut end = 0u64;
+        for frame in frames.iter() {
+            let paddr = frame.paddr() as u64;
+            start = start.min(paddr);
+            end = end.max(paddr.saturating_add(PAGE_SIZE as u64));
+        }
+        if start == u64::MAX || end <= start {
+            None
+        } else {
+            Some((start, end))
+        }
+    }
+
+    fn validate_dma_frames(
+        rx_frames: &HeaplessVec<RamFrame, RX_RING_DESCS>,
+        tx_frames: &HeaplessVec<RamFrame, TX_RING_DESCS>,
+    ) -> Result<(), DriverError> {
+        let page_mask = (PAGE_SIZE as u64).saturating_sub(1);
+        for (idx, frame) in rx_frames.iter().enumerate() {
+            let paddr = frame.paddr() as u64;
+            let vaddr = frame.ptr().as_ptr() as usize;
+            if paddr == 0 || (paddr & page_mask) != 0 || (vaddr & (PAGE_SIZE - 1)) != 0 {
+                warn!(
+                    "[bcmgenet] invalid RX DMA frame idx={} paddr=0x{:016x} vaddr=0x{:016x}",
+                    idx, paddr, vaddr
+                );
+                return Err(DriverError::QueueInit);
+            }
+        }
+        for (idx, frame) in tx_frames.iter().enumerate() {
+            let paddr = frame.paddr() as u64;
+            let vaddr = frame.ptr().as_ptr() as usize;
+            if paddr == 0 || (paddr & page_mask) != 0 || (vaddr & (PAGE_SIZE - 1)) != 0 {
+                warn!(
+                    "[bcmgenet] invalid TX DMA frame idx={} paddr=0x{:016x} vaddr=0x{:016x}",
+                    idx, paddr, vaddr
+                );
+                return Err(DriverError::QueueInit);
+            }
+        }
+        for i in 0..rx_frames.len() {
+            let paddr_i = rx_frames[i].paddr() as u64;
+            for j in (i + 1)..rx_frames.len() {
+                if paddr_i == rx_frames[j].paddr() as u64 {
+                    warn!(
+                        "[bcmgenet] duplicate RX DMA frame paddr=0x{:016x} i={} j={}",
+                        paddr_i, i, j
+                    );
+                    return Err(DriverError::QueueInit);
+                }
+            }
+            for j in 0..tx_frames.len() {
+                if paddr_i == tx_frames[j].paddr() as u64 {
+                    warn!(
+                        "[bcmgenet] RX/TX DMA frame alias paddr=0x{:016x} rx={} tx={}",
+                        paddr_i, i, j
+                    );
+                    return Err(DriverError::QueueInit);
+                }
+            }
+        }
+        for i in 0..tx_frames.len() {
+            let paddr_i = tx_frames[i].paddr() as u64;
+            for j in (i + 1)..tx_frames.len() {
+                if paddr_i == tx_frames[j].paddr() as u64 {
+                    warn!(
+                        "[bcmgenet] duplicate TX DMA frame paddr=0x{:016x} i={} j={}",
+                        paddr_i, i, j
+                    );
+                    return Err(DriverError::QueueInit);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn map_registers<H>(
@@ -459,13 +568,28 @@ impl BcmGenetDevice {
     }
 
     fn init_umac(&mut self) {
-        let mut cmd = self.read_reg32(GENET_UMAC_CMD);
-        cmd &= !(CMD_TX_EN | CMD_RX_EN);
-        self.write_reg32(GENET_UMAC_CMD, cmd);
+        let mut flush = self.read_reg32(SYS_RBUF_FLUSH_CTRL);
+        flush |= 1 << 1;
+        self.write_reg32(SYS_RBUF_FLUSH_CTRL, flush);
+        for _ in 0..10_000 {
+            spin_loop();
+        }
+        flush &= !(1 << 1);
+        self.write_reg32(SYS_RBUF_FLUSH_CTRL, flush);
+        for _ in 0..10_000 {
+            spin_loop();
+        }
+        self.write_reg32(SYS_RBUF_FLUSH_CTRL, 0);
+        for _ in 0..10_000 {
+            spin_loop();
+        }
 
-        // Keep link speed/duplex state firmware selected and only reset datapath blocks.
+        self.write_reg32(GENET_UMAC_CMD, 0);
         self.write_reg32(GENET_UMAC_CMD, CMD_SW_RESET | CMD_LCL_LOOP_EN);
-        self.write_reg32(GENET_UMAC_CMD, cmd);
+        for _ in 0..2_000 {
+            spin_loop();
+        }
+        self.write_reg32(GENET_UMAC_CMD, 0);
         self.write_reg32(UMAC_MIB_CTRL, MIB_RESET_RX | MIB_RESET_TX | MIB_RESET_RUNT);
         self.write_reg32(UMAC_MIB_CTRL, 0);
         self.write_reg32(UMAC_MAX_FRAME_LEN, ENET_MAX_MTU_SIZE as u32);
@@ -483,10 +607,13 @@ impl BcmGenetDevice {
         oob |= RGMII_LINK | RGMII_MODE_EN | ID_MODE_DIS;
         self.write_reg32(EXT_RGMII_OOB_CTRL, oob);
 
+        // Keep PHY/MAC aligned even when autoneg takes longer at boot.
+        // A mismatched MAC speed can present as TX queue stalls + no RX.
         let mut speed = self.current_umac_speed();
         let initial_speed = speed;
         let mut link_up = false;
         let mut autoneg_complete = false;
+        let mut resolved_speed = None;
         if let Some(phy_addr) = self.discover_phy_addr() {
             if let Ok(bmcr) = self.mdio_read(phy_addr, MII_BMCR) {
                 if (bmcr & MII_BMCR_ANENABLE) == 0 {
@@ -501,31 +628,43 @@ impl BcmGenetDevice {
                 // BMSR link bit is latch-low, so read twice to observe current state.
                 let _ = self.mdio_read(phy_addr, MII_BMSR);
                 let Ok(status) = self.mdio_read(phy_addr, MII_BMSR) else {
+                    for _ in 0..PHY_LINK_POLL_DELAY_SPINS {
+                        spin_loop();
+                    }
                     continue;
                 };
                 link_up = (status & MII_BMSR_LSTATUS) != 0;
                 autoneg_complete = (status & MII_BMSR_ANEGCOMPLETE) != 0;
-                if link_up && autoneg_complete {
+                if let Some(resolved) = self.resolve_phy_speed(phy_addr) {
+                    resolved_speed = Some(resolved);
+                }
+                if link_up && (autoneg_complete || resolved_speed.is_some()) {
                     break;
                 }
-                spin_loop();
+                for _ in 0..PHY_LINK_POLL_DELAY_SPINS {
+                    spin_loop();
+                }
             }
 
-            if let Some(resolved) = self.resolve_phy_speed(phy_addr) {
+            if let Some(resolved) = resolved_speed {
                 speed = resolved;
+            } else if let Ok(bmcr) = self.mdio_read(phy_addr, MII_BMCR) {
+                speed = decode_bmcr_speed(bmcr);
+            } else if link_up {
+                // If link is up but speed cannot be resolved yet, prefer 1000M over
+                // stale/reset 10M to avoid a persistent MAC/PHY mismatch.
+                speed = UMAC_SPEED_1000;
             } else {
-                // Do not force speed from BMCR while autoneg is active:
-                // many PHYs leave BMCR speed bits at 10M defaults even when
-                // negotiated link speed is 100/1000, which can desync MAC/PHY.
                 speed = initial_speed;
             }
             info!(
-                "[bcmgenet] phy addr={} link_up={} autoneg={} speed={} fallback={}",
+                "[bcmgenet] phy addr={} link_up={} autoneg={} speed={} fallback={} resolved={}",
                 phy_addr,
                 link_up,
                 autoneg_complete,
                 speed_label(speed),
                 speed_label(initial_speed),
+                if resolved_speed.is_some() { 1 } else { 0 },
             );
         } else {
             warn!(
@@ -644,6 +783,9 @@ impl BcmGenetDevice {
         let rdma_ctrl = self.read_reg32(RDMA_REG_BASE + DMA_CTRL);
         self.write_reg32(RDMA_REG_BASE + DMA_CTRL, rdma_ctrl & !DMA_EN);
         self.write_reg32(UMAC_TX_FLUSH, 1);
+        for _ in 0..10_000 {
+            spin_loop();
+        }
         self.write_reg32(UMAC_TX_FLUSH, 0);
     }
 
@@ -661,7 +803,7 @@ impl BcmGenetDevice {
         self.write_reg32(RDMA_READ_PTR, 0);
         self.write_reg32(RDMA_WRITE_PTR, 0);
         self.write_reg32(RDMA_RING_REG_BASE + DMA_END_ADDR, ring_end_addr(ring_len));
-        let prod = ring_index(self.read_reg32(RDMA_PROD_INDEX) as u16, ring_len);
+        let prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
         self.rx_cons_index = prod;
         self.write_reg32(RDMA_CONS_INDEX, prod as u32);
         info!(
@@ -686,7 +828,7 @@ impl BcmGenetDevice {
         self.write_reg32(TDMA_READ_PTR, 0);
         self.write_reg32(TDMA_WRITE_PTR, 0);
         self.write_reg32(TDMA_RING_REG_BASE + DMA_END_ADDR, ring_end_addr(ring_len));
-        let cons = ring_index(self.read_reg32(TDMA_CONS_INDEX) as u16, ring_len);
+        let cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
         self.tx_cons_index = cons;
         self.tx_prod_index = cons;
         self.write_reg32(TDMA_PROD_INDEX, cons as u32);
@@ -791,33 +933,29 @@ impl BcmGenetDevice {
 
     fn refresh_tx_counters(&mut self) {
         let ring_len = self.tx_ring_len();
-        let ring_capacity = ring_len.saturating_sub(1);
-        let in_flight =
-            ring_distance_in_ring(self.tx_prod_index, self.tx_cons_index, ring_len) as usize;
-        if in_flight > ring_capacity {
+        let in_flight = ring_distance(self.tx_prod_index, self.tx_cons_index) as usize;
+        if in_flight > ring_len {
             self.counters.tx_invalid_used_state =
                 self.counters.tx_invalid_used_state.saturating_add(1);
-            self.counters.tx_in_flight = ring_capacity as u64;
+            self.counters.tx_in_flight = ring_len as u64;
             self.counters.tx_free = 0;
             self.log_dma_breadcrumb(BreadcrumbReason::TxSwIndexInvalid);
             return;
         }
         self.counters.tx_in_flight = in_flight as u64;
-        self.counters.tx_free = ring_capacity.saturating_sub(in_flight) as u64;
+        self.counters.tx_free = ring_len.saturating_sub(in_flight) as u64;
     }
 
     fn tx_in_flight(&self) -> usize {
-        ring_distance_in_ring(self.tx_prod_index, self.tx_cons_index, self.tx_ring_len()) as usize
+        ring_distance(self.tx_prod_index, self.tx_cons_index) as usize
     }
 
     fn tx_has_room(&mut self) -> bool {
-        let ring_len = self.tx_ring_len();
-        let ring_capacity = ring_len.saturating_sub(1);
-        if ring_capacity == 0 {
+        if self.tx_ring_len() == 0 {
             return false;
         }
         self.poll_tx_completions();
-        if self.tx_in_flight() < ring_capacity {
+        if self.tx_in_flight() < self.tx_ring_len() {
             if self.tx_backpressure_logged {
                 self.log_dma_breadcrumb(BreadcrumbReason::TxNoRoomRecovered);
             }
@@ -839,10 +977,10 @@ impl BcmGenetDevice {
     fn capture_breadcrumb_snapshot(&self) -> DmaBreadcrumbSnapshot {
         let tx_ring_len = self.tx_ring_len();
         let rx_ring_len = self.rx_ring_len();
-        let tx_hw_prod = ring_index(self.read_reg32(TDMA_PROD_INDEX) as u16, tx_ring_len);
-        let tx_hw_cons = ring_index(self.read_reg32(TDMA_CONS_INDEX) as u16, tx_ring_len);
-        let rx_hw_prod = ring_index(self.read_reg32(RDMA_PROD_INDEX) as u16, rx_ring_len);
-        let rx_hw_cons = ring_index(self.read_reg32(RDMA_CONS_INDEX) as u16, rx_ring_len);
+        let tx_hw_prod = self.read_reg32(TDMA_PROD_INDEX) as u16;
+        let tx_hw_cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
+        let rx_hw_prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
+        let rx_hw_cons = self.read_reg32(RDMA_CONS_INDEX) as u16;
         let tx_cons_slot = ring_slot(self.tx_cons_index, tx_ring_len);
         let tx_prod_slot = ring_slot(self.tx_prod_index, tx_ring_len);
         let rx_cons_slot = ring_slot(self.rx_cons_index, rx_ring_len);
@@ -860,12 +998,8 @@ impl BcmGenetDevice {
             tx_hw_cons,
             rx_hw_prod,
             rx_hw_cons,
-            tx_sw_in_flight: ring_distance_in_ring(
-                self.tx_prod_index,
-                self.tx_cons_index,
-                tx_ring_len,
-            ),
-            tx_hw_in_flight: ring_distance_in_ring(tx_hw_prod, tx_hw_cons, tx_ring_len),
+            tx_sw_in_flight: ring_distance(self.tx_prod_index, self.tx_cons_index),
+            tx_hw_in_flight: ring_distance(tx_hw_prod, tx_hw_cons),
             tx_read_ptr: self.read_reg32(TDMA_READ_PTR),
             tx_write_ptr: self.read_reg32(TDMA_WRITE_PTR),
             rx_read_ptr: self.read_reg32(RDMA_READ_PTR),
@@ -967,19 +1101,19 @@ impl BcmGenetDevice {
 
     fn poll_tx_completions(&mut self) {
         let ring_len = self.tx_ring_len();
-        if ring_len <= 1 {
+        if ring_len == 0 {
             self.refresh_tx_counters();
             return;
         }
-        let new_cons = ring_index(self.read_reg32(TDMA_CONS_INDEX) as u16, ring_len);
-        let hw_prod = ring_index(self.read_reg32(TDMA_PROD_INDEX) as u16, ring_len);
-        let hw_in_flight = ring_distance_in_ring(hw_prod, new_cons, ring_len) as usize;
-        if hw_in_flight > ring_len.saturating_sub(1) {
+        let new_cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
+        let hw_prod = self.read_reg32(TDMA_PROD_INDEX) as u16;
+        let hw_in_flight = ring_distance(hw_prod, new_cons) as usize;
+        if hw_in_flight > ring_len {
             self.counters.tx_invalid_used_state =
                 self.counters.tx_invalid_used_state.saturating_add(1);
             self.log_dma_breadcrumb(BreadcrumbReason::TxHwIndexInvalid);
         }
-        let completed = ring_distance_in_ring(new_cons, self.tx_cons_index, ring_len);
+        let completed = ring_distance(new_cons, self.tx_cons_index);
         if completed == 0 {
             if self.tx_in_flight() > 0 {
                 self.tx_stall_polls = self.tx_stall_polls.saturating_add(1);
@@ -994,7 +1128,7 @@ impl BcmGenetDevice {
             self.refresh_tx_counters();
             return;
         }
-        if completed as usize > ring_len.saturating_sub(1) {
+        if completed as usize > ring_len {
             self.counters.tx_invalid_used_state =
                 self.counters.tx_invalid_used_state.saturating_add(1);
             self.log_dma_breadcrumb(BreadcrumbReason::TxConsJump);
@@ -1022,6 +1156,11 @@ impl BcmGenetDevice {
         if len == 0 {
             return;
         }
+        // Ensure payload writes are not reordered past descriptor publication.
+        compiler_fence(Ordering::Release);
+        if !self.dma_cacheable {
+            return;
+        }
         #[cfg(any(
             all(feature = "kernel", target_os = "none"),
             feature = "cache-maintenance"
@@ -1040,6 +1179,11 @@ impl BcmGenetDevice {
         if len == 0 {
             return;
         }
+        if !self.dma_cacheable {
+            dma_load_barrier();
+            return;
+        }
+        compiler_fence(Ordering::SeqCst);
         #[cfg(any(
             all(feature = "kernel", target_os = "none"),
             feature = "cache-maintenance"
@@ -1052,6 +1196,7 @@ impl BcmGenetDevice {
             feature = "cache-maintenance"
         )))]
         let _ = (vaddr, len);
+        dma_load_barrier();
     }
 
     fn rearm_rx_slot(&mut self, slot: usize) {
@@ -1065,7 +1210,8 @@ impl BcmGenetDevice {
     }
 
     fn advance_rx_consumer(&mut self) {
-        self.rx_cons_index = ring_index(self.rx_cons_index.wrapping_add(1), self.rx_ring_len());
+        self.rx_cons_index = self.rx_cons_index.wrapping_add(1);
+        tx_doorbell_barrier();
         self.write_reg32(RDMA_CONS_INDEX, self.rx_cons_index as u32);
     }
 
@@ -1086,10 +1232,8 @@ impl BcmGenetDevice {
 
         self.poll_tx_completions();
         let ring_len = self.tx_ring_len();
-        let ring_capacity = ring_len.saturating_sub(1);
-        let in_flight =
-            ring_distance_in_ring(self.tx_prod_index, self.tx_cons_index, ring_len) as usize;
-        if in_flight >= ring_capacity {
+        let in_flight = ring_distance(self.tx_prod_index, self.tx_cons_index) as usize;
+        if in_flight >= ring_len {
             self.tx_drops = self.tx_drops.saturating_add(1);
             self.counters.tx_alloc_blocked_inflight =
                 self.counters.tx_alloc_blocked_inflight.saturating_add(1);
@@ -1111,7 +1255,7 @@ impl BcmGenetDevice {
         let frame_dma = dma_phys_to_bus_addr(frame_paddr);
         self.write_tx_desc(slot, frame_dma, encode_tx_len_status(packet.len()));
         tx_doorbell_barrier();
-        self.tx_prod_index = ring_index(self.tx_prod_index.wrapping_add(1), ring_len);
+        self.tx_prod_index = self.tx_prod_index.wrapping_add(1);
         self.write_reg32(TDMA_PROD_INDEX, self.tx_prod_index as u32);
 
         self.counters.tx_packets = self.counters.tx_packets.saturating_add(1);
@@ -1145,7 +1289,7 @@ impl BcmGenetDevice {
 
         let mut budget = self.rx_ring_len();
         while budget > 0 && self.rx_ready.len() < RX_READY_CAP {
-            let prod = ring_index(self.read_reg32(RDMA_PROD_INDEX) as u16, self.rx_ring_len());
+            let prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
             if prod == self.rx_cons_index {
                 self.rx_idle_polls = self.rx_idle_polls.saturating_add(1);
                 if should_log_rx_idle(self.rx_idle_polls, self.rx_idle_logged) {
@@ -1240,21 +1384,8 @@ const fn ring_slot(index: u16, slots: usize) -> usize {
     }
 }
 
-const fn ring_index(index: u16, slots: usize) -> u16 {
-    if slots == 0 {
-        0
-    } else {
-        (index as usize % slots) as u16
-    }
-}
-
-const fn ring_distance_in_ring(newer: u16, older: u16, slots: usize) -> u16 {
-    if slots == 0 {
-        return 0;
-    }
-    let newer_slot = ring_index(newer, slots) as usize;
-    let older_slot = ring_index(older, slots) as usize;
-    ((newer_slot + slots - older_slot) % slots) as u16
+const fn ring_distance(newer: u16, older: u16) -> u16 {
+    newer.wrapping_sub(older)
 }
 
 const fn desc_dma_addr(addr_hi: u32, addr_lo: u32) -> u64 {
@@ -1262,7 +1393,7 @@ const fn desc_dma_addr(addr_hi: u32, addr_lo: u32) -> u64 {
 }
 
 const fn dma_phys_to_bus_addr(phys: u64) -> u64 {
-    if phys < GENET_DMA_ALIAS_WINDOW_BYTES {
+    if GENET_DMA_USE_BUS_ALIAS && phys < GENET_DMA_ALIAS_WINDOW_BYTES {
         phys | GENET_DMA_BUS_ALIAS_BASE
     } else {
         phys
@@ -1354,6 +1485,19 @@ fn tx_doorbell_barrier() {
     }
 }
 
+#[inline(always)]
+fn dma_load_barrier() {
+    compiler_fence(Ordering::Acquire);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        // SAFETY: Barrier has no memory operands and only orders prior DMA/device
+        // writes before subsequent CPU reads on this core.
+        asm!("dmb oshld", options(nostack, preserves_flags));
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    fence(Ordering::Acquire);
+}
+
 impl phy::RxToken for RxToken {
     fn consume<R, F>(self, f: F) -> R
     where
@@ -1438,10 +1582,10 @@ impl NetDevice for BcmGenetDevice {
     fn debug_snapshot(&mut self) {
         self.poll_tx_completions();
         let cmd = self.read_reg32(GENET_UMAC_CMD);
-        let tx_prod = ring_index(self.read_reg32(TDMA_PROD_INDEX) as u16, self.tx_ring_len());
-        let tx_cons = ring_index(self.read_reg32(TDMA_CONS_INDEX) as u16, self.tx_ring_len());
-        let rx_prod = ring_index(self.read_reg32(RDMA_PROD_INDEX) as u16, self.rx_ring_len());
-        let rx_cons = ring_index(self.read_reg32(RDMA_CONS_INDEX) as u16, self.rx_ring_len());
+        let tx_prod = self.read_reg32(TDMA_PROD_INDEX) as u16;
+        let tx_cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
+        let rx_prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
+        let rx_cons = self.read_reg32(RDMA_CONS_INDEX) as u16;
         let tx_desc = self.read_tx_desc(ring_slot(self.tx_cons_index, self.tx_ring_len()));
         let rx_desc = self.read_rx_desc(ring_slot(self.rx_cons_index, self.rx_ring_len()));
         debug!(
@@ -1484,11 +1628,10 @@ impl NetDevice for BcmGenetDevice {
 mod tests {
     use super::{
         decode_bmcr_speed, decode_rx_length, dma_phys_to_bus_addr, encode_tx_len_status,
-        ring_distance_in_ring, ring_index, ring_slot, rx_owned_len_status,
-        should_emit_repeated_breadcrumb, should_log_rx_idle, should_log_tx_drop,
-        DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP, DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC,
-        DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH, UMAC_SPEED_10,
-        UMAC_SPEED_100, UMAC_SPEED_1000,
+        ring_distance, ring_slot, rx_owned_len_status, should_emit_repeated_breadcrumb,
+        should_log_rx_idle, should_log_tx_drop, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP,
+        DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100,
+        MII_BMCR_SPEED1000, RX_BUF_LENGTH, UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
     };
 
     #[test]
@@ -1505,19 +1648,9 @@ mod tests {
     }
 
     #[test]
-    fn ring_index_normalizes_to_ring_size() {
-        assert_eq!(ring_index(0, 256), 0);
-        assert_eq!(ring_index(255, 256), 255);
-        assert_eq!(ring_index(256, 256), 0);
-        assert_eq!(ring_index(513, 256), 1);
-    }
-
-    #[test]
-    fn ring_distance_uses_ring_slots() {
-        assert_eq!(ring_distance_in_ring(10, 7, 256), 3);
-        assert_eq!(ring_distance_in_ring(0, 255, 256), 1);
-        assert_eq!(ring_distance_in_ring(3, 3, 256), 0);
-        assert_eq!(ring_distance_in_ring(3, 250, 256), 9);
+    fn ring_distance_handles_wrap() {
+        assert_eq!(ring_distance(10, 7), 3);
+        assert_eq!(ring_distance(0, u16::MAX), 1);
     }
 
     #[test]
@@ -1582,9 +1715,15 @@ mod tests {
 
     #[test]
     fn dma_phys_addresses_use_pi4_bus_alias_window() {
-        assert_eq!(dma_phys_to_bus_addr(0x0000_0000), 0xC000_0000);
-        assert_eq!(dma_phys_to_bus_addr(0x0400_0000), 0xC400_0000);
-        assert_eq!(dma_phys_to_bus_addr(0x3FFF_FFFF), 0xFFFF_FFFF);
+        if GENET_DMA_USE_BUS_ALIAS {
+            assert_eq!(dma_phys_to_bus_addr(0x0000_0000), 0xC000_0000);
+            assert_eq!(dma_phys_to_bus_addr(0x0400_0000), 0xC400_0000);
+            assert_eq!(dma_phys_to_bus_addr(0x3FFF_FFFF), 0xFFFF_FFFF);
+        } else {
+            assert_eq!(dma_phys_to_bus_addr(0x0000_0000), 0x0000_0000);
+            assert_eq!(dma_phys_to_bus_addr(0x0400_0000), 0x0400_0000);
+            assert_eq!(dma_phys_to_bus_addr(0x3FFF_FFFF), 0x3FFF_FFFF);
+        }
         assert_eq!(dma_phys_to_bus_addr(0x4000_0000), 0x4000_0000);
     }
 }
