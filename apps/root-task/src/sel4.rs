@@ -82,6 +82,9 @@ static BOOTINFO_WINDOW_DUMPED: AtomicBool = AtomicBool::new(false);
 const DMA_MAP_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const DMA_MAP_LOG_CAPACITY: usize = 128;
 const MAX_DEVICE_SKIP_OBJECTS: usize = 512;
+// Local-seat DMA frame trace can generate thousands of UART lines during USB
+// enumeration; keep it opt-in for targeted diagnostics.
+const LOCAL_SEAT_DMA_FRAME_VERBOSE_LOGS: bool = false;
 
 #[derive(Clone, Copy)]
 struct DmaMapRecord {
@@ -4044,7 +4047,8 @@ impl<'a> KernelEnv<'a> {
         prefer_high: bool,
     ) -> Result<RamFrame, seL4_Error> {
         let trace_uncached = attr == sel4_sys::seL4_ARM_Page_Uncached;
-        if trace_uncached {
+        let trace_verbose = trace_uncached && LOCAL_SEAT_DMA_FRAME_VERBOSE_LOGS;
+        if trace_verbose {
             let mut line = HeaplessString::<160>::new();
             let _ = write!(
                 &mut line,
@@ -4065,7 +4069,7 @@ impl<'a> KernelEnv<'a> {
             self.untyped.reserve_ram(PAGE_BITS as u8)
         }
         .ok_or(seL4_NotEnoughMemory)?;
-        if trace_uncached {
+        if trace_verbose {
             let mut line = HeaplessString::<176>::new();
             let _ = write!(
                 &mut line,
@@ -4100,7 +4104,7 @@ impl<'a> KernelEnv<'a> {
             self.untyped.release(&reserved);
             return Err(err);
         }
-        if trace_uncached {
+        if trace_verbose {
             let mut line = HeaplessString::<176>::new();
             let _ = write!(
                 &mut line,
@@ -4127,7 +4131,7 @@ impl<'a> KernelEnv<'a> {
                 return Err(err);
             }
         };
-        if trace_uncached {
+        if trace_verbose {
             let mut line = HeaplessString::<192>::new();
             let _ = write!(
                 &mut line,
@@ -4140,7 +4144,7 @@ impl<'a> KernelEnv<'a> {
         self.record_retype(trace, RetypeStatus::Ok);
         let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "dma-frame");
         self.dma_cursor = range.end;
-        if trace_uncached {
+        if trace_verbose {
             let mut line = HeaplessString::<208>::new();
             let _ = write!(
                 &mut line,
@@ -4150,7 +4154,7 @@ impl<'a> KernelEnv<'a> {
             boot_log::force_uart_line(line.as_str());
         }
         self.map_frame(frame_slot, range.start, attr, true)?;
-        if trace_uncached {
+        if trace_verbose {
             let mut line = HeaplessString::<176>::new();
             let _ = write!(
                 &mut line,
@@ -4161,7 +4165,7 @@ impl<'a> KernelEnv<'a> {
         }
         let attr_raw: usize = unsafe { core::mem::transmute(attr) };
         record_dma_mapping(paddr, range.start, PAGE_SIZE, attr_raw);
-        if trace_uncached {
+        if trace_verbose {
             boot_log::force_uart_line("[local-seat] dma-frame before hal-log");
         }
         ::log::debug!(
@@ -4172,7 +4176,7 @@ impl<'a> KernelEnv<'a> {
             paddr = paddr,
             attr = attr_raw,
         );
-        if trace_uncached {
+        if trace_verbose {
             boot_log::force_uart_line("[local-seat] dma-frame after hal-log");
         }
         Ok(RamFrame {

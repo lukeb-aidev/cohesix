@@ -106,11 +106,22 @@ const HUB_DISCONNECTED_RECOVERY_POWER_RETRIES: usize = 2;
 // Keep eager power on for individually-switched hubs and fall back if a
 // particular hub rejects the request.
 const HUB_EAGER_INDIVIDUAL_PORT_POWER: bool = true;
+// Fast path: do not blind-address ports that already reported disconnected.
+const HUB_ENABLE_DISCONNECTED_BLIND_PROBE: bool = false;
+// Blind probing for status-unavailable ports is only allowed after prepare
+// succeeds (power/reset path reached the hub).
+const HUB_ENABLE_UNAVAILABLE_BLIND_PROBE: bool = true;
+// Retry-addressing with alternate speeds is expensive and should stay opt-in.
+const HUB_ENABLE_SPEED_FALLBACK_REPROBE: bool = false;
 // Some hubs reject hub-class port requests unless wIndex carries a
 // non-default interface in the high byte. Probe a bounded interface set to
 // keep bring-up deterministic while tolerating firmware descriptor quirks.
 const HUB_PORT_IFACE_FALLBACK_MAX: u8 = 3;
 const HUB_PORT_INDEX_CANDIDATES_MAX: usize = 2 + HUB_PORT_IFACE_FALLBACK_MAX as usize;
+// Alternate wIndex probing is only useful when the device responded with
+// STALL; timeout-like failures indicate transport-level issues, not index
+// encoding mismatches.
+const HUB_INDEX_FALLBACK_ON_STALL_ONLY: bool = true;
 const HUB_POST_CONFIG_SETTLE_MS: u64 = 250;
 const HUB_POWER_SETTLE_MIN_MS: u64 = 200;
 const HUB_RESET_SETTLE_MS: u64 = 100;
@@ -192,6 +203,9 @@ const XHCI_FORCE_LOW_DMA_PROBE: bool = true;
 // VL805 on Pi4 expects xHCI DMA pointers in the PCIe outbound DMA window
 // address space, not raw CPU physical addresses.
 const XHCI_PCIE_DMA_BUS_ALIAS_ENABLED: bool = true;
+// Per-allocation DMA tracing is useful for bring-up debugging but can add
+// heavy UART latency during normal keyboard enumeration.
+const XHCI_DMA_VERBOSE_LOGS: bool = false;
 // Raw-phys DMA fallback is disabled on Pi4 because it consistently times out
 // controller start (stage 0x0272) and adds long startup stalls.
 const XHCI_TRY_RAW_PHYS_DMA_FALLBACK: bool = false;
@@ -3664,24 +3678,26 @@ impl UsbKeyboard {
                             );
                         }
                     } else {
-                        blind_probe_attempted = blind_probe_attempted.saturating_add(1);
-                        match Self::probe_hub_child_without_port_status(
-                            &device,
-                            downstream_port,
-                            hub_multi_tt,
-                            hub_tt_think_time,
-                            depth_remaining,
-                            saw_keyboard_init_error,
-                            "disconnected-pre-reset",
-                        ) {
-                            HubChildProbeResult::Keyboard(hid) => {
-                                blind_probe_succeeded = blind_probe_succeeded.saturating_add(1);
-                                return Some(hid);
+                        if HUB_ENABLE_DISCONNECTED_BLIND_PROBE {
+                            blind_probe_attempted = blind_probe_attempted.saturating_add(1);
+                            match Self::probe_hub_child_without_port_status(
+                                &device,
+                                downstream_port,
+                                hub_multi_tt,
+                                hub_tt_think_time,
+                                depth_remaining,
+                                saw_keyboard_init_error,
+                                "disconnected-pre-reset",
+                            ) {
+                                HubChildProbeResult::Keyboard(hid) => {
+                                    blind_probe_succeeded = blind_probe_succeeded.saturating_add(1);
+                                    return Some(hid);
+                                }
+                                HubChildProbeResult::ProbedNoKeyboard => {
+                                    continue;
+                                }
+                                HubChildProbeResult::Failed => {}
                             }
-                            HubChildProbeResult::ProbedNoKeyboard => {
-                                continue;
-                            }
-                            HubChildProbeResult::Failed => {}
                         }
                         Self::log_hub_port_exact_fault(
                             device.slot_id(),
@@ -3726,12 +3742,16 @@ impl UsbKeyboard {
                     );
                     boot_log::force_uart_line(line.as_str());
                 }
-                blind_probe_attempted = blind_probe_attempted.saturating_add(1);
                 let blind_source = if prepared {
                     "pre-status-unavailable"
                 } else {
                     "pre-status-unavailable-no-prepare"
                 };
+                if !prepared || !HUB_ENABLE_UNAVAILABLE_BLIND_PROBE {
+                    Self::log_hub_port_terminal(device.slot_id(), downstream_port, blind_source);
+                    continue;
+                }
+                blind_probe_attempted = blind_probe_attempted.saturating_add(1);
                 match Self::probe_hub_child_without_port_status(
                     &device,
                     downstream_port,
@@ -3903,22 +3923,26 @@ impl UsbKeyboard {
                         }
                         None => child_speed,
                     };
-                    match Self::probe_hub_child_with_speed_fallback(
-                        &device,
-                        downstream_port,
-                        route,
-                        rearmed_primary_speed,
-                        hub_multi_tt,
-                        hub_tt_think_time,
-                        hub_interface_number,
-                        hub_protocol_code,
-                        depth_remaining,
-                        saw_keyboard_init_error,
-                    ) {
-                        HubChildProbeResult::Keyboard(hid) => return Some(hid),
-                        HubChildProbeResult::ProbedNoKeyboard | HubChildProbeResult::Failed => {
-                            continue;
+                    if HUB_ENABLE_SPEED_FALLBACK_REPROBE {
+                        match Self::probe_hub_child_with_speed_fallback(
+                            &device,
+                            downstream_port,
+                            route,
+                            rearmed_primary_speed,
+                            hub_multi_tt,
+                            hub_tt_think_time,
+                            hub_interface_number,
+                            hub_protocol_code,
+                            depth_remaining,
+                            saw_keyboard_init_error,
+                        ) {
+                            HubChildProbeResult::Keyboard(hid) => return Some(hid),
+                            HubChildProbeResult::ProbedNoKeyboard | HubChildProbeResult::Failed => {
+                                continue;
+                            }
                         }
+                    } else {
+                        continue;
                     }
                 }
             }
@@ -4728,6 +4752,14 @@ impl UsbKeyboard {
         (candidates, count)
     }
 
+    #[inline]
+    const fn should_try_hub_index_fallback(err: UsbError) -> bool {
+        if !HUB_INDEX_FALLBACK_ON_STALL_ONLY {
+            return true;
+        }
+        matches!(err, UsbError::Stall)
+    }
+
     fn hub_set_feature(
         device: &UsbDevice<SeatDma>,
         hub_interface_number: u8,
@@ -4737,48 +4769,42 @@ impl UsbKeyboard {
     ) -> core::result::Result<(), UsbError> {
         let (candidates, candidate_count) =
             Self::hub_port_index_candidates(hub_interface_number, port);
-        let mut primary_err = None;
-        let mut last_err = None;
+        let primary_index = candidates[0];
+        let primary_setup = SetupPacket::new(0x23, request::SET_FEATURE, feature, primary_index, 0);
+        let primary_err =
+            match device.control_transfer_with_wait_spins(&primary_setup, None, wait_spins) {
+                Ok(_) => return Ok(()),
+                Err(err) => err,
+            };
+        if candidate_count <= 1 || !Self::should_try_hub_index_fallback(primary_err) {
+            return Err(primary_err);
+        }
 
-        for (candidate_idx, index) in candidates.iter().take(candidate_count).copied().enumerate() {
+        let mut last_err = primary_err;
+        for index in candidates.iter().take(candidate_count).copied().skip(1) {
             let setup = SetupPacket::new(0x23, request::SET_FEATURE, feature, index, 0);
             match device.control_transfer_with_wait_spins(&setup, None, wait_spins) {
                 Ok(_) => {
-                    if candidate_idx > 0 {
-                        let primary_detail = match primary_err {
-                            Some(err) => err,
-                            None => UsbError::Stall,
-                        };
-                        let mut line = heapless::String::<256>::new();
-                        let _ = core::fmt::Write::write_fmt(
-                            &mut line,
-                            format_args!(
-                                "[local-seat] hub ctl fallback slot={} iface={} port={} stage=set-feature wIndex=0x{:04x} detail=primary-failed({:?})",
-                                device.slot_id(),
-                                hub_interface_number,
-                                port,
-                                index,
-                                primary_detail,
-                            ),
-                        );
-                        boot_log::force_uart_line(line.as_str());
-                    }
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] hub ctl fallback slot={} iface={} port={} stage=set-feature wIndex=0x{:04x} detail=primary-failed({primary_err:?})",
+                            device.slot_id(),
+                            hub_interface_number,
+                            port,
+                            index
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
                     return Ok(());
                 }
                 Err(err) => {
-                    if primary_err.is_none() {
-                        primary_err = Some(err);
-                    }
-                    last_err = Some(err);
+                    last_err = err;
                 }
             }
         }
-
-        if let Some(err) = last_err {
-            Err(err)
-        } else {
-            Err(UsbError::Stall)
-        }
+        Err(last_err)
     }
 
     #[inline]
@@ -5170,27 +5196,38 @@ impl UsbKeyboard {
     ) -> bool {
         let (candidates, candidate_count) =
             Self::hub_port_index_candidates(hub_interface_number, port);
-
-        for (candidate_idx, index) in candidates.iter().take(candidate_count).copied().enumerate() {
+        let primary_index = candidates[0];
+        let primary_setup =
+            SetupPacket::new(0x23, request::CLEAR_FEATURE, feature, primary_index, 0);
+        let primary_err = match device.control_transfer_with_wait_spins(
+            &primary_setup,
+            None,
+            HUB_CLASS_CONTROL_WAIT_SPINS,
+        ) {
+            Ok(_) => return true,
+            Err(err) => err,
+        };
+        if candidate_count <= 1 || !Self::should_try_hub_index_fallback(primary_err) {
+            return false;
+        }
+        for index in candidates.iter().take(candidate_count).copied().skip(1) {
             let setup = SetupPacket::new(0x23, request::CLEAR_FEATURE, feature, index, 0);
             if device
                 .control_transfer_with_wait_spins(&setup, None, HUB_CLASS_CONTROL_WAIT_SPINS)
                 .is_ok()
             {
-                if candidate_idx > 0 {
-                    let mut line = heapless::String::<224>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] hub ctl fallback slot={} iface={} port={} stage=clear-feature wIndex=0x{:04x}",
-                            device.slot_id(),
-                            hub_interface_number,
-                            port,
-                            index
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                }
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub ctl fallback slot={} iface={} port={} stage=clear-feature wIndex=0x{:04x}",
+                        device.slot_id(),
+                        hub_interface_number,
+                        port,
+                        index
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
                 return true;
             }
         }
@@ -5206,9 +5243,51 @@ impl UsbKeyboard {
         let (candidates, candidate_count) =
             Self::hub_port_index_candidates(hub_interface_number, port);
         let mut bytes = [0u8; HUB_PORT_STATUS_BYTES];
-        let mut first_control_err = None;
+        let primary_index = candidates[0];
+        let primary_setup = SetupPacket::new(
+            0xA3,
+            request::GET_STATUS,
+            0,
+            primary_index,
+            HUB_PORT_STATUS_BYTES as u16,
+        );
+        let mut primary_control_err = None;
         let mut first_short_transfer = None;
-        for (candidate_idx, index) in candidates.iter().take(candidate_count).copied().enumerate() {
+        match device.control_transfer_with_wait_spins(&primary_setup, Some(&mut bytes), wait_spins)
+        {
+            Ok(transferred) => {
+                if transferred >= HUB_PORT_STATUS_BYTES {
+                    return Ok(HubPortStatus {
+                        status: u16::from_le_bytes([bytes[0], bytes[1]]),
+                        change: u16::from_le_bytes([bytes[2], bytes[3]]),
+                    });
+                }
+                first_short_transfer = Some(transferred);
+            }
+            Err(err) => {
+                primary_control_err = Some(err);
+            }
+        }
+
+        let allow_fallback = if candidate_count <= 1 {
+            false
+        } else if let Some(err) = primary_control_err {
+            Self::should_try_hub_index_fallback(err)
+        } else {
+            true
+        };
+        if !allow_fallback {
+            if let Some(transferred) = first_short_transfer {
+                return Err(HubPortStatusReadError::ShortTransfer { transferred, bytes });
+            }
+            if let Some(err) = primary_control_err {
+                return Err(HubPortStatusReadError::Control(err));
+            }
+            return Err(HubPortStatusReadError::Control(UsbError::Stall));
+        }
+
+        let mut fallback_control_err = None;
+        for index in candidates.iter().take(candidate_count).copied().skip(1) {
             let setup = SetupPacket::new(
                 0xA3,
                 request::GET_STATUS,
@@ -5219,20 +5298,18 @@ impl UsbKeyboard {
             match device.control_transfer_with_wait_spins(&setup, Some(&mut bytes), wait_spins) {
                 Ok(transferred) => {
                     if transferred >= HUB_PORT_STATUS_BYTES {
-                        if candidate_idx > 0 {
-                            let mut line = heapless::String::<256>::new();
-                            let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
-                                    "[local-seat] hub status fallback slot={} iface={} port={} wIndex=0x{:04x}",
-                                    device.slot_id(),
-                                    hub_interface_number,
-                                    port,
-                                    index
-                                ),
-                            );
-                            boot_log::force_uart_line(line.as_str());
-                        }
+                        let mut line = heapless::String::<256>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] hub status fallback slot={} iface={} port={} wIndex=0x{:04x}",
+                                device.slot_id(),
+                                hub_interface_number,
+                                port,
+                                index
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
                         return Ok(HubPortStatus {
                             status: u16::from_le_bytes([bytes[0], bytes[1]]),
                             change: u16::from_le_bytes([bytes[2], bytes[3]]),
@@ -5243,8 +5320,8 @@ impl UsbKeyboard {
                     }
                 }
                 Err(err) => {
-                    if first_control_err.is_none() {
-                        first_control_err = Some(err);
+                    if fallback_control_err.is_none() {
+                        fallback_control_err = Some(err);
                     }
                 }
             }
@@ -5252,7 +5329,7 @@ impl UsbKeyboard {
         if let Some(transferred) = first_short_transfer {
             return Err(HubPortStatusReadError::ShortTransfer { transferred, bytes });
         }
-        let control_err = match first_control_err {
+        let control_err = match fallback_control_err.or(primary_control_err) {
             Some(err) => err,
             None => UsbError::Stall,
         };
@@ -5843,32 +5920,36 @@ impl SeatDma {
 
         let page_count = div_ceil(size, PAGE_SIZE);
         let hal = hal_from_ptr(state.hal_ptr)?;
-        let mut begin_line = heapless::String::<208>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut begin_line,
-            format_args!(
-                "[local-seat] xhci dma alloc begin size=0x{size:x} align=0x{align:x} pages={} mode={}",
-                page_count,
-                if state.prefer_high { "high" } else { "low" }
-            ),
-        );
-        boot_log::force_uart_line(begin_line.as_str());
+        if XHCI_DMA_VERBOSE_LOGS {
+            let mut begin_line = heapless::String::<208>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut begin_line,
+                format_args!(
+                    "[local-seat] xhci dma alloc begin size=0x{size:x} align=0x{align:x} pages={} mode={}",
+                    page_count,
+                    if state.prefer_high { "high" } else { "low" }
+                ),
+            );
+            boot_log::force_uart_line(begin_line.as_str());
+        }
 
         let mut frames = Vec::with_capacity(page_count);
         let mut expected_phys = 0usize;
         let mut expected_virt = 0usize;
         for idx in 0..page_count {
-            let mut req_line = heapless::String::<192>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut req_line,
-                format_args!(
-                    "[local-seat] xhci dma frame request idx={} pages={} mode={}",
-                    idx,
-                    page_count,
-                    if state.prefer_high { "high" } else { "low" }
-                ),
-            );
-            boot_log::force_uart_line(req_line.as_str());
+            if XHCI_DMA_VERBOSE_LOGS {
+                let mut req_line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut req_line,
+                    format_args!(
+                        "[local-seat] xhci dma frame request idx={} pages={} mode={}",
+                        idx,
+                        page_count,
+                        if state.prefer_high { "high" } else { "low" }
+                    ),
+                );
+                boot_log::force_uart_line(req_line.as_str());
+            }
             let frame = match if state.prefer_high {
                 hal.alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Uncached)
             } else {
@@ -5907,15 +5988,17 @@ impl SeatDma {
             };
             let phys = frame.paddr();
             let virt = frame.ptr().as_ptr() as usize;
-            let mut got_line = heapless::String::<224>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut got_line,
-                format_args!(
-                    "[local-seat] xhci dma frame ready idx={} paddr=0x{phys:016x} vaddr=0x{virt:016x}",
-                    idx
-                ),
-            );
-            boot_log::force_uart_line(got_line.as_str());
+            if XHCI_DMA_VERBOSE_LOGS {
+                let mut got_line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut got_line,
+                    format_args!(
+                        "[local-seat] xhci dma frame ready idx={} paddr=0x{phys:016x} vaddr=0x{virt:016x}",
+                        idx
+                    ),
+                );
+                boot_log::force_uart_line(got_line.as_str());
+            }
             if phys >= RPI4_PCIE_DMA_LIMIT {
                 if !USB_DMA_RANGE_WARNED.swap(true, Ordering::AcqRel) {
                     let mut line = heapless::String::<192>::new();
@@ -5976,17 +6059,19 @@ impl SeatDma {
             align,
             backing: RegionBacking::Dma(frames),
         });
-        let mut done_line = heapless::String::<224>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut done_line,
-            format_args!(
-                "[local-seat] xhci dma alloc done size=0x{size:x} align=0x{align:x} pages={} paddr=0x{paddr:016x} vaddr=0x{vaddr:016x}",
-                page_count,
-                paddr = expected_phys,
-                vaddr = expected_virt
-            ),
-        );
-        boot_log::force_uart_line(done_line.as_str());
+        if XHCI_DMA_VERBOSE_LOGS {
+            let mut done_line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut done_line,
+                format_args!(
+                    "[local-seat] xhci dma alloc done size=0x{size:x} align=0x{align:x} pages={} paddr=0x{paddr:016x} vaddr=0x{vaddr:016x}",
+                    page_count,
+                    paddr = expected_phys,
+                    vaddr = expected_virt
+                ),
+            );
+            boot_log::force_uart_line(done_line.as_str());
+        }
         Some(expected_virt)
     }
 
