@@ -102,10 +102,10 @@ const HUB_PORT_STATUS_QUICK_RETRIES: usize = 4;
 const HUB_SET_FEATURE_RETRIES: usize = 3;
 const HUB_BLIND_PREPARE_RESET_RETRIES: usize = 1;
 const HUB_DISCONNECTED_RECOVERY_POWER_RETRIES: usize = 2;
-// Some cascaded hubs only become visible after explicit per-port power.
-// Keep eager power on for individually-switched hubs and fall back if a
-// particular hub rejects the request.
-const HUB_EAGER_INDIVIDUAL_PORT_POWER: bool = true;
+// Some downstream hubs report individual switching but stall on eager
+// PORT_POWER requests during early enum. Keep eager power disabled and
+// prefer status-driven/on-demand recovery for deterministic bring-up.
+const HUB_EAGER_INDIVIDUAL_PORT_POWER: bool = false;
 // Fast path: do not blind-address ports that already reported disconnected.
 const HUB_ENABLE_DISCONNECTED_BLIND_PROBE: bool = false;
 // Blind probing for status-unavailable ports is only allowed after prepare
@@ -6752,9 +6752,9 @@ mod tests {
     }
 
     #[test]
-    fn hub_port_power_policy_enables_individual_switching_only() {
+    fn hub_port_power_policy_defaults_to_deferred_scan() {
         assert!(!hub_should_eager_port_power(0));
-        assert!(hub_should_eager_port_power(1));
+        assert!(!hub_should_eager_port_power(1));
     }
 
     #[test]

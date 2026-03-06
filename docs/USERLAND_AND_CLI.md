@@ -550,6 +550,8 @@ QEMU runs with `-serial mon:stdio` and a user-net device that forwards TCP/UDP p
 - `netstats` reports deterministic target fields: `backend=<label> enabled=<bool> running=<bool> udp=<ip:port> tcp=<ip:port> last=<result>`.
 - QEMU behavior is unchanged (`127.0.0.1:{31338,31339}` hostfwd workflows remain valid).
 - Pi 4 `pi4-uboot-aarch64` uses manifest static IPv4/gateway-derived targets and reports `backend=bcmgenet-v5` when networking is enabled.
+- On QEMU hostfwd/tunnel flows, capture self-test traffic on `lo0`.
+- On Pi 4 direct-link/static IPv4 flows, capture on the host's physical interface (for example `en8`), not `lo0`; `nettest` logs the peer-side `nc` commands that must be run from the host to exercise the UDP echo and TCP smoke sockets.
 
 ### Virtio-MMIO modes (when `net-backend-virtio` is enabled)
 - **Modern v2 (default for virtio)**: no extra flags are required; the build wrapper forces `virtio-mmio.force-legacy=false` so QEMU exposes the modern header and the driver accepts it by default.【F:scripts/cohesix-build-run.sh†L518-L544】【F:apps/root-task/src/drivers/virtio/net.rs†L118-L157】 Use the host forwards above to reach the TCP console (31337), UDP echo self-test (31338), and TCP smoke test (31339).

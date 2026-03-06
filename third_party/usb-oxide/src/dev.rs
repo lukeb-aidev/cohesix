@@ -225,6 +225,13 @@ const fn should_retry_by_dropping_tt_context(
     completion_code == completion::PARAMETER_ERROR && reductions_applied >= 2
 }
 
+#[inline]
+const fn should_attempt_ep0_hardware_recovery(completion_code: u8, stage: u8) -> bool {
+    let _ = completion_code;
+    let _ = stage;
+    false
+}
+
 /// xHCI Slot Context (32 bytes).
 ///
 /// Contains device-specific information used by the xHCI controller
@@ -581,6 +588,20 @@ impl<H: Dma> UsbDevice<H> {
                 | enqueue_idx as u64,
             ((producer_cycle as u64) << 63) | dequeue_ptr,
         );
+
+        // EP0 recovers on the next SETUP stage. Reset Endpoint / Set TR Dequeue
+        // is appropriate for halted data endpoints, but it can poison cascaded
+        // hub control traffic on Pi4/VL805 after an ordinary control timeout or
+        // transfer error.
+        if !should_attempt_ep0_hardware_recovery(completion_code, stage) {
+            self.ctrl.emit_diag(
+                0x0340,
+                ((self.slot_id as u64) << 32) | 1u64,
+                dequeue_ptr,
+                4u64 << 32,
+            );
+            return;
+        }
 
         let reset_result = self.ctrl.reset_endpoint(self.slot_id, 1);
         self.ctrl.emit_diag(
@@ -2185,5 +2206,22 @@ mod tests {
 
         let hs_stt = slot_ctx_with_hub_info(base, reg::SPEED_HIGH, 4, false);
         assert_eq!(hs_stt.dw0 & SLOT_DEV_MTT, 0);
+    }
+
+    #[test]
+    fn ep0_hardware_recovery_is_disabled_for_control_failures() {
+        assert!(!should_attempt_ep0_hardware_recovery(
+            completion::STALL_ERROR,
+            2
+        ));
+        assert!(!should_attempt_ep0_hardware_recovery(
+            completion::STALL_ERROR,
+            3
+        ));
+        assert!(!should_attempt_ep0_hardware_recovery(
+            completion::USB_TRANSACTION_ERROR,
+            2
+        ));
+        assert!(!should_attempt_ep0_hardware_recovery(0xff, 0));
     }
 }

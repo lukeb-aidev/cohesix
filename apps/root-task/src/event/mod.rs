@@ -3928,26 +3928,38 @@ mod tests {
     #[test]
     fn net_diag_idle_requires_zero_tx_drops() {
         let snapshot = NetDiagSnapshot::default();
-        assert!(
-            EventPump::<NullIpc, LoopbackSerial<16>, TestTimer, 4>::net_diag_idle(
-                snapshot,
-                NetTelemetry {
-                    link_up: true,
-                    tx_drops: 0,
-                    last_poll_ms: 0,
-                }
-            )
-        );
-        assert!(
-            !EventPump::<NullIpc, LoopbackSerial<16>, TestTimer, 4>::net_diag_idle(
-                snapshot,
-                NetTelemetry {
-                    link_up: true,
-                    tx_drops: 1,
-                    last_poll_ms: 0,
-                }
-            )
-        );
+        assert!(EventPump::<
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >::net_diag_idle(
+            snapshot,
+            NetTelemetry {
+                link_up: true,
+                tx_drops: 0,
+                last_poll_ms: 0,
+            }
+        ));
+        assert!(!EventPump::<
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >::net_diag_idle(
+            snapshot,
+            NetTelemetry {
+                link_up: true,
+                tx_drops: 1,
+                last_poll_ms: 0,
+            }
+        ));
     }
 
     #[cfg(feature = "net-console")]
@@ -3962,9 +3974,15 @@ mod tests {
         curr.tx_frames_from_smoltcp = 20;
         curr.outbound_frames = 20;
         curr.outbound_bytes = 1_500;
-        assert!(
-            !EventPump::<NullIpc, LoopbackSerial<16>, TestTimer, 4>::net_diag_changed(prev, curr)
-        );
+        assert!(!EventPump::<
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >::net_diag_changed(prev, curr));
     }
 
     #[cfg(feature = "net-console")]
@@ -3973,9 +3991,15 @@ mod tests {
         let prev = NetDiagSnapshot::default();
         let mut curr = prev;
         curr.bytes_written = 1;
-        assert!(
-            EventPump::<NullIpc, LoopbackSerial<16>, TestTimer, 4>::net_diag_changed(prev, curr)
-        );
+        assert!(EventPump::<
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >::net_diag_changed(prev, curr));
     }
 
     struct NullIpc;

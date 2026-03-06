@@ -36,7 +36,8 @@ use smoltcp::socket::tcp::{
 };
 use smoltcp::socket::udp::{
     BindError as UdpBindError, PacketBuffer as UdpPacketBuffer,
-    PacketMetadata as UdpPacketMetadata, RecvError as UdpRecvError, Socket as UdpSocket,
+    PacketMetadata as UdpPacketMetadata, RecvError as UdpRecvError, SendError as UdpSendError,
+    Socket as UdpSocket,
 };
 use smoltcp::time::Instant;
 use smoltcp::wire::{
@@ -1025,7 +1026,7 @@ struct SelfTestState {
     beacon_seq: u32,
     beacons_sent: u32,
     burst_remaining: u32,
-    tx_ok: bool,
+    start_tx_complete: u64,
     udp_echo_ok: bool,
     tcp_ok: bool,
     tcp_accept_seen: bool,
@@ -1037,6 +1038,9 @@ struct SelfTestState {
     console_probe_done: bool,
     console_ok: bool,
     last_result: Option<NetSelfTestResult>,
+    post_poll_flush_logs: u32,
+    udp_beacon_blocked_logs: u32,
+    udp_beacon_error_logs: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1080,14 +1084,14 @@ impl SelfTestState {
         }
     }
 
-    fn reset(&mut self, now_ms: u64) {
+    fn reset(&mut self, now_ms: u64, start_tx_complete: u64) {
         self.running = true;
         self.started_ms = now_ms;
         self.last_beacon_ms = now_ms.saturating_sub(SELF_TEST_BEACON_INTERVAL_MS);
         self.beacon_seq = 0;
         self.beacons_sent = 0;
         self.burst_remaining = SELF_TEST_TX_WRAP_BURST;
-        self.tx_ok = false;
+        self.start_tx_complete = start_tx_complete;
         self.udp_echo_ok = false;
         self.tcp_ok = false;
         self.tcp_accept_seen = false;
@@ -1099,18 +1103,26 @@ impl SelfTestState {
         self.console_probe_done = false;
         self.console_ok = false;
         self.last_result = None;
+        self.post_poll_flush_logs = 0;
+        self.udp_beacon_blocked_logs = 0;
+        self.udp_beacon_error_logs = 0;
     }
 
-    fn start(&mut self, now_ms: u64) -> bool {
+    fn start(&mut self, now_ms: u64, start_tx_complete: u64) -> bool {
         if !self.enabled {
             return false;
         }
-        self.reset(now_ms);
+        self.reset(now_ms, start_tx_complete);
         true
     }
 
-    fn record_tx(&mut self) {
-        self.tx_ok = true;
+    fn current_result(&self, counters: NetCounters) -> NetSelfTestResult {
+        NetSelfTestResult {
+            tx_ok: counters.tx_complete > self.start_tx_complete,
+            udp_echo_ok: self.udp_echo_ok,
+            tcp_ok: self.tcp_ok,
+            console_ok: self.console_ok,
+        }
     }
 
     fn record_udp_echo(&mut self) {
@@ -1125,18 +1137,19 @@ impl SelfTestState {
         self.console_ok = true;
     }
 
-    fn conclude_if_needed(&mut self, now_ms: u64) -> Option<NetSelfTestResult> {
+    fn conclude_if_needed(
+        &mut self,
+        now_ms: u64,
+        counters: NetCounters,
+    ) -> Option<NetSelfTestResult> {
         if !self.running {
             return None;
         }
         let deadline_reached = now_ms.saturating_sub(self.started_ms) >= SELF_TEST_WINDOW_MS;
-        if self.tx_ok && self.udp_echo_ok && self.tcp_ok && self.console_ok || deadline_reached {
-            let result = NetSelfTestResult {
-                tx_ok: self.tx_ok,
-                udp_echo_ok: self.udp_echo_ok,
-                tcp_ok: self.tcp_ok,
-                console_ok: self.console_ok,
-            };
+        let result = self.current_result(counters);
+        if (result.tx_ok && result.udp_echo_ok && result.tcp_ok && result.console_ok)
+            || deadline_reached
+        {
             self.last_result = Some(result);
             self.running = false;
             return Some(result);
@@ -1173,6 +1186,41 @@ fn render_host_selftest_target(
 
     let _ = write!(target, "{}:{}", guest_ip, port);
     target
+}
+
+fn self_test_failure_hint(
+    result: NetSelfTestResult,
+    counters: NetCounters,
+) -> Option<&'static str> {
+    if !result.tx_ok {
+        Some("[net-selftest] hint: TX never completed after self-test start -> queue notify / cache / descriptors / MAC")
+    } else if !result.udp_echo_ok {
+        if counters.rx_packets == 0 {
+            Some(
+                "[net-selftest] hint: RX never reaches the driver -> buffers not posted / used ring not read / IRQ missing",
+            )
+        } else if counters.udp_rx == 0 && counters.tcp_accepts == 0 {
+            Some(
+                "[net-selftest] hint: driver RX works, but no peer UDP/TCP reached self-test sockets -> run the logged host-side commands on the peer and verify IP/ARP/route",
+            )
+        } else {
+            Some(
+                "[net-selftest] hint: UDP echo path missing while other RX exists -> verify echo port/path",
+            )
+        }
+    } else if !result.tcp_ok {
+        if counters.tcp_accepts > 0 && counters.tcp_rx_bytes == 0 {
+            Some("[net-selftest] hint: TCP accepts but no bytes -> poll loop scheduling / RX path")
+        } else {
+            Some(
+                "[net-selftest] hint: UDP path works, but outbound TCP smoke did not complete -> verify peer listener/routing",
+            )
+        }
+    } else if !result.console_ok {
+        Some("[net-selftest] hint: TCP console banner missing or listener not recycling")
+    } else {
+        None
+    }
 }
 
 fn prefix_to_netmask(prefix_len: u8) -> Ipv4Address {
@@ -2640,21 +2688,39 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
     }
 
+    fn current_counters(&self) -> NetCounters {
+        let device_counters = self.device.counters();
+        NetCounters {
+            rx_packets: device_counters.rx_packets,
+            tx_packets: device_counters.tx_packets,
+            rx_used_advances: device_counters.rx_used_advances,
+            tx_used_advances: device_counters.tx_used_advances,
+            smoltcp_polls: self.counters.smoltcp_polls,
+            udp_rx: self.counters.udp_rx,
+            udp_tx: self.counters.udp_tx,
+            tcp_accepts: self.counters.tcp_accepts,
+            tcp_rx_bytes: self.counters.tcp_rx_bytes,
+            tcp_tx_bytes: self.counters.tcp_tx_bytes,
+            tcp_smoke_outbound: self.counters.tcp_smoke_outbound,
+            tcp_smoke_outbound_failures: self.counters.tcp_smoke_outbound_failures,
+            tx_submit: device_counters.tx_submit,
+            tx_complete: device_counters.tx_complete,
+            tx_free: device_counters.tx_free,
+            tx_in_flight: device_counters.tx_in_flight,
+            tx_double_submit: device_counters.tx_double_submit,
+            tx_zero_len_attempt: device_counters.tx_zero_len_attempt,
+            dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
+        }
+    }
+
     fn log_self_test_result(&self, result: NetSelfTestResult) {
+        let counters = self.current_counters();
         info!(
             "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={}",
             result.tx_ok, result.udp_echo_ok, result.tcp_ok, result.console_ok
         );
-        if !result.tx_ok {
-            info!("[net-selftest] hint: TX not visible → queue notify / cache / descriptors");
-        } else if !result.udp_echo_ok {
-            info!(
-                "[net-selftest] hint: RX never arrives → buffers not posted / used ring not read / IRQ missing"
-            );
-        } else if !result.tcp_ok {
-            info!("[net-selftest] hint: TCP accepts but no bytes → poll loop scheduling / RX path");
-        } else if !result.console_ok {
-            info!("[net-selftest] hint: TCP console banner missing or listener not recycling");
+        if let Some(hint) = self_test_failure_hint(result, counters) {
+            info!("{hint}");
         }
     }
 
@@ -2685,7 +2751,6 @@ impl<D: NetDevice> NetStack<D> {
             tcp_ok: false,
             console_ok: false,
         };
-        self.self_test.tx_ok = false;
         self.self_test.udp_echo_ok = false;
         self.self_test.tcp_ok = false;
         self.self_test.console_ok = false;
@@ -2699,7 +2764,8 @@ impl<D: NetDevice> NetStack<D> {
             return false;
         }
 
-        if let Some(result) = self.self_test.conclude_if_needed(now_ms) {
+        let mut counters = self.current_counters();
+        if let Some(result) = self.self_test.conclude_if_needed(now_ms, counters) {
             self.log_self_test_result(result);
         }
 
@@ -2729,11 +2795,18 @@ impl<D: NetDevice> NetStack<D> {
                 self.interface
                     .poll(timestamp, self.device.as_mut(), &mut self.sockets);
             if poll_result != PollResult::None {
-                info!("[net-selftest] post-selftest poll flushed pending work");
+                self.self_test.post_poll_flush_logs =
+                    self.self_test.post_poll_flush_logs.saturating_add(1);
+                if self.self_test.post_poll_flush_logs == 1 {
+                    info!("[net-selftest] post-selftest poll flushed pending work");
+                } else {
+                    debug!("[net-selftest] post-selftest poll flushed pending work");
+                }
             }
         }
 
-        if let Some(result) = self.self_test.conclude_if_needed(now_ms) {
+        counters = self.current_counters();
+        if let Some(result) = self.self_test.conclude_if_needed(now_ms, counters) {
             self.log_self_test_result(result);
         }
 
@@ -2915,7 +2988,7 @@ impl<D: NetDevice> NetStack<D> {
                         self.counters.udp_tx = self.counters.udp_tx.saturating_add(1);
                         self.self_test.beacon_seq = self.self_test.beacon_seq.wrapping_add(1);
                         self.self_test.beacons_sent = self.self_test.beacons_sent.saturating_add(1);
-                        self.self_test.record_tx();
+                        self.self_test.udp_beacon_blocked_logs = 0;
                         if consume_burst {
                             self.self_test.burst_remaining =
                                 self.self_test.burst_remaining.saturating_sub(1);
@@ -2946,10 +3019,29 @@ impl<D: NetDevice> NetStack<D> {
                         sent = sent.saturating_add(1);
                     }
                     Err(err) => {
-                        warn!(
-                            "[net-selftest] udp-beacon send failed seq={} err={:?}",
-                            self.self_test.beacon_seq, err
-                        );
+                        let log_count = match err {
+                            UdpSendError::BufferFull => {
+                                self.self_test.udp_beacon_blocked_logs =
+                                    self.self_test.udp_beacon_blocked_logs.saturating_add(1);
+                                self.self_test.udp_beacon_blocked_logs
+                            }
+                            _ => {
+                                self.self_test.udp_beacon_error_logs =
+                                    self.self_test.udp_beacon_error_logs.saturating_add(1);
+                                self.self_test.udp_beacon_error_logs
+                            }
+                        };
+                        if log_count == 1 {
+                            warn!(
+                                "[net-selftest] udp-beacon send failed seq={} err={:?}",
+                                self.self_test.beacon_seq, err
+                            );
+                        } else {
+                            debug!(
+                                "[net-selftest] udp-beacon send failed seq={} err={:?}",
+                                self.self_test.beacon_seq, err
+                            );
+                        }
                         break;
                     }
                 }
@@ -4948,7 +5040,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             return false;
         }
         self.session_state.not_ready_logged = false;
-        if self.self_test.start(now_ms) {
+        let start_tx_complete = self.device.counters().tx_complete;
+        if self.self_test.start(now_ms, start_tx_complete) {
             self.tcp_smoke_outbound_sent = false;
             self.tcp_smoke_last_attempt_ms = now_ms.saturating_sub(1_000);
             let udp_target = self.selftest_host_target(UDP_ECHO_PORT);
@@ -4957,11 +5050,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 "[net-selftest] starting run (udp dst={} tcp dst={})",
                 udp_target.primary, tcp_target.primary
             );
-            info!(
-                "[net-selftest] host capture: tcpdump -i lo0 -n udp port {}",
-                UDP_ECHO_PORT
-            );
             if udp_target.forwarded_hint || tcp_target.forwarded_hint {
+                info!(
+                    "[net-selftest] host capture (hostfwd/tunnel): tcpdump -i lo0 -n 'udp port {} or tcp port {}'",
+                    UDP_ECHO_PORT, TCP_SMOKE_PORT
+                );
                 info!(
                     "[net-selftest] host udp echo (hostfwd/tunnel): echo -n \"ping\" | nc -u -w1 {}",
                     udp_target.primary
@@ -4975,6 +5068,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     udp_target.direct
                 );
             } else if self.backend.uses_dev_virt_defaults() {
+                info!(
+                    "[net-selftest] host capture (qemu hostfwd): tcpdump -i lo0 -n 'udp port {} or tcp port {}'",
+                    UDP_ECHO_PORT, TCP_SMOKE_PORT
+                );
                 info!(
                     "[net-selftest] qemu user-net without hostfwd → add hostfwd=tcp::31338-:31338,hostfwd=tcp::31339-:31339 and use localhost",
                 );
@@ -4991,6 +5088,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     udp_target.direct
                 );
             } else {
+                info!(
+                    "[net-selftest] host capture (direct-link): tcpdump -ni <host-iface> 'arp or udp port {} or tcp port {}'",
+                    UDP_ECHO_PORT, TCP_SMOKE_PORT
+                );
                 info!(
                     "[net-selftest] static profile target udp={} tcp={}",
                     udp_target.primary, tcp_target.primary
@@ -5318,5 +5419,44 @@ mod tests {
         let (prefix, prefix_len) = NetStack::<DefaultNetDevice>::trace_conn_prefix(&payload);
         assert_eq!(prefix_len, payload.len());
         assert_eq!(&prefix[..prefix_len], payload);
+    }
+
+    #[test]
+    fn self_test_hint_distinguishes_driver_rx_from_socket_rx() {
+        let result = NetSelfTestResult {
+            tx_ok: true,
+            udp_echo_ok: false,
+            tcp_ok: false,
+            console_ok: false,
+        };
+        let counters = NetCounters {
+            rx_packets: 78,
+            udp_rx: 0,
+            tcp_accepts: 0,
+            ..NetCounters::default()
+        };
+        assert_eq!(
+            self_test_failure_hint(result, counters),
+            Some(
+                "[net-selftest] hint: driver RX works, but no peer UDP/TCP reached self-test sockets -> run the logged host-side commands on the peer and verify IP/ARP/route",
+            )
+        );
+    }
+
+    #[test]
+    fn self_test_hint_reports_driver_level_rx_failure_when_no_frames_arrive() {
+        let result = NetSelfTestResult {
+            tx_ok: true,
+            udp_echo_ok: false,
+            tcp_ok: false,
+            console_ok: false,
+        };
+        let counters = NetCounters::default();
+        assert_eq!(
+            self_test_failure_hint(result, counters),
+            Some(
+                "[net-selftest] hint: RX never reaches the driver -> buffers not posted / used ring not read / IRQ missing",
+            )
+        );
     }
 }

@@ -679,6 +679,7 @@ pub trait RootTaskControl {
   `backend=<label> enabled=<bool> running=<bool> udp=<ip:port> tcp=<ip:port> last=<result>`.
 - `nettest` target selection is profile-gated:
   QEMU keeps existing `127.0.0.1:{31338,31339}` hostfwd semantics; Pi 4 uses manifest static IPv4/gateway-derived targets without introducing new in-VM listeners.
+- Operator capture guidance is profile-gated as well: QEMU hostfwd/tunnel flows use `lo0`, while Pi 4 direct-link/static IPv4 flows use the host's physical NIC and require the logged peer-side `nc` commands to exercise UDP echo and TCP smoke.
 - `cohsh` is the authoritative implementation of this protocol, and the planned WASM GUI is conceptually another client that wraps the same verbs without introducing a new control surface.
 
 ## 14. Error Surface
