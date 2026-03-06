@@ -20,6 +20,7 @@ FLASH_DISK=""
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net-console"
 SKIP_BUILD=0
+PI4_TOTAL_MEM_MB=2048
 
 usage() {
     cat <<'USAGE'
@@ -118,6 +119,7 @@ configure_pi4_sel4_build() {
       -DAARCH64=TRUE \
       -DARM_HYP=OFF \
       -DPLATFORM=bcm2711 \
+      -DRPI4_MEMORY="${PI4_TOTAL_MEM_MB}" \
       -DRELEASE=OFF \
       -DVERIFICATION=OFF \
       -DSMP=ON \
@@ -141,6 +143,7 @@ configure_pi4_sel4_build() {
     grep -q "^RELEASE:BOOL=OFF$" "$cache_file" || fail "RELEASE mode unexpectedly enabled"
     grep -q "^SMP:BOOL=ON$" "$cache_file" || fail "SMP not enabled"
     grep -q "^NUM_NODES:STRING=4$" "$cache_file" || fail "NUM_NODES not set to 4"
+    grep -Eq "^RPI4_MEMORY:[A-Z]+=${PI4_TOTAL_MEM_MB}$" "$cache_file" || fail "RPI4_MEMORY not set to ${PI4_TOTAL_MEM_MB}"
     grep -q "^Sel4testAllowSettingsOverride:BOOL=ON$" "$cache_file" || fail "Sel4testAllowSettingsOverride not ON"
     grep -q "^KernelDebugBuild:BOOL=ON$" "$cache_file" || fail "KernelDebugBuild not ON"
     grep -q "^KernelPrinting:BOOL=ON$" "$cache_file" || fail "KernelPrinting not ON"
@@ -440,7 +443,7 @@ stage_sd_payload() {
     # fallback boot path cannot silently run stale bits.
     cp -f "${STAGE_DIR}/${COHESIX_IMAGE_NAME}" "$fallback_image"
 
-    cat > "${STAGE_DIR}/config.txt" <<'EOF'
+    cat > "${STAGE_DIR}/config.txt" <<EOF
 arm_64bit=1
 arm_boost=1
 enable_uart=1
@@ -450,7 +453,7 @@ kernel=u-boot.bin
 dtoverlay=upstream-pi4
 # Keep mini-UART on GPIO14/15 to match seL4 bcm2711 serial1 console routing.
 core_freq=250
-total_mem=1024
+total_mem=${PI4_TOTAL_MEM_MB}
 EOF
 
     write_boot_cmd "${STAGE_DIR}/boot.cmd" "${COHESIX_IMAGE_NAME}" "${SEL4_UPSTREAM_IMAGE_NAME}"

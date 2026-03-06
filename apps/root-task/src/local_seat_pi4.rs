@@ -3727,6 +3727,7 @@ impl UsbKeyboard {
                     hub_interface_number,
                     hub_protocol_code,
                     hub_desc.power_switching_mode(),
+                    hub_desc.pwr_on_2_pwr_good,
                     downstream_port,
                     reset_feature,
                 );
@@ -4826,6 +4827,31 @@ impl UsbKeyboard {
         HUB_EAGER_INDIVIDUAL_PORT_POWER && power_mode == 1
     }
 
+    #[inline]
+    const fn hub_should_power_port_during_blind_prepare(power_mode: u8) -> bool {
+        Self::hub_mode_supports_port_power(power_mode)
+    }
+
+    #[inline]
+    const fn hub_should_probe_status_after_power_kick(power_mode: u8) -> bool {
+        power_mode != 1
+    }
+
+    #[inline]
+    const fn hub_post_power_wait_ms(power_mode: u8, pwr_on_2_pwr_good: u8) -> u64 {
+        let pwr_good_ms = (pwr_on_2_pwr_good as u64).saturating_mul(2);
+        let minimum = if power_mode == 1 {
+            HUB_POWER_SETTLE_MIN_MS
+        } else {
+            HUB_PORT_STATUS_QUICK_RETRY_DELAY_MS
+        };
+        if pwr_good_ms > minimum {
+            pwr_good_ms
+        } else {
+            minimum
+        }
+    }
+
     fn recover_disconnected_hub_port(
         device: &UsbDevice<SeatDma>,
         hub_interface_number: u8,
@@ -4864,45 +4890,62 @@ impl UsbKeyboard {
                 HUB_DISCONNECTED_RECOVERY_POWER_RETRIES,
             );
             if power_kick_sent {
-                let pwr_good_ms = (pwr_on_2_pwr_good as u64).saturating_mul(2);
-                wait_ms(cmp::max(pwr_good_ms, HUB_PORT_STATUS_QUICK_RETRY_DELAY_MS));
-                post_power_status = Self::hub_port_status_with_retry(
-                    device,
-                    hub_interface_number,
-                    port,
-                    "disconnected-post-power",
-                );
-                if let Some(status) = post_power_status {
-                    Self::log_hub_port_status(
-                        device.slot_id(),
-                        port,
-                        "disconnected-post-power",
-                        status,
-                    );
-                    Self::clear_hub_port_change_bits(
+                let wait_ms_after_power =
+                    Self::hub_post_power_wait_ms(hub_power_mode, pwr_on_2_pwr_good);
+                wait_ms(wait_ms_after_power);
+                if Self::hub_should_probe_status_after_power_kick(hub_power_mode) {
+                    post_power_status = Self::hub_port_status_with_retry(
                         device,
                         hub_interface_number,
                         port,
-                        status,
-                        hub_protocol_code,
+                        "disconnected-post-power",
                     );
-                    if status.connected() {
-                        Self::log_hub_port_exact_fault(
+                    if let Some(status) = post_power_status {
+                        Self::log_hub_port_status(
+                            device.slot_id(),
+                            port,
+                            "disconnected-post-power",
+                            status,
+                        );
+                        Self::clear_hub_port_change_bits(
+                            device,
+                            hub_interface_number,
+                            port,
+                            status,
+                            hub_protocol_code,
+                        );
+                        if status.connected() {
+                            Self::log_hub_port_exact_fault(
+                                device.slot_id(),
+                                hub_interface_number,
+                                port,
+                                "recovered-after-power-kick",
+                                status,
+                                hub_power_mode,
+                            );
+                            return true;
+                        }
+                    } else {
+                        Self::log_hub_port_status_unavailable(
+                            device.slot_id(),
+                            port,
+                            "disconnected-post-power",
+                        );
+                    }
+                } else {
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] hub power kick deferred-status slot={} iface={} port={} mode={} wait_ms={}",
                             device.slot_id(),
                             hub_interface_number,
                             port,
-                            "recovered-after-power-kick",
-                            status,
                             hub_power_mode,
-                        );
-                        return true;
-                    }
-                } else {
-                    Self::log_hub_port_status_unavailable(
-                        device.slot_id(),
-                        port,
-                        "disconnected-post-power",
+                            wait_ms_after_power,
+                        ),
                     );
+                    boot_log::force_uart_line(line.as_str());
                 }
             }
         }
@@ -5136,11 +5179,12 @@ impl UsbKeyboard {
         hub_interface_number: u8,
         hub_protocol_code: u8,
         hub_power_mode: u8,
+        pwr_on_2_pwr_good: u8,
         port: u8,
         reset_feature: u16,
     ) -> bool {
         let mut prepared = false;
-        if Self::hub_should_eager_port_power(hub_power_mode)
+        if Self::hub_should_power_port_during_blind_prepare(hub_power_mode)
             && Self::hub_set_feature_with_retry(
                 device,
                 hub_interface_number,
@@ -5151,6 +5195,10 @@ impl UsbKeyboard {
             )
         {
             prepared = true;
+            wait_ms(Self::hub_post_power_wait_ms(
+                hub_power_mode,
+                pwr_on_2_pwr_good,
+            ));
         }
 
         if Self::hub_set_feature_with_retry(
@@ -6755,6 +6803,32 @@ mod tests {
     fn hub_port_power_policy_defaults_to_deferred_scan() {
         assert!(!hub_should_eager_port_power(0));
         assert!(!hub_should_eager_port_power(1));
+    }
+
+    #[test]
+    fn blind_prepare_powers_ports_for_switchable_hubs() {
+        assert!(UsbKeyboard::hub_should_power_port_during_blind_prepare(0));
+        assert!(UsbKeyboard::hub_should_power_port_during_blind_prepare(1));
+        assert!(!UsbKeyboard::hub_should_power_port_during_blind_prepare(2));
+    }
+
+    #[test]
+    fn power_kick_status_probe_is_deferred_for_individual_hubs() {
+        assert!(UsbKeyboard::hub_should_probe_status_after_power_kick(0));
+        assert!(!UsbKeyboard::hub_should_probe_status_after_power_kick(1));
+    }
+
+    #[test]
+    fn hub_post_power_wait_uses_full_settle_for_individual_hubs() {
+        assert_eq!(
+            UsbKeyboard::hub_post_power_wait_ms(1, 50),
+            HUB_POWER_SETTLE_MIN_MS
+        );
+        assert_eq!(UsbKeyboard::hub_post_power_wait_ms(1, 150), 300);
+        assert_eq!(
+            UsbKeyboard::hub_post_power_wait_ms(0, 50),
+            HUB_PORT_STATUS_QUICK_RETRY_DELAY_MS.max(100)
+        );
     }
 
     #[test]

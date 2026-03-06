@@ -26,6 +26,8 @@ use crate::{
 use alloc::sync::Arc;
 use core::{hint::spin_loop, ptr};
 
+const BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD: u8 = 4;
+
 #[inline]
 const fn has_report_payload(
     completion_code: u8,
@@ -210,6 +212,41 @@ fn decode_keyboard_report_payload(buf: &[u8], preferred_offset: usize) -> Option
         }
     }
     None
+}
+
+#[inline]
+fn decode_keyboard_report_payload_boot_compatible(
+    buf: &[u8],
+    preferred_offset: usize,
+) -> Option<KeyboardReport> {
+    if buf.len() < 4 {
+        return None;
+    }
+
+    let try_offset = |offset: usize| {
+        decode_boot_keyboard_report_at(buf, offset)
+            .or_else(|| decode_compact_keyboard_report_at(buf, offset))
+    };
+
+    if let Some(report) = try_offset(preferred_offset) {
+        return Some(report);
+    }
+
+    for offset in [0usize, 1usize] {
+        if offset == preferred_offset {
+            continue;
+        }
+        if let Some(report) = try_offset(offset) {
+            return Some(report);
+        }
+    }
+    None
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyboardDecodeMode {
+    BootCompatible,
+    Flexible,
 }
 
 #[inline]
@@ -729,6 +766,8 @@ pub struct HidDevice<H: Dma> {
     interface: u8,
     ep_in: u8,
     ep_max_packet: u16,
+    keyboard_decode_failures: u8,
+    keyboard_decode_mode: KeyboardDecodeMode,
     keyboard_report_offset: u8,
     report_buf: PhysMem<H>,
 }
@@ -767,6 +806,12 @@ impl<H: Dma> HidDevice<H> {
             interface: iface.interface_number,
             ep_in: ep_in.number(),
             ep_max_packet: ep_in.max_packet_size,
+            keyboard_decode_failures: 0,
+            keyboard_decode_mode: if hid_type == HidType::Keyboard {
+                KeyboardDecodeMode::BootCompatible
+            } else {
+                KeyboardDecodeMode::Flexible
+            },
             keyboard_report_offset: 0,
             report_buf,
         };
@@ -856,7 +901,7 @@ impl<H: Dma> HidDevice<H> {
     }
 
     /// Poll for keyboard report (non-blocking) with transfer re-queue errors surfaced.
-    pub fn poll_keyboard_checked(&self) -> Result<Option<KeyboardReport>> {
+    pub fn poll_keyboard_checked(&mut self) -> Result<Option<KeyboardReport>> {
         if self.hid_type != HidType::Keyboard {
             return Ok(None);
         }
@@ -892,9 +937,30 @@ impl<H: Dma> HidDevice<H> {
                         payload_len.min(self.ep_max_packet as usize),
                     )
                 };
-                if let Some(report) =
-                    decode_keyboard_report_payload(payload, usize::from(self.keyboard_report_offset))
+                let mut report = match self.keyboard_decode_mode {
+                    KeyboardDecodeMode::BootCompatible => decode_keyboard_report_payload_boot_compatible(
+                        payload,
+                        usize::from(self.keyboard_report_offset),
+                    ),
+                    KeyboardDecodeMode::Flexible => decode_keyboard_report_payload(
+                        payload,
+                        usize::from(self.keyboard_report_offset),
+                    ),
+                };
+                if report.is_none() && self.keyboard_decode_mode == KeyboardDecodeMode::BootCompatible
                 {
+                    self.keyboard_decode_failures =
+                        self.keyboard_decode_failures.saturating_add(1);
+                    if self.keyboard_decode_failures >= BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD {
+                        self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
+                        report = decode_keyboard_report_payload(
+                            payload,
+                            usize::from(self.keyboard_report_offset),
+                        );
+                    }
+                }
+                if let Some(report) = report {
+                    self.keyboard_decode_failures = 0;
                     self.queue_read()?;
                     return Ok(Some(report));
                 }
@@ -911,7 +977,7 @@ impl<H: Dma> HidDevice<H> {
     }
 
     /// Poll for keyboard report (non-blocking).
-    pub fn poll_keyboard(&self) -> Option<KeyboardReport> {
+    pub fn poll_keyboard(&mut self) -> Option<KeyboardReport> {
         self.poll_keyboard_checked().ok().flatten()
     }
 
@@ -955,7 +1021,7 @@ impl<H: Dma> HidDevice<H> {
     }
 
     /// Blocking read for keyboard
-    pub fn read_keyboard(&self) -> Result<KeyboardReport> {
+    pub fn read_keyboard(&mut self) -> Result<KeyboardReport> {
         if self.hid_type != HidType::Keyboard {
             return Err(UsbError::NotSupported);
         }
@@ -999,6 +1065,8 @@ impl<H: Dma> HidDevice<H> {
     /// `bInterfaceProtocol` but still accept `SET_PROTOCOL(BOOT)`.
     pub fn into_forced_keyboard(mut self) -> Self {
         self.hid_type = HidType::Keyboard;
+        self.keyboard_decode_failures = 0;
+        self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
         self.keyboard_report_offset = 0;
         self
     }
@@ -1009,6 +1077,8 @@ impl<H: Dma> HidDevice<H> {
     /// reports are `[report_id, modifiers, reserved, keys[6], ...]`.
     pub fn into_forced_keyboard_with_report_id(mut self) -> Self {
         self.hid_type = HidType::Keyboard;
+        self.keyboard_decode_failures = 0;
+        self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
         self.keyboard_report_offset = 1;
         self
     }
@@ -1106,8 +1176,8 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_keyboard_report_payload, has_report_payload, keyboard_endpoint_id_matches,
-        keyboard_usage_code_valid,
+        decode_keyboard_report_payload, decode_keyboard_report_payload_boot_compatible,
+        has_report_payload, keyboard_endpoint_id_matches, keyboard_usage_code_valid,
     };
     use crate::ring::completion;
 
@@ -1196,6 +1266,25 @@ mod tests {
         // Invalid usage code (0x02) should be rejected by layout validation.
         let payload = [0x00u8, 0x00, 0x02, 0, 0, 0, 0, 0];
         assert!(decode_keyboard_report_payload(&payload, 0).is_none());
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_boot_compatible_accepts_boot_and_report_id() {
+        let boot = [0x02u8, 0x00, 0x04, 0, 0, 0, 0, 0];
+        let report = decode_keyboard_report_payload_boot_compatible(&boot, 0).expect("decode");
+        assert_eq!(report.keys[0], 0x04);
+
+        let report_id = [0x01u8, 0x02, 0x00, 0x05, 0, 0, 0, 0, 0];
+        let report =
+            decode_keyboard_report_payload_boot_compatible(&report_id, 1).expect("decode");
+        assert_eq!(report.keys[0], 0x05);
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_boot_compatible_rejects_bitmap_only_reports() {
+        let bitmap = [0x00u8, 0x00, 0x10, 0x00];
+        assert!(decode_keyboard_report_payload_boot_compatible(&bitmap, 0).is_none());
+        assert!(decode_keyboard_report_payload(&bitmap, 0).is_some());
     }
 
     #[test]

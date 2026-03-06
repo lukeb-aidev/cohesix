@@ -989,6 +989,7 @@ pub struct NetStack<D: NetDevice> {
     stage_policy: NetStagePolicy,
     tx_only_sent: bool,
     tcp_smoke_outbound_sent: bool,
+    tcp_smoke_outbound_connecting: bool,
     tcp_smoke_last_attempt_ms: u64,
     #[cfg(feature = "net-outbound-probe")]
     probe_sent: bool,
@@ -1197,12 +1198,19 @@ fn self_test_failure_hint(
     } else if !result.udp_echo_ok {
         if counters.rx_packets == 0 {
             Some(
-                "[net-selftest] hint: RX never reaches the driver -> buffers not posted / used ring not read / IRQ missing",
-            )
+                    "[net-selftest] hint: RX never reaches the driver -> buffers not posted / used ring not read / IRQ missing",
+                )
+        } else if counters.udp_rx == 0
+            && counters.tcp_accepts == 0
+            && counters.tcp_smoke_outbound_failures > 0
+        {
+            Some(
+                    "[net-selftest] hint: driver RX works and the peer is refusing TCP smoke while no UDP echo arrived -> run the logged host-side commands on the peer (31338/31339)",
+                )
         } else if counters.udp_rx == 0 && counters.tcp_accepts == 0 {
             Some(
-                "[net-selftest] hint: driver RX works, but no peer UDP/TCP reached self-test sockets -> run the logged host-side commands on the peer and verify IP/ARP/route",
-            )
+                    "[net-selftest] hint: driver RX works, but no peer UDP/TCP reached self-test sockets -> run the logged host-side commands on the peer and verify IP/ARP/route",
+                )
         } else {
             Some(
                 "[net-selftest] hint: UDP echo path missing while other RX exists -> verify echo port/path",
@@ -2379,6 +2387,7 @@ impl<D: NetDevice> NetStack<D> {
             stage_policy,
             tx_only_sent: false,
             tcp_smoke_outbound_sent: false,
+            tcp_smoke_outbound_connecting: false,
             tcp_smoke_last_attempt_ms: 0,
             #[cfg(feature = "net-outbound-probe")]
             probe_sent: false,
@@ -3395,6 +3404,15 @@ impl<D: NetDevice> NetStack<D> {
         let mut activity = false;
 
         if matches!(socket.state(), TcpState::Closed) {
+            if self.tcp_smoke_outbound_connecting && !self.tcp_smoke_outbound_sent {
+                self.counters.tcp_smoke_outbound_failures =
+                    self.counters.tcp_smoke_outbound_failures.saturating_add(1);
+                warn!(
+                    "[net-selftest] tcp-smoke outbound closed/reset before establish dest={}:{}",
+                    dest.addr, dest.port
+                );
+                self.tcp_smoke_outbound_connecting = false;
+            }
             if now_ms.saturating_sub(self.tcp_smoke_last_attempt_ms) >= 1_000 {
                 self.tcp_smoke_last_attempt_ms = now_ms;
                 self.tcp_smoke_outbound_sent = false;
@@ -3411,6 +3429,7 @@ impl<D: NetDevice> NetStack<D> {
                     "tcp-smoke-outbound",
                 ) {
                     Ok(()) => {
+                        self.tcp_smoke_outbound_connecting = true;
                         info!(
                             "[net-selftest] tcp-smoke outbound connect -> {}:{} (now_ms={})",
                             dest.addr, dest.port, now_ms
@@ -3418,6 +3437,7 @@ impl<D: NetDevice> NetStack<D> {
                         activity = true;
                     }
                     Err(err) => {
+                        self.tcp_smoke_outbound_connecting = false;
                         self.counters.tcp_smoke_outbound_failures =
                             self.counters.tcp_smoke_outbound_failures.saturating_add(1);
                         warn!(
@@ -3439,6 +3459,7 @@ impl<D: NetDevice> NetStack<D> {
                         self.counters.tcp_smoke_outbound =
                             self.counters.tcp_smoke_outbound.saturating_add(1);
                         self.tcp_smoke_outbound_sent = true;
+                        self.tcp_smoke_outbound_connecting = false;
                         self.self_test.record_tcp_ok();
                         info!(
                             "[net-selftest] tcp-smoke outbound sent bytes={} dest={}:{}",
@@ -3464,6 +3485,7 @@ impl<D: NetDevice> NetStack<D> {
         {
             self.counters.tcp_smoke_outbound_failures =
                 self.counters.tcp_smoke_outbound_failures.saturating_add(1);
+            self.tcp_smoke_outbound_connecting = false;
             warn!(
                 "[net-selftest] tcp-smoke outbound closed without send state={:?}",
                 socket.state()
@@ -5000,6 +5022,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.telemetry = NetTelemetry::default();
         self.outbound.reset();
         self.tcp_smoke_outbound_sent = false;
+        self.tcp_smoke_outbound_connecting = false;
         self.tcp_smoke_last_attempt_ms = 0;
         self.tx_only_sent = false;
         self.self_test.console_probe_done = false;
@@ -5043,6 +5066,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         let start_tx_complete = self.device.counters().tx_complete;
         if self.self_test.start(now_ms, start_tx_complete) {
             self.tcp_smoke_outbound_sent = false;
+            self.tcp_smoke_outbound_connecting = false;
             self.tcp_smoke_last_attempt_ms = now_ms.saturating_sub(1_000);
             let udp_target = self.selftest_host_target(UDP_ECHO_PORT);
             let tcp_target = self.selftest_host_target(TCP_SMOKE_PORT);
