@@ -174,13 +174,9 @@ const CONSOLE_BANNER: &str = "[Cohesix] Root console ready (type 'help' for comm
 const CONSOLE_PROMPT: &str = "cohesix> ";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
 #[cfg(feature = "net-console")]
-const NET_DIAG_HEARTBEAT_MS: u64 = 5_000;
-#[cfg(feature = "net-console")]
-const NET_DIAG_RATE_LIMIT_MS: u64 = 1_000;
+const NET_DIAG_RATE_LIMIT_MS: u64 = 15_000;
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_KINDS: usize = 1;
-#[cfg(feature = "net-console")]
-const NET_DIAG_HEARTBEAT_POLLS: u64 = 1_024;
 #[cfg(feature = "net-console")]
 const NET_DIAG_STUCK_MS: u64 = 3_000;
 
@@ -1243,28 +1239,58 @@ where
     #[cfg(feature = "net-console")]
     // Activity-only logging to prevent endless spam in steady state.
     fn should_log_net_diag(&self, snapshot: NetDiagSnapshot, telemetry: NetTelemetry) -> bool {
-        let activity = self.last_net_diag_emitted.map_or(true, |prev| {
+        if Self::net_diag_idle(snapshot, telemetry) {
+            return false;
+        }
+        self.last_net_diag_emitted.map_or(true, |prev| {
             Self::net_diag_changed(prev.snapshot, snapshot)
                 || prev.link_up != telemetry.link_up
                 || prev.tx_drops != telemetry.tx_drops
-        });
-        let heartbeat_poll = self.last_net_diag_emitted.map_or(false, |prev| {
-            snapshot.poll_calls.saturating_sub(prev.snapshot.poll_calls) >= NET_DIAG_HEARTBEAT_POLLS
-        });
-        let heartbeat_time = self.last_net_diag_log_ms.map_or(false, |last| {
-            self.now_ms.saturating_sub(last) >= NET_DIAG_HEARTBEAT_MS
-        });
-
-        activity || heartbeat_poll || heartbeat_time
+        })
     }
 
     #[cfg(feature = "net-console")]
     fn net_diag_changed(prev: NetDiagSnapshot, curr: NetDiagSnapshot) -> bool {
         let mut prev = prev;
         let mut curr = curr;
+        // Ignore rapidly changing TX bookkeeping during sustained link failure;
+        // these counters can churn continuously without any meaningful traffic.
         prev.poll_calls = 0;
         curr.poll_calls = 0;
+        prev.tx_submits = 0;
+        curr.tx_submits = 0;
+        prev.tx_kicks = 0;
+        curr.tx_kicks = 0;
+        prev.tx_used_seen = 0;
+        curr.tx_used_seen = 0;
+        prev.tx_completions = 0;
+        curr.tx_completions = 0;
+        prev.tx_frames_from_smoltcp = 0;
+        curr.tx_frames_from_smoltcp = 0;
+        prev.outbound_frames = 0;
+        curr.outbound_frames = 0;
+        prev.outbound_bytes = 0;
+        curr.outbound_bytes = 0;
         prev != curr
+    }
+
+    #[cfg(feature = "net-console")]
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn net_diag_idle(snapshot: NetDiagSnapshot, telemetry: NetTelemetry) -> bool {
+        telemetry.tx_drops == 0
+            && snapshot.bytes_read == 0
+            && snapshot.bytes_written == 0
+            && snapshot.accept_attempts == 0
+            && snapshot.accept_success == 0
+            && snapshot.rx_frames_to_stack == 0
+            && snapshot.rx_frames_into_smoltcp == 0
+            && snapshot.tx_frames_from_smoltcp == 0
+            && snapshot.outbound_queued_lines == 0
+            && snapshot.outbound_queued_bytes == 0
+            && snapshot.outbound_drops == 0
+            && snapshot.outbound_would_block == 0
+            && snapshot.tx_submits == 0
+            && snapshot.tx_completions == 0
     }
 
     #[cfg(feature = "net-console")]
@@ -3896,6 +3922,60 @@ mod tests {
         assert_eq!(backoff.observe(true), None);
         assert_eq!(backoff.observe(false), None);
         assert_eq!(backoff.observe(false), Some(2));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn net_diag_idle_requires_zero_tx_drops() {
+        let snapshot = NetDiagSnapshot::default();
+        assert!(
+            EventPump::<NullIpc, LoopbackSerial<16>, TestTimer, 4>::net_diag_idle(
+                snapshot,
+                NetTelemetry {
+                    link_up: true,
+                    tx_drops: 0,
+                    last_poll_ms: 0,
+                }
+            )
+        );
+        assert!(
+            !EventPump::<NullIpc, LoopbackSerial<16>, TestTimer, 4>::net_diag_idle(
+                snapshot,
+                NetTelemetry {
+                    link_up: true,
+                    tx_drops: 1,
+                    last_poll_ms: 0,
+                }
+            )
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn net_diag_changed_ignores_tx_churn_counters() {
+        let prev = NetDiagSnapshot::default();
+        let mut curr = prev;
+        curr.tx_submits = 10;
+        curr.tx_kicks = 10;
+        curr.tx_used_seen = 7;
+        curr.tx_completions = 3;
+        curr.tx_frames_from_smoltcp = 20;
+        curr.outbound_frames = 20;
+        curr.outbound_bytes = 1_500;
+        assert!(
+            !EventPump::<NullIpc, LoopbackSerial<16>, TestTimer, 4>::net_diag_changed(prev, curr)
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn net_diag_changed_detects_real_io_progress() {
+        let prev = NetDiagSnapshot::default();
+        let mut curr = prev;
+        curr.bytes_written = 1;
+        assert!(
+            EventPump::<NullIpc, LoopbackSerial<16>, TestTimer, 4>::net_diag_changed(prev, curr)
+        );
     }
 
     struct NullIpc;

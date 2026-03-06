@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Kernel-mediated cache maintenance helpers for DMA buffers with structured logging.
 // Author: Lukas Bower
@@ -14,7 +14,7 @@ use core::panic::Location;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use heapless::{Deque, Vec};
-use log::{info, trace, warn, Level};
+use log::{debug, trace, warn, Level};
 use sel4_sys::{
     seL4_CPtr, seL4_Error, seL4_InvalidArgument, seL4_NoError, seL4_RangeError, seL4_Word,
 };
@@ -41,7 +41,8 @@ const ARMVSPACE_CLEAN_INVALIDATE_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 2;
 const ARMVSPACE_UNIFY_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 3;
 
 // Logging policy: per-op traces are gated to TRACE (or the `cache-trace` feature).
-// INFO emits rate-limited summaries with suppression counts; WARN dumps recent ops on errors.
+// DEBUG emits rate-limited summaries only when trace logging is enabled;
+// WARN dumps recent ops on errors.
 const CACHE_RING_CAPACITY: usize = 2048;
 const CACHE_DUMP_CHUNK: usize = 64;
 const ERROR_DUMP_RECENT: usize = 64;
@@ -409,7 +410,7 @@ fn bucket_len(len: usize) -> usize {
 fn render_record_line(record: &CacheOpRecord) -> heapless::String<192> {
     let mut line = heapless::String::<192>::new();
     let aligned_end = record.aligned_start.saturating_add(record.aligned_len);
-    let _ = write!(
+    if write!(
         line,
         "[cache] seq={seq} ts_ms={ts_ms} op={op} vspace=0x{vspace:04x} vaddr=0x{vaddr:016x}..0x{vend:016x} aligned=0x{astart:016x}..0x{aend:016x} len={len} aligned_len={aligned_len} err={err} caller={caller_file}:{caller_line}",
         seq = record.seq,
@@ -425,7 +426,20 @@ fn render_record_line(record: &CacheOpRecord) -> heapless::String<192> {
         err = record.err,
         caller_file = record.caller_file,
         caller_line = record.caller_line,
-    );
+    )
+    .is_err()
+    {
+        line.clear();
+        let _ = write!(
+            line,
+            "[cache] seq={} op={} err={} caller={}:{}",
+            record.seq,
+            record.op.as_str(),
+            record.err,
+            record.caller_file,
+            record.caller_line,
+        );
+    }
     line
 }
 
@@ -435,7 +449,7 @@ fn render_summary_line(snapshot: &SummarySnapshot, ring_len: usize) -> heapless:
         + snapshot.invalidate
         + snapshot.clean_invalidate
         + snapshot.unify_instruction;
-    let _ = write!(
+    if write!(
         line,
         "[cache] summary window_ms={} ops={} clean={} invalidate={} clean_invalidate={} unify_instruction={} requested_bytes={} aligned_bytes={} max_aligned_len={} errors={} suppressed={} ring_size={}",
         snapshot.window_ms,
@@ -450,7 +464,16 @@ fn render_summary_line(snapshot: &SummarySnapshot, ring_len: usize) -> heapless:
         snapshot.errors,
         snapshot.suppressed,
         ring_len,
-    );
+    )
+    .is_err()
+    {
+        line.clear();
+        let _ = write!(
+            line,
+            "[cache] summary ops={} errors={} suppressed={}",
+            total_ops, snapshot.errors, snapshot.suppressed,
+        );
+    }
     line
 }
 
@@ -570,18 +593,28 @@ fn call_cache_op(
 
     if trace_requested && !suppressed {
         let line = render_record_line(&record);
-        trace!(target: "hal-cache", "{line}");
+        if !line.is_empty() {
+            trace!(target: "hal-cache", "{line}");
+        }
     }
 
     if let Some(snapshot) = summary_snapshot {
         let line = render_summary_line(&snapshot, ring_len);
-        info!(target: "hal-cache", "{line}");
+        if !line.is_empty() {
+            if snapshot.errors > 0 {
+                warn!(target: "hal-cache", "{line}");
+            } else if FORCE_CACHE_TRACE {
+                debug!(target: "hal-cache", "{line}");
+            }
+        }
     }
 
     if err != 0 {
         let cache_err = CacheError::new(err);
         let line = render_record_line(&record);
-        warn!(target: "hal-cache", "{line}");
+        if !line.is_empty() {
+            warn!(target: "hal-cache", "{line}");
+        }
         dump_recent_logs(ERROR_DUMP_RECENT);
         Err(cache_err)
     } else {

@@ -948,7 +948,7 @@ impl NetworkClock {
 /// Smoltcp-backed network stack that bridges the selected network device into the root task.
 pub struct NetStack<D: NetDevice> {
     clock: NetworkClock,
-    device: D,
+    device: Box<D>,
     interface: Interface,
     sockets: SocketSet<'static>,
     _reservation: StorageReservation,
@@ -1469,6 +1469,20 @@ fn debug_validate_socket_storage(marker: &'static str) {
 #[cfg(not(debug_assertions))]
 fn debug_validate_socket_storage(_: &'static str) {}
 
+fn check_bootinfo_wrap(mark: &'static str) -> Result<(), DefaultNetConsoleError> {
+    let Some(state) = BootInfoState::get() else {
+        return Ok(());
+    };
+
+    let (pre, post) = state.canary_values();
+    info!("[bootinfo:net-wrap] mark={mark} pre=0x{pre:016x} post=0x{post:016x}");
+    if let Err(err) = state.verify("net.init.wrap", mark) {
+        error!("[bootinfo:net-wrap] mark={mark} err={err:?}");
+        return Err(NetConsoleError::Init(NetStackError::BootInfoCanary(mark)));
+    }
+    Ok(())
+}
+
 /// Initialise the network console stack, translating low-level errors into
 /// user-facing diagnostics.
 pub fn init_net_console<H>(
@@ -1518,22 +1532,41 @@ where
         UDP_ECHO_PORT,
         TCP_SMOKE_PORT
     );
+    info!(
+        "[net-console] layout sizes: stack.rtl8139={} stack.bcmgenet={} dev.bcmgenet={} enum.default={}",
+        mem::size_of::<NetStack<Rtl8139Device>>(),
+        mem::size_of::<NetStack<BcmGenetDevice>>(),
+        mem::size_of::<BcmGenetDevice>(),
+        mem::size_of::<DefaultNetStack>(),
+    );
+    #[cfg(feature = "net-backend-virtio")]
+    info!(
+        "[net-console] layout sizes: stack.virtio={} dev.virtio={}",
+        mem::size_of::<NetStack<VirtioNetStatic>>(),
+        mem::size_of::<VirtioNetStatic>(),
+    );
 
     let backend = config.backend;
     match backend {
-        NetBackend::Rtl8139 => NetStack::<Rtl8139Device>::new(hal, config, backend)
-            .map(Box::new)
-            .map(DefaultNetStack::Rtl8139)
-            .map_err(convert_console_error::<Rtl8139DriverError>),
-        NetBackend::BcmGenet => NetStack::<BcmGenetDevice>::new(hal, config, backend)
-            .map(Box::new)
-            .map(DefaultNetStack::BcmGenet)
-            .map_err(convert_console_error::<BcmGenetDriverError>),
+        NetBackend::Rtl8139 => {
+            let stack = NetStack::<Rtl8139Device>::new(hal, config, backend)
+                .map_err(convert_console_error::<Rtl8139DriverError>)?;
+            check_bootinfo_wrap("net.init.wrap.after-new.rtl8139")?;
+            Ok(DefaultNetStack::Rtl8139(stack))
+        }
+        NetBackend::BcmGenet => {
+            let stack = NetStack::<BcmGenetDevice>::new(hal, config, backend)
+                .map_err(convert_console_error::<BcmGenetDriverError>)?;
+            check_bootinfo_wrap("net.init.wrap.after-new.bcmgenet")?;
+            Ok(DefaultNetStack::BcmGenet(stack))
+        }
         #[cfg(feature = "net-backend-virtio")]
-        NetBackend::Virtio => NetStack::<VirtioNetStatic>::new(hal, config, backend)
-            .map(Box::new)
-            .map(DefaultNetStack::Virtio)
-            .map_err(convert_console_error::<VirtioDriverError>),
+        NetBackend::Virtio => {
+            let stack = NetStack::<VirtioNetStatic>::new(hal, config, backend)
+                .map_err(convert_console_error::<VirtioDriverError>)?;
+            check_bootinfo_wrap("net.init.wrap.after-new.virtio")?;
+            Ok(DefaultNetStack::Virtio(stack))
+        }
     }
 }
 
@@ -1731,6 +1764,9 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn watched_bootinfo_range() -> Option<Range<usize>> {
+        if let Some(state) = BootInfoState::get() {
+            return Some(state.snapshot_region());
+        }
         BOOTINFO_WINDOW_GUARD
             .watched_region()
             .map(|(ptr, len)| ptr as usize..ptr as usize + len)
@@ -2096,7 +2132,7 @@ impl<D: NetDevice> NetStack<D> {
         hal: &mut H,
         config: ConsoleNetConfig,
         backend: NetBackend,
-    ) -> Result<Self, NetStackError<D::Error>>
+    ) -> Result<Box<Self>, NetStackError<D::Error>>
     where
         H: Hardware<Error = HalError>,
     {
@@ -2140,7 +2176,7 @@ impl<D: NetDevice> NetStack<D> {
         console_config: ConsoleNetConfig,
         backend: NetBackend,
         init_guard: NetStackInitGuard,
-    ) -> Result<Self, NetStackError<D::Error>> {
+    ) -> Result<Box<Self>, NetStackError<D::Error>> {
         let netmask = prefix_to_netmask(prefix);
         let gateway_label = gateway.unwrap_or(Ipv4Address::UNSPECIFIED);
         let backend_label = backend.label();
@@ -2191,7 +2227,7 @@ impl<D: NetDevice> NetStack<D> {
         };
         log_net_watch_targets("net.init.begin");
         BOOTINFO_WINDOW_GUARD.check("net.init.device.pre");
-        let mut device = D::create_with_stage(hal, stage)?;
+        let mut device = Box::new(D::create_with_stage(hal, stage)?);
         BOOTINFO_WINDOW_GUARD.check("net.init.device.post");
         let mac = device.mac();
         info!("[net-console] {backend_label} device online: mac={mac}");
@@ -2215,7 +2251,7 @@ impl<D: NetDevice> NetStack<D> {
         let mut iface_config = IfaceConfig::new(HardwareAddress::Ethernet(mac));
         iface_config.random_seed = RANDOM_SEED;
 
-        let mut interface = Interface::new(iface_config, &mut device, clock.now());
+        let mut interface = Interface::new(iface_config, device.as_mut(), clock.now());
         info!(
             "[net-console] smoltcp interface created; assigning ip={}/{} netmask={}",
             ip, prefix, netmask
@@ -2250,7 +2286,7 @@ impl<D: NetDevice> NetStack<D> {
         let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
         log_bootinfo_mark("net.init.socketset", &attempt)?;
 
-        let mut stack = Self {
+        let mut stack = Box::new(Self {
             clock,
             device,
             interface,
@@ -2310,7 +2346,7 @@ impl<D: NetDevice> NetStack<D> {
             probe_hint_logged: false,
             last_now_ms: None,
             time_stall_warned: false,
-        };
+        });
         stack.assert_bootinfo_overlaps();
         stack.log_buffer_addresses_once("net.init.buffers");
         if stage_policy.allow_tcp {
@@ -2516,7 +2552,7 @@ impl<D: NetDevice> NetStack<D> {
             if activity {
                 let poll_result =
                     self.interface
-                        .poll(timestamp, &mut self.device, &mut self.sockets);
+                        .poll(timestamp, self.device.as_mut(), &mut self.sockets);
                 if poll_result != PollResult::None {
                     log::debug!("[net] smoltcp: tx-only poll now_ms={}", now_ms);
                 }
@@ -2531,9 +2567,9 @@ impl<D: NetDevice> NetStack<D> {
             return activity;
         }
 
-        let mut poll_result = self
-            .interface
-            .poll(timestamp, &mut self.device, &mut self.sockets);
+        let mut poll_result =
+            self.interface
+                .poll(timestamp, self.device.as_mut(), &mut self.sockets);
         if poll_result != PollResult::None {
             log::debug!("[net] smoltcp: events processed at now_ms={}", now_ms);
         }
@@ -2559,7 +2595,7 @@ impl<D: NetDevice> NetStack<D> {
             self.bump_poll_counter();
             poll_result = self
                 .interface
-                .poll(timestamp, &mut self.device, &mut self.sockets);
+                .poll(timestamp, self.device.as_mut(), &mut self.sockets);
             let poll_activity = poll_result != PollResult::None;
             if poll_activity {
                 log::debug!("[net] smoltcp: post-tcp poll now_ms={}", now_ms);
@@ -2689,9 +2725,9 @@ impl<D: NetDevice> NetStack<D> {
 
         if activity {
             self.bump_poll_counter();
-            let poll_result = self
-                .interface
-                .poll(timestamp, &mut self.device, &mut self.sockets);
+            let poll_result =
+                self.interface
+                    .poll(timestamp, self.device.as_mut(), &mut self.sockets);
             if poll_result != PollResult::None {
                 info!("[net-selftest] post-selftest poll flushed pending work");
             }
@@ -2827,9 +2863,9 @@ impl<D: NetDevice> NetStack<D> {
             }
 
             self.bump_poll_counter();
-            let poll_result = self
-                .interface
-                .poll(timestamp, &mut self.device, &mut self.sockets);
+            let poll_result =
+                self.interface
+                    .poll(timestamp, self.device.as_mut(), &mut self.sockets);
             if poll_result != PollResult::None {
                 activity = true;
             }

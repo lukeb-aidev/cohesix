@@ -1439,6 +1439,122 @@ pub fn user_image_paddr_range() -> Option<Range<usize>> {
     None
 }
 
+#[cfg(feature = "kernel")]
+fn reserve_bootinfo_snapshot_paddrs(untyped: &mut UntypedCatalog<'_>) {
+    let Some(state) = BootInfoState::get() else {
+        boot_log::force_uart_line("[bootinfo:snapshot] reserve skipped: state unavailable");
+        log::warn!("[bootinfo:snapshot] reserve skipped: state unavailable");
+        return;
+    };
+
+    let region = state.snapshot_region();
+    let page_start = region.start & !(PAGE_SIZE - 1);
+    let page_end = region.end.saturating_add(PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let mut begin_line = HeaplessString::<176>::new();
+    let _ = write!(
+        &mut begin_line,
+        "[bootinfo:snapshot] reserve begin vaddr=[0x{start:016x}..0x{end:016x})",
+        start = page_start,
+        end = page_end,
+    );
+    boot_log::force_uart_line(begin_line.as_str());
+    log::info!("{}", begin_line.as_str());
+    if page_start >= page_end {
+        return;
+    }
+
+    let mut total_pages = 0usize;
+    let mut resolved_pages = 0usize;
+    let mut segments = 0usize;
+    let mut missing_pages = false;
+    let mut seg_start: Option<usize> = None;
+    let mut seg_end = 0usize;
+    let mut first_paddr: Option<usize> = None;
+    let mut last_paddr_end = 0usize;
+
+    for vaddr in (page_start..page_end).step_by(PAGE_SIZE) {
+        total_pages = total_pages.saturating_add(1);
+        let Some(paddr) = user_image_vaddr_to_paddr(vaddr) else {
+            missing_pages = true;
+            if let Some(start) = seg_start.take() {
+                untyped.reserve_paddr_range(start..seg_end, "bootinfo-snapshot");
+                segments = segments.saturating_add(1);
+                if first_paddr.is_none() {
+                    first_paddr = Some(start);
+                }
+                last_paddr_end = seg_end;
+                seg_end = 0;
+            }
+            continue;
+        };
+
+        resolved_pages = resolved_pages.saturating_add(1);
+        match seg_start {
+            Some(start) if paddr == seg_end => {
+                seg_end = paddr.saturating_add(PAGE_SIZE);
+                debug_assert!(seg_end >= paddr, "bootinfo snapshot paddr overflow");
+                if first_paddr.is_none() {
+                    first_paddr = Some(start);
+                }
+                last_paddr_end = seg_end;
+            }
+            Some(start) => {
+                untyped.reserve_paddr_range(start..seg_end, "bootinfo-snapshot");
+                segments = segments.saturating_add(1);
+                if first_paddr.is_none() {
+                    first_paddr = Some(start);
+                }
+                last_paddr_end = seg_end;
+                seg_start = Some(paddr);
+                seg_end = paddr.saturating_add(PAGE_SIZE);
+            }
+            None => {
+                seg_start = Some(paddr);
+                seg_end = paddr.saturating_add(PAGE_SIZE);
+            }
+        }
+    }
+
+    if let Some(start) = seg_start.take() {
+        untyped.reserve_paddr_range(start..seg_end, "bootinfo-snapshot");
+        segments = segments.saturating_add(1);
+        if first_paddr.is_none() {
+            first_paddr = Some(start);
+        }
+        last_paddr_end = seg_end;
+    }
+
+    let mut line = HeaplessString::<256>::new();
+    match first_paddr {
+        Some(first) => {
+            let _ = write!(
+                &mut line,
+                "[bootinfo:snapshot] reserved paddr pages={resolved}/{total} segments={segments} missing={missing} vaddr=[0x{vstart:016x}..0x{vend:016x}) paddr=[0x{pstart:016x}..0x{pend:016x})",
+                resolved = resolved_pages,
+                total = total_pages,
+                missing = missing_pages as u8,
+                vstart = page_start,
+                vend = page_end,
+                pstart = first,
+                pend = last_paddr_end,
+            );
+            boot_log::force_uart_line(line.as_str());
+            log::info!("{}", line.as_str());
+        }
+        None => {
+            let _ = write!(
+                &mut line,
+                "[bootinfo:snapshot] failed to resolve paddr pages={total} vaddr=[0x{vstart:016x}..0x{vend:016x})",
+                total = total_pages,
+                vstart = page_start,
+                vend = page_end,
+            );
+            boot_log::force_uart_line(line.as_str());
+            log::warn!("{}", line.as_str());
+        }
+    }
+}
+
 /// Sets the CPU affinity for a TCB when SMP is enabled.
 #[cfg(feature = "kernel")]
 fn set_tcb_affinity_impl(
@@ -2276,6 +2392,7 @@ const PAGE_DIRECTORY_ALIGN: usize = 1 << 30;
 const PAGE_UPPER_DIRECTORY_ALIGN: usize = 1 << 39;
 const DEVICE_VADDR_BASE: usize = 0xA000_0000;
 const DMA_VADDR_BASE: usize = 0xB000_0000;
+const DMA_LOW_GUARD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_TABLES: usize = 64;
 const MAX_PAGE_DIRECTORIES: usize = 32;
 const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
@@ -3400,12 +3517,34 @@ impl<'a> KernelEnv<'a> {
         }
         let mut untyped = UntypedCatalog::new(bootinfo, pool_index);
         if let Some(range) = user_image_paddr_range() {
+            let mut line = HeaplessString::<160>::new();
+            let _ = write!(
+                &mut line,
+                "[untyped] user-image paddr=[0x{start:08x}..0x{end:08x})",
+                start = range.start,
+                end = range.end,
+            );
+            boot_log::force_uart_line(line.as_str());
+            log::info!("{}", line.as_str());
             untyped.reserve_paddr_range(range, "user-image");
         } else {
             log::warn!(
                 "[untyped] user image paddr range unavailable; DMA allocations may overlap image"
             );
+            boot_log::force_uart_line(
+                "[untyped] user image paddr range unavailable; DMA allocations may overlap image",
+            );
         }
+        reserve_bootinfo_snapshot_paddrs(&mut untyped);
+        untyped.reserve_paddr_range(0..DMA_LOW_GUARD_BYTES, "dma-low-guard");
+        let mut guard_line = HeaplessString::<112>::new();
+        let _ = write!(
+            &mut guard_line,
+            "[untyped] reserved dma-low-guard [0x00000000..0x{end:08x})",
+            end = DMA_LOW_GUARD_BYTES,
+        );
+        boot_log::force_uart_line(guard_line.as_str());
+        log::info!("{}", guard_line.as_str());
         Self {
             bootinfo,
             slots,
@@ -4010,7 +4149,7 @@ impl<'a> KernelEnv<'a> {
             );
             boot_log::force_uart_line(line.as_str());
         }
-        self.map_frame(frame_slot, range.start, attr, false)?;
+        self.map_frame(frame_slot, range.start, attr, true)?;
         if trace_uncached {
             let mut line = HeaplessString::<176>::new();
             let _ = write!(
@@ -4025,7 +4164,7 @@ impl<'a> KernelEnv<'a> {
         if trace_uncached {
             boot_log::force_uart_line("[local-seat] dma-frame before hal-log");
         }
-        ::log::info!(
+        ::log::debug!(
             target: "hal",
             "[hal] dma frame mapped source={source} vaddr=0x{vaddr:08x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
             source = if prefer_high { "high" } else { "low" },

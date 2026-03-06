@@ -10,10 +10,13 @@
 //! DMA frames.
 #![allow(unsafe_code)]
 
+#[cfg(target_arch = "aarch64")]
+use core::arch::asm;
 use core::fmt;
+use core::hint::spin_loop;
 use core::ops::Range;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{compiler_fence, Ordering};
+use core::sync::atomic::{fence, Ordering};
 
 use heapless::Vec as HeaplessVec;
 use log::{debug, info, warn};
@@ -37,22 +40,32 @@ use crate::sel4::{DeviceFrame, RamFrame, PAGE_BITS};
 
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
 const MAX_FRAME_LEN: usize = crate::net_consts::MAX_FRAME_LEN;
-const RING_FRAMES: usize = 8;
+const RX_RING_DESCS: usize = HW_TOTAL_DESCS;
+const TX_RING_DESCS: usize = HW_TOTAL_DESCS;
+const RX_READY_CAP: usize = 8;
 const MMIO_PAGE_COUNT: usize = 6;
 
 // GENETv5 MMIO candidates observed across Pi4 firmware/alias mappings.
 const GENET_MMIO_CANDIDATES: [usize; 3] = [0xFD58_0000, 0x7D58_0000, 0xFE58_0000];
 
 const GENET_SYS_OFF: usize = 0x0000;
+const GENET_EXT_OFF: usize = 0x0080;
 const GENET_RBUF_OFF: usize = 0x0300;
 const GENET_UMAC_OFF: usize = 0x0800;
 const GENET_RX_OFF: usize = 0x2000;
 const GENET_TX_OFF: usize = 0x4000;
 
+const SYS_PORT_CTRL: usize = GENET_SYS_OFF + 0x04;
 const SYS_RBUF_FLUSH_CTRL: usize = GENET_SYS_OFF + 0x08;
+const EXT_RGMII_OOB_CTRL: usize = GENET_EXT_OFF + 0x0c;
 const RBUF_CTRL: usize = GENET_RBUF_OFF + 0x00;
 const RBUF_TBUF_SIZE_CTRL: usize = GENET_RBUF_OFF + 0xb4;
 
+const PORT_MODE_EXT_GPHY: u32 = 3;
+const RGMII_LINK: u32 = 1 << 4;
+const OOB_DISABLE: u32 = 1 << 5;
+const RGMII_MODE_EN: u32 = 1 << 6;
+const ID_MODE_DIS: u32 = 1 << 16;
 const RBUF_ALIGN_2B: u32 = 1 << 1;
 
 const GENET_UMAC_CMD: usize = 0x0808;
@@ -61,15 +74,53 @@ const GENET_UMAC_MAC1: usize = 0x0810;
 const UMAC_MAX_FRAME_LEN: usize = GENET_UMAC_OFF + 0x14;
 const UMAC_TX_FLUSH: usize = GENET_UMAC_OFF + 0x334;
 const UMAC_MIB_CTRL: usize = GENET_UMAC_OFF + 0x580;
+const MDIO_CMD: usize = GENET_UMAC_OFF + 0x614;
 
 const CMD_TX_EN: u32 = 1 << 0;
 const CMD_RX_EN: u32 = 1 << 1;
+const CMD_SPEED_SHIFT: u32 = 2;
+const CMD_SPEED_MASK: u32 = 0x3;
 const CMD_SW_RESET: u32 = 1 << 13;
 const CMD_LCL_LOOP_EN: u32 = 1 << 15;
+const UMAC_SPEED_10: u32 = 0;
+const UMAC_SPEED_100: u32 = 1;
+const UMAC_SPEED_1000: u32 = 2;
 
 const MIB_RESET_RX: u32 = 1 << 0;
 const MIB_RESET_RUNT: u32 = 1 << 1;
 const MIB_RESET_TX: u32 = 1 << 2;
+
+const MDIO_START_BUSY: u32 = 1 << 29;
+const MDIO_READ_FAIL: u32 = 1 << 28;
+const MDIO_RD: u32 = 2 << 26;
+const MDIO_WR: u32 = 1 << 26;
+const MDIO_PMD_SHIFT: u32 = 21;
+const MDIO_REG_SHIFT: u32 = 16;
+const MDIO_FIELD_MASK: u32 = 0x1f;
+const MDIO_POLL_TRIES: usize = 10_000;
+const MII_BMCR: u8 = 0;
+const MII_BMSR: u8 = 1;
+const MII_ADVERTISE: u8 = 4;
+const MII_LPA: u8 = 5;
+const MII_CTRL1000: u8 = 9;
+const MII_STAT1000: u8 = 10;
+const MII_PHYSID1: u8 = 2;
+const MII_PHYSID2: u8 = 3;
+const MII_BMSR_LSTATUS: u16 = 1 << 2;
+const MII_BMSR_ANEGCOMPLETE: u16 = 1 << 5;
+const MII_BMCR_SPEED100: u16 = 1 << 13;
+const MII_BMCR_SPEED1000: u16 = 1 << 6;
+const MII_BMCR_ANENABLE: u16 = 1 << 12;
+const MII_BMCR_ANRESTART: u16 = 1 << 9;
+const LPA_10HALF: u16 = 0x0020;
+const LPA_10FULL: u16 = 0x0040;
+const LPA_100HALF: u16 = 0x0080;
+const LPA_100FULL: u16 = 0x0100;
+const ADVERTISE_1000HALF: u16 = 0x0100;
+const ADVERTISE_1000FULL: u16 = 0x0200;
+const LPA_1000HALF: u16 = 0x0400;
+const LPA_1000FULL: u16 = 0x0800;
+const PHY_LINK_POLL_TRIES: usize = 200_000;
 
 const DMA_EN: u32 = 1 << 0;
 const DMA_RING_BUF_EN_SHIFT: u32 = 1;
@@ -116,12 +167,87 @@ const DMA_FC_THRESH_LO: u32 = 5;
 const ENET_MAX_MTU_SIZE: usize = 1536;
 const RX_BUF_LENGTH: usize = 2048;
 const RX_BUF_OFFSET: usize = 2;
+const TX_STALL_LOG_POLL_THRESHOLD: u32 = 8_192;
+const TX_BACKPRESSURE_LOG_POLL_THRESHOLD: u32 = 8_192;
+const TX_DROP_LOG_INTERVAL: u32 = 512;
+const RX_IDLE_LOG_POLL_THRESHOLD: u32 = 65_536;
+const GENET_DMA_BUS_ALIAS_BASE: u64 = 0xC000_0000;
+const GENET_DMA_ALIAS_WINDOW_BYTES: u64 = 0x4000_0000;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct DmaDesc {
     len_status: u32,
     addr_lo: u32,
     addr_hi: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BreadcrumbReason {
+    TxNoRoom,
+    TxNoRoomRecovered,
+    TxRingFull,
+    TxConsStalled,
+    TxConsRecovered,
+    TxConsJump,
+    TxSwIndexInvalid,
+    TxHwIndexInvalid,
+    TxFirstCompletion,
+    RxProdStalled,
+    RxProdRecovered,
+    RxFirstFrame,
+}
+
+impl BreadcrumbReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::TxNoRoom => "tx-no-room",
+            Self::TxNoRoomRecovered => "tx-no-room-recovered",
+            Self::TxRingFull => "tx-ring-full",
+            Self::TxConsStalled => "tx-cons-stalled",
+            Self::TxConsRecovered => "tx-cons-recovered",
+            Self::TxConsJump => "tx-cons-jump",
+            Self::TxSwIndexInvalid => "tx-sw-index-invalid",
+            Self::TxHwIndexInvalid => "tx-hw-index-invalid",
+            Self::TxFirstCompletion => "tx-first-completion",
+            Self::RxProdStalled => "rx-prod-stalled",
+            Self::RxProdRecovered => "rx-prod-recovered",
+            Self::RxFirstFrame => "rx-first-frame",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DmaBreadcrumbSnapshot {
+    tx_sw_prod: u16,
+    tx_sw_cons: u16,
+    rx_sw_cons: u16,
+    tx_hw_prod: u16,
+    tx_hw_cons: u16,
+    rx_hw_prod: u16,
+    rx_hw_cons: u16,
+    tx_sw_in_flight: u16,
+    tx_hw_in_flight: u16,
+    tx_read_ptr: u32,
+    tx_write_ptr: u32,
+    rx_read_ptr: u32,
+    rx_write_ptr: u32,
+    umac_cmd: u32,
+    oob_ctrl: u32,
+    tdma_ctrl: u32,
+    rdma_ctrl: u32,
+    tx_cons_len_status: u32,
+    tx_prod_len_status: u32,
+    tx_cons_addr_lo: u32,
+    tx_cons_addr_hi: u32,
+    tx_prod_addr_lo: u32,
+    tx_prod_addr_hi: u32,
+    rx_cons_len_status: u32,
+    rx_prod_len_status: u32,
+    rx_cons_addr_lo: u32,
+    rx_cons_addr_hi: u32,
+    rx_prod_addr_lo: u32,
+    rx_prod_addr_hi: u32,
+    rx_ready_len: u16,
 }
 
 #[derive(Debug)]
@@ -156,14 +282,26 @@ impl NetDriverError for DriverError {
 pub struct BcmGenetDevice {
     regs: HeaplessVec<DeviceFrame, MMIO_PAGE_COUNT>,
     mmio_base: usize,
-    rx_frames: HeaplessVec<RamFrame, RING_FRAMES>,
-    tx_frames: HeaplessVec<RamFrame, RING_FRAMES>,
+    rx_frames: HeaplessVec<RamFrame, RX_RING_DESCS>,
+    tx_frames: HeaplessVec<RamFrame, TX_RING_DESCS>,
     tx_prod_index: u16,
     tx_cons_index: u16,
     rx_cons_index: u16,
+    rx_ready: HeaplessVec<HeaplessVec<u8, MAX_FRAME_LEN>, RX_READY_CAP>,
     mac: EthernetAddress,
     tx_drops: u32,
     counters: NetDeviceCounters,
+    tx_stall_polls: u32,
+    tx_stall_logged: bool,
+    tx_backpressure_polls: u32,
+    tx_backpressure_logged: bool,
+    rx_idle_polls: u32,
+    rx_idle_logged: bool,
+    crumb_seq: u64,
+    crumb_repeat: u32,
+    crumb_suppressed: u32,
+    crumb_last_reason: Option<BreadcrumbReason>,
+    crumb_last_snapshot: Option<DmaBreadcrumbSnapshot>,
 }
 
 pub struct RxToken {
@@ -182,10 +320,12 @@ impl BcmGenetDevice {
         let (mmio_base, regs) = Self::map_registers(hal)?;
         let mut rx_frames = HeaplessVec::new();
         let mut tx_frames = HeaplessVec::new();
-        for _ in 0..RING_FRAMES {
+        for _ in 0..RX_RING_DESCS {
             rx_frames
                 .push(hal.alloc_dma_frame_low()?)
                 .map_err(|_| DriverError::QueueInit)?;
+        }
+        for _ in 0..TX_RING_DESCS {
             tx_frames
                 .push(hal.alloc_dma_frame_low()?)
                 .map_err(|_| DriverError::QueueInit)?;
@@ -199,9 +339,21 @@ impl BcmGenetDevice {
             tx_prod_index: 0,
             tx_cons_index: 0,
             rx_cons_index: 0,
+            rx_ready: HeaplessVec::new(),
             mac: EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x01]),
             tx_drops: 0,
             counters: NetDeviceCounters::default(),
+            tx_stall_polls: 0,
+            tx_stall_logged: false,
+            tx_backpressure_polls: 0,
+            tx_backpressure_logged: false,
+            rx_idle_polls: 0,
+            rx_idle_logged: false,
+            crumb_seq: 0,
+            crumb_repeat: 0,
+            crumb_suppressed: 0,
+            crumb_last_reason: None,
+            crumb_last_snapshot: None,
         };
         device.init_hardware();
         device.mac = device.read_or_default_mac();
@@ -211,7 +363,7 @@ impl BcmGenetDevice {
             "[bcmgenet] init complete mmio=0x{:016x} pages={} ring_frames={} mac={} tx_idx={} rx_idx={}",
             device.mmio_base,
             MMIO_PAGE_COUNT,
-            RING_FRAMES,
+            TX_RING_DESCS,
             device.mac,
             device.tx_prod_index,
             device.rx_cons_index,
@@ -296,6 +448,7 @@ impl BcmGenetDevice {
     fn init_hardware(&mut self) {
         self.disable_dma();
         self.init_umac();
+        self.init_phy_link();
         self.init_rx_ring();
         self.init_tx_ring();
         self.init_rx_descriptors();
@@ -323,6 +476,168 @@ impl BcmGenetDevice {
         self.write_reg32(UMAC_TX_FLUSH, 0);
     }
 
+    fn init_phy_link(&mut self) {
+        self.write_reg32(SYS_PORT_CTRL, PORT_MODE_EXT_GPHY);
+        let mut oob = self.read_reg32(EXT_RGMII_OOB_CTRL);
+        oob &= !OOB_DISABLE;
+        oob |= RGMII_LINK | RGMII_MODE_EN | ID_MODE_DIS;
+        self.write_reg32(EXT_RGMII_OOB_CTRL, oob);
+
+        let mut speed = self.current_umac_speed();
+        let initial_speed = speed;
+        let mut link_up = false;
+        let mut autoneg_complete = false;
+        if let Some(phy_addr) = self.discover_phy_addr() {
+            if let Ok(bmcr) = self.mdio_read(phy_addr, MII_BMCR) {
+                if (bmcr & MII_BMCR_ANENABLE) == 0 {
+                    let mut next = bmcr | MII_BMCR_ANENABLE | MII_BMCR_ANRESTART;
+                    // Ensure forced-speed bits do not conflict with autoneg.
+                    next &= !(MII_BMCR_SPEED100 | MII_BMCR_SPEED1000);
+                    let _ = self.mdio_write(phy_addr, MII_BMCR, next);
+                }
+            }
+
+            for _ in 0..PHY_LINK_POLL_TRIES {
+                // BMSR link bit is latch-low, so read twice to observe current state.
+                let _ = self.mdio_read(phy_addr, MII_BMSR);
+                let Ok(status) = self.mdio_read(phy_addr, MII_BMSR) else {
+                    continue;
+                };
+                link_up = (status & MII_BMSR_LSTATUS) != 0;
+                autoneg_complete = (status & MII_BMSR_ANEGCOMPLETE) != 0;
+                if link_up && autoneg_complete {
+                    break;
+                }
+                spin_loop();
+            }
+
+            if let Some(resolved) = self.resolve_phy_speed(phy_addr) {
+                speed = resolved;
+            } else {
+                // Do not force speed from BMCR while autoneg is active:
+                // many PHYs leave BMCR speed bits at 10M defaults even when
+                // negotiated link speed is 100/1000, which can desync MAC/PHY.
+                speed = initial_speed;
+            }
+            info!(
+                "[bcmgenet] phy addr={} link_up={} autoneg={} speed={} fallback={}",
+                phy_addr,
+                link_up,
+                autoneg_complete,
+                speed_label(speed),
+                speed_label(initial_speed),
+            );
+        } else {
+            warn!(
+                "[bcmgenet] no MDIO PHY discovered; retaining UMAC speed={}",
+                speed_label(speed)
+            );
+        }
+        self.set_umac_speed(speed);
+    }
+
+    fn discover_phy_addr(&self) -> Option<u8> {
+        for addr in 0..32u8 {
+            let Ok(id1) = self.mdio_read(addr, MII_PHYSID1) else {
+                continue;
+            };
+            let Ok(id2) = self.mdio_read(addr, MII_PHYSID2) else {
+                continue;
+            };
+            if id1 == 0 || id1 == u16::MAX || id2 == 0 || id2 == u16::MAX {
+                continue;
+            }
+            return Some(addr);
+        }
+        None
+    }
+
+    fn mdio_wait_idle(&self) -> bool {
+        for _ in 0..MDIO_POLL_TRIES {
+            if (self.read_reg32(MDIO_CMD) & MDIO_START_BUSY) == 0 {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn mdio_read(&self, phy_addr: u8, reg: u8) -> Result<u16, ()> {
+        if !self.mdio_wait_idle() {
+            return Err(());
+        }
+        let mut cmd = MDIO_RD
+            | ((u32::from(phy_addr) & MDIO_FIELD_MASK) << MDIO_PMD_SHIFT)
+            | ((u32::from(reg) & MDIO_FIELD_MASK) << MDIO_REG_SHIFT);
+        self.write_reg32(MDIO_CMD, cmd);
+        cmd |= MDIO_START_BUSY;
+        self.write_reg32(MDIO_CMD, cmd);
+        if !self.mdio_wait_idle() {
+            return Err(());
+        }
+        let value = self.read_reg32(MDIO_CMD);
+        if (value & MDIO_READ_FAIL) != 0 {
+            return Err(());
+        }
+        Ok((value & 0xffff) as u16)
+    }
+
+    fn mdio_write(&self, phy_addr: u8, reg: u8, value: u16) -> Result<(), ()> {
+        if !self.mdio_wait_idle() {
+            return Err(());
+        }
+        let cmd = MDIO_WR
+            | ((u32::from(phy_addr) & MDIO_FIELD_MASK) << MDIO_PMD_SHIFT)
+            | ((u32::from(reg) & MDIO_FIELD_MASK) << MDIO_REG_SHIFT)
+            | u32::from(value);
+        self.write_reg32(MDIO_CMD, cmd | MDIO_START_BUSY);
+        if !self.mdio_wait_idle() {
+            return Err(());
+        }
+        let status = self.read_reg32(MDIO_CMD);
+        if (status & MDIO_READ_FAIL) != 0 {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    fn resolve_phy_speed(&self, phy_addr: u8) -> Option<u32> {
+        let adv_1000 = self.mdio_read(phy_addr, MII_CTRL1000).ok()?;
+        let lpa_1000 = self.mdio_read(phy_addr, MII_STAT1000).ok()?;
+        if (adv_1000 & ADVERTISE_1000FULL) != 0 && (lpa_1000 & LPA_1000FULL) != 0 {
+            return Some(UMAC_SPEED_1000);
+        }
+        if (adv_1000 & ADVERTISE_1000HALF) != 0 && (lpa_1000 & LPA_1000HALF) != 0 {
+            return Some(UMAC_SPEED_1000);
+        }
+
+        let adv = self.mdio_read(phy_addr, MII_ADVERTISE).ok()?;
+        let lpa = self.mdio_read(phy_addr, MII_LPA).ok()?;
+        if (adv & LPA_100FULL) != 0 && (lpa & LPA_100FULL) != 0 {
+            return Some(UMAC_SPEED_100);
+        }
+        if (adv & LPA_100HALF) != 0 && (lpa & LPA_100HALF) != 0 {
+            return Some(UMAC_SPEED_100);
+        }
+        if (adv & LPA_10FULL) != 0 && (lpa & LPA_10FULL) != 0 {
+            return Some(UMAC_SPEED_10);
+        }
+        if (adv & LPA_10HALF) != 0 && (lpa & LPA_10HALF) != 0 {
+            return Some(UMAC_SPEED_10);
+        }
+        None
+    }
+
+    fn current_umac_speed(&self) -> u32 {
+        (self.read_reg32(GENET_UMAC_CMD) >> CMD_SPEED_SHIFT) & CMD_SPEED_MASK
+    }
+
+    fn set_umac_speed(&self, speed: u32) {
+        let mut cmd = self.read_reg32(GENET_UMAC_CMD);
+        cmd &= !(CMD_SPEED_MASK << CMD_SPEED_SHIFT);
+        cmd |= (speed & CMD_SPEED_MASK) << CMD_SPEED_SHIFT;
+        self.write_reg32(GENET_UMAC_CMD, cmd);
+    }
+
     fn disable_dma(&mut self) {
         let tdma_ctrl = self.read_reg32(TDMA_REG_BASE + DMA_CTRL);
         self.write_reg32(TDMA_REG_BASE + DMA_CTRL, tdma_ctrl & !DMA_EN);
@@ -346,9 +661,16 @@ impl BcmGenetDevice {
         self.write_reg32(RDMA_READ_PTR, 0);
         self.write_reg32(RDMA_WRITE_PTR, 0);
         self.write_reg32(RDMA_RING_REG_BASE + DMA_END_ADDR, ring_end_addr(ring_len));
-        let prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
+        let prod = ring_index(self.read_reg32(RDMA_PROD_INDEX) as u16, ring_len);
         self.rx_cons_index = prod;
         self.write_reg32(RDMA_CONS_INDEX, prod as u32);
+        info!(
+            "[bcmgenet] rx ring init prod={} cons={} slot={} ring_len={}",
+            prod,
+            self.rx_cons_index,
+            ring_slot(self.rx_cons_index, ring_len),
+            ring_len
+        );
         self.write_reg32(
             RDMA_RING_REG_BASE + DMA_RING_BUF_SIZE,
             ring_buffer_size(ring_len),
@@ -364,10 +686,17 @@ impl BcmGenetDevice {
         self.write_reg32(TDMA_READ_PTR, 0);
         self.write_reg32(TDMA_WRITE_PTR, 0);
         self.write_reg32(TDMA_RING_REG_BASE + DMA_END_ADDR, ring_end_addr(ring_len));
-        let cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
+        let cons = ring_index(self.read_reg32(TDMA_CONS_INDEX) as u16, ring_len);
         self.tx_cons_index = cons;
         self.tx_prod_index = cons;
         self.write_reg32(TDMA_PROD_INDEX, cons as u32);
+        info!(
+            "[bcmgenet] tx ring init cons={} prod={} slot={} ring_len={}",
+            self.tx_cons_index,
+            self.tx_prod_index,
+            ring_slot(self.tx_prod_index, ring_len),
+            ring_len
+        );
         self.write_reg32(TDMA_RING_REG_BASE + DMA_MBUF_DONE_THRESH, 1);
         self.write_reg32(TDMA_FLOW_PERIOD, 0);
         self.write_reg32(
@@ -462,36 +791,230 @@ impl BcmGenetDevice {
 
     fn refresh_tx_counters(&mut self) {
         let ring_len = self.tx_ring_len();
-        let in_flight = ring_distance(self.tx_prod_index, self.tx_cons_index) as usize;
-        if in_flight > ring_len {
+        let ring_capacity = ring_len.saturating_sub(1);
+        let in_flight =
+            ring_distance_in_ring(self.tx_prod_index, self.tx_cons_index, ring_len) as usize;
+        if in_flight > ring_capacity {
             self.counters.tx_invalid_used_state =
                 self.counters.tx_invalid_used_state.saturating_add(1);
-            self.counters.tx_in_flight = ring_len as u64;
+            self.counters.tx_in_flight = ring_capacity as u64;
             self.counters.tx_free = 0;
+            self.log_dma_breadcrumb(BreadcrumbReason::TxSwIndexInvalid);
             return;
         }
         self.counters.tx_in_flight = in_flight as u64;
-        self.counters.tx_free = ring_len.saturating_sub(in_flight) as u64;
+        self.counters.tx_free = ring_capacity.saturating_sub(in_flight) as u64;
+    }
+
+    fn tx_in_flight(&self) -> usize {
+        ring_distance_in_ring(self.tx_prod_index, self.tx_cons_index, self.tx_ring_len()) as usize
+    }
+
+    fn tx_has_room(&mut self) -> bool {
+        let ring_len = self.tx_ring_len();
+        let ring_capacity = ring_len.saturating_sub(1);
+        if ring_capacity == 0 {
+            return false;
+        }
+        self.poll_tx_completions();
+        if self.tx_in_flight() < ring_capacity {
+            if self.tx_backpressure_logged {
+                self.log_dma_breadcrumb(BreadcrumbReason::TxNoRoomRecovered);
+            }
+            self.tx_backpressure_polls = 0;
+            self.tx_backpressure_logged = false;
+            true
+        } else {
+            self.tx_backpressure_polls = self.tx_backpressure_polls.saturating_add(1);
+            if self.tx_backpressure_polls >= TX_BACKPRESSURE_LOG_POLL_THRESHOLD
+                && !self.tx_backpressure_logged
+            {
+                self.log_dma_breadcrumb(BreadcrumbReason::TxNoRoom);
+                self.tx_backpressure_logged = true;
+            }
+            false
+        }
+    }
+
+    fn capture_breadcrumb_snapshot(&self) -> DmaBreadcrumbSnapshot {
+        let tx_ring_len = self.tx_ring_len();
+        let rx_ring_len = self.rx_ring_len();
+        let tx_hw_prod = ring_index(self.read_reg32(TDMA_PROD_INDEX) as u16, tx_ring_len);
+        let tx_hw_cons = ring_index(self.read_reg32(TDMA_CONS_INDEX) as u16, tx_ring_len);
+        let rx_hw_prod = ring_index(self.read_reg32(RDMA_PROD_INDEX) as u16, rx_ring_len);
+        let rx_hw_cons = ring_index(self.read_reg32(RDMA_CONS_INDEX) as u16, rx_ring_len);
+        let tx_cons_slot = ring_slot(self.tx_cons_index, tx_ring_len);
+        let tx_prod_slot = ring_slot(self.tx_prod_index, tx_ring_len);
+        let rx_cons_slot = ring_slot(self.rx_cons_index, rx_ring_len);
+        let rx_prod_slot = ring_slot(rx_hw_prod, rx_ring_len);
+        let tx_cons_desc = self.read_tx_desc(tx_cons_slot).unwrap_or_default();
+        let tx_prod_desc = self.read_tx_desc(tx_prod_slot).unwrap_or_default();
+        let rx_cons_desc = self.read_rx_desc(rx_cons_slot).unwrap_or_default();
+        let rx_prod_desc = self.read_rx_desc(rx_prod_slot).unwrap_or_default();
+
+        DmaBreadcrumbSnapshot {
+            tx_sw_prod: self.tx_prod_index,
+            tx_sw_cons: self.tx_cons_index,
+            rx_sw_cons: self.rx_cons_index,
+            tx_hw_prod,
+            tx_hw_cons,
+            rx_hw_prod,
+            rx_hw_cons,
+            tx_sw_in_flight: ring_distance_in_ring(
+                self.tx_prod_index,
+                self.tx_cons_index,
+                tx_ring_len,
+            ),
+            tx_hw_in_flight: ring_distance_in_ring(tx_hw_prod, tx_hw_cons, tx_ring_len),
+            tx_read_ptr: self.read_reg32(TDMA_READ_PTR),
+            tx_write_ptr: self.read_reg32(TDMA_WRITE_PTR),
+            rx_read_ptr: self.read_reg32(RDMA_READ_PTR),
+            rx_write_ptr: self.read_reg32(RDMA_WRITE_PTR),
+            umac_cmd: self.read_reg32(GENET_UMAC_CMD),
+            oob_ctrl: self.read_reg32(EXT_RGMII_OOB_CTRL),
+            tdma_ctrl: self.read_reg32(TDMA_REG_BASE + DMA_CTRL),
+            rdma_ctrl: self.read_reg32(RDMA_REG_BASE + DMA_CTRL),
+            tx_cons_len_status: tx_cons_desc.len_status,
+            tx_prod_len_status: tx_prod_desc.len_status,
+            tx_cons_addr_lo: tx_cons_desc.addr_lo,
+            tx_cons_addr_hi: tx_cons_desc.addr_hi,
+            tx_prod_addr_lo: tx_prod_desc.addr_lo,
+            tx_prod_addr_hi: tx_prod_desc.addr_hi,
+            rx_cons_len_status: rx_cons_desc.len_status,
+            rx_prod_len_status: rx_prod_desc.len_status,
+            rx_cons_addr_lo: rx_cons_desc.addr_lo,
+            rx_cons_addr_hi: rx_cons_desc.addr_hi,
+            rx_prod_addr_lo: rx_prod_desc.addr_lo,
+            rx_prod_addr_hi: rx_prod_desc.addr_hi,
+            rx_ready_len: self.rx_ready.len() as u16,
+        }
+    }
+
+    fn log_dma_breadcrumb(&mut self, reason: BreadcrumbReason) {
+        let snapshot = self.capture_breadcrumb_snapshot();
+        let repeated = self.crumb_last_reason == Some(reason)
+            && self
+                .crumb_last_snapshot
+                .map_or(false, |prev| prev == snapshot);
+        if repeated {
+            self.crumb_repeat = self.crumb_repeat.saturating_add(1);
+            self.crumb_suppressed = self.crumb_suppressed.saturating_add(1);
+            if !should_emit_repeated_breadcrumb(self.crumb_repeat) {
+                return;
+            }
+        } else {
+            self.crumb_repeat = 0;
+        }
+
+        self.crumb_seq = self.crumb_seq.saturating_add(1);
+        let suppressed = core::mem::replace(&mut self.crumb_suppressed, 0);
+        let tx_ring_len = self.tx_ring_len();
+        let tx_sw_overflow = usize::from(snapshot.tx_sw_in_flight) > tx_ring_len;
+        let tx_hw_overflow = usize::from(snapshot.tx_hw_in_flight) > tx_ring_len;
+
+        warn!(
+            "[bcmgenet][crumb] seq={} r={} rpt={} sup={} drops={} txblk={} rxidle={}",
+            self.crumb_seq,
+            reason.as_str(),
+            self.crumb_repeat,
+            suppressed,
+            self.tx_drops,
+            self.counters.tx_alloc_blocked_inflight,
+            self.rx_idle_polls,
+        );
+        warn!(
+            "[bcmgenet][crumb] sw tx={}/{} in={} ov={} hw tx={}/{} in={} ov={} sw rx={} hw rx={}/{} q={} txptr={:08x}/{:08x} rxptr={:08x}/{:08x}",
+            snapshot.tx_sw_prod,
+            snapshot.tx_sw_cons,
+            snapshot.tx_sw_in_flight,
+            u8::from(tx_sw_overflow),
+            snapshot.tx_hw_prod,
+            snapshot.tx_hw_cons,
+            snapshot.tx_hw_in_flight,
+            u8::from(tx_hw_overflow),
+            snapshot.rx_sw_cons,
+            snapshot.rx_hw_prod,
+            snapshot.rx_hw_cons,
+            snapshot.rx_ready_len,
+            snapshot.tx_read_ptr,
+            snapshot.tx_write_ptr,
+            snapshot.rx_read_ptr,
+            snapshot.rx_write_ptr,
+        );
+        warn!(
+            "[bcmgenet][crumb] desc tx(cons=0x{:08x} prod=0x{:08x}) rx(cons=0x{:08x} prod=0x{:08x}) own(cons={},prod={}) umac={:08x} tdma={:08x} rdma={:08x} oob={:08x}",
+            snapshot.tx_cons_len_status,
+            snapshot.tx_prod_len_status,
+            snapshot.rx_cons_len_status,
+            snapshot.rx_prod_len_status,
+            u8::from((snapshot.rx_cons_len_status & DMA_OWN) != 0),
+            u8::from((snapshot.rx_prod_len_status & DMA_OWN) != 0),
+            snapshot.umac_cmd,
+            snapshot.tdma_ctrl,
+            snapshot.rdma_ctrl,
+            snapshot.oob_ctrl,
+        );
+        warn!(
+            "[bcmgenet][crumb] addr tx(cons=0x{:016x} prod=0x{:016x}) rx(cons=0x{:016x} prod=0x{:016x})",
+            desc_dma_addr(snapshot.tx_cons_addr_hi, snapshot.tx_cons_addr_lo),
+            desc_dma_addr(snapshot.tx_prod_addr_hi, snapshot.tx_prod_addr_lo),
+            desc_dma_addr(snapshot.rx_cons_addr_hi, snapshot.rx_cons_addr_lo),
+            desc_dma_addr(snapshot.rx_prod_addr_hi, snapshot.rx_prod_addr_lo),
+        );
+        self.crumb_last_reason = Some(reason);
+        self.crumb_last_snapshot = Some(snapshot);
     }
 
     fn poll_tx_completions(&mut self) {
-        let new_cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
-        let completed = ring_distance(new_cons, self.tx_cons_index);
-        if completed == 0 {
+        let ring_len = self.tx_ring_len();
+        if ring_len <= 1 {
             self.refresh_tx_counters();
             return;
         }
-        if completed as usize > self.tx_ring_len() {
+        let new_cons = ring_index(self.read_reg32(TDMA_CONS_INDEX) as u16, ring_len);
+        let hw_prod = ring_index(self.read_reg32(TDMA_PROD_INDEX) as u16, ring_len);
+        let hw_in_flight = ring_distance_in_ring(hw_prod, new_cons, ring_len) as usize;
+        if hw_in_flight > ring_len.saturating_sub(1) {
             self.counters.tx_invalid_used_state =
                 self.counters.tx_invalid_used_state.saturating_add(1);
+            self.log_dma_breadcrumb(BreadcrumbReason::TxHwIndexInvalid);
+        }
+        let completed = ring_distance_in_ring(new_cons, self.tx_cons_index, ring_len);
+        if completed == 0 {
+            if self.tx_in_flight() > 0 {
+                self.tx_stall_polls = self.tx_stall_polls.saturating_add(1);
+                if self.tx_stall_polls >= TX_STALL_LOG_POLL_THRESHOLD && !self.tx_stall_logged {
+                    self.log_dma_breadcrumb(BreadcrumbReason::TxConsStalled);
+                    self.tx_stall_logged = true;
+                }
+            } else {
+                self.tx_stall_polls = 0;
+                self.tx_stall_logged = false;
+            }
+            self.refresh_tx_counters();
+            return;
+        }
+        if completed as usize > ring_len.saturating_sub(1) {
+            self.counters.tx_invalid_used_state =
+                self.counters.tx_invalid_used_state.saturating_add(1);
+            self.log_dma_breadcrumb(BreadcrumbReason::TxConsJump);
         } else {
+            let prev_complete = self.counters.tx_complete;
             self.counters.tx_used_advances = self
                 .counters
                 .tx_used_advances
                 .saturating_add(completed as u64);
             self.counters.tx_complete = self.counters.tx_complete.saturating_add(completed as u64);
+            if prev_complete == 0 {
+                self.log_dma_breadcrumb(BreadcrumbReason::TxFirstCompletion);
+            }
         }
         self.tx_cons_index = new_cons;
+        if self.tx_stall_logged {
+            self.log_dma_breadcrumb(BreadcrumbReason::TxConsRecovered);
+        }
+        self.tx_stall_logged = false;
+        self.tx_stall_polls = 0;
         self.refresh_tx_counters();
     }
 
@@ -537,11 +1060,12 @@ impl BcmGenetDevice {
         };
         let frame_ptr = frame.ptr().as_ptr() as usize;
         self.clean_cache_for_device(frame_ptr, RX_BUF_LENGTH);
-        self.write_rx_desc(slot, frame.paddr() as u64, rx_owned_len_status());
+        let frame_dma = dma_phys_to_bus_addr(frame.paddr() as u64);
+        self.write_rx_desc(slot, frame_dma, rx_owned_len_status());
     }
 
     fn advance_rx_consumer(&mut self) {
-        self.rx_cons_index = self.rx_cons_index.wrapping_add(1);
+        self.rx_cons_index = ring_index(self.rx_cons_index.wrapping_add(1), self.rx_ring_len());
         self.write_reg32(RDMA_CONS_INDEX, self.rx_cons_index as u32);
     }
 
@@ -561,11 +1085,17 @@ impl BcmGenetDevice {
         }
 
         self.poll_tx_completions();
-        let in_flight = ring_distance(self.tx_prod_index, self.tx_cons_index) as usize;
-        if in_flight >= self.tx_ring_len() {
+        let ring_len = self.tx_ring_len();
+        let ring_capacity = ring_len.saturating_sub(1);
+        let in_flight =
+            ring_distance_in_ring(self.tx_prod_index, self.tx_cons_index, ring_len) as usize;
+        if in_flight >= ring_capacity {
             self.tx_drops = self.tx_drops.saturating_add(1);
             self.counters.tx_alloc_blocked_inflight =
                 self.counters.tx_alloc_blocked_inflight.saturating_add(1);
+            if should_log_tx_drop(self.tx_drops) {
+                self.log_dma_breadcrumb(BreadcrumbReason::TxRingFull);
+            }
             self.refresh_tx_counters();
             return Ok(());
         }
@@ -578,9 +1108,10 @@ impl BcmGenetDevice {
         buf[..packet.len()].copy_from_slice(packet);
         self.clean_cache_for_device(frame_ptr, packet.len());
 
-        self.write_tx_desc(slot, frame_paddr, encode_tx_len_status(packet.len()));
-        compiler_fence(Ordering::Release);
-        self.tx_prod_index = self.tx_prod_index.wrapping_add(1);
+        let frame_dma = dma_phys_to_bus_addr(frame_paddr);
+        self.write_tx_desc(slot, frame_dma, encode_tx_len_status(packet.len()));
+        tx_doorbell_barrier();
+        self.tx_prod_index = ring_index(self.tx_prod_index.wrapping_add(1), ring_len);
         self.write_reg32(TDMA_PROD_INDEX, self.tx_prod_index as u32);
 
         self.counters.tx_packets = self.counters.tx_packets.saturating_add(1);
@@ -599,68 +1130,86 @@ impl BcmGenetDevice {
 
     fn poll_rx(&mut self) -> Option<HeaplessVec<u8, MAX_FRAME_LEN>> {
         self.poll_tx_completions();
+        self.drain_rx_ready();
+        if self.rx_ready.is_empty() {
+            None
+        } else {
+            Some(self.rx_ready.remove(0))
+        }
+    }
+
+    fn drain_rx_ready(&mut self) {
         if self.rx_frames.is_empty() {
-            return None;
+            return;
         }
 
-        let prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
-        if prod == self.rx_cons_index {
-            return None;
-        }
+        let mut budget = self.rx_ring_len();
+        while budget > 0 && self.rx_ready.len() < RX_READY_CAP {
+            let prod = ring_index(self.read_reg32(RDMA_PROD_INDEX) as u16, self.rx_ring_len());
+            if prod == self.rx_cons_index {
+                self.rx_idle_polls = self.rx_idle_polls.saturating_add(1);
+                if should_log_rx_idle(self.rx_idle_polls, self.rx_idle_logged) {
+                    self.log_dma_breadcrumb(BreadcrumbReason::RxProdStalled);
+                    self.rx_idle_logged = true;
+                }
+                break;
+            }
+            if self.rx_idle_logged {
+                self.log_dma_breadcrumb(BreadcrumbReason::RxProdRecovered);
+            }
+            self.rx_idle_logged = false;
+            self.rx_idle_polls = 0;
 
-        let slot = ring_slot(self.rx_cons_index, self.rx_ring_len());
-        let desc = self.read_rx_desc(slot)?;
-        let length = decode_rx_length(desc.len_status);
-        if length <= RX_BUF_OFFSET || length > RX_BUF_LENGTH {
-            warn!(
-                "[bcmgenet] rx len invalid len={} slot={} len_status=0x{:08x} addr=0x{:08x}{:08x}",
-                length, slot, desc.len_status, desc.addr_hi, desc.addr_lo
-            );
+            let slot = ring_slot(self.rx_cons_index, self.rx_ring_len());
+            let Some(desc) = self.read_rx_desc(slot) else {
+                break;
+            };
+            let length = decode_rx_length(desc.len_status);
+            let mut maybe_frame = None;
+            if length <= RX_BUF_OFFSET || length > RX_BUF_LENGTH {
+                warn!(
+                    "[bcmgenet] rx len invalid len={} slot={} len_status=0x{:08x} addr=0x{:08x}{:08x}",
+                    length, slot, desc.len_status, desc.addr_hi, desc.addr_lo
+                );
+            } else {
+                let mut frame = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
+                if let Some(source) = self.rx_frames.get(slot) {
+                    let source_ptr = source.ptr().as_ptr() as usize;
+                    self.invalidate_cache_for_cpu(source_ptr, length);
+                    let payload_len = length.saturating_sub(RX_BUF_OFFSET).min(MAX_FRAME_LEN);
+                    let payload_start = RX_BUF_OFFSET;
+                    let payload_end = payload_start.saturating_add(payload_len);
+                    let src_slice = source.as_slice();
+                    if payload_end <= src_slice.len()
+                        && frame
+                            .extend_from_slice(&src_slice[payload_start..payload_end])
+                            .is_ok()
+                    {
+                        maybe_frame = Some(frame);
+                    }
+                }
+            }
+
             self.rearm_rx_slot(slot);
             self.advance_rx_consumer();
             self.counters.rx_used_advances = self.counters.rx_used_advances.saturating_add(1);
-            return None;
-        }
-
-        let mut frame = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
-        {
-            let source = self.rx_frames.get(slot)?;
-            let source_ptr = source.ptr().as_ptr() as usize;
-            self.invalidate_cache_for_cpu(source_ptr, length);
-            let payload_len = length.saturating_sub(RX_BUF_OFFSET).min(MAX_FRAME_LEN);
-            let payload_start = RX_BUF_OFFSET;
-            let payload_end = payload_start.saturating_add(payload_len);
-            let src_slice = source.as_slice();
-            if payload_end > src_slice.len() {
-                self.rearm_rx_slot(slot);
-                self.advance_rx_consumer();
-                self.counters.rx_used_advances = self.counters.rx_used_advances.saturating_add(1);
-                return None;
+            if let Some(frame) = maybe_frame {
+                self.counters.rx_packets = self.counters.rx_packets.saturating_add(1);
+                if self.counters.rx_packets == 1 {
+                    self.log_dma_breadcrumb(BreadcrumbReason::RxFirstFrame);
+                }
+                debug!(
+                    "[bcmgenet] rx len={} slot={} prod={} cons={} first={:02x?}",
+                    frame.len(),
+                    slot,
+                    prod,
+                    self.rx_cons_index,
+                    &frame[..frame.len().min(8)]
+                );
+                let _ = self.rx_ready.push(frame);
             }
-            if frame
-                .extend_from_slice(&src_slice[payload_start..payload_end])
-                .is_err()
-            {
-                self.rearm_rx_slot(slot);
-                self.advance_rx_consumer();
-                self.counters.rx_used_advances = self.counters.rx_used_advances.saturating_add(1);
-                return None;
-            }
+            budget = budget.saturating_sub(1);
         }
-
-        self.rearm_rx_slot(slot);
-        self.advance_rx_consumer();
-        self.counters.rx_packets = self.counters.rx_packets.saturating_add(1);
-        self.counters.rx_used_advances = self.counters.rx_used_advances.saturating_add(1);
-        debug!(
-            "[bcmgenet] rx len={} slot={} prod={} cons={} first={:02x?}",
-            frame.len(),
-            slot,
-            prod,
-            self.rx_cons_index,
-            &frame[..frame.len().min(8)]
-        );
-        Some(frame)
     }
 
     fn reg_ptr(&self, offset: usize) -> *mut u32 {
@@ -691,8 +1240,45 @@ const fn ring_slot(index: u16, slots: usize) -> usize {
     }
 }
 
-const fn ring_distance(newer: u16, older: u16) -> u16 {
-    newer.wrapping_sub(older)
+const fn ring_index(index: u16, slots: usize) -> u16 {
+    if slots == 0 {
+        0
+    } else {
+        (index as usize % slots) as u16
+    }
+}
+
+const fn ring_distance_in_ring(newer: u16, older: u16, slots: usize) -> u16 {
+    if slots == 0 {
+        return 0;
+    }
+    let newer_slot = ring_index(newer, slots) as usize;
+    let older_slot = ring_index(older, slots) as usize;
+    ((newer_slot + slots - older_slot) % slots) as u16
+}
+
+const fn desc_dma_addr(addr_hi: u32, addr_lo: u32) -> u64 {
+    ((addr_hi as u64) << 32) | (addr_lo as u64)
+}
+
+const fn dma_phys_to_bus_addr(phys: u64) -> u64 {
+    if phys < GENET_DMA_ALIAS_WINDOW_BYTES {
+        phys | GENET_DMA_BUS_ALIAS_BASE
+    } else {
+        phys
+    }
+}
+
+const fn should_log_tx_drop(tx_drops: u32) -> bool {
+    tx_drops == 1 || (tx_drops % TX_DROP_LOG_INTERVAL) == 0
+}
+
+const fn should_log_rx_idle(rx_idle_polls: u32, already_logged: bool) -> bool {
+    !already_logged && rx_idle_polls >= RX_IDLE_LOG_POLL_THRESHOLD
+}
+
+fn should_emit_repeated_breadcrumb(repeat_count: u32) -> bool {
+    repeat_count == 1 || (repeat_count >= 64 && repeat_count.is_power_of_two())
 }
 
 const fn rx_owned_len_status() -> u32 {
@@ -738,6 +1324,36 @@ const fn tx_desc_offset(slot: usize) -> Option<usize> {
     }
 }
 
+const fn decode_bmcr_speed(bmcr: u16) -> u32 {
+    let speed_100 = (bmcr & MII_BMCR_SPEED100) != 0;
+    let speed_1000 = (bmcr & MII_BMCR_SPEED1000) != 0;
+    match (speed_100, speed_1000) {
+        (false, false) => UMAC_SPEED_10,
+        (true, false) => UMAC_SPEED_100,
+        (false, true) | (true, true) => UMAC_SPEED_1000,
+    }
+}
+
+const fn speed_label(speed: u32) -> &'static str {
+    match speed {
+        UMAC_SPEED_10 => "10M",
+        UMAC_SPEED_100 => "100M",
+        UMAC_SPEED_1000 => "1000M",
+        _ => "unknown",
+    }
+}
+
+#[inline(always)]
+fn tx_doorbell_barrier() {
+    fence(Ordering::SeqCst);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        // SAFETY: Barrier has no memory operands and only orders prior descriptor
+        // writes/cleans before the MMIO doorbell write on this core.
+        asm!("dmb oshst", options(nostack, preserves_flags));
+    }
+}
+
 impl phy::RxToken for RxToken {
     fn consume<R, F>(self, f: F) -> R
     where
@@ -778,8 +1394,11 @@ impl Device for BcmGenetDevice {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        self.poll_tx_completions();
-        Some(TxToken { device: self })
+        if self.tx_has_room() {
+            Some(TxToken { device: self })
+        } else {
+            None
+        }
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -819,10 +1438,10 @@ impl NetDevice for BcmGenetDevice {
     fn debug_snapshot(&mut self) {
         self.poll_tx_completions();
         let cmd = self.read_reg32(GENET_UMAC_CMD);
-        let tx_prod = self.read_reg32(TDMA_PROD_INDEX) as u16;
-        let tx_cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
-        let rx_prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
-        let rx_cons = self.read_reg32(RDMA_CONS_INDEX) as u16;
+        let tx_prod = ring_index(self.read_reg32(TDMA_PROD_INDEX) as u16, self.tx_ring_len());
+        let tx_cons = ring_index(self.read_reg32(TDMA_CONS_INDEX) as u16, self.tx_ring_len());
+        let rx_prod = ring_index(self.read_reg32(RDMA_PROD_INDEX) as u16, self.rx_ring_len());
+        let rx_cons = ring_index(self.read_reg32(RDMA_CONS_INDEX) as u16, self.rx_ring_len());
         let tx_desc = self.read_tx_desc(ring_slot(self.tx_cons_index, self.tx_ring_len()));
         let rx_desc = self.read_rx_desc(ring_slot(self.rx_cons_index, self.rx_ring_len()));
         debug!(
@@ -845,25 +1464,39 @@ impl NetDevice for BcmGenetDevice {
     }
 
     fn buffer_bounds(&self) -> Option<Range<usize>> {
-        let start = self.rx_frames.first()?.ptr().as_ptr() as usize;
-        Some(start..start.saturating_add(PAGE_SIZE))
+        let mut start = usize::MAX;
+        let mut end = 0usize;
+        for frame in self.rx_frames.iter().chain(self.tx_frames.iter()) {
+            let frame_start = frame.ptr().as_ptr() as usize;
+            let frame_end = frame_start.saturating_add(PAGE_SIZE);
+            start = start.min(frame_start);
+            end = end.max(frame_end);
+        }
+        if start == usize::MAX || end <= start {
+            None
+        } else {
+            Some(start..end)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_rx_length, encode_tx_len_status, ring_distance, ring_slot, rx_owned_len_status,
+        decode_bmcr_speed, decode_rx_length, dma_phys_to_bus_addr, encode_tx_len_status,
+        ring_distance_in_ring, ring_index, ring_slot, rx_owned_len_status,
+        should_emit_repeated_breadcrumb, should_log_rx_idle, should_log_tx_drop,
         DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP, DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC,
-        DMA_TX_QTAG_SHIFT, RING_FRAMES, RX_BUF_LENGTH,
+        DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH, UMAC_SPEED_10,
+        UMAC_SPEED_100, UMAC_SPEED_1000,
     };
 
     #[test]
     fn ring_slot_wraps_descriptor_count() {
-        assert_eq!(ring_slot(0, RING_FRAMES), 0);
-        assert_eq!(ring_slot(7, RING_FRAMES), 7);
-        assert_eq!(ring_slot(8, RING_FRAMES), 0);
-        assert_eq!(ring_slot(15, RING_FRAMES), 7);
+        assert_eq!(ring_slot(0, 8), 0);
+        assert_eq!(ring_slot(7, 8), 7);
+        assert_eq!(ring_slot(8, 8), 0);
+        assert_eq!(ring_slot(15, 8), 7);
     }
 
     #[test]
@@ -872,9 +1505,19 @@ mod tests {
     }
 
     #[test]
-    fn ring_distance_handles_wrap() {
-        assert_eq!(ring_distance(10, 7), 3);
-        assert_eq!(ring_distance(0, u16::MAX), 1);
+    fn ring_index_normalizes_to_ring_size() {
+        assert_eq!(ring_index(0, 256), 0);
+        assert_eq!(ring_index(255, 256), 255);
+        assert_eq!(ring_index(256, 256), 0);
+        assert_eq!(ring_index(513, 256), 1);
+    }
+
+    #[test]
+    fn ring_distance_uses_ring_slots() {
+        assert_eq!(ring_distance_in_ring(10, 7, 256), 3);
+        assert_eq!(ring_distance_in_ring(0, 255, 256), 1);
+        assert_eq!(ring_distance_in_ring(3, 3, 256), 0);
+        assert_eq!(ring_distance_in_ring(3, 250, 256), 9);
     }
 
     #[test]
@@ -896,5 +1539,52 @@ mod tests {
         let len_status = rx_owned_len_status();
         assert_eq!(decode_rx_length(len_status), RX_BUF_LENGTH);
         assert_ne!(len_status & DMA_OWN, 0);
+    }
+
+    #[test]
+    fn bmcr_speed_decode_matches_umac_encoding() {
+        assert_eq!(decode_bmcr_speed(0), UMAC_SPEED_10);
+        assert_eq!(decode_bmcr_speed(MII_BMCR_SPEED100), UMAC_SPEED_100);
+        assert_eq!(decode_bmcr_speed(MII_BMCR_SPEED1000), UMAC_SPEED_1000);
+        assert_eq!(
+            decode_bmcr_speed(MII_BMCR_SPEED100 | MII_BMCR_SPEED1000),
+            UMAC_SPEED_1000
+        );
+    }
+
+    #[test]
+    fn tx_drop_breadcrumb_is_rate_limited() {
+        assert!(should_log_tx_drop(1));
+        assert!(!should_log_tx_drop(2));
+        assert!(should_log_tx_drop(512));
+        assert!(!should_log_tx_drop(513));
+    }
+
+    #[test]
+    fn rx_idle_breadcrumb_requires_threshold_and_repeat_window() {
+        assert!(!should_log_rx_idle(1, false));
+        assert!(!should_log_rx_idle(65_535, false));
+        assert!(should_log_rx_idle(65_536, false));
+        assert!(!should_log_rx_idle(70_000, true));
+        assert!(!should_log_rx_idle(131_072, true));
+    }
+
+    #[test]
+    fn repeated_breadcrumbs_emit_only_at_escalation_points() {
+        assert!(!should_emit_repeated_breadcrumb(0));
+        assert!(should_emit_repeated_breadcrumb(1));
+        assert!(!should_emit_repeated_breadcrumb(2));
+        assert!(!should_emit_repeated_breadcrumb(63));
+        assert!(should_emit_repeated_breadcrumb(64));
+        assert!(should_emit_repeated_breadcrumb(128));
+        assert!(!should_emit_repeated_breadcrumb(96));
+    }
+
+    #[test]
+    fn dma_phys_addresses_use_pi4_bus_alias_window() {
+        assert_eq!(dma_phys_to_bus_addr(0x0000_0000), 0xC000_0000);
+        assert_eq!(dma_phys_to_bus_addr(0x0400_0000), 0xC400_0000);
+        assert_eq!(dma_phys_to_bus_addr(0x3FFF_FFFF), 0xFFFF_FFFF);
+        assert_eq!(dma_phys_to_bus_addr(0x4000_0000), 0x4000_0000);
     }
 }

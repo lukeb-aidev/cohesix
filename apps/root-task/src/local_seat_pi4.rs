@@ -13,7 +13,7 @@ use core::cmp;
 use core::hint::spin_loop;
 use core::mem;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use font8x8::legacy::BASIC_LEGACY;
 use spin::Mutex;
@@ -117,7 +117,16 @@ const HUB_SET_FEATURE_RETRY_DELAY_MS: u64 = 10;
 // Keep this aligned with usb-oxide's default control wait budget to avoid
 // false timeouts during hub bring-up.
 const HUB_CLASS_CONTROL_WAIT_SPINS: usize = 20_000_000;
+// Use a fast first pass for hub control and port-status operations; keep a
+// slow final attempt to preserve compatibility with slower hubs/keyboards.
+const HUB_CLASS_CONTROL_WAIT_SPINS_FAST: usize = 2_000_000;
+const HUB_CONTROL_SLOW_TAIL_ATTEMPTS: usize = 1;
+const HUB_STATUS_SLOW_TAIL_ATTEMPTS: usize = 1;
+const HUB_WAIT_READY_FAST_LOOPS: usize = 16;
+const HUB_PORT_STATUS_RETRY_DELAY_MS_FAST: u64 = 10;
+const HUB_VERBOSE_STATUS_RETRY_LOGS: bool = false;
 const HID_REPORT_DESC_MAX_BYTES: usize = 512;
+const HID_REPORT_DESC_WAIT_SPINS: usize = HUB_CLASS_CONTROL_WAIT_SPINS_FAST;
 const WAIT_MS_SPINS_PER_MS: usize = 50_000;
 const WAIT_MS_MIN_SPINS: usize = 10_000;
 const WAIT_MS_MAX_SPINS: usize = 25_000_000;
@@ -207,6 +216,7 @@ static KEYBOARD_RUNTIME_INIT_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DIAG_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 static XHCI_MMIO_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DMA_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
+static XHCI_DIAG_LINE_COUNT: AtomicU32 = AtomicU32::new(0);
 static VL805_CFG_VIRT: AtomicUsize = AtomicUsize::new(0);
 static VL805_XHCI_MMIO_HINT: AtomicUsize = AtomicUsize::new(0);
 static PINNED_XHCI_MMIO: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
@@ -215,6 +225,8 @@ static USB_PROGRESS_ACTIVE: AtomicBool = AtomicBool::new(false);
 static USB_PROGRESS_DISPLAY_PTR: AtomicUsize = AtomicUsize::new(0);
 static USB_PROGRESS_ELAPSED_MS: AtomicUsize = AtomicUsize::new(0);
 static USB_PROGRESS_DOTS: AtomicUsize = AtomicUsize::new(0);
+
+const XHCI_DIAG_MAX_LINES: u32 = 64;
 
 fn usb_progress_emit(dots: usize) {
     let ptr = USB_PROGRESS_DISPLAY_PTR.load(Ordering::Acquire);
@@ -682,6 +694,15 @@ const fn vl805_runtime_cfg_touch_allowed(
 }
 
 fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
+    let line_no = XHCI_DIAG_LINE_COUNT
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    if line_no > XHCI_DIAG_MAX_LINES {
+        if line_no == XHCI_DIAG_MAX_LINES.saturating_add(1) {
+            boot_log::force_uart_line("[local-seat] xhci.diag suppressed (rate-limited)");
+        }
+        return;
+    }
     let mut line = heapless::String::<176>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
@@ -2917,6 +2938,7 @@ impl UsbKeyboard {
             usb_oxide::EndpointDesc,
             Option<bool>,
         )>::new();
+        let mut strict_keyboard_candidates = 0usize;
 
         for attach_rank in 0..=1 {
             for (iface, ep_in) in &interfaces {
@@ -2949,12 +2971,15 @@ impl UsbKeyboard {
                     }
                     continue;
                 }
+                strict_keyboard_candidates = strict_keyboard_candidates.saturating_add(1);
                 if candidate_rank != attach_rank {
                     continue;
                 }
                 let source = hid_keyboard_attach_source(candidate_rank);
                 let require_boot_switch = candidate_rank != 0;
-                let force_keyboard_mode = candidate_rank != 0;
+                // Treat all explicit keyboard protocol candidates as keyboard
+                // reports even when devices expose non-boot quirks.
+                let force_keyboard_mode = true;
                 let track_failures = candidate_rank != 2;
                 if let Some(hid) = Self::try_attach_hid_keyboard_candidate(
                     device.clone(),
@@ -2988,6 +3013,28 @@ impl UsbKeyboard {
                     *iface,
                     *ep_in,
                     hid_keyboard_attach_source(2),
+                    true,
+                    true,
+                    false,
+                    saw_keyboard_init_error,
+                ) {
+                    return Some(hid);
+                }
+            }
+        }
+        // Last-resort: report-descriptor hints can be wrong on some vendor
+        // keyboards. If no strict keyboard protocol candidate exists, still
+        // attempt protocol-none interfaces that were hinted as non-keyboard.
+        if strict_keyboard_candidates == 0 {
+            for (iface, ep_in, hint) in &protocol_none_candidates {
+                if !matches!(hint, Some(false)) {
+                    continue;
+                }
+                if let Some(hid) = Self::try_attach_hid_keyboard_candidate(
+                    device.clone(),
+                    *iface,
+                    *ep_in,
+                    "protocol-none-last-resort",
                     true,
                     true,
                     false,
@@ -3174,7 +3221,7 @@ impl UsbKeyboard {
         let transferred = match device.control_transfer_with_wait_spins(
             &setup,
             Some(report_desc.as_mut_slice()),
-            HUB_CLASS_CONTROL_WAIT_SPINS,
+            HID_REPORT_DESC_WAIT_SPINS,
         ) {
             Ok(transferred) => transferred,
             Err(err) => {
@@ -3221,8 +3268,55 @@ impl UsbKeyboard {
         track_failures: bool,
         saw_keyboard_init_error: &mut bool,
     ) -> Option<HidDevice<SeatDma>> {
+        let mut bypassed_boot_subclass = false;
         let mut hid = match HidDevice::from_interface(device.clone(), &iface, &ep_in) {
             Ok(hid) => hid,
+            Err(primary_err)
+                if iface.interface_subclass == hid_subclass::BOOT
+                    && iface.interface_protocol == hid_protocol::KEYBOARD =>
+            {
+                // Some keyboards reject early SET_PROTOCOL during constructor
+                // attach. Retry without Boot subclass auto-switch and handle
+                // protocol switching in this function's compatibility path.
+                let mut relaxed_iface = iface;
+                relaxed_iface.interface_subclass = hid_subclass::NONE;
+                match HidDevice::from_interface(device.clone(), &relaxed_iface, &ep_in) {
+                    Ok(hid) => {
+                        bypassed_boot_subclass = true;
+                        let mut line = heapless::String::<288>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] usb hid attach retry slot={} iface={} ep=0x{:02x} source={} mode=boot-subclass-bypass detail={primary_err:?}",
+                                device.slot_id(),
+                                iface.interface_number,
+                                ep_in.endpoint_address,
+                                source
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        hid
+                    }
+                    Err(err) => {
+                        if track_failures {
+                            *saw_keyboard_init_error = true;
+                        }
+                        let mut line = heapless::String::<320>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] usb hid attach failed slot={} iface={} ep=0x{:02x} source={} detail={primary_err:?} retry={err:?}",
+                                device.slot_id(),
+                                iface.interface_number,
+                                ep_in.endpoint_address,
+                                source,
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        return None;
+                    }
+                }
+            }
             Err(err) => {
                 if track_failures {
                     *saw_keyboard_init_error = true;
@@ -3243,7 +3337,7 @@ impl UsbKeyboard {
             }
         };
         let mut report_layout = "boot";
-        if require_boot_switch {
+        if require_boot_switch || bypassed_boot_subclass {
             match hid.set_protocol(0) {
                 Ok(()) => {}
                 Err(_) if force_keyboard_mode => {
@@ -3626,14 +3720,13 @@ impl UsbKeyboard {
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
-                    Self::log_hub_port_terminal(
-                        device.slot_id(),
-                        downstream_port,
-                        "pre-status-unavailable-no-prepare",
-                    );
-                    continue;
                 }
                 blind_probe_attempted = blind_probe_attempted.saturating_add(1);
+                let blind_source = if prepared {
+                    "pre-status-unavailable"
+                } else {
+                    "pre-status-unavailable-no-prepare"
+                };
                 match Self::probe_hub_child_without_port_status(
                     &device,
                     downstream_port,
@@ -3641,7 +3734,7 @@ impl UsbKeyboard {
                     hub_tt_think_time,
                     depth_remaining,
                     saw_keyboard_init_error,
-                    "pre-status-unavailable",
+                    blind_source,
                 ) {
                     HubChildProbeResult::Keyboard(hid) => {
                         blind_probe_succeeded = blind_probe_succeeded.saturating_add(1);
@@ -3652,11 +3745,7 @@ impl UsbKeyboard {
                     }
                     HubChildProbeResult::Failed => {}
                 }
-                Self::log_hub_port_terminal(
-                    device.slot_id(),
-                    downstream_port,
-                    "pre-status-unavailable",
-                );
+                Self::log_hub_port_terminal(device.slot_id(), downstream_port, blind_source);
                 continue;
             }
 
@@ -3918,7 +4007,7 @@ impl UsbKeyboard {
                 hub_tt_think_time,
                 depth_remaining,
                 saw_keyboard_init_error,
-                "blind-pre-status",
+                source,
             ) {
                 HubChildProbeResult::Keyboard(hid) => return HubChildProbeResult::Keyboard(hid),
                 HubChildProbeResult::ProbedNoKeyboard => {
@@ -4613,21 +4702,18 @@ impl UsbKeyboard {
         hub_interface_number: u8,
         feature: u16,
         port: u8,
+        wait_spins: usize,
     ) -> core::result::Result<(), UsbError> {
         let primary_index = Self::hub_port_index(port);
         let setup = SetupPacket::new(0x23, request::SET_FEATURE, feature, primary_index, 0);
-        match device.control_transfer_with_wait_spins(&setup, None, HUB_CLASS_CONTROL_WAIT_SPINS) {
+        match device.control_transfer_with_wait_spins(&setup, None, wait_spins) {
             Ok(_) => Ok(()),
             Err(primary_err) => {
                 let Some(alt_index) = Self::hub_port_alt_index(hub_interface_number, port) else {
                     return Err(primary_err);
                 };
                 let alt_setup = SetupPacket::new(0x23, request::SET_FEATURE, feature, alt_index, 0);
-                match device.control_transfer_with_wait_spins(
-                    &alt_setup,
-                    None,
-                    HUB_CLASS_CONTROL_WAIT_SPINS,
-                ) {
+                match device.control_transfer_with_wait_spins(&alt_setup, None, wait_spins) {
                     Ok(_) => {
                         let mut line = heapless::String::<256>::new();
                         let _ = core::fmt::Write::write_fmt(
@@ -4927,21 +5013,28 @@ impl UsbKeyboard {
     ) -> bool {
         let max_attempts = attempts.max(1);
         for attempt in 1..=max_attempts {
-            match Self::hub_set_feature(device, hub_interface_number, feature, port) {
+            let wait_spins =
+                hub_retry_wait_spins(attempt, max_attempts, HUB_CONTROL_SLOW_TAIL_ATTEMPTS);
+            match Self::hub_set_feature(device, hub_interface_number, feature, port, wait_spins) {
                 Ok(()) => {
                     if attempt > 1 {
                         let mut line = heapless::String::<224>::new();
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] hub ctl retry-ok slot={} iface={} port={} stage={} feature=0x{:04x} attempt={}/{}",
+                                "[local-seat] hub ctl retry-ok slot={} iface={} port={} stage={} feature=0x{:04x} attempt={}/{} wait={}",
                                 device.slot_id(),
                                 hub_interface_number,
                                 port,
                                 stage,
                                 feature,
                                 attempt,
-                                max_attempts
+                                max_attempts,
+                                if wait_spins == HUB_CLASS_CONTROL_WAIT_SPINS_FAST {
+                                    "fast"
+                                } else {
+                                    "slow"
+                                }
                             ),
                         );
                         boot_log::force_uart_line(line.as_str());
@@ -5066,31 +5159,29 @@ impl UsbKeyboard {
         device: &UsbDevice<SeatDma>,
         hub_interface_number: u8,
         port: u8,
+        wait_spins: usize,
     ) -> Result<HubPortStatus, HubPortStatusReadError> {
         let primary_index = Self::hub_port_index(port);
         let alt_index = Self::hub_port_alt_index(hub_interface_number, port);
         let mut bytes = [0u8; HUB_PORT_STATUS_BYTES];
-        let read_for_index = |index: u16, bytes: &mut [u8; HUB_PORT_STATUS_BYTES]| {
-            let setup = SetupPacket::new(
-                0xA3,
-                request::GET_STATUS,
-                0,
-                index,
-                HUB_PORT_STATUS_BYTES as u16,
-            );
-            device.control_transfer_with_wait_spins(
-                &setup,
-                Some(bytes),
-                HUB_CLASS_CONTROL_WAIT_SPINS,
-            )
-        };
-        let transferred = match read_for_index(primary_index, &mut bytes) {
+        let read_for_index =
+            |index: u16, bytes: &mut [u8; HUB_PORT_STATUS_BYTES], wait_spins: usize| {
+                let setup = SetupPacket::new(
+                    0xA3,
+                    request::GET_STATUS,
+                    0,
+                    index,
+                    HUB_PORT_STATUS_BYTES as u16,
+                );
+                device.control_transfer_with_wait_spins(&setup, Some(bytes), wait_spins)
+            };
+        let transferred = match read_for_index(primary_index, &mut bytes, wait_spins) {
             Ok(transferred) => transferred,
             Err(primary_err) => {
                 let Some(alt_index) = alt_index else {
                     return Err(HubPortStatusReadError::Control(primary_err));
                 };
-                match read_for_index(alt_index, &mut bytes) {
+                match read_for_index(alt_index, &mut bytes, wait_spins) {
                     Ok(transferred) => {
                         let mut line = heapless::String::<256>::new();
                         let _ = core::fmt::Write::write_fmt(
@@ -5113,7 +5204,7 @@ impl UsbKeyboard {
         if transferred < HUB_PORT_STATUS_BYTES {
             if let Some(alt_index) = alt_index {
                 if alt_index != primary_index {
-                    match read_for_index(alt_index, &mut bytes) {
+                    match read_for_index(alt_index, &mut bytes, wait_spins) {
                         Ok(retry_transferred) if retry_transferred >= HUB_PORT_STATUS_BYTES => {
                             let mut line = heapless::String::<256>::new();
                             let _ = core::fmt::Write::write_fmt(
@@ -5149,7 +5240,13 @@ impl UsbKeyboard {
         hub_interface_number: u8,
         port: u8,
     ) -> Option<HubPortStatus> {
-        Self::hub_port_status_read(device, hub_interface_number, port).ok()
+        Self::hub_port_status_read(
+            device,
+            hub_interface_number,
+            port,
+            HUB_CLASS_CONTROL_WAIT_SPINS,
+        )
+        .ok()
     }
 
     fn hub_port_status_with_retry(
@@ -5159,41 +5256,55 @@ impl UsbKeyboard {
         stage: &str,
     ) -> Option<HubPortStatus> {
         for attempt in 1..=HUB_PORT_STATUS_QUICK_RETRIES {
-            match Self::hub_port_status_read(device, hub_interface_number, port) {
+            let wait_spins = hub_retry_wait_spins(
+                attempt,
+                HUB_PORT_STATUS_QUICK_RETRIES,
+                HUB_STATUS_SLOW_TAIL_ATTEMPTS,
+            );
+            match Self::hub_port_status_read(device, hub_interface_number, port, wait_spins) {
                 Ok(status) => {
-                    let raw = status.raw_bytes();
-                    let mut line = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] hub status read slot={} iface={} port={} stage={} attempt={}/{} status=0x{:04x} change=0x{:04x} raw={:02x}{:02x}{:02x}{:02x}",
+                    if HUB_VERBOSE_STATUS_RETRY_LOGS || attempt > 1 {
+                        let raw = status.raw_bytes();
+                        let mut line = heapless::String::<256>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] hub status read slot={} iface={} port={} stage={} attempt={}/{} wait={} status=0x{:04x} change=0x{:04x} raw={:02x}{:02x}{:02x}{:02x}",
+                                device.slot_id(),
+                                hub_interface_number,
+                                port,
+                                stage,
+                                attempt,
+                                HUB_PORT_STATUS_QUICK_RETRIES,
+                                if wait_spins == HUB_CLASS_CONTROL_WAIT_SPINS_FAST {
+                                    "fast"
+                                } else {
+                                    "slow"
+                                },
+                                status.status,
+                                status.change,
+                                raw[0],
+                                raw[1],
+                                raw[2],
+                                raw[3]
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                    }
+                    return Some(status);
+                }
+                Err(err) => {
+                    if HUB_VERBOSE_STATUS_RETRY_LOGS || attempt == HUB_PORT_STATUS_QUICK_RETRIES {
+                        Self::log_hub_status_read_error(
                             device.slot_id(),
                             hub_interface_number,
                             port,
                             stage,
                             attempt,
                             HUB_PORT_STATUS_QUICK_RETRIES,
-                            status.status,
-                            status.change,
-                            raw[0],
-                            raw[1],
-                            raw[2],
-                            raw[3]
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    return Some(status);
-                }
-                Err(err) => {
-                    Self::log_hub_status_read_error(
-                        device.slot_id(),
-                        hub_interface_number,
-                        port,
-                        stage,
-                        attempt,
-                        HUB_PORT_STATUS_QUICK_RETRIES,
-                        err,
-                    );
+                            err,
+                        );
+                    }
                 }
             }
             if attempt < HUB_PORT_STATUS_QUICK_RETRIES {
@@ -5211,8 +5322,18 @@ impl UsbKeyboard {
     ) -> Option<HubPortStatus> {
         let mut first_seen = None;
         let mut last_seen = None;
+        let mut attempts_executed = 0usize;
         for attempt in 0..HUB_PORT_STATUS_RETRY_LOOPS {
-            if let Some(status) = Self::hub_port_status(device, hub_interface_number, port) {
+            attempts_executed = attempt.saturating_add(1);
+            let fast_phase = attempt < HUB_WAIT_READY_FAST_LOOPS;
+            let wait_spins = if fast_phase {
+                HUB_CLASS_CONTROL_WAIT_SPINS_FAST
+            } else {
+                HUB_CLASS_CONTROL_WAIT_SPINS
+            };
+            if let Some(status) =
+                Self::hub_port_status_read(device, hub_interface_number, port, wait_spins).ok()
+            {
                 if first_seen.is_none() {
                     first_seen = Some(status);
                 }
@@ -5241,7 +5362,14 @@ impl UsbKeyboard {
                     return Some(status);
                 }
             }
-            wait_ms(HUB_PORT_STATUS_RETRY_DELAY_MS);
+            if fast_phase {
+                if first_seen.is_none() && attempts_executed >= HUB_WAIT_READY_FAST_LOOPS {
+                    break;
+                }
+                wait_ms(HUB_PORT_STATUS_RETRY_DELAY_MS_FAST);
+            } else {
+                wait_ms(HUB_PORT_STATUS_RETRY_DELAY_MS);
+            }
         }
         let mut line = heapless::String::<256>::new();
         match (first_seen, last_seen) {
@@ -5253,7 +5381,7 @@ impl UsbKeyboard {
                         device.slot_id(),
                         hub_interface_number,
                         port,
-                        HUB_PORT_STATUS_RETRY_LOOPS,
+                        attempts_executed,
                         first.status,
                         first.change,
                         last.status,
@@ -5269,7 +5397,7 @@ impl UsbKeyboard {
                         device.slot_id(),
                         hub_interface_number,
                         port,
-                        HUB_PORT_STATUS_RETRY_LOOPS
+                        attempts_executed
                     ),
                 );
             }
@@ -6334,6 +6462,31 @@ const fn normalize_hub_tt_profile(
 }
 
 #[inline]
+const fn hub_retry_wait_spins(
+    attempt: usize,
+    max_attempts: usize,
+    slow_tail_attempts: usize,
+) -> usize {
+    if max_attempts <= 1 {
+        return HUB_CLASS_CONTROL_WAIT_SPINS;
+    }
+    let slow_tail = if slow_tail_attempts >= max_attempts {
+        max_attempts.saturating_sub(1)
+    } else {
+        slow_tail_attempts
+    };
+    if slow_tail == 0 {
+        return HUB_CLASS_CONTROL_WAIT_SPINS_FAST;
+    }
+    let slow_start = max_attempts.saturating_sub(slow_tail).saturating_add(1);
+    if attempt >= slow_start {
+        HUB_CLASS_CONTROL_WAIT_SPINS
+    } else {
+        HUB_CLASS_CONTROL_WAIT_SPINS_FAST
+    }
+}
+
+#[inline]
 fn read_config_desc(config_blob: &[u8]) -> Option<ConfigDesc> {
     if config_blob.len() < mem::size_of::<ConfigDesc>() {
         return None;
@@ -6380,12 +6533,15 @@ fn validate_framebuffer_geometry(
 mod tests {
     use super::{
         clamp_visible_height, clamp_visible_width, config_value_for_set, decode_pci_mmio_bar,
-        hid_keyboard_attach_rank, hid_keyboard_attach_source, hub_should_eager_port_power,
-        keyboard_scancode_to_char, mailbox_visible_dimension, normalize_hub_tt_profile,
-        text_row_count, text_viewport_height, vl805_runtime_cfg_touch_allowed, ConfigDesc,
-        UsbKeyboard,
+        hid_keyboard_attach_rank, hid_keyboard_attach_source, hub_retry_wait_spins,
+        hub_should_eager_port_power, keyboard_scancode_to_char, mailbox_visible_dimension,
+        normalize_hub_tt_profile, text_row_count, text_viewport_height,
+        vl805_runtime_cfg_touch_allowed, ConfigDesc, UsbKeyboard,
     };
-    use super::{hid_protocol, hid_subclass, scancode, CHAR_HEIGHT, HUB_CLASS_CONTROL_WAIT_SPINS};
+    use super::{
+        hid_protocol, hid_subclass, scancode, CHAR_HEIGHT, HUB_CLASS_CONTROL_WAIT_SPINS,
+        HUB_CLASS_CONTROL_WAIT_SPINS_FAST,
+    };
 
     #[test]
     fn decode_pci_mmio_bar_rejects_io_bar() {
@@ -6466,6 +6622,24 @@ mod tests {
     #[test]
     fn hub_class_control_wait_budget_matches_default_control_budget() {
         assert_eq!(HUB_CLASS_CONTROL_WAIT_SPINS, 20_000_000);
+    }
+
+    #[test]
+    fn hub_retry_wait_spins_uses_fast_then_slow_tail() {
+        assert_eq!(
+            hub_retry_wait_spins(1, 4, 1),
+            HUB_CLASS_CONTROL_WAIT_SPINS_FAST
+        );
+        assert_eq!(
+            hub_retry_wait_spins(3, 4, 1),
+            HUB_CLASS_CONTROL_WAIT_SPINS_FAST
+        );
+        assert_eq!(hub_retry_wait_spins(4, 4, 1), HUB_CLASS_CONTROL_WAIT_SPINS);
+    }
+
+    #[test]
+    fn hub_retry_wait_spins_keeps_single_attempt_slow() {
+        assert_eq!(hub_retry_wait_spins(1, 1, 1), HUB_CLASS_CONTROL_WAIT_SPINS);
     }
 
     #[test]

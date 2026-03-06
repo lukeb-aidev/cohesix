@@ -1932,6 +1932,7 @@ fn bootstrap<P: Platform>(
     crate::sel4::log_sel4_type_sanity();
 
     let mut bootinfo_snapshot_opt: Option<BootInfoSnapshot> = None;
+    let mut bootinfo_snapshot_region_opt: Option<core::ops::Range<usize>> = None;
 
     early_phase = EarlyBootPhase::BootInfoSnapshot;
     debug_uart_str("[breadcrumb] before bootinfo snapshot capture\r\n");
@@ -2014,6 +2015,7 @@ fn bootstrap<P: Platform>(
         let backing_len = bootinfo_snapshot.backing().len();
         let snapshot_pages = align_up(backing_len, IPC_PAGE_BYTES) / IPC_PAGE_BYTES;
         let region = state.snapshot_region();
+        bootinfo_snapshot_region_opt = Some(region.clone());
         let _ = write!(
             snapshot_state_line,
             "[state] snapshot_region=[0x{start:016x}..0x{end:016x}) bootinfo=0x{bootinfo:016x} total=0x{total:08x} pages={boot_pages} backing=0x{back:016x} len=0x{len:08x} snap_pages={snap_pages}\r\n",
@@ -2344,6 +2346,9 @@ fn bootstrap<P: Platform>(
     }
 
     ensure_device_pt_pool(bootinfo_ref);
+    if let Some(region) = bootinfo_snapshot_region_opt.as_ref() {
+        reserved_vaddrs.reserve(region, "bootinfo-snapshot");
+    }
 
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
     let mut kernel_env = KernelEnv::new(
@@ -3144,6 +3149,7 @@ fn bootstrap<P: Platform>(
             console.writeln_prefixed("[uart] init skipped: no mapped UART backend");
         }
 
+        boot_guard.record_phase("NetInit");
         check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let (net_stack, virtio_present, net_init_error, net_backend_label) = {
@@ -3164,6 +3170,7 @@ fn bootstrap<P: Platform>(
             } else {
                 match init_net_console(hal, config) {
                     Ok(stack) => {
+                        check_bootinfo(&mut boot_guard, "[mark] net.init.return");
                         let mac = stack.hardware_address();
                         let ip = stack.ipv4_address();
                         let port = stack.console_listen_port();
@@ -3171,6 +3178,7 @@ fn bootstrap<P: Platform>(
                         let _ =
                             write!(ok_line, "[net-console] ready ip={ip} port={port} mac={mac}");
                         boot_log::force_uart_line(ok_line.as_str());
+                        check_bootinfo(&mut boot_guard, "[mark] net.init.ready-line");
                         boot_guard.record_invariant("net-console.ready");
                         let virtio_selected = cfg!(feature = "net-backend-virtio")
                             && net_backend_label == "virtio-net";
@@ -3206,6 +3214,7 @@ fn bootstrap<P: Platform>(
         #[cfg(not(feature = "net-console"))]
         let net_stack = None::<()>;
         check_bootinfo(&mut boot_guard, "[mark] net.init.post");
+        boot_guard.record_phase("TimersAndIPC");
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
         let (timer, ipc) = match run_timers_and_ipc_phase(endpoints, bootstrap_ipc) {

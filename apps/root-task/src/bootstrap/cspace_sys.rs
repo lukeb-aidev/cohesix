@@ -1292,7 +1292,7 @@ impl From<RetypeArgsError> for RetypeCallError {
 
 /// Emits a diagnostic trace of the supplied retype arguments.
 pub fn log_retype_args(args: &RetypeArgs) {
-    log::info!(
+    log::debug!(
         "[retype] ut={:#x} type={:#x} size_bits={} root={:#x} idx={:#x} depth={} off={:#x} n={}",
         args.ut,
         args.objtype,
