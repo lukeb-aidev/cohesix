@@ -1077,6 +1077,18 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `hw.network.mode`: `{}`",
+            format_network_mode(manifest.hw.network.mode)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.network.interface`: `{}`",
+            format_network_interface_policy(manifest.hw.network.interface)
+        )
+        .ok();
+        writeln!(
+            schema_md,
             "- `hw.network.static_ipv4.ip`: `{}`",
             if manifest.hw.network.static_ipv4.ip.trim().is_empty() {
                 "(unset)"
@@ -1103,6 +1115,24 @@ impl DocFragments {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or("(unset)")
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.network.dhcp.discover_timeout_ms`: `{}`",
+            manifest.hw.network.dhcp.discover_timeout_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.network.dhcp.request_timeout_ms`: `{}`",
+            manifest.hw.network.dhcp.request_timeout_ms
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `hw.network.dhcp.max_retries`: `{}`",
+            manifest.hw.network.dhcp.max_retries
         )
         .ok();
         writeln!(
@@ -2643,6 +2673,22 @@ fn format_network_backend(backend: NetworkBackendKind) -> &'static str {
     }
 }
 
+fn format_network_mode(mode: crate::ir::NetworkMode) -> &'static str {
+    match mode {
+        crate::ir::NetworkMode::Off => "off",
+        crate::ir::NetworkMode::Static => "static",
+        crate::ir::NetworkMode::Dhcp => "dhcp",
+    }
+}
+
+fn format_network_interface_policy(policy: crate::ir::NetworkInterfacePolicy) -> &'static str {
+    match policy {
+        crate::ir::NetworkInterfacePolicy::Wired => "wired",
+        crate::ir::NetworkInterfacePolicy::Wifi => "wifi",
+        crate::ir::NetworkInterfacePolicy::Auto => "auto",
+    }
+}
+
 fn format_attestation_policy(policy: crate::ir::AttestationPolicy) -> &'static str {
     match policy {
         crate::ir::AttestationPolicy::TpmOnly => "tpm-only",
@@ -2655,6 +2701,7 @@ fn format_hardware_device_kind(kind: crate::ir::HardwareDeviceKind) -> &'static 
     match kind {
         crate::ir::HardwareDeviceKind::Uart => "uart",
         crate::ir::HardwareDeviceKind::Net => "net",
+        crate::ir::HardwareDeviceKind::Wifi => "wifi",
         crate::ir::HardwareDeviceKind::Tpm => "tpm",
         crate::ir::HardwareDeviceKind::Rtc => "rtc",
         crate::ir::HardwareDeviceKind::Keyboard => "keyboard",

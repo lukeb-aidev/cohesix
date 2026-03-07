@@ -674,12 +674,16 @@ pub trait RootTaskControl {
     rejecting whitespace or malformed values so automation does not leak failed attempts over the wire.
 - Cohesix ships regression scripts in `.coh` format consumed by `coh> test`; see the canonical spec in [USERLAND_AND_CLI.md](./USERLAND_AND_CLI.md#coh-scripts-coh) for syntax and assertion rules.
 - For `dev-virt`, QEMU forwards `127.0.0.1:{31337/tcp,31338/udp,31339/tcp}` to `10.0.2.15` for the console and self-test ports; the virtio-net backend is the default (`net-backend-virtio`), with RTL8139 available as a fallback by removing that feature. Operators generally do not need to care which NIC is active, but the backend label appears in boot logs for diagnostics.
-- For `pi4-uboot-aarch64` (and migration alias `uefi-aarch64`), backend and addressing are manifest-authored through `hw.network.*`; `hw.network.backend=bcmgenet-v5` with static IPv4 is required when networking is enabled.
+- For `pi4-uboot-aarch64` (and migration alias `uefi-aarch64`), backend and addressing are authored through `hw.network.*`: `hw.network.backend=bcmgenet-v5`, `hw.network.mode=(off|static|dhcp)`, `hw.network.interface=(wired|wifi|auto)`, manifest static IPv4 when `mode=static`, and bounded DHCP retry/timeout fields when `mode=dhcp`.
+- The staged Pi 4 U-Boot boot script mirrors `coh_net_mode`, `coh_net_interface`, `coh_wifi_ssid`, and `coh_wifi_psk` env vars into DTB `/chosen/cohesix,*` properties when `fdtcontroladdr` is available; root-task applies only bounded overrides and otherwise falls back to manifest defaults.
+- Current as-built runtime supports only the wired control-plane interface. `wifi` or `auto` policy requests are rejected during net-console init with deterministic `InvalidConfig` evidence instead of silently falling back to wired.
 - `nettest` and `netstats` remain backend-agnostic console verbs (no grammar changes). `netstats` includes deterministic target fields:
   `backend=<label> enabled=<bool> running=<bool> udp=<ip:port> tcp=<ip:port> last=<result>`.
+- `netstats` also reports the active policy state on a dedicated line:
+  `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`.
 - `nettest` target selection is profile-gated:
-  QEMU keeps existing `127.0.0.1:{31338,31339}` hostfwd semantics; Pi 4 uses manifest static IPv4/gateway-derived targets without introducing new in-VM listeners.
-- Operator capture guidance is profile-gated as well: QEMU hostfwd/tunnel flows use `lo0`, while Pi 4 direct-link/static IPv4 flows use the host's physical NIC and require the logged peer-side `nc` commands to exercise UDP echo and TCP smoke.
+  QEMU keeps existing `127.0.0.1:{31338,31339}` hostfwd semantics; Pi 4 uses the active wired address (static IPv4 or DHCP lease) without introducing new in-VM listeners.
+- Operator capture guidance is profile-gated as well: QEMU hostfwd/tunnel flows use `lo0`, while Pi 4 direct-link flows use the host's physical NIC and require the logged peer-side `nc` commands to exercise UDP echo and TCP smoke.
 - `cohsh` is the authoritative implementation of this protocol, and the planned WASM GUI is conceptually another client that wraps the same verbs without introducing a new control surface.
 
 ## 14. Error Surface

@@ -639,6 +639,52 @@ struct Pi4UefiDtbDiagnostics {
     has_pcie_disabled: bool,
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const COHESIX_DTB_NET_MODE_PROP: &str = "cohesix,net-mode";
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const COHESIX_DTB_NET_INTERFACE_PROP: &str = "cohesix,net-interface";
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const COHESIX_DTB_WIFI_SSID_PROP: &str = "cohesix,wifi-ssid";
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const COHESIX_DTB_WIFI_PSK_PROP: &str = "cohesix,wifi-psk";
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Pi4BootNetPolicyProperties {
+    mode: Option<generated::NetworkMode>,
+    mode_seen: bool,
+    interface: Option<generated::NetworkInterfacePolicy>,
+    interface_seen: bool,
+    wifi_credentials_present: bool,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Pi4BootNetPolicySource {
+    Manifest,
+    DtbApplied,
+    DtbIgnored(&'static str),
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Pi4BootNetPolicyResolution {
+    policy: crate::net::RuntimeNetPolicyOverride,
+    source: Pi4BootNetPolicySource,
+    wifi_credentials_present: bool,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl Default for Pi4BootNetPolicyResolution {
+    fn default() -> Self {
+        Self {
+            policy: crate::net::RuntimeNetPolicyOverride::default(),
+            source: Pi4BootNetPolicySource::Manifest,
+            wifi_credentials_present: false,
+        }
+    }
+}
+
 fn dtb_prop_cstr<'a>(value: &'a [u8]) -> Option<&'a str> {
     let end = value
         .iter()
@@ -659,6 +705,195 @@ fn dtb_prop_u64_be(value: &[u8], offset: usize) -> Option<u64> {
     let hi = u64::from(dtb_prop_u32_be(value, offset)?);
     let lo = u64::from(dtb_prop_u32_be(value, offset.saturating_add(4))?);
     Some((hi << 32) | lo)
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn parse_dtb_network_mode(value: &[u8]) -> Option<generated::NetworkMode> {
+    let value = dtb_prop_cstr(value)?;
+    if value.eq_ignore_ascii_case("off") {
+        Some(generated::NetworkMode::Off)
+    } else if value.eq_ignore_ascii_case("static") {
+        Some(generated::NetworkMode::Static)
+    } else if value.eq_ignore_ascii_case("dhcp") {
+        Some(generated::NetworkMode::Dhcp)
+    } else {
+        None
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn parse_dtb_network_interface(value: &[u8]) -> Option<generated::NetworkInterfacePolicy> {
+    let value = dtb_prop_cstr(value)?;
+    if value.eq_ignore_ascii_case("wired") {
+        Some(generated::NetworkInterfacePolicy::Wired)
+    } else if value.eq_ignore_ascii_case("wifi") {
+        Some(generated::NetworkInterfacePolicy::Wifi)
+    } else if value.eq_ignore_ascii_case("auto") {
+        Some(generated::NetworkInterfacePolicy::Auto)
+    } else {
+        None
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn runtime_net_mode(mode: generated::NetworkMode) -> crate::net::NetMode {
+    match mode {
+        generated::NetworkMode::Off => crate::net::NetMode::Off,
+        generated::NetworkMode::Static => crate::net::NetMode::Static,
+        generated::NetworkMode::Dhcp => crate::net::NetMode::Dhcp,
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn runtime_net_interface(
+    policy: generated::NetworkInterfacePolicy,
+) -> crate::net::NetInterfacePolicy {
+    match policy {
+        generated::NetworkInterfacePolicy::Wired => crate::net::NetInterfacePolicy::Wired,
+        generated::NetworkInterfacePolicy::Wifi => crate::net::NetInterfacePolicy::Wifi,
+        generated::NetworkInterfacePolicy::Auto => crate::net::NetInterfacePolicy::Auto,
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn hardware_has_device(
+    hardware: generated::HardwareConfig,
+    kind: generated::HardwareDeviceKind,
+) -> bool {
+    hardware.devices.iter().any(|device| device.kind == kind)
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn collect_pi4_boot_net_policy(
+    dtb: &bi_extra::Dtb<'_>,
+) -> Result<Pi4BootNetPolicyProperties, bi_extra::ParseError> {
+    let mut policy = Pi4BootNetPolicyProperties::default();
+    let mut path = HeaplessVec::<&str, 16>::new();
+    let mut cursor = dtb.structure_cursor();
+    while let Some(item) = cursor.next()? {
+        match item {
+            bi_extra::StructureItem::BeginNode(name) => {
+                let _ = path.push(name);
+            }
+            bi_extra::StructureItem::EndNode => {
+                let _ = path.pop();
+            }
+            bi_extra::StructureItem::Property { name, value } => {
+                let in_chosen = path.iter().any(|segment| *segment == "chosen");
+                if !in_chosen {
+                    continue;
+                }
+                match name {
+                    COHESIX_DTB_NET_MODE_PROP => {
+                        policy.mode_seen = true;
+                        policy.mode = parse_dtb_network_mode(value);
+                    }
+                    COHESIX_DTB_NET_INTERFACE_PROP => {
+                        policy.interface_seen = true;
+                        policy.interface = parse_dtb_network_interface(value);
+                    }
+                    COHESIX_DTB_WIFI_SSID_PROP | COHESIX_DTB_WIFI_PSK_PROP => {
+                        policy.wifi_credentials_present |= dtb_prop_cstr(value)
+                            .map(|text| !text.is_empty())
+                            .unwrap_or(false);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(policy)
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn resolve_pi4_boot_net_policy(
+    extra_bytes: &[u8],
+    extra_range: Range<usize>,
+    hardware: generated::HardwareConfig,
+) -> Pi4BootNetPolicyResolution {
+    let mut resolution = Pi4BootNetPolicyResolution::default();
+    if hardware.no_nic
+        || !hardware.network.enabled
+        || hardware.network.backend != generated::NetworkBackendKind::BcmGenetV5
+    {
+        return resolution;
+    }
+
+    let dtb_blob = match bi_extra::locate_dtb(extra_bytes, extra_range) {
+        Ok(blob) => blob,
+        Err(_) => return resolution,
+    };
+    let dtb = match bi_extra::parse_dtb(dtb_blob) {
+        Ok(dtb) => dtb,
+        Err(_) => return resolution,
+    };
+    let raw = match collect_pi4_boot_net_policy(&dtb) {
+        Ok(raw) => raw,
+        Err(_) => return resolution,
+    };
+    resolution.wifi_credentials_present = raw.wifi_credentials_present;
+
+    if raw.mode_seen && raw.mode.is_none() {
+        resolution.source = Pi4BootNetPolicySource::DtbIgnored("invalid-net-mode");
+        return resolution;
+    }
+    if raw.interface_seen && raw.interface.is_none() {
+        resolution.source = Pi4BootNetPolicySource::DtbIgnored("invalid-net-interface");
+        return resolution;
+    }
+    if raw.mode.is_none() && raw.interface.is_none() && !raw.wifi_credentials_present {
+        return resolution;
+    }
+
+    let effective_mode = raw.mode.unwrap_or(hardware.network.mode);
+    let effective_interface = raw.interface.unwrap_or(hardware.network.interface);
+    let has_wifi = hardware_has_device(hardware, generated::HardwareDeviceKind::Wifi);
+
+    if effective_mode != generated::NetworkMode::Off
+        && !matches!(
+            effective_interface,
+            generated::NetworkInterfacePolicy::Wired
+        )
+    {
+        resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-runtime-unavailable");
+        return resolution;
+    }
+    if effective_mode != generated::NetworkMode::Off
+        && matches!(
+            effective_interface,
+            generated::NetworkInterfacePolicy::Wifi | generated::NetworkInterfacePolicy::Auto
+        )
+        && !has_wifi
+    {
+        resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-device-missing");
+        return resolution;
+    }
+    if effective_mode != generated::NetworkMode::Off
+        && matches!(
+            effective_interface,
+            generated::NetworkInterfacePolicy::Wifi | generated::NetworkInterfacePolicy::Auto
+        )
+        && effective_mode != generated::NetworkMode::Dhcp
+    {
+        resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-requires-dhcp");
+        return resolution;
+    }
+    if effective_mode != generated::NetworkMode::Off
+        && matches!(effective_interface, generated::NetworkInterfacePolicy::Wifi)
+        && !raw.wifi_credentials_present
+    {
+        resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-credentials-missing");
+        return resolution;
+    }
+
+    resolution.policy = crate::net::RuntimeNetPolicyOverride {
+        mode: raw.mode.map(runtime_net_mode),
+        interface: raw.interface.map(runtime_net_interface),
+    };
+    if resolution.policy.mode.is_some() || resolution.policy.interface.is_some() {
+        resolution.source = Pi4BootNetPolicySource::DtbApplied;
+    }
+    resolution
 }
 
 fn dtb_first_reg_addr(value: &[u8]) -> Option<usize> {
@@ -3153,15 +3388,73 @@ fn bootstrap<P: Platform>(
         check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let (net_stack, virtio_present, net_init_error, net_backend_label) = {
-            use crate::net::{console_net_config, init_net_console, NetConsoleError};
-            let config = console_net_config();
+            use crate::net::{
+                console_net_config_with_runtime_policy, init_net_console, NetConsoleError, NetMode,
+                NetPoller,
+            };
+            let boot_policy =
+                resolve_pi4_boot_net_policy(extra_bytes, extra_range.clone(), hardware);
+            let config = console_net_config_with_runtime_policy(boot_policy.policy);
             let net_backend_label = config.backend.label();
+            if hardware.network.enabled && !config.backend.uses_dev_virt_defaults() {
+                let mut policy_line = heapless::String::<192>::new();
+                match boot_policy.source {
+                    Pi4BootNetPolicySource::Manifest => {
+                        let _ = write!(
+                            policy_line,
+                            "[net-policy] source=manifest mode={} interface={} wifi_creds={}",
+                            config.policy.mode.as_str(),
+                            config.policy.interface.as_str(),
+                            if boot_policy.wifi_credentials_present {
+                                "yes"
+                            } else {
+                                "no"
+                            }
+                        );
+                    }
+                    Pi4BootNetPolicySource::DtbApplied => {
+                        let _ = write!(
+                            policy_line,
+                            "[net-policy] source=dtb mode={} interface={} wifi_creds={}",
+                            config.policy.mode.as_str(),
+                            config.policy.interface.as_str(),
+                            if boot_policy.wifi_credentials_present {
+                                "yes"
+                            } else {
+                                "no"
+                            }
+                        );
+                    }
+                    Pi4BootNetPolicySource::DtbIgnored(reason) => {
+                        let _ = write!(
+                            policy_line,
+                            "[net-policy] source=dtb ignored reason={} mode={} interface={} wifi_creds={}",
+                            reason,
+                            config.policy.mode.as_str(),
+                            config.policy.interface.as_str(),
+                            if boot_policy.wifi_credentials_present {
+                                "yes"
+                            } else {
+                                "no"
+                            }
+                        );
+                    }
+                }
+                console.writeln_prefixed(policy_line.as_str());
+                boot_log::force_uart_line(policy_line.as_str());
+            }
 
             if hardware.no_nic {
                 boot_log::force_uart_line("[net-console] disabled reason=manifest-no-nic err=0");
                 log::info!("[net-console] disabled by manifest no_nic baseline");
                 let mut detail = heapless::String::<192>::new();
                 let _ = write!(detail, "disabled by manifest hw.no_nic=true");
+                (None, false, Some(detail), net_backend_label)
+            } else if matches!(config.policy.mode, NetMode::Off) {
+                boot_log::force_uart_line("[net-console] disabled reason=policy-off err=0");
+                log::info!("[net-console] disabled by runtime policy mode=off");
+                let mut detail = heapless::String::<192>::new();
+                let _ = write!(detail, "disabled by runtime policy mode=off");
                 (None, false, Some(detail), net_backend_label)
             } else if !sel4::ep_ready() || !sel4::ep_validated() {
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
@@ -3172,11 +3465,23 @@ fn bootstrap<P: Platform>(
                     Ok(stack) => {
                         check_bootinfo(&mut boot_guard, "[mark] net.init.return");
                         let mac = stack.hardware_address();
-                        let ip = stack.ipv4_address();
                         let port = stack.console_listen_port();
+                        let status = stack.status_report();
                         let mut ok_line = heapless::String::<160>::new();
-                        let _ =
-                            write!(ok_line, "[net-console] ready ip={ip} port={port} mac={mac}");
+                        if status.mode == "dhcp" && status.address_source == "dhcp-pending" {
+                            let _ = write!(
+                                ok_line,
+                                "[net-console] pending-dhcp backend={} dhcp={} port={port} mac={mac}",
+                                status.backend,
+                                status.dhcp_phase,
+                            );
+                        } else {
+                            let _ = write!(
+                                ok_line,
+                                "[net-console] ready ip={} port={port} mac={mac}",
+                                status.ip
+                            );
+                        }
                         boot_log::force_uart_line(ok_line.as_str());
                         check_bootinfo(&mut boot_guard, "[mark] net.init.ready-line");
                         boot_guard.record_invariant("net-console.ready");

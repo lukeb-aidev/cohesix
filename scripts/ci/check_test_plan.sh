@@ -50,6 +50,9 @@ required_snippets = [
     "scripts/cohsh/run_regression_batch.sh",
     "scripts/cohsh/REST_regression_batch.sh",
     "scripts/ci/due_diligence_gate.sh",
+    "scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json",
+    "scripts/uboot/qemu-uboot-smoke.sh --net user",
+    "scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none",
     "cargo test -p tests",
     "cargo test --workspace",
 ]

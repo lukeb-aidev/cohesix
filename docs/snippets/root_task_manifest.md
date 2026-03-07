@@ -175,9 +175,14 @@
 - `hw.no_nic`: `false`
 - `hw.network.enabled`: `false`
 - `hw.network.backend`: `auto`
+- `hw.network.mode`: `off`
+- `hw.network.interface`: `wired`
 - `hw.network.static_ipv4.ip`: `(unset)`
 - `hw.network.static_ipv4.prefix_len`: `0`
 - `hw.network.static_ipv4.gateway`: `(unset)`
+- `hw.network.dhcp.discover_timeout_ms`: `1000`
+- `hw.network.dhcp.request_timeout_ms`: `1000`
+- `hw.network.dhcp.max_retries`: `4`
 - `hw.attestation.enabled`: `false`
 - `hw.attestation.policy`: `tpm-or-dice`
 - `hw.attestation.evidence_max_bytes`: `256`
@@ -194,7 +199,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `b487945f401c5e2bfd7883e8f820981b5c682894056e2185d9a4caa5f34e8f67`
+- `manifest.sha256`: `9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -256,4 +261,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `b487945f401c5e2bfd7883e8f820981b5c682894056e2185d9a4caa5f34e8f67`)._
+_Generated from `configs/root_task.toml` (sha256: `9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf`)._

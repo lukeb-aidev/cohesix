@@ -46,10 +46,12 @@ use smoltcp::wire::{
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
+    dhcp::{DhcpClient, DhcpEvent, DhcpLease, DHCP_CLIENT_PORT, DHCP_SERVER_PORT},
     outbound::{OutboundCoalescer, OutboundLane, SendError},
     ConsoleLine, ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent,
-    NetCounters, NetDevice, NetDriverError, NetPoller, NetSelfTestReport, NetSelfTestResult,
-    NetStage, NetTelemetry, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
+    NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode, NetPoller,
+    NetSelfTestReport, NetSelfTestResult, NetStage, NetStatusReport, NetTelemetry,
+    DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
@@ -80,6 +82,8 @@ const ERR_AUTH_REASON_TIMEOUT: &str = "ERR AUTH reason=timeout";
 const ERR_CONSOLE_REASON_TIMEOUT: &str = "ERR CONSOLE reason=timeout";
 const UDP_METADATA_CAPACITY: usize = 8;
 const UDP_PAYLOAD_CAPACITY: usize = 512;
+const DHCP_PAYLOAD_CAPACITY: usize = 576;
+const DHCP_METADATA_CAPACITY: usize = 4;
 const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
@@ -189,6 +193,8 @@ pub enum NetStackError<DE> {
     TcpSmokeTxStorageInUse,
     UdpBeaconStorageInUse,
     UdpEchoStorageInUse,
+    DhcpStorageInUse,
+    DhcpSocketBind(UdpBindError),
     TcpProbeRxStorageInUse,
     TcpProbeTxStorageInUse,
 }
@@ -209,6 +215,8 @@ impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
             Self::TcpSmokeTxStorageInUse => f.write_str("TCP smoke test TX storage already in use"),
             Self::UdpBeaconStorageInUse => f.write_str("UDP beacon storage already in use"),
             Self::UdpEchoStorageInUse => f.write_str("UDP echo storage already in use"),
+            Self::DhcpStorageInUse => f.write_str("DHCP socket storage already in use"),
+            Self::DhcpSocketBind(err) => write!(f, "DHCP socket bind failed: {err:?}"),
             Self::TcpProbeRxStorageInUse => f.write_str("TCP probe RX storage already in use"),
             Self::TcpProbeTxStorageInUse => f.write_str("TCP probe TX storage already in use"),
         }
@@ -645,6 +653,25 @@ fn reserve_udp_echo_storage<DE>(
     )
 }
 
+fn reserve_dhcp_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &DHCP_STORAGE_IN_USE,
+            owner: &DHCP_STORAGE_OWNER,
+            tag_id: &DHCP_STORAGE_TAG_ID,
+            tag_label: &DHCP_STORAGE_TAG_LABEL,
+            label: "dhcp",
+        },
+        owner_id,
+        tag,
+        NetStackError::DhcpStorageInUse,
+        None,
+    )
+}
+
 #[cfg(feature = "net-outbound-probe")]
 fn reserve_tcp_probe_rx_storage<DE>(
     owner_id: u64,
@@ -689,6 +716,7 @@ struct StorageReservation {
     socket: StorageLease,
     tcp_rx: StorageLease,
     tcp_tx: StorageLease,
+    dhcp: Option<StorageLease>,
     tcp_smoke_rx: Option<StorageLease>,
     tcp_smoke_tx: Option<StorageLease>,
     tcp_smoke_out_rx: Option<StorageLease>,
@@ -704,6 +732,7 @@ struct StorageReservation {
 impl StorageReservation {
     fn acquire<DE>(
         self_test_enabled: bool,
+        dhcp_enabled: bool,
         owner: &NetInitAttempt,
         tag: &'static str,
     ) -> Result<Self, NetStackError<DE>> {
@@ -711,6 +740,11 @@ impl StorageReservation {
         let socket = reserve_socket_storage(owner.owner_id(), reservation_tag)?;
         let tcp_rx = reserve_tcp_rx_storage(owner.owner_id(), reservation_tag)?;
         let tcp_tx = reserve_tcp_tx_storage(owner.owner_id(), reservation_tag)?;
+        let dhcp = if dhcp_enabled {
+            Some(reserve_dhcp_storage(owner.owner_id(), reservation_tag)?)
+        } else {
+            None
+        };
         let tcp_smoke_rx = if self_test_enabled {
             Some(reserve_tcp_smoke_rx_storage(
                 owner.owner_id(),
@@ -765,6 +799,7 @@ impl StorageReservation {
             socket,
             tcp_rx,
             tcp_tx,
+            dhcp,
             tcp_smoke_rx,
             tcp_smoke_tx,
             tcp_smoke_out_rx,
@@ -908,6 +943,10 @@ static UDP_ECHO_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static UDP_ECHO_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
 static UDP_ECHO_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
 static UDP_ECHO_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
+static DHCP_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static DHCP_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static DHCP_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static DHCP_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut UDP_BEACON_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
 static mut UDP_BEACON_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
@@ -916,10 +955,16 @@ static mut UDP_ECHO_RX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
 static mut UDP_ECHO_TX_METADATA: [UdpPacketMetadata; UDP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; UDP_METADATA_CAPACITY];
+static mut DHCP_RX_METADATA: [UdpPacketMetadata; DHCP_METADATA_CAPACITY] =
+    [UdpPacketMetadata::EMPTY; DHCP_METADATA_CAPACITY];
+static mut DHCP_TX_METADATA: [UdpPacketMetadata; DHCP_METADATA_CAPACITY] =
+    [UdpPacketMetadata::EMPTY; DHCP_METADATA_CAPACITY];
 static mut UDP_BEACON_RX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
 static mut UDP_BEACON_TX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
 static mut UDP_ECHO_RX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
 static mut UDP_ECHO_TX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
+static mut DHCP_RX_STORAGE: [u8; DHCP_PAYLOAD_CAPACITY] = [0u8; DHCP_PAYLOAD_CAPACITY];
+static mut DHCP_TX_STORAGE: [u8; DHCP_PAYLOAD_CAPACITY] = [0u8; DHCP_PAYLOAD_CAPACITY];
 
 /// Shared monotonic clock for the interface.
 #[derive(Debug, Default)]
@@ -959,6 +1004,8 @@ pub struct NetStack<D: NetDevice> {
     outbound: OutboundCoalescer,
     telemetry: NetTelemetry,
     backend: NetBackend,
+    mode: NetMode,
+    interface_policy: NetInterfacePolicy,
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
     prefix_len: u8,
@@ -978,6 +1025,8 @@ pub struct NetStack<D: NetDevice> {
     service_logged: bool,
     last_poll_snapshot: Option<PollSnapshot>,
     peer_endpoint: Option<(IpAddress, u16)>,
+    dhcp_handle: Option<SocketHandle>,
+    dhcp: Option<DhcpClient>,
     udp_beacon_handle: Option<SocketHandle>,
     udp_echo_handle: Option<SocketHandle>,
     tcp_smoke_handle: Option<SocketHandle>,
@@ -1552,15 +1601,32 @@ where
 
     let config = config.with_profile_defaults();
     let iface_ip = config.address.ip;
-    if config.listen_port == 0 || iface_ip == [0, 0, 0, 0] {
+    if config.listen_port == 0
+        || (matches!(config.policy.mode, NetMode::Static) && iface_ip == [0, 0, 0, 0])
+    {
         log::error!(
-            "[net-console] invalid configuration: backend={} listen_port={} iface_ip={:?}; disabling net-console",
+            "[net-console] invalid configuration: backend={} mode={} interface={} listen_port={} iface_ip={:?}; disabling net-console",
             config.backend.label(),
+            config.policy.mode.as_str(),
+            config.policy.interface.as_str(),
             config.listen_port,
             config.address.ip
         );
         return Err(NetConsoleError::InvalidConfig(
-            "listen_port/ip must be configured",
+            "listen_port/ip must be configured for static mode",
+        ));
+    }
+    if !config
+        .backend
+        .supports_interface_policy(config.policy.interface)
+    {
+        log::error!(
+            "[net-console] invalid configuration: backend={} interface={} is not supported by the current runtime",
+            config.backend.label(),
+            config.policy.interface.as_str(),
+        );
+        return Err(NetConsoleError::InvalidConfig(
+            "selected interface policy is not available in the current runtime",
         ));
     }
     if let Err(reason) = super::validate_console_auth_token(config.auth_token) {
@@ -1579,14 +1645,19 @@ where
         .unwrap_or(Ipv4Address::UNSPECIFIED);
     let iface_ip = Ipv4Address::new(iface_ip[0], iface_ip[1], iface_ip[2], iface_ip[3]);
     log::info!(
-        "[net-console] config: backend={} iface_ip={}/{} gateway={} listen_port={} udp_echo_port={} tcp_smoke_port={}",
+        "[net-console] config: backend={} mode={} interface={} iface_ip={}/{} gateway={} listen_port={} udp_echo_port={} tcp_smoke_port={} dhcp(discover_ms={} request_ms={} retries={})",
         config.backend.label(),
+        config.policy.mode.as_str(),
+        config.policy.interface.as_str(),
         iface_ip,
         config.address.prefix_len,
         gateway_label,
         config.listen_port,
         UDP_ECHO_PORT,
-        TCP_SMOKE_PORT
+        TCP_SMOKE_PORT,
+        config.policy.dhcp.discover_timeout_ms,
+        config.policy.dhcp.request_timeout_ms,
+        config.policy.dhcp.max_retries
     );
     info!(
         "[net-console] layout sizes: stack.rtl8139={} stack.bcmgenet={} dev.bcmgenet={} enum.default={}",
@@ -1664,6 +1735,10 @@ where
         }
         NetStackError::UdpEchoStorageInUse => {
             NetConsoleError::Init(NetStackError::UdpEchoStorageInUse)
+        }
+        NetStackError::DhcpStorageInUse => NetConsoleError::Init(NetStackError::DhcpStorageInUse),
+        NetStackError::DhcpSocketBind(err) => {
+            NetConsoleError::Init(NetStackError::DhcpSocketBind(err))
         }
         NetStackError::TcpProbeRxStorageInUse => {
             NetConsoleError::Init(NetStackError::TcpProbeRxStorageInUse)
@@ -2201,27 +2276,23 @@ impl<D: NetDevice> NetStack<D> {
             debug_assert_eq!(config.address.prefix_len, DEV_VIRT_PREFIX);
             debug_assert_eq!(config.address.gateway, Some(DEV_VIRT_GATEWAY));
         }
-
-        let ip = Ipv4Address::new(
-            config.address.ip[0],
-            config.address.ip[1],
-            config.address.ip[2],
-            config.address.ip[3],
-        );
-        let gateway = config
-            .address
-            .gateway
-            .map(|gateway| Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3]));
+        let (ip, prefix, gateway) = match config.policy.mode {
+            NetMode::Dhcp => (Ipv4Address::UNSPECIFIED, 0, None),
+            NetMode::Static | NetMode::Off => {
+                let ip = Ipv4Address::new(
+                    config.address.ip[0],
+                    config.address.ip[1],
+                    config.address.ip[2],
+                    config.address.ip[3],
+                );
+                let gateway = config.address.gateway.map(|gateway| {
+                    Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3])
+                });
+                (ip, config.address.prefix_len, gateway)
+            }
+        };
         log_bootinfo_mark("net.init.begin", init_guard.attempt())?;
-        Self::with_ipv4(
-            hal,
-            ip,
-            config.address.prefix_len,
-            gateway,
-            config,
-            backend,
-            init_guard,
-        )
+        Self::with_ipv4(hal, ip, prefix, gateway, config, backend, init_guard)
     }
 
     fn with_ipv4(
@@ -2238,8 +2309,13 @@ impl<D: NetDevice> NetStack<D> {
         let backend_label = backend.label();
         debug_assert_eq!(backend_label, D::name());
         info!(
-            "[net-console] init: bringing up {backend_label} with ip={}/{} netmask={} gateway={}",
-            ip, prefix, netmask, gateway_label
+            "[net-console] init: bringing up {backend_label} mode={} interface={} ip={}/{} netmask={} gateway={}",
+            console_config.policy.mode.as_str(),
+            console_config.policy.interface.as_str(),
+            ip,
+            prefix,
+            netmask,
+            gateway_label
         );
         info!(
             "[net-console] init: creating {backend_label} device (listen_port={})",
@@ -2290,11 +2366,13 @@ impl<D: NetDevice> NetStack<D> {
 
         let attempt = *init_guard.attempt();
         log_bootinfo_mark("net.init.device", &attempt)?;
+        let dhcp_enabled = matches!(console_config.policy.mode, NetMode::Dhcp);
 
         BOOTINFO_WINDOW_GUARD.check("net.init.storage.pre");
         log_storage_addresses_once("net.init.reservation");
         let reservation = StorageReservation::acquire::<D::Error>(
             stage_policy.allow_selftest,
+            dhcp_enabled,
             &attempt,
             attempt.tag,
         )?;
@@ -2357,6 +2435,8 @@ impl<D: NetDevice> NetStack<D> {
             outbound: OutboundCoalescer::new(),
             telemetry: NetTelemetry::default(),
             backend,
+            mode: console_config.policy.mode,
+            interface_policy: console_config.policy.interface,
             ip,
             gateway,
             prefix_len: prefix,
@@ -2376,6 +2456,8 @@ impl<D: NetDevice> NetStack<D> {
             service_logged: false,
             last_poll_snapshot: None,
             peer_endpoint: None,
+            dhcp_handle: None,
+            dhcp: dhcp_enabled.then(|| DhcpClient::new(console_config.policy.dhcp)),
             udp_beacon_handle: None,
             udp_echo_handle: None,
             tcp_smoke_handle: None,
@@ -2408,6 +2490,12 @@ impl<D: NetDevice> NetStack<D> {
         stack.log_buffer_addresses_once("net.init.buffers");
         if stage_policy.allow_tcp {
             stack.initialise_socket()?;
+        }
+        if dhcp_enabled {
+            stack.initialise_dhcp_socket()?;
+            if let Some(client) = stack.dhcp.as_mut() {
+                client.start(mac.0, init_now_ms);
+            }
         }
         if stage_policy.allow_selftest {
             stack.initialise_self_test_sockets()?;
@@ -2447,6 +2535,28 @@ impl<D: NetDevice> NetStack<D> {
         let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
         self.tcp_handle = self.sockets.add(tcp_socket);
         self.log_init_canary("net.init.socket.tcp")?;
+        Ok(())
+    }
+
+    fn initialise_dhcp_socket(&mut self) -> Result<(), NetStackError<D::Error>> {
+        if self.dhcp.is_none() {
+            return Ok(());
+        }
+        debug_assert!(DHCP_STORAGE_IN_USE.load(Ordering::Acquire));
+        let rx_buffer =
+            unsafe { UdpPacketBuffer::new(&mut DHCP_RX_METADATA[..], &mut DHCP_RX_STORAGE[..]) };
+        let tx_buffer =
+            unsafe { UdpPacketBuffer::new(&mut DHCP_TX_METADATA[..], &mut DHCP_TX_STORAGE[..]) };
+        let mut socket = UdpSocket::new(rx_buffer, tx_buffer);
+        socket
+            .bind(DHCP_CLIENT_PORT)
+            .map_err(NetStackError::DhcpSocketBind)?;
+        self.dhcp_handle = Some(self.sockets.add(socket));
+        self.log_init_canary("net.init.socket.dhcp")?;
+        info!(
+            "[dhcp] socket ready local_port={} server_port={}",
+            DHCP_CLIENT_PORT, DHCP_SERVER_PORT
+        );
         Ok(())
     }
 
@@ -2638,11 +2748,13 @@ impl<D: NetDevice> NetStack<D> {
             false
         };
         activity |= tcp_activity;
+        let dhcp_activity = self.service_dhcp(now_ms);
+        activity |= dhcp_activity;
 
         // Run a second poll pass when TCP work was observed so any queued
         // responses (including AUTH acknowledgements) are flushed to the wire
         // without waiting for the next timer tick.
-        if tcp_activity {
+        if tcp_activity || dhcp_activity {
             if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
                 self.telemetry.last_poll_ms = now_ms;
                 self.telemetry.tx_drops = self.device.tx_drop_count();
@@ -2680,6 +2792,130 @@ impl<D: NetDevice> NetStack<D> {
     fn bump_poll_counter(&mut self) {
         self.counters.smoltcp_polls = self.counters.smoltcp_polls.saturating_add(1);
         NET_DIAG.record_poll_call();
+    }
+
+    fn service_dhcp(&mut self, now_ms: u64) -> bool {
+        let Some(handle) = self.dhcp_handle else {
+            return false;
+        };
+        let Some(mut client) = self.dhcp.take() else {
+            return false;
+        };
+        let mut activity = false;
+        let mac = self.device.mac().0;
+        let mut rx_packet = [0u8; DHCP_PAYLOAD_CAPACITY];
+
+        loop {
+            let recv = {
+                let socket = self.sockets.get_mut::<UdpSocket>(handle);
+                match socket.recv() {
+                    Ok((data, _endpoint)) => {
+                        let len = core::cmp::min(data.len(), rx_packet.len());
+                        rx_packet[..len].copy_from_slice(&data[..len]);
+                        Some(len)
+                    }
+                    Err(UdpRecvError::Exhausted) => None,
+                    Err(UdpRecvError::Truncated) => {
+                        self.counters.udp_rx = self.counters.udp_rx.saturating_add(1);
+                        client.handle_packet(mac, &[], now_ms);
+                        None
+                    }
+                }
+            };
+            let Some(len) = recv else {
+                break;
+            };
+            self.counters.udp_rx = self.counters.udp_rx.saturating_add(1);
+            let event = client.handle_packet(mac, &rx_packet[..len], now_ms);
+            activity |= self.apply_dhcp_event(event);
+        }
+
+        let timer_event = client.on_timer(now_ms);
+        if let DhcpEvent::Failed(reason) = timer_event {
+            warn!("[dhcp] timer failure reason={}", reason.as_str());
+        }
+        activity |= self.apply_dhcp_event(timer_event);
+
+        if let Some(socket) = self.dhcp_handle {
+            let mut tx_packet = [0u8; DHCP_PAYLOAD_CAPACITY];
+            let can_send = self.sockets.get::<UdpSocket>(socket).can_send();
+            if can_send {
+                match client.build_outbound(mac, &mut tx_packet, now_ms) {
+                    Ok(Some(len)) => {
+                        let endpoint =
+                            IpEndpoint::new(Ipv4Address::BROADCAST.into(), DHCP_SERVER_PORT);
+                        let send_result = self
+                            .sockets
+                            .get_mut::<UdpSocket>(socket)
+                            .send_slice(&tx_packet[..len], endpoint);
+                        match send_result {
+                            Ok(()) => {
+                                self.counters.udp_tx = self.counters.udp_tx.saturating_add(1);
+                                activity = true;
+                            }
+                            Err(UdpSendError::BufferFull) => {}
+                            Err(UdpSendError::Unaddressable) => {
+                                warn!("[dhcp] send failed: unaddressable");
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(reason) => {
+                        warn!("[dhcp] encode failed reason={}", reason.as_str());
+                        activity = true;
+                    }
+                }
+            }
+        }
+
+        self.dhcp = Some(client);
+        activity
+    }
+
+    fn apply_dhcp_event(&mut self, event: DhcpEvent) -> bool {
+        match event {
+            DhcpEvent::None => false,
+            DhcpEvent::SendQueued => true,
+            DhcpEvent::LeaseAcquired(lease) => {
+                self.apply_dhcp_lease(lease);
+                true
+            }
+            DhcpEvent::Failed(reason) => {
+                warn!("[dhcp] failed reason={}", reason.as_str());
+                true
+            }
+        }
+    }
+
+    fn apply_dhcp_lease(&mut self, lease: DhcpLease) {
+        let ip = Ipv4Address::new(lease.ip[0], lease.ip[1], lease.ip[2], lease.ip[3]);
+        let gateway = lease
+            .gateway
+            .map(|value| Ipv4Address::new(value[0], value[1], value[2], value[3]));
+        self.ip = ip;
+        self.prefix_len = lease.prefix_len;
+        self.gateway = gateway;
+        self.interface.update_ip_addrs(|addrs| {
+            let cidr = IpCidr::new(IpAddress::from(ip), lease.prefix_len);
+            if addrs.push(cidr).is_err() {
+                addrs[0] = cidr;
+            }
+        });
+        let _ = self.interface.routes_mut().remove_default_ipv4_route();
+        if let Some(gw) = gateway {
+            let _ = self.interface.routes_mut().add_default_ipv4_route(gw);
+        }
+        info!(
+            "[dhcp] lease bound ip={}/{} gateway={} server={}.{}.{}.{} lease_s={}",
+            ip,
+            lease.prefix_len,
+            gateway.unwrap_or(Ipv4Address::UNSPECIFIED),
+            lease.server_id[0],
+            lease.server_id[1],
+            lease.server_id[2],
+            lease.server_id[3],
+            lease.lease_seconds
+        );
     }
 
     fn sync_device_counters(&mut self) {
@@ -5050,6 +5286,13 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         if !self.self_test.enabled {
             return false;
         }
+        if matches!(self.mode, NetMode::Dhcp) && self.ip == Ipv4Address::UNSPECIFIED {
+            if !self.session_state.not_ready_logged {
+                self.session_state.not_ready_logged = true;
+                log::warn!("[net] not-ready gate tripped: want=net-selftest reason=dhcp-pending");
+            }
+            return false;
+        }
         if let Some((snapshot, reason)) = readiness::gate() {
             if !self.session_state.not_ready_logged {
                 self.session_state.not_ready_logged = true;
@@ -5149,6 +5392,50 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             backend: self.backend.label(),
             udp_target: udp_target.primary,
             tcp_target: tcp_target.primary,
+        }
+    }
+
+    fn status_report(&self) -> NetStatusReport {
+        let mut ip = HeaplessString::<32>::new();
+        let _ = write!(&mut ip, "{}", self.ip);
+        let mut gateway = HeaplessString::<32>::new();
+        let _ = write!(
+            &mut gateway,
+            "{}",
+            self.gateway.unwrap_or(Ipv4Address::UNSPECIFIED)
+        );
+        let (address_source, dhcp_phase) = match self.dhcp.as_ref() {
+            Some(client) => {
+                let status = client.status();
+                let source = if self.ip == Ipv4Address::UNSPECIFIED {
+                    if status.failure.is_some() {
+                        "dhcp-failed"
+                    } else {
+                        "dhcp-pending"
+                    }
+                } else {
+                    "dhcp-lease"
+                };
+                (source, status.phase.as_str())
+            }
+            None if self.backend.uses_dev_virt_defaults() => ("dev-virt", "disabled"),
+            None => ("manifest-static", "disabled"),
+        };
+        let standby_interface = match (self.interface_policy, self.backend) {
+            (NetInterfacePolicy::Auto, NetBackend::BcmGenet) => "wifi",
+            (NetInterfacePolicy::Auto, _) => "wired",
+            _ => "none",
+        };
+        NetStatusReport {
+            backend: self.backend.label(),
+            mode: self.mode.as_str(),
+            interface_policy: self.interface_policy.as_str(),
+            active_interface: "wired",
+            standby_interface,
+            address_source,
+            ip,
+            gateway,
+            dhcp_phase,
         }
     }
 }
@@ -5277,6 +5564,15 @@ impl NetPoller for DefaultNetStack {
             Self::BcmGenet(stack) => stack.self_test_report(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.self_test_report(),
+        }
+    }
+
+    fn status_report(&self) -> NetStatusReport {
+        match self {
+            Self::Rtl8139(stack) => stack.status_report(),
+            Self::BcmGenet(stack) => stack.status_report(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.status_report(),
         }
     }
 }

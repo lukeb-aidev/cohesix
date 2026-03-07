@@ -7,18 +7,18 @@
 
 use super::{
     AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig,
-    ControlPlaneConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind,
-    HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider,
-    HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig,
-    LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount,
-    NetworkBackendKind, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig,
-    Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig,
-    ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy,
-    SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter,
-    SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig,
-    TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits,
-    TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig,
-    UiUpdatesConfig,
+    ControlPlaneConfig, DhcpPolicyConfig, ExportControlConfig, HardwareConfig, HardwareDevice,
+    HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig,
+    HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState,
+    LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig,
+    NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig,
+    PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig,
+    ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig,
+    Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig,
+    SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig,
+    StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema,
+    TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec,
+    UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig,
 };
 use cohesix_ticket::Role;
 
@@ -27,7 +27,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "1f4cbb2a18df6ba0d9be0e850accaa6c0d5c04706e2be0c29c32311fb04d687c";
+    "495ee845e396052cebbbae5605a53083fd03b972520251c776dcfeaf509b5779";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -188,10 +188,17 @@ pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {
     network: HardwareNetworkConfig {
         enabled: false,
         backend: NetworkBackendKind::Auto,
+        mode: NetworkMode::Off,
+        interface: NetworkInterfacePolicy::Wired,
         static_ipv4: StaticIpv4Config {
             ip: [0, 0, 0, 0],
             prefix_len: 0,
             gateway: None,
+        },
+        dhcp: DhcpPolicyConfig {
+            discover_timeout_ms: 1000,
+            request_timeout_ms: 1000,
+            max_retries: 4,
         },
     },
     attestation: AttestationConfig {
@@ -482,10 +489,10 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
-pub const INITIAL_AUDIT_LINES: [&str; 31] = [
+pub const INITIAL_AUDIT_LINES: [&str; 36] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=b487945f401c5e2bfd7883e8f820981b5c682894056e2185d9a4caa5f34e8f67",
+    "manifest.sha256=9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -509,6 +516,11 @@ pub const INITIAL_AUDIT_LINES: [&str; 31] = [
     "manifest.hw.no_nic=false",
     "manifest.hw.network.enabled=false",
     "manifest.hw.network.backend=auto",
+    "manifest.hw.network.mode=off",
+    "manifest.hw.network.interface=wired",
+    "manifest.hw.network.dhcp.discover_timeout_ms=1000",
+    "manifest.hw.network.dhcp.request_timeout_ms=1000",
+    "manifest.hw.network.dhcp.max_retries=4",
     "manifest.hw.attestation.enabled=false",
     "manifest.hw.attestation.policy=tpm-or-dice",
     "manifest.hw.local_seat.enabled=false",

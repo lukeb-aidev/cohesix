@@ -467,8 +467,9 @@ fn update_input_echo_preview(preview: &mut String, byte: u8, max_bytes: usize) {
 mod tests {
     use super::*;
     use crate::generated::{
-        AttestationConfig, AttestationPolicy, HardwareConfig, HardwareDevice,
-        HardwareNetworkConfig, LocalSeatConfig, NetworkBackendKind, StaticIpv4Config,
+        AttestationConfig, AttestationPolicy, DhcpPolicyConfig, HardwareConfig, HardwareDevice,
+        HardwareNetworkConfig, LocalSeatConfig, NetworkBackendKind, NetworkInterfacePolicy,
+        NetworkMode, StaticIpv4Config,
     };
 
     const KEYBOARD: HardwareDevice = HardwareDevice {
@@ -490,10 +491,17 @@ mod tests {
             network: HardwareNetworkConfig {
                 enabled: false,
                 backend: NetworkBackendKind::Auto,
+                mode: NetworkMode::Off,
+                interface: NetworkInterfacePolicy::Wired,
                 static_ipv4: StaticIpv4Config {
                     ip: [0, 0, 0, 0],
                     prefix_len: 0,
                     gateway: None,
+                },
+                dhcp: DhcpPolicyConfig {
+                    discover_timeout_ms: 1_000,
+                    request_timeout_ms: 1_000,
+                    max_retries: 4,
                 },
             },
             attestation: AttestationConfig {

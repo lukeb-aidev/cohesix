@@ -299,6 +299,7 @@ pub struct UiProviderConfig {
 pub enum HardwareDeviceKind {
     Uart,
     Net,
+    Wifi,
     Tpm,
     Rtc,
     Keyboard,
@@ -344,6 +345,20 @@ pub enum NetworkBackendKind {
     BcmGenetV5,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetworkMode {
+    Off,
+    Static,
+    Dhcp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetworkInterfacePolicy {
+    Wired,
+    Wifi,
+    Auto,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct StaticIpv4Config {
     pub ip: [u8; 4],
@@ -352,10 +367,20 @@ pub struct StaticIpv4Config {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct DhcpPolicyConfig {
+    pub discover_timeout_ms: u32,
+    pub request_timeout_ms: u32,
+    pub max_retries: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct HardwareNetworkConfig {
     pub enabled: bool,
     pub backend: NetworkBackendKind,
+    pub mode: NetworkMode,
+    pub interface: NetworkInterfacePolicy,
     pub static_ipv4: StaticIpv4Config,
+    pub dhcp: DhcpPolicyConfig,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -536,7 +561,7 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
 pub const MANIFEST_SHA256: &str =
-    "b487945f401c5e2bfd7883e8f820981b5c682894056e2185d9a4caa5f34e8f67";
+    "9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

@@ -20,6 +20,8 @@ use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 #[cfg(feature = "kernel")]
 use cohesix_ticket::Role;
+#[cfg(feature = "net-console")]
+pub mod dhcp;
 #[cfg(all(feature = "net", feature = "kernel"))]
 pub mod outbound;
 pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CONSOLE_PORT};
@@ -118,6 +120,109 @@ impl NetAddressConfig {
     }
 }
 
+/// Effective network acquisition mode for the active control-plane interface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetMode {
+    Off,
+    Static,
+    Dhcp,
+}
+
+impl NetMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Static => "static",
+            Self::Dhcp => "dhcp",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[must_use]
+    pub const fn from_generated(mode: crate::generated::NetworkMode) -> Self {
+        match mode {
+            crate::generated::NetworkMode::Off => Self::Off,
+            crate::generated::NetworkMode::Static => Self::Static,
+            crate::generated::NetworkMode::Dhcp => Self::Dhcp,
+        }
+    }
+}
+
+/// Requested runtime interface policy for Pi 4 networking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetInterfacePolicy {
+    Wired,
+    Wifi,
+    Auto,
+}
+
+impl NetInterfacePolicy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Wired => "wired",
+            Self::Wifi => "wifi",
+            Self::Auto => "auto",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[must_use]
+    pub const fn from_generated(policy: crate::generated::NetworkInterfacePolicy) -> Self {
+        match policy {
+            crate::generated::NetworkInterfacePolicy::Wired => Self::Wired,
+            crate::generated::NetworkInterfacePolicy::Wifi => Self::Wifi,
+            crate::generated::NetworkInterfacePolicy::Auto => Self::Auto,
+        }
+    }
+}
+
+/// Deterministic DHCP retry and timeout bounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NetDhcpConfig {
+    pub discover_timeout_ms: u32,
+    pub request_timeout_ms: u32,
+    pub max_retries: u8,
+}
+
+impl NetDhcpConfig {
+    #[must_use]
+    pub const fn dev_virt() -> Self {
+        Self {
+            discover_timeout_ms: 1_000,
+            request_timeout_ms: 1_000,
+            max_retries: 4,
+        }
+    }
+}
+
+/// Manifest-authored network policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NetPolicyConfig {
+    pub mode: NetMode,
+    pub interface: NetInterfacePolicy,
+    pub dhcp: NetDhcpConfig,
+}
+
+impl NetPolicyConfig {
+    #[must_use]
+    pub const fn dev_virt() -> Self {
+        Self {
+            mode: NetMode::Static,
+            interface: NetInterfacePolicy::Wired,
+            dhcp: NetDhcpConfig::dev_virt(),
+        }
+    }
+}
+
+/// Optional runtime override sourced from bounded boot-policy inputs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RuntimeNetPolicyOverride {
+    pub mode: Option<NetMode>,
+    pub interface: Option<NetInterfacePolicy>,
+}
+
 /// Configuration for console networking transports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConsoleNetConfig {
@@ -129,6 +234,8 @@ pub struct ConsoleNetConfig {
     pub listen_port: u16,
     /// Active NIC backend selected from profile-generated settings.
     pub backend: NetBackend,
+    /// Manifest-authored interface and address acquisition policy.
+    pub policy: NetPolicyConfig,
     /// IPv4 configuration for the console interface.
     pub address: NetAddressConfig,
 }
@@ -141,6 +248,7 @@ impl ConsoleNetConfig {
             idle_timeout_ms: IDLE_TIMEOUT_MS,
             listen_port: COHSH_TCP_PORT,
             backend: DEFAULT_NET_BACKEND,
+            policy: NetPolicyConfig::dev_virt(),
             address: NetAddressConfig::dev_virt(),
         }
     }
@@ -155,6 +263,12 @@ impl ConsoleNetConfig {
             self.listen_port = COHESIX_TCP_CONSOLE_PORT;
         }
         if self.backend.uses_dev_virt_defaults() {
+            if self.policy.mode == NetMode::Off {
+                self.policy.mode = NetMode::Static;
+            }
+            if self.policy.interface != NetInterfacePolicy::Wired {
+                self.policy.interface = NetInterfacePolicy::Wired;
+            }
             if self.address.ip == [0, 0, 0, 0] {
                 self.address.ip = DEV_VIRT_IP;
                 self.address.prefix_len = DEV_VIRT_PREFIX;
@@ -165,6 +279,21 @@ impl ConsoleNetConfig {
             if self.address.gateway.is_none() {
                 self.address.gateway = Some(DEV_VIRT_GATEWAY);
             }
+        }
+        self
+    }
+
+    /// Apply a bounded boot-policy override without changing dev-virt defaults.
+    #[must_use]
+    pub fn with_runtime_policy(mut self, policy: RuntimeNetPolicyOverride) -> Self {
+        if self.backend.uses_dev_virt_defaults() {
+            return self;
+        }
+        if let Some(mode) = policy.mode {
+            self.policy.mode = mode;
+        }
+        if let Some(interface) = policy.interface {
+            self.policy.interface = interface;
         }
         self
     }
@@ -180,6 +309,15 @@ pub fn console_net_config() -> ConsoleNetConfig {
         let hardware = crate::generated::hardware_config();
         let network = hardware.network;
         config.backend = NetBackend::from_generated(network.backend);
+        config.policy = NetPolicyConfig {
+            mode: NetMode::from_generated(network.mode),
+            interface: NetInterfacePolicy::from_generated(network.interface),
+            dhcp: NetDhcpConfig {
+                discover_timeout_ms: network.dhcp.discover_timeout_ms,
+                request_timeout_ms: network.dhcp.request_timeout_ms,
+                max_retries: network.dhcp.max_retries,
+            },
+        };
         config.address = NetAddressConfig {
             ip: network.static_ipv4.ip,
             prefix_len: network.static_ipv4.prefix_len,
@@ -191,6 +329,14 @@ pub fn console_net_config() -> ConsoleNetConfig {
     {
         ConsoleNetConfig::default().with_profile_defaults()
     }
+}
+
+/// Resolve the active TCP console config with an optional boot-policy override.
+#[must_use]
+pub fn console_net_config_with_runtime_policy(
+    policy: RuntimeNetPolicyOverride,
+) -> ConsoleNetConfig {
+    console_net_config().with_runtime_policy(policy)
 }
 
 /// Resolve the TCP console authentication token from generated manifest data.
@@ -371,6 +517,36 @@ impl Default for NetSelfTestReport {
     }
 }
 
+/// Summary of the active network policy and address state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetStatusReport {
+    pub backend: &'static str,
+    pub mode: &'static str,
+    pub interface_policy: &'static str,
+    pub active_interface: &'static str,
+    pub standby_interface: &'static str,
+    pub address_source: &'static str,
+    pub ip: HeaplessString<32>,
+    pub gateway: HeaplessString<32>,
+    pub dhcp_phase: &'static str,
+}
+
+impl Default for NetStatusReport {
+    fn default() -> Self {
+        Self {
+            backend: "disabled",
+            mode: "off",
+            interface_policy: "wired",
+            active_interface: "none",
+            standby_interface: "none",
+            address_source: "disabled",
+            ip: HeaplessString::new(),
+            gateway: HeaplessString::new(),
+            dhcp_phase: "disabled",
+        }
+    }
+}
+
 /// Driver-facing abstraction that all NIC backends must implement in order to
 /// plug into the TCP console stack.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -463,6 +639,12 @@ impl NetBackend {
         }
     }
 
+    #[must_use]
+    pub const fn supports_interface_policy(self, policy: NetInterfacePolicy) -> bool {
+        let _ = self;
+        matches!(policy, NetInterfacePolicy::Wired)
+    }
+
     #[cfg(feature = "kernel")]
     #[must_use]
     pub fn from_generated(backend: crate::generated::NetworkBackendKind) -> Self {
@@ -547,6 +729,11 @@ pub trait NetPoller {
     fn self_test_report(&self) -> NetSelfTestReport {
         NetSelfTestReport::default()
     }
+
+    /// Return the active network policy and address state for diagnostics.
+    fn status_report(&self) -> NetStatusReport {
+        NetStatusReport::default()
+    }
 }
 
 /// Connection lifecycle notifications surfaced by TCP console transports.
@@ -626,6 +813,8 @@ mod tests {
 
         assert_eq!(config.listen_port, COHSH_TCP_PORT);
         assert_ne!(config.listen_port, 0);
+        assert_eq!(config.policy.mode, NetMode::Static);
+        assert_eq!(config.policy.interface, NetInterfacePolicy::Wired);
         assert_eq!(config.address.ip, DEV_VIRT_IP);
         assert_eq!(config.address.prefix_len, DEV_VIRT_PREFIX);
         assert_eq!(config.address.gateway, Some(DEV_VIRT_GATEWAY));
@@ -639,6 +828,11 @@ mod tests {
             idle_timeout_ms: IDLE_TIMEOUT_MS,
             listen_port: COHSH_TCP_PORT,
             backend: NetBackend::BcmGenet,
+            policy: NetPolicyConfig {
+                mode: NetMode::Dhcp,
+                interface: NetInterfacePolicy::Wired,
+                dhcp: NetDhcpConfig::dev_virt(),
+            },
             address: NetAddressConfig {
                 ip: [192, 168, 10, 42],
                 prefix_len: 24,
@@ -649,5 +843,53 @@ mod tests {
         assert_eq!(resolved.address.ip, [192, 168, 10, 42]);
         assert_eq!(resolved.address.prefix_len, 24);
         assert_eq!(resolved.address.gateway, Some([192, 168, 10, 1]));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn current_backends_only_support_wired_policy() {
+        assert!(NetBackend::Rtl8139.supports_interface_policy(NetInterfacePolicy::Wired));
+        assert!(!NetBackend::Rtl8139.supports_interface_policy(NetInterfacePolicy::Wifi));
+        assert!(!NetBackend::BcmGenet.supports_interface_policy(NetInterfacePolicy::Auto));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn runtime_policy_override_changes_pi4_mode_and_interface() {
+        let config = ConsoleNetConfig {
+            auth_token: "token",
+            idle_timeout_ms: IDLE_TIMEOUT_MS,
+            listen_port: COHSH_TCP_PORT,
+            backend: NetBackend::BcmGenet,
+            policy: NetPolicyConfig {
+                mode: NetMode::Static,
+                interface: NetInterfacePolicy::Wired,
+                dhcp: NetDhcpConfig::dev_virt(),
+            },
+            address: NetAddressConfig {
+                ip: [192, 168, 10, 42],
+                prefix_len: 24,
+                gateway: Some([192, 168, 10, 1]),
+            },
+        };
+        let resolved = config.with_runtime_policy(RuntimeNetPolicyOverride {
+            mode: Some(NetMode::Dhcp),
+            interface: Some(NetInterfacePolicy::Auto),
+        });
+        assert_eq!(resolved.policy.mode, NetMode::Dhcp);
+        assert_eq!(resolved.policy.interface, NetInterfacePolicy::Auto);
+        assert_eq!(resolved.address.ip, [192, 168, 10, 42]);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn runtime_policy_override_does_not_change_dev_virt_defaults() {
+        let resolved = ConsoleNetConfig::default().with_runtime_policy(RuntimeNetPolicyOverride {
+            mode: Some(NetMode::Off),
+            interface: Some(NetInterfacePolicy::Wifi),
+        });
+        assert_eq!(resolved.policy.mode, NetMode::Static);
+        assert_eq!(resolved.policy.interface, NetInterfacePolicy::Wired);
+        assert_eq!(resolved.address.ip, DEV_VIRT_IP);
     }
 }

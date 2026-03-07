@@ -78,9 +78,12 @@ Non-goals:
 8. Serial console starts; TCP console is started only when networking is enabled by profile/policy.
 9. The event pump enters its cooperative loop (serial, timer, networking, IPC, NineDoorBridge), avoiding busy waits.
 
-### 5.1 Profile-gated NIC matrix (Milestone 26a)
+### 5.1 Profile-gated NIC matrix (Milestone 26a/26b as-built)
 - QEMU/dev-virt flow keeps existing behavior: virtio-net is default when enabled, RTL8139 remains supported, and dev defaults remain `10.0.2.15/24` with gateway `10.0.2.2`.
-- Pi 4 U-Boot flow requires manifest-authoritative static IPv4 with `hw.network.enabled=true`, `hw.network.backend=bcmgenet-v5`, and non-zero `hw.network.static_ipv4.{ip,prefix_len}` (optional non-zero gateway).
+- Pi 4 U-Boot flow uses manifest-authored `hw.network.mode`, `hw.network.interface`, `hw.network.static_ipv4`, and `hw.network.dhcp` bounds with `hw.network.enabled=true` and `hw.network.backend=bcmgenet-v5`.
+- The staged Pi 4 U-Boot boot script can mirror `coh_net_mode`, `coh_net_interface`, `coh_wifi_ssid`, and `coh_wifi_psk` env vars into DTB `/chosen/cohesix,*` properties before handoff; root-task applies only bounded overrides and otherwise falls back to manifest defaults.
+- The current runtime supports a single active wired control-plane interface. `mode=static` uses manifest static IPv4, `mode=dhcp` acquires a lease through the bounded DHCPv4 client, and `mode=off` disables net-console before socket bring-up.
+- `wifi` and `auto` policy values are compiler-visible and DTB-parseable, but they are currently rejected during net-console init because the HAL-backed CYW43xx datapath is not yet present. This prevents silent fallback to wired and keeps QEMU/Pi 4 behavior auditable.
 - Legacy `uefi-aarch64` manifests are accepted only as migration alias and emit deterministic diagnostics (`manifest.profile.alias=uefi-aarch64->pi4-uboot-aarch64`).
 - Source of truth is compiler IR (`coh-rtc`) fields under `hw.network.*`; root-task does not hard-code Pi 4 network addresses.
 - GENETv5 design provenance order is Linux `bcmgenet` -> Linux `bcm2711` DT bindings -> U-Boot `bcmgenet`; references are design-only and no source code lift is permitted.

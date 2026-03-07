@@ -64,11 +64,18 @@ no_nic = false
 [hw.network]
 enabled = true
 backend = "bcmgenet-v5"
+mode = "dhcp"
+interface = "wired"
 
 [hw.network.static_ipv4]
 ip = "192.168.10.42"
 prefix_len = 24
 gateway = "192.168.10.1"
+
+[hw.network.dhcp]
+discover_timeout_ms = 1000
+request_timeout_ms = 1000
+max_retries = 4
 
 [hw.attestation]
 enabled = true
@@ -97,6 +104,11 @@ required = true
 kind = "net"
 id = "bcmgenet0"
 required = true
+
+[[hw.devices]]
+kind = "wifi"
+id = "cyw43xx0"
+required = false
 
 [[hw.devices]]
 kind = "tpm"

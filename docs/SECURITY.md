@@ -33,15 +33,18 @@ The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 
   expand the audit surface for data races and timing side effects.
 - Back-pressure is explicit: overloaded tasks return deterministic `ERR ... reason=busy` instead of hidden queues or background work.
 
-## 1.2 Milestone 26/26a Pi 4 Identity + Networking Gates
+## 1.2 Milestone 26/26a/26b Pi 4 Identity + Networking Gates
 - `coh-rtc` preserves Milestone 26 no-NIC mode (`hw.no_nic=true`, `features.net_console=false`) and emits deterministic evidence (`manifest.hw.networking=disabled-m26-baseline`).
-- Milestone 26a network-enabled Pi 4 mode is profile-gated and compiler-enforced:
+- Milestone 26a/26b network-enabled Pi 4 mode is profile-gated and compiler-enforced:
 - `profile.name` must be `pi4-uboot-aarch64` (legacy alias `uefi-aarch64` accepted only for migration).
 - `hw.network.enabled=true` requires `hw.network.backend=bcmgenet-v5`.
-- `hw.network.static_ipv4.ip` must be non-zero IPv4 with `prefix_len` in `1..=32`; gateway is optional but if set must be non-zero IPv4.
+- `hw.network.mode` is bounded to `off|static|dhcp`, `hw.network.interface` is bounded to `wired|wifi|auto`, and DHCP retry/timeout fields are compiler-bounded.
+- `hw.network.static_ipv4.ip` must be non-zero IPv4 with `prefix_len` in `1..=32`; gateway is optional but if set must be non-zero IPv4 when `mode=static`.
 - `hw.devices` must declare a required `net` device before backend selection is accepted.
-- Boot logs include deterministic network evidence lines (`manifest.hw.network.enabled`, `manifest.hw.network.backend`, `manifest.hw.networking=enabled-static-ipv4`) for audited before/after proofs.
-- DHCP is intentionally out of scope for 26a; no DHCP client path is accepted under these gates.
+- Boot logs include deterministic network evidence lines (`manifest.hw.network.enabled`, `manifest.hw.network.backend`, `manifest.hw.network.mode`, `manifest.hw.network.interface`, `manifest.hw.networking=...`) for audited before/after proofs.
+- The DHCP client path is bounded and client-only: DHCPv4 DISCOVER/OFFER/REQUEST/ACK, fixed buffers, bounded retry/timeouts, strict packet validation, and no new listeners or protocol surfaces.
+- Pi 4 boot scripts may mirror `coh_net_mode`, `coh_net_interface`, `coh_wifi_ssid`, and `coh_wifi_psk` into DTB `/chosen/cohesix,*`; root-task accepts only bounded values and falls back to manifest defaults when the DTB handoff is absent or invalid.
+- The current runtime still rejects `wifi` and `auto` policy at net-console init because the HAL-backed CYW43xx path is not landed. Rejecting unsupported policy is intentional: it prevents silent authority drift onto the wired NIC.
 - Attestation policy is manifest-gated through `hw.attestation.*`:
 - `tpm-only` requires a TPM declaration.
 - `tpm-or-dice` and `dice-only` are encoded deterministically and bound to the manifest fingerprint.
@@ -51,6 +54,7 @@ The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 
 - `hw.local_seat.required=true` is fail-fast: missing declarations or unavailable backend aborts boot before ticket material is published.
 - `hw.local_seat.required=false` degrades to serial-only diagnostics with explicit audited boot lines.
 - GENETv5 implementation provenance is documented and constrained: Linux `bcmgenet` behavior -> Linux `bcm2711` DT bindings -> U-Boot `bcmgenet`; these references are design-only and code lift is prohibited.
+- Planned CYW43xx implementation provenance remains fixed as well: OpenBSD `bwfm` -> Zephyr/Infineon WHD HAL layering -> Linux `brcmfmac` SDIO recovery/link edge cases. No source code lift is permitted.
 
 ## 2. Console Hardening
 - A leaky-bucket rate limiter permits two consecutive authentication failures per 60-second window; the third failure triggers a

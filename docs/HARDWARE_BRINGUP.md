@@ -8,7 +8,7 @@
 - Cohesix supports two bring-up paths:
 - QEMU `aarch64/virt` (development/CI baseline).
 - Raspberry Pi 4 (`bcm2711`) via upstream-style boot chain: `Pi firmware -> U-Boot -> seL4 image -> root-task`.
-- Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4.
+- Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4; the current 26b as-built state adds wired DHCP policy handoff while leaving Pi 4 Wi-Fi runtime support incomplete.
 
 ## Canonical Pi 4 boot chain
 1. Pi boot firmware loads `start4.elf` and `fixup4.dat`.
@@ -20,10 +20,10 @@
 ## Manifest profiles
 - Development profile: `configs/root_task.toml` (`profile.name = "virt-aarch64"`).
 - Pi 4 baseline profile (Milestone 26 no-NIC): `configs/root_task_uefi_aarch64.toml` (`profile.name = "uefi-aarch64"` migration alias).
-- Pi 4 networking profile (Milestone 26a static IPv4): `configs/root_task_pi4_uboot_aarch64.toml` (`profile.name = "pi4-uboot-aarch64"`).
+- Pi 4 networking profile (Milestone 26a/26b policy baseline): `configs/root_task_pi4_uboot_aarch64.toml` (`profile.name = "pi4-uboot-aarch64"`).
 - `coh-rtc` enforces profile gates:
 - Milestone 26 baseline: `hw.no_nic=true`, `features.net_console=false`.
-- Milestone 26a networking: `hw.network.enabled=true`, `hw.network.backend=bcmgenet-v5`, required `net` device declaration, bounded non-zero static IPv4 (`prefix_len=1..32`).
+- Milestone 26a/26b networking: `hw.network.enabled=true`, `hw.network.backend=bcmgenet-v5`, bounded `hw.network.mode` (`off|static|dhcp`), bounded `hw.network.interface` (`wired|wifi|auto`), DHCP retry/timeout bounds, required `net` device declaration, and bounded non-zero static IPv4 (`prefix_len=1..32`) when `mode=static`.
 - declared `uart` + `rtc` devices
 - local-seat declarations when `hw.local_seat.enabled=true`
 - attestation policy/device requirements when `hw.attestation.enabled=true`
@@ -51,14 +51,20 @@
 - `go ${loadaddr}`
 
 ## U-Boot networking setup (for 26a/26b prep)
-- Milestone 26a uses static IPv4 in runtime and keeps U-Boot env controls deterministic.
+- Milestone 26a uses static IPv4 in runtime. The current 26b wired baseline adds optional U-Boot-to-DTB policy handoff for `mode`/`interface` while keeping manifest defaults authoritative when the handoff is absent or invalid.
 - Typical env setup:
 - `setenv autoload no`
 - `setenv ipaddr <board-ip>`
 - `setenv serverip <host-ip>`
 - `setenv ethact <interface>`
+- Optional Cohesix net-policy overrides mirrored into DTB `/chosen` by the staged boot script when `fdtcontroladdr` is available:
+- `setenv coh_net_mode <off|static|dhcp>`
+- `setenv coh_net_interface <wired|wifi|auto>`
+- `setenv coh_wifi_ssid <ssid>` (accepted into DTB handoff; current runtime still rejects Wi-Fi policy)
+- `setenv coh_wifi_psk <psk>` (accepted into DTB handoff; current runtime still rejects Wi-Fi policy)
 - `ping ${serverip}`
 - `saveenv`
+- The staged `boot.cmd` copies these env vars into `/chosen/cohesix,*` properties before `go` when possible. If `/chosen` cannot be updated, root-task falls back to manifest defaults and logs `source=manifest`.
 
 ## Milestone 26a Pi 4 network checklist
 1. Build/validate the QEMU U-Boot harness:
@@ -72,6 +78,24 @@
 - `manifest.hw.networking=enabled-static-ipv4`
 4. Validate TCP console reachability from host:
 - `cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
+
+## Milestone 26b wired DHCP checklist (as-built)
+1. Build Pi 4 payload with the 26b policy-capable manifest:
+- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
+2. Optional U-Boot runtime override before boot:
+- `setenv coh_net_mode dhcp`
+- `setenv coh_net_interface wired`
+3. Boot and confirm policy + DHCP evidence:
+- `[net-policy] source=manifest ...` or `[net-policy] source=dtb ...`
+- `manifest.hw.network.mode=dhcp`
+- `manifest.hw.network.interface=wired`
+- `manifest.hw.networking=enabled-dhcp-ipv4`
+- `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...` and then `[net-console] ready ip=<lease-ip> ...`
+4. Validate diagnostics surfaces:
+- `netstats` includes `mode=dhcp policy=wired active=wired standby=none addr_src=dhcp-lease ...`
+- `nettest` targets the active wired address only.
+5. Current limitation:
+- `wifi` and `auto` policy requests are parsed and logged but rejected at runtime with deterministic `invalid-config` evidence until the HAL-backed CYW43xx path lands.
 
 ## macOS U-Boot debug harness (fast iteration)
 - Purpose: validate U-Boot scripts/env/network setup behavior quickly before hardware retest.

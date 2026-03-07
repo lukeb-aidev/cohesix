@@ -132,6 +132,14 @@ esac
 
 command -v "$QEMU_BIN" >/dev/null 2>&1 || fail "qemu binary not found: ${QEMU_BIN}"
 [[ -f "$U_BOOT_BIN" ]] || fail "u-boot binary missing: ${U_BOOT_BIN}"
+
+if [[ "$U_BOOT_BIN" == "${ROOT_DIR}/third_party/u-boot/u-boot.bin" ]]; then
+    uboot_config="${ROOT_DIR}/third_party/u-boot/.config"
+    if [[ -f "$uboot_config" ]] && ! rg -q '^CONFIG_TARGET_QEMU_ARM_64=y$' "$uboot_config"; then
+        fail "third_party/u-boot/.config is not a qemu_arm64 build; run 'make -C third_party/u-boot qemu_arm64_defconfig' before using this harness"
+    fi
+fi
+
 mkdir -p "$OUT_DIR"
 
 if [[ -z "$LOG_FILE" ]]; then
@@ -204,8 +212,12 @@ if net_mode == "user":
         [
             f"setenv ipaddr {board_ip}",
             f"setenv serverip {server_ip}",
+            "setenv coh_net_mode dhcp",
+            "setenv coh_net_interface wired",
             "printenv ipaddr",
             "printenv serverip",
+            "printenv coh_net_mode",
+            "printenv coh_net_interface",
             "printenv ethact",
         ]
     )

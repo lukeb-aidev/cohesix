@@ -442,6 +442,31 @@ setenv coh_image_fallback __COH_IMAGE_FALLBACK__
 setenv coh_addr 0x10000000
 
 if fatload mmc 0:1 ${coh_addr} ${coh_image}; then
+    if test -n "${fdtcontroladdr}"; then
+        fdt addr ${fdtcontroladdr}
+        if fdt resize 512; then
+            if test -n "${coh_net_mode}"; then
+                fdt set /chosen cohesix,net-mode "${coh_net_mode}"
+                echo "[cohesix] dtb chosen cohesix,net-mode=${coh_net_mode}"
+            fi
+            if test -n "${coh_net_interface}"; then
+                fdt set /chosen cohesix,net-interface "${coh_net_interface}"
+                echo "[cohesix] dtb chosen cohesix,net-interface=${coh_net_interface}"
+            fi
+            if test -n "${coh_wifi_ssid}"; then
+                fdt set /chosen cohesix,wifi-ssid "${coh_wifi_ssid}"
+                echo "[cohesix] dtb chosen cohesix,wifi-ssid=<set>"
+            fi
+            if test -n "${coh_wifi_psk}"; then
+                fdt set /chosen cohesix,wifi-psk "${coh_wifi_psk}"
+                echo "[cohesix] dtb chosen cohesix,wifi-psk=<set>"
+            fi
+        else
+            echo "[cohesix] dtb resize skipped; using manifest net policy"
+        fi
+    else
+        echo "[cohesix] no fdtcontroladdr; using manifest net policy"
+    fi
     echo "[cohesix] loaded ${coh_image} to ${coh_addr}; jumping"
     go ${coh_addr}
     echo "[cohesix] returned from image"
@@ -450,6 +475,31 @@ else
     if fatload mmc 0:1 ${coh_addr} ${coh_image_fallback}; then
         setenv coh_image ${coh_image_fallback}
 
+        if test -n "${fdtcontroladdr}"; then
+            fdt addr ${fdtcontroladdr}
+            if fdt resize 512; then
+                if test -n "${coh_net_mode}"; then
+                    fdt set /chosen cohesix,net-mode "${coh_net_mode}"
+                    echo "[cohesix] dtb chosen cohesix,net-mode=${coh_net_mode}"
+                fi
+                if test -n "${coh_net_interface}"; then
+                    fdt set /chosen cohesix,net-interface "${coh_net_interface}"
+                    echo "[cohesix] dtb chosen cohesix,net-interface=${coh_net_interface}"
+                fi
+                if test -n "${coh_wifi_ssid}"; then
+                    fdt set /chosen cohesix,wifi-ssid "${coh_wifi_ssid}"
+                    echo "[cohesix] dtb chosen cohesix,wifi-ssid=<set>"
+                fi
+                if test -n "${coh_wifi_psk}"; then
+                    fdt set /chosen cohesix,wifi-psk "${coh_wifi_psk}"
+                    echo "[cohesix] dtb chosen cohesix,wifi-psk=<set>"
+                fi
+            else
+                echo "[cohesix] dtb resize skipped; using manifest net policy"
+            fi
+        else
+            echo "[cohesix] no fdtcontroladdr; using manifest net policy"
+        fi
         echo "[cohesix] loaded fallback ${coh_image} to ${coh_addr}; jumping"
         go ${coh_addr}
         echo "[cohesix] returned from image"

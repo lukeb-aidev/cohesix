@@ -354,6 +354,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "pub enum HardwareDeviceKind {{")?;
     writeln!(mod_contents, "    Uart,")?;
     writeln!(mod_contents, "    Net,")?;
+    writeln!(mod_contents, "    Wifi,")?;
     writeln!(mod_contents, "    Tpm,")?;
     writeln!(mod_contents, "    Rtc,")?;
     writeln!(mod_contents, "    Keyboard,")?;
@@ -399,6 +400,20 @@ pub fn emit_rust(
     writeln!(mod_contents, "    BcmGenetV5,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum NetworkMode {{")?;
+    writeln!(mod_contents, "    Off,")?;
+    writeln!(mod_contents, "    Static,")?;
+    writeln!(mod_contents, "    Dhcp,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum NetworkInterfacePolicy {{")?;
+    writeln!(mod_contents, "    Wired,")?;
+    writeln!(mod_contents, "    Wifi,")?;
+    writeln!(mod_contents, "    Auto,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct StaticIpv4Config {{")?;
     writeln!(mod_contents, "    pub ip: [u8; 4],")?;
@@ -407,10 +422,20 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct DhcpPolicyConfig {{")?;
+    writeln!(mod_contents, "    pub discover_timeout_ms: u32,")?;
+    writeln!(mod_contents, "    pub request_timeout_ms: u32,")?;
+    writeln!(mod_contents, "    pub max_retries: u8,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct HardwareNetworkConfig {{")?;
     writeln!(mod_contents, "    pub enabled: bool,")?;
     writeln!(mod_contents, "    pub backend: NetworkBackendKind,")?;
+    writeln!(mod_contents, "    pub mode: NetworkMode,")?;
+    writeln!(mod_contents, "    pub interface: NetworkInterfacePolicy,")?;
     writeln!(mod_contents, "    pub static_ipv4: StaticIpv4Config,")?;
+    writeln!(mod_contents, "    pub dhcp: DhcpPolicyConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -968,7 +993,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
     writeln!(bootstrap_contents)?;
@@ -1216,14 +1241,19 @@ pub fn emit_rust(
         .unwrap_or_else(|| "None".to_owned());
     writeln!(
         bootstrap_contents,
-        "pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {{ secure_boot: {}, no_nic: {}, network: HardwareNetworkConfig {{ enabled: {}, backend: {}, static_ipv4: StaticIpv4Config {{ ip: {}, prefix_len: {}, gateway: {} }} }}, attestation: AttestationConfig {{ enabled: {}, policy: {}, evidence_max_bytes: {} }}, local_seat: LocalSeatConfig {{ enabled: {}, required: {}, keyboard_device: \"{}\", display_device: \"{}\", line_bytes: {}, buffer_lines: {} }}, devices: &HARDWARE_DEVICES }};\n",
+        "pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {{ secure_boot: {}, no_nic: {}, network: HardwareNetworkConfig {{ enabled: {}, backend: {}, mode: {}, interface: {}, static_ipv4: StaticIpv4Config {{ ip: {}, prefix_len: {}, gateway: {} }}, dhcp: DhcpPolicyConfig {{ discover_timeout_ms: {}, request_timeout_ms: {}, max_retries: {} }} }}, attestation: AttestationConfig {{ enabled: {}, policy: {}, evidence_max_bytes: {} }}, local_seat: LocalSeatConfig {{ enabled: {}, required: {}, keyboard_device: \"{}\", display_device: \"{}\", line_bytes: {}, buffer_lines: {} }}, devices: &HARDWARE_DEVICES }};\n",
         manifest.hw.secure_boot,
         manifest.hw.no_nic,
         manifest.hw.network.enabled,
         network_backend_to_rust(manifest.hw.network.backend),
+        network_mode_to_rust(manifest.hw.network.mode),
+        network_interface_policy_to_rust(manifest.hw.network.interface),
         static_ip_literal,
         manifest.hw.network.static_ipv4.prefix_len,
         gateway_literal,
+        manifest.hw.network.dhcp.discover_timeout_ms,
+        manifest.hw.network.dhcp.request_timeout_ms,
+        manifest.hw.network.dhcp.max_retries,
         manifest.hw.attestation.enabled,
         attestation_policy_to_rust(manifest.hw.attestation.policy),
         manifest.hw.attestation.evidence_max_bytes,
@@ -1696,6 +1726,7 @@ fn hw_device_kind_to_rust(kind: HardwareDeviceKind) -> &'static str {
     match kind {
         HardwareDeviceKind::Uart => "HardwareDeviceKind::Uart",
         HardwareDeviceKind::Net => "HardwareDeviceKind::Net",
+        HardwareDeviceKind::Wifi => "HardwareDeviceKind::Wifi",
         HardwareDeviceKind::Tpm => "HardwareDeviceKind::Tpm",
         HardwareDeviceKind::Rtc => "HardwareDeviceKind::Rtc",
         HardwareDeviceKind::Keyboard => "HardwareDeviceKind::Keyboard",
@@ -1709,6 +1740,22 @@ fn network_backend_to_rust(backend: NetworkBackendKind) -> &'static str {
         NetworkBackendKind::Rtl8139 => "NetworkBackendKind::Rtl8139",
         NetworkBackendKind::VirtioNet => "NetworkBackendKind::VirtioNet",
         NetworkBackendKind::BcmGenetV5 => "NetworkBackendKind::BcmGenetV5",
+    }
+}
+
+fn network_mode_to_rust(mode: crate::ir::NetworkMode) -> &'static str {
+    match mode {
+        crate::ir::NetworkMode::Off => "NetworkMode::Off",
+        crate::ir::NetworkMode::Static => "NetworkMode::Static",
+        crate::ir::NetworkMode::Dhcp => "NetworkMode::Dhcp",
+    }
+}
+
+fn network_interface_policy_to_rust(policy: crate::ir::NetworkInterfacePolicy) -> &'static str {
+    match policy {
+        crate::ir::NetworkInterfacePolicy::Wired => "NetworkInterfacePolicy::Wired",
+        crate::ir::NetworkInterfacePolicy::Wifi => "NetworkInterfacePolicy::Wifi",
+        crate::ir::NetworkInterfacePolicy::Auto => "NetworkInterfacePolicy::Auto",
     }
 }
 
@@ -2152,6 +2199,26 @@ fn build_audit_lines(
             network_backend_label(manifest.hw.network.backend)
         ),
         format!(
+            "manifest.hw.network.mode={}",
+            manifest.hw.network.mode.as_str()
+        ),
+        format!(
+            "manifest.hw.network.interface={}",
+            manifest.hw.network.interface.as_str()
+        ),
+        format!(
+            "manifest.hw.network.dhcp.discover_timeout_ms={}",
+            manifest.hw.network.dhcp.discover_timeout_ms
+        ),
+        format!(
+            "manifest.hw.network.dhcp.request_timeout_ms={}",
+            manifest.hw.network.dhcp.request_timeout_ms
+        ),
+        format!(
+            "manifest.hw.network.dhcp.max_retries={}",
+            manifest.hw.network.dhcp.max_retries
+        ),
+        format!(
             "manifest.hw.attestation.enabled={}",
             manifest.hw.attestation.enabled
         ),
@@ -2210,7 +2277,12 @@ fn build_audit_lines(
     {
         lines.push("manifest.hw.networking=disabled-m26-baseline".to_owned());
     } else if manifest.hw.network.enabled {
-        lines.push("manifest.hw.networking=enabled-static-ipv4".to_owned());
+        let label = match manifest.hw.network.mode {
+            crate::ir::NetworkMode::Off => "disabled-policy-off",
+            crate::ir::NetworkMode::Static => "enabled-static-ipv4",
+            crate::ir::NetworkMode::Dhcp => "enabled-dhcp-ipv4",
+        };
+        lines.push(format!("manifest.hw.networking={label}"));
     }
     lines.push(format!("event_pump.fds={}", event_pump_fds.join(",")));
     lines

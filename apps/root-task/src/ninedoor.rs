@@ -8766,9 +8766,9 @@ fn truncate(input: &str, limit: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use super::*;
     use crate::{bootstrap::log as boot_log, event::AuditSink};
+    use alloc::vec;
     use cohesix_cas::{CasManifest, CAS_MANIFEST_SCHEMA};
     use ed25519_dalek::{Signature, SigningKey};
     use sha2::{Digest, Sha256};

@@ -2139,6 +2139,7 @@ where
                     if let Some(net) = self.net.as_mut() {
                         let stats = net.stats();
                         let report = net.self_test_report();
+                        let status = net.status_report();
                         let line_one = format_message(format_args!(
                             "netstats: rx_pkts={} tx_pkts={} rx_used={} tx_used={} polls={}",
                             stats.rx_packets,
@@ -2168,6 +2169,17 @@ where
                             stats.tx_double_submit,
                             stats.tx_zero_len_attempt
                         ));
+                        let line_five = format_message(format_args!(
+                            "netstats: mode={} policy={} active={} standby={} addr_src={} ip={} gateway={} dhcp={}",
+                            status.mode,
+                            status.interface_policy,
+                            status.active_interface,
+                            status.standby_interface,
+                            status.address_source,
+                            status.ip,
+                            status.gateway,
+                            status.dhcp_phase
+                        ));
                         let status_line = format_message(format_args!(
                             "nettest: backend={} enabled={} running={} udp={} tcp={} last={:?}",
                             report.backend,
@@ -2181,6 +2193,7 @@ where
                         self.emit_console_line(line_two.as_str());
                         self.emit_console_line(line_three.as_str());
                         self.emit_console_line(line_four.as_str());
+                        self.emit_console_line(line_five.as_str());
                         self.emit_console_line(status_line.as_str());
                         self.metrics.accepted_commands += 1;
                         self.emit_ack_ok(verb_label, None);

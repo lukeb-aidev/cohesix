@@ -63,6 +63,8 @@ const MAX_HW_DEVICE_ID_LEN: usize = 64;
 const MAX_LOCAL_SEAT_DEVICE_ID_LEN: usize = 64;
 const MAX_LOCAL_SEAT_BUFFER_LINES: u16 = 1024;
 const MAX_HW_NETWORK_IP_LITERAL_LEN: usize = 15;
+const MAX_HW_NETWORK_DHCP_TIMEOUT_MS: u32 = 60_000;
+const MAX_HW_NETWORK_DHCP_RETRIES: u8 = 16;
 const MAX_LIFECYCLE_AUTO_TRANSITIONS: usize = 8;
 const MAX_SCHEDULE_ID_LEN: usize = 64;
 const MAX_SCHEDULE_ROLE_LEN: usize = 16;
@@ -356,6 +358,7 @@ impl Manifest {
             |kind: HardwareDeviceKind| self.hw.devices.iter().any(|device| device.kind == kind);
         let has_tpm = has_device(HardwareDeviceKind::Tpm);
         let has_net = has_device(HardwareDeviceKind::Net);
+        let has_wifi = has_device(HardwareDeviceKind::Wifi);
         if attest.enabled {
             match attest.policy {
                 AttestationPolicy::TpmOnly if !has_tpm => {
@@ -381,6 +384,33 @@ impl Manifest {
                     MAX_HW_NETWORK_IP_LITERAL_LEN
                 );
             }
+        }
+        if self.hw.network.dhcp.discover_timeout_ms == 0
+            || self.hw.network.dhcp.discover_timeout_ms > MAX_HW_NETWORK_DHCP_TIMEOUT_MS
+        {
+            bail!(
+                "hw.network.dhcp.discover_timeout_ms {} must be in 1..={}",
+                self.hw.network.dhcp.discover_timeout_ms,
+                MAX_HW_NETWORK_DHCP_TIMEOUT_MS
+            );
+        }
+        if self.hw.network.dhcp.request_timeout_ms == 0
+            || self.hw.network.dhcp.request_timeout_ms > MAX_HW_NETWORK_DHCP_TIMEOUT_MS
+        {
+            bail!(
+                "hw.network.dhcp.request_timeout_ms {} must be in 1..={}",
+                self.hw.network.dhcp.request_timeout_ms,
+                MAX_HW_NETWORK_DHCP_TIMEOUT_MS
+            );
+        }
+        if self.hw.network.dhcp.max_retries == 0
+            || self.hw.network.dhcp.max_retries > MAX_HW_NETWORK_DHCP_RETRIES
+        {
+            bail!(
+                "hw.network.dhcp.max_retries {} must be in 1..={}",
+                self.hw.network.dhcp.max_retries,
+                MAX_HW_NETWORK_DHCP_RETRIES
+            );
         }
         if self.hw.network.backend == NetworkBackendKind::BcmGenetV5
             && !self.profile_is_pi4_family()
@@ -430,31 +460,20 @@ impl Manifest {
                     );
                 }
             } else if self.features.net_console {
-                self.validate_pi4_static_ipv4_network(profile_name, has_net)?;
+                self.validate_pi4_network(profile_name, has_net, has_wifi)?;
             } else if self.hw.network.enabled {
                 bail!(
                     "profile.name={profile_name} with hw.network.enabled=true requires features.net_console=true"
                 );
             }
         } else {
-            if !self.hw.network.static_ipv4.ip.trim().is_empty() {
-                let _ = Self::parse_ipv4_literal(
-                    "hw.network.static_ipv4.ip",
-                    self.hw.network.static_ipv4.ip.trim(),
-                )?;
-            }
-            if let Some(gateway) = self.hw.network.static_ipv4.gateway.as_ref() {
-                if !gateway.trim().is_empty() {
-                    let _ =
-                        Self::parse_ipv4_literal("hw.network.static_ipv4.gateway", gateway.trim())?;
-                }
-            }
-            if self.hw.network.static_ipv4.prefix_len != 0
-                && !(1..=32).contains(&self.hw.network.static_ipv4.prefix_len)
-            {
+            self.validate_optional_static_ipv4_fields()?;
+            if self.hw.network.interface != NetworkInterfacePolicy::Wired {
                 bail!(
-                    "hw.network.static_ipv4.prefix_len {} must be in 1..=32",
-                    self.hw.network.static_ipv4.prefix_len
+                    "hw.network.interface={} is only valid for profile.name={} (or legacy alias {})",
+                    self.hw.network.interface.as_str(),
+                    PI4_PROFILE_NAME,
+                    PI4_PROFILE_LEGACY_ALIAS
                 );
             }
         }
@@ -475,48 +494,108 @@ impl Manifest {
             .with_context(|| format!("{label} must be a valid IPv4 literal"))
     }
 
-    fn validate_pi4_static_ipv4_network(
+    fn validate_optional_static_ipv4_fields(&self) -> Result<()> {
+        if !self.hw.network.static_ipv4.ip.trim().is_empty() {
+            let _ = Self::parse_ipv4_literal(
+                "hw.network.static_ipv4.ip",
+                self.hw.network.static_ipv4.ip.trim(),
+            )?;
+        }
+        if let Some(gateway) = self.hw.network.static_ipv4.gateway.as_ref() {
+            if !gateway.trim().is_empty() {
+                let _ = Self::parse_ipv4_literal("hw.network.static_ipv4.gateway", gateway.trim())?;
+            }
+        }
+        if self.hw.network.static_ipv4.prefix_len != 0
+            && !(1..=32).contains(&self.hw.network.static_ipv4.prefix_len)
+        {
+            bail!(
+                "hw.network.static_ipv4.prefix_len {} must be in 1..=32",
+                self.hw.network.static_ipv4.prefix_len
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_pi4_network(
         &self,
         profile_name: &str,
         has_net_device: bool,
+        has_wifi_device: bool,
     ) -> Result<()> {
         if !self.hw.network.enabled {
             bail!(
                 "profile.name={profile_name} with features.net_console=true requires hw.network.enabled=true"
             );
         }
-        if !has_net_device {
-            bail!(
-                "profile.name={profile_name} network-enabled mode requires hw.devices[] kind=net"
-            );
+        if self.hw.network.mode == NetworkMode::Off {
+            bail!("hw.network.mode=off requires hw.network.enabled=false");
         }
-        if self.hw.network.backend != NetworkBackendKind::BcmGenetV5 {
-            bail!(
-                "profile.name={profile_name} network-enabled mode requires hw.network.backend=bcmgenet-v5"
-            );
+        self.validate_optional_static_ipv4_fields()?;
+        match self.hw.network.interface {
+            NetworkInterfacePolicy::Wired => {
+                if !has_net_device {
+                    bail!(
+                        "profile.name={profile_name} network-enabled mode requires hw.devices[] kind=net"
+                    );
+                }
+                if self.hw.network.backend != NetworkBackendKind::BcmGenetV5 {
+                    bail!(
+                        "profile.name={profile_name} network-enabled wired mode requires hw.network.backend=bcmgenet-v5"
+                    );
+                }
+            }
+            NetworkInterfacePolicy::Wifi => {
+                if !has_wifi_device {
+                    bail!("profile.name={profile_name} wifi mode requires hw.devices[] kind=wifi");
+                }
+                if self.hw.network.mode != NetworkMode::Dhcp {
+                    bail!("profile.name={profile_name} wifi mode requires hw.network.mode=dhcp");
+                }
+            }
+            NetworkInterfacePolicy::Auto => {
+                if !has_net_device {
+                    bail!("profile.name={profile_name} auto mode requires hw.devices[] kind=net");
+                }
+                if !has_wifi_device {
+                    bail!("profile.name={profile_name} auto mode requires hw.devices[] kind=wifi");
+                }
+                if self.hw.network.backend != NetworkBackendKind::BcmGenetV5 {
+                    bail!(
+                        "profile.name={profile_name} auto mode requires hw.network.backend=bcmgenet-v5"
+                    );
+                }
+                if self.hw.network.mode != NetworkMode::Dhcp {
+                    bail!("profile.name={profile_name} auto mode requires hw.network.mode=dhcp");
+                }
+            }
         }
-        let ip_literal = self.hw.network.static_ipv4.ip.trim();
-        if ip_literal.is_empty() {
-            bail!("hw.network.static_ipv4.ip must be set for profile.name={profile_name}");
-        }
-        let ip = Self::parse_ipv4_literal("hw.network.static_ipv4.ip", ip_literal)?;
-        if ip.is_unspecified() {
-            bail!("hw.network.static_ipv4.ip must not be 0.0.0.0");
-        }
-        let prefix = self.hw.network.static_ipv4.prefix_len;
-        if !(1..=32).contains(&prefix) {
-            bail!(
-                "hw.network.static_ipv4.prefix_len {} must be in 1..=32",
-                prefix
-            );
-        }
-        if let Some(gateway) = self.hw.network.static_ipv4.gateway.as_ref() {
-            let gateway_literal = gateway.trim();
-            if !gateway_literal.is_empty() {
-                let parsed =
-                    Self::parse_ipv4_literal("hw.network.static_ipv4.gateway", gateway_literal)?;
-                if parsed.is_unspecified() {
-                    bail!("hw.network.static_ipv4.gateway must not be 0.0.0.0");
+        if self.hw.network.mode == NetworkMode::Static {
+            let ip_literal = self.hw.network.static_ipv4.ip.trim();
+            if ip_literal.is_empty() {
+                bail!("hw.network.static_ipv4.ip must be set for profile.name={profile_name}");
+            }
+            let ip = Self::parse_ipv4_literal("hw.network.static_ipv4.ip", ip_literal)?;
+            if ip.is_unspecified() {
+                bail!("hw.network.static_ipv4.ip must not be 0.0.0.0");
+            }
+            let prefix = self.hw.network.static_ipv4.prefix_len;
+            if !(1..=32).contains(&prefix) {
+                bail!(
+                    "hw.network.static_ipv4.prefix_len {} must be in 1..=32",
+                    prefix
+                );
+            }
+            if let Some(gateway) = self.hw.network.static_ipv4.gateway.as_ref() {
+                let gateway_literal = gateway.trim();
+                if !gateway_literal.is_empty() {
+                    let parsed = Self::parse_ipv4_literal(
+                        "hw.network.static_ipv4.gateway",
+                        gateway_literal,
+                    )?;
+                    if parsed.is_unspecified() {
+                        bail!("hw.network.static_ipv4.gateway must not be 0.0.0.0");
+                    }
                 }
             }
         }
@@ -2321,7 +2400,7 @@ impl Default for AffinityPolicy {
 mod tests {
     use super::{
         load_manifest, AffinityPolicy, AttestationPolicy, HardwareDevice, HardwareDeviceKind,
-        NetworkBackendKind,
+        NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
     };
     use std::path::PathBuf;
 
@@ -2358,6 +2437,8 @@ mod tests {
         manifest.hw.no_nic = true;
         manifest.hw.network.enabled = false;
         manifest.hw.network.backend = NetworkBackendKind::Auto;
+        manifest.hw.network.mode = NetworkMode::Off;
+        manifest.hw.network.interface = NetworkInterfacePolicy::Wired;
         manifest.hw.network.static_ipv4.ip.clear();
         manifest.hw.network.static_ipv4.prefix_len = 0;
         manifest.hw.network.static_ipv4.gateway = None;
@@ -2396,6 +2477,7 @@ mod tests {
         manifest.features.net_console = true;
         manifest.hw.network.enabled = true;
         manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.mode = NetworkMode::Static;
         manifest.hw.network.static_ipv4.prefix_len = 24;
         let err = manifest
             .validate()
@@ -2414,6 +2496,7 @@ mod tests {
         manifest.features.net_console = true;
         manifest.hw.network.enabled = true;
         manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.mode = NetworkMode::Static;
         manifest.hw.network.static_ipv4.ip = "192.168.2.20".to_owned();
         manifest.hw.network.static_ipv4.prefix_len = 0;
         let err = manifest.validate().expect_err("invalid prefix must fail");
@@ -2431,6 +2514,7 @@ mod tests {
         manifest.features.net_console = true;
         manifest.hw.network.enabled = true;
         manifest.hw.network.backend = NetworkBackendKind::Rtl8139;
+        manifest.hw.network.mode = NetworkMode::Static;
         manifest.hw.network.static_ipv4.ip = "192.168.2.20".to_owned();
         manifest.hw.network.static_ipv4.prefix_len = 24;
         let err = manifest
@@ -2450,6 +2534,7 @@ mod tests {
         manifest.features.net_console = true;
         manifest.hw.network.enabled = true;
         manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.mode = NetworkMode::Static;
         manifest.hw.network.static_ipv4.ip = "192.168.2.20".to_owned();
         manifest.hw.network.static_ipv4.prefix_len = 24;
         manifest.hw.network.static_ipv4.gateway = Some("192.168.2.1".to_owned());
@@ -2465,12 +2550,85 @@ mod tests {
         manifest.features.net_console = true;
         manifest.hw.network.enabled = true;
         manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.mode = NetworkMode::Static;
         manifest.hw.network.static_ipv4.ip = "10.42.0.9".to_owned();
         manifest.hw.network.static_ipv4.prefix_len = 24;
         manifest.hw.network.static_ipv4.gateway = Some("10.42.0.1".to_owned());
         manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect("legacy alias should accept 26a static IPv4 migration path");
+    }
+
+    #[test]
+    fn pi4_profile_wifi_policy_requires_wifi_device() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.no_nic = false;
+        manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.mode = NetworkMode::Dhcp;
+        manifest.hw.network.interface = NetworkInterfacePolicy::Wifi;
+        let err = manifest
+            .validate()
+            .expect_err("wifi policy without wifi device must fail");
+        assert!(
+            err.to_string().contains("hw.devices[] kind=wifi"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn pi4_profile_auto_policy_requires_wifi_device() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.no_nic = false;
+        manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.mode = NetworkMode::Dhcp;
+        manifest.hw.network.interface = NetworkInterfacePolicy::Auto;
+        let err = manifest
+            .validate()
+            .expect_err("auto policy without wifi device must fail");
+        assert!(
+            err.to_string().contains("hw.devices[] kind=wifi"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn pi4_profile_accepts_wifi_dhcp_configuration() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.no_nic = false;
+        manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.mode = NetworkMode::Dhcp;
+        manifest.hw.network.interface = NetworkInterfacePolicy::Wifi;
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Wifi,
+            id: "cyw43xx0".to_owned(),
+            required: false,
+        });
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("valid pi4 wifi DHCP manifest should validate");
+    }
+
+    #[test]
+    fn pi4_profile_accepts_auto_dhcp_configuration() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.no_nic = false;
+        manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.mode = NetworkMode::Dhcp;
+        manifest.hw.network.interface = NetworkInterfacePolicy::Auto;
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Wifi,
+            id: "cyw43xx0".to_owned(),
+            required: false,
+        });
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("valid pi4 auto DHCP manifest should validate");
     }
 
     #[test]
@@ -2602,6 +2760,7 @@ pub struct HardwareDevice {
 pub enum HardwareDeviceKind {
     Uart,
     Net,
+    Wifi,
     Tpm,
     Rtc,
     Keyboard,
@@ -2663,7 +2822,10 @@ impl Default for LocalSeatConfig {
 pub struct HardwareNetworkConfig {
     pub enabled: bool,
     pub backend: NetworkBackendKind,
+    pub mode: NetworkMode,
+    pub interface: NetworkInterfacePolicy,
     pub static_ipv4: StaticIpv4Config,
+    pub dhcp: DhcpPolicyConfig,
 }
 
 impl Default for HardwareNetworkConfig {
@@ -2671,7 +2833,76 @@ impl Default for HardwareNetworkConfig {
         Self {
             enabled: false,
             backend: NetworkBackendKind::Auto,
+            mode: NetworkMode::Off,
+            interface: NetworkInterfacePolicy::Wired,
             static_ipv4: StaticIpv4Config::default(),
+            dhcp: DhcpPolicyConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NetworkMode {
+    Off,
+    Static,
+    Dhcp,
+}
+
+impl Default for NetworkMode {
+    fn default() -> Self {
+        Self::Off
+    }
+}
+
+impl NetworkMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Static => "static",
+            Self::Dhcp => "dhcp",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NetworkInterfacePolicy {
+    Wired,
+    Wifi,
+    Auto,
+}
+
+impl Default for NetworkInterfacePolicy {
+    fn default() -> Self {
+        Self::Wired
+    }
+}
+
+impl NetworkInterfacePolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wired => "wired",
+            Self::Wifi => "wifi",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DhcpPolicyConfig {
+    pub discover_timeout_ms: u32,
+    pub request_timeout_ms: u32,
+    pub max_retries: u8,
+}
+
+impl Default for DhcpPolicyConfig {
+    fn default() -> Self {
+        Self {
+            discover_timeout_ms: 1_000,
+            request_timeout_ms: 1_000,
+            max_retries: 4,
         }
     }
 }
