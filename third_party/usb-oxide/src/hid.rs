@@ -249,6 +249,44 @@ enum KeyboardDecodeMode {
     Flexible,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyboardProtocolMode {
+    Boot,
+    Report,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyboardDecodeTransition {
+    None,
+    SwitchToReportProtocol,
+    RelaxDecode,
+}
+
+#[inline]
+const fn forced_keyboard_profile(
+    report_id_prefixed: bool,
+) -> (KeyboardProtocolMode, KeyboardDecodeMode, u8) {
+    if report_id_prefixed {
+        (KeyboardProtocolMode::Report, KeyboardDecodeMode::BootCompatible, 1)
+    } else {
+        (KeyboardProtocolMode::Boot, KeyboardDecodeMode::BootCompatible, 0)
+    }
+}
+
+#[inline]
+const fn keyboard_decode_transition(
+    protocol_mode: KeyboardProtocolMode,
+    decode_mode: KeyboardDecodeMode,
+) -> KeyboardDecodeTransition {
+    match decode_mode {
+        KeyboardDecodeMode::Flexible => KeyboardDecodeTransition::None,
+        KeyboardDecodeMode::BootCompatible => match protocol_mode {
+            KeyboardProtocolMode::Boot => KeyboardDecodeTransition::SwitchToReportProtocol,
+            KeyboardProtocolMode::Report => KeyboardDecodeTransition::RelaxDecode,
+        },
+    }
+}
+
 #[inline]
 const fn keyboard_endpoint_id_matches(ep_num: u8, endpoint_id: u8) -> bool {
     let dci_in = (ep_num << 1) | 1;
@@ -767,6 +805,7 @@ pub struct HidDevice<H: Dma> {
     ep_in: u8,
     ep_max_packet: u16,
     keyboard_decode_failures: u8,
+    keyboard_protocol_mode: KeyboardProtocolMode,
     keyboard_decode_mode: KeyboardDecodeMode,
     keyboard_report_offset: u8,
     report_buf: PhysMem<H>,
@@ -807,6 +846,11 @@ impl<H: Dma> HidDevice<H> {
             ep_in: ep_in.number(),
             ep_max_packet: ep_in.max_packet_size,
             keyboard_decode_failures: 0,
+            keyboard_protocol_mode: if hid_type == HidType::Keyboard {
+                KeyboardProtocolMode::Boot
+            } else {
+                KeyboardProtocolMode::Report
+            },
             keyboard_decode_mode: if hid_type == HidType::Keyboard {
                 KeyboardDecodeMode::BootCompatible
             } else {
@@ -900,6 +944,43 @@ impl<H: Dma> HidDevice<H> {
         keyboard_endpoint_id_matches(self.ep_in, endpoint_id)
     }
 
+    fn reset_keyboard_profile(
+        &mut self,
+        protocol_mode: KeyboardProtocolMode,
+        decode_mode: KeyboardDecodeMode,
+        report_offset: u8,
+    ) {
+        self.keyboard_protocol_mode = protocol_mode;
+        self.keyboard_decode_mode = decode_mode;
+        self.keyboard_report_offset = report_offset;
+        self.keyboard_decode_failures = 0;
+    }
+
+    fn advance_keyboard_decode_profile(&mut self) -> bool {
+        match keyboard_decode_transition(self.keyboard_protocol_mode, self.keyboard_decode_mode) {
+            KeyboardDecodeTransition::None => {
+                self.keyboard_decode_failures = 0;
+                false
+            }
+            KeyboardDecodeTransition::RelaxDecode => {
+                self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
+                self.keyboard_decode_failures = 0;
+                true
+            }
+            KeyboardDecodeTransition::SwitchToReportProtocol => {
+                if self.set_protocol(1).is_ok() {
+                    self.keyboard_protocol_mode = KeyboardProtocolMode::Report;
+                    self.keyboard_decode_failures = 0;
+                    false
+                } else {
+                    self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
+                    self.keyboard_decode_failures = 0;
+                    true
+                }
+            }
+        }
+    }
+
     /// Poll for keyboard report (non-blocking) with transfer re-queue errors surfaced.
     pub fn poll_keyboard_checked(&mut self) -> Result<Option<KeyboardReport>> {
         if self.hid_type != HidType::Keyboard {
@@ -952,11 +1033,20 @@ impl<H: Dma> HidDevice<H> {
                     self.keyboard_decode_failures =
                         self.keyboard_decode_failures.saturating_add(1);
                     if self.keyboard_decode_failures >= BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD {
-                        self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
-                        report = decode_keyboard_report_payload(
-                            payload,
-                            usize::from(self.keyboard_report_offset),
-                        );
+                        if self.advance_keyboard_decode_profile() {
+                            report = match self.keyboard_decode_mode {
+                                KeyboardDecodeMode::BootCompatible => {
+                                    decode_keyboard_report_payload_boot_compatible(
+                                        payload,
+                                        usize::from(self.keyboard_report_offset),
+                                    )
+                                }
+                                KeyboardDecodeMode::Flexible => decode_keyboard_report_payload(
+                                    payload,
+                                    usize::from(self.keyboard_report_offset),
+                                ),
+                            };
+                        }
                     }
                 }
                 if let Some(report) = report {
@@ -1065,9 +1155,8 @@ impl<H: Dma> HidDevice<H> {
     /// `bInterfaceProtocol` but still accept `SET_PROTOCOL(BOOT)`.
     pub fn into_forced_keyboard(mut self) -> Self {
         self.hid_type = HidType::Keyboard;
-        self.keyboard_decode_failures = 0;
-        self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
-        self.keyboard_report_offset = 0;
+        let (protocol_mode, decode_mode, report_offset) = forced_keyboard_profile(false);
+        self.reset_keyboard_profile(protocol_mode, decode_mode, report_offset);
         self
     }
 
@@ -1077,9 +1166,8 @@ impl<H: Dma> HidDevice<H> {
     /// reports are `[report_id, modifiers, reserved, keys[6], ...]`.
     pub fn into_forced_keyboard_with_report_id(mut self) -> Self {
         self.hid_type = HidType::Keyboard;
-        self.keyboard_decode_failures = 0;
-        self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
-        self.keyboard_report_offset = 1;
+        let (protocol_mode, decode_mode, report_offset) = forced_keyboard_profile(true);
+        self.reset_keyboard_profile(protocol_mode, decode_mode, report_offset);
         self
     }
 
@@ -1176,8 +1264,10 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
 #[cfg(test)]
 mod tests {
     use super::{
+        KeyboardDecodeMode, KeyboardDecodeTransition, KeyboardProtocolMode,
         decode_keyboard_report_payload, decode_keyboard_report_payload_boot_compatible,
-        has_report_payload, keyboard_endpoint_id_matches, keyboard_usage_code_valid,
+        forced_keyboard_profile, has_report_payload, keyboard_decode_transition,
+        keyboard_endpoint_id_matches, keyboard_usage_code_valid,
     };
     use crate::ring::completion;
 
@@ -1285,6 +1375,47 @@ mod tests {
         let bitmap = [0x00u8, 0x00, 0x10, 0x00];
         assert!(decode_keyboard_report_payload_boot_compatible(&bitmap, 0).is_none());
         assert!(decode_keyboard_report_payload(&bitmap, 0).is_some());
+    }
+
+    #[test]
+    fn forced_keyboard_profile_keeps_boot_layout_strict_by_default() {
+        assert_eq!(
+            forced_keyboard_profile(false),
+            (KeyboardProtocolMode::Boot, KeyboardDecodeMode::BootCompatible, 0)
+        );
+        assert_eq!(
+            forced_keyboard_profile(true),
+            (
+                KeyboardProtocolMode::Report,
+                KeyboardDecodeMode::BootCompatible,
+                1,
+            )
+        );
+    }
+
+    #[test]
+    fn keyboard_decode_transition_is_bounded_and_protocol_aware() {
+        assert_eq!(
+            keyboard_decode_transition(
+                KeyboardProtocolMode::Boot,
+                KeyboardDecodeMode::BootCompatible,
+            ),
+            KeyboardDecodeTransition::SwitchToReportProtocol
+        );
+        assert_eq!(
+            keyboard_decode_transition(
+                KeyboardProtocolMode::Report,
+                KeyboardDecodeMode::BootCompatible,
+            ),
+            KeyboardDecodeTransition::RelaxDecode
+        );
+        assert_eq!(
+            keyboard_decode_transition(
+                KeyboardProtocolMode::Report,
+                KeyboardDecodeMode::Flexible,
+            ),
+            KeyboardDecodeTransition::None
+        );
     }
 
     #[test]

@@ -800,6 +800,11 @@ pub fn ep_only_active() -> bool {
     matches!(LOGGER.transport(), LogTransport::EpOnly)
 }
 
+/// Returns `true` when boot requested the logger/bridge handoff to the EP sink.
+pub fn bridge_attach_requested() -> bool {
+    EP_REQUESTED.load(Ordering::Acquire)
+}
+
 /// Returns `true` when the bridge transport has been disabled via environment configuration.
 pub fn bridge_disabled() -> bool {
     NO_BRIDGE_MODE.load(Ordering::Acquire)

@@ -105,6 +105,21 @@ pub struct TransportMetrics {
     pub heartbeats: usize,
 }
 
+/// Diagnostic snapshot for a TCP-backed console connection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TcpConnectionInfo {
+    /// Configured host name or IP address for the connection.
+    pub host: String,
+    /// Configured TCP port for the connection.
+    pub port: u16,
+    /// True when the transport currently holds an open TCP socket.
+    pub connected: bool,
+    /// Local socket address for the active connection, when available.
+    pub local_addr: Option<String>,
+    /// Peer socket address for the active connection, when available.
+    pub peer_addr: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LifecycleState {
     Booting,
@@ -578,6 +593,11 @@ pub trait Transport {
     fn tcp_endpoint(&self) -> Option<(String, u16)> {
         None
     }
+
+    /// Return the active TCP connection details if the transport exposes them.
+    fn tcp_connection_info(&self) -> Option<TcpConnectionInfo> {
+        None
+    }
 }
 
 impl<T> Transport for Box<T>
@@ -631,6 +651,10 @@ where
 
     fn tcp_endpoint(&self) -> Option<(String, u16)> {
         (**self).tcp_endpoint()
+    }
+
+    fn tcp_connection_info(&self) -> Option<TcpConnectionInfo> {
+        (**self).tcp_connection_info()
     }
 
     fn metrics(&self) -> TransportMetrics {
@@ -3226,7 +3250,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
             .transport
             .tcp_endpoint()
             .unwrap_or_else(|| ("127.0.0.1".to_owned(), COHSH_TCP_PORT));
-        let mut port = endpoint.1;
+        let default_port = endpoint.1;
+        let mut port = default_port;
         if let Some(raw_port) = port_override {
             port = raw_port
                 .parse::<u16>()
@@ -3234,6 +3259,21 @@ impl<T: Transport, W: Write> Shell<T, W> {
         }
         let host = endpoint.0;
         self.write_line(&format!("tcp-diag: connecting to {host}:{port}"))?;
+        if port == default_port {
+            if let Some(info) = self.transport.tcp_connection_info() {
+                if info.connected {
+                    self.write_line("tcp-diag: using active console connection")?;
+                    self.write_line("tcp-diag: connect succeeded")?;
+                    if let Some(local) = info.local_addr {
+                        self.write_line(&format!("tcp-diag: local_addr={local}"))?;
+                    }
+                    if let Some(peer) = info.peer_addr {
+                        self.write_line(&format!("tcp-diag: peer_addr={peer}"))?;
+                    }
+                    return Ok(());
+                }
+            }
+        }
         match TcpStream::connect((host.as_str(), port)) {
             Ok(stream) => {
                 self.write_line("tcp-diag: connect succeeded")?;
@@ -4441,7 +4481,15 @@ fn parse_telemetry_push_args<'a>(
 mod tests {
     use super::*;
     use std::io::Cursor;
+    #[cfg(feature = "tcp")]
+    use std::io::{BufReader, Read, Write};
+    #[cfg(feature = "tcp")]
+    use std::net::{Shutdown, TcpListener, TcpStream};
     use std::sync::Mutex;
+    #[cfg(feature = "tcp")]
+    use std::thread;
+    #[cfg(feature = "tcp")]
+    use std::time::Duration;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -4584,6 +4632,74 @@ mod tests {
         assert!(rendered.contains("ls <path>"));
         assert!(rendered.contains("mount <service> <path>"));
         assert!(rendered.contains("detach"));
+    }
+
+    #[cfg(feature = "tcp")]
+    #[test]
+    fn tcp_diag_uses_active_console_connection() {
+        fn write_frame(stream: &mut TcpStream, line: &str) {
+            let total_len = line.len().saturating_add(4) as u32;
+            stream.write_all(&total_len.to_le_bytes()).unwrap();
+            stream.write_all(line.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        }
+
+        fn read_frame(reader: &mut BufReader<TcpStream>) -> Option<String> {
+            let mut len_buf = [0u8; 4];
+            if reader.read_exact(&mut len_buf).is_err() {
+                return None;
+            }
+            let total_len = u32::from_le_bytes(len_buf) as usize;
+            if total_len < 4 {
+                return None;
+            }
+            let payload_len = total_len - 4;
+            let mut payload = vec![0u8; payload_len];
+            if reader.read_exact(&mut payload).is_err() {
+                return None;
+            }
+            String::from_utf8(payload).ok()
+        }
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            drop(listener);
+            write_frame(&mut stream, "OK AUTH detail=present-token");
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            while let Some(line) = read_frame(&mut reader) {
+                let trimmed = line.trim();
+                if trimmed.starts_with("AUTH ") {
+                    write_frame(&mut stream, "OK AUTH");
+                } else if trimmed.starts_with("ATTACH") {
+                    write_frame(&mut stream, "OK ATTACH role=queen");
+                } else if trimmed == "quit" {
+                    write_frame(&mut stream, "OK QUIT");
+                    let _ = stream.shutdown(Shutdown::Both);
+                    break;
+                }
+            }
+        });
+
+        let transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(100))
+            .with_max_retries(1)
+            .with_auth_token("test-auth-token");
+        let mut output = Vec::new();
+        {
+            let mut shell = Shell::new(transport, &mut output);
+            shell.attach(Role::Queen, None).unwrap();
+            shell.execute("tcp-diag").unwrap();
+            shell.execute("quit").unwrap();
+        }
+
+        server.join().unwrap();
+
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains("tcp-diag: using active console connection"));
+        assert!(rendered.contains("tcp-diag: connect succeeded"));
+        assert!(!rendered.contains("tcp-diag: connect failed"));
     }
 
     #[test]

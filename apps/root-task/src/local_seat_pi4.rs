@@ -150,7 +150,7 @@ const USB_PROGRESS_TICK_MS: usize = 1_000;
 const USB_PROGRESS_MAX_DOTS: usize = 64;
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
-const KEYBOARD_ATTACH_ATTEMPTS: usize = 1;
+const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
 const KEYBOARD_RETRY_SPINS: usize = 200_000;
 const VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
 const VL805_NOTIFY_SETTLE_SPINS: usize = 50_000;
@@ -2996,9 +2996,10 @@ impl UsbKeyboard {
                 }
                 let source = hid_keyboard_attach_source(candidate_rank);
                 let require_boot_switch = candidate_rank != 0;
-                // Treat all explicit keyboard protocol candidates as keyboard
-                // reports even when devices expose non-boot quirks.
-                let force_keyboard_mode = true;
+                // Boot keyboards are already configured by `HidDevice::from_interface`;
+                // only relaxed candidates need the compatibility coercion path.
+                let force_keyboard_mode =
+                    hid_keyboard_candidate_requires_force_mode(candidate_rank);
                 let track_failures = candidate_rank != 2;
                 if let Some(hid) = Self::try_attach_hid_keyboard_candidate(
                     device.clone(),
@@ -6567,6 +6568,11 @@ const fn hid_keyboard_attach_source(rank: u8) -> &'static str {
 }
 
 #[inline]
+const fn hid_keyboard_candidate_requires_force_mode(rank: u8) -> bool {
+    rank != 0
+}
+
+#[inline]
 const fn text_row_count(height: usize) -> usize {
     let rows = height / CHAR_HEIGHT;
     if rows == 0 {
@@ -6690,7 +6696,8 @@ fn validate_framebuffer_geometry(
 mod tests {
     use super::{
         clamp_visible_height, clamp_visible_width, config_value_for_set, decode_pci_mmio_bar,
-        hid_keyboard_attach_rank, hid_keyboard_attach_source, hub_retry_wait_spins,
+        hid_keyboard_attach_rank, hid_keyboard_attach_source,
+        hid_keyboard_candidate_requires_force_mode, hub_retry_wait_spins,
         hub_should_eager_port_power, keyboard_scancode_to_char, mailbox_visible_dimension,
         normalize_hub_tt_profile, text_row_count, text_viewport_height,
         vl805_runtime_cfg_touch_allowed, ConfigDesc, UsbKeyboard, HUB_PORT_IFACE_FALLBACK_MAX,
@@ -6906,6 +6913,7 @@ mod tests {
             Some(0)
         );
         assert_eq!(hid_keyboard_attach_source(0), "boot-keyboard");
+        assert!(!hid_keyboard_candidate_requires_force_mode(0));
     }
 
     #[test]
@@ -6920,6 +6928,8 @@ mod tests {
         );
         assert_eq!(hid_keyboard_attach_source(1), "keyboard-protocol");
         assert_eq!(hid_keyboard_attach_source(2), "protocol-none-fallback");
+        assert!(hid_keyboard_candidate_requires_force_mode(1));
+        assert!(hid_keyboard_candidate_requires_force_mode(2));
     }
 
     #[test]

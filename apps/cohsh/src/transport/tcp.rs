@@ -23,7 +23,7 @@ use log::{debug, error, info, trace, warn};
 use secure9p_codec::SessionId;
 
 use crate::proto::{parse_ack, AckStatus};
-use crate::{CohshRetryPolicy, Session, Transport, TransportMetrics};
+use crate::{CohshRetryPolicy, Session, TcpConnectionInfo, Transport, TransportMetrics};
 
 /// Default TCP timeout applied to socket operations.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -1375,6 +1375,26 @@ impl Transport for TcpTransport {
         Some((self.address.clone(), self.port))
     }
 
+    fn tcp_connection_info(&self) -> Option<TcpConnectionInfo> {
+        let local_addr = self
+            .stream
+            .as_ref()
+            .and_then(|stream| stream.local_addr().ok())
+            .map(|addr| addr.to_string());
+        let peer_addr = self
+            .stream
+            .as_ref()
+            .and_then(|stream| stream.peer_addr().ok())
+            .map(|addr| addr.to_string());
+        Some(TcpConnectionInfo {
+            host: self.address.clone(),
+            port: self.port,
+            connected: self.stream.is_some(),
+            local_addr,
+            peer_addr,
+        })
+    }
+
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
         let ticket_payload = Self::normalise_ticket(role, ticket)?;
         let ticket_len = ticket_payload
@@ -1795,6 +1815,11 @@ impl Transport for SharedTcpTransport {
         let inner = self.lock();
         inner.tcp_endpoint()
     }
+
+    fn tcp_connection_info(&self) -> Option<TcpConnectionInfo> {
+        let inner = self.lock();
+        inner.tcp_connection_info()
+    }
 }
 
 impl Transport for PooledTcpTransport {
@@ -1864,6 +1889,11 @@ impl Transport for PooledTcpTransport {
     fn tcp_endpoint(&self) -> Option<(String, u16)> {
         let inner = self.lock();
         inner.tcp_endpoint()
+    }
+
+    fn tcp_connection_info(&self) -> Option<TcpConnectionInfo> {
+        let inner = self.lock();
+        inner.tcp_connection_info()
     }
 }
 

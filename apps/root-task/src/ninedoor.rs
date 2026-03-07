@@ -613,7 +613,10 @@ impl NineDoorBridge {
         #[cfg(feature = "kernel")]
         {
             boot_log::notify_bridge_attached();
-            if boot_log::bridge_disabled() || boot_log::ep_only_active() {
+            if boot_log::bridge_disabled()
+                || !boot_log::bridge_attach_requested()
+                || boot_log::ep_only_active()
+            {
                 self.attached = true;
                 boot_tracer().advance(BootPhase::EPAttachOk);
                 self.update_session_context(role, ticket);
@@ -8729,10 +8732,35 @@ fn truncate(input: &str, limit: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{bootstrap::log as boot_log, event::AuditSink};
     use cohesix_cas::{CasManifest, CAS_MANIFEST_SCHEMA};
     use ed25519_dalek::{Signature, SigningKey};
     use sha2::{Digest, Sha256};
     use signature::Signer;
+
+    #[derive(Default)]
+    struct TestAudit;
+
+    impl AuditSink for TestAudit {
+        fn info(&mut self, _message: &str) {}
+
+        fn denied(&mut self, _message: &str) {}
+    }
+
+    #[test]
+    fn attach_succeeds_when_bridge_handoff_was_not_requested() {
+        boot_log::init_logger_bootstrap_only();
+        boot_log::set_no_bridge_mode(false);
+
+        let mut bridge = NineDoorBridge::new();
+        let mut audit = TestAudit;
+        bridge
+            .attach("queen", None, &mut audit)
+            .expect("attach should succeed without EP handoff");
+
+        assert!(bridge.attached());
+        assert!(bridge.is_queen());
+    }
 
     #[test]
     fn cas_manifest_reupload_is_idempotent() {

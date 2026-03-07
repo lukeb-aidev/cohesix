@@ -27,7 +27,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "e19e34454c299e31c23499ca11a83b1a2864250fe6c95729544fa605aeaf941b";
+    "1f4cbb2a18df6ba0d9be0e850accaa6c0d5c04706e2be0c29c32311fb04d687c";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -180,58 +180,27 @@ pub const CAS_CONFIG: CasConfig = CasConfig {
     models_enabled: false,
 };
 
-pub const HARDWARE_DEVICES: [HardwareDevice; 6] = [
-    HardwareDevice {
-        kind: HardwareDeviceKind::Uart,
-        id: "uart0",
-        required: true,
-    },
-    HardwareDevice {
-        kind: HardwareDeviceKind::Rtc,
-        id: "rtc0",
-        required: true,
-    },
-    HardwareDevice {
-        kind: HardwareDeviceKind::Net,
-        id: "bcmgenet0",
-        required: true,
-    },
-    HardwareDevice {
-        kind: HardwareDeviceKind::Tpm,
-        id: "tpm0",
-        required: false,
-    },
-    HardwareDevice {
-        kind: HardwareDeviceKind::Keyboard,
-        id: "usb-kbd0",
-        required: false,
-    },
-    HardwareDevice {
-        kind: HardwareDeviceKind::Display,
-        id: "hdmi0",
-        required: false,
-    },
-];
+pub const HARDWARE_DEVICES: [HardwareDevice; 0] = [];
 
 pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {
     secure_boot: false,
     no_nic: false,
     network: HardwareNetworkConfig {
-        enabled: true,
-        backend: NetworkBackendKind::BcmGenetV5,
+        enabled: false,
+        backend: NetworkBackendKind::Auto,
         static_ipv4: StaticIpv4Config {
-            ip: [192, 168, 10, 42],
-            prefix_len: 24,
-            gateway: Some([192, 168, 10, 1]),
+            ip: [0, 0, 0, 0],
+            prefix_len: 0,
+            gateway: None,
         },
     },
     attestation: AttestationConfig {
-        enabled: true,
+        enabled: false,
         policy: AttestationPolicy::TpmOrDice,
         evidence_max_bytes: 256,
     },
     local_seat: LocalSeatConfig {
-        enabled: true,
+        enabled: false,
         required: false,
         keyboard_device: "usb-kbd0",
         display_device: "hdmi0",
@@ -513,10 +482,10 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
-pub const INITIAL_AUDIT_LINES: [&str; 37] = [
+pub const INITIAL_AUDIT_LINES: [&str; 31] = [
     "manifest.schema=1.5",
-    "manifest.profile=pi4-uboot-aarch64",
-    "manifest.sha256=667af94f6669d2380d0954577430198dddedd2aef2b8b2d4b49cac17727b8f76",
+    "manifest.profile=virt-aarch64",
+    "manifest.sha256=b487945f401c5e2bfd7883e8f820981b5c682894056e2185d9a4caa5f34e8f67",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -538,17 +507,11 @@ pub const INITIAL_AUDIT_LINES: [&str; 37] = [
     "manifest.features.net_console=true",
     "manifest.hw.secure_boot=false",
     "manifest.hw.no_nic=false",
-    "manifest.hw.network.enabled=true",
-    "manifest.hw.network.backend=bcmgenet-v5",
-    "manifest.hw.attestation.enabled=true",
+    "manifest.hw.network.enabled=false",
+    "manifest.hw.network.backend=auto",
+    "manifest.hw.attestation.enabled=false",
     "manifest.hw.attestation.policy=tpm-or-dice",
-    "manifest.hw.local_seat.enabled=true",
+    "manifest.hw.local_seat.enabled=false",
     "manifest.hw.local_seat.required=false",
-    "manifest.hw.network.static_ipv4.ip=192.168.10.42",
-    "manifest.hw.network.static_ipv4.prefix_len=24",
-    "manifest.hw.network.static_ipv4.gateway=192.168.10.1",
-    "attestation.bound_manifest_sha256=667af94f6669d2380d0954577430198dddedd2aef2b8b2d4b49cac17727b8f76",
-    "attestation.evidence_sha256=74329da038081f526c01e6c67838637eb2d2986d81259de59de44d99fd3eb226",
-    "manifest.hw.networking=enabled-static-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

@@ -4,7 +4,7 @@
 
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
-- `meta.purpose`: `Pi4 U-Boot aarch64 root-task manifest input for coh-rtc.`
+- `meta.purpose`: `Root-task manifest input for coh-rtc.`
 - `root_task.schema`: `1.5`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
@@ -12,7 +12,7 @@
 - `root_task.affinity.ninedoor_cores`: `[1]`
 - `root_task.affinity.provider_cores`: `[2, 3]`
 - `root_task.affinity.worker_cores`: `[2, 3]`
-- `profile.name`: `pi4-uboot-aarch64`
+- `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
 - `secure9p.msize`: `8192`
@@ -173,33 +173,28 @@
 - `features.std_host_tools`: `false`
 - `hw.secure_boot`: `false`
 - `hw.no_nic`: `false`
-- `hw.network.enabled`: `true`
-- `hw.network.backend`: `bcmgenet-v5`
-- `hw.network.static_ipv4.ip`: `192.168.10.42`
-- `hw.network.static_ipv4.prefix_len`: `24`
-- `hw.network.static_ipv4.gateway`: `192.168.10.1`
-- `hw.attestation.enabled`: `true`
+- `hw.network.enabled`: `false`
+- `hw.network.backend`: `auto`
+- `hw.network.static_ipv4.ip`: `(unset)`
+- `hw.network.static_ipv4.prefix_len`: `0`
+- `hw.network.static_ipv4.gateway`: `(unset)`
+- `hw.attestation.enabled`: `false`
 - `hw.attestation.policy`: `tpm-or-dice`
 - `hw.attestation.evidence_max_bytes`: `256`
-- `hw.local_seat.enabled`: `true`
+- `hw.local_seat.enabled`: `false`
 - `hw.local_seat.required`: `false`
 - `hw.local_seat.keyboard_device`: `usb-kbd0`
 - `hw.local_seat.display_device`: `hdmi0`
 - `hw.local_seat.line_bytes`: `160`
 - `hw.local_seat.buffer_lines`: `128`
-- `hw.devices`: `6` entries
-- `hw.devices[]`: `kind=uart` `id=uart0` `required=true`
-- `hw.devices[]`: `kind=rtc` `id=rtc0` `required=true`
-- `hw.devices[]`: `kind=net` `id=bcmgenet0` `required=true`
-- `hw.devices[]`: `kind=tpm` `id=tpm0` `required=false`
-- `hw.devices[]`: `kind=keyboard` `id=usb-kbd0` `required=false`
-- `hw.devices[]`: `kind=display` `id=hdmi0` `required=false`
+- `hw.devices`: `0` entries
+- `hw.devices[]`: `(none)`
 - `namespaces.role_isolation`: `true`
 - `sharding.enabled`: `true`
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `667af94f6669d2380d0954577430198dddedd2aef2b8b2d4b49cac17727b8f76`
+- `manifest.sha256`: `b487945f401c5e2bfd7883e8f820981b5c682894056e2185d9a4caa5f34e8f67`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -261,4 +256,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `667af94f6669d2380d0954577430198dddedd2aef2b8b2d4b49cac17727b8f76`)._
+_Generated from `configs/root_task.toml` (sha256: `b487945f401c5e2bfd7883e8f820981b5c682894056e2185d9a4caa5f34e8f67`)._
