@@ -6384,6 +6384,7 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 **Non-negotiable constraints:**
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a "humanizing" label.
 - Comment/header/doc rewrites must not hide semantic changes. Behavior-changing refactors require their own tests and doc updates in the same change.
+- Humanized documentation must remain auditable against the as-built system: generated snippets, manifest fingerprints, fixture outputs, release artifacts, and staged test evidence take precedence over prose.
 - Generic restatement comments ("Defines the X module", "Provides the Y library surface", "CLI entry point") are prohibited once 26c lands; comments must explain invariants, authority boundaries, limits, operator-visible behavior, or rationale.
 - Required file headers may be narrowed, reformatted, or reduced only by updating `AGENTS.md`, `CONTRIBUTING.md`, and `docs/CODING_GUIDELINES.md` in the same change.
 - Large `root-task` and driver monoliths are not first-wave cleanup targets; extraction is allowed only when characterization tests already pin behavior.
@@ -6398,8 +6399,9 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 Humanize the authored Cohesix code and documentation surfaces without protocol or behavioral regression by:
 1. replacing template-heavy comments and test naming with invariant-focused prose,
 2. classifying and reviewing every `*.md` file in the repository,
-3. adding characterization/CI gates before touching riskier host-side cleanup targets, and
-4. requiring the full staged Test Plan to pass on both QEMU and Pi 4 before closure.
+3. auditing canonical documentation against generated artifacts, manifest outputs, and observed staged-run evidence before prose cleanup lands,
+4. adding characterization/CI gates before touching riskier host-side cleanup targets, and
+5. requiring the full staged Test Plan to pass on both QEMU and Pi 4 before closure.
 
 ### Markdown review scope (all `*.md` files)
 Milestone 26c must inventory every Markdown file returned by:
@@ -6433,6 +6435,11 @@ For each inventory entry, 26c must record one of:
   - Record which docs are canonical, generated, release-derived, reference-only, or vendored.
   - Ensure release and snippet docs are traced back to their source artifacts instead of receiving ad-hoc prose edits.
 
+- **Docs-as-built audit before prose cleanup**
+  - Audit canonical docs against current generated snippets, resolved manifests, committed fixtures, release artifacts, and staged test evidence before rewriting for tone or readability.
+  - Record where documentation is sourced from compiler outputs, where it is manually maintained, and what exact commands prove alignment.
+  - Reject any humanizing change that makes prose nicer but less faithful to the observed system.
+
 - **Low-risk surface cleanup**
   - Clean up public crate surfaces, tiny modules, tests, READMEs, and operator docs first.
   - Prefer renaming tests, tightening doc comments, and deleting generic noise before any control-flow refactor.
@@ -6454,6 +6461,8 @@ For each inventory entry, 26c must record one of:
 
 ### Commands
 - `rg --files -g '*.md' | sort > out/audit/m26c_markdown_inventory.txt`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `scripts/check-generated.sh`
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test -p secure9p-core`
@@ -6466,6 +6475,7 @@ For each inventory entry, 26c must record one of:
 
 ### Checks (DoD)
 - Every Markdown file returned by `rg --files -g '*.md'` is present in the checked-in 26c inventory with an explicit disposition.
+- Cohesix-authored canonical docs are audited against generated snippets, manifest fingerprints, fixture outputs, release artifacts, and staged-run evidence before and after prose cleanup.
 - Cohesix-authored canonical docs are rewritten to remove generic template prose and to describe the as-built system, invariants, or operator contract.
 - Release snapshots, generated snippets, seL4 mirrors, and vendored docs are handled according to their disposition rules; no ad-hoc edits hide provenance.
 - Low-risk code/comment cleanup lands with no console grammar, Secure9P semantics, manifest output, telemetry format, or release workflow drift.
@@ -6516,9 +6526,26 @@ Checks:
 Deliverables:
   - Auditable all-Markdown inventory and disposition table covering canonical docs, release snapshots, reference mirrors, and vendored material.
 
+Title/ID: m26c-docs-as-built-audit
+Goal: Audit canonical documentation against the actual generated and observed system before any humanizing prose cleanup lands.
+Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md, docs/SECURE9P.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, docs/USERLAND_AND_CLI.md, docs/BOOT_REFERENCE.md, docs/FAILURE_MODES.md, docs/OPERATOR_WALKTHROUGH.md, README.md, docs/snippets/*.md, apps/root-task/src/generated/*, out/manifests/root_task_resolved.json, release bundles under releases/**, staged test evidence
+Changes:
+  - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md — trace each canonical doc surface to generated snippets, manifests, fixtures, release artifacts, or staged-run evidence.
+  - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/HOST_TOOLS.md + docs/SECURE9P.md + docs/SECURITY.md + docs/TEST_PLAN.md + docs/HARDWARE_BRINGUP.md + docs/USERLAND_AND_CLI.md + docs/BOOT_REFERENCE.md + docs/FAILURE_MODES.md + docs/OPERATOR_WALKTHROUGH.md + README.md — correct any prose that does not match the current as-built system before tone cleanup begins.
+  - docs/snippets/*.md + releases/**/*.md — verify provenance and regeneration paths; update only through the proper source or release-cut flow.
+Commands:
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Canonical docs can be traced to current manifests, generated snippets, fixtures, release snapshots, or staged-run evidence.
+  - Any docs drift is corrected before humanizing edits are accepted.
+Deliverables:
+  - Auditable docs-as-built report proving documentation truth before presentation cleanup.
+
 Title/ID: m26c-low-risk-surface-cleanup
-Goal: Humanize the highest-visibility low-risk code and doc surfaces before touching structural logic.
-Inputs: apps/*/README.md, crates/**/README.md, tools/cohesix-py/README.md, tests/integration/README.md, public crate roots under apps/*/src/lib.rs, tests/**/*.rs, docs/OPERATOR_WALKTHROUGH.md, docs/QUICKSTART.md, docs/QUICKSTART_ALPHA.md
+Goal: Humanize the highest-visibility low-risk code and doc surfaces after docs-as-built alignment is proven.
+Inputs: apps/*/README.md, crates/**/README.md, tools/cohesix-py/README.md, tests/integration/README.md, public crate roots under apps/*/src/lib.rs, tests/**/*.rs, docs/OPERATOR_WALKTHROUGH.md, docs/QUICKSTART.md, docs/QUICKSTART_ALPHA.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
 Changes:
   - apps/*/README.md + crates/**/README.md + tools/cohesix-py/README.md + tests/integration/README.md — replace template summaries with role-specific descriptions, assumptions, and operator-facing boundaries.
   - apps/*/src/lib.rs + apps/*/src/main.rs + crates/**/src/lib.rs — remove generic module-surface comments and rewrite doc comments around invariants or usage.
@@ -6530,6 +6557,7 @@ Commands:
   - cargo test -p tests --quiet
 Checks:
   - High-visibility surface files read as authored, file-specific documentation instead of generated scaffolding.
+  - Humanized docs remain consistent with the audit evidence produced by `m26c-docs-as-built-audit`.
   - Test names and doc comments describe behaviors and scenarios, not file names.
 Deliverables:
   - First-wave cleanup across low-risk surfaces with zero behavior changes and passing tests.
