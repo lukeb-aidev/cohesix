@@ -216,11 +216,80 @@ impl NetPolicyConfig {
     }
 }
 
+/// Bounded Wi-Fi credentials carried from boot policy into the Pi 4 runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WifiCredentials {
+    pub ssid_len: u8,
+    pub ssid: [u8; 32],
+    pub psk_len: u8,
+    pub psk: [u8; 64],
+}
+
+impl WifiCredentials {
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            ssid_len: 0,
+            ssid: [0; 32],
+            psk_len: 0,
+            psk: [0; 64],
+        }
+    }
+
+    pub fn new(ssid: &str, psk: &str) -> Result<Self, &'static str> {
+        if ssid.is_empty() {
+            return Err("wifi-ssid-empty");
+        }
+        if ssid.len() > 32 {
+            return Err("wifi-ssid-too-long");
+        }
+        if psk.len() > 64 {
+            return Err("wifi-psk-too-long");
+        }
+        if !psk.is_empty() && psk.len() < 8 {
+            return Err("wifi-psk-too-short");
+        }
+
+        let mut credentials = Self::empty();
+        credentials.ssid_len = u8::try_from(ssid.len()).map_err(|_| "wifi-ssid-too-long")?;
+        credentials.psk_len = u8::try_from(psk.len()).map_err(|_| "wifi-psk-too-long")?;
+        credentials.ssid[..ssid.len()].copy_from_slice(ssid.as_bytes());
+        credentials.psk[..psk.len()].copy_from_slice(psk.as_bytes());
+        Ok(credentials)
+    }
+
+    #[must_use]
+    pub const fn has_ssid(self) -> bool {
+        self.ssid_len > 0
+    }
+
+    #[must_use]
+    pub const fn has_psk(self) -> bool {
+        self.psk_len > 0
+    }
+
+    pub fn ssid(&self) -> Result<&str, &'static str> {
+        core::str::from_utf8(&self.ssid[..usize::from(self.ssid_len)]).map_err(|_| "wifi-ssid-utf8")
+    }
+
+    pub fn psk(&self) -> Result<&str, &'static str> {
+        core::str::from_utf8(&self.psk[..usize::from(self.psk_len)]).map_err(|_| "wifi-psk-utf8")
+    }
+}
+
+impl Default for WifiCredentials {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 /// Optional runtime override sourced from bounded boot-policy inputs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RuntimeNetPolicyOverride {
     pub mode: Option<NetMode>,
     pub interface: Option<NetInterfacePolicy>,
+    pub static_address: Option<NetAddressConfig>,
+    pub wifi_credentials: Option<WifiCredentials>,
 }
 
 /// Configuration for console networking transports.
@@ -238,6 +307,8 @@ pub struct ConsoleNetConfig {
     pub policy: NetPolicyConfig,
     /// IPv4 configuration for the console interface.
     pub address: NetAddressConfig,
+    /// Optional Wi-Fi credentials injected by bounded boot policy.
+    pub wifi_credentials: Option<WifiCredentials>,
 }
 
 impl ConsoleNetConfig {
@@ -250,6 +321,7 @@ impl ConsoleNetConfig {
             backend: DEFAULT_NET_BACKEND,
             policy: NetPolicyConfig::dev_virt(),
             address: NetAddressConfig::dev_virt(),
+            wifi_credentials: None,
         }
     }
 
@@ -294,6 +366,12 @@ impl ConsoleNetConfig {
         }
         if let Some(interface) = policy.interface {
             self.policy.interface = interface;
+        }
+        if let Some(address) = policy.static_address {
+            self.address = address;
+        }
+        if let Some(credentials) = policy.wifi_credentials {
+            self.wifi_credentials = Some(credentials);
         }
         self
     }
@@ -487,6 +565,48 @@ pub struct NetSelfTestResult {
     pub console_ok: bool,
 }
 
+/// Outcome when attempting to start a network self-test run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetSelfTestStartResult {
+    Started,
+    Unsupported,
+    PolicyDisabled,
+    SelfTestDisabled,
+    DhcpPending,
+    NotReadyRootEp,
+    NotReadyIpcBuffer,
+    NotReadyCspaceWindow,
+    NotReadyBootstrapCommit,
+}
+
+impl NetSelfTestStartResult {
+    #[must_use]
+    pub const fn refusal_detail(self) -> Option<&'static str> {
+        match self {
+            Self::Started => None,
+            Self::Unsupported => Some("detail=unsupported"),
+            Self::PolicyDisabled => Some("detail=policy-disabled"),
+            Self::SelfTestDisabled => Some("detail=selftest-disabled"),
+            Self::DhcpPending => Some("detail=dhcp-pending"),
+            Self::NotReadyRootEp => Some("detail=not-ready:root-ep"),
+            Self::NotReadyIpcBuffer => Some("detail=not-ready:ipc-buffer"),
+            Self::NotReadyCspaceWindow => Some("detail=not-ready:cspace-window"),
+            Self::NotReadyBootstrapCommit => Some("detail=not-ready:bootstrap-commit"),
+        }
+    }
+
+    #[must_use]
+    pub fn from_readiness_reason(reason: &'static str) -> Self {
+        match reason {
+            "root-ep" => Self::NotReadyRootEp,
+            "ipc-buffer" => Self::NotReadyIpcBuffer,
+            "cspace-window" => Self::NotReadyCspaceWindow,
+            "bootstrap-commit" => Self::NotReadyBootstrapCommit,
+            _ => Self::Unsupported,
+        }
+    }
+}
+
 /// Summary of the self-test subsystem for consoles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetSelfTestReport {
@@ -561,7 +681,11 @@ pub trait NetDevice: Device {
         Self: Sized;
 
     /// Construct a device instance for the supplied bring-up stage.
-    fn create_with_stage<H>(hal: &mut H, _stage: NetStage) -> Result<Self, Self::Error>
+    fn create_with_stage<H>(
+        hal: &mut H,
+        _config: &ConsoleNetConfig,
+        _stage: NetStage,
+    ) -> Result<Self, Self::Error>
     where
         H: crate::hal::Hardware<Error = crate::hal::HalError>,
         Self: Sized,
@@ -579,6 +703,11 @@ pub trait NetDevice: Device {
     fn name() -> &'static str
     where
         Self: Sized;
+
+    /// Active interface label surfaced through diagnostics.
+    fn interface_label(&self) -> &'static str {
+        "wired"
+    }
 
     /// Optional debug snapshot hook surfaced to stack callers.
     fn debug_snapshot(&mut self);
@@ -641,8 +770,15 @@ impl NetBackend {
 
     #[must_use]
     pub const fn supports_interface_policy(self, policy: NetInterfacePolicy) -> bool {
-        let _ = self;
-        matches!(policy, NetInterfacePolicy::Wired)
+        match self {
+            Self::Rtl8139 => matches!(policy, NetInterfacePolicy::Wired),
+            Self::BcmGenet => matches!(
+                policy,
+                NetInterfacePolicy::Wired | NetInterfacePolicy::Wifi | NetInterfacePolicy::Auto
+            ),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio => matches!(policy, NetInterfacePolicy::Wired),
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -721,8 +857,8 @@ pub trait NetPoller {
     }
 
     /// Start a network self-test run if supported.
-    fn start_self_test(&mut self, _now_ms: u64) -> bool {
-        false
+    fn start_self_test(&mut self, _now_ms: u64) -> NetSelfTestStartResult {
+        NetSelfTestStartResult::Unsupported
     }
 
     /// Return the current self-test state for diagnostics.
@@ -838,6 +974,7 @@ mod tests {
                 prefix_len: 24,
                 gateway: Some([192, 168, 10, 1]),
             },
+            wifi_credentials: None,
         };
         let resolved = config.with_profile_defaults();
         assert_eq!(resolved.address.ip, [192, 168, 10, 42]);
@@ -847,10 +984,11 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn current_backends_only_support_wired_policy() {
+    fn backend_supports_pi4_wifi_policies() {
         assert!(NetBackend::Rtl8139.supports_interface_policy(NetInterfacePolicy::Wired));
         assert!(!NetBackend::Rtl8139.supports_interface_policy(NetInterfacePolicy::Wifi));
-        assert!(!NetBackend::BcmGenet.supports_interface_policy(NetInterfacePolicy::Auto));
+        assert!(NetBackend::BcmGenet.supports_interface_policy(NetInterfacePolicy::Wifi));
+        assert!(NetBackend::BcmGenet.supports_interface_policy(NetInterfacePolicy::Auto));
     }
 
     #[cfg(feature = "net-console")]
@@ -871,14 +1009,27 @@ mod tests {
                 prefix_len: 24,
                 gateway: Some([192, 168, 10, 1]),
             },
+            wifi_credentials: None,
         };
         let resolved = config.with_runtime_policy(RuntimeNetPolicyOverride {
             mode: Some(NetMode::Dhcp),
             interface: Some(NetInterfacePolicy::Auto),
+            static_address: None,
+            wifi_credentials: Some(
+                WifiCredentials::new("cohesix", "passphrase").expect("valid wifi credentials"),
+            ),
         });
         assert_eq!(resolved.policy.mode, NetMode::Dhcp);
         assert_eq!(resolved.policy.interface, NetInterfacePolicy::Auto);
         assert_eq!(resolved.address.ip, [192, 168, 10, 42]);
+        assert_eq!(
+            resolved
+                .wifi_credentials
+                .expect("runtime credentials present")
+                .ssid()
+                .expect("ssid utf8"),
+            "cohesix"
+        );
     }
 
     #[cfg(feature = "net-console")]
@@ -887,9 +1038,65 @@ mod tests {
         let resolved = ConsoleNetConfig::default().with_runtime_policy(RuntimeNetPolicyOverride {
             mode: Some(NetMode::Off),
             interface: Some(NetInterfacePolicy::Wifi),
+            static_address: Some(NetAddressConfig {
+                ip: [10, 1, 2, 3],
+                prefix_len: 24,
+                gateway: Some([10, 1, 2, 1]),
+            }),
+            wifi_credentials: Some(
+                WifiCredentials::new("cohesix", "passphrase").expect("valid wifi credentials"),
+            ),
         });
         assert_eq!(resolved.policy.mode, NetMode::Static);
         assert_eq!(resolved.policy.interface, NetInterfacePolicy::Wired);
         assert_eq!(resolved.address.ip, DEV_VIRT_IP);
+        assert!(resolved.wifi_credentials.is_none());
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn runtime_policy_override_changes_pi4_static_address() {
+        let config = ConsoleNetConfig {
+            auth_token: "token",
+            idle_timeout_ms: IDLE_TIMEOUT_MS,
+            listen_port: COHSH_TCP_PORT,
+            backend: NetBackend::BcmGenet,
+            policy: NetPolicyConfig {
+                mode: NetMode::Static,
+                interface: NetInterfacePolicy::Wired,
+                dhcp: NetDhcpConfig::dev_virt(),
+            },
+            address: NetAddressConfig {
+                ip: [192, 168, 10, 42],
+                prefix_len: 24,
+                gateway: Some([192, 168, 10, 1]),
+            },
+            wifi_credentials: None,
+        };
+        let resolved = config.with_runtime_policy(RuntimeNetPolicyOverride {
+            mode: Some(NetMode::Static),
+            interface: Some(NetInterfacePolicy::Wifi),
+            static_address: Some(NetAddressConfig {
+                ip: [10, 20, 30, 40],
+                prefix_len: 25,
+                gateway: Some([10, 20, 30, 1]),
+            }),
+            wifi_credentials: Some(
+                WifiCredentials::new("cohesix", "passphrase").expect("valid wifi credentials"),
+            ),
+        });
+        assert_eq!(resolved.policy.mode, NetMode::Static);
+        assert_eq!(resolved.policy.interface, NetInterfacePolicy::Wifi);
+        assert_eq!(resolved.address.ip, [10, 20, 30, 40]);
+        assert_eq!(resolved.address.prefix_len, 25);
+        assert_eq!(resolved.address.gateway, Some([10, 20, 30, 1]));
+    }
+
+    #[test]
+    fn wifi_credentials_enforce_bounds() {
+        assert!(WifiCredentials::new("", "").is_err());
+        assert!(WifiCredentials::new("ssid", "short").is_err());
+        assert!(WifiCredentials::new("ssid", "12345678").is_ok());
+        assert!(WifiCredentials::new("open-network", "").is_ok());
     }
 }

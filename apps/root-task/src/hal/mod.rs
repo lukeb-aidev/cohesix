@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Hardware abstraction layer façade for drivers and platform helpers.
 // Author: Lukas Bower
@@ -25,6 +25,8 @@ pub mod dma;
 
 #[cfg(feature = "kernel")]
 pub mod pci;
+#[cfg(feature = "kernel")]
+pub mod pi4_wifi;
 
 #[cfg(feature = "kernel")]
 use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame};
@@ -39,6 +41,99 @@ use sel4_sys::seL4_Error;
 pub trait Timebase {
     /// Returns the current time in milliseconds.
     fn now_ms(&self) -> u64;
+}
+
+/// Supported SDIO bus widths for the Pi 4 Wi-Fi transport.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SdioBusWidth {
+    OneBit,
+    FourBit,
+}
+
+impl SdioBusWidth {
+    /// Returns the wire-width in bits.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        match self {
+            Self::OneBit => 1,
+            Self::FourBit => 4,
+        }
+    }
+}
+
+/// Addressable SDIO functions used by the CYW43455.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SdioFunction {
+    Function0,
+    Function1,
+    Function2,
+}
+
+impl SdioFunction {
+    /// Returns the numeric SDIO function identifier.
+    #[must_use]
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::Function0 => 0,
+            Self::Function1 => 1,
+            Self::Function2 => 2,
+        }
+    }
+}
+
+/// HAL-owned power state for the Pi 4 Wi-Fi device.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WifiPowerState {
+    Off,
+    On,
+}
+
+/// HAL-owned reset line state for the Pi 4 Wi-Fi device.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum WifiResetState {
+    Asserted,
+    Deasserted,
+}
+
+/// HAL-provided firmware payloads for the Pi 4 Wi-Fi path.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct WifiFirmwareBundle<'a> {
+    pub firmware: &'a [u8],
+    pub nvram: &'a [u8],
+    pub clm_blob: Option<&'a [u8]>,
+    pub board_type: &'a str,
+}
+
+impl<'a> WifiFirmwareBundle<'a> {
+    /// Constructs a firmware bundle view backed by HAL-owned storage.
+    #[must_use]
+    pub const fn new(
+        firmware: &'a [u8],
+        nvram: &'a [u8],
+        clm_blob: Option<&'a [u8]>,
+        board_type: &'a str,
+    ) -> Self {
+        Self {
+            firmware,
+            nvram,
+            clm_blob,
+            board_type,
+        }
+    }
+
+    /// Validates the presence of the bounded firmware assets expected by CYW43455.
+    pub fn validate(self) -> Result<(), &'static str> {
+        if self.firmware.is_empty() {
+            return Err("missing-firmware");
+        }
+        if self.nvram.is_empty() {
+            return Err("missing-nvram");
+        }
+        if self.board_type.trim().is_empty() {
+            return Err("missing-board-type");
+        }
+        Ok(())
+    }
 }
 
 /// Lightweight IRQ identifier used across drivers.
@@ -334,12 +429,117 @@ pub trait Hardware {
         addr: PciAddress,
         command_flags: PciCommandFlags,
     ) -> Result<(), Self::Error>;
+
+    /// Returns the firmware assets required for the Pi 4 Wi-Fi path.
+    fn wifi_firmware_bundle(&self) -> Result<WifiFirmwareBundle<'static>, Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("wifi-firmware-bundle").into())
+    }
+
+    /// Drives the Wi-Fi power control line.
+    fn wifi_set_power(&mut self, _state: WifiPowerState) -> Result<(), Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("wifi-power").into())
+    }
+
+    /// Drives the Wi-Fi reset control line.
+    fn wifi_set_reset(&mut self, _state: WifiResetState) -> Result<(), Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("wifi-reset").into())
+    }
+
+    /// Returns whether the Wi-Fi out-of-band interrupt line is pending.
+    fn wifi_oob_irq_pending(&self) -> Result<bool, Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("wifi-oob-irq").into())
+    }
+
+    /// Acknowledges a Wi-Fi out-of-band interrupt indication.
+    fn wifi_ack_oob_irq(&mut self) -> Result<(), Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("wifi-oob-irq-ack").into())
+    }
+
+    /// Resets the SDIO host/controller before Wi-Fi attach.
+    fn sdio_reset_host(&mut self) -> Result<(), Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("sdio-reset-host").into())
+    }
+
+    /// Applies the requested SDIO bus width and returns the effective width in bits.
+    fn sdio_set_bus_width(&mut self, _width: SdioBusWidth) -> Result<(), Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("sdio-set-bus-width").into())
+    }
+
+    /// Applies the requested SDIO clock and returns the effective clock rate in hertz.
+    fn sdio_set_clock_hz(&mut self, _target_hz: u32) -> Result<u32, Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("sdio-set-clock").into())
+    }
+
+    /// Executes a CMD52-style SDIO direct read.
+    fn sdio_io_direct_read(
+        &mut self,
+        _function: SdioFunction,
+        _addr: u32,
+    ) -> Result<u8, Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("sdio-io-direct-read").into())
+    }
+
+    /// Executes a CMD52-style SDIO direct write.
+    fn sdio_io_direct_write(
+        &mut self,
+        _function: SdioFunction,
+        _addr: u32,
+        _value: u8,
+    ) -> Result<(), Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("sdio-io-direct-write").into())
+    }
+
+    /// Executes a CMD53-style SDIO extended transfer in-place.
+    fn sdio_io_extended(
+        &mut self,
+        _function: SdioFunction,
+        _addr: u32,
+        _increment_addr: bool,
+        _write: bool,
+        _buffer: &mut [u8],
+    ) -> Result<(), Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        Err(HalError::Unsupported("sdio-io-extended").into())
+    }
 }
 
 /// seL4-backed hardware provider that owns the [`KernelEnv`].
 #[cfg(feature = "kernel")]
 pub struct KernelHal<'a> {
     env: KernelEnv<'a>,
+    pi4_wifi: Option<pi4_wifi::Pi4WifiState>,
 }
 
 #[cfg(feature = "kernel")]
@@ -347,7 +547,10 @@ impl<'a> KernelHal<'a> {
     /// Construct a new HAL instance wrapping the supplied [`KernelEnv`].
     #[must_use]
     pub fn new(env: KernelEnv<'a>) -> Self {
-        Self { env }
+        Self {
+            env,
+            pi4_wifi: None,
+        }
     }
 
     /// Consumes bootstrap CSpace slots allocated before the HAL is initialised.
@@ -363,6 +566,15 @@ impl<'a> KernelHal<'a> {
     /// Access to the underlying [`KernelEnv`] for transitional callers.
     pub fn as_env_mut(&mut self) -> &mut KernelEnv<'a> {
         &mut self.env
+    }
+
+    fn pi4_wifi_state(&mut self) -> Result<&mut pi4_wifi::Pi4WifiState, HalError> {
+        if self.pi4_wifi.is_none() {
+            self.pi4_wifi = Some(pi4_wifi::Pi4WifiState::new(self)?);
+        }
+        self.pi4_wifi
+            .as_mut()
+            .ok_or(HalError::Unsupported("pi4-wifi-state"))
     }
 }
 
@@ -429,5 +641,102 @@ impl<'a> Hardware for KernelHal<'a> {
         _command_flags: PciCommandFlags,
     ) -> Result<(), Self::Error> {
         Err(HalError::NoPci)
+    }
+
+    fn wifi_firmware_bundle(&self) -> Result<WifiFirmwareBundle<'static>, Self::Error> {
+        Ok(self
+            .pi4_wifi
+            .as_ref()
+            .map(pi4_wifi::Pi4WifiState::firmware_bundle)
+            .unwrap_or_else(|| {
+                WifiFirmwareBundle::new(
+                    pi4_wifi::PI4_WIFI_FIRMWARE,
+                    pi4_wifi::PI4_WIFI_NVRAM,
+                    Some(pi4_wifi::PI4_WIFI_CLM_BLOB),
+                    pi4_wifi::PI4_WIFI_BOARD_TYPE,
+                )
+            }))
+    }
+
+    fn wifi_set_power(&mut self, state: WifiPowerState) -> Result<(), Self::Error> {
+        self.pi4_wifi_state()?.set_power(state)
+    }
+
+    fn wifi_set_reset(&mut self, state: WifiResetState) -> Result<(), Self::Error> {
+        self.pi4_wifi_state()?.set_reset(state)
+    }
+
+    fn sdio_reset_host(&mut self) -> Result<(), Self::Error> {
+        self.pi4_wifi_state()?.reset_host()
+    }
+
+    fn sdio_set_bus_width(&mut self, width: SdioBusWidth) -> Result<(), Self::Error> {
+        self.pi4_wifi_state()?.set_bus_width(width)
+    }
+
+    fn sdio_set_clock_hz(&mut self, target_hz: u32) -> Result<u32, Self::Error> {
+        self.pi4_wifi_state()?.set_clock_hz(target_hz)
+    }
+
+    fn sdio_io_direct_read(
+        &mut self,
+        function: SdioFunction,
+        addr: u32,
+    ) -> Result<u8, Self::Error> {
+        self.pi4_wifi_state()?.io_direct_read(function, addr)
+    }
+
+    fn sdio_io_direct_write(
+        &mut self,
+        function: SdioFunction,
+        addr: u32,
+        value: u8,
+    ) -> Result<(), Self::Error> {
+        self.pi4_wifi_state()?
+            .io_direct_write(function, addr, value)
+    }
+
+    fn sdio_io_extended(
+        &mut self,
+        function: SdioFunction,
+        addr: u32,
+        increment_addr: bool,
+        write: bool,
+        buffer: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        self.pi4_wifi_state()?
+            .io_extended(function, addr, increment_addr, write, buffer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SdioBusWidth, SdioFunction, WifiFirmwareBundle};
+
+    #[test]
+    fn wifi_firmware_bundle_validation_rejects_missing_assets() {
+        let missing_firmware = WifiFirmwareBundle::new(&[], b"nvram", Some(b"clm"), "cyw43455");
+        assert_eq!(missing_firmware.validate(), Err("missing-firmware"));
+
+        let missing_nvram = WifiFirmwareBundle::new(b"fw", &[], Some(b"clm"), "cyw43455");
+        assert_eq!(missing_nvram.validate(), Err("missing-nvram"));
+
+        let missing_board = WifiFirmwareBundle::new(b"fw", b"nvram", Some(b"clm"), " ");
+        assert_eq!(missing_board.validate(), Err("missing-board-type"));
+    }
+
+    #[test]
+    fn wifi_firmware_bundle_validation_accepts_minimal_bundle() {
+        let bundle = WifiFirmwareBundle::new(b"fw", b"nvram", None, "cyw43455");
+        assert_eq!(bundle.validate(), Ok(()));
+    }
+
+    #[test]
+    fn sdio_helpers_report_expected_values() {
+        assert_eq!(SdioBusWidth::OneBit.bits(), 1);
+        assert_eq!(SdioBusWidth::FourBit.bits(), 4);
+        assert_eq!(SdioFunction::Function0.number(), 0);
+        assert_eq!(SdioFunction::Function1.number(), 1);
+        assert_eq!(SdioFunction::Function2.number(), 2);
     }
 }

@@ -114,6 +114,8 @@ use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
+use crate::net::NetSelfTestStartResult;
+#[cfg(feature = "net-console")]
 use crate::net::{
     ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller,
     NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
@@ -2099,18 +2101,21 @@ where
                 #[cfg(feature = "net-console")]
                 {
                     if let Some(net) = self.net.as_mut() {
-                        if net.start_self_test(self.now_ms) {
-                            self.metrics.accepted_commands += 1;
-                            self.emit_console_line("[net-selftest] triggered");
-                            self.emit_ack_ok(verb_label, None);
-                        } else {
-                            self.metrics.denied_commands += 1;
-                            cmd_status = "err";
-                            self.emit_refusal(
-                                verb_label,
-                                RefusalReason::Policy,
-                                Some("detail=unsupported"),
-                            );
+                        match net.start_self_test(self.now_ms) {
+                            NetSelfTestStartResult::Started => {
+                                self.metrics.accepted_commands += 1;
+                                self.emit_console_line("[net-selftest] triggered");
+                                self.emit_ack_ok(verb_label, None);
+                            }
+                            result => {
+                                self.metrics.denied_commands += 1;
+                                cmd_status = "err";
+                                self.emit_refusal(
+                                    verb_label,
+                                    RefusalReason::Policy,
+                                    result.refusal_detail(),
+                                );
+                            }
                         }
                     } else {
                         self.metrics.denied_commands += 1;
@@ -2180,6 +2185,10 @@ where
                             status.gateway,
                             status.dhcp_phase
                         ));
+                        let line_six = format_message(format_args!(
+                            "netstatus: ip={} gateway={} src={} dhcp={}",
+                            status.ip, status.gateway, status.address_source, status.dhcp_phase
+                        ));
                         let status_line = format_message(format_args!(
                             "nettest: backend={} enabled={} running={} udp={} tcp={} last={:?}",
                             report.backend,
@@ -2194,6 +2203,7 @@ where
                         self.emit_console_line(line_three.as_str());
                         self.emit_console_line(line_four.as_str());
                         self.emit_console_line(line_five.as_str());
+                        self.emit_console_line(line_six.as_str());
                         self.emit_console_line(status_line.as_str());
                         self.metrics.accepted_commands += 1;
                         self.emit_ack_ok(verb_label, None);
@@ -3877,7 +3887,7 @@ extern "C" fn vtable_sentinel() {}
 mod tests {
     use super::*;
     #[cfg(feature = "net-console")]
-    use crate::net::NetTelemetry;
+    use crate::net::{NetSelfTestStartResult, NetStatusReport, NetTelemetry};
     #[cfg(feature = "kernel")]
     use crate::ninedoor::NineDoorBridge;
     use crate::serial::test_support::LoopbackSerial;
@@ -4139,6 +4149,69 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "net-console")]
+    struct FakeNet {
+        lines: heapless::Vec<ConsoleLine, 4>,
+        sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>,
+        start_result: NetSelfTestStartResult,
+        status: NetStatusReport,
+    }
+
+    #[cfg(feature = "net-console")]
+    impl FakeNet {
+        fn new() -> Self {
+            Self {
+                lines: heapless::Vec::new(),
+                sent: heapless::Vec::new(),
+                start_result: NetSelfTestStartResult::Unsupported,
+                status: NetStatusReport::default(),
+            }
+        }
+    }
+
+    #[cfg(feature = "net-console")]
+    impl NetPoller for FakeNet {
+        fn poll(&mut self, _now_ms: u64) -> bool {
+            true
+        }
+
+        fn telemetry(&self) -> NetTelemetry {
+            NetTelemetry {
+                link_up: true,
+                tx_drops: 0,
+                last_poll_ms: 0,
+            }
+        }
+
+        fn drain_console_lines(&mut self, _now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
+            while !self.lines.is_empty() {
+                let line = self.lines.remove(0);
+                visitor(line);
+            }
+        }
+
+        fn ingest_snapshot(&self) -> IngestSnapshot {
+            IngestSnapshot::default()
+        }
+
+        fn send_console_line(&mut self, line: &str) -> bool {
+            let mut buf = HeaplessString::new();
+            if buf.push_str(line).is_err() {
+                return false;
+            }
+            let _ = self.sent.push(buf);
+            true
+        }
+
+        fn start_self_test(&mut self, _now_ms: u64) -> NetSelfTestStartResult {
+            self.start_result
+        }
+
+        fn status_report(&self) -> NetStatusReport {
+            self.status.clone()
+        }
+    }
+
     #[test]
     fn pump_bootstrap_logs_subsystems() {
         let driver = LoopbackSerial::<16>::new();
@@ -4335,54 +4408,6 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn network_lines_feed_parser() {
-        struct FakeNet {
-            lines: heapless::Vec<ConsoleLine, 4>,
-            sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4>,
-        }
-
-        impl FakeNet {
-            fn new() -> Self {
-                Self {
-                    lines: heapless::Vec::new(),
-                    sent: heapless::Vec::new(),
-                }
-            }
-        }
-
-        impl NetPoller for FakeNet {
-            fn poll(&mut self, _now_ms: u64) -> bool {
-                true
-            }
-
-            fn telemetry(&self) -> NetTelemetry {
-                NetTelemetry {
-                    link_up: true,
-                    tx_drops: 0,
-                    last_poll_ms: 0,
-                }
-            }
-
-            fn drain_console_lines(&mut self, _now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
-                while !self.lines.is_empty() {
-                    let line = self.lines.remove(0);
-                    visitor(line);
-                }
-            }
-
-            fn ingest_snapshot(&self) -> IngestSnapshot {
-                IngestSnapshot::default()
-            }
-
-            fn send_console_line(&mut self, line: &str) -> bool {
-                let mut buf = HeaplessString::new();
-                if buf.push_str(line).is_err() {
-                    return false;
-                }
-                let _ = self.sent.push(buf);
-                true
-            }
-        }
-
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -4400,6 +4425,110 @@ mod tests {
             .sent
             .iter()
             .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn nettest_reports_dhcp_pending_detail() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.start_result = NetSelfTestStartResult::DhcpPending;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"nettest\n");
+
+        pump.poll();
+        pump.poll();
+
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR NETTEST reason=policy detail=dhcp-pending"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn nettest_reports_not_ready_reason() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.start_result = NetSelfTestStartResult::NotReadyIpcBuffer;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"nettest\n");
+
+        pump.poll();
+        pump.poll();
+
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR NETTEST reason=policy detail=not-ready:ipc-buffer"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn netstats_emits_compact_status_line() {
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.mode = "dhcp";
+        net.status.interface_policy = "wired";
+        net.status.active_interface = "wired";
+        net.status.standby_interface = "none";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.status.ip.push_str("192.168.10.50").unwrap();
+        net.status.gateway.push_str("192.168.10.1").unwrap();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"netstats\n");
+
+        pump.poll();
+
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "netstatus: ip=192.168.10.50 gateway=192.168.10.1 src=dhcp-lease dhcp=bound"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: mode=dhcp policy=wired active=wired standby=none addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound"
+            ),
+            "{rendered}"
+        );
     }
 
     #[test]

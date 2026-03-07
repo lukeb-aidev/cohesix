@@ -50,12 +50,13 @@ use super::{
     outbound::{OutboundCoalescer, OutboundLane, SendError},
     ConsoleLine, ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent,
     NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode, NetPoller,
-    NetSelfTestReport, NetSelfTestResult, NetStage, NetStatusReport, NetTelemetry,
-    DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
+    NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStage, NetStatusReport,
+    NetTelemetry, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
 use crate::drivers::bcmgenet::{BcmGenetDevice, DriverError as BcmGenetDriverError};
+use crate::drivers::cyw43::{Cyw43NetDevice, DriverError as Cyw43DriverError};
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
@@ -125,6 +126,7 @@ type DefaultNetDevice = Rtl8139Device;
 pub enum DefaultDriverError {
     Rtl8139(Rtl8139DriverError),
     BcmGenet(BcmGenetDriverError),
+    Cyw43(Cyw43DriverError),
     #[cfg(feature = "net-backend-virtio")]
     Virtio(VirtioDriverError),
 }
@@ -134,6 +136,7 @@ impl fmt::Display for DefaultDriverError {
         match self {
             Self::Rtl8139(err) => write!(f, "{err}"),
             Self::BcmGenet(err) => write!(f, "{err}"),
+            Self::Cyw43(err) => write!(f, "{err}"),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(err) => write!(f, "{err}"),
         }
@@ -145,6 +148,7 @@ impl NetDriverError for DefaultDriverError {
         match self {
             Self::Rtl8139(err) => err.is_absent(),
             Self::BcmGenet(err) => err.is_absent(),
+            Self::Cyw43(err) => err.is_absent(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(err) => err.is_absent(),
         }
@@ -163,6 +167,12 @@ impl From<BcmGenetDriverError> for DefaultDriverError {
     }
 }
 
+impl From<Cyw43DriverError> for DefaultDriverError {
+    fn from(value: Cyw43DriverError) -> Self {
+        Self::Cyw43(value)
+    }
+}
+
 #[cfg(feature = "net-backend-virtio")]
 impl From<VirtioDriverError> for DefaultDriverError {
     fn from(value: VirtioDriverError) -> Self {
@@ -173,6 +183,7 @@ impl From<VirtioDriverError> for DefaultDriverError {
 pub enum DefaultNetStack {
     Rtl8139(Box<NetStack<Rtl8139Device>>),
     BcmGenet(Box<NetStack<BcmGenetDevice>>),
+    Cyw43(Box<NetStack<Cyw43NetDevice>>),
     #[cfg(feature = "net-backend-virtio")]
     Virtio(Box<NetStack<VirtioNetStatic>>),
 }
@@ -1091,6 +1102,9 @@ struct SelfTestState {
     post_poll_flush_logs: u32,
     udp_beacon_blocked_logs: u32,
     udp_beacon_error_logs: u32,
+    udp_rx_packets: u32,
+    udp_reply_packets: u32,
+    udp_last_peer: Option<IpEndpoint>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1156,6 +1170,9 @@ impl SelfTestState {
         self.post_poll_flush_logs = 0;
         self.udp_beacon_blocked_logs = 0;
         self.udp_beacon_error_logs = 0;
+        self.udp_rx_packets = 0;
+        self.udp_reply_packets = 0;
+        self.udp_last_peer = None;
     }
 
     fn start(&mut self, now_ms: u64, start_tx_complete: u64) -> bool {
@@ -1175,8 +1192,16 @@ impl SelfTestState {
         }
     }
 
-    fn record_udp_echo(&mut self) {
+    fn record_udp_echo_rx(&mut self, endpoint: IpEndpoint) {
         self.udp_echo_ok = true;
+        self.udp_rx_packets = self.udp_rx_packets.saturating_add(1);
+        self.udp_last_peer = Some(endpoint);
+    }
+
+    fn record_udp_echo_reply(&mut self, endpoint: IpEndpoint) {
+        self.udp_echo_ok = true;
+        self.udp_reply_packets = self.udp_reply_packets.saturating_add(1);
+        self.udp_last_peer = Some(endpoint);
     }
 
     fn record_tcp_ok(&mut self) {
@@ -1660,10 +1685,12 @@ where
         config.policy.dhcp.max_retries
     );
     info!(
-        "[net-console] layout sizes: stack.rtl8139={} stack.bcmgenet={} dev.bcmgenet={} enum.default={}",
+        "[net-console] layout sizes: stack.rtl8139={} stack.bcmgenet={} stack.cyw43={} dev.bcmgenet={} dev.cyw43={} enum.default={}",
         mem::size_of::<NetStack<Rtl8139Device>>(),
         mem::size_of::<NetStack<BcmGenetDevice>>(),
+        mem::size_of::<NetStack<Cyw43NetDevice>>(),
         mem::size_of::<BcmGenetDevice>(),
+        mem::size_of::<Cyw43NetDevice>(),
         mem::size_of::<DefaultNetStack>(),
     );
     #[cfg(feature = "net-backend-virtio")]
@@ -1681,12 +1708,48 @@ where
             check_bootinfo_wrap("net.init.wrap.after-new.rtl8139")?;
             Ok(DefaultNetStack::Rtl8139(stack))
         }
-        NetBackend::BcmGenet => {
-            let stack = NetStack::<BcmGenetDevice>::new(hal, config, backend)
-                .map_err(convert_console_error::<BcmGenetDriverError>)?;
-            check_bootinfo_wrap("net.init.wrap.after-new.bcmgenet")?;
-            Ok(DefaultNetStack::BcmGenet(stack))
-        }
+        NetBackend::BcmGenet => match config.policy.interface {
+            NetInterfacePolicy::Wired => {
+                let stack = NetStack::<BcmGenetDevice>::new(hal, config, backend)
+                    .map_err(convert_console_error::<BcmGenetDriverError>)?;
+                check_bootinfo_wrap("net.init.wrap.after-new.bcmgenet")?;
+                Ok(DefaultNetStack::BcmGenet(stack))
+            }
+            NetInterfacePolicy::Wifi => {
+                let stack = NetStack::<Cyw43NetDevice>::new(hal, config, backend)
+                    .map_err(convert_console_error::<Cyw43DriverError>)?;
+                check_bootinfo_wrap("net.init.wrap.after-new.cyw43")?;
+                Ok(DefaultNetStack::Cyw43(stack))
+            }
+            NetInterfacePolicy::Auto => {
+                if config.wifi_credentials.is_some() {
+                    match NetStack::<Cyw43NetDevice>::new(hal, config, backend) {
+                        Ok(stack) => {
+                            check_bootinfo_wrap("net.init.wrap.after-new.cyw43-auto")?;
+                            Ok(DefaultNetStack::Cyw43(stack))
+                        }
+                        Err(err) => {
+                            warn!(
+                                    "[net-console] auto fallback: wifi init failed err={}; using wired backend",
+                                    convert_console_error::<Cyw43DriverError>(err)
+                                );
+                            let stack = NetStack::<BcmGenetDevice>::new(hal, config, backend)
+                                .map_err(convert_console_error::<BcmGenetDriverError>)?;
+                            check_bootinfo_wrap("net.init.wrap.after-new.bcmgenet-auto")?;
+                            Ok(DefaultNetStack::BcmGenet(stack))
+                        }
+                    }
+                } else {
+                    info!(
+                            "[net-console] auto policy missing Wi-Fi credentials; selecting wired backend"
+                        );
+                    let stack = NetStack::<BcmGenetDevice>::new(hal, config, backend)
+                        .map_err(convert_console_error::<BcmGenetDriverError>)?;
+                    check_bootinfo_wrap("net.init.wrap.after-new.bcmgenet-auto")?;
+                    Ok(DefaultNetStack::BcmGenet(stack))
+                }
+            }
+        },
         #[cfg(feature = "net-backend-virtio")]
         NetBackend::Virtio => {
             let stack = NetStack::<VirtioNetStatic>::new(hal, config, backend)
@@ -2307,9 +2370,10 @@ impl<D: NetDevice> NetStack<D> {
         let netmask = prefix_to_netmask(prefix);
         let gateway_label = gateway.unwrap_or(Ipv4Address::UNSPECIFIED);
         let backend_label = backend.label();
-        debug_assert_eq!(backend_label, D::name());
         info!(
-            "[net-console] init: bringing up {backend_label} mode={} interface={} ip={}/{} netmask={} gateway={}",
+            "[net-console] init: bringing up backend={} device={} mode={} interface={} ip={}/{} netmask={} gateway={}",
+            backend_label,
+            D::name(),
             console_config.policy.mode.as_str(),
             console_config.policy.interface.as_str(),
             ip,
@@ -2359,10 +2423,15 @@ impl<D: NetDevice> NetStack<D> {
         };
         log_net_watch_targets("net.init.begin");
         BOOTINFO_WINDOW_GUARD.check("net.init.device.pre");
-        let mut device = Box::new(D::create_with_stage(hal, stage)?);
+        let mut device = Box::new(D::create_with_stage(hal, &console_config, stage)?);
         BOOTINFO_WINDOW_GUARD.check("net.init.device.post");
         let mac = device.mac();
-        info!("[net-console] {backend_label} device online: mac={mac}");
+        info!(
+            "[net-console] {} device online: mac={} interface={}",
+            D::name(),
+            mac,
+            device.interface_label()
+        );
 
         let attempt = *init_guard.attempt();
         log_bootinfo_mark("net.init.device", &attempt)?;
@@ -2964,6 +3033,21 @@ impl<D: NetDevice> NetStack<D> {
             "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={}",
             result.tx_ok, result.udp_echo_ok, result.tcp_ok, result.console_ok
         );
+        if !result.udp_echo_ok {
+            match self.self_test.udp_last_peer {
+                Some(peer) => warn!(
+                    "[net-selftest] udp-echo summary rx_pkts={} reply_pkts={} last_peer={}:{}",
+                    self.self_test.udp_rx_packets,
+                    self.self_test.udp_reply_packets,
+                    peer.addr,
+                    peer.port
+                ),
+                None => warn!(
+                    "[net-selftest] udp-echo summary rx_pkts={} reply_pkts={} last_peer=none",
+                    self.self_test.udp_rx_packets, self.self_test.udp_reply_packets
+                ),
+            }
+        }
         if let Some(hint) = self_test_failure_hint(result, counters) {
             info!("{hint}");
         }
@@ -3333,7 +3417,7 @@ impl<D: NetDevice> NetStack<D> {
                     let reply_len = prefix.len() + copy_len;
                     self.counters.udp_rx = self.counters.udp_rx.saturating_add(1);
                     if self.self_test.running {
-                        self.self_test.record_udp_echo();
+                        self.self_test.record_udp_echo_rx(endpoint);
                     }
                     info!(
                         "[net-selftest] udp-echo rx len={} from {}:{}",
@@ -3345,7 +3429,7 @@ impl<D: NetDevice> NetStack<D> {
                         Ok(()) => {
                             self.counters.udp_tx = self.counters.udp_tx.saturating_add(1);
                             if self.self_test.running {
-                                self.self_test.record_udp_echo();
+                                self.self_test.record_udp_echo_reply(endpoint);
                             }
                             info!(
                                 "[net-selftest] udp-echo tx len={} to {}:{}",
@@ -5080,6 +5164,7 @@ impl DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.hardware_address(),
             Self::BcmGenet(stack) => stack.hardware_address(),
+            Self::Cyw43(stack) => stack.hardware_address(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.hardware_address(),
         }
@@ -5090,6 +5175,7 @@ impl DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.ipv4_address(),
             Self::BcmGenet(stack) => stack.ipv4_address(),
+            Self::Cyw43(stack) => stack.ipv4_address(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.ipv4_address(),
         }
@@ -5100,6 +5186,7 @@ impl DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.console_listen_port(),
             Self::BcmGenet(stack) => stack.console_listen_port(),
+            Self::Cyw43(stack) => stack.console_listen_port(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.console_listen_port(),
         }
@@ -5110,6 +5197,7 @@ impl DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.prefix_len(),
             Self::BcmGenet(stack) => stack.prefix_len(),
+            Self::Cyw43(stack) => stack.prefix_len(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.prefix_len(),
         }
@@ -5120,6 +5208,7 @@ impl DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.gateway(),
             Self::BcmGenet(stack) => stack.gateway(),
+            Self::Cyw43(stack) => stack.gateway(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.gateway(),
         }
@@ -5279,19 +5368,19 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         }
     }
 
-    fn start_self_test(&mut self, now_ms: u64) -> bool {
+    fn start_self_test(&mut self, now_ms: u64) -> NetSelfTestStartResult {
         if !self.stage_policy.allow_selftest {
-            return false;
+            return NetSelfTestStartResult::PolicyDisabled;
         }
         if !self.self_test.enabled {
-            return false;
+            return NetSelfTestStartResult::SelfTestDisabled;
         }
         if matches!(self.mode, NetMode::Dhcp) && self.ip == Ipv4Address::UNSPECIFIED {
             if !self.session_state.not_ready_logged {
                 self.session_state.not_ready_logged = true;
                 log::warn!("[net] not-ready gate tripped: want=net-selftest reason=dhcp-pending");
             }
-            return false;
+            return NetSelfTestStartResult::DhcpPending;
         }
         if let Some((snapshot, reason)) = readiness::gate() {
             if !self.session_state.not_ready_logged {
@@ -5303,7 +5392,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     flags.as_str()
                 );
             }
-            return false;
+            return NetSelfTestStartResult::from_readiness_reason(reason);
         }
         self.session_state.not_ready_logged = false;
         let start_tx_complete = self.device.counters().tx_complete;
@@ -5372,9 +5461,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     tcp_target.primary
                 );
             }
-            true
+            NetSelfTestStartResult::Started
         } else {
-            false
+            NetSelfTestStartResult::SelfTestDisabled
         }
     }
 
@@ -5421,16 +5510,18 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             None if self.backend.uses_dev_virt_defaults() => ("dev-virt", "disabled"),
             None => ("manifest-static", "disabled"),
         };
-        let standby_interface = match (self.interface_policy, self.backend) {
-            (NetInterfacePolicy::Auto, NetBackend::BcmGenet) => "wifi",
-            (NetInterfacePolicy::Auto, _) => "wired",
+        let active_interface = self.device.interface_label();
+        let standby_interface = match (self.interface_policy, self.backend, active_interface) {
+            (NetInterfacePolicy::Auto, NetBackend::BcmGenet, "wifi") => "wired",
+            (NetInterfacePolicy::Auto, NetBackend::BcmGenet, _) => "wifi",
+            (NetInterfacePolicy::Auto, _, _) => "wired",
             _ => "none",
         };
         NetStatusReport {
             backend: self.backend.label(),
             mode: self.mode.as_str(),
             interface_policy: self.interface_policy.as_str(),
-            active_interface: "wired",
+            active_interface,
             standby_interface,
             address_source,
             ip,
@@ -5445,6 +5536,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.poll(now_ms),
             Self::BcmGenet(stack) => stack.poll(now_ms),
+            Self::Cyw43(stack) => stack.poll(now_ms),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.poll(now_ms),
         }
@@ -5454,6 +5546,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.telemetry(),
             Self::BcmGenet(stack) => stack.telemetry(),
+            Self::Cyw43(stack) => stack.telemetry(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.telemetry(),
         }
@@ -5463,6 +5556,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.stats(),
             Self::BcmGenet(stack) => stack.stats(),
+            Self::Cyw43(stack) => stack.stats(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.stats(),
         }
@@ -5472,6 +5566,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.drain_console_lines(now_ms, visitor),
             Self::BcmGenet(stack) => stack.drain_console_lines(now_ms, visitor),
+            Self::Cyw43(stack) => stack.drain_console_lines(now_ms, visitor),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.drain_console_lines(now_ms, visitor),
         }
@@ -5481,6 +5576,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.send_console_line(line),
             Self::BcmGenet(stack) => stack.send_console_line(line),
+            Self::Cyw43(stack) => stack.send_console_line(line),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.send_console_line(line),
         }
@@ -5490,6 +5586,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.request_disconnect(),
             Self::BcmGenet(stack) => stack.request_disconnect(),
+            Self::Cyw43(stack) => stack.request_disconnect(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.request_disconnect(),
         }
@@ -5499,6 +5596,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.drain_console_events(visitor),
             Self::BcmGenet(stack) => stack.drain_console_events(visitor),
+            Self::Cyw43(stack) => stack.drain_console_events(visitor),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.drain_console_events(visitor),
         }
@@ -5508,6 +5606,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.ingest_snapshot(),
             Self::BcmGenet(stack) => stack.ingest_snapshot(),
+            Self::Cyw43(stack) => stack.ingest_snapshot(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.ingest_snapshot(),
         }
@@ -5517,6 +5616,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.active_console_conn_id(),
             Self::BcmGenet(stack) => stack.active_console_conn_id(),
+            Self::Cyw43(stack) => stack.active_console_conn_id(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.active_console_conn_id(),
         }
@@ -5526,6 +5626,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.inject_console_line(line),
             Self::BcmGenet(stack) => stack.inject_console_line(line),
+            Self::Cyw43(stack) => stack.inject_console_line(line),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.inject_console_line(line),
         }
@@ -5535,6 +5636,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.reset(),
             Self::BcmGenet(stack) => stack.reset(),
+            Self::Cyw43(stack) => stack.reset(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.reset(),
         }
@@ -5544,15 +5646,17 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.console_listen_port(),
             Self::BcmGenet(stack) => stack.console_listen_port(),
+            Self::Cyw43(stack) => stack.console_listen_port(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.console_listen_port(),
         }
     }
 
-    fn start_self_test(&mut self, now_ms: u64) -> bool {
+    fn start_self_test(&mut self, now_ms: u64) -> NetSelfTestStartResult {
         match self {
             Self::Rtl8139(stack) => stack.start_self_test(now_ms),
             Self::BcmGenet(stack) => stack.start_self_test(now_ms),
+            Self::Cyw43(stack) => stack.start_self_test(now_ms),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.start_self_test(now_ms),
         }
@@ -5562,6 +5666,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.self_test_report(),
             Self::BcmGenet(stack) => stack.self_test_report(),
+            Self::Cyw43(stack) => stack.self_test_report(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.self_test_report(),
         }
@@ -5571,6 +5676,7 @@ impl NetPoller for DefaultNetStack {
         match self {
             Self::Rtl8139(stack) => stack.status_report(),
             Self::BcmGenet(stack) => stack.status_report(),
+            Self::Cyw43(stack) => stack.status_report(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.status_report(),
         }

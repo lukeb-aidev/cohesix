@@ -44,7 +44,8 @@ use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::dma::{self, PinnedDmaRange};
 use crate::hal::{HalError, Hardware};
 use crate::net::{
-    NetDevice, NetDeviceCounters, NetDriverError, NetStage, CONSOLE_TCP_PORT, NET_DIAG, NET_STAGE,
+    ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetStage, CONSOLE_TCP_PORT,
+    NET_DIAG, NET_STAGE,
 };
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{
@@ -8918,7 +8919,11 @@ impl NetDevice for VirtioNet {
         Self::new(hal)
     }
 
-    fn create_with_stage<H>(hal: &mut H, stage: NetStage) -> Result<Self, Self::Error>
+    fn create_with_stage<H>(
+        hal: &mut H,
+        _config: &ConsoleNetConfig,
+        stage: NetStage,
+    ) -> Result<Self, Self::Error>
     where
         H: Hardware<Error = HalError>,
         Self: Sized,
@@ -8992,10 +8997,14 @@ impl NetDevice for VirtioNetStatic {
         H: Hardware<Error = HalError>,
         Self: Sized,
     {
-        Self::create_with_stage(hal, NET_STAGE)
+        Self::create_with_stage(hal, &ConsoleNetConfig::default(), NET_STAGE)
     }
 
-    fn create_with_stage<H>(hal: &mut H, stage: NetStage) -> Result<Self, Self::Error>
+    fn create_with_stage<H>(
+        hal: &mut H,
+        _config: &ConsoleNetConfig,
+        stage: NetStage,
+    ) -> Result<Self, Self::Error>
     where
         H: Hardware<Error = HalError>,
         Self: Sized,

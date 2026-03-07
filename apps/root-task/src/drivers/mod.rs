@@ -7,6 +7,8 @@
 
 #[cfg(feature = "kernel")]
 pub(crate) mod bcmgenet;
+#[cfg(feature = "kernel")]
+pub(crate) mod cyw43;
 pub(crate) mod rtl8139;
 #[cfg(feature = "kernel")]
 pub(crate) mod virtio;

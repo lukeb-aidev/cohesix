@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the drivers/rtl8139 module for root-task.
 // Author: Lukas Bower
@@ -22,7 +22,7 @@ use smoltcp::wire::EthernetAddress;
 use crate::debug::{watched_copy_nonoverlapping, watched_write_bytes};
 use crate::hal::pci::{PciBarKind, PciDeviceInfo};
 use crate::hal::{HalError, Hardware, MapPerms, MappedRegion, PciCommandFlags};
-use crate::net::{NetDevice, NetDeviceCounters, NetDriverError};
+use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError};
 use crate::sel4::RamFrame;
 
 const RTL8139_VENDOR_ID: u16 = 0x10ec;
@@ -405,6 +405,18 @@ impl NetDevice for Rtl8139Device {
     type Error = DriverError;
 
     fn create<H>(hal: &mut H) -> Result<Self, Self::Error>
+    where
+        H: Hardware<Error = HalError>,
+        Self: Sized,
+    {
+        Self::new(hal)
+    }
+
+    fn create_with_stage<H>(
+        hal: &mut H,
+        _config: &ConsoleNetConfig,
+        _stage: crate::net::NetStage,
+    ) -> Result<Self, Self::Error>
     where
         H: Hardware<Error = HalError>,
         Self: Sized,

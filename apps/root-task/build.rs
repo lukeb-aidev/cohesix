@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the build script for root-task.
 // Author: Lukas Bower
@@ -99,6 +99,9 @@ fn main() {
     }
     if let Err(err) = validate_generated_manifest() {
         panic!("generated manifest check failed: {err}");
+    }
+    if let Err(err) = emit_pi4_wifi_firmware() {
+        panic!("failed to stage pi4 wifi firmware bundle: {err}");
     }
 
     println!("cargo:rerun-if-env-changed=SEL4_LD");
@@ -231,6 +234,112 @@ fn validate_generated_manifest() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn emit_pi4_wifi_firmware() -> io::Result<()> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(io::Error::other)?);
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(|parent| parent.parent())
+        .ok_or_else(|| io::Error::other("unable to locate repo root"))?;
+    let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
+    let staged = out_dir.join("pi4_wifi_firmware.rs");
+
+    let firmware = find_pi4_wifi_firmware(repo_root)
+        .map_err(io::Error::other)?
+        .map(|bundle| Pi4WifiFirmwareBundle {
+            firmware: bundle.firmware,
+            nvram: bundle.nvram,
+            clm_blob: bundle.clm_blob,
+            board_type: "cyw43455-rpi4b",
+        });
+
+    let mut contents = String::from(
+        "// Copyright 2026 Lukas Bower\n\
+// SPDX-License-Identifier: Apache-2.0\n\
+// Purpose: Stages bounded Pi 4 CYW43455 firmware assets discovered at build time.\n\
+// Author: Lukas Bower\n\n",
+    );
+
+    match firmware {
+        Some(bundle) => {
+            println!("cargo:rerun-if-changed={}", bundle.firmware.display());
+            println!("cargo:rerun-if-changed={}", bundle.nvram.display());
+            println!("cargo:rerun-if-changed={}", bundle.clm_blob.display());
+            contents.push_str(&format!(
+                "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = include_bytes!(r#\"{}\"#);\n\
+pub(crate) static PI4_WIFI_NVRAM: &[u8] = include_bytes!(r#\"{}\"#);\n\
+pub(crate) static PI4_WIFI_CLM_BLOB: &[u8] = include_bytes!(r#\"{}\"#);\n\
+pub(crate) const PI4_WIFI_BOARD_TYPE: &str = {:?};\n",
+                bundle.firmware.display(),
+                bundle.nvram.display(),
+                bundle.clm_blob.display(),
+                bundle.board_type,
+            ));
+        }
+        None => {
+            contents.push_str(
+                "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = &[];\n\
+pub(crate) static PI4_WIFI_NVRAM: &[u8] = &[];\n\
+pub(crate) static PI4_WIFI_CLM_BLOB: &[u8] = &[];\n\
+pub(crate) const PI4_WIFI_BOARD_TYPE: &str = \"cyw43455-rpi4b\";\n",
+            );
+        }
+    }
+
+    fs::write(staged, contents)?;
+    Ok(())
+}
+
+struct Pi4WifiFirmwareBundle {
+    firmware: PathBuf,
+    nvram: PathBuf,
+    clm_blob: PathBuf,
+    board_type: &'static str,
+}
+
+struct Pi4WifiFirmwareSearch {
+    firmware: PathBuf,
+    nvram: PathBuf,
+    clm_blob: PathBuf,
+}
+
+fn find_pi4_wifi_firmware(repo_root: &Path) -> Result<Option<Pi4WifiFirmwareSearch>, String> {
+    let firmware = find_artifact_with(
+        repo_root,
+        "brcmfmac43455-sdio.bin",
+        &["out/uefi/pi4-followup/firmware/v1.50/firmware/brcm/brcmfmac43455-sdio.bin"],
+        |_| Ok(ArtifactDecision::Accept),
+    );
+    let clm_blob = find_artifact_with(
+        repo_root,
+        "brcmfmac43455-sdio.clm_blob",
+        &["out/uefi/pi4-followup/firmware/v1.50/firmware/brcm/brcmfmac43455-sdio.clm_blob"],
+        |_| Ok(ArtifactDecision::Accept),
+    );
+    let nvram = find_artifact_with(
+        repo_root,
+        "brcmfmac43455-sdio.Raspberry",
+        &["out/uefi/pi4-followup/firmware/v1.50/firmware/brcm/brcmfmac43455-sdio.Raspberry"],
+        |_| Ok(ArtifactDecision::Accept),
+    )
+    .or_else(|_| {
+        find_artifact_with(
+            repo_root,
+            "brcmfmac43455-sdio.txt",
+            &["out/uefi/pi4-followup/firmware/v1.50/firmware/brcm/brcmfmac43455-sdio.txt"],
+            |_| Ok(ArtifactDecision::Accept),
+        )
+    });
+
+    match (firmware, nvram, clm_blob) {
+        (Ok(firmware), Ok(nvram), Ok(clm_blob)) => Ok(Some(Pi4WifiFirmwareSearch {
+            firmware,
+            nvram,
+            clm_blob,
+        })),
+        _ => Ok(None),
+    }
 }
 
 fn find_artifact_with<F>(

@@ -547,11 +547,13 @@ QEMU runs with `-serial mon:stdio` and a user-net device that forwards TCP/UDP p
 
 ### Network self-test (`nettest` / `netstats`)
 - Console grammar is unchanged across profiles; `nettest` and `netstats` names/ACK-ERR-END behavior remain stable.
+- `nettest` refusal details are deterministic when the stack cannot start a run: `detail=dhcp-pending`, `detail=not-ready:<root-ep|ipc-buffer|cspace-window|bootstrap-commit>`, `detail=policy-disabled`, or `detail=selftest-disabled`.
 - `netstats` reports deterministic target fields: `backend=<label> enabled=<bool> running=<bool> udp=<ip:port> tcp=<ip:port> last=<result>`.
 - QEMU behavior is unchanged (`127.0.0.1:{31338,31339}` hostfwd workflows remain valid).
-- Pi 4 `pi4-uboot-aarch64` uses the active wired address (manifest static IPv4 or acquired DHCP lease) and reports `backend=bcmgenet-v5` when networking is enabled.
+- Pi 4 `pi4-uboot-aarch64` uses the active control-plane address (wired GENETv5 or Wi-Fi CYW43455) and reports `backend=bcmgenet-v5` because the compiler-visible Pi 4 backend owns both interface choices.
 - `netstats` emits a policy line: `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`.
-- Only one control-plane interface is active at a time. The current as-built runtime supports wired activation; `wifi` and `auto` policy requests are rejected during net-console init until the CYW43xx path lands.
+- `netstats` also emits a compact status line for wrapped serial consoles: `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`.
+- Only one control-plane interface is active at a time. The current as-built runtime supports `wired` over GENETv5, `wifi` over CYW43455, and `auto` with deterministic Wi-Fi-first fallback to wired; final Milestone 26b completion still requires Pi 4 hardware evidence for join + DHCP.
 - On QEMU hostfwd/tunnel flows, capture self-test traffic on `lo0`.
 - On Pi 4 direct-link flows, capture on the host's physical interface (for example `en8`), not `lo0`; `nettest` logs the peer-side `nc` commands that must be run from the host to exercise the UDP echo and TCP smoke sockets.
 

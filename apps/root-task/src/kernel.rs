@@ -644,18 +644,34 @@ const COHESIX_DTB_NET_MODE_PROP: &str = "cohesix,net-mode";
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const COHESIX_DTB_NET_INTERFACE_PROP: &str = "cohesix,net-interface";
 #[cfg(all(feature = "kernel", feature = "net-console"))]
+const COHESIX_DTB_STATIC_IP_PROP: &str = "cohesix,static-ipv4";
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const COHESIX_DTB_STATIC_PREFIX_PROP: &str = "cohesix,static-prefix-len";
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const COHESIX_DTB_STATIC_GATEWAY_PROP: &str = "cohesix,static-gateway";
+#[cfg(all(feature = "kernel", feature = "net-console"))]
 const COHESIX_DTB_WIFI_SSID_PROP: &str = "cohesix,wifi-ssid";
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const COHESIX_DTB_WIFI_PSK_PROP: &str = "cohesix,wifi-psk";
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct Pi4BootNetPolicyProperties {
     mode: Option<generated::NetworkMode>,
     mode_seen: bool,
     interface: Option<generated::NetworkInterfacePolicy>,
     interface_seen: bool,
+    static_ip: Option<[u8; 4]>,
+    static_ip_seen: bool,
+    static_prefix_len: Option<u8>,
+    static_prefix_seen: bool,
+    static_gateway: Option<[u8; 4]>,
+    static_gateway_seen: bool,
+    static_policy_error: Option<&'static str>,
+    wifi_ssid: Option<HeaplessString<32>>,
+    wifi_psk: Option<HeaplessString<64>>,
     wifi_credentials_present: bool,
+    wifi_credentials_error: Option<&'static str>,
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -667,7 +683,7 @@ enum Pi4BootNetPolicySource {
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Pi4BootNetPolicyResolution {
     policy: crate::net::RuntimeNetPolicyOverride,
     source: Pi4BootNetPolicySource,
@@ -736,6 +752,50 @@ fn parse_dtb_network_interface(value: &[u8]) -> Option<generated::NetworkInterfa
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
+fn parse_dtb_decimal_u8(value: &str) -> Option<u8> {
+    if value.is_empty() {
+        return None;
+    }
+    let mut parsed = 0u16;
+    for byte in value.bytes() {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        parsed = parsed
+            .saturating_mul(10)
+            .saturating_add(u16::from(byte - b'0'));
+        if parsed > u16::from(u8::MAX) {
+            return None;
+        }
+    }
+    Some(parsed as u8)
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn parse_dtb_ipv4_address(value: &[u8]) -> Option<[u8; 4]> {
+    let value = dtb_prop_cstr(value)?;
+    let mut octets = [0u8; 4];
+    let mut segments = value.split('.');
+    for octet in &mut octets {
+        *octet = parse_dtb_decimal_u8(segments.next()?)?;
+    }
+    if segments.next().is_some() {
+        return None;
+    }
+    Some(octets)
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn parse_dtb_prefix_len(value: &[u8]) -> Option<u8> {
+    let prefix = parse_dtb_decimal_u8(dtb_prop_cstr(value)?)?;
+    if (1..=32).contains(&prefix) {
+        Some(prefix)
+    } else {
+        None
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
 fn runtime_net_mode(mode: generated::NetworkMode) -> crate::net::NetMode {
     match mode {
         generated::NetworkMode::Off => crate::net::NetMode::Off,
@@ -792,10 +852,58 @@ fn collect_pi4_boot_net_policy(
                         policy.interface_seen = true;
                         policy.interface = parse_dtb_network_interface(value);
                     }
-                    COHESIX_DTB_WIFI_SSID_PROP | COHESIX_DTB_WIFI_PSK_PROP => {
-                        policy.wifi_credentials_present |= dtb_prop_cstr(value)
-                            .map(|text| !text.is_empty())
-                            .unwrap_or(false);
+                    COHESIX_DTB_STATIC_IP_PROP => {
+                        policy.static_ip_seen = true;
+                        policy.static_ip = parse_dtb_ipv4_address(value);
+                        if policy.static_ip.is_none() {
+                            policy.static_policy_error = Some("invalid-static-ip");
+                        }
+                    }
+                    COHESIX_DTB_STATIC_PREFIX_PROP => {
+                        policy.static_prefix_seen = true;
+                        policy.static_prefix_len = parse_dtb_prefix_len(value);
+                        if policy.static_prefix_len.is_none() {
+                            policy.static_policy_error = Some("invalid-static-prefix-len");
+                        }
+                    }
+                    COHESIX_DTB_STATIC_GATEWAY_PROP => {
+                        policy.static_gateway_seen = true;
+                        policy.static_gateway = parse_dtb_ipv4_address(value);
+                        if policy.static_gateway.is_none() {
+                            policy.static_policy_error = Some("invalid-static-gateway");
+                        }
+                    }
+                    COHESIX_DTB_WIFI_SSID_PROP => {
+                        let Some(text) = dtb_prop_cstr(value) else {
+                            policy.wifi_credentials_error = Some("invalid-wifi-ssid");
+                            continue;
+                        };
+                        if text.is_empty() {
+                            continue;
+                        }
+                        policy.wifi_credentials_present = true;
+                        let mut ssid = HeaplessString::<32>::new();
+                        if ssid.push_str(text).is_err() {
+                            policy.wifi_credentials_error = Some("wifi-ssid-too-long");
+                            continue;
+                        }
+                        policy.wifi_ssid = Some(ssid);
+                    }
+                    COHESIX_DTB_WIFI_PSK_PROP => {
+                        let Some(text) = dtb_prop_cstr(value) else {
+                            policy.wifi_credentials_error = Some("invalid-wifi-psk");
+                            continue;
+                        };
+                        if text.is_empty() {
+                            continue;
+                        }
+                        policy.wifi_credentials_present = true;
+                        let mut psk = HeaplessString::<64>::new();
+                        if psk.push_str(text).is_err() {
+                            policy.wifi_credentials_error = Some("wifi-psk-too-long");
+                            continue;
+                        }
+                        policy.wifi_psk = Some(psk);
                     }
                     _ => {}
                 }
@@ -832,6 +940,14 @@ fn resolve_pi4_boot_net_policy(
         Err(_) => return resolution,
     };
     resolution.wifi_credentials_present = raw.wifi_credentials_present;
+    if let Some(reason) = raw.static_policy_error {
+        resolution.source = Pi4BootNetPolicySource::DtbIgnored(reason);
+        return resolution;
+    }
+    if let Some(reason) = raw.wifi_credentials_error {
+        resolution.source = Pi4BootNetPolicySource::DtbIgnored(reason);
+        return resolution;
+    }
 
     if raw.mode_seen && raw.mode.is_none() {
         resolution.source = Pi4BootNetPolicySource::DtbIgnored("invalid-net-mode");
@@ -841,23 +957,61 @@ fn resolve_pi4_boot_net_policy(
         resolution.source = Pi4BootNetPolicySource::DtbIgnored("invalid-net-interface");
         return resolution;
     }
-    if raw.mode.is_none() && raw.interface.is_none() && !raw.wifi_credentials_present {
+    if raw.mode.is_none()
+        && raw.interface.is_none()
+        && !raw.static_ip_seen
+        && !raw.static_prefix_seen
+        && !raw.static_gateway_seen
+        && !raw.wifi_credentials_present
+    {
         return resolution;
     }
 
     let effective_mode = raw.mode.unwrap_or(hardware.network.mode);
     let effective_interface = raw.interface.unwrap_or(hardware.network.interface);
     let has_wifi = hardware_has_device(hardware, generated::HardwareDeviceKind::Wifi);
+    let wifi_credentials = match (raw.wifi_ssid.as_ref(), raw.wifi_psk.as_ref()) {
+        (Some(ssid), psk) => match crate::net::WifiCredentials::new(
+            ssid.as_str(),
+            psk.map_or("", HeaplessString::as_str),
+        ) {
+            Ok(credentials) => Some(credentials),
+            Err(reason) => {
+                resolution.source = Pi4BootNetPolicySource::DtbIgnored(reason);
+                return resolution;
+            }
+        },
+        (None, Some(_)) => {
+            resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-ssid-missing");
+            return resolution;
+        }
+        (None, None) => None,
+    };
+    let static_address = if effective_mode == generated::NetworkMode::Static {
+        if raw.static_ip.is_none()
+            && raw.static_prefix_len.is_none()
+            && raw.static_gateway.is_none()
+        {
+            None
+        } else {
+            let Some(ip) = raw.static_ip else {
+                resolution.source = Pi4BootNetPolicySource::DtbIgnored("static-ip-missing");
+                return resolution;
+            };
+            let Some(prefix_len) = raw.static_prefix_len else {
+                resolution.source = Pi4BootNetPolicySource::DtbIgnored("static-prefix-len-missing");
+                return resolution;
+            };
+            Some(crate::net::NetAddressConfig {
+                ip,
+                prefix_len,
+                gateway: raw.static_gateway,
+            })
+        }
+    } else {
+        None
+    };
 
-    if effective_mode != generated::NetworkMode::Off
-        && !matches!(
-            effective_interface,
-            generated::NetworkInterfacePolicy::Wired
-        )
-    {
-        resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-runtime-unavailable");
-        return resolution;
-    }
     if effective_mode != generated::NetworkMode::Off
         && matches!(
             effective_interface,
@@ -869,18 +1023,15 @@ fn resolve_pi4_boot_net_policy(
         return resolution;
     }
     if effective_mode != generated::NetworkMode::Off
-        && matches!(
-            effective_interface,
-            generated::NetworkInterfacePolicy::Wifi | generated::NetworkInterfacePolicy::Auto
-        )
+        && matches!(effective_interface, generated::NetworkInterfacePolicy::Auto)
         && effective_mode != generated::NetworkMode::Dhcp
     {
-        resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-requires-dhcp");
+        resolution.source = Pi4BootNetPolicySource::DtbIgnored("auto-requires-dhcp");
         return resolution;
     }
     if effective_mode != generated::NetworkMode::Off
         && matches!(effective_interface, generated::NetworkInterfacePolicy::Wifi)
-        && !raw.wifi_credentials_present
+        && wifi_credentials.is_none()
     {
         resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-credentials-missing");
         return resolution;
@@ -889,8 +1040,14 @@ fn resolve_pi4_boot_net_policy(
     resolution.policy = crate::net::RuntimeNetPolicyOverride {
         mode: raw.mode.map(runtime_net_mode),
         interface: raw.interface.map(runtime_net_interface),
+        static_address,
+        wifi_credentials,
     };
-    if resolution.policy.mode.is_some() || resolution.policy.interface.is_some() {
+    if resolution.policy.mode.is_some()
+        || resolution.policy.interface.is_some()
+        || resolution.policy.static_address.is_some()
+        || resolution.policy.wifi_credentials.is_some()
+    {
         resolution.source = Pi4BootNetPolicySource::DtbApplied;
     }
     resolution
@@ -5666,6 +5823,30 @@ mod tests {
             }
             other => panic!("expected hex preview, got {other:?}"),
         }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn parse_dtb_ipv4_address_accepts_dotted_quad() {
+        assert_eq!(
+            super::parse_dtb_ipv4_address(b"192.168.10.42\0"),
+            Some([192, 168, 10, 42])
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn parse_dtb_ipv4_address_rejects_invalid_octets() {
+        assert_eq!(super::parse_dtb_ipv4_address(b"10.0.300.1\0"), None);
+        assert_eq!(super::parse_dtb_ipv4_address(b"10.0.1\0"), None);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn parse_dtb_prefix_len_enforces_bounds() {
+        assert_eq!(super::parse_dtb_prefix_len(b"24\0"), Some(24));
+        assert_eq!(super::parse_dtb_prefix_len(b"0\0"), None);
+        assert_eq!(super::parse_dtb_prefix_len(b"33\0"), None);
     }
 }
 

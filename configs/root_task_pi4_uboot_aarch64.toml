@@ -64,7 +64,7 @@ no_nic = false
 [hw.network]
 enabled = true
 backend = "bcmgenet-v5"
-mode = "dhcp"
+mode = "static"
 interface = "wired"
 
 [hw.network.static_ipv4]

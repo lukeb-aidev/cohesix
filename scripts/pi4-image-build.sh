@@ -13,16 +13,21 @@ CANONICAL_MANIFEST_PATH="${ROOT_DIR}/configs/root_task.toml"
 SEL4_BUILD_DIR="${HOME}/seL4/build_UBOOT"
 SEL4_VENV_DIR="${HOME}/seL4/.venv_aarch64"
 U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
+OBJCOPY_WRAPPER="${ROOT_DIR}/scripts/aarch64-objcopy-stdout.sh"
 FIRMWARE_DIR="${ROOT_DIR}/out/uefi/pi4-followup/firmware/v1.50"
 STAGE_DIR="${ROOT_DIR}/out/pi4-sd"
 SEL4_UPSTREAM_IMAGE_NAME="sel4test-driver-image-arm-bcm2711"
 COHESIX_IMAGE_NAME="cohesix-image-arm-bcm2711"
+COHESIX_LOGO_SOURCE="${ROOT_DIR}/docs/COHESIX_LOGO.png"
+COHESIX_LOGO_STAGE_NAME="cohesix-logo.bmp"
+BOOTSTD_LOGO_STAGE_NAME="boot.bmp"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net-console"
 SKIP_BUILD=0
 PI4_TOTAL_MEM_MB=2048
 RESTORE_CANONICAL_CODEGEN=0
+PI4_DTB_PADDED_SIZE=$((128 * 1024))
 
 usage() {
     cat <<'USAGE'
@@ -33,6 +38,7 @@ Builds and stages a Pi 4 SD payload with:
   - U-Boot (u-boot.bin)
   - seL4 image (upstream output copied as cohesix-image-arm-bcm2711)
   - Cohesix autoboot script (boot.scr.uimg)
+  - Optional Cohesix HDMI logo (cohesix-logo.bmp for U-Boot video)
 
 By default this script only builds/stages files under out/pi4-sd.
 To erase and flash an SD card, pass --flash-disk /dev/diskN explicitly.
@@ -80,6 +86,7 @@ verify_u_boot_pi4_target() {
     local u_boot_source_dir="${ROOT_DIR}/third_party/u-boot"
     local default_u_boot_bin="${u_boot_source_dir}/u-boot.bin"
     local config_file="${u_boot_source_dir}/.config"
+    local u_boot_elf="${u_boot_source_dir}/u-boot"
     local device_tree
 
     if [[ "${U_BOOT_BIN}" != "${default_u_boot_bin}" ]]; then
@@ -91,10 +98,34 @@ verify_u_boot_pi4_target() {
         return 0
     fi
 
+    if [[ ! -f "${default_u_boot_bin}" ]]; then
+        fail "u-boot.bin is missing; run: gmake -C third_party/u-boot rpi_4_defconfig && gmake -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    fi
+    if [[ "${config_file}" -nt "${default_u_boot_bin}" ]]; then
+        fail "u-boot.bin is older than ${config_file}; rebuild U-Boot so the flashed binary matches the requested commands"
+    fi
+    if [[ -f "${u_boot_elf}" && "${config_file}" -nt "${u_boot_elf}" ]]; then
+        fail "u-boot ELF is older than ${config_file}; rebuild U-Boot so the flashed binary matches the requested commands"
+    fi
+
     device_tree="$(awk -F= '/^CONFIG_DEFAULT_DEVICE_TREE=/{gsub(/"/, "", $2); print $2}' "${config_file}" | tail -n 1)"
     if [[ "${device_tree}" != "bcm2711-rpi-4-b" ]]; then
         fail "u-boot.bin is not configured for Pi 4 (CONFIG_DEFAULT_DEVICE_TREE=${device_tree:-unset}); run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
     fi
+    grep -q '^CONFIG_CMD_ASKENV=y$' "${config_file}" || \
+      fail "u-boot.bin is missing CONFIG_CMD_ASKENV; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    grep -q '^CONFIG_CMD_BMP=y$' "${config_file}" || \
+      fail "u-boot.bin is missing CONFIG_CMD_BMP; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    grep -q '^CONFIG_CMD_BOOTM=y$' "${config_file}" || \
+      fail "u-boot.bin is missing CONFIG_CMD_BOOTM; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    grep -q '^CONFIG_LEGACY_IMAGE_FORMAT=y$' "${config_file}" || \
+      fail "u-boot.bin is missing CONFIG_LEGACY_IMAGE_FORMAT; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    grep -q '^CONFIG_USB_KEYBOARD=y$' "${config_file}" || \
+      fail "u-boot.bin is missing CONFIG_USB_KEYBOARD; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    grep -q '^CONFIG_SYS_USB_EVENT_POLL=y$' "${config_file}" || \
+      fail "u-boot.bin is missing CONFIG_SYS_USB_EVENT_POLL; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    grep -q '^CONFIG_SYS_CONSOLE_IS_IN_ENV=y$' "${config_file}" || \
+      fail "u-boot.bin is missing CONFIG_SYS_CONSOLE_IS_IN_ENV; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
 }
 
 resolve_sel4_source_dir() {
@@ -134,8 +165,9 @@ configure_pi4_sel4_build() {
       -DHardwareDebugAPI=OFF \
       -DKernelMaxNumNodes=4 \
       -DKernelRootCNodeSizeBits=13 \
-      -DElfloaderImage=binary \
-      -DElfloaderIncludeDtb=ON \
+      -DElfloaderImage=uimage \
+      -DElfloaderIncludeDtb=OFF \
+      -DCMAKE_OBJCOPY="${OBJCOPY_WRAPPER}" \
       -DSIMULATION=OFF \
       -DCMAKE_BUILD_TYPE=Debug
 
@@ -151,6 +183,8 @@ configure_pi4_sel4_build() {
     grep -q "^KernelPrinting:BOOL=ON$" "$cache_file" || fail "KernelPrinting not ON"
     grep -q "^HardwareDebugAPI:BOOL=OFF$" "$cache_file" || fail "HardwareDebugAPI must be OFF for current sel4-sys bindings"
     grep -q "^KernelMaxNumNodes:STRING=4$" "$cache_file" || fail "KernelMaxNumNodes not 4"
+    grep -q "^ElfloaderImage:STRING=uimage$" "$cache_file" || fail "ElfloaderImage not set to uimage"
+    grep -q "^ElfloaderIncludeDtb:BOOL=OFF$" "$cache_file" || fail "ElfloaderIncludeDtb must be OFF for Pi4 U-Boot DTB handoff"
 }
 
 resolve_mkimage() {
@@ -430,6 +464,94 @@ build_pi4_image() {
       fail "embedded rootserver was regenerated after root-task injection"
 }
 
+stage_uboot_logo() {
+    local out="$1"
+    local temp_bmp
+    local python_bin
+
+    if [[ ! -f "${COHESIX_LOGO_SOURCE}" ]]; then
+        log "Skipping Cohesix logo staging (missing ${COHESIX_LOGO_SOURCE})"
+        return 0
+    fi
+    if ! command -v sips >/dev/null 2>&1; then
+        log "Skipping Cohesix logo staging (sips not found)"
+        return 0
+    fi
+    python_bin="$(command -v python3 || true)"
+    if [[ -z "${python_bin}" ]]; then
+        log "Skipping Cohesix logo staging (python3 not found)"
+        return 0
+    fi
+
+    temp_bmp="$(mktemp "${TMPDIR:-/tmp}/cohesix-logo.XXXXXX.bmp")"
+    trap 'rm -f "${temp_bmp}"' RETURN
+
+    sips -Z 320 -s format bmp "${COHESIX_LOGO_SOURCE}" --out "${temp_bmp}" >/dev/null
+    "${python_bin}" - "${temp_bmp}" "${out}" <<'PY'
+import struct
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+data = bytearray(src.read_bytes())
+if data[:2] != b"BM":
+    raise SystemExit("not a BMP file")
+pixel_offset = struct.unpack_from("<I", data, 10)[0]
+width = struct.unpack_from("<i", data, 18)[0]
+height = struct.unpack_from("<i", data, 22)[0]
+bits_per_pixel = struct.unpack_from("<H", data, 28)[0]
+compression = struct.unpack_from("<I", data, 30)[0]
+if bits_per_pixel != 24 or compression != 0:
+    raise SystemExit("unsupported BMP format")
+if height < 0:
+    row_bytes = ((abs(width) * (bits_per_pixel // 8) + 3) // 4) * 4
+    rows = [
+        data[pixel_offset + row_bytes * idx: pixel_offset + row_bytes * (idx + 1)]
+        for idx in range(abs(height))
+    ]
+    rows.reverse()
+    struct.pack_into("<i", data, 22, abs(height))
+    data[pixel_offset:pixel_offset + row_bytes * len(rows)] = b"".join(rows)
+dst.write_bytes(data)
+PY
+    trap - RETURN
+    rm -f "${temp_bmp}"
+    log "Staged U-Boot logo at ${out}"
+}
+
+stage_pi4_dtb() {
+    local src="$1"
+    local out="$2"
+
+    require_file "$src"
+    python3 - "$src" "$out" "$PI4_DTB_PADDED_SIZE" <<'PY'
+import struct
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+target_size = int(sys.argv[3])
+data = bytearray(src.read_bytes())
+if len(data) < 40:
+    raise SystemExit("dtb too small")
+if data[:4] != b"\xd0\x0d\xfe\xed":
+    raise SystemExit("invalid dtb magic")
+
+totalsize = struct.unpack_from(">I", data, 4)[0]
+blob_len = max(len(data), totalsize)
+if blob_len > len(data):
+    data.extend(b"\x00" * (blob_len - len(data)))
+new_size = max(blob_len, target_size)
+struct.pack_into(">I", data, 4, new_size)
+if len(data) < new_size:
+    data.extend(b"\x00" * (new_size - len(data)))
+dst.write_bytes(data)
+PY
+    log "Staged padded Pi4 DTB at ${out} (${PI4_DTB_PADDED_SIZE} bytes target)"
+}
+
 write_boot_cmd() {
     local out="$1"
     local coh_image="$2"
@@ -440,79 +562,44 @@ setenv bootdelay 0
 setenv coh_image __COH_IMAGE__
 setenv coh_image_fallback __COH_IMAGE_FALLBACK__
 setenv coh_addr 0x10000000
-
-if fatload mmc 0:1 ${coh_addr} ${coh_image}; then
-    if test -n "${fdtcontroladdr}"; then
-        fdt addr ${fdtcontroladdr}
-        if fdt resize 512; then
-            if test -n "${coh_net_mode}"; then
-                fdt set /chosen cohesix,net-mode "${coh_net_mode}"
-                echo "[cohesix] dtb chosen cohesix,net-mode=${coh_net_mode}"
-            fi
-            if test -n "${coh_net_interface}"; then
-                fdt set /chosen cohesix,net-interface "${coh_net_interface}"
-                echo "[cohesix] dtb chosen cohesix,net-interface=${coh_net_interface}"
-            fi
-            if test -n "${coh_wifi_ssid}"; then
-                fdt set /chosen cohesix,wifi-ssid "${coh_wifi_ssid}"
-                echo "[cohesix] dtb chosen cohesix,wifi-ssid=<set>"
-            fi
-            if test -n "${coh_wifi_psk}"; then
-                fdt set /chosen cohesix,wifi-psk "${coh_wifi_psk}"
-                echo "[cohesix] dtb chosen cohesix,wifi-psk=<set>"
-            fi
-        else
-            echo "[cohesix] dtb resize skipped; using manifest net policy"
-        fi
-    else
-        echo "[cohesix] no fdtcontroladdr; using manifest net policy"
-    fi
-    echo "[cohesix] loaded ${coh_image} to ${coh_addr}; jumping"
-    go ${coh_addr}
-    echo "[cohesix] returned from image"
-else
-    echo "[cohesix] primary image load failed: ${coh_image}"
-    if fatload mmc 0:1 ${coh_addr} ${coh_image_fallback}; then
-        setenv coh_image ${coh_image_fallback}
-
-        if test -n "${fdtcontroladdr}"; then
-            fdt addr ${fdtcontroladdr}
-            if fdt resize 512; then
-                if test -n "${coh_net_mode}"; then
-                    fdt set /chosen cohesix,net-mode "${coh_net_mode}"
-                    echo "[cohesix] dtb chosen cohesix,net-mode=${coh_net_mode}"
-                fi
-                if test -n "${coh_net_interface}"; then
-                    fdt set /chosen cohesix,net-interface "${coh_net_interface}"
-                    echo "[cohesix] dtb chosen cohesix,net-interface=${coh_net_interface}"
-                fi
-                if test -n "${coh_wifi_ssid}"; then
-                    fdt set /chosen cohesix,wifi-ssid "${coh_wifi_ssid}"
-                    echo "[cohesix] dtb chosen cohesix,wifi-ssid=<set>"
-                fi
-                if test -n "${coh_wifi_psk}"; then
-                    fdt set /chosen cohesix,wifi-psk "${coh_wifi_psk}"
-                    echo "[cohesix] dtb chosen cohesix,wifi-psk=<set>"
-                fi
-            else
-                echo "[cohesix] dtb resize skipped; using manifest net policy"
-            fi
-        else
-            echo "[cohesix] no fdtcontroladdr; using manifest net policy"
-        fi
-        echo "[cohesix] loaded fallback ${coh_image} to ${coh_addr}; jumping"
-        go ${coh_addr}
-        echo "[cohesix] returned from image"
-    else
-        echo "[cohesix] ERROR: failed to load ${coh_image} or fallback ${coh_image_fallback} from mmc 0:1"
-        echo "[cohesix] manual: fatls mmc 0:1"
-        echo "[cohesix] manual: fatload mmc 0:1 0x10000000 ${coh_image}"
-        echo "[cohesix] manual: go 0x10000000"
-    fi
-fi
+setenv coh_dtb_addr 0x14000000
+setenv coh_dtb_file bcm2711-rpi-4-b.dtb
+setenv coh_policy_addr 0x02100000
+setenv coh_policy_file cohesix.env
+setenv coh_logo_addr 0x02000000
+setenv coh_logo_file __COH_LOGO_FILE__
+setenv coh_logo_bootstd_file __COH_BOOTSTD_LOGO_FILE__
+setenv coh_logo_delay 2
+setenv coh_logo_x 20
+setenv coh_logo_y 20
+setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""'
+setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
+setenv coh_prepare_input 'if test "${coh_usb_input_ready}" != "1"; then usb start; usb reset; setenv coh_usb_input_ready 1; fi; setenv stdin serial,usbkbd; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
+setenv coh_toggle_logo 'if test "${coh_show_logo}" = "1"; then setenv coh_show_logo 0; echo "[cohesix] HDMI logo disabled"; else setenv coh_show_logo 1; echo "[cohesix] HDMI logo enabled"; fi'
+setenv coh_detect_saved_config 'setenv coh_has_saved_config 0; if test -n "${coh_net_mode}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_net_interface}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_ip}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_prefix_len}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_gateway}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_ssid}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_psk}"; then setenv coh_has_saved_config 1; fi'
+setenv coh_load_saved_policy 'run coh_clear_saved_policy; if fatload mmc 0:1 ${coh_policy_addr} ${coh_policy_file}; then if env import -d -t ${coh_policy_addr} ${filesize} coh_net_mode coh_net_interface coh_static_ip coh_static_prefix_len coh_static_gateway coh_wifi_ssid coh_wifi_psk coh_show_logo; then echo "[cohesix] loaded saved settings from ${coh_policy_file}"; else echo "[cohesix] WARNING: failed to import ${coh_policy_file}; ignoring saved settings"; run coh_clear_saved_policy; fi; fi; if test -z "${coh_show_logo}"; then setenv coh_show_logo 1; fi'
+setenv coh_persist_policy 'if env export -t ${coh_policy_addr} coh_net_mode coh_net_interface coh_static_ip coh_static_prefix_len coh_static_gateway coh_wifi_ssid coh_wifi_psk coh_show_logo; then if fatwrite mmc 0:1 ${coh_policy_addr} ${coh_policy_file} ${filesize}; then echo "[cohesix] saved settings to ${coh_policy_file}"; else echo "[cohesix] ERROR: failed to write ${coh_policy_file}"; fi; else echo "[cohesix] ERROR: failed to export saved settings"; fi'
+setenv coh_render_logo 'if test "${coh_show_logo}" = "1"; then if fatload mmc 0:1 ${coh_logo_addr} ${coh_logo_file}; then if bmp display ${coh_logo_addr} ${coh_logo_x} ${coh_logo_y}; then true; else echo "[cohesix] logo draw failed: ${coh_logo_file}"; fi; else echo "[cohesix] logo load skipped: ${coh_logo_file}"; fi; fi'
+setenv coh_show_logo_splash 'if test "${coh_show_logo}" = "1"; then if test "${coh_logo_shown}" != "1"; then cls; if fatload mmc 0:1 ${coh_logo_addr} ${coh_logo_bootstd_file}; then if bmp display ${coh_logo_addr} m m; then echo "[cohesix] loading boot options..."; sleep ${coh_logo_delay}; setenv coh_logo_shown 1; else echo "[cohesix] logo draw failed: ${coh_logo_bootstd_file}"; fi; else echo "[cohesix] logo splash skipped: ${coh_logo_bootstd_file}"; fi; fi; fi'
+setenv coh_load_runtime_dtb 'setenv coh_boot_error 0; if fatload mmc 0:1 ${coh_dtb_addr} ${coh_dtb_file}; then if fdt addr ${coh_dtb_addr}; then echo "[cohesix] loaded ${coh_dtb_file} to ${coh_dtb_addr}"; else echo "[cohesix] ERROR: failed to select ${coh_dtb_file}"; setenv coh_boot_error 1; fi; else echo "[cohesix] ERROR: failed to load ${coh_dtb_file}"; setenv coh_boot_error 1; fi'
+setenv coh_apply_dtb_policy 'if test "${coh_boot_error}" = "1"; then true; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_net_mode}"; then if fdt set /chosen cohesix,net-mode "${coh_net_mode}"; then echo "[cohesix] dtb chosen cohesix,net-mode=${coh_net_mode}"; else echo "[cohesix] ERROR: failed to set cohesix,net-mode"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_net_interface}"; then if fdt set /chosen cohesix,net-interface "${coh_net_interface}"; then echo "[cohesix] dtb chosen cohesix,net-interface=${coh_net_interface}"; else echo "[cohesix] ERROR: failed to set cohesix,net-interface"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_ip}"; then if fdt set /chosen cohesix,static-ipv4 "${coh_static_ip}"; then echo "[cohesix] dtb chosen cohesix,static-ipv4=${coh_static_ip}"; else echo "[cohesix] ERROR: failed to set cohesix,static-ipv4"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_prefix_len}"; then if fdt set /chosen cohesix,static-prefix-len "${coh_static_prefix_len}"; then echo "[cohesix] dtb chosen cohesix,static-prefix-len=${coh_static_prefix_len}"; else echo "[cohesix] ERROR: failed to set cohesix,static-prefix-len"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_gateway}"; then if fdt set /chosen cohesix,static-gateway "${coh_static_gateway}"; then echo "[cohesix] dtb chosen cohesix,static-gateway=${coh_static_gateway}"; else echo "[cohesix] ERROR: failed to set cohesix,static-gateway"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_wifi_ssid}"; then if fdt set /chosen cohesix,wifi-ssid "${coh_wifi_ssid}"; then echo "[cohesix] dtb chosen cohesix,wifi-ssid=<set>"; else echo "[cohesix] ERROR: failed to set cohesix,wifi-ssid"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_wifi_psk}"; then if fdt set /chosen cohesix,wifi-psk "${coh_wifi_psk}"; then echo "[cohesix] dtb chosen cohesix,wifi-psk=<set>"; else echo "[cohesix] ERROR: failed to set cohesix,wifi-psk"; setenv coh_boot_error 1; fi; fi'
+setenv coh_emit_policy_summary 'if test -n "${coh_net_mode}"; then echo "[cohesix] mode=${coh_net_mode}"; else echo "[cohesix] mode=manifest"; fi; if test -n "${coh_net_interface}"; then echo "[cohesix] interface=${coh_net_interface}"; else echo "[cohesix] interface=manifest"; fi; if test -n "${coh_static_ip}"; then echo "[cohesix] static-ip=${coh_static_ip}/${coh_static_prefix_len} gateway=${coh_static_gateway}"; fi; if test -n "${coh_wifi_ssid}"; then echo "[cohesix] wifi-ssid=${coh_wifi_ssid}"; fi'
+setenv coh_boot_loaded_image 'run coh_load_runtime_dtb; run coh_apply_dtb_policy; if test "${coh_boot_error}" = "1"; then echo "[cohesix] ERROR: boot aborted before kernel handoff"; else echo "[cohesix] loaded ${coh_image} to ${coh_addr}; bootm with ${coh_dtb_file}"; bootm ${coh_addr} - ${coh_dtb_addr}; echo "[cohesix] returned from image"; fi'
+setenv coh_boot_sequence 'run coh_emit_policy_summary; if fatload mmc 0:1 ${coh_addr} ${coh_image}; then run coh_boot_loaded_image; else echo "[cohesix] primary image load failed: ${coh_image}"; if fatload mmc 0:1 ${coh_addr} ${coh_image_fallback}; then setenv coh_image ${coh_image_fallback}; run coh_boot_loaded_image; else echo "[cohesix] ERROR: failed to load ${coh_image} or fallback ${coh_image_fallback} from mmc 0:1"; echo "[cohesix] manual: fatls mmc 0:1"; echo "[cohesix] manual: fatload mmc 0:1 0x10000000 ${coh_image}"; echo "[cohesix] manual: fatload mmc 0:1 0x14000000 ${coh_dtb_file}"; echo "[cohesix] manual: bootm 0x10000000 - 0x14000000"; fi; fi'
+setenv coh_prompt_dhcp 'run coh_prepare_input; cls; run coh_render_logo; echo "[cohesix] Guided network setup"; echo "[cohesix] Select address acquisition mode"; echo "  1. DHCP ON (automatic address)"; echo "  2. DHCP OFF (static IPv4)"; echo "  3. Back to boot options"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then setenv coh_net_mode dhcp; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; run coh_prompt_interface; elif test "${coh_choice}" = "2"; then setenv coh_net_mode static; run coh_prompt_interface; elif test "${coh_choice}" = "3"; then run coh_prompt_root; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_dhcp; fi'
+setenv coh_prompt_interface 'run coh_prepare_input; cls; run coh_render_logo; echo "[cohesix] Guided network setup"; echo "[cohesix] Select active interface"; echo "  1. Wired Ethernet (GENET)"; echo "  2. Wi-Fi (CYW43455)"; echo "  3. Back to DHCP selection"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then setenv coh_net_interface wired; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""; run coh_after_interface; elif test "${coh_choice}" = "2"; then setenv coh_net_interface wifi; run coh_after_interface; elif test "${coh_choice}" = "3"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_interface; fi'
+setenv coh_wifi_setup 'run coh_prepare_input; cls; run coh_render_logo; echo "[cohesix] Configure Wi-Fi credentials"; askenv coh_wifi_ssid "Wi-Fi SSID (required): " 32; if test -z "${coh_wifi_ssid}"; then echo "[cohesix] Wi-Fi SSID is required"; run coh_prompt_interface; fi; askenv coh_wifi_psk "Wi-Fi PSK (blank for open network): " 64; if test "${coh_net_mode}" = "static"; then run coh_static_setup; else run coh_confirm_prompt; fi'
+setenv coh_static_setup 'run coh_prepare_input; cls; run coh_render_logo; echo "[cohesix] Configure static IPv4 for ${coh_net_interface}"; askenv coh_static_ip "Static IPv4 address (required): " 15; if test -z "${coh_static_ip}"; then echo "[cohesix] Static IPv4 address is required"; run coh_static_setup; fi; askenv coh_static_prefix_len "Prefix length (required, 1-32): " 2; if test -z "${coh_static_prefix_len}"; then echo "[cohesix] Prefix length is required"; run coh_static_setup; fi; askenv coh_static_gateway "Gateway IPv4 (optional): " 15; run coh_confirm_prompt'
+setenv coh_after_interface 'if test "${coh_net_interface}" = "wifi"; then run coh_wifi_setup; elif test "${coh_net_mode}" = "static"; then run coh_static_setup; else run coh_confirm_prompt; fi'
+setenv coh_confirm_prompt 'run coh_prepare_input; cls; run coh_render_logo; echo "[cohesix] Review network settings"; run coh_emit_policy_summary; echo "  1. Boot with these settings"; echo "  2. Save settings and reboot"; echo "  3. Edit settings"; echo "  4. Discard changes and return"; echo "  0. Exit to U-Boot prompt"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then run coh_boot_sequence; elif test "${coh_choice}" = "2"; then run coh_persist_policy; reset; elif test "${coh_choice}" = "3"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "4"; then run coh_load_saved_policy; run coh_prompt_root; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_confirm_prompt; fi'
+setenv coh_prompt_root 'run coh_prepare_input; run coh_detect_saved_config; run coh_show_logo_splash; cls; run coh_render_logo; echo "[cohesix] Cohesix boot options"; if test "${coh_has_saved_config}" = "1"; then echo "[cohesix] Saved network settings detected"; run coh_emit_policy_summary; echo "  1. Continue with existing config"; else echo "[cohesix] No saved network settings; manifest defaults remain active"; echo "  1. Boot with manifest defaults"; fi; echo "  2. Configure networking"; echo "  3. Toggle HDMI logo"; echo "  4. Restore manifest defaults"; echo "  5. Save current settings and reboot"; echo "  0. Exit to U-Boot prompt"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then run coh_boot_sequence; elif test "${coh_choice}" = "2"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "3"; then run coh_toggle_logo; run coh_prompt_root; elif test "${coh_choice}" = "4"; then run coh_reset_policy; run coh_persist_policy; echo "[cohesix] manifest defaults restored"; run coh_prompt_root; elif test "${coh_choice}" = "5"; then run coh_persist_policy; reset; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_root; fi'
+run coh_load_saved_policy
+run coh_prompt_root
 EOF
     sed -i '' "s/__COH_IMAGE__/${coh_image}/g" "$out"
     sed -i '' "s/__COH_IMAGE_FALLBACK__/${fallback_image}/g" "$out"
+    sed -i '' "s/__COH_LOGO_FILE__/${COHESIX_LOGO_STAGE_NAME}/g" "$out"
+    sed -i '' "s/__COH_BOOTSTD_LOGO_FILE__/${BOOTSTD_LOGO_STAGE_NAME}/g" "$out"
 }
 
 stage_sd_payload() {
@@ -530,7 +617,7 @@ stage_sd_payload() {
 
     cp -f "${FIRMWARE_DIR}/start4.elf" "${STAGE_DIR}/start4.elf"
     cp -f "${FIRMWARE_DIR}/fixup4.dat" "${STAGE_DIR}/fixup4.dat"
-    cp -f "${FIRMWARE_DIR}/bcm2711-rpi-4-b.dtb" "${STAGE_DIR}/bcm2711-rpi-4-b.dtb"
+    stage_pi4_dtb "${FIRMWARE_DIR}/bcm2711-rpi-4-b.dtb" "${STAGE_DIR}/bcm2711-rpi-4-b.dtb"
     cp -f "${FIRMWARE_DIR}/overlays/miniuart-bt.dtbo" "${stage_overlays}/miniuart-bt.dtbo"
     cp -f "${FIRMWARE_DIR}/overlays/upstream-pi4.dtbo" "${stage_overlays}/upstream-pi4.dtbo"
     cp -f "$U_BOOT_BIN" "${STAGE_DIR}/u-boot.bin"
@@ -538,6 +625,10 @@ stage_sd_payload() {
     # Keep legacy fallback filename in sync with the staged Cohesix image so a
     # fallback boot path cannot silently run stale bits.
     cp -f "${STAGE_DIR}/${COHESIX_IMAGE_NAME}" "$fallback_image"
+    stage_uboot_logo "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}"
+    if [[ -f "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}" ]]; then
+        cp -f "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}" "${STAGE_DIR}/${BOOTSTD_LOGO_STAGE_NAME}"
+    fi
 
     cat > "${STAGE_DIR}/config.txt" <<EOF
 arm_64bit=1
@@ -636,6 +727,7 @@ main() {
     local mkimage_bin
     local cpio_bin
     mkimage_bin="$(resolve_mkimage)"
+    export PATH="$(dirname "${mkimage_bin}"):${PATH}"
     log "Using mkimage: ${mkimage_bin}"
 
     activate_venv

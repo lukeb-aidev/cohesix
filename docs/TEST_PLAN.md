@@ -492,7 +492,7 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
 - Pi 4 image / U-Boot gate:
   - `scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
   - `scripts/uboot/qemu-uboot-smoke.sh --net user`
-  - Confirm U-Boot env control remains deterministic (`ipaddr`, `serverip`, `coh_net_mode`, `coh_net_interface`) and the staged Pi 4 boot script mirrors `coh_net_*` env values into DTB `/chosen/cohesix,*` when `fdtcontroladdr` is available.
+  - Confirm U-Boot env control remains deterministic (`ipaddr`, `serverip`, `coh_net_mode`, `coh_net_interface`), the staged Pi 4 boot script reloads `cohesix.env`, mirrors `coh_net_*` values into the staged padded `bcm2711-rpi-4-b.dtb`, and boots the seL4 elfloader through U-Boot `bootm` with that DTB.
 - QEMU compatibility gate:
   - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
   - Existing QEMU hostfwd defaults (`127.0.0.1:{31337,31338,31339}`) and ACK/ERR/END fixtures must remain unchanged.
@@ -501,10 +501,17 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
     - `manifest.hw.network.mode=<static|dhcp>`
     - `manifest.hw.network.interface=<wired|wifi|auto>`
     - `[net-policy] source=<manifest|dtb> ...`
+    - when saved Cohesix policy exists, the U-Boot wizard defaults to `Continue with existing config`; otherwise it defaults to `Boot with manifest defaults`
+    - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`
   - `netstats` must report:
     - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`
-  - `wifi` and `auto` policy remain release-blocking until a HAL-backed CYW43xx path exists; current runtime rejection is deterministic but does not satisfy final 26b completion.
+    - `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`
+  - `nettest` refusal detail must preserve the reason when the run cannot start:
+    - `detail=dhcp-pending`
+    - `detail=not-ready:<root-ep|ipc-buffer|cspace-window|bootstrap-commit>`
+    - `detail=policy-disabled` or `detail=selftest-disabled` when the profile/runtime disables self-test
+  - explicit `wifi` now supports both `static` and `dhcp` through the HAL-backed CYW43455 path; `auto` remains DHCP-only, and final 26b completion still requires Pi 4 hardware captures proving join + DHCP and `auto` fallback behavior.
 
 ### 7) Release bundle validation (macOS + Ubuntu)
 Run Sections 3–5 using the extracted bundle in a clean temp directory (not the repo checkout).

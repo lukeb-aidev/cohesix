@@ -103,7 +103,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Complete |
 | [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | In Progress |
 | [26a](#26a) | Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) | Complete |
-| [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | Pending |
+| [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | In Progress |
 | [26c](#26c) | Humanized Surface Cleanup + Markdown Audit (Zero-Regression) | Pending |
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -6256,9 +6256,11 @@ Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC
   - Extend manifest/compiler schema with bounded policy fields for `pi4-uboot-aarch64`, including:
     - network mode (`off`, `static`, `dhcp`),
     - interface policy (`wired`, `wifi`, `auto`),
+    - bounded static IPv4 override fields (`ip`, `prefix_len`, optional `gateway`) for explicit `mode=static`,
     - DHCP timing bounds and retry limits.
   - When bootloader setup can provide network policy inputs, capture them pre-handoff and normalize through manifest/DTB-generated structures validated by `coh-rtc`.
   - Preserve deterministic fallback behavior when U-Boot policy inputs are missing or invalid.
+  - Stage an interactive Pi 4 U-Boot wizard that offers a Linux-style default action (`Continue with existing config` when saved Cohesix policy exists, otherwise `Boot with manifest defaults`), bounded DHCP/static selection, bounded wired/Wi-Fi selection, serial/USB-keyboard-safe numbered prompts, and optional HDMI logo display without introducing any new Cohesix protocol semantics.
 
 - **Backward-compatibility guardrails**
   - Keep QEMU `aarch64/virt` behavior for macOS/Linux unchanged by default (existing static/dev-virt flows must keep working with no required operator command changes).
@@ -6321,13 +6323,34 @@ Checks:
 Deliverables:
   - Manifest/U-Boot-policy-driven DHCP mode selection with docs-as-built parity.
 
+Title/ID: m26b-uboot-network-wizard
+Goal: Add an interactive Pi 4 U-Boot network wizard with saved-config continue flow, bounded static IPv4 prompts, and optional logo display.
+Inputs: scripts/pi4-image-build.sh, third_party/u-boot/configs/rpi_4_defconfig, docs/HARDWARE_BRINGUP.md, docs/INTERFACES.md, docs/COHESIX_LOGO.png.
+Changes:
+  - scripts/pi4-image-build.sh — generate an `askenv`-driven Pi 4 boot script that can continue with saved policy, choose DHCP vs static, choose wired vs Wi-Fi, collect bounded static IPv4 fields, persist only Cohesix policy to a dedicated FAT-side file, and optionally render a staged BMP logo on HDMI.
+  - third_party/u-boot/configs/rpi_4_defconfig — enable the `askenv` and `bmp display` support required by the wizard while keeping the seL4-recommended Pi 4 USB baseline.
+  - docs/HARDWARE_BRINGUP.md + docs/INTERFACES.md — document the wizard flow, persisted `coh_*` variables, bounded `/chosen/cohesix,*` static IPv4 properties, and the saved-config fast path.
+Commands:
+  - bash -n scripts/pi4-image-build.sh
+  - make -C third_party/u-boot rpi_4_defconfig
+  - make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+Checks:
+  - The first wizard action continues with saved Cohesix settings when any persisted override exists, otherwise it boots manifest defaults by default.
+  - `DHCP OFF` collects bounded static IPv4 fields and mirrors them into DTB `/chosen/cohesix,static-*` properties before handoff.
+  - The HDMI logo is optional: it renders when enabled and available, and boot still proceeds cleanly when it is disabled or cannot be staged.
+Deliverables:
+  - Pi 4 U-Boot network wizard with deterministic saved-config continuation and optional logo display.
+
 Title/ID: m26b-pi4-wifi-dhcp-baseline
 Goal: Add minimal Pi 4 Wi-Fi path sufficient for DHCP-backed diagnostics connectivity.
 Inputs: apps/root-task/src/drivers/*, apps/root-task/src/hal/*, docs/ARCHITECTURE.md, docs/SECURITY.md.
 Changes:
-  - apps/root-task/src/drivers/* — add HAL-bound CYW43xx-class Wi-Fi bring-up path with bounded join/retry behavior and no direct MMIO outside HAL traits.
-  - apps/root-task/src/net/* — bind Wi-Fi link state into shared DHCP/bootstrap flow.
-  - docs/ARCHITECTURE.md + docs/SECURITY.md — update network backend matrix, bounds, threat notes, and design-reference provenance (`bwfm` -> Zephyr/WHD HAL split -> `brcmfmac` edge-case guidance; no code lift).
+  - apps/root-task/src/hal/* — add Pi 4 Wi-Fi HAL traits for SDIO host I/O, power/reset control, OOB/host-wake observation, and firmware/NVRAM/CLM handoff; default implementations must fail deterministically with `unsupported`.
+  - apps/root-task/src/drivers/* — add a dedicated CYW43455/CYW43xx-class driver path that follows the reference shape `bwfm` -> Zephyr/WHD HAL split -> Linux `brcmfmac` (`sdio.c`, `firmware.c`, `cfg80211.c`) without lifting source.
+  - apps/root-task/src/drivers/* — implement the Pi 4 SDIO transport path first (function-0 direct I/O, function-1/2 enable, mailbox/interrupt handling, bounded firmware download, NVRAM/CLM staging) before join/auth logic.
+  - apps/root-task/src/net/* — bind Wi-Fi link state and Ethernet frame ingress/egress into the shared smoltcp bootstrap/DHCP flow without introducing any new in-VM listener surface.
+  - docs/ARCHITECTURE.md + docs/SECURITY.md — update the network backend matrix, bounds, threat notes, silicon identification (Pi 4B uses CYW43455 over SDIO), and reference-only provenance (`bwfm` -> Zephyr/WHD HAL split -> `brcmfmac` edge-case guidance; no code lift).
 Commands:
   - cargo check -p root-task
   - cargo test -p root-task wifi:: -- --nocapture
@@ -6337,6 +6360,86 @@ Checks:
   - Wi-Fi runtime/device access remains HAL-only; any non-HAL direct access path fails review.
 Deliverables:
   - Profile-gated CYW43xx Wi-Fi DHCP diagnostics path for Pi 4 with explicit reference-only provenance documentation.
+
+Title/ID: m26b-pi4-wifi-hal-foundation
+Goal: Add the HAL surface required to support Pi 4 Wi-Fi without any direct MMIO or firmware-service bypass in drivers.
+Inputs: apps/root-task/src/hal/*, apps/root-task/src/kernel.rs, docs/ARCHITECTURE.md.
+Changes:
+  - apps/root-task/src/hal/mod.rs — add bounded SDIO, Wi-Fi control GPIO, OOB/host-wake, and firmware bundle traits/types with deterministic `unsupported` defaults.
+  - apps/root-task/src/kernel.rs — keep Wi-Fi runtime rejection paths explicit until HAL-backed implementations are present.
+  - docs/ARCHITECTURE.md — document HAL ownership of Pi 4 Wi-Fi transport/control resources.
+Commands:
+  - cargo check -p root-task --no-default-features --features net-console
+  - cargo test -p root-task hal:: -- --nocapture
+Checks:
+  - All Wi-Fi transport/control operations are represented in HAL before any driver code depends on them.
+  - Non-Pi4 or pre-implementation HALs fail deterministically with `unsupported`.
+Deliverables:
+  - Auditable Wi-Fi HAL contract for subsequent 26b tasks.
+
+Title/ID: m26b-pi4-sdio-host-bringup
+Goal: Implement the Pi 4 SDIO host path needed by CYW43455.
+Inputs: apps/root-task/src/hal/*, apps/root-task/src/drivers/*, Pi 4 DTB/U-Boot handoff artifacts.
+Changes:
+  - apps/root-task/src/hal/* — add Pi 4 SDIO host implementation for the BCM2835/BCM2711 SDIO controller used by the on-board Wi-Fi device.
+  - apps/root-task/src/drivers/* — add bounded command/data path helpers for function-0 direct I/O and function-1/2 CMD53 transfers.
+  - docs/HARDWARE_BRINGUP.md — record the Pi 4 SDIO host node/pin assumptions and bring-up evidence.
+Commands:
+  - cargo check -p root-task
+  - cargo test -p root-task sdio:: -- --nocapture
+Checks:
+  - SDIO host init, clocking, bus-width changes, and direct/extended transfers are HAL-only and test-covered.
+Deliverables:
+  - Pi 4 SDIO transport substrate for CYW43455.
+
+Title/ID: m26b-cyw43455-firmware-transport
+Goal: Bring the CYW43455 to a firmware-ready state with bounded mailbox and firmware/NVRAM/CLM handling.
+Inputs: apps/root-task/src/drivers/*, out/pi4-sd/*, docs/SECURITY.md.
+Changes:
+  - apps/root-task/src/drivers/* — add CYW43455 reset/attach sequencing, core discovery, mailbox handling, firmware download, NVRAM application, and CLM load.
+  - docs/SECURITY.md — document firmware provenance, bounds, and runtime trust assumptions for the bundled Pi 4 Wi-Fi blobs.
+Commands:
+  - cargo check -p root-task
+  - cargo test -p root-task cyw43:: -- --nocapture
+Checks:
+  - Firmware bundle validation is bounded and deterministic.
+  - Driver reaches a ready-for-join state without bypassing HAL.
+Deliverables:
+  - CYW43455 transport/firmware path ready for association work.
+
+Title/ID: m26b-cyw43455-join-dhcp
+Goal: Complete Pi 4 Wi-Fi diagnostics connectivity by joining a network and binding the shared DHCP/bootstrap flow.
+Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/*, docs/INTERFACES.md, docs/HARDWARE_BRINGUP.md.
+Changes:
+  - apps/root-task/src/drivers/* — add bounded open-network/WPA2-PSK join sequencing, link-state reporting, and audited failure reasons.
+  - apps/root-task/src/net/* — route `wifi` and `auto` policy through the CYW43455 path while preserving single-active-interface guarantees.
+  - docs/INTERFACES.md + docs/HARDWARE_BRINGUP.md — document required credentials handoff, join breadcrumbs, DHCP evidence, and operator workflow.
+Commands:
+  - cargo check -p root-task
+  - cargo test -p root-task wifi:: -- --nocapture
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+Checks:
+  - `wifi` reaches link-up + DHCP when credentials are present.
+  - `auto` prefers Wi-Fi only when the CYW43455 path is healthy and still exposes at most one active control-plane interface.
+Deliverables:
+  - End-to-end Pi 4 Wi-Fi diagnostics path with DHCP and console reachability.
+
+Title/ID: m26b-pi4-wifi-hardware-validation
+Goal: Capture Pi 4 on-device evidence for CYW43455 join, DHCP, and deterministic `auto` fallback before marking 26b complete.
+Inputs: flashed Pi 4 SD image, serial capture, Wi-Fi credentials, direct-link/wired fallback host setup, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
+Changes:
+  - docs/HARDWARE_BRINGUP.md — record the exact serial breadcrumbs, host commands, and observed IP/console evidence for a successful Wi-Fi boot.
+  - docs/TEST_PLAN.md — add the final Pi 4 Wi-Fi validation transcript and `auto` fallback proof.
+Commands:
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+  - minicom -D /dev/cu.usbserial-0001 -b 115200 -o -C pi4-serial.log
+  - cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <wifi-lease-ip> --tcp-port 31337 --auth-token bootstrap
+Checks:
+  - Serial shows CYW43455 attach/join breadcrumbs followed by `[dhcp] lease bound ...`.
+  - `netstats` / `netstatus` report the Wi-Fi lease on `policy=wifi`.
+  - `auto` proves single-active-interface behavior by using Wi-Fi when healthy and falling back to wired only after explicit Wi-Fi failure.
+Deliverables:
+  - Pi 4 hardware validation evidence required to mark Milestone 26b complete.
 
 Title/ID: m26b-qemu-compat-gate
 Goal: Prove 26/26a/26b changes do not break macOS/Linux QEMU backward compatibility.

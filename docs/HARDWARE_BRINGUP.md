@@ -51,20 +51,36 @@
 - `go ${loadaddr}`
 
 ## U-Boot networking setup (for 26a/26b prep)
-- Milestone 26a uses static IPv4 in runtime. The current 26b wired baseline adds optional U-Boot-to-DTB policy handoff for `mode`/`interface` while keeping manifest defaults authoritative when the handoff is absent or invalid.
+- Milestone 26a uses static IPv4 in runtime. The current 26b Pi 4 path adds an interactive U-Boot wizard plus persisted `cohesix.env` policy handoff through a staged padded DTB and U-Boot `bootm`, while keeping manifest defaults authoritative when the handoff is absent or invalid.
 - Typical env setup:
 - `setenv autoload no`
 - `setenv ipaddr <board-ip>`
 - `setenv serverip <host-ip>`
 - `setenv ethact <interface>`
-- Optional Cohesix net-policy overrides mirrored into DTB `/chosen` by the staged boot script when `fdtcontroladdr` is available:
+- The staged `boot.cmd` now presents a Linux-style numbered wizard over the existing U-Boot consoles:
+- `Continue with existing config` is the default action when saved Cohesix policy already exists in `cohesix.env`.
+- `Boot with manifest defaults` is the default action when no saved Cohesix overrides exist.
+- `Configure networking` walks DHCP `ON|OFF`, `wired|wifi`, Wi-Fi credentials when needed, and static IPv4 prompts only when DHCP is off.
+- `Save current settings and reboot` persists only the user-facing Cohesix policy fields to `cohesix.env` on the FAT boot partition; it does not rewrite the manifest or generic U-Boot environment.
+- The wizard intentionally uses `askenv`-based numbered prompts instead of U-Boot `bootmenu`, because upstream U-Boot documents `bootmenu` as an ANSI-terminal path and the simpler prompt flow is more reliable on the Pi 4 HDMI + USB-keyboard bring-up path while still preserving serial control via `minicom`.
+- The script reloads only `cohesix.env` from the FAT partition, reinitializes USB input after bootflow scanning, then loads the staged padded `bcm2711-rpi-4-b.dtb` for policy handoff.
+- Optional Cohesix net-policy overrides mirrored into DTB `/chosen` by the staged boot script:
 - `setenv coh_net_mode <off|static|dhcp>`
 - `setenv coh_net_interface <wired|wifi|auto>`
-- `setenv coh_wifi_ssid <ssid>` (accepted into DTB handoff; current runtime still rejects Wi-Fi policy)
-- `setenv coh_wifi_psk <psk>` (accepted into DTB handoff; current runtime still rejects Wi-Fi policy)
+- `setenv coh_static_ip <ipv4>` (mirrored into DTB `/chosen/cohesix,static-ipv4`; only applied when the effective mode is `static`)
+- `setenv coh_static_prefix_len <1..32>` (mirrored into DTB `/chosen/cohesix,static-prefix-len`; only applied when the effective mode is `static`)
+- `setenv coh_static_gateway <ipv4>` (mirrored into DTB `/chosen/cohesix,static-gateway`; optional and only applied when the effective mode is `static`)
+- `setenv coh_wifi_ssid <ssid>` (mirrored into DTB `/chosen/cohesix,wifi-ssid`; used by the CYW43455 path when `coh_net_interface=wifi` or when `auto` prefers Wi-Fi)
+- `setenv coh_wifi_psk <psk>` (mirrored into DTB `/chosen/cohesix,wifi-psk`; used by the CYW43455 path for open/WPA2-PSK join)
+- The staged boot script now hands the saved `coh_wifi_*` variables directly to `fdt set` without mutating or persisting escaped shadow copies, so repeated boots and policy-file writes do not grow backslashes or corrupt WPA2 credentials. If an older card reports `Wi-Fi credential handoff overflow`, clear the saved `coh_wifi_ssid` / `coh_wifi_psk` values once and re-enter them through the wizard.
+- The staged `bcm2711-rpi-4-b.dtb` is padded to 128 KiB before flashing, so U-Boot can add `/chosen/cohesix,*` properties in place without `fdt resize`.
+- `setenv coh_show_logo <0|1>` (controls whether the staged `cohesix-logo.bmp` is displayed on HDMI before the menu)
+- The staged Pi 4 U-Boot build enables 24bpp BMP drawing, so the centered `boot.bmp` splash and menu logo use the same HDMI framebuffer path as `bmp display`.
+- Pi 4 U-Boot otherwise stays aligned with the seL4-recommended `rpi_4_defconfig` USB input path (`CONFIG_PREBOOT="pci enum; usb start;"`) so the menu/keyboard behavior matches the previously working baseline.
+- On first entry to the root menu, the staged `boot.bmp` copy of the Cohesix logo is shown centered for a short splash delay before the interactive menu is redrawn, so the logo remains visible even if the menu console clears the framebuffer afterward.
 - `ping ${serverip}`
-- `saveenv`
-- The staged `boot.cmd` copies these env vars into `/chosen/cohesix,*` properties before `go` when possible. If `/chosen` cannot be updated, root-task falls back to manifest defaults and logs `source=manifest`.
+- `fatwrite mmc 0:1 ${coh_policy_addr} cohesix.env ${filesize}` (only when explicitly persisting Cohesix policy)
+- The staged `boot.cmd` copies these env vars into `/chosen/cohesix,*` on the staged DTB before `bootm`. If that DTB cannot be loaded or updated, the script aborts before handoff instead of silently booting with stale policy. Saved Cohesix policy persists across reboots via `cohesix.env`, but the manifest remains the build-time default and is never rewritten on the SD card.
 
 ## Milestone 26a Pi 4 network checklist
 1. Build/validate the QEMU U-Boot harness:
@@ -79,23 +95,34 @@
 4. Validate TCP console reachability from host:
 - `cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
 
-## Milestone 26b wired DHCP checklist (as-built)
+## Milestone 26b Pi 4 network wizard checklist (as-built)
 1. Build Pi 4 payload with the 26b policy-capable manifest:
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
-2. Optional U-Boot runtime override before boot:
-- `setenv coh_net_mode dhcp`
-- `setenv coh_net_interface wired`
-3. Boot and confirm policy + DHCP evidence:
+2. At the U-Boot wizard, either:
+- wait for `Continue with existing config` or `Boot with manifest defaults`, or
+- choose `Configure networking` and walk the prompts:
+  - `DHCP ON (automatic address)` or `DHCP OFF (static IPv4)`
+  - `Wired Ethernet (GENET)` or `Wi-Fi (CYW43455)`
+  - when `DHCP OFF`, enter `Static IPv4 address`, `Prefix length`, and optional `Gateway IPv4`
+  - when `Wi-Fi`, enter `Wi-Fi SSID` and optional `Wi-Fi PSK`
+3. Optional persistence:
+- choose `Save current settings and reboot` or `Save settings and reboot` to persist only the Cohesix policy fields into `cohesix.env`.
+4. Boot and confirm policy evidence:
 - `[net-policy] source=manifest ...` or `[net-policy] source=dtb ...`
-- `manifest.hw.network.mode=dhcp`
+- `manifest.hw.network.mode=static`
 - `manifest.hw.network.interface=wired`
-- `manifest.hw.networking=enabled-dhcp-ipv4`
-- `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...` and then `[net-console] ready ip=<lease-ip> ...`
-4. Validate diagnostics surfaces:
-- `netstats` includes `mode=dhcp policy=wired active=wired standby=none addr_src=dhcp-lease ...`
+- `manifest.hw.networking=enabled-static-ipv4`
+- for the manifest-default boot, `[net-console] init: bringing up backend=... mode=static interface=wired ip=192.168.10.42/24 ...`
+- for wizard-selected `mode=dhcp`, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...` and then `[net-console] ready ip=<lease-ip> ...`
+- for wizard-selected `mode=static`, `[net-console] init: bringing up backend=... mode=static interface=... ip=<static-ip>/<prefix> ...`
+5. Validate diagnostics surfaces:
+- on the manifest-default boot, `netstats` includes `mode=static policy=wired active=wired standby=none addr_src=manifest-static ip=192.168.10.42 gateway=192.168.10.1 dhcp=disabled`
+- on the manifest-default boot, `netstatus` prints `ip=192.168.10.42 gateway=192.168.10.1 src=manifest-static dhcp=disabled`
+- on DHCP boots, `netstatus` prints the compact lease state (`ip=<lease-ip> gateway=<gw> src=dhcp-lease dhcp=bound`) so wrapped serial consoles still show the active address.
 - `nettest` targets the active wired address only.
-5. Current limitation:
-- `wifi` and `auto` policy requests are parsed and logged but rejected at runtime with deterministic `invalid-config` evidence until the HAL-backed CYW43xx path lands.
+6. Current limitation:
+- explicit `policy=wifi` now supports both `dhcp` and `static` when credentials are present.
+- `auto` remains DHCP-only and still tries Wi-Fi first when credentials are present, but Milestone 26b is not complete until on-device Pi 4 serial logs prove join + DHCP and `auto` fallback behavior.
 
 ## macOS U-Boot debug harness (fast iteration)
 - Purpose: validate U-Boot scripts/env/network setup behavior quickly before hardware retest.

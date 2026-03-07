@@ -30,7 +30,7 @@ use smoltcp::wire::EthernetAddress;
 ))]
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::{HalError, Hardware};
-use crate::net::{NetDevice, NetDeviceCounters, NetDriverError};
+use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError};
 #[cfg(any(
     all(feature = "kernel", target_os = "none"),
     feature = "cache-maintenance"
@@ -1557,6 +1557,18 @@ impl NetDevice for BcmGenetDevice {
     type Error = DriverError;
 
     fn create<H>(hal: &mut H) -> Result<Self, Self::Error>
+    where
+        H: crate::hal::Hardware<Error = crate::hal::HalError>,
+        Self: Sized,
+    {
+        Self::new(hal)
+    }
+
+    fn create_with_stage<H>(
+        hal: &mut H,
+        _config: &ConsoleNetConfig,
+        _stage: crate::net::NetStage,
+    ) -> Result<Self, Self::Error>
     where
         H: crate::hal::Hardware<Error = crate::hal::HalError>,
         Self: Sized,
