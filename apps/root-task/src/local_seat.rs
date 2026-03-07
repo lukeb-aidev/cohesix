@@ -63,6 +63,7 @@ pub struct LocalSeatStatus {
 pub struct LocalSeatRuntime {
     status: LocalSeatStatus,
     keyboard_queue: VecDeque<u8>,
+    input_echo_preview: String,
     mirrored_lines: VecDeque<String>,
     dropped_keyboard_bytes: u64,
     dropped_mirrored_lines: u64,
@@ -99,6 +100,7 @@ impl LocalSeatRuntime {
         Self {
             status,
             keyboard_queue: VecDeque::new(),
+            input_echo_preview: String::new(),
             mirrored_lines: VecDeque::new(),
             dropped_keyboard_bytes: 0,
             dropped_mirrored_lines: 0,
@@ -182,6 +184,21 @@ impl LocalSeatRuntime {
         self.dropped_mirrored_lines
     }
 
+    fn echo_input_bytes(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            update_input_echo_preview(
+                &mut self.input_echo_preview,
+                byte,
+                usize::from(self.status.line_bytes),
+            );
+        }
+
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        if let Some(backend) = self.backend.as_mut() {
+            backend.write_bytes(bytes);
+        }
+    }
+
     /// Poll the platform local-seat input backend and enqueue discovered bytes.
     pub fn poll_backend_keyboard(&mut self) {
         #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -201,6 +218,7 @@ impl LocalSeatRuntime {
                         );
                         boot_log::force_uart_line(line.as_str());
                     }
+                    self.echo_input_bytes(&chunk[..read]);
                     let _ = self.enqueue_keyboard_bytes(&chunk[..read]);
                 }
             }
@@ -430,6 +448,21 @@ pub fn truncate_for_display(line: &str, line_bytes: u16) -> &str {
     &line[..idx]
 }
 
+fn update_input_echo_preview(preview: &mut String, byte: u8, max_bytes: usize) {
+    match byte {
+        b'\r' | b'\n' => preview.clear(),
+        0x08 | 0x7f => {
+            let _ = preview.pop();
+        }
+        byte if byte.is_ascii_control() => {}
+        byte => {
+            if preview.len() < max_bytes {
+                let _ = preview.push(byte as char);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,5 +583,27 @@ mod tests {
         assert_eq!(lines[0], "abcde");
         assert_eq!(lines[1], "xyz");
         assert_eq!(runtime.dropped_mirrored_lines(), 1);
+    }
+
+    #[test]
+    fn input_echo_preview_tracks_typing_backspace_and_enter() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 4,
+            buffer_lines: 2,
+        });
+
+        runtime.echo_input_bytes(b"ab");
+        assert_eq!(runtime.input_echo_preview, "ab");
+
+        runtime.echo_input_bytes(b"\x08c");
+        assert_eq!(runtime.input_echo_preview, "ac");
+
+        runtime.echo_input_bytes(b"def");
+        assert_eq!(runtime.input_echo_preview, "acde");
+
+        runtime.echo_input_bytes(b"\n");
+        assert!(runtime.input_echo_preview.is_empty());
     }
 }

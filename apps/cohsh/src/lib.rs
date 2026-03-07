@@ -2034,18 +2034,19 @@ impl<T: Transport, W: Write> Shell<T, W> {
         had_session: bool,
         last_attach: &Option<LastAttach>,
     ) -> Result<()> {
-        if self.script_state.is_some() {
-            return Ok(());
-        }
         if !had_session || self.session.is_some() {
             return Ok(());
         }
         let Some(last_attach) = last_attach else {
             return Ok(());
         };
+        // Reattach after internal selftest scripts close the session, but do not let the
+        // restoration chatter overwrite the outer script's last-response bookkeeping.
+        let suspended_script_state = self.script_state.take();
         if let Err(err) = self.attach(last_attach.role, last_attach.ticket.as_deref()) {
             self.write_line(&format!("selftest: reattach failed: {err}"))?;
         }
+        self.script_state = suspended_script_state;
         Ok(())
     }
 
@@ -4632,6 +4633,70 @@ mod tests {
         assert!(rendered.contains("ls <path>"));
         assert!(rendered.contains("mount <service> <path>"));
         assert!(rendered.contains("detach"));
+    }
+
+    #[derive(Default)]
+    struct RestoreTestTransport {
+        attaches: u32,
+    }
+
+    impl Transport for RestoreTestTransport {
+        fn attach(&mut self, role: Role, _ticket: Option<&str>) -> Result<Session> {
+            self.attaches = self.attaches.saturating_add(1);
+            Ok(Session::new(
+                SessionId::from_raw(self.attaches.into()),
+                role,
+            ))
+        }
+
+        fn ping(&mut self, _session: &Session) -> Result<String> {
+            Ok("ping: ok".to_owned())
+        }
+
+        fn tail(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+            Ok(vec!["tail".to_owned()])
+        }
+
+        fn read(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        fn list(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        fn write(&mut self, _session: &Session, _path: &str, _payload: &[u8]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn restore_after_selftest_reattaches_inside_outer_script_without_clobbering_state() {
+        let mut output = Vec::new();
+        let mut shell = Shell::new(RestoreTestTransport::default(), &mut output);
+        shell.attach(Role::Queen, None).unwrap();
+        let last_attach = shell.last_attach.clone();
+        shell.script_state = Some(ScriptState::default());
+        {
+            let state = shell.script_state.as_mut().unwrap();
+            state.begin_command("test --mode quick");
+            state.record_output_line("selftest PASS mode=quick elapsed_ms=200");
+        }
+        shell.session = None;
+
+        shell.restore_after_selftest(true, &last_attach).unwrap();
+
+        assert!(shell.session.is_some());
+        assert_eq!(shell.transport.attaches, 2);
+        let state = shell.script_state.as_ref().unwrap();
+        assert_eq!(
+            state.last_response_line.as_deref(),
+            Some("selftest PASS mode=quick elapsed_ms=200")
+        );
+        assert_eq!(
+            state.last_command_line.as_deref(),
+            Some("test --mode quick")
+        );
     }
 
     #[cfg(feature = "tcp")]

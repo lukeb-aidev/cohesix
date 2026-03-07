@@ -7,6 +7,8 @@
 
 extern crate alloc;
 
+use alloc::collections::VecDeque;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp;
@@ -64,6 +66,9 @@ const PIXEL_ORDER_RGB: u32 = 1;
 const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
 const TAB_WIDTH: usize = 4;
+const HDMI_SCROLLBACK_MAX_LINES: usize = 512;
+const HDMI_SCROLLBACK_MAX_LINE_BYTES: usize = 256;
+const HDMI_SCROLL_PAGE_STEP_ROWS: i8 = 8;
 
 const FG_COLOR: u32 = 0xFFFF_FFFF;
 const BG_COLOR: u32 = 0xFF00_0000;
@@ -444,6 +449,16 @@ impl Pi4LocalSeat {
         self.display.write_line(line);
     }
 
+    /// Mirror raw console input bytes to HDMI without forcing a trailing newline.
+    pub fn write_bytes(&mut self, bytes: &[u8]) {
+        self.display.write_bytes(bytes);
+    }
+
+    /// Scroll the HDMI text viewport by display rows using local keyboard-only controls.
+    pub fn scroll_display_rows(&mut self, delta_rows: i8) {
+        self.display.scroll_view_rows(delta_rows);
+    }
+
     /// Poll USB keyboard and write canonical bytes into `out`.
     pub fn poll_keyboard_bytes(&mut self, out: &mut [u8]) -> usize {
         if self.keyboard.is_none() && !self.keyboard_init_attempted {
@@ -514,7 +529,14 @@ impl Pi4LocalSeat {
         }
 
         match self.keyboard.as_mut() {
-            Some(keyboard) => keyboard.poll_bytes(out),
+            Some(keyboard) => {
+                let written = keyboard.poll_bytes(out);
+                let scroll_rows = keyboard.take_pending_display_scroll_rows();
+                if scroll_rows != 0 {
+                    self.scroll_display_rows(scroll_rows);
+                }
+                written
+            }
             None => 0,
         }
     }
@@ -1445,6 +1467,9 @@ struct HdmiTextSink {
     col: usize,
     framebuffer: *mut u8,
     backend: HdmiBackend,
+    scrollback_lines: VecDeque<String>,
+    current_line: String,
+    scrollback_row_offset: usize,
     mappings: Vec<crate::sel4::DeviceFrame>,
     _prefix_maps: Vec<crate::sel4::DeviceFrame>,
 }
@@ -1700,6 +1725,9 @@ impl HdmiTextSink {
             col: 0,
             framebuffer,
             backend,
+            scrollback_lines: VecDeque::with_capacity(HDMI_SCROLLBACK_MAX_LINES),
+            current_line: String::new(),
+            scrollback_row_offset: 0,
             mappings,
             _prefix_maps: prefix_maps,
         };
@@ -1713,22 +1741,52 @@ impl HdmiTextSink {
     }
 
     fn write_line(&mut self, line: &str) {
+        self.reset_scrollback_on_live_update();
         for &byte in line.as_bytes() {
             self.put_byte(byte);
         }
         self.newline();
     }
 
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        self.reset_scrollback_on_live_update();
+        for &byte in bytes {
+            self.put_byte(byte);
+        }
+    }
+
+    fn scroll_view_rows(&mut self, delta_rows: i8) {
+        let max_offset = self.max_scrollback_row_offset();
+        let requested = if delta_rows >= 0 {
+            self.scrollback_row_offset
+                .saturating_add(delta_rows as usize)
+                .min(max_offset)
+        } else {
+            self.scrollback_row_offset
+                .saturating_sub((-delta_rows) as usize)
+        };
+        if requested == self.scrollback_row_offset {
+            return;
+        }
+        self.scrollback_row_offset = requested;
+        self.render_scrollback_view();
+    }
+
     fn put_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.newline(),
             b'\r' => self.col = 0,
+            0x08 | 0x7f => {
+                self.record_backspace();
+                self.backspace();
+            }
             b'\t' => {
                 for _ in 0..TAB_WIDTH {
                     self.put_byte(b' ');
                 }
             }
             _ => {
+                self.record_visible_byte(byte);
                 if self.col >= self.cols {
                     self.newline();
                 }
@@ -1738,7 +1796,15 @@ impl HdmiTextSink {
         }
     }
 
+    fn backspace(&mut self) {
+        let (row, col) = text_backspace_target(self.row, self.col, self.cols);
+        self.row = row;
+        self.col = col;
+        self.draw_char(b' ');
+    }
+
     fn newline(&mut self) {
+        self.record_newline();
         self.col = 0;
         self.row = self.row.saturating_add(1);
         if self.row >= self.rows {
@@ -1886,6 +1952,87 @@ impl HdmiTextSink {
         self.fill_rect(0, 0, self.width, self.height, BG_COLOR);
     }
 
+    fn reset_scrollback_on_live_update(&mut self) {
+        if self.scrollback_row_offset == 0 {
+            return;
+        }
+        self.scrollback_row_offset = 0;
+        self.render_scrollback_view();
+    }
+
+    fn record_visible_byte(&mut self, byte: u8) {
+        if self.current_line.len() >= HDMI_SCROLLBACK_MAX_LINE_BYTES {
+            return;
+        }
+        let _ = self.current_line.push(byte as char);
+    }
+
+    fn record_backspace(&mut self) {
+        let _ = self.current_line.pop();
+    }
+
+    fn record_newline(&mut self) {
+        if self.scrollback_lines.len() >= HDMI_SCROLLBACK_MAX_LINES {
+            let _ = self.scrollback_lines.pop_front();
+        }
+        self.scrollback_lines.push_back(self.current_line.clone());
+        self.current_line.clear();
+    }
+
+    fn max_scrollback_row_offset(&self) -> usize {
+        let total_rows = self.collect_scrollback_rows().len();
+        total_rows.saturating_sub(self.rows.max(1))
+    }
+
+    fn collect_scrollback_rows(&self) -> Vec<String> {
+        let mut rows = Vec::new();
+        let cols = self.cols.max(1);
+        for line in &self.scrollback_lines {
+            append_wrapped_scrollback_rows(&mut rows, line, cols);
+        }
+        append_wrapped_scrollback_rows(&mut rows, &self.current_line, cols);
+        if rows.is_empty() {
+            rows.push(String::new());
+        }
+        rows
+    }
+
+    fn render_scrollback_view(&mut self) {
+        let rows = self.collect_scrollback_rows();
+        let visible_rows = self.rows.max(1);
+        let total_rows = rows.len();
+        let max_offset = total_rows.saturating_sub(visible_rows);
+        self.scrollback_row_offset = self.scrollback_row_offset.min(max_offset);
+        let end = total_rows.saturating_sub(self.scrollback_row_offset);
+        let start = end.saturating_sub(visible_rows);
+
+        self.clear_screen();
+
+        for (display_row, row_text) in rows[start..end].iter().enumerate() {
+            for (display_col, byte) in row_text.as_bytes().iter().copied().enumerate() {
+                if display_col >= self.cols {
+                    break;
+                }
+                self.row = display_row;
+                self.col = display_col;
+                self.draw_char(byte);
+            }
+        }
+
+        let cursor_global_row = total_rows.saturating_sub(1);
+        let cursor_col = rows
+            .last()
+            .map(|line| line.as_bytes().len().min(self.cols))
+            .unwrap_or(0);
+        if cursor_global_row >= start && cursor_global_row < end {
+            self.row = cursor_global_row - start;
+            self.col = cursor_col;
+        } else {
+            self.row = 0;
+            self.col = 0;
+        }
+    }
+
     fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
         let x_end = cmp::min(self.width, x.saturating_add(w));
         let y_end = cmp::min(self.height, y.saturating_add(h));
@@ -1956,6 +2103,30 @@ impl HdmiTextSink {
 impl Drop for HdmiTextSink {
     fn drop(&mut self) {
         let _ = self.mappings.len();
+    }
+}
+
+#[inline]
+fn append_wrapped_scrollback_rows(rows: &mut Vec<String>, line: &str, cols: usize) {
+    if cols == 0 {
+        return;
+    }
+    if line.is_empty() {
+        rows.push(String::new());
+        return;
+    }
+
+    let mut start = 0usize;
+    while start < line.len() {
+        let mut end = cmp::min(start.saturating_add(cols), line.len());
+        while end > start && !line.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        if end == start {
+            break;
+        }
+        rows.push(String::from(&line[start..end]));
+        start = end;
     }
 }
 
@@ -2218,6 +2389,7 @@ struct UsbKeyboard {
     poll_error_logged: bool,
     led_error_logged: bool,
     first_report_logged: bool,
+    pending_display_scroll_rows: i8,
 }
 
 #[derive(Clone, Copy)]
@@ -2874,6 +3046,7 @@ impl UsbKeyboard {
                                 poll_error_logged: false,
                                 led_error_logged: false,
                                 first_report_logged: false,
+                                pending_display_scroll_rows: 0,
                             });
                         }
                     }
@@ -5834,6 +6007,13 @@ impl UsbKeyboard {
             if key == 0 || self.last_keys.contains(&key) {
                 continue;
             }
+            let scroll_delta = keyboard_display_scroll_delta_for_key(key);
+            if scroll_delta != 0 {
+                self.pending_display_scroll_rows = self
+                    .pending_display_scroll_rows
+                    .saturating_add(scroll_delta);
+                continue;
+            }
             if key == scancode::CAPS_LOCK {
                 self.caps_lock_on = !self.caps_lock_on;
                 let leds = if self.caps_lock_on { led::CAPS_LOCK } else { 0 };
@@ -5874,6 +6054,12 @@ impl UsbKeyboard {
 
         self.last_keys = report.keys;
         written
+    }
+
+    fn take_pending_display_scroll_rows(&mut self) -> i8 {
+        let delta = self.pending_display_scroll_rows;
+        self.pending_display_scroll_rows = 0;
+        delta
     }
 }
 
@@ -6573,6 +6759,20 @@ const fn hid_keyboard_candidate_requires_force_mode(rank: u8) -> bool {
 }
 
 #[inline]
+const fn text_backspace_target(row: usize, col: usize, cols: usize) -> (usize, usize) {
+    if cols == 0 {
+        return (0, 0);
+    }
+    if col > 0 {
+        (row, col - 1)
+    } else if row > 0 {
+        (row - 1, cols - 1)
+    } else {
+        (0, 0)
+    }
+}
+
+#[inline]
 const fn text_row_count(height: usize) -> usize {
     let rows = height / CHAR_HEIGHT;
     if rows == 0 {
@@ -6598,6 +6798,15 @@ fn keyboard_scancode_to_char(key: u8, shift: bool) -> Option<char> {
         Some('\n')
     } else {
         scancode_to_ascii(key, shift)
+    }
+}
+
+#[inline]
+const fn keyboard_display_scroll_delta_for_key(key: u8) -> i8 {
+    match key {
+        scancode::UP_ARROW => 1,
+        scancode::DOWN_ARROW => -1,
+        _ => 0,
     }
 }
 
@@ -6694,12 +6903,15 @@ fn validate_framebuffer_geometry(
 
 #[cfg(test)]
 mod tests {
+    use alloc::{string::String, vec::Vec};
+
     use super::{
-        clamp_visible_height, clamp_visible_width, config_value_for_set, decode_pci_mmio_bar,
-        hid_keyboard_attach_rank, hid_keyboard_attach_source,
-        hid_keyboard_candidate_requires_force_mode, hub_retry_wait_spins,
-        hub_should_eager_port_power, keyboard_scancode_to_char, mailbox_visible_dimension,
-        normalize_hub_tt_profile, text_row_count, text_viewport_height,
+        append_wrapped_scrollback_rows, clamp_visible_height, clamp_visible_width,
+        config_value_for_set, decode_pci_mmio_bar, hid_keyboard_attach_rank,
+        hid_keyboard_attach_source, hid_keyboard_candidate_requires_force_mode,
+        hub_retry_wait_spins, hub_should_eager_port_power, keyboard_display_scroll_delta_for_key,
+        keyboard_scancode_to_char, mailbox_visible_dimension, normalize_hub_tt_profile,
+        text_backspace_target, text_row_count, text_viewport_height,
         vl805_runtime_cfg_touch_allowed, ConfigDesc, UsbKeyboard, HUB_PORT_IFACE_FALLBACK_MAX,
     };
     use super::{
@@ -6895,6 +7107,25 @@ mod tests {
     }
 
     #[test]
+    fn text_backspace_target_rewinds_within_and_across_rows() {
+        assert_eq!(text_backspace_target(0, 0, 80), (0, 0));
+        assert_eq!(text_backspace_target(0, 5, 80), (0, 4));
+        assert_eq!(text_backspace_target(2, 0, 80), (1, 79));
+        assert_eq!(text_backspace_target(2, 0, 0), (0, 0));
+    }
+
+    #[test]
+    fn append_wrapped_scrollback_rows_wraps_empty_and_long_lines() {
+        let mut rows = Vec::new();
+        append_wrapped_scrollback_rows(&mut rows, "", 4);
+        append_wrapped_scrollback_rows(&mut rows, "abcdef", 4);
+        assert_eq!(
+            rows,
+            Vec::from([String::new(), String::from("abcd"), String::from("ef")])
+        );
+    }
+
+    #[test]
     fn keypad_enter_maps_to_newline() {
         assert_eq!(
             keyboard_scancode_to_char(scancode::KP_ENTER, false),
@@ -6904,6 +7135,16 @@ mod tests {
             keyboard_scancode_to_char(scancode::KP_ENTER, true),
             Some('\n')
         );
+    }
+
+    #[test]
+    fn keyboard_display_scroll_delta_maps_arrow_keys_only() {
+        assert_eq!(keyboard_display_scroll_delta_for_key(scancode::UP_ARROW), 1);
+        assert_eq!(
+            keyboard_display_scroll_delta_for_key(scancode::DOWN_ARROW),
+            -1
+        );
+        assert_eq!(keyboard_display_scroll_delta_for_key(scancode::A), 0);
     }
 
     #[test]

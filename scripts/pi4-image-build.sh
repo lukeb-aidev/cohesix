@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
+CANONICAL_MANIFEST_PATH="${ROOT_DIR}/configs/root_task.toml"
 SEL4_BUILD_DIR="${HOME}/seL4/build_UBOOT"
 SEL4_VENV_DIR="${HOME}/seL4/.venv_aarch64"
 U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
@@ -21,6 +22,7 @@ DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net-console"
 SKIP_BUILD=0
 PI4_TOTAL_MEM_MB=2048
+RESTORE_CANONICAL_CODEGEN=0
 
 usage() {
     cat <<'USAGE'
@@ -285,12 +287,17 @@ activate_venv() {
     source "${SEL4_VENV_DIR}/bin/activate"
 }
 
-run_coh_rtc_codegen() {
-    local manifest_json="${ROOT_DIR}/out/manifests/root_task_resolved.json"
+realpath_py() {
+    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"
+}
+
+run_coh_rtc_codegen_for_manifest() {
+    local manifest_path="$1"
+    local manifest_json="$2"
     mkdir -p "${ROOT_DIR}/out/manifests"
 
     cargo run -p coh-rtc -- \
-      "$MANIFEST_PATH" \
+      "$manifest_path" \
       --out "${ROOT_DIR}/apps/root-task/src/generated" \
       --manifest "$manifest_json" \
       --cas-manifest-template "${ROOT_DIR}/out/cas_manifest_template.json" \
@@ -303,8 +310,47 @@ run_coh_rtc_codegen() {
       --trace-policy-snippet "${ROOT_DIR}/docs/snippets/trace_policy.md" \
       --cas-interfaces-snippet "${ROOT_DIR}/docs/snippets/cas_interfaces.md" \
       --cas-security-snippet "${ROOT_DIR}/docs/snippets/cas_security.md" \
+      --cohesix-py-defaults "${ROOT_DIR}/tools/cohesix-py/cohesix/generated.py" \
+      --cohesix-py-doc "${ROOT_DIR}/docs/snippets/cohesix_py_defaults.md" \
+      --coh-doctor-doc "${ROOT_DIR}/docs/snippets/coh_doctor_checks.md" \
+      --cohsh-policy "${ROOT_DIR}/out/cohsh_policy.toml" \
+      --cohsh-policy-rust "${ROOT_DIR}/apps/cohsh/src/generated/policy.rs" \
+      --cohsh-policy-doc "${ROOT_DIR}/docs/snippets/cohsh_policy.md" \
+      --cohsh-client-rust "${ROOT_DIR}/apps/cohsh/src/generated/client.rs" \
+      --cohsh-client-doc "${ROOT_DIR}/docs/snippets/cohsh_client.md" \
       --cohsh-grammar-doc "${ROOT_DIR}/docs/snippets/cohsh_grammar.md" \
-      --cohsh-ticket-policy-doc "${ROOT_DIR}/docs/snippets/cohsh_ticket_policy.md"
+      --cohsh-ticket-policy-doc "${ROOT_DIR}/docs/snippets/cohsh_ticket_policy.md" \
+      --coh-policy "${ROOT_DIR}/out/coh_policy.toml" \
+      --coh-policy-rust "${ROOT_DIR}/apps/coh/src/generated/policy.rs" \
+      --coh-policy-doc "${ROOT_DIR}/docs/snippets/coh_policy.md" \
+      --swarmui-defaults "${ROOT_DIR}/out/swarmui_defaults.toml" \
+      --swarmui-defaults-rust "${ROOT_DIR}/apps/swarmui/src/generated.rs" \
+      --swarmui-defaults-doc "${ROOT_DIR}/docs/snippets/swarmui_defaults.md"
+}
+
+run_coh_rtc_codegen() {
+    run_coh_rtc_codegen_for_manifest \
+      "${MANIFEST_PATH}" \
+      "${ROOT_DIR}/out/manifests/root_task_resolved.json"
+}
+
+restore_canonical_codegen() {
+    if [[ "${RESTORE_CANONICAL_CODEGEN}" -eq 0 ]]; then
+        return 0
+    fi
+    log "Restoring canonical manifest artifacts via coh-rtc (${CANONICAL_MANIFEST_PATH})"
+    run_coh_rtc_codegen_for_manifest \
+      "${CANONICAL_MANIFEST_PATH}" \
+      "${ROOT_DIR}/out/manifests/root_task_resolved.json"
+}
+
+cleanup() {
+    local status=$?
+    trap - EXIT
+    if ! restore_canonical_codegen; then
+        status=1
+    fi
+    exit "$status"
 }
 
 sync_resolved_manifest_json() {
@@ -313,15 +359,15 @@ sync_resolved_manifest_json() {
     local dst_real
     mkdir -p "${ROOT_DIR}/out/manifests"
 
-    src_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${MANIFEST_PATH}")"
-    dst_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${manifest_json}")"
+    src_real="$(realpath_py "${MANIFEST_PATH}")"
+    dst_real="$(realpath_py "${manifest_json}")"
     if [[ "${src_real}" != "${dst_real}" ]]; then
         cp -f "${MANIFEST_PATH}" "${manifest_json}"
     fi
 
     if [[ -f "${MANIFEST_PATH}.sha256" ]]; then
-        src_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${MANIFEST_PATH}.sha256")"
-        dst_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${manifest_json}.sha256")"
+        src_real="$(realpath_py "${MANIFEST_PATH}.sha256")"
+        dst_real="$(realpath_py "${manifest_json}.sha256")"
         if [[ "${src_real}" != "${dst_real}" ]]; then
             cp -f "${MANIFEST_PATH}.sha256" "${manifest_json}.sha256"
         fi
@@ -523,6 +569,13 @@ main() {
     parse_args "$@"
 
     cd "$ROOT_DIR"
+    trap cleanup EXIT
+
+    local manifest_real
+    manifest_real="$(realpath_py "${MANIFEST_PATH}")"
+    if [[ "${manifest_real}" != "$(realpath_py "${CANONICAL_MANIFEST_PATH}")" ]]; then
+        RESTORE_CANONICAL_CODEGEN=1
+    fi
 
     require_file "$MANIFEST_PATH"
     require_file "$U_BOOT_BIN"

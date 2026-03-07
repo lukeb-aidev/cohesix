@@ -104,6 +104,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | In Progress |
 | [26a](#26a) | Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) | Complete |
 | [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | Pending |
+| [26c](#26c) | Humanized Surface Cleanup + Markdown Audit (Zero-Regression) | Pending |
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
@@ -6370,6 +6371,224 @@ Checks:
   - Existing QEMU `nettest` behavior and host workflows remain backward compatible with no required command changes.
 Deliverables:
   - Policy-driven `nettest` behavior for Pi 4 DHCP milestones with explicit single-active-interface guarantees and compatibility evidence.
+```
+
+---
+
+## Milestone 26c — Humanized Surface Cleanup + Markdown Audit (Zero-Regression) <a id="26c"></a>
+[Milestones](#Milestones)
+
+**Why now (reviewer trust):**
+Milestones 25-26b establish technical capability, transport breadth, and Pi 4 bring-up evidence, but external reviewers still judge code quality from the visible authoring surface first. Milestone 26c removes template-heavy presentation, tightens comment/header policy, inventories every Markdown file, and widens the regression gate so cleanup is only complete when the full staged Test Plan passes on both QEMU and Pi 4.
+
+**Non-negotiable constraints:**
+- No protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a "humanizing" label.
+- Comment/header/doc rewrites must not hide semantic changes. Behavior-changing refactors require their own tests and doc updates in the same change.
+- Generic restatement comments ("Defines the X module", "Provides the Y library surface", "CLI entry point") are prohibited once 26c lands; comments must explain invariants, authority boundaries, limits, operator-visible behavior, or rationale.
+- Required file headers may be narrowed, reformatted, or reduced only by updating `AGENTS.md`, `CONTRIBUTING.md`, and `docs/CODING_GUIDELINES.md` in the same change.
+- Large `root-task` and driver monoliths are not first-wave cleanup targets; extraction is allowed only when characterization tests already pin behavior.
+- `docs/snippets/*.md`, release snapshot docs under `releases/**/*.md`, and other generated/derived documentation remain update-by-source artifacts; they are not to be hand-edited as a shortcut.
+- Vendored/reference Markdown under `third_party/**/*.md` is inventory-only unless provenance, licensing, or linkage is wrong.
+- Milestone closure is blocked until the full Test Plan succeeds on QEMU and Pi 4 with no `INCOMPLETE` markers.
+
+### Prerequisite
+- Milestone **26b** completed (Pi 4 DHCP baseline + QEMU compatibility guardrails).
+
+### Goal
+Humanize the authored Cohesix code and documentation surfaces without protocol or behavioral regression by:
+1. replacing template-heavy comments and test naming with invariant-focused prose,
+2. classifying and reviewing every `*.md` file in the repository,
+3. adding characterization/CI gates before touching riskier host-side cleanup targets, and
+4. requiring the full staged Test Plan to pass on both QEMU and Pi 4 before closure.
+
+### Markdown review scope (all `*.md` files)
+Milestone 26c must inventory every Markdown file returned by:
+`rg --files -g '*.md' | sort`
+
+The inventory MUST include and disposition these path classes:
+- root/project Markdown: `AGENTS.md`, `CONTRIBUTING.md`, `README.md`
+- app and crate READMEs: `apps/**/README.md`, `crates/**/README.md`, `tools/cohesix-py/README.md`, `tests/integration/README.md`
+- canonical product docs: `docs/*.md`
+- audit docs: `docs/audit/*.md`, `docs/audit/checklists/*.md`, `docs/nist/*.md`
+- generated or derived doc fragments: `docs/snippets/*.md`
+- release snapshot docs: `releases/**/*.md`
+- seL4/reference docs carried in-repo: `seL4/*.md`
+- vendored/reference Markdown: `third_party/**/*.md`
+
+For each inventory entry, 26c must record one of:
+- human-edited canonical source,
+- generated snippet / do not hand-edit,
+- release snapshot / update only during release cut,
+- vendored reference / review-only,
+- external reference mirror / provenance and linkage only.
+
+### Deliverables
+- **Style charter and authoring rules**
+  - Update repository guidance so comments explain invariants, limits, threat boundaries, operator-visible behavior, or rationale rather than file names or obvious syntax.
+  - Replace blanket "library surface/module for/CLI entry point" phrasing with file-specific documentation or remove it when it adds no information.
+  - Define which boilerplate is still mandatory, which is derived, and which is prohibited.
+
+- **All-Markdown inventory and disposition**
+  - Produce a checked-in Markdown inventory/disposition table covering every `*.md` file under the repository root.
+  - Record which docs are canonical, generated, release-derived, reference-only, or vendored.
+  - Ensure release and snippet docs are traced back to their source artifacts instead of receiving ad-hoc prose edits.
+
+- **Low-risk surface cleanup**
+  - Clean up public crate surfaces, tiny modules, tests, READMEs, and operator docs first.
+  - Prefer renaming tests, tightening doc comments, and deleting generic noise before any control-flow refactor.
+  - Keep changes behavior-preserving and small enough to review mechanically.
+
+- **Characterization and gate expansion**
+  - Add or expand tests around crates currently most exposed to cleanup risk and currently weaker in CI coverage, especially `coh`, `host-ticket-agent`, and selected `root-task` helper modules.
+  - Extend CI/test-plan execution so cleanup work in these areas is exercised automatically before merge.
+  - Fail the gate on protocol drift, fixture drift, or undocumented output changes.
+
+- **Selected structural cleanup**
+  - Refactor repetitive validation and processing code in host-side crates only after characterization tests exist.
+  - Focus on readability wins that reduce duplication or make invariants explicit, not aesthetic churn.
+  - Defer monolithic kernel/driver rewrites until dedicated milestone work justifies the risk.
+
+- **QEMU + Pi 4 full regression evidence**
+  - Extend the staged Test Plan runner and docs so "PASS" can be asserted separately for QEMU and Pi 4 hardware runs using the same stage contract and evidence layout.
+  - Require full successful completion of the Test Plan on QEMU and Pi 4 for milestone closure.
+
+### Commands
+- `rg --files -g '*.md' | sort > out/audit/m26c_markdown_inventory.txt`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test -p secure9p-core`
+- `cargo test -p coh --features mock`
+- `cargo test -p host-ticket-agent`
+- `cargo test -p root-task --lib`
+- `scripts/ci/check_test_plan.sh`
+- `scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-qemu`
+- `COHESIX_TEST_TARGET=pi4 scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-pi4`
+
+### Checks (DoD)
+- Every Markdown file returned by `rg --files -g '*.md'` is present in the checked-in 26c inventory with an explicit disposition.
+- Cohesix-authored canonical docs are rewritten to remove generic template prose and to describe the as-built system, invariants, or operator contract.
+- Release snapshots, generated snippets, seL4 mirrors, and vendored docs are handled according to their disposition rules; no ad-hoc edits hide provenance.
+- Low-risk code/comment cleanup lands with no console grammar, Secure9P semantics, manifest output, telemetry format, or release workflow drift.
+- Cleanup candidates previously excluded or weakly covered in CI have characterization tests and staged-run coverage before structural refactors are accepted.
+- QEMU full Test Plan run is `PASS` via the staged runner with `stage_01.done` through `stage_05.done` and no `*.incomplete` markers.
+- Pi 4 full Test Plan run is `PASS` via the staged runner with the same stage completeness requirements and archived evidence/logs.
+- Milestone closure evidence includes before/after reviewer-facing artifacts: representative code diffs, Markdown inventory/disposition, QEMU test-plan state dir, Pi 4 test-plan state dir, and due-diligence outputs.
+
+### Compiler / docsystem touchpoints
+- `coh-rtc` generated snippets referenced by `docs/snippets/*.md` remain authoritative; 26c may only change their source schemas or generators, never hand-edit the derived snippet text.
+- Release snapshot documentation under `releases/**/*.md` remains derived from canonical docs and release packaging; if snapshot wording changes, the corresponding release-cut flow and notes must change in the same work.
+- `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
+
+### Task Breakdown
+```
+Title/ID: m26c-authoring-charter-and-header-rules
+Goal: Replace generic repository-wide authoring templates with explicit human-authored comment, header, and documentation rules.
+Inputs: AGENTS.md, CONTRIBUTING.md, README.md, docs/CODING_GUIDELINES.md, docs/API_GUIDELINES.md, docs/BUILD_PLAN.md
+Changes:
+  - AGENTS.md — narrow file-header requirements to legal/provenance metadata plus rules for when comments are required.
+  - CONTRIBUTING.md — codify review expectations for comment quality, diff shape, and no-regression cleanup sequencing.
+  - README.md — align contributor-facing quality language with the new authoring policy.
+  - docs/CODING_GUIDELINES.md — define acceptable doc-comment content, prohibited template phrasing, and behavior-preserving cleanup rules.
+  - docs/API_GUIDELINES.md — require interface docs to describe contracts, invariants, and failure modes instead of file/module summaries.
+Commands:
+  - rg -n "Purpose:|Defines the|Provide(s)? the|CLI entry point|library and public module surface|module for" AGENTS.md CONTRIBUTING.md README.md docs/CODING_GUIDELINES.md docs/API_GUIDELINES.md
+  - cargo fmt --all -- --check
+Checks:
+  - Repository guidance no longer instructs contributors to write generic file-summary boilerplate.
+  - Header and comment rules are internally consistent across canonical contributor documents.
+Deliverables:
+  - Canonical authoring policy for human-readable code and docs without hidden behavior changes.
+
+Title/ID: m26c-markdown-inventory-and-disposition
+Goal: Inventory and disposition every Markdown file in the repository so canonical, generated, release-derived, and vendored docs are handled correctly.
+Inputs: `rg --files -g '*.md' | sort`, root/project docs, apps/**/README.md, crates/**/README.md, docs/**/*.md, releases/**/*.md, seL4/*.md, tests/integration/README.md, tools/**/*.md, third_party/**/*.md
+Changes:
+  - docs/audit/M26C_MARKDOWN_INVENTORY.md — checked-in inventory/disposition table for every Markdown file returned by `rg --files -g '*.md'`.
+  - docs/BUILD_PLAN.md — record milestone scope, disposition rules, and inventory obligations.
+  - docs/REPO_LAYOUT.md — document Markdown path classes and which ones are canonical, derived, or vendored.
+  - docs/SECURITY.md — capture documentation provenance rules for generated, release, and vendored Markdown when they influence audit evidence.
+Commands:
+  - rg --files -g '*.md' | sort > out/audit/m26c_markdown_inventory.txt
+  - diff -u out/audit/m26c_markdown_inventory.txt <(awk 'NR>2 {print $1}' docs/audit/M26C_MARKDOWN_INVENTORY.md)
+Checks:
+  - Every repository Markdown file is accounted for exactly once in the checked-in inventory.
+  - Each entry has an explicit disposition and an update rule.
+Deliverables:
+  - Auditable all-Markdown inventory and disposition table covering canonical docs, release snapshots, reference mirrors, and vendored material.
+
+Title/ID: m26c-low-risk-surface-cleanup
+Goal: Humanize the highest-visibility low-risk code and doc surfaces before touching structural logic.
+Inputs: apps/*/README.md, crates/**/README.md, tools/cohesix-py/README.md, tests/integration/README.md, public crate roots under apps/*/src/lib.rs, tests/**/*.rs, docs/OPERATOR_WALKTHROUGH.md, docs/QUICKSTART.md, docs/QUICKSTART_ALPHA.md
+Changes:
+  - apps/*/README.md + crates/**/README.md + tools/cohesix-py/README.md + tests/integration/README.md — replace template summaries with role-specific descriptions, assumptions, and operator-facing boundaries.
+  - apps/*/src/lib.rs + apps/*/src/main.rs + crates/**/src/lib.rs — remove generic module-surface comments and rewrite doc comments around invariants or usage.
+  - tests/**/*.rs — rename template-like test names/descriptions to scenario-driven names and tighten helper naming.
+  - docs/OPERATOR_WALKTHROUGH.md + docs/QUICKSTART.md + docs/QUICKSTART_ALPHA.md — remove repetitive prose and keep operator sequences concrete.
+Commands:
+  - cargo test -p secure9p-core
+  - cargo test -p cohsh-core
+  - cargo test -p tests --quiet
+Checks:
+  - High-visibility surface files read as authored, file-specific documentation instead of generated scaffolding.
+  - Test names and doc comments describe behaviors and scenarios, not file names.
+Deliverables:
+  - First-wave cleanup across low-risk surfaces with zero behavior changes and passing tests.
+
+Title/ID: m26c-characterization-gates-before-refactor
+Goal: Add characterization tests and merge gates around cleanup-sensitive crates before accepting structural refactors.
+Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, apps/coh/src/mount.rs, apps/host-ticket-agent/src/*.rs, apps/root-task/src/net/stack.rs, docs/TEST_PLAN.md
+Changes:
+  - .github/workflows/ci.yml — stop excluding cleanup-sensitive crates without compensating gate coverage, or add explicit targeted jobs for them.
+  - scripts/ci/test_plan_stage_02_host_fast.sh — exercise `coh`, `host-ticket-agent`, and other cleanup targets as first-class checks.
+  - docs/TEST_PLAN.md — document the expanded cleanup-target coverage and required artifact retention.
+  - apps/coh/src/mount.rs + apps/host-ticket-agent/src/*.rs + selected apps/root-task/src/* helpers — add characterization tests for current outputs, errors, and state transitions before refactor.
+Commands:
+  - cargo test -p coh --features mock
+  - cargo test -p host-ticket-agent
+  - cargo test -p root-task --lib
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Cleanup-sensitive crates have deterministic tests that pin current operator-visible behavior.
+  - CI and staged test-plan coverage run those tests automatically.
+Deliverables:
+  - Regression safety net expanded ahead of structural cleanup.
+
+Title/ID: m26c-selected-host-structural-cleanup
+Goal: Refactor repetitive host-side validation and processing flows once characterization tests are in place.
+Inputs: apps/host-ticket-agent/src/lib.rs, apps/host-ticket-agent/src/claim.rs, apps/host-ticket-agent/src/status.rs, apps/coh/src/mount.rs, docs/ARCHITECTURE.md, docs/HOST_TOOLS.md, docs/INTERFACES.md
+Changes:
+  - apps/host-ticket-agent/src/lib.rs — factor manifest validation and ticket-processing branches into explicit invariant-bearing helpers without changing lifecycle semantics.
+  - apps/host-ticket-agent/src/claim.rs + apps/host-ticket-agent/src/status.rs — tighten naming, error shaping, and test readability while preserving JSON/receipt behavior.
+  - apps/coh/src/mount.rs — extract validation and append-only helpers into clearer units without changing FUSE or REST mount behavior.
+  - docs/ARCHITECTURE.md + docs/HOST_TOOLS.md + docs/INTERFACES.md — update any as-built explanations needed to reflect clearer code structure while preserving external contracts.
+Commands:
+  - cargo test -p host-ticket-agent
+  - cargo test -p coh --features mock
+  - cargo clippy --workspace --all-targets -- -D warnings
+Checks:
+  - Host-side cleanup reduces repetition and makes invariants explicit without protocol or file-layout drift.
+  - Characterization tests stay unchanged and passing across refactors.
+Deliverables:
+  - Human-readable host-side control-plane code with preserved external behavior.
+
+Title/ID: m26c-full-test-plan-qemu-and-pi4
+Goal: Make full staged Test Plan PASS on both QEMU and Pi 4 the explicit closure gate for 26c.
+Inputs: docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/pi4-image-build.sh, scripts/uboot/qemu-uboot-smoke.sh
+Changes:
+  - docs/TEST_PLAN.md — define QEMU and Pi 4 execution matrices, evidence paths, and PASS criteria using the same staged contract.
+  - docs/HARDWARE_BRINGUP.md — document Pi 4 hardware setup, log capture, and operator prerequisites needed to run the full Test Plan.
+  - scripts/ci/test_plan_run.sh + scripts/ci/test_plan_stage_*.sh — add target selection and evidence handling so the same runner can execute and archive QEMU and Pi 4 runs.
+  - scripts/pi4-image-build.sh — produce deterministic artifacts consumed by Pi 4 staged test-plan runs.
+Commands:
+  - scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-qemu
+  - COHESIX_TEST_TARGET=pi4 scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+  - COHESIX_TEST_TARGET=pi4 scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-pi4
+Checks:
+  - The staged runner produces `stage_01.done` through `stage_05.done` for both QEMU and Pi 4 state dirs.
+  - Neither state dir contains `*.incomplete` markers.
+  - Pi 4 evidence includes serial logs, network/console validation, and due-diligence outputs matching the documented PASS contract.
+Deliverables:
+  - Full Test Plan PASS on QEMU and Pi 4 as the hard milestone exit criterion, with archived evidence for both targets.
 ```
 
 ---

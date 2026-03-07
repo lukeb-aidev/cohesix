@@ -215,7 +215,6 @@ pub struct NineDoorBridge {
     session_role: Option<SessionRoleLabel>,
     session_ticket: Option<String>,
     session_scope: Option<String>,
-    next_worker_id: u32,
     ui: generated::UiProviderConfig,
     telemetry: generated::TelemetryConfig,
     telemetry_ingest: TelemetryIngestState,
@@ -538,7 +537,6 @@ impl NineDoorBridge {
             session_role: None,
             session_ticket: None,
             session_scope: None,
-            next_worker_id: 1,
             ui: generated::ui_provider_config(),
             telemetry: generated::telemetry_config(),
             telemetry_ingest: TelemetryIngestState::new(),
@@ -2028,8 +2026,7 @@ impl NineDoorBridge {
         if self.gpu.entry(gpu_id).is_none() {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
-        let worker_id = self.next_worker_id;
-        let worker_label = format!("worker-{worker_id}");
+        let (worker_id, worker_label) = self.allocate_worker_identity()?;
         let line = format!(
             "{{\"schema\":\"{}\",\"state\":\"{}\",\"gpu_id\":\"{}\",\"worker_id\":\"{}\",\"mem_mb\":{mem_mb},\"streams\":{streams},\"ttl_s\":{ttl_s},\"priority\":{priority}}}",
             GPU_LEASE_SCHEMA,
@@ -2047,7 +2044,8 @@ impl NineDoorBridge {
             append_log_bytes(&mut entry.lease_log, &line, lease_max)?;
             before_len
         };
-        if let Err(err) = self.spawn_worker(SpawnTarget::Gpu) {
+        if let Err(err) = self.spawn_worker_with_identity(SpawnTarget::Gpu, worker_id, worker_label)
+        {
             if let Some(entry) = self.gpu.entry_mut(gpu_id) {
                 entry.lease_log.truncate(before_len);
             }
@@ -2076,20 +2074,26 @@ impl NineDoorBridge {
     }
 
     fn spawn_worker(&mut self, target: SpawnTarget) -> Result<(), NineDoorBridgeError> {
+        let (worker_id, label) = self.allocate_worker_identity()?;
+        self.spawn_worker_with_identity(target, worker_id, label)
+    }
+
+    fn spawn_worker_with_identity(
+        &mut self,
+        target: SpawnTarget,
+        worker_id: u32,
+        id: HeaplessString<MAX_WORKER_ID_LEN>,
+    ) -> Result<(), NineDoorBridgeError> {
         let policy = affinity::policy();
-        let worker_index = self.next_worker_id.saturating_sub(1) as usize;
+        let worker_index = worker_id.saturating_sub(1) as usize;
         affinity::with_role_affinity(
             affinity::AffinityRole::Worker,
             worker_index,
             &policy,
             || {
-                let mut id = HeaplessString::<MAX_WORKER_ID_LEN>::new();
-                let worker_id = self.next_worker_id;
-                write!(id, "worker-{worker_id}").map_err(|_| NineDoorBridgeError::BufferFull)?;
                 if self.workers.len() >= MAX_WORKERS {
                     return Err(NineDoorBridgeError::BufferFull);
                 }
-                self.next_worker_id = self.next_worker_id.saturating_add(1);
                 let ring = TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize);
                 self.workers
                     .try_reserve(1)
@@ -2098,6 +2102,25 @@ impl NineDoorBridge {
                 Ok(())
             },
         )
+    }
+
+    fn allocate_worker_identity(
+        &self,
+    ) -> Result<(u32, HeaplessString<MAX_WORKER_ID_LEN>), NineDoorBridgeError> {
+        let max_workers =
+            u32::try_from(MAX_WORKERS).map_err(|_| NineDoorBridgeError::BufferFull)?;
+        for worker_id in 1..=max_workers {
+            let mut id = HeaplessString::<MAX_WORKER_ID_LEN>::new();
+            write!(id, "worker-{worker_id}").map_err(|_| NineDoorBridgeError::BufferFull)?;
+            if !self
+                .workers
+                .iter()
+                .any(|worker| worker.id.as_str() == id.as_str())
+            {
+                return Ok((worker_id, id));
+            }
+        }
+        Err(NineDoorBridgeError::BufferFull)
     }
 
     fn remove_worker(&mut self, worker_id: &str) -> Result<(), NineDoorBridgeError> {
@@ -5555,12 +5578,18 @@ impl PolicyState {
             return Ok(());
         }
         let max_entries = self.limits.queue_max_entries as usize;
+        self.evict_replaced_consumed_actions(&actions);
         self.evict_consumed_actions(actions.len(), max_entries);
         if self.actions.len() + actions.len() > max_entries {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
-        for action in actions.iter() {
-            if self.actions.iter().any(|entry| entry.id == action.id) {
+        for (index, action) in actions.iter().enumerate() {
+            if self
+                .actions
+                .iter()
+                .any(|entry| !entry.consumed && entry.id == action.id)
+                || actions[..index].iter().any(|prior| prior.id == action.id)
+            {
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
         }
@@ -5570,6 +5599,12 @@ impl PolicyState {
             self.actions.push(action);
         }
         Ok(())
+    }
+
+    fn evict_replaced_consumed_actions(&mut self, incoming: &[PolicyAction]) {
+        self.actions.retain(|entry| {
+            !(entry.consumed && incoming.iter().any(|action| action.id == entry.id))
+        });
     }
 
     fn evict_consumed_actions(&mut self, incoming: usize, max_entries: usize) {
@@ -8731,6 +8766,7 @@ fn truncate(input: &str, limit: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use super::*;
     use crate::{bootstrap::log as boot_log, event::AuditSink};
     use cohesix_cas::{CasManifest, CAS_MANIFEST_SCHEMA};
@@ -8760,6 +8796,29 @@ mod tests {
 
         assert!(bridge.attached());
         assert!(bridge.is_queen());
+    }
+
+    #[test]
+    fn worker_ids_reuse_lowest_free_slot_after_kill() {
+        let mut bridge = NineDoorBridge::new();
+        bridge
+            .spawn_worker(SpawnTarget::Heartbeat)
+            .expect("spawn worker-1");
+        bridge
+            .spawn_worker(SpawnTarget::Heartbeat)
+            .expect("spawn worker-2");
+        bridge.remove_worker("worker-1").expect("remove worker-1");
+        bridge
+            .spawn_worker(SpawnTarget::Heartbeat)
+            .expect("reuse worker-1");
+
+        let mut ids: Vec<&str> = bridge
+            .workers
+            .iter()
+            .map(|worker| worker.id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["worker-1", "worker-2"]);
     }
 
     #[test]
@@ -8944,6 +9003,46 @@ mod tests {
                 "test-ticket",
             )
             .expect_err("queue should reject when no consumed entries can be evicted");
+        assert!(matches!(err, NineDoorBridgeError::InvalidPayload));
+    }
+
+    #[test]
+    fn action_queue_reuses_consumed_action_ids_on_rerun() {
+        let mut policy = PolicyState::new();
+        policy.actions = vec![PolicyAction {
+            id: "selftest-approve-1".to_owned(),
+            target: "/queen/ctl".to_owned(),
+            decision: PolicyDecision::Approve,
+            consumed: true,
+        }];
+
+        policy
+            .append_action_queue(
+                "{\"id\":\"selftest-approve-1\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}\n",
+                "queen",
+                "test-ticket",
+            )
+            .expect("consumed action id should be reusable");
+
+        assert_eq!(policy.actions.len(), 1);
+        assert_eq!(policy.actions[0].id, "selftest-approve-1");
+        assert!(!policy.actions[0].consumed);
+    }
+
+    #[test]
+    fn action_queue_rejects_duplicate_ids_within_same_payload() {
+        let mut policy = PolicyState::new();
+
+        let err = policy
+            .append_action_queue(
+                concat!(
+                    "{\"id\":\"dup\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}\n",
+                    "{\"id\":\"dup\",\"target\":\"/queen/ctl\",\"decision\":\"approve\"}\n"
+                ),
+                "queen",
+                "test-ticket",
+            )
+            .expect_err("duplicate ids in one payload should be rejected");
         assert!(matches!(err, NineDoorBridgeError::InvalidPayload));
     }
 }
