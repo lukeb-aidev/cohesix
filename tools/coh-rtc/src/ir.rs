@@ -2841,18 +2841,13 @@ impl Default for HardwareNetworkConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NetworkMode {
+    #[default]
     Off,
     Static,
     Dhcp,
-}
-
-impl Default for NetworkMode {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 impl NetworkMode {
@@ -2865,18 +2860,13 @@ impl NetworkMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NetworkInterfacePolicy {
+    #[default]
     Wired,
     Wifi,
     Auto,
-}
-
-impl Default for NetworkInterfacePolicy {
-    fn default() -> Self {
-        Self::Wired
-    }
 }
 
 impl NetworkInterfacePolicy {
@@ -2907,7 +2897,7 @@ impl Default for DhcpPolicyConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct StaticIpv4Config {
     pub ip: String,
@@ -2915,30 +2905,15 @@ pub struct StaticIpv4Config {
     pub gateway: Option<String>,
 }
 
-impl Default for StaticIpv4Config {
-    fn default() -> Self {
-        Self {
-            ip: String::new(),
-            prefix_len: 0,
-            gateway: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NetworkBackendKind {
+    #[default]
     Auto,
     Rtl8139,
     VirtioNet,
     #[serde(rename = "bcmgenet-v5", alias = "bcm-genet-v5")]
     BcmGenetV5,
-}
-
-impl Default for NetworkBackendKind {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl NetworkBackendKind {

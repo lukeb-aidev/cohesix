@@ -164,15 +164,17 @@ const VL805_NOTIFY_SETTLE_SPINS: usize = 50_000;
 // bring-up. Keep it disabled for now.
 const VL805_RESET_NOTIFY_BEFORE_USB_PROBE: bool = false;
 // Touching VL805 PCI config space during early bootstrap has correlated with
-// fatal IRQ 27 entries on Pi4/seL4. Keep preseed writes disabled.
+// fatal IRQ 27 entries on Pi4/seL4. Keep preseed writes disabled, but still
+// pin the already-covered config page so runtime can reuse it without new ECAM
+// probing.
 const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
-// Runtime VL805 PCI preflight must ensure MEMORY_SPACE + BUS_MASTER are set
-// before xHCI bring-up. Without this, controller RUN can stall in HCH with
-// USBSTS.HSE set (observed as stage 0x0272 timeout on Pi4 local-seat boots).
-// However, direct runtime ECAM probing has also triggered fatal IRQ 27 entries
-// on Pi4 even when an xHCI MMIO hint is present. Runtime code must only touch
-// config space when a safe cfg window was already pinned during preseed.
-const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = true;
+// Runtime VL805 PCI preflight would ideally ensure MEMORY_SPACE + BUS_MASTER
+// are set before xHCI bring-up. In practice, direct ECAM probing on Pi4/seL4
+// is still causing fatal IRQ 27 entries during runtime keyboard attach even
+// after a safe cfg window was pinned during preseed. Keep runtime config-space
+// touches disabled and rely on the already-running firmware/U-Boot controller
+// state plus the preseeded xHCI MMIO window until ECAM access is proven safe.
+const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = false;
 const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
 const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
@@ -427,10 +429,13 @@ impl Pi4LocalSeat {
             boot_log::force_uart_line("[local-seat] pi4 keyboard preseed begin");
         }
         // Keep bootstrap preseed side-effect free: pin mapping windows only.
-        if VL805_CFG_PRESEED_TOUCH_ENABLED {
-            prime_pinned_vl805_cfg_window(hal);
-        } else if !VL805_CFG_SAFE_MODE_LOGGED.swap(true, Ordering::AcqRel) {
-            boot_log::force_uart_line("[local-seat] vl805 pci cfg touch disabled (safe-mode)");
+        prime_pinned_vl805_cfg_window(hal);
+        if !VL805_CFG_PRESEED_TOUCH_ENABLED
+            && !VL805_CFG_SAFE_MODE_LOGGED.swap(true, Ordering::AcqRel)
+        {
+            boot_log::force_uart_line(
+                "[local-seat] vl805 pci cfg writes disabled during preseed (safe-mode)",
+            );
         }
         if first_preseed {
             boot_log::force_uart_line("[local-seat] pi4 xhci preseed begin");
@@ -632,6 +637,13 @@ fn pinned_xhci_window_lookup(phys: usize, size: usize) -> Option<usize> {
     window.virt_start.checked_add(offset)
 }
 
+fn pinned_xhci_phys_start() -> Option<usize> {
+    PINNED_XHCI_MMIO
+        .lock()
+        .as_ref()
+        .map(|window| window.phys_start)
+}
+
 fn pinned_vl805_cfg_lookup(phys: usize, size: usize) -> Option<usize> {
     if size == 0 {
         return None;
@@ -726,8 +738,25 @@ fn current_vl805_xhci_mmio_hint() -> Option<usize> {
 }
 
 #[inline]
+fn preferred_xhci_runtime_mmio(
+    pinned_mmio: Option<usize>,
+    vl805_pci_mmio: Option<usize>,
+) -> Option<usize> {
+    vl805_pci_mmio.or(pinned_mmio)
+}
+
+#[inline]
 const fn vl805_runtime_cfg_touch_allowed(runtime_enabled: bool, has_cfg_window: bool) -> bool {
     runtime_enabled && has_cfg_window
+}
+
+#[inline]
+const fn xhci_runtime_mmio_candidate_allowed(mmio: usize, has_safe_cfg_window: bool) -> bool {
+    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
+        has_safe_cfg_window
+    } else {
+        true
+    }
 }
 
 fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
@@ -878,7 +907,7 @@ fn probe_xhci_capability_with_alias_scan(
     );
     boot_log::force_uart_line(scan_line.as_str());
 
-    for page in 1..XHCI_MMIO_ALIAS_SCAN_PAGES {
+    for page in 1..=XHCI_MMIO_ALIAS_SCAN_PAGES {
         let Some(candidate) = mmio_base.checked_add(page.saturating_mul(PAGE_SIZE)) else {
             break;
         };
@@ -948,23 +977,6 @@ fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>) {
         };
         remember_vl805_cfg_virt(config_virt);
 
-        let vendor_device = pci_cfg_read_u32(config_virt, PCI_CFG_VENDOR_DEVICE);
-        let class_revision = pci_cfg_read_u32(config_virt, PCI_CFG_CLASS_REVISION);
-        let command_before =
-            (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
-        // Keep VL805 INTx masked during bring-up to avoid fatal IRQ 27 storms
-        // while still enabling memory decode + DMA for xHCI rings.
-        let command_required = command_before
-            | PCI_COMMAND_MEMORY_SPACE
-            | PCI_COMMAND_BUS_MASTER
-            | PCI_COMMAND_INTERRUPT_DISABLE;
-        if command_required != command_before {
-            pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_required);
-        }
-        let command_after = (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
-        let bar0 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR0);
-        let bar1 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR1);
-        let bar_mmio = decode_pci_mmio_bar(bar0, bar1);
         core::mem::forget(frame);
 
         let mut pinned = PINNED_VL805_CFG.lock();
@@ -974,54 +986,86 @@ fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>) {
             virt_start: virt,
         });
 
-        let mut line = heapless::String::<240>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 pci cfg preseeded ecam=0x{ecam:016x} cfg=0x{cfg:016x} mode=read-mostly cfg_id=0x{cfg_id:08x} class=0x{class:06x} cmd=0x{before:04x}->0x{after:04x} bar0=0x{bar0:08x}",
-                ecam = ecam_base,
-                cfg = config_paddr,
-                cfg_id = vendor_device,
-                class = (class_revision >> 8) & 0x00ff_ffff,
-                before = command_before,
-                after = command_after,
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        let mut bar_line = heapless::String::<176>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut bar_line,
-            format_args!("[local-seat] vl805 pci cfg bar bar0=0x{bar0:08x} bar1=0x{bar1:08x}"),
-        );
-        boot_log::force_uart_line(bar_line.as_str());
-        if let Some(mmio) = bar_mmio {
-            let mut hint = heapless::String::<176>::new();
-            if xhci_mmio_candidate_valid(mmio) {
-                remember_vl805_xhci_mmio_hint(mmio);
-                let _ = core::fmt::Write::write_fmt(
-                    &mut hint,
-                    format_args!("[local-seat] vl805 pci cfg hint mmio=0x{mmio:016x}"),
-                );
+        if VL805_CFG_PRESEED_TOUCH_ENABLED {
+            let vendor_device = pci_cfg_read_u32(config_virt, PCI_CFG_VENDOR_DEVICE);
+            let class_revision = pci_cfg_read_u32(config_virt, PCI_CFG_CLASS_REVISION);
+            let command_before =
+                (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
+            // Keep VL805 INTx masked during bring-up to avoid fatal IRQ 27 storms
+            // while still enabling memory decode + DMA for xHCI rings.
+            let command_required = command_before
+                | PCI_COMMAND_MEMORY_SPACE
+                | PCI_COMMAND_BUS_MASTER
+                | PCI_COMMAND_INTERRUPT_DISABLE;
+            if command_required != command_before {
+                pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_required);
+            }
+            let command_after =
+                (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
+            let bar0 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR0);
+            let bar1 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR1);
+            let bar_mmio = decode_pci_mmio_bar(bar0, bar1);
+
+            let mut line = heapless::String::<240>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 pci cfg preseeded ecam=0x{ecam:016x} cfg=0x{cfg:016x} mode=read-mostly cfg_id=0x{cfg_id:08x} class=0x{class:06x} cmd=0x{before:04x}->0x{after:04x} bar0=0x{bar0:08x}",
+                    ecam = ecam_base,
+                    cfg = config_paddr,
+                    cfg_id = vendor_device,
+                    class = (class_revision >> 8) & 0x00ff_ffff,
+                    before = command_before,
+                    after = command_after,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            let mut bar_line = heapless::String::<176>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut bar_line,
+                format_args!("[local-seat] vl805 pci cfg bar bar0=0x{bar0:08x} bar1=0x{bar1:08x}"),
+            );
+            boot_log::force_uart_line(bar_line.as_str());
+            if let Some(mmio) = bar_mmio {
+                let mut hint = heapless::String::<176>::new();
+                if xhci_mmio_candidate_valid(mmio) {
+                    remember_vl805_xhci_mmio_hint(mmio);
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut hint,
+                        format_args!("[local-seat] vl805 pci cfg hint mmio=0x{mmio:016x}"),
+                    );
+                } else {
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut hint,
+                        format_args!(
+                            "[local-seat] vl805 pci cfg hint rejected mmio=0x{mmio:016x} reason=invalid-candidate"
+                        ),
+                    );
+                }
+                boot_log::force_uart_line(hint.as_str());
             } else {
-                let _ = core::fmt::Write::write_fmt(
-                    &mut hint,
-                    format_args!(
-                        "[local-seat] vl805 pci cfg hint rejected mmio=0x{mmio:016x} reason=invalid-candidate"
-                    ),
+                boot_log::force_uart_line(
+                    "[local-seat] vl805 pci cfg hint missing (BAR decode failed)",
                 );
             }
-            boot_log::force_uart_line(hint.as_str());
+            if (command_after & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER))
+                != (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
+            {
+                boot_log::force_uart_line(
+                    "[local-seat] vl805 pci cfg warning command bits missing after preseed",
+                );
+            }
         } else {
-            boot_log::force_uart_line(
-                "[local-seat] vl805 pci cfg hint missing (BAR decode failed)",
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 pci cfg preseeded ecam=0x{ecam:016x} cfg=0x{cfg:016x} mode=pin-only",
+                    ecam = ecam_base,
+                    cfg = config_paddr,
+                ),
             );
-        }
-        if (command_after & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER))
-            != (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
-        {
-            boot_log::force_uart_line(
-                "[local-seat] vl805 pci cfg warning command bits missing after preseed",
-            );
+            boot_log::force_uart_line(line.as_str());
         }
         return;
     }
@@ -2513,10 +2557,23 @@ impl UsbKeyboard {
             (None, false)
         };
 
+        let pinned_xhci_mmio = pinned_xhci_phys_start();
+        let has_safe_cfg_window = current_vl805_cfg_virt().is_some();
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
         let mut consider_candidate = |mmio: usize| {
             if candidate_count >= candidates.len() {
+                return;
+            }
+            if !xhci_runtime_mmio_candidate_allowed(mmio, has_safe_cfg_window) {
+                let mut line = heapless::String::<208>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-safe-cfg-window"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
                 return;
             }
             if !xhci_mmio_candidate_valid(mmio) {
@@ -2561,20 +2618,30 @@ impl UsbKeyboard {
             candidates[candidate_count] = mmio;
             candidate_count = candidate_count.saturating_add(1);
         };
-        match vl805_pci_mmio {
-            Some(vl805_mmio) => {
-                consider_candidate(vl805_mmio);
+        match preferred_xhci_runtime_mmio(pinned_xhci_mmio, vl805_pci_mmio) {
+            Some(preferred_mmio) => {
+                consider_candidate(preferred_mmio);
                 if let Some(hint) = xhci_mmio_hint {
-                    if hint != vl805_mmio {
+                    if hint != preferred_mmio {
                         let mut line = heapless::String::<208>::new();
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
                                 "[local-seat] xhci hint ignored hint=0x{hint:016x} verified=0x{verified:016x}",
-                                verified = vl805_mmio
+                                verified = preferred_mmio
                             ),
                         );
                         boot_log::force_uart_line(line.as_str());
+                    }
+                }
+                if let Some(remembered_mmio) = current_vl805_xhci_mmio_hint() {
+                    if remembered_mmio != preferred_mmio {
+                        consider_candidate(remembered_mmio);
+                    }
+                }
+                for fallback in RPI4_XHCI_MMIO_FALLBACKS {
+                    if fallback != preferred_mmio {
+                        consider_candidate(fallback);
                     }
                 }
             }
@@ -6905,7 +6972,9 @@ mod tests {
         hub_retry_wait_spins, hub_should_eager_port_power, keyboard_display_scroll_delta_for_key,
         keyboard_scancode_to_char, mailbox_visible_dimension, normalize_hub_tt_profile,
         text_backspace_target, text_row_count, text_viewport_height,
-        vl805_runtime_cfg_touch_allowed, ConfigDesc, UsbKeyboard, HUB_PORT_IFACE_FALLBACK_MAX,
+        vl805_runtime_cfg_touch_allowed, xhci_runtime_mmio_candidate_allowed, ConfigDesc,
+        UsbKeyboard, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
     };
     use super::{
         hid_protocol, hid_subclass, scancode, CHAR_HEIGHT, HUB_CLASS_CONTROL_WAIT_SPINS,
@@ -6958,6 +7027,37 @@ mod tests {
     #[test]
     fn vl805_runtime_cfg_touch_respects_global_disable() {
         assert!(!vl805_runtime_cfg_touch_allowed(false, true));
+    }
+
+    #[test]
+    fn xhci_high_candidate_requires_safe_cfg_window() {
+        assert!(!xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            true,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            false,
+        ));
+    }
+
+    #[test]
+    fn preferred_xhci_runtime_mmio_prefers_vl805_bar_hint() {
+        assert_eq!(
+            super::preferred_xhci_runtime_mmio(
+                Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            ),
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+        );
+        assert_eq!(
+            super::preferred_xhci_runtime_mmio(None, Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)),
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+        );
     }
 
     #[test]

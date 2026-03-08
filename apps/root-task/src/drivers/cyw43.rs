@@ -229,6 +229,10 @@ impl Cyw43NetDevice {
             .wifi_credentials
             .ok_or(DriverError::Config("wifi-credentials-missing"))?;
 
+        info!(
+            "[cyw43] init: begin ssid_len={} psk_len={}",
+            credentials.ssid_len, credentials.psk_len,
+        );
         let mut state = Pi4WifiState::new(hal)?;
         let firmware = state.firmware_bundle();
         firmware.validate().map_err(DriverError::InvalidFirmware)?;
@@ -239,6 +243,10 @@ impl Cyw43NetDevice {
         let effective_clock_hz = state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
         state.set_bus_width(SdioBusWidth::OneBit)?;
         state.set_reset(WifiResetState::Deasserted)?;
+        info!(
+            "[cyw43] init: power/reset/clock ready startup_clock={}Hz",
+            effective_clock_hz
+        );
 
         info!(
             "[cyw43] attach: fw={} nvram={} clm={} board={} clock={}Hz",

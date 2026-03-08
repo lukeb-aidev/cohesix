@@ -457,7 +457,7 @@ fn update_input_echo_preview(preview: &mut String, byte: u8, max_bytes: usize) {
         byte if byte.is_ascii_control() => {}
         byte => {
             if preview.len() < max_bytes {
-                let _ = preview.push(byte as char);
+                preview.push(byte as char);
             }
         }
     }

@@ -2382,7 +2382,10 @@ impl<D: NetDevice> NetStack<D> {
             gateway_label
         );
         info!(
-            "[net-console] init: creating {backend_label} device (listen_port={})",
+            "[net-console] init: creating device={} backend={} interface={} (listen_port={})",
+            D::name(),
+            backend_label,
+            console_config.policy.interface.as_str(),
             console_config.listen_port
         );
         let stage = NET_STAGE;

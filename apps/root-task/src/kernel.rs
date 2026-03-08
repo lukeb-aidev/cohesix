@@ -3336,9 +3336,9 @@ fn bootstrap<P: Platform>(
     }
 
     let hardware = generated::hardware_config();
-    // Initialise local-seat before UART MMIO mapping so low Pi4 peripheral
-    // pages (e.g. mailbox at 0xfe00_b000) can be reserved before higher UART
+    // Reserve low Pi4 Wi-Fi peripheral pages (mailbox/SDHCI) before higher UART
     // pages advance the device-untyped cursor.
+    crate::hal::pi4_wifi::preseed_mmio(hal);
     let mut local_seat_runtime = init_local_seat_runtime(
         &mut console,
         hardware,
@@ -3660,6 +3660,9 @@ fn bootstrap<P: Platform>(
                             "[net-console] disabled reason={reason} err={err_code}"
                         );
                         boot_log::force_uart_line(fail_line.as_str());
+                        let mut detail_line = heapless::String::<192>::new();
+                        let _ = write!(detail_line, "[net-console] init detail={err}");
+                        boot_log::force_uart_line(detail_line.as_str());
                         log::warn!("{} detail={err}", fail_line.as_str());
                         let virtio_present = cfg!(feature = "net-backend-virtio")
                             && net_backend_label == "virtio-net"

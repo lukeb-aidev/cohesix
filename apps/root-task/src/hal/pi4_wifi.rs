@@ -15,8 +15,10 @@ use super::{
     HalError, Hardware, SdioBusWidth, SdioFunction, WifiFirmwareBundle, WifiPowerState,
     WifiResetState,
 };
+use crate::bootstrap::log as boot_log;
 use crate::rust_alloc::vec::Vec;
 use crate::sel4::{page_get_address, DeviceFrame, RamFrame, PAGE_BITS};
+use spin::Mutex;
 
 include!(concat!(env!("OUT_DIR"), "/pi4_wifi_firmware.rs"));
 
@@ -56,6 +58,84 @@ const CLOCK_ID_EMMC2: u32 = 12;
 const EXPGPIO_BASE: u32 = 128;
 const PI4_WIFI_GPIO: u32 = EXPGPIO_BASE + 1;
 const GPIO_DIR_OUT: u32 = 1;
+
+static PINNED_MAILBOX_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
+static PINNED_SDHCI_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
+
+#[derive(Clone, Copy)]
+struct MappedRegs {
+    paddr: usize,
+    vaddr: usize,
+}
+
+impl MappedRegs {
+    fn from_frame(frame: &DeviceFrame) -> Self {
+        Self {
+            paddr: frame.paddr(),
+            vaddr: frame.ptr().as_ptr() as usize,
+        }
+    }
+
+    fn paddr(self) -> usize {
+        self.paddr
+    }
+
+    fn vaddr(self) -> usize {
+        self.vaddr
+    }
+}
+
+fn cloned_pinned_regs(pinned: &Mutex<Option<MappedRegs>>) -> Option<MappedRegs> {
+    pinned.lock().as_ref().copied()
+}
+
+fn preseed_register_block<H>(
+    hal: &mut H,
+    candidates: &[usize],
+    pinned: &Mutex<Option<MappedRegs>>,
+) -> bool
+where
+    H: Hardware<Error = HalError>,
+{
+    if pinned.lock().is_some() {
+        return true;
+    }
+
+    let mut prefix_maps = Vec::new();
+    let Ok(regs) = map_exact(hal, candidates, &mut prefix_maps) else {
+        return false;
+    };
+
+    let regs = MappedRegs::from_frame(&regs);
+    let mut slot = pinned.lock();
+    if slot.is_none() {
+        *slot = Some(regs);
+    }
+    true
+}
+
+pub fn preseed_mmio<H>(hal: &mut H)
+where
+    H: Hardware<Error = HalError>,
+{
+    let mailbox = preseed_register_block(hal, &MAILBOX_PAGE_PADDR_CANDIDATES, &PINNED_MAILBOX_REGS);
+    let sdhci = preseed_register_block(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &PINNED_SDHCI_REGS);
+
+    match (mailbox, sdhci) {
+        (true, true) => {
+            boot_log::force_uart_line("[pi4-wifi] mmio preseeded mailbox=yes sdhci=yes");
+        }
+        (true, false) => {
+            boot_log::force_uart_line("[pi4-wifi] mmio preseeded mailbox=yes sdhci=no");
+        }
+        (false, true) => {
+            boot_log::force_uart_line("[pi4-wifi] mmio preseeded mailbox=no sdhci=yes");
+        }
+        (false, false) => {
+            boot_log::force_uart_line("[pi4-wifi] mmio preseeded mailbox=no sdhci=no");
+        }
+    }
+}
 
 const SDHCI_BLOCK_SIZE: usize = 0x04;
 const SDHCI_BLOCK_COUNT: usize = 0x06;
@@ -264,8 +344,21 @@ impl Pi4WifiState {
     where
         H: Hardware<Error = HalError>,
     {
-        let mailbox = Mailbox::new(hal)?;
-        let host = SdioHost::new(hal, &mailbox)?;
+        log::info!("[pi4-wifi] hal init: begin");
+        let mailbox = Mailbox::new(hal).map_err(|err| {
+            log::warn!("[pi4-wifi] hal init: mailbox failed: {err}");
+            err
+        })?;
+        let host = SdioHost::new(hal, &mailbox).map_err(|err| {
+            log::warn!("[pi4-wifi] hal init: sdhci failed: {err}");
+            err
+        })?;
+        log::info!(
+            "[pi4-wifi] hal init: mailbox=0x{:08x} sdhci=0x{:08x} base_clock={}Hz",
+            mailbox.regs.paddr(),
+            host.regs_paddr,
+            host.base_clock_hz,
+        );
         Ok(Self {
             mailbox,
             host,
@@ -374,9 +467,8 @@ impl Pi4WifiState {
 }
 
 struct Mailbox {
-    regs: DeviceFrame,
+    regs: MappedRegs,
     request: RamFrame,
-    _prefix_maps: Vec<DeviceFrame>,
 }
 
 impl Mailbox {
@@ -384,16 +476,17 @@ impl Mailbox {
     where
         H: Hardware<Error = HalError>,
     {
-        let mut prefix_maps = Vec::new();
-        let regs = map_exact(hal, &MAILBOX_PAGE_PADDR_CANDIDATES, &mut prefix_maps)?;
+        let regs = if let Some(regs) = cloned_pinned_regs(&PINNED_MAILBOX_REGS) {
+            regs
+        } else {
+            let mut prefix_maps = Vec::new();
+            let regs = map_exact(hal, &MAILBOX_PAGE_PADDR_CANDIDATES, &mut prefix_maps)?;
+            MappedRegs::from_frame(&regs)
+        };
         let request = hal
             .alloc_dma_frame_low_attr(sel4_sys::seL4_ARM_Page_Uncached)
             .map_err(|_| HalError::Unsupported("mailbox-dma"))?;
-        Ok(Self {
-            regs,
-            request,
-            _prefix_maps: prefix_maps,
-        })
+        Ok(Self { regs, request })
     }
 
     fn power_on_module(&mut self, module: u32) -> Result<(), HalError> {
@@ -437,6 +530,7 @@ impl Mailbox {
         request_len_bytes: u32,
         payload: &mut [u32],
     ) -> Result<(), HalError> {
+        let original_payload = payload.to_vec();
         let words = {
             let bytes = self.request.as_mut_slice();
             unsafe {
@@ -444,6 +538,54 @@ impl Mailbox {
             }
         };
 
+        let mut last_err = HalError::Unsupported("mailbox-protocol");
+        for (alias_index, &alias_base) in VC_BUS_ALIAS_BASES.iter().enumerate() {
+            self.encode_request(words, tag, request_len_bytes, &original_payload)?;
+            let request_bus = phys_to_bus(self.request.paddr(), alias_base)
+                .ok_or(HalError::Unsupported("mailbox-bus-alias"))?;
+            match self.send(request_bus) {
+                Ok(()) => {
+                    if words[1] != MAILBOX_RESPONSE_SUCCESS
+                        || words[2] != tag
+                        || (words[4] & MAILBOX_VALUE_RESPONSE) == 0
+                    {
+                        last_err = HalError::Unsupported("mailbox-protocol");
+                        continue;
+                    }
+                    if alias_index > 0 {
+                        let mut line = heapless::String::<192>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[pi4-wifi] mailbox alias fallback alias=0x{alias_base:08x}"
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                    }
+                    payload.copy_from_slice(&words[5..5 + payload.len()]);
+                    return Ok(());
+                }
+                Err(err @ HalError::Unsupported("mailbox-timeout"))
+                | Err(err @ HalError::Unsupported("mailbox-protocol")) => {
+                    last_err = err;
+                    if alias_index + 1 == VC_BUS_ALIAS_BASES.len() {
+                        return Err(err);
+                    }
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(last_err)
+    }
+
+    fn encode_request(
+        &self,
+        words: &mut [u32],
+        tag: u32,
+        request_len_bytes: u32,
+        payload: &[u32],
+    ) -> Result<(), HalError> {
         let total_words = 6usize
             .checked_add(payload.len())
             .ok_or(HalError::Unsupported("mailbox-request-overflow"))?;
@@ -463,28 +605,7 @@ impl Mailbox {
         words[5 + payload.len()] = 0;
 
         fence(Ordering::SeqCst);
-
-        let mut last_err = HalError::Unsupported("mailbox-property");
-        for &alias_base in &VC_BUS_ALIAS_BASES {
-            let request_bus = phys_to_bus(self.request.paddr(), alias_base)
-                .ok_or(HalError::Unsupported("mailbox-bus-alias"))?;
-            match self.send(request_bus) {
-                Ok(()) => {
-                    if words[1] != MAILBOX_RESPONSE_SUCCESS
-                        || words[2] != tag
-                        || (words[4] & MAILBOX_VALUE_RESPONSE) == 0
-                    {
-                        last_err = HalError::Unsupported("mailbox-protocol");
-                        continue;
-                    }
-                    payload.copy_from_slice(&words[5..5 + payload.len()]);
-                    return Ok(());
-                }
-                Err(err) => last_err = err,
-            }
-        }
-
-        Err(last_err)
+        Ok(())
     }
 
     fn send(&self, data: u32) -> Result<(), HalError> {
@@ -495,47 +616,71 @@ impl Mailbox {
             let _ = self.read_reg(MAILBOX_READ_OFFSET);
         }
 
-        for _ in 0..MAILBOX_WAIT_SPINS {
-            if self.read_reg(MAILBOX_STATUS1_OFFSET) & MAILBOX_FULL == 0 {
-                self.write_reg(
-                    MAILBOX_WRITE_OFFSET,
-                    (data & !0xF) | (MAILBOX_CHANNEL_PROPERTY & 0xF),
-                );
-                fence(Ordering::SeqCst);
-                for _ in 0..MAILBOX_WAIT_SPINS {
-                    if self.read_reg(MAILBOX_STATUS0_OFFSET) & MAILBOX_EMPTY == 0 {
-                        let value = self.read_reg(MAILBOX_READ_OFFSET);
-                        if (value & 0xF) != MAILBOX_CHANNEL_PROPERTY
-                            || (value & !0xF) != (data & !0xF)
-                        {
-                            return Err(HalError::Unsupported("mailbox-protocol"));
-                        }
-                        return Ok(());
-                    }
-                    spin_loop();
-                }
+        let mut wait = 0usize;
+        while self.read_reg(MAILBOX_STATUS1_OFFSET) & MAILBOX_FULL != 0 {
+            wait = wait.saturating_add(1);
+            if wait >= MAILBOX_WAIT_SPINS {
+                self.log_timeout("send-space");
                 return Err(HalError::Unsupported("mailbox-timeout"));
             }
             spin_loop();
         }
-        Err(HalError::Unsupported("mailbox-timeout"))
+
+        self.write_reg(
+            MAILBOX_WRITE_OFFSET,
+            (data & !0xF) | (MAILBOX_CHANNEL_PROPERTY & 0xF),
+        );
+        fence(Ordering::SeqCst);
+
+        wait = 0;
+        loop {
+            while self.read_reg(MAILBOX_STATUS0_OFFSET) & MAILBOX_EMPTY != 0 {
+                wait = wait.saturating_add(1);
+                if wait >= MAILBOX_WAIT_SPINS {
+                    self.log_timeout("recv");
+                    return Err(HalError::Unsupported("mailbox-timeout"));
+                }
+                spin_loop();
+            }
+
+            let value = self.read_reg(MAILBOX_READ_OFFSET);
+            if (value & 0xF) == MAILBOX_CHANNEL_PROPERTY {
+                if (value & !0xF) != (data & !0xF) {
+                    return Err(HalError::Unsupported("mailbox-protocol"));
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    fn log_timeout(&self, phase: &str) {
+        let status0 = self.read_reg(MAILBOX_STATUS0_OFFSET);
+        let status1 = self.read_reg(MAILBOX_STATUS1_OFFSET);
+        let mut line = heapless::String::<200>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[pi4-wifi] mailbox timeout phase={phase} regs=0x{regs:08x} status0=0x{status0:08x} status1=0x{status1:08x}",
+                regs = self.regs.paddr()
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
     }
 
     fn read_reg(&self, offset: usize) -> u32 {
-        let base = self.regs.ptr().as_ptr() as usize;
+        let base = self.regs.vaddr();
         unsafe { ptr::read_volatile((base + offset) as *const u32) }
     }
 
     fn write_reg(&self, offset: usize, value: u32) {
-        let base = self.regs.ptr().as_ptr() as usize;
+        let base = self.regs.vaddr();
         unsafe { ptr::write_volatile((base + offset) as *mut u32, value) };
     }
 }
 
 struct SdioHost {
-    regs: DeviceFrame,
+    regs: MappedRegs,
     regs_paddr: usize,
-    _prefix_maps: Vec<DeviceFrame>,
     base_clock_hz: u32,
     current_clock_hz: u32,
     desired_bus_width: SdioBusWidth,
@@ -547,15 +692,19 @@ impl SdioHost {
     where
         H: Hardware<Error = HalError>,
     {
-        let mut prefix_maps = Vec::new();
-        let regs = map_exact(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &mut prefix_maps)?;
+        let regs = if let Some(regs) = cloned_pinned_regs(&PINNED_SDHCI_REGS) {
+            regs
+        } else {
+            let mut prefix_maps = Vec::new();
+            let regs = map_exact(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &mut prefix_maps)?;
+            MappedRegs::from_frame(&regs)
+        };
         let regs_paddr = regs.paddr();
         let mut mailbox = MailboxRef(mailbox);
         let base_clock_hz = mailbox.query_clock_hz().unwrap_or(100_000_000);
         Ok(Self {
             regs,
             regs_paddr,
-            _prefix_maps: prefix_maps,
             base_clock_hz,
             current_clock_hz: 0,
             desired_bus_width: SdioBusWidth::OneBit,
@@ -1282,12 +1431,12 @@ impl SdioHost {
     }
 
     fn read8(&self, offset: usize) -> u8 {
-        let base = self.regs.ptr().as_ptr() as usize;
+        let base = self.regs.vaddr();
         unsafe { ptr::read_volatile((base + offset) as *const u8) }
     }
 
     fn read16(&self, offset: usize) -> u16 {
-        let base = self.regs.ptr().as_ptr() as usize;
+        let base = self.regs.vaddr();
         let aligned = offset & !0x3;
         let word = unsafe { ptr::read_volatile((base + aligned) as *const u32) };
         let shift = ((offset & 0x2) * 8) as u32;
@@ -1295,7 +1444,7 @@ impl SdioHost {
     }
 
     fn read32(&self, offset: usize) -> u32 {
-        let base = self.regs.ptr().as_ptr() as usize;
+        let base = self.regs.vaddr();
         unsafe { ptr::read_volatile((base + offset) as *const u32) }
     }
 
@@ -1313,13 +1462,13 @@ impl SdioHost {
         let shift = ((offset & 0x2) * 8) as u32;
         let mask = !(0xFFFFu32 << shift);
         let new_word = (word & mask) | (u32::from(value) << shift);
-        let base = self.regs.ptr().as_ptr() as usize;
+        let base = self.regs.vaddr();
         unsafe { ptr::write_volatile((base + aligned) as *mut u32, new_word) };
         self.write_delay(aligned);
     }
 
     fn write32(&self, offset: usize, value: u32) {
-        let base = self.regs.ptr().as_ptr() as usize;
+        let base = self.regs.vaddr();
         unsafe { ptr::write_volatile((base + offset) as *mut u32, value) };
         self.write_delay(offset);
     }
@@ -1341,7 +1490,6 @@ impl MailboxRef<'_> {
         let mut cloned = Mailbox {
             regs: self.0.regs.clone(),
             request: self.0.request.clone(),
-            _prefix_maps: Vec::new(),
         };
         cloned.power_on_module(POWER_DEVID_SDHCI)?;
         cloned
@@ -1441,7 +1589,7 @@ pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{make_command, normalize_nvram, r5_status, ResponseType};
+    use super::{make_command, normalize_nvram, phys_to_bus, r5_status, ResponseType};
 
     #[test]
     fn normalize_nvram_appends_newline_nul_and_padding() {
@@ -1462,5 +1610,11 @@ mod tests {
         assert_eq!(r5_status(0), 0);
         assert_eq!(r5_status(0xCB00), 0xCB00);
         assert_eq!(r5_status(0xFFFF_FFFF), 0xCB00);
+    }
+
+    #[test]
+    fn phys_to_bus_preserves_low_bits_and_applies_alias() {
+        assert_eq!(phys_to_bus(0x3F00_B880, 0xC000_0000), Some(0xFF00_B880));
+        assert_eq!(phys_to_bus(0x3F00_B880, 0x4000_0000), Some(0x7F00_B880));
     }
 }
