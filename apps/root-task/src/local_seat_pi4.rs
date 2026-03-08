@@ -756,6 +756,16 @@ const fn xhci_preseed_allows_static_legacy_fallbacks(_vl805_hint: Option<usize>)
     true
 }
 
+#[inline]
+const fn xhci_preseed_requires_pin_only(mmio: usize, vl805_hint: Option<usize>) -> bool {
+    xhci_mmio_is_legacy_alias(mmio) && vl805_hint.is_none()
+}
+
+#[inline]
+const fn xhci_runtime_allows_alias_scan(mmio: usize, verified_vl805_hint: Option<usize>) -> bool {
+    !xhci_mmio_is_legacy_alias(mmio) || verified_vl805_hint.is_some()
+}
+
 #[derive(Clone, Copy)]
 struct Vl805PciCfgSnapshot {
     vendor_device: u32,
@@ -1330,6 +1340,38 @@ fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usiz
                 ),
             );
             boot_log::force_uart_line(attempt.as_str());
+            if xhci_preseed_requires_pin_only(mmio, vl805_hint) {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci preseed pin-only mmio=0x{mmio:016x} reason=no-verified-vl805-hint"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                if pin_xhci_mmio_window(hal, mmio, length).is_ok() {
+                    let mut line = heapless::String::<208>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci mmio preseeded mmio=0x{mmio:016x} bytes=0x{bytes:05x} mode=pin-only",
+                            bytes = length
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    return;
+                }
+                let mut fail = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut fail,
+                    format_args!(
+                        "[local-seat] xhci preseed failed mmio=0x{mmio:016x} bytes=0x{bytes:05x} mode=pin-only",
+                        bytes = length
+                    ),
+                );
+                boot_log::force_uart_line(fail.as_str());
+                continue;
+            }
             let (validated_mmio, probe) = match probe_xhci_capability_with_alias_scan(hal, mmio) {
                 Ok(validated) => validated,
                 Err(reason) => {
@@ -2962,33 +3004,47 @@ impl UsbKeyboard {
 
             let (effective_mmio, _cap_probe) = match validate_xhci_capability_window(&raw_probe) {
                 Ok(()) => (mmio_base, raw_probe),
-                Err(reason) => match probe_xhci_capability_with_alias_scan(hal, mmio_base) {
-                    Ok((candidate, scanned_probe)) => {
-                        let mut line = heapless::String::<224>::new();
-                        let _ = core::fmt::Write::write_fmt(
-                            &mut line,
-                            format_args!(
-                                "[local-seat] xhci candidate shifted base=0x{base:016x} selected=0x{selected:016x}",
-                                base = mmio_base,
-                                selected = candidate
-                            ),
-                        );
-                        boot_log::force_uart_line(line.as_str());
-                        (candidate, scanned_probe)
-                    }
-                    Err(_) => {
+                Err(reason) => {
+                    if !xhci_runtime_allows_alias_scan(mmio_base, verified_vl805_hint) {
                         let mut line = heapless::String::<208>::new();
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] xhci candidate rejected mmio=0x{mmio:016x} detail={reason}",
+                                "[local-seat] xhci candidate rejected mmio=0x{mmio:016x} detail={reason} mode=no-alias-scan",
                                 mmio = mmio_base
                             ),
                         );
                         boot_log::force_uart_line(line.as_str());
                         continue;
                     }
-                },
+                    match probe_xhci_capability_with_alias_scan(hal, mmio_base) {
+                        Ok((candidate, scanned_probe)) => {
+                            let mut line = heapless::String::<224>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci candidate shifted base=0x{base:016x} selected=0x{selected:016x}",
+                                    base = mmio_base,
+                                    selected = candidate
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            (candidate, scanned_probe)
+                        }
+                        Err(_) => {
+                            let mut line = heapless::String::<208>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci candidate rejected mmio=0x{mmio:016x} detail={reason}",
+                                    mmio = mmio_base
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            continue;
+                        }
+                    }
+                }
             };
 
             // Keep probe order deterministic so field logs are directly
@@ -7301,6 +7357,46 @@ mod tests {
         assert!(xhci_preseed_allows_static_legacy_fallbacks(Some(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE
         )));
+    }
+
+    #[test]
+    fn xhci_preseed_uses_pin_only_for_legacy_aliases_without_vl805_hint() {
+        assert!(xhci_preseed_requires_pin_only(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            None,
+        ));
+        assert!(xhci_preseed_requires_pin_only(
+            RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
+            None,
+        ));
+        assert!(!xhci_preseed_requires_pin_only(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+        ));
+        assert!(!xhci_preseed_requires_pin_only(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            None,
+        ));
+    }
+
+    #[test]
+    fn xhci_runtime_alias_scan_requires_verified_source_for_legacy_aliases() {
+        assert!(!xhci_runtime_allows_alias_scan(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            None,
+        ));
+        assert!(!xhci_runtime_allows_alias_scan(
+            RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
+            None,
+        ));
+        assert!(xhci_runtime_allows_alias_scan(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+        ));
+        assert!(xhci_runtime_allows_alias_scan(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            None,
+        ));
     }
 
     #[test]

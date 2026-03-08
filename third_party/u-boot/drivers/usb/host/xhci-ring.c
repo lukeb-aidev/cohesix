@@ -911,15 +911,30 @@ int xhci_ctrl_tx(struct usb_device *udev, unsigned long pipe,
 	 * prepare_trasfer() as there in 'Linux' since we are not
 	 * maintaining multiple TDs/transfer at the same time.
 	 */
-	ret = prepare_ring(ctrl, ep_ring,
-				le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK);
+	u32 ep_state = le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK;
+
+	ret = prepare_ring(ctrl, ep_ring, ep_state);
+	if (ret < 0 && ep_state == EP_STATE_HALTED) {
+		printf("[xhci] ctrl halt-recover slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u\n",
+		       slot_id, ep_index, req->request, req->requesttype,
+		       le16_to_cpu(req->value), le16_to_cpu(req->index),
+		       le16_to_cpu(req->length));
+		reset_ep(udev, ep_index);
+		ep_state = le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK;
+		ret = prepare_ring(ctrl, ep_ring, ep_state);
+		if (!ret) {
+			printf("[xhci] ctrl halt-recovered slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u ep_state=0x%x\n",
+			       slot_id, ep_index, req->request, req->requesttype,
+			       le16_to_cpu(req->value), le16_to_cpu(req->index),
+			       le16_to_cpu(req->length), ep_state);
+		}
+	}
 
 	if (ret < 0) {
 		printf("[xhci] ctrl prepare failed slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u ep_state=0x%x ret=%d\n",
 		       slot_id, ep_index, req->request, req->requesttype,
 		       le16_to_cpu(req->value), le16_to_cpu(req->index),
-		       le16_to_cpu(req->length),
-		       le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK, ret);
+		       le16_to_cpu(req->length), ep_state, ret);
 		return ret;
 	}
 
@@ -1029,15 +1044,25 @@ int xhci_ctrl_tx(struct usb_device *udev, unsigned long pipe,
 
 	record_transfer_result(udev, event, length);
 	if (udev->status != 0) {
-		printf("[xhci] ctrl completion slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u comp=%u usb_status=%lu act_len=%d flags=0x%08x xfer=0x%08x\n",
-		       slot_id, ep_index, req->request, req->requesttype,
-		       le16_to_cpu(req->value), le16_to_cpu(req->index),
-		       le16_to_cpu(req->length),
+		xhci_inval_cache((uintptr_t)virt_dev->out_ctx->bytes,
+				 virt_dev->out_ctx->size);
+		ep_state = le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK;
+		printf("[xhci] ctrl completion comp=%u usb=%lu ep_state=0x%x slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u act_len=%d\n",
 		       GET_COMP_CODE(le32_to_cpu(event->trans_event.transfer_len)),
-		       udev->status, udev->act_len, field,
-		       le32_to_cpu(event->trans_event.transfer_len));
+		       udev->status, ep_state, slot_id, ep_index, req->request,
+		       req->requesttype, le16_to_cpu(req->value),
+		       le16_to_cpu(req->index), le16_to_cpu(req->length),
+		       udev->act_len);
 	}
 	xhci_acknowledge_event(ctrl);
+	if (udev->status != 0 && ep_state == EP_STATE_HALTED) {
+		printf("[xhci] ctrl completion halt slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u\n",
+		       slot_id, ep_index, req->request, req->requesttype,
+		       le16_to_cpu(req->value), le16_to_cpu(req->index),
+		       le16_to_cpu(req->length));
+		reset_ep(udev, ep_index);
+		return -EPIPE;
+	}
 	if (udev->status == USB_ST_STALLED) {
 		reset_ep(udev, ep_index);
 		return -EPIPE;
