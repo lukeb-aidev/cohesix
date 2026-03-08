@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
+ * Author: Lukas Bower
+ * Purpose: Trace xHCI ring and control-transfer failures during Cohesix Pi 4 U-Boot bring-up.
+ * Copyright 2026 Lukas Bower
+ */
+/*
  * USB HOST XHCI Controller stack
  *
  * Based on xHCI host controller driver in linux-kernel
@@ -909,8 +914,14 @@ int xhci_ctrl_tx(struct usb_device *udev, unsigned long pipe,
 	ret = prepare_ring(ctrl, ep_ring,
 				le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK);
 
-	if (ret < 0)
+	if (ret < 0) {
+		printf("[xhci] ctrl prepare failed slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u ep_state=0x%x ret=%d\n",
+		       slot_id, ep_index, req->request, req->requesttype,
+		       le16_to_cpu(req->value), le16_to_cpu(req->index),
+		       le16_to_cpu(req->length),
+		       le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK, ret);
 		return ret;
+	}
 
 	/*
 	 * Don't give the first TRB to the hardware (by toggling the cycle bit)
@@ -1017,6 +1028,15 @@ int xhci_ctrl_tx(struct usb_device *udev, unsigned long pipe,
 	BUG_ON(TRB_TO_EP_INDEX(field) != ep_index);
 
 	record_transfer_result(udev, event, length);
+	if (udev->status != 0) {
+		printf("[xhci] ctrl completion slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u comp=%u usb_status=%lu act_len=%d flags=0x%08x xfer=0x%08x\n",
+		       slot_id, ep_index, req->request, req->requesttype,
+		       le16_to_cpu(req->value), le16_to_cpu(req->index),
+		       le16_to_cpu(req->length),
+		       GET_COMP_CODE(le32_to_cpu(event->trans_event.transfer_len)),
+		       udev->status, udev->act_len, field,
+		       le32_to_cpu(event->trans_event.transfer_len));
+	}
 	xhci_acknowledge_event(ctrl);
 	if (udev->status == USB_ST_STALLED) {
 		reset_ep(udev, ep_index);
@@ -1044,6 +1064,10 @@ int xhci_ctrl_tx(struct usb_device *udev, unsigned long pipe,
 
 abort:
 	debug("XHCI control transfer timed out, aborting...\n");
+	printf("[xhci] ctrl abort slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u\n",
+	       slot_id, ep_index, req->request, req->requesttype,
+	       le16_to_cpu(req->value), le16_to_cpu(req->index),
+	       le16_to_cpu(req->length));
 	abort_td(udev, ep_index);
 	udev->status = USB_ST_NAK_REC;
 	udev->act_len = 0;

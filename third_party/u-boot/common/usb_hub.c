@@ -152,12 +152,21 @@ static int usb_hub_port_control_with_fallback(struct usb_device *dev,
 		return ret;
 
 	iface = usb_hub_primary_interface_number(dev);
+	printf("[usb-hub] %s primary-fail hub=%04x:%04x dev=%d port=%d iface=%u req=0x%02x type=0x%02x value=0x%04x wIndex=0x%04x size=%d timeout=%d pipe=0x%x ret=%d\n",
+	       stage, le16_to_cpu(dev->descriptor.idVendor),
+	       le16_to_cpu(dev->descriptor.idProduct), dev->devnum, port, iface,
+	       request, requesttype, value, port, size, timeout, pipe, ret);
 	count = usb_hub_port_index_candidates(dev, port, candidates,
 					      ARRAY_SIZE(candidates));
 	last_ret = ret;
 	for (idx = 1; idx < count; idx++) {
 		last_ret = usb_control_msg(dev, pipe, request, requesttype, value,
 					   candidates[idx], data, size, timeout);
+		printf("[usb-hub] %s retry hub=%04x:%04x dev=%d port=%d iface=%u try=%d/%d req=0x%02x type=0x%02x value=0x%04x wIndex=0x%04x ret=%d\n",
+		       stage, le16_to_cpu(dev->descriptor.idVendor),
+		       le16_to_cpu(dev->descriptor.idProduct), dev->devnum, port,
+		       iface, idx, count - 1, request, requesttype, value,
+		       candidates[idx], last_ret);
 		if (last_ret >= 0) {
 			printf("[usb-hub] %s fallback hub=%04x:%04x port=%d iface=%u wIndex=0x%04x primary=%d fallback=%d\n",
 			       stage, le16_to_cpu(dev->descriptor.idVendor),
@@ -167,10 +176,10 @@ static int usb_hub_port_control_with_fallback(struct usb_device *dev,
 		}
 	}
 
-	printf("[usb-hub] %s detail hub=%04x:%04x port=%d iface=%u primary=%d last=%d\n",
+	printf("[usb-hub] %s detail hub=%04x:%04x dev=%d port=%d iface=%u req=0x%02x type=0x%02x value=0x%04x tries=%d primary=%d last=%d\n",
 	       stage, le16_to_cpu(dev->descriptor.idVendor),
-	       le16_to_cpu(dev->descriptor.idProduct), port, iface, ret,
-	       last_ret);
+	       le16_to_cpu(dev->descriptor.idProduct), dev->devnum, port, iface,
+	       request, requesttype, value, count - 1, ret, last_ret);
 
 	return last_ret;
 }
