@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines tests for root-task bootinfo_layout.
 // Author: Lukas Bower
@@ -8,7 +8,7 @@ use core::mem::size_of;
 
 use root_task::bootstrap::bootinfo_snapshot::BootInfoSnapshot;
 use root_task::bootstrap::cspace_sys::{cnode_depth, enc_index, TupleStyle};
-use root_task::sel4::BootInfoExt;
+use root_task::sel4::{BootInfoExt, BOOTINFO_FRAME_BYTES};
 use sel4_sys::{seL4_BootInfo, seL4_SlotRegion, seL4_UntypedDesc, MAX_BOOTINFO_UNTYPEDS};
 
 fn zero_untyped_desc() -> seL4_UntypedDesc {
@@ -89,7 +89,7 @@ fn guard_encoded_matches_word_bits_shift() {
 }
 
 #[test]
-fn bootinfo_extra_range_respects_snapshot_layout() {
+fn bootinfo_extra_range_respects_kernel_frame_layout() {
     const BACKING_BYTES: usize = 0x4000;
     const HEADER_OFFSET: usize = 0x940;
     const EXTRA_LEN: usize = 0x1e21;
@@ -110,8 +110,7 @@ fn bootinfo_extra_range_respects_snapshot_layout() {
     let view = root_task::sel4::BootInfoView::new(header_ref)
         .expect("bootinfo view must not reject mapped extra range");
 
-    let header_size = core::mem::size_of::<seL4_BootInfo>();
-    let expected_start = header_ref as *const _ as usize + header_size;
+    let expected_start = header_ref as *const _ as usize + BOOTINFO_FRAME_BYTES;
     let expected_end = expected_start + EXTRA_LEN;
     let page_base = (header_ref as *const _ as usize) & !(root_task::sel4::IPC_PAGE_BYTES - 1);
     let required_bytes = expected_end - page_base;
@@ -128,4 +127,52 @@ fn bootinfo_extra_range_respects_snapshot_layout() {
     assert_eq!(snapshot.extra_end, snapshot.post_canary_addr());
 
     drop(leaked_backing);
+}
+
+#[test]
+fn snapshot_view_uses_compact_extra_layout() {
+    const BACKING_BYTES: usize = 0x4000;
+    const HEADER_OFFSET: usize = 0x940;
+    const EXTRA_LEN: usize = 0x180;
+
+    let mut source_backing: Box<[u8]> = vec![0u8; BACKING_BYTES].into_boxed_slice();
+    let source_header_ptr =
+        unsafe { source_backing.as_mut_ptr().add(HEADER_OFFSET) as *mut seL4_BootInfo };
+
+    unsafe {
+        core::ptr::write(
+            source_header_ptr,
+            synthetic_bootinfo_with_extra(13, 0x0103, 0x2000, EXTRA_LEN, (1, 2)),
+        );
+    }
+
+    let leaked_source: &'static mut [u8] = Box::leak(source_backing);
+    let source_header_ref: &'static seL4_BootInfo = unsafe { &*source_header_ptr };
+    let source_view =
+        root_task::sel4::BootInfoView::new(source_header_ref).expect("source view valid");
+
+    let header_bytes = source_view.header_bytes();
+    let mut snapshot_backing = vec![0u8; header_bytes.len() + EXTRA_LEN];
+    snapshot_backing[..header_bytes.len()].copy_from_slice(header_bytes);
+    snapshot_backing[header_bytes.len()..].copy_from_slice(source_view.extra());
+
+    let leaked_snapshot: &'static mut [u8] = Box::leak(snapshot_backing.into_boxed_slice());
+    let snapshot_header_ref: &'static seL4_BootInfo =
+        unsafe { &*(leaked_snapshot.as_ptr() as *const seL4_BootInfo) };
+    let snapshot_view =
+        root_task::sel4::BootInfoView::from_snapshot_source(&source_view, snapshot_header_ref)
+            .expect("snapshot view valid");
+
+    let expected_start = snapshot_header_ref as *const _ as usize + size_of::<seL4_BootInfo>();
+    let expected_end = expected_start + EXTRA_LEN;
+
+    assert_eq!(snapshot_view.extra_range().start, expected_start);
+    assert_eq!(snapshot_view.extra_range().end, expected_end);
+    assert_eq!(
+        snapshot_view.extra(),
+        &leaked_snapshot[header_bytes.len()..]
+    );
+
+    drop(leaked_snapshot);
+    drop(leaked_source);
 }

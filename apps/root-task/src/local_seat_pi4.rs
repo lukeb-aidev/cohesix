@@ -169,9 +169,9 @@ const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
 // Runtime VL805 PCI preflight must ensure MEMORY_SPACE + BUS_MASTER are set
 // before xHCI bring-up. Without this, controller RUN can stall in HCH with
 // USBSTS.HSE set (observed as stage 0x0272 timeout on Pi4 local-seat boots).
-// However, on firmware paths without a DTB-backed xHCI hint, probing ECAM can
-// trigger a fatal IRQ 27. Runtime code must gate actual cfg-space touching
-// using `vl805_runtime_cfg_touch_allowed`.
+// However, direct runtime ECAM probing has also triggered fatal IRQ 27 entries
+// on Pi4 even when an xHCI MMIO hint is present. Runtime code must only touch
+// config space when a safe cfg window was already pinned during preseed.
 const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = true;
 const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
@@ -726,12 +726,8 @@ fn current_vl805_xhci_mmio_hint() -> Option<usize> {
 }
 
 #[inline]
-const fn vl805_runtime_cfg_touch_allowed(
-    runtime_enabled: bool,
-    has_xhci_hint: bool,
-    has_cfg_window: bool,
-) -> bool {
-    runtime_enabled && (has_xhci_hint || has_cfg_window)
+const fn vl805_runtime_cfg_touch_allowed(runtime_enabled: bool, has_cfg_window: bool) -> bool {
+    runtime_enabled && has_cfg_window
 }
 
 fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
@@ -2472,11 +2468,8 @@ impl UsbKeyboard {
             boot_log::force_uart_line("[local-seat] xhci diag hook installed");
         }
         let cfg_window_present = current_vl805_cfg_virt().is_some();
-        let runtime_cfg_touch_enabled = vl805_runtime_cfg_touch_allowed(
-            VL805_CFG_RUNTIME_TOUCH_ENABLED,
-            xhci_mmio_hint.is_some(),
-            cfg_window_present,
-        );
+        let runtime_cfg_touch_enabled =
+            vl805_runtime_cfg_touch_allowed(VL805_CFG_RUNTIME_TOUCH_ENABLED, cfg_window_present);
         if runtime_cfg_touch_enabled {
             if cfg_window_present {
                 boot_log::force_uart_line("[local-seat] vl805 cfg present stage=usb-init-entry");
@@ -2486,7 +2479,7 @@ impl UsbKeyboard {
         } else if VL805_CFG_RUNTIME_TOUCH_ENABLED {
             if !VL805_CFG_RUNTIME_GATED_LOGGED.swap(true, Ordering::AcqRel) {
                 boot_log::force_uart_line(
-                    "[local-seat] vl805 pci cfg runtime preflight skipped reason=no-dtb-xhci-hint",
+                    "[local-seat] vl805 pci cfg runtime preflight skipped reason=no-safe-cfg-window",
                 );
             }
         } else if !VL805_CFG_SAFE_MODE_LOGGED.swap(true, Ordering::AcqRel) {
@@ -6957,16 +6950,14 @@ mod tests {
     }
 
     #[test]
-    fn vl805_runtime_cfg_touch_requires_hint_or_cfg_window() {
-        assert!(vl805_runtime_cfg_touch_allowed(true, true, false));
-        assert!(vl805_runtime_cfg_touch_allowed(true, false, true));
-        assert!(vl805_runtime_cfg_touch_allowed(true, true, true));
-        assert!(!vl805_runtime_cfg_touch_allowed(true, false, false));
+    fn vl805_runtime_cfg_touch_requires_safe_cfg_window() {
+        assert!(!vl805_runtime_cfg_touch_allowed(true, false));
+        assert!(vl805_runtime_cfg_touch_allowed(true, true));
     }
 
     #[test]
     fn vl805_runtime_cfg_touch_respects_global_disable() {
-        assert!(!vl805_runtime_cfg_touch_allowed(false, true, true));
+        assert!(!vl805_runtime_cfg_touch_allowed(false, true));
     }
 
     #[test]

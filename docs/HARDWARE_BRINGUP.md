@@ -8,13 +8,13 @@
 - Cohesix supports two bring-up paths:
 - QEMU `aarch64/virt` (development/CI baseline).
 - Raspberry Pi 4 (`bcm2711`) via upstream-style boot chain: `Pi firmware -> U-Boot -> seL4 image -> root-task`.
-- Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4; the current 26b as-built state adds wired DHCP policy handoff while leaving Pi 4 Wi-Fi runtime support incomplete.
+- Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4; the current 26b as-built state adds the interactive U-Boot policy wizard, DTB `/chosen/cohesix,*` handoff, wired DHCP, and the staged Pi 4 Wi-Fi runtime path.
 
 ## Canonical Pi 4 boot chain
 1. Pi boot firmware loads `start4.elf` and `fixup4.dat`.
 2. Firmware loads `u-boot.bin` (from FAT boot partition).
-3. U-Boot loads the staged Cohesix payload (`cohesix-image-arm-bcm2711`) using `fatload`.
-4. U-Boot transfers control with `go`.
+3. U-Boot loads the staged Cohesix payload (`cohesix-image-arm-bcm2711`) and the padded staged Pi 4 DTB (`bcm2711-rpi-4-b.dtb`) using `fatload`.
+4. U-Boot applies any saved/runtime Cohesix policy into DTB `/chosen/cohesix,*`, quiesces the USB host stack, and transfers control with `bootm`.
 5. seL4 enters root-task; Cohesix reaches `cohesix>` prompt.
 
 ## Manifest profiles
@@ -63,7 +63,8 @@
 - `Configure networking` walks DHCP `ON|OFF`, `wired|wifi`, Wi-Fi credentials when needed, and static IPv4 prompts only when DHCP is off.
 - `Save current settings and reboot` persists only the user-facing Cohesix policy fields to `cohesix.env` on the FAT boot partition; it does not rewrite the manifest or generic U-Boot environment.
 - The wizard intentionally uses `askenv`-based numbered prompts instead of U-Boot `bootmenu`, because upstream U-Boot documents `bootmenu` as an ANSI-terminal path and the simpler prompt flow is more reliable on the Pi 4 HDMI + USB-keyboard bring-up path while still preserving serial control via `minicom`.
-- The script reloads only `cohesix.env` from the FAT partition, reinitializes USB input after bootflow scanning, then loads the staged padded `bcm2711-rpi-4-b.dtb` for policy handoff.
+- The script reloads only `cohesix.env` from the FAT partition, performs a guarded `usb reset` before enabling `usbkbd` for the wizard, then stops the U-Boot USB host stack before `bootm` so seL4/root-task receive a fixed post-U-Boot image and DTB handoff.
+- The Pi 4 U-Boot build stays on the seL4-aligned `usbkbd` interrupt-polling baseline (`CONFIG_SYS_USB_EVENT_POLL=y`) so the HDMI wizard matches the previously working Pi 4 input path.
 - Optional Cohesix net-policy overrides mirrored into DTB `/chosen` by the staged boot script:
 - `setenv coh_net_mode <off|static|dhcp>`
 - `setenv coh_net_interface <wired|wifi|auto>`
@@ -74,10 +75,10 @@
 - `setenv coh_wifi_psk <psk>` (mirrored into DTB `/chosen/cohesix,wifi-psk`; used by the CYW43455 path for open/WPA2-PSK join)
 - The staged boot script now hands the saved `coh_wifi_*` variables directly to `fdt set` without mutating or persisting escaped shadow copies, so repeated boots and policy-file writes do not grow backslashes or corrupt WPA2 credentials. If an older card reports `Wi-Fi credential handoff overflow`, clear the saved `coh_wifi_ssid` / `coh_wifi_psk` values once and re-enter them through the wizard.
 - The staged `bcm2711-rpi-4-b.dtb` is padded to 128 KiB before flashing, so U-Boot can add `/chosen/cohesix,*` properties in place without `fdt resize`.
-- `setenv coh_show_logo <0|1>` (controls whether the staged `cohesix-logo.bmp` is displayed on HDMI before the menu)
-- The staged Pi 4 U-Boot build enables 24bpp BMP drawing, so the centered `boot.bmp` splash and menu logo use the same HDMI framebuffer path as `bmp display`.
+- `setenv coh_show_logo <0|1>` (controls whether the staged `boot.bmp` splash is displayed on HDMI before the menu)
+- The staged Pi 4 U-Boot build enables 24bpp BMP drawing, so the centered `boot.bmp` splash uses the same HDMI framebuffer path as `bmp display`.
 - Pi 4 U-Boot otherwise stays aligned with the seL4-recommended `rpi_4_defconfig` USB input path (`CONFIG_PREBOOT="pci enum; usb start;"`) so the menu/keyboard behavior matches the previously working baseline.
-- On first entry to the root menu, the staged `boot.bmp` copy of the Cohesix logo is shown centered for a short splash delay before the interactive menu is redrawn, so the logo remains visible even if the menu console clears the framebuffer afterward.
+- On first entry to the root menu, the staged `boot.bmp` copy of the Cohesix logo is shown centered for a short splash delay and the interactive menu is then drawn on a cleared console, so the splash is visible without being left behind the menu text.
 - `ping ${serverip}`
 - `fatwrite mmc 0:1 ${coh_policy_addr} cohesix.env ${filesize}` (only when explicitly persisting Cohesix policy)
 - The staged `boot.cmd` copies these env vars into `/chosen/cohesix,*` on the staged DTB before `bootm`. If that DTB cannot be loaded or updated, the script aborts before handoff instead of silently booting with stale policy. Saved Cohesix policy persists across reboots via `cohesix.env`, but the manifest remains the build-time default and is never rewritten on the SD card.
@@ -115,6 +116,7 @@
 - for the manifest-default boot, `[net-console] init: bringing up backend=... mode=static interface=wired ip=192.168.10.42/24 ...`
 - for wizard-selected `mode=dhcp`, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...` and then `[net-console] ready ip=<lease-ip> ...`
 - for wizard-selected `mode=static`, `[net-console] init: bringing up backend=... mode=static interface=... ip=<static-ip>/<prefix> ...`
+- when saved wizard settings are used after reboot, root-task must not print `[boot] dtb locate skipped/failed: bootinfo extra truncated`; that message indicates the DTB handoff was lost before policy resolution and is a regression.
 5. Validate diagnostics surfaces:
 - on the manifest-default boot, `netstats` includes `mode=static policy=wired active=wired standby=none addr_src=manifest-static ip=192.168.10.42 gateway=192.168.10.1 dhcp=disabled`
 - on the manifest-default boot, `netstatus` prints `ip=192.168.10.42 gateway=192.168.10.1 src=manifest-static dhcp=disabled`

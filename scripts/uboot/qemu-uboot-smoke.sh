@@ -135,7 +135,8 @@ command -v "$QEMU_BIN" >/dev/null 2>&1 || fail "qemu binary not found: ${QEMU_BI
 
 if [[ "$U_BOOT_BIN" == "${ROOT_DIR}/third_party/u-boot/u-boot.bin" ]]; then
     uboot_config="${ROOT_DIR}/third_party/u-boot/.config"
-    if [[ -f "$uboot_config" ]] && ! rg -q '^CONFIG_TARGET_QEMU_ARM_64=y$' "$uboot_config"; then
+    if [[ -f "$uboot_config" ]] \
+        && ! rg -q '^CONFIG_TARGET_QEMU_ARM_64=y$|^CONFIG_TARGET_QEMU_ARM_64BIT=y$' "$uboot_config"; then
         fail "third_party/u-boot/.config is not a qemu_arm64 build; run 'make -C third_party/u-boot qemu_arm64_defconfig' before using this harness"
     fi
 fi

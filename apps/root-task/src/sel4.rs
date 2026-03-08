@@ -71,7 +71,15 @@ pub const IPC_PAGE_BITS: usize = 12;
 /// Size in bytes of a single seL4 IPC buffer page.
 pub const IPC_PAGE_BYTES: usize = 1 << IPC_PAGE_BITS;
 
+/// Size in bytes of the fixed seL4 bootinfo frame.
+///
+/// The kernel guarantees `seL4_BootInfoFrameBits == seL4_PageBits` for this
+/// configuration, so the bootinfo frame occupies exactly one page even though
+/// the concrete `seL4_BootInfo` struct is smaller.
+pub const BOOTINFO_FRAME_BYTES: usize = IPC_PAGE_BYTES;
+
 const_assert!(sel4_sys::seL4_PageBits == 12);
+const_assert!(BOOTINFO_FRAME_BYTES == IPC_PAGE_BYTES);
 const CANONICAL_ROOT_SENTINEL: usize = usize::MAX;
 static CANONICAL_ROOT_CAP: AtomicUsize =
     AtomicUsize::new(sel4_sys::seL4_CapInitThreadCNode as usize);
@@ -446,6 +454,7 @@ impl fmt::Display for BootInfoError {
 
 fn bootinfo_extra_slice<'a>(
     header: &'a seL4_BootInfo,
+    extra_offset: usize,
 ) -> Result<(&'a [u8], usize, usize, usize), BootInfoError> {
     let addr = header as *const _ as usize;
     let required_align = mem::align_of::<seL4_BootInfo>();
@@ -457,9 +466,8 @@ fn bootinfo_extra_slice<'a>(
     }
 
     let extra_len = header.extraLen as usize;
-    let header_size = core::mem::size_of::<seL4_BootInfo>();
     let extra_start = addr
-        .checked_add(header_size)
+        .checked_add(extra_offset)
         .ok_or(BootInfoError::Overflow)?;
     let extra_end = extra_start
         .checked_add(extra_len)
@@ -517,7 +525,8 @@ impl BootInfoView {
             ::log::error!("bootinfo initBits invalid: {init_bits} (expected <= seL4_WordBits)");
             return Err(BootInfoError::InitCNodeBits { bits: init_bits });
         }
-        let (extra_bytes, extra_start, extra_end, extra_limit) = bootinfo_extra_slice(header)?;
+        let (extra_bytes, extra_start, extra_end, extra_limit) =
+            bootinfo_extra_slice(header, BOOTINFO_FRAME_BYTES)?;
         Ok(Self {
             header,
             extra_bytes,
@@ -567,10 +576,10 @@ impl BootInfoView {
             });
         }
 
-        let header_size = mem::size_of::<seL4_BootInfo>();
         let extra_len = source.extra().len();
+        let snapshot_extra_offset = mem::size_of::<seL4_BootInfo>();
         let extra_start = addr
-            .checked_add(header_size)
+            .checked_add(snapshot_extra_offset)
             .ok_or(BootInfoError::Overflow)?;
         let extra_end = extra_start
             .checked_add(extra_len)
@@ -2003,7 +2012,7 @@ impl BootInfoExt for seL4_BootInfo {
     }
 
     fn extra_bytes(&self) -> &[u8] {
-        match bootinfo_extra_slice(self) {
+        match bootinfo_extra_slice(self, BOOTINFO_FRAME_BYTES) {
             Ok((slice, _, _, _)) => slice,
             Err(err) => {
                 log::error!("invalid bootinfo extra region: {err}");
@@ -4513,14 +4522,15 @@ impl<'a> KernelEnv<'a> {
         let header_ptr = header_addr as *const u8;
         let header_byte = unsafe { ptr::read_volatile(header_ptr) };
 
-        let (extra_bytes, extra_start, extra_end, _) = match bootinfo_extra_slice(self.bootinfo) {
-            Ok((bytes, start, end, limit)) => (bytes, start, end, limit),
-            Err(err) => {
-                ::log::error!("[boot] bootinfo extra validation failed: {err}",);
-                crate::sel4::debug_halt();
-                return;
-            }
-        };
+        let (extra_bytes, extra_start, extra_end, _) =
+            match bootinfo_extra_slice(self.bootinfo, BOOTINFO_FRAME_BYTES) {
+                Ok((bytes, start, end, limit)) => (bytes, start, end, limit),
+                Err(err) => {
+                    ::log::error!("[boot] bootinfo extra validation failed: {err}",);
+                    crate::sel4::debug_halt();
+                    return;
+                }
+            };
 
         debug_assert!(
             extra_bytes.is_empty() || extra_start < extra_end,
@@ -5263,28 +5273,75 @@ mod tests {
     }
 
     #[test]
-    fn extra_bytes_returns_appended_region() {
+    fn extra_bytes_returns_region_after_bootinfo_frame() {
         use core::mem::MaybeUninit;
 
-        const EXTRA_WORDS: usize = 2;
-        const EXTRA_BYTES: usize = EXTRA_WORDS * mem::size_of::<seL4_Word>();
+        const EXTRA_BYTES: usize = 2 * mem::size_of::<seL4_Word>();
+        const FRAME_GAP_BYTES: usize = BOOTINFO_FRAME_BYTES - mem::size_of::<seL4_BootInfo>();
 
         #[repr(C)]
         struct Fixture<const N: usize> {
             bootinfo: seL4_BootInfo,
+            frame_gap: [u8; FRAME_GAP_BYTES],
             extra: [u8; N],
         }
 
         let mut fixture: Fixture<EXTRA_BYTES> = unsafe { MaybeUninit::zeroed().assume_init() };
 
+        for byte in fixture.frame_gap.iter_mut() {
+            *byte = 0xa5;
+        }
         for (index, byte) in fixture.extra.iter_mut().enumerate() {
             *byte = index as u8;
         }
 
-        fixture.bootinfo.extraLen = EXTRA_WORDS as seL4_Word;
+        fixture.bootinfo.extraLen = EXTRA_BYTES as seL4_Word;
 
         let extra = fixture.bootinfo.extra_bytes();
         assert_eq!(extra, &fixture.extra);
+    }
+
+    #[test]
+    fn snapshot_view_uses_compact_extra_layout() {
+        use core::mem::MaybeUninit;
+
+        const EXTRA_BYTES: usize = 3 * mem::size_of::<seL4_Word>();
+        const FRAME_GAP_BYTES: usize = BOOTINFO_FRAME_BYTES - mem::size_of::<seL4_BootInfo>();
+
+        #[repr(C)]
+        struct SourceFixture<const N: usize> {
+            bootinfo: seL4_BootInfo,
+            frame_gap: [u8; FRAME_GAP_BYTES],
+            extra: [u8; N],
+        }
+
+        let mut source: SourceFixture<EXTRA_BYTES> = unsafe { MaybeUninit::zeroed().assume_init() };
+        for byte in source.frame_gap.iter_mut() {
+            *byte = 0xa5;
+        }
+        for (index, byte) in source.extra.iter_mut().enumerate() {
+            *byte = (index as u8).wrapping_add(1);
+        }
+        source.bootinfo.extraLen = EXTRA_BYTES as seL4_Word;
+
+        let source_view = BootInfoView::new(&source.bootinfo).expect("source bootinfo view");
+        let mut snapshot_backing = [0u8; mem::size_of::<seL4_BootInfo>() + EXTRA_BYTES];
+        snapshot_backing[..mem::size_of::<seL4_BootInfo>()]
+            .copy_from_slice(source_view.header_bytes());
+        snapshot_backing[mem::size_of::<seL4_BootInfo>()..].copy_from_slice(source_view.extra());
+
+        let snapshot_header = unsafe { &*(snapshot_backing.as_ptr() as *const seL4_BootInfo) };
+        let snapshot_view =
+            BootInfoView::from_snapshot_source(&source_view, snapshot_header).expect("snapshot");
+        let expected_start = snapshot_header as *const _ as usize + mem::size_of::<seL4_BootInfo>();
+        let expected_end = expected_start + EXTRA_BYTES;
+
+        assert_eq!(snapshot_view.extra_range().start, expected_start);
+        assert_eq!(snapshot_view.extra_range().end, expected_end);
+        assert_eq!(
+            snapshot_view.extra(),
+            &snapshot_backing[mem::size_of::<seL4_BootInfo>()..]
+        );
     }
 
     #[test]

@@ -69,6 +69,11 @@ const PORTSC_NEUTRAL_MASK: u32 = reg::PORTSC_CCS
     | reg::PORTSC_WOE
     | reg::PORTSC_DR;
 
+#[inline(always)]
+const fn polling_iman_value() -> u32 {
+    reg::IMAN_IP
+}
+
 #[inline]
 const fn port_ready_for_enumeration(portsc: u32) -> bool {
     if (portsc & reg::PORTSC_CCS) == 0 {
@@ -520,9 +525,10 @@ impl<H: Dma> XhciCtrl<H> {
         // Keep moderation disabled; Cohesix local-seat uses polling and does
         // not install xHCI IRQ handlers during early boot.
         self.write_reg(int_base + reg::IMOD, 0u32);
-        // Keep interrupter state armed while running in polling mode.
-        // USBCMD_INTE remains masked, so this does not require a live IRQ path.
-        self.write_reg(int_base + reg::IMAN, reg::IMAN_IP | reg::IMAN_IE);
+        // Cohesix uses pure polling during Pi4 local-seat bring-up. Acknowledge
+        // any stale pending bit but keep the interrupter disabled so VL805 does
+        // not surface an unhandled IRQ before userspace installs handlers.
+        self.write_reg(int_base + reg::IMAN, polling_iman_value());
         emit_xhci_diag(
             0x0261,
             self.read_reg::<u32>(int_base + reg::ERSTSZ) as u64,
@@ -667,8 +673,9 @@ impl<H: Dma> XhciCtrl<H> {
             int_base + reg::ERDP,
             event_ring.dequeue_ptr(&*self.host) | 0x8,
         );
-        // Keep interrupter state armed while acknowledging pending status.
-        self.write_reg(int_base + reg::IMAN, reg::IMAN_IP | reg::IMAN_IE);
+        // Polling mode must leave the xHCI interrupter disabled while
+        // acknowledging Event Handler Busy / pending state.
+        self.write_reg(int_base + reg::IMAN, polling_iman_value());
         self.write_op(reg::USBSTS, reg::USBSTS_EINT);
     }
 
@@ -1090,7 +1097,7 @@ impl<H: Dma> XhciCtrl<H> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_controller_params, port_ready_for_enumeration};
+    use super::{parse_controller_params, polling_iman_value, port_ready_for_enumeration};
     use crate::reg;
 
     #[test]
@@ -1129,6 +1136,12 @@ mod tests {
     fn port_ready_rejects_missing_speed_or_connect() {
         assert!(!port_ready_for_enumeration(0));
         assert!(!port_ready_for_enumeration(reg::PORTSC_CCS));
+    }
+
+    #[test]
+    fn polling_mode_keeps_interrupter_disabled() {
+        assert_eq!(polling_iman_value(), reg::IMAN_IP);
+        assert_eq!(polling_iman_value() & reg::IMAN_IE, 0);
     }
 }
 
