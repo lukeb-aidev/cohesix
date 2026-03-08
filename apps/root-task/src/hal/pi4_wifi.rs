@@ -89,6 +89,100 @@ fn cloned_pinned_regs(pinned: &Mutex<Option<MappedRegs>>) -> Option<MappedRegs> 
     pinned.lock().as_ref().copied()
 }
 
+fn emit_breadcrumb(args: core::fmt::Arguments<'_>) {
+    let mut line = heapless::String::<224>::new();
+    let _ = core::fmt::Write::write_fmt(&mut line, args);
+    boot_log::force_uart_line(line.as_str());
+}
+
+fn wifi_power_state_name(state: WifiPowerState) -> &'static str {
+    match state {
+        WifiPowerState::Off => "off",
+        WifiPowerState::On => "on",
+    }
+}
+
+fn wifi_reset_state_name(state: WifiResetState) -> &'static str {
+    match state {
+        WifiResetState::Asserted => "asserted",
+        WifiResetState::Deasserted => "deasserted",
+    }
+}
+
+fn sdio_bus_width_name(width: SdioBusWidth) -> &'static str {
+    match width {
+        SdioBusWidth::OneBit => "1bit",
+        SdioBusWidth::FourBit => "4bit",
+    }
+}
+
+fn bounded_spin_settle(stage: &'static str, loops: usize) {
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] settle stage={stage} loops={loops}"
+    ));
+    for _ in 0..loops {
+        spin_loop();
+    }
+}
+
+fn mailbox_tag_name(tag: u32) -> &'static str {
+    match tag {
+        TAG_SET_POWER_STATE => "set-power-state",
+        TAG_GET_CLOCK_RATE => "get-clock-rate",
+        TAG_GET_MAX_CLOCK_RATE => "get-max-clock-rate",
+        TAG_GET_GPIO_STATE => "get-gpio-state",
+        TAG_SET_GPIO_STATE => "set-gpio-state",
+        TAG_GET_GPIO_CONFIG => "get-gpio-config",
+        TAG_SET_GPIO_CONFIG => "set-gpio-config",
+        _ => "unknown",
+    }
+}
+
+fn sdhci_status_reason(status: u32) -> &'static str {
+    if (status & SDHCI_INT_TIMEOUT) != 0 {
+        "timeout"
+    } else if (status & SDHCI_INT_CRC) != 0 {
+        "crc"
+    } else if (status & SDHCI_INT_END_BIT) != 0 {
+        "end-bit"
+    } else if (status & SDHCI_INT_INDEX) != 0 {
+        "index"
+    } else if (status & SDHCI_INT_DATA_TIMEOUT) != 0 {
+        "data-timeout"
+    } else if (status & SDHCI_INT_DATA_CRC) != 0 {
+        "data-crc"
+    } else if (status & SDHCI_INT_DATA_END_BIT) != 0 {
+        "data-end-bit"
+    } else if (status & SDHCI_INT_ERROR) != 0 {
+        "error"
+    } else if (status & SDHCI_INT_RESPONSE) != 0 {
+        "complete"
+    } else {
+        "unknown"
+    }
+}
+
+fn is_mailbox_protocol_error(err: &HalError) -> bool {
+    matches!(err, HalError::Unsupported("mailbox-protocol"))
+}
+
+fn mailbox_protocol_reason(
+    expected_tag: u32,
+    status: u32,
+    reply_tag: u32,
+    value_status: u32,
+) -> &'static str {
+    if status != MAILBOX_RESPONSE_SUCCESS {
+        "status"
+    } else if reply_tag != expected_tag {
+        "reply-tag"
+    } else if (value_status & MAILBOX_VALUE_RESPONSE) == 0 {
+        "value-response"
+    } else {
+        "unknown"
+    }
+}
+
 fn preseed_register_block<H>(
     hal: &mut H,
     candidates: &[usize],
@@ -114,25 +208,50 @@ where
     true
 }
 
-pub fn preseed_mmio<H>(hal: &mut H)
+pub fn preseed_mailbox_mmio<H>(hal: &mut H) -> bool
 where
     H: Hardware<Error = HalError>,
 {
     let mailbox = preseed_register_block(hal, &MAILBOX_PAGE_PADDR_CANDIDATES, &PINNED_MAILBOX_REGS);
-    let sdhci = preseed_register_block(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &PINNED_SDHCI_REGS);
+    boot_log::force_uart_line(if mailbox {
+        "[pi4-wifi] mmio preseeded mailbox=yes"
+    } else {
+        "[pi4-wifi] mmio preseeded mailbox=no"
+    });
+    mailbox
+}
 
+pub fn preseed_sdhci_mmio<H>(hal: &mut H) -> bool
+where
+    H: Hardware<Error = HalError>,
+{
+    let sdhci = preseed_register_block(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &PINNED_SDHCI_REGS);
+    boot_log::force_uart_line(if sdhci {
+        "[pi4-wifi] mmio preseeded sdhci=yes"
+    } else {
+        "[pi4-wifi] mmio preseeded sdhci=no"
+    });
+    sdhci
+}
+
+pub fn preseed_mmio<H>(hal: &mut H)
+where
+    H: Hardware<Error = HalError>,
+{
+    let mailbox = preseed_mailbox_mmio(hal);
+    let sdhci = preseed_sdhci_mmio(hal);
     match (mailbox, sdhci) {
         (true, true) => {
-            boot_log::force_uart_line("[pi4-wifi] mmio preseeded mailbox=yes sdhci=yes");
+            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=yes sdhci=yes")
         }
         (true, false) => {
-            boot_log::force_uart_line("[pi4-wifi] mmio preseeded mailbox=yes sdhci=no");
+            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=yes sdhci=no")
         }
         (false, true) => {
-            boot_log::force_uart_line("[pi4-wifi] mmio preseeded mailbox=no sdhci=yes");
+            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=no sdhci=yes")
         }
         (false, false) => {
-            boot_log::force_uart_line("[pi4-wifi] mmio preseeded mailbox=no sdhci=no");
+            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=no sdhci=no")
         }
     }
 }
@@ -311,7 +430,10 @@ const SDIO_HOST_RESET_LOOPS: usize = 50_000;
 const SDIO_CLOCK_STABLE_LOOPS: usize = 50_000;
 const SDIO_CMD_WAIT_LOOPS: usize = 200_000;
 const SDIO_DATA_WAIT_LOOPS: usize = 200_000;
-const WIFI_RESET_SETTLE_LOOPS: usize = 2_000_000;
+const SDIO_CARD_INIT_ATTEMPTS: usize = 2;
+const SDHCI_POWER_SETTLE_LOOPS: usize = 20_000_000;
+const SDIO_CARD_INIT_RETRY_SETTLE_LOOPS: usize = 20_000_000;
+const WIFI_RESET_SETTLE_LOOPS: usize = 20_000_000;
 const WIFI_POWER_SETTLE_LOOPS: usize = 500_000;
 const SDHCI_WRITE_DELAY_LOOPS: usize = 256;
 const CYW43_READY_LOOPS: usize = 1_000;
@@ -321,6 +443,7 @@ const SDIO_MAX_BYTE_MODE: usize = 511;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResponseType {
     None,
+    Ocr,
     Short,
     ShortBusy,
     Long,
@@ -378,30 +501,45 @@ impl Pi4WifiState {
     }
 
     pub fn set_power(&mut self, state: WifiPowerState) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] power state={}",
+            wifi_power_state_name(state)
+        ));
         self.power_state = state;
         self.apply_wifi_line()
     }
 
     pub fn set_reset(&mut self, state: WifiResetState) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] reset state={}",
+            wifi_reset_state_name(state)
+        ));
         self.reset_state = state;
         self.apply_wifi_line()?;
         if matches!(state, WifiResetState::Deasserted) {
-            for _ in 0..WIFI_RESET_SETTLE_LOOPS {
-                spin_loop();
-            }
+            bounded_spin_settle("wifi-reset-deassert", WIFI_RESET_SETTLE_LOOPS);
         }
         Ok(())
     }
 
     pub fn reset_host(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] host reset begin"));
         self.host.reset_controller()
     }
 
     pub fn set_clock_hz(&mut self, target_hz: u32) -> Result<u32, HalError> {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] host clock request={}Hz",
+            target_hz
+        ));
         self.host.set_clock_hz(target_hz)
     }
 
     pub fn set_bus_width(&mut self, width: SdioBusWidth) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] host bus-width={}",
+            sdio_bus_width_name(width)
+        ));
         self.host.set_bus_width(width)
     }
 
@@ -452,6 +590,12 @@ impl Pi4WifiState {
     fn apply_wifi_line(&mut self) -> Result<(), HalError> {
         let enabled = matches!(self.power_state, WifiPowerState::On)
             && matches!(self.reset_state, WifiResetState::Deasserted);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] gpio line enabled={} power={} reset={}",
+            enabled as u8,
+            wifi_power_state_name(self.power_state),
+            wifi_reset_state_name(self.reset_state),
+        ));
         self.mailbox
             .configure_gpio_output(PI4_WIFI_GPIO, enabled as u32)?;
         if enabled {
@@ -490,15 +634,23 @@ impl Mailbox {
     }
 
     fn power_on_module(&mut self, module: u32) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox power-on module=0x{module:08x}"
+        ));
         let mut payload = [module, POWER_STATE_REQ_ON | POWER_STATE_REQ_WAIT];
         self.call_tag(TAG_SET_POWER_STATE, 8, &mut payload)?;
         Ok(())
     }
 
     fn get_clock_rate(&mut self, clock_id: u32) -> Result<u32, HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] mailbox clock-query id={clock_id}"));
         let mut payload = [clock_id, 0];
         self.call_tag(TAG_GET_CLOCK_RATE, 4, &mut payload)?;
         if payload[1] != 0 {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] mailbox clock-query id={clock_id} rate={}Hz",
+                payload[1]
+            ));
             return Ok(payload[1]);
         }
 
@@ -506,21 +658,88 @@ impl Mailbox {
         if payload[1] == 0 {
             return Err(HalError::Unsupported("mailbox-clock-rate"));
         }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox clock-query fallback id={clock_id} rate={}Hz",
+            payload[1]
+        ));
         Ok(payload[1])
     }
 
     fn configure_gpio_output(&mut self, gpio: u32, state: u32) -> Result<(), HalError> {
-        let mut config = [gpio, GPIO_DIR_OUT, self.gpio_polarity(gpio)?, 0, 0, state];
-        self.call_tag(TAG_SET_GPIO_CONFIG, 24, &mut config)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox gpio begin gpio={gpio} state={state}"
+        ));
+        let current_state = match self.gpio_state(gpio) {
+            Ok(current) => Some(current),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] mailbox gpio-state unavailable gpio={gpio} err={err}"
+                ));
+                None
+            }
+        };
+        if current_state == Some(state) && state == 0 {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] mailbox gpio already-low gpio={gpio} skip-write=yes"
+            ));
+            return Ok(());
+        }
+        let polarity = self.gpio_polarity(gpio)?;
+        let mut config = [gpio, GPIO_DIR_OUT, polarity, 0, 0, state];
+        match self.call_tag(TAG_SET_GPIO_CONFIG, 24, &mut config) {
+            Ok(()) => {}
+            Err(err) if is_mailbox_protocol_error(&err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] mailbox gpio-config unsupported gpio={gpio} polarity={polarity} fallback=state-only"
+                ));
+            }
+            Err(err) => return Err(err),
+        }
 
         let mut level = [gpio, state];
-        self.call_tag(TAG_SET_GPIO_STATE, 8, &mut level)?;
+        match self.call_tag(TAG_SET_GPIO_STATE, 8, &mut level) {
+            Ok(()) => {}
+            Err(err) if is_mailbox_protocol_error(&err) => {
+                if let Ok(confirm) = self.gpio_state(gpio) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] mailbox gpio-state confirm gpio={gpio} value={confirm}"
+                    ));
+                    if confirm == state {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] mailbox gpio-state matched gpio={gpio} treating-as-success"
+                        ));
+                        return Ok(());
+                    }
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox gpio complete gpio={gpio} state={state}"
+        ));
         Ok(())
     }
 
+    fn gpio_state(&mut self, gpio: u32) -> Result<u32, HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] mailbox gpio-state gpio={gpio}"));
+        let mut payload = [gpio, 0];
+        self.call_tag(TAG_GET_GPIO_STATE, 4, &mut payload)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox gpio-state gpio={gpio} value={}",
+            payload[1]
+        ));
+        Ok(payload[1])
+    }
+
     fn gpio_polarity(&mut self, gpio: u32) -> Result<u32, HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] mailbox gpio-polarity gpio={gpio}"));
         let mut config = [gpio, 0, 0, 0, 0];
         self.call_tag(TAG_GET_GPIO_CONFIG, 4, &mut config)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox gpio-polarity gpio={gpio} polarity={}",
+            config[2]
+        ));
         Ok(config[2])
     }
 
@@ -549,18 +768,15 @@ impl Mailbox {
                         || words[2] != tag
                         || (words[4] & MAILBOX_VALUE_RESPONSE) == 0
                     {
+                        self.log_protocol_reply(tag, alias_base, words);
                         last_err = HalError::Unsupported("mailbox-protocol");
                         continue;
                     }
                     if alias_index > 0 {
-                        let mut line = heapless::String::<192>::new();
-                        let _ = core::fmt::Write::write_fmt(
-                            &mut line,
-                            format_args!(
-                                "[pi4-wifi] mailbox alias fallback alias=0x{alias_base:08x}"
-                            ),
-                        );
-                        boot_log::force_uart_line(line.as_str());
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] mailbox alias fallback tag={} alias=0x{alias_base:08x}",
+                            mailbox_tag_name(tag)
+                        ));
                     }
                     payload.copy_from_slice(&words[5..5 + payload.len()]);
                     return Ok(());
@@ -646,6 +862,10 @@ impl Mailbox {
             let value = self.read_reg(MAILBOX_READ_OFFSET);
             if (value & 0xF) == MAILBOX_CHANNEL_PROPERTY {
                 if (value & !0xF) != (data & !0xF) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] mailbox reply mismatch expected=0x{:08x} actual=0x{value:08x}",
+                        data & !0xF
+                    ));
                     return Err(HalError::Unsupported("mailbox-protocol"));
                 }
                 return Ok(());
@@ -653,18 +873,30 @@ impl Mailbox {
         }
     }
 
+    fn log_protocol_reply(&self, tag: u32, alias_base: u32, words: &[u32]) {
+        let status = words.get(1).copied().unwrap_or_default();
+        let reply_tag = words.get(2).copied().unwrap_or_default();
+        let value_len = words.get(3).copied().unwrap_or_default();
+        let value_status = words.get(4).copied().unwrap_or_default();
+        let value0 = words.get(5).copied().unwrap_or_default();
+        let value1 = words.get(6).copied().unwrap_or_default();
+        let reason = mailbox_protocol_reason(tag, status, reply_tag, value_status);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox protocol fail tag={} alias=0x{alias_base:08x} reason={reason}",
+            mailbox_tag_name(tag),
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox protocol data st=0x{status:08x} tag=0x{reply_tag:08x} len=0x{value_len:08x} val=0x{value_status:08x} v0=0x{value0:08x} v1=0x{value1:08x}",
+        ));
+    }
+
     fn log_timeout(&self, phase: &str) {
         let status0 = self.read_reg(MAILBOX_STATUS0_OFFSET);
         let status1 = self.read_reg(MAILBOX_STATUS1_OFFSET);
-        let mut line = heapless::String::<200>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[pi4-wifi] mailbox timeout phase={phase} regs=0x{regs:08x} status0=0x{status0:08x} status1=0x{status1:08x}",
-                regs = self.regs.paddr()
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox timeout phase={phase} regs=0x{regs:08x} status0=0x{status0:08x} status1=0x{status1:08x}",
+            regs = self.regs.paddr()
+        ));
     }
 
     fn read_reg(&self, offset: usize) -> u32 {
@@ -701,7 +933,21 @@ impl SdioHost {
         };
         let regs_paddr = regs.paddr();
         let mut mailbox = MailboxRef(mailbox);
-        let base_clock_hz = mailbox.query_clock_hz().unwrap_or(100_000_000);
+        let base_clock_hz = match mailbox.query_clock_hz() {
+            Ok(rate) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdhci base-clock source=mailbox rate={}Hz",
+                    rate
+                ));
+                rate
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdhci base-clock source=fallback rate=100000000Hz err={err}"
+                ));
+                100_000_000
+            }
+        };
         Ok(Self {
             regs,
             regs_paddr,
@@ -720,6 +966,7 @@ impl SdioHost {
     fn reset_controller(&mut self) -> Result<(), HalError> {
         self.software_reset(SDHCI_RESET_ALL)?;
         self.write8(SDHCI_POWER_CONTROL, SDHCI_POWER_330 | SDHCI_POWER_ON);
+        bounded_spin_settle("sdhci-power-on", SDHCI_POWER_SETTLE_LOOPS);
         self.write8(SDHCI_TIMEOUT_CONTROL, 0x0E);
         self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
         self.write32(SDHCI_INT_ENABLE, SDHCI_INT_ALL_MASK);
@@ -727,6 +974,7 @@ impl SdioHost {
         self.set_clock_hz(400_000)?;
         self.apply_host_bus_width(self.desired_bus_width);
         self.card = None;
+        self.log_host_state("after-reset");
         Ok(())
     }
 
@@ -779,12 +1027,41 @@ impl SdioHost {
             return Ok(());
         }
 
+        let mut last_err = HalError::Unsupported("sdio-card-init");
+        for attempt in 1..=SDIO_CARD_INIT_ATTEMPTS {
+            emit_breadcrumb(format_args!("[pi4-wifi] sdio card-init attempt={attempt}"));
+            match self.try_card_init() {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    last_err = err;
+                    if attempt == SDIO_CARD_INIT_ATTEMPTS {
+                        break;
+                    }
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] sdio card-init retry attempt={} err={}",
+                        attempt + 1,
+                        last_err
+                    ));
+                    bounded_spin_settle("sdio-card-retry", SDIO_CARD_INIT_RETRY_SETTLE_LOOPS);
+                }
+            }
+        }
+
+        Err(last_err)
+    }
+
+    fn try_card_init(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] sdio card-init begin"));
         self.reset_controller()?;
+
+        emit_breadcrumb(format_args!("[pi4-wifi] sdio card-init phase=cmd0"));
         self.send_command(0, 0, ResponseType::None)?;
 
+        emit_breadcrumb(format_args!("[pi4-wifi] sdio card-init phase=cmd5-probe"));
+        self.log_host_state("before-cmd5-probe");
         let mut ocr = 0u32;
         for _ in 0..SDIO_INIT_WAIT_LOOPS {
-            ocr = self.send_command(SDIO_CMD5, 0, ResponseType::Short)?[0];
+            ocr = self.send_command(SDIO_CMD5, 0, ResponseType::Ocr)?[0];
             if (ocr & SDIO_OCR_3V2_3V4) != 0 {
                 break;
             }
@@ -793,10 +1070,15 @@ impl SdioHost {
         if (ocr & SDIO_OCR_3V2_3V4) == 0 {
             return Err(HalError::Unsupported("sdio-ocr-timeout"));
         }
+        emit_breadcrumb(format_args!("[pi4-wifi] sdio card-ocr raw=0x{ocr:08x}"));
 
         let desired_ocr = ocr & SDIO_OCR_3V2_3V4;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio card-init phase=cmd5-ready ocr=0x{desired_ocr:08x}"
+        ));
+        self.log_host_state("before-cmd5-ready");
         for _ in 0..SDIO_INIT_WAIT_LOOPS {
-            ocr = self.send_command(SDIO_CMD5, desired_ocr, ResponseType::Short)?[0];
+            ocr = self.send_command(SDIO_CMD5, desired_ocr, ResponseType::Ocr)?[0];
             if (ocr & SDIO_R4_READY) != 0 {
                 break;
             }
@@ -806,10 +1088,12 @@ impl SdioHost {
             return Err(HalError::Unsupported("sdio-card-not-ready"));
         }
 
+        emit_breadcrumb(format_args!("[pi4-wifi] sdio card-init phase=cmd3"));
         let rca = (self.send_command(SDIO_CMD3, 0, ResponseType::Short)?[0] >> 16) as u16;
         if rca == 0 {
             return Err(HalError::Unsupported("sdio-missing-rca"));
         }
+        emit_breadcrumb(format_args!("[pi4-wifi] sdio card-init phase=cmd7"));
         self.send_command(SDIO_CMD7, u32::from(rca) << 16, ResponseType::ShortBusy)?;
         self.card = Some(CardInfo { rca, ocr });
         self.apply_host_bus_width(self.desired_bus_width);
@@ -818,6 +1102,10 @@ impl SdioHost {
             self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_IF, SDIO_BUS_WIDTH_4BIT)?;
         }
 
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio card-init ready rca=0x{rca:04x} ocr=0x{ocr:08x} width={}",
+            sdio_bus_width_name(self.desired_bus_width)
+        ));
         Ok(())
     }
 
@@ -875,6 +1163,7 @@ impl SdioHost {
     }
 
     fn enable_functions(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] sdio enable-functions begin"));
         let ioex = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
         let desired = ioex | SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
         if desired != ioex {
@@ -889,6 +1178,9 @@ impl SdioHost {
                 self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_IENX, ien)?;
                 self.set_function_block_size(SdioFunction::Function1, 64)?;
                 self.set_function_block_size(SdioFunction::Function2, 256)?;
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdio enable-functions ready ioex=0x{desired:02x}"
+                ));
                 return Ok(());
             }
             spin_loop();
@@ -897,6 +1189,7 @@ impl SdioHost {
     }
 
     fn bring_up_backplane(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] cyw43 backplane begin"));
         self.io_direct_write(
             SdioFunction::Function1,
             SBSDIO_FUNC1_CHIPCLKCSR,
@@ -924,6 +1217,7 @@ impl SdioHost {
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SDIOPULLUP, 0)?;
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL, 1 << 1)
             .ok();
+        emit_breadcrumb(format_args!("[pi4-wifi] cyw43 backplane ready"));
         Ok(())
     }
 
@@ -960,6 +1254,9 @@ impl SdioHost {
                 if version != 0 && version != SDPCM_PROT_VERSION {
                     return Err(HalError::Unsupported("cyw43-protocol-version"));
                 }
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware ready mailbox=0x{value:08x} version={version}"
+                ));
                 return Ok(());
             }
             spin_loop();
@@ -1156,16 +1453,23 @@ impl SdioHost {
     }
 
     fn init_cyw43_transport(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] cyw43 transport init begin"));
         self.ensure_card_ready()?;
         self.enable_functions()?;
         self.bring_up_backplane()?;
-        let _ = self.chip_id()?;
+        let chip_id = self.chip_id()?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] cyw43 transport ready chip=0x{chip_id:08x}"
+        ));
         Ok(())
     }
 
     fn load_firmware(&mut self, bundle: WifiFirmwareBundle<'static>) -> Result<(), HalError> {
         let ram_base = self.firmware_ram_base();
         let ram_size = self.ram_size()?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware load begin ram_base=0x{ram_base:08x} ram_size=0x{ram_size:08x}"
+        ));
         self.core_disable(CYW43_ARMCR4_CORE_BASE)?;
         self.core_disable(CYW43_SOCRAM_CORE_BASE)?;
         self.core_reset(CYW43_SOCRAM_CORE_BASE)?;
@@ -1193,6 +1497,7 @@ impl SdioHost {
         self.wait_for_ht_clock()?;
         self.setup_firmware_channel()?;
         self.wait_for_firmware_ready()?;
+        emit_breadcrumb(format_args!("[pi4-wifi] firmware load ready"));
         Ok(())
     }
 
@@ -1312,8 +1617,15 @@ impl SdioHost {
         self.write16(SDHCI_TRANSFER_MODE, 0);
         self.write16(SDHCI_COMMAND, make_command(cmd, response, false));
 
-        let status = self.wait_int(SDHCI_INT_CMD_MASK)?;
+        let status = match self.wait_int(SDHCI_INT_CMD_MASK) {
+            Ok(status) => status,
+            Err(err) => {
+                self.log_command_state("wait", cmd, arg, 0);
+                return Err(err);
+            }
+        };
         if (status & SDHCI_INT_ERROR) != 0 {
+            self.log_command_state("error", cmd, arg, status);
             self.software_reset(SDHCI_RESET_CMD).ok();
             return Err(HalError::Unsupported("sdhci-command-error"));
         }
@@ -1326,7 +1638,7 @@ impl SdioHost {
                     *slot = self.read32(SDHCI_RESPONSE + index * 4);
                 }
             }
-            ResponseType::Short | ResponseType::ShortBusy => {
+            ResponseType::Ocr | ResponseType::Short | ResponseType::ShortBusy => {
                 resp[0] = self.read32(SDHCI_RESPONSE);
             }
         }
@@ -1407,6 +1719,36 @@ impl SdioHost {
             spin_loop();
         }
         Err(HalError::Unsupported("sdhci-int-timeout"))
+    }
+
+    fn log_command_state(&self, stage: &'static str, cmd: u16, arg: u32, status: u32) {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdhci cmd {stage} cmd={cmd} arg=0x{arg:08x} status=0x{status:08x} reason={} present=0x{:08x} power=0x{:02x} clock=0x{:04x} host=0x{:02x}",
+            sdhci_status_reason(status),
+            self.read32(SDHCI_PRESENT_STATE),
+            self.read8(SDHCI_POWER_CONTROL),
+            self.read16(SDHCI_CLOCK_CONTROL),
+            self.read8(SDHCI_HOST_CONTROL),
+        ));
+        self.log_host_state("cmd-fail");
+    }
+
+    fn log_host_state(&self, stage: &'static str) {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdhci state {stage} present=0x{:08x} power=0x{:02x} clock=0x{:04x} timeout=0x{:02x} host=0x{:02x} int_status=0x{:08x} int_enable=0x{:08x} signal=0x{:08x} caps=0x{:08x} ver=0x{:04x} hz={} width={}",
+            self.read32(SDHCI_PRESENT_STATE),
+            self.read8(SDHCI_POWER_CONTROL),
+            self.read16(SDHCI_CLOCK_CONTROL),
+            self.read8(SDHCI_TIMEOUT_CONTROL),
+            self.read8(SDHCI_HOST_CONTROL),
+            self.read32(SDHCI_INT_STATUS),
+            self.read32(SDHCI_INT_ENABLE),
+            self.read32(SDHCI_SIGNAL_ENABLE),
+            self.read32(SDHCI_CAPABILITIES),
+            self.read16(SDHCI_HOST_VERSION),
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+        ));
     }
 
     fn set_function_block_size(
@@ -1555,6 +1897,7 @@ fn phys_to_bus(paddr: usize, alias_base: u32) -> Option<u32> {
 fn make_command(cmd: u16, response: ResponseType, data: bool) -> u16 {
     let mut flags = match response {
         ResponseType::None => SDHCI_CMD_RESP_NONE,
+        ResponseType::Ocr => SDHCI_CMD_RESP_SHORT,
         ResponseType::Short => SDHCI_CMD_RESP_SHORT | SDHCI_CMD_CRC | SDHCI_CMD_INDEX,
         ResponseType::ShortBusy => SDHCI_CMD_RESP_SHORT_BUSY | SDHCI_CMD_CRC | SDHCI_CMD_INDEX,
         ResponseType::Long => SDHCI_CMD_RESP_LONG | SDHCI_CMD_CRC,
@@ -1589,7 +1932,11 @@ pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{make_command, normalize_nvram, phys_to_bus, r5_status, ResponseType};
+    use super::{
+        is_mailbox_protocol_error, mailbox_tag_name, make_command, normalize_nvram, phys_to_bus,
+        r5_status, sdhci_status_reason, HalError, ResponseType, SDHCI_INT_CRC, SDHCI_INT_DATA_CRC,
+        SDHCI_INT_TIMEOUT, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+    };
 
     #[test]
     fn normalize_nvram_appends_newline_nul_and_padding() {
@@ -1601,8 +1948,29 @@ mod tests {
     #[test]
     fn cmd_flags_encode_expected_response_modes() {
         assert_eq!(make_command(5, ResponseType::None, false) & 0x3F, 0);
+        let cmd5 = make_command(5, ResponseType::Ocr, false);
+        assert_ne!(cmd5 & SDHCI_CMD_RESP_SHORT, 0);
+        assert_eq!(cmd5 & (SDHCI_CMD_CRC | SDHCI_CMD_INDEX), 0);
         assert_ne!(make_command(52, ResponseType::Short, false) & 0x1C, 0);
         assert_ne!(make_command(53, ResponseType::Short, true) & 0x20, 0);
+    }
+
+    #[test]
+    fn mailbox_tag_names_cover_bringup_tags() {
+        assert_eq!(mailbox_tag_name(TAG_SET_POWER_STATE), "set-power-state");
+        assert_eq!(mailbox_tag_name(TAG_GET_CLOCK_RATE), "get-clock-rate");
+        assert_eq!(mailbox_tag_name(TAG_SET_GPIO_CONFIG), "set-gpio-config");
+        assert_eq!(mailbox_tag_name(0xffff_ffff), "unknown");
+    }
+
+    #[test]
+    fn mailbox_protocol_error_match_is_exact() {
+        assert!(is_mailbox_protocol_error(&HalError::Unsupported(
+            "mailbox-protocol"
+        )));
+        assert!(!is_mailbox_protocol_error(&HalError::Unsupported(
+            "mailbox-timeout"
+        )));
     }
 
     #[test]
@@ -1616,5 +1984,13 @@ mod tests {
     fn phys_to_bus_preserves_low_bits_and_applies_alias() {
         assert_eq!(phys_to_bus(0x3F00_B880, 0xC000_0000), Some(0xFF00_B880));
         assert_eq!(phys_to_bus(0x3F00_B880, 0x4000_0000), Some(0x7F00_B880));
+    }
+
+    #[test]
+    fn sdhci_status_reason_prefers_specific_error_bits() {
+        assert_eq!(sdhci_status_reason(SDHCI_INT_TIMEOUT), "timeout");
+        assert_eq!(sdhci_status_reason(SDHCI_INT_CRC), "crc");
+        assert_eq!(sdhci_status_reason(SDHCI_INT_DATA_CRC), "data-crc");
+        assert_eq!(sdhci_status_reason(0), "unknown");
     }
 }

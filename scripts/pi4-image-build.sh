@@ -122,11 +122,28 @@ verify_u_boot_pi4_target() {
       fail "u-boot.bin is missing CONFIG_LEGACY_IMAGE_FORMAT; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
     grep -q '^CONFIG_USB_KEYBOARD=y$' "${config_file}" || \
       fail "u-boot.bin is missing CONFIG_USB_KEYBOARD; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    grep -q '^CONFIG_CMD_CONITRACE=y$' "${config_file}" || \
+      fail "u-boot.bin is missing CONFIG_CMD_CONITRACE; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
     if ! grep -Eq '^CONFIG_SYS_USB_EVENT_POLL=y$|^CONFIG_SYS_USB_EVENT_POLL_VIA_CONTROL_EP=y$' "${config_file}"; then
       fail "u-boot.bin is missing a supported USB keyboard polling mode; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
     fi
     grep -q '^CONFIG_SYS_CONSOLE_IS_IN_ENV=y$' "${config_file}" || \
       fail "u-boot.bin is missing CONFIG_SYS_CONSOLE_IS_IN_ENV; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+}
+
+verify_boot_cmd_diagnostics() {
+    local path="$1"
+
+    require_file "$path"
+
+    grep -q 'coh_usb_capture_diag' "$path" || fail "boot.cmd is missing USB diagnostic capture"
+    grep -q 'coh_usb_trace_diag' "$path" || fail "boot.cmd is missing USB keyboard trace diagnostics"
+    grep -q 'coh_usb_cold_diag' "$path" || fail "boot.cmd is missing USB cold re-enumeration diagnostics"
+    grep -q 'conitrace' "$path" || fail "boot.cmd is missing conitrace USB test path"
+    grep -q 'usb tree' "$path" || fail "boot.cmd is missing usb tree diagnostics"
+    grep -q 'usb info' "$path" || fail "boot.cmd is missing usb info diagnostics"
+    grep -q 'printenv usb_pgood_delay' "$path" || fail "boot.cmd is missing usb_pgood_delay diagnostics"
+    grep -q 'printenv stdin' "$path" || fail "boot.cmd is missing stdin diagnostics"
 }
 
 resolve_sel4_source_dir() {
@@ -575,7 +592,11 @@ setenv coh_logo_x 20
 setenv coh_logo_y 20
 setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""'
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
-setenv coh_prepare_input 'if test "${coh_usb_input_ready}" != "1"; then setenv coh_usb_input_ready 1; echo "[cohesix] reusing preboot USB session for menu input"; fi; setenv stdin usbkbd,serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
+setenv coh_usb_capture_diag 'echo "[cohesix] USB input diagnostics"; printenv usb_pgood_delay; printenv stdin; printenv stdout; printenv stderr; coninfo; if usb tree; then true; else echo "[cohesix] WARNING: usb tree failed"; fi; if usb info; then true; else echo "[cohesix] WARNING: usb info failed"; fi'
+setenv coh_usb_menu_diag 'if test "${coh_usb_diag_done}" != "1"; then setenv coh_usb_diag_done 1; run coh_usb_capture_diag; fi'
+setenv coh_usb_cold_diag 'echo "[cohesix] USB cold re-enumeration diagnostics"; setenv coh_usb_saved_pgood ${usb_pgood_delay}; setenv usb_pgood_delay 8000; echo "[cohesix] usb_pgood_delay=8000 (diagnostic only)"; if usb stop; then true; else echo "[cohesix] WARNING: usb stop failed during diagnostics"; fi; if usb start; then true; else echo "[cohesix] WARNING: usb start failed during diagnostics"; fi; run coh_usb_capture_diag; setenv usb_pgood_delay ${coh_usb_saved_pgood}; setenv stdin usbkbd,serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
+setenv coh_usb_trace_diag 'run coh_prepare_input; cls; echo "[cohesix] USB keyboard diagnostics"; echo "[cohesix] Press keys on the USB keyboard now"; echo "[cohesix] Type x on serial to exit if the keyboard is still dead"; run coh_usb_capture_diag; conitrace; run coh_usb_cold_diag; echo "[cohesix] USB keyboard diagnostics complete"'
+setenv coh_prepare_input 'if test "${coh_usb_input_ready}" != "1"; then setenv coh_usb_input_ready 1; echo "[cohesix] reusing preboot USB session for menu input"; fi; setenv stdin usbkbd,serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole; run coh_usb_menu_diag'
 setenv coh_quiesce_usb 'setenv stdin serial; if usb stop; then echo "[cohesix] USB host quiesced before handoff"; else echo "[cohesix] WARNING: usb stop failed before handoff"; fi'
 setenv coh_toggle_logo 'if test "${coh_show_logo}" = "1"; then setenv coh_show_logo 0; echo "[cohesix] HDMI logo disabled"; else setenv coh_show_logo 1; echo "[cohesix] HDMI logo enabled"; fi'
 setenv coh_detect_saved_config 'setenv coh_has_saved_config 0; if test -n "${coh_net_mode}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_net_interface}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_ip}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_prefix_len}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_gateway}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_ssid}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_psk}"; then setenv coh_has_saved_config 1; fi'
@@ -593,7 +614,7 @@ setenv coh_wifi_setup 'run coh_prepare_input; cls; echo "[cohesix] Configure Wi-
 setenv coh_static_setup 'run coh_prepare_input; cls; echo "[cohesix] Configure static IPv4 for ${coh_net_interface}"; askenv coh_static_ip "Static IPv4 address (required): " 15; if test -z "${coh_static_ip}"; then echo "[cohesix] Static IPv4 address is required"; run coh_static_setup; fi; askenv coh_static_prefix_len "Prefix length (required, 1-32): " 2; if test -z "${coh_static_prefix_len}"; then echo "[cohesix] Prefix length is required"; run coh_static_setup; fi; askenv coh_static_gateway "Gateway IPv4 (optional): " 15; run coh_confirm_prompt'
 setenv coh_after_interface 'if test "${coh_net_interface}" = "wifi"; then run coh_wifi_setup; elif test "${coh_net_mode}" = "static"; then run coh_static_setup; else run coh_confirm_prompt; fi'
 setenv coh_confirm_prompt 'run coh_prepare_input; cls; echo "[cohesix] Review network settings"; run coh_emit_policy_summary; echo "  1. Boot with these settings"; echo "  2. Save settings and reboot"; echo "  3. Edit settings"; echo "  4. Discard changes and return"; echo "  0. Exit to U-Boot prompt"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then run coh_boot_sequence; elif test "${coh_choice}" = "2"; then run coh_persist_policy; reset; elif test "${coh_choice}" = "3"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "4"; then run coh_load_saved_policy; run coh_prompt_root; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_confirm_prompt; fi'
-setenv coh_prompt_root 'run coh_prepare_input; run coh_detect_saved_config; run coh_show_logo_splash; cls; echo "[cohesix] Cohesix boot options"; if test "${coh_has_saved_config}" = "1"; then echo "[cohesix] Saved network settings detected"; run coh_emit_policy_summary; echo "  1. Continue with existing config"; else echo "[cohesix] No saved network settings; manifest defaults remain active"; echo "  1. Boot with manifest defaults"; fi; echo "  2. Configure networking"; echo "  3. Toggle HDMI logo"; echo "  4. Restore manifest defaults"; echo "  5. Save current settings and reboot"; echo "  0. Exit to U-Boot prompt"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then run coh_boot_sequence; elif test "${coh_choice}" = "2"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "3"; then run coh_toggle_logo; run coh_prompt_root; elif test "${coh_choice}" = "4"; then run coh_reset_policy; run coh_persist_policy; echo "[cohesix] manifest defaults restored"; run coh_prompt_root; elif test "${coh_choice}" = "5"; then run coh_persist_policy; reset; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_root; fi'
+setenv coh_prompt_root 'run coh_prepare_input; run coh_detect_saved_config; run coh_show_logo_splash; cls; echo "[cohesix] Cohesix boot options"; if test "${coh_has_saved_config}" = "1"; then echo "[cohesix] Saved network settings detected"; run coh_emit_policy_summary; echo "  1. Continue with existing config"; else echo "[cohesix] No saved network settings; manifest defaults remain active"; echo "  1. Boot with manifest defaults"; fi; echo "  2. Configure networking"; echo "  3. Toggle HDMI logo"; echo "  4. Restore manifest defaults"; echo "  5. Save current settings and reboot"; echo "  6. USB keyboard diagnostics"; echo "  0. Exit to U-Boot prompt"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then run coh_boot_sequence; elif test "${coh_choice}" = "2"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "3"; then run coh_toggle_logo; run coh_prompt_root; elif test "${coh_choice}" = "4"; then run coh_reset_policy; run coh_persist_policy; echo "[cohesix] manifest defaults restored"; run coh_prompt_root; elif test "${coh_choice}" = "5"; then run coh_persist_policy; reset; elif test "${coh_choice}" = "6"; then run coh_usb_trace_diag; run coh_prompt_root; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_root; fi'
 run coh_load_saved_policy
 run coh_prompt_root
 EOF
@@ -645,6 +666,7 @@ total_mem=${PI4_TOTAL_MEM_MB}
 EOF
 
     write_boot_cmd "${STAGE_DIR}/boot.cmd" "${COHESIX_IMAGE_NAME}" "${SEL4_UPSTREAM_IMAGE_NAME}"
+    verify_boot_cmd_diagnostics "${STAGE_DIR}/boot.cmd"
     "$mkimage_bin" \
       -A arm64 \
       -T script \

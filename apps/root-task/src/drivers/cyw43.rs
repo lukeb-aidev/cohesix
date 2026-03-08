@@ -237,11 +237,17 @@ impl Cyw43NetDevice {
         let firmware = state.firmware_bundle();
         firmware.validate().map_err(DriverError::InvalidFirmware)?;
 
+        info!("[cyw43] step: set_power(on)");
         state.set_power(WifiPowerState::On)?;
+        info!("[cyw43] step: set_reset(asserted)");
         state.set_reset(WifiResetState::Asserted)?;
+        info!("[cyw43] step: reset_host");
         state.reset_host()?;
+        info!("[cyw43] step: set_clock(startup)");
         let effective_clock_hz = state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
+        info!("[cyw43] step: set_bus_width(1bit)");
         state.set_bus_width(SdioBusWidth::OneBit)?;
+        info!("[cyw43] step: set_reset(deasserted)");
         state.set_reset(WifiResetState::Deasserted)?;
         info!(
             "[cyw43] init: power/reset/clock ready startup_clock={}Hz",
@@ -257,10 +263,15 @@ impl Cyw43NetDevice {
             effective_clock_hz,
         );
 
+        info!("[cyw43] step: init_transport");
         state.init_cyw43_transport()?;
+        info!("[cyw43] step: set_bus_width(4bit)");
         state.set_bus_width(SdioBusWidth::FourBit)?;
+        info!("[cyw43] step: set_clock(data)");
         let data_clock_hz = state.set_clock_hz(SDIO_DATA_CLOCK_HZ)?;
+        info!("[cyw43] step: load_firmware");
         state.load_cyw43_firmware()?;
+        info!("[cyw43] step: read_ioex");
         let ioex = state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
 
         let mut device = Self {
@@ -284,6 +295,7 @@ impl Cyw43NetDevice {
             control_response: [0; CONTROL_RESPONSE_BUF_LEN],
         };
 
+        info!("[cyw43] step: init_control_plane");
         device.init_control_plane(firmware, credentials)?;
         info!(
             "[cyw43] ready: mac={} clock={}Hz bus_width={} ioex=0x{:02x}",

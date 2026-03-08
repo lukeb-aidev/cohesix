@@ -1107,23 +1107,48 @@ fn collect_pi4_uefi_xhci_mmio_hint(
     dtb: &bi_extra::Dtb<'_>,
 ) -> Result<Option<usize>, bi_extra::ParseError> {
     let mut hint = None;
+    let mut candidate_depth = None;
+    let mut candidate_reg = None;
+    let mut candidate_disabled = false;
     let mut path = HeaplessVec::<&str, 16>::new();
     let mut cursor = dtb.structure_cursor();
     while let Some(item) = cursor.next()? {
         match item {
             bi_extra::StructureItem::BeginNode(name) => {
                 let _ = path.push(name);
+                if name.contains("xhci@") {
+                    candidate_depth = Some(path.len());
+                    candidate_disabled = false;
+                }
             }
             bi_extra::StructureItem::EndNode => {
+                if candidate_depth == Some(path.len()) {
+                    if hint.is_none() && !candidate_disabled {
+                        hint = candidate_reg;
+                    }
+                    candidate_depth = None;
+                    candidate_reg = None;
+                    candidate_disabled = false;
+                }
                 let _ = path.pop();
             }
             bi_extra::StructureItem::Property { name, value } => {
-                if hint.is_some() || name != "reg" {
+                let Some(depth) = candidate_depth else {
+                    continue;
+                };
+                if path.len() != depth {
                     continue;
                 }
-                let in_xhci = path.iter().any(|segment| segment.contains("xhci@"));
-                if in_xhci {
-                    hint = dtb_first_reg_addr(value);
+                match name {
+                    "status" => {
+                        candidate_disabled = dtb_prop_cstr(value)
+                            .map(|status| status.eq_ignore_ascii_case("disabled"))
+                            .unwrap_or(false);
+                    }
+                    "reg" => {
+                        candidate_reg = dtb_first_reg_addr(value);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -3336,22 +3361,10 @@ fn bootstrap<P: Platform>(
     }
 
     let hardware = generated::hardware_config();
-    // Reserve low Pi4 Wi-Fi peripheral pages (mailbox/SDHCI) before higher UART
-    // pages advance the device-untyped cursor.
-    crate::hal::pi4_wifi::preseed_mmio(hal);
-    let mut local_seat_runtime = init_local_seat_runtime(
-        &mut console,
-        hardware,
-        hal,
-        extra_bytes,
-        extra_range.clone(),
-    )?;
-
-    #[cfg(feature = "kernel")]
-    let ninedoor: &'static mut NineDoorBridge = {
-        let bridge = Box::new(NineDoorBridge::new());
-        Box::leak(bridge)
-    };
+    // Reserve the low mailbox page before mid/high Pi4 MMIO mappings advance the
+    // device-untyped cursor. Defer SDHCI until after UART so the FE300000 page
+    // cannot consume past the FE215000 UART window first.
+    crate::hal::pi4_wifi::preseed_mailbox_mmio(hal);
 
     let mut uart_slot: Option<sel4_sys::seL4_CPtr> = None;
     let mut uart_mmio: Option<KernelUartMmio> = None;
@@ -3359,9 +3372,29 @@ fn bootstrap<P: Platform>(
     for candidate in UART_CANDIDATES {
         let paddr = candidate.paddr();
         let coverage = hal.device_coverage(paddr, DEVICE_FRAME_BITS);
-        if coverage.is_none() {
+        let Some(coverage) = coverage else {
+            let mut line = heapless::String::<192>::new();
+            let _ = write!(
+                line,
+                "[uart] coverage missing backend={} paddr=0x{paddr:08x}",
+                candidate.label(),
+                paddr = paddr,
+            );
+            console.writeln_prefixed(line.as_str());
             continue;
-        }
+        };
+        let mut line = heapless::String::<224>::new();
+        let _ = write!(
+            line,
+            "[uart] coverage backend={} paddr=0x{paddr:08x} region=[0x{base:08x}..0x{limit:08x}) idx={} used={}",
+            candidate.label(),
+            coverage.index,
+            if coverage.used { "yes" } else { "no" },
+            paddr = paddr,
+            base = coverage.base,
+            limit = coverage.limit,
+        );
+        console.writeln_prefixed(line.as_str());
 
         match hal.map_device(paddr) {
             Ok(region) => {
@@ -3428,6 +3461,22 @@ fn bootstrap<P: Platform>(
             }
         }
     }
+
+    crate::hal::pi4_wifi::preseed_sdhci_mmio(hal);
+
+    let mut local_seat_runtime = init_local_seat_runtime(
+        &mut console,
+        hardware,
+        hal,
+        extra_bytes,
+        extra_range.clone(),
+    )?;
+
+    #[cfg(feature = "kernel")]
+    let ninedoor: &'static mut NineDoorBridge = {
+        let bridge = Box::new(NineDoorBridge::new());
+        Box::leak(bridge)
+    };
 
     if let Some(runtime) = local_seat_runtime.as_deref_mut() {
         boot_log::force_uart_line("[local-seat] runtime preseed hook begin");

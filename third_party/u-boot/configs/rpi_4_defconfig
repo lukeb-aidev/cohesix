@@ -24,7 +24,7 @@ CONFIG_OF_BOARD_SETUP=y
 CONFIG_FDT_SIMPLEFB=y
 CONFIG_BOOTDELAY=0
 CONFIG_USE_PREBOOT=y
-CONFIG_PREBOOT="pci enum; usb start; setenv stdin usbkbd,serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole"
+CONFIG_PREBOOT="pci enum; usb start; usb tree; usb info; setenv stdin usbkbd,serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole; coninfo; printenv usb_pgood_delay; printenv stdin; printenv stdout; printenv stderr"
 CONFIG_SYS_PBSIZE=1049
 # CONFIG_DISPLAY_CPUINFO is not set
 # CONFIG_DISPLAY_BOARDINFO is not set
@@ -32,6 +32,7 @@ CONFIG_MISC_INIT_R=y
 CONFIG_SYS_PROMPT="U-Boot> "
 CONFIG_CMD_BOOTMENU=y
 CONFIG_CMD_CONSOLE=y
+CONFIG_CMD_CONITRACE=y
 CONFIG_CMD_NVEDIT_EFI=y
 CONFIG_CMD_ASKENV=y
 CONFIG_CMD_BMP=y
@@ -73,7 +74,7 @@ CONFIG_USB_XHCI_HCD=y
 CONFIG_USB_XHCI_PCI=y
 CONFIG_USB_KEYBOARD=y
 CONFIG_SYS_USB_EVENT_POLL=y
-CONFIG_USB_HUB_DEBOUNCE_TIMEOUT=2000
+CONFIG_USB_HUB_DEBOUNCE_TIMEOUT=5000
 CONFIG_USB_GADGET=y
 CONFIG_USB_GADGET_MANUFACTURER="FSL"
 CONFIG_USB_GADGET_VENDOR_NUM=0x0525

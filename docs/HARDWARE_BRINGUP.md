@@ -63,7 +63,7 @@
 - `Configure networking` walks DHCP `ON|OFF`, `wired|wifi`, Wi-Fi credentials when needed, and static IPv4 prompts only when DHCP is off.
 - `Save current settings and reboot` persists only the user-facing Cohesix policy fields to `cohesix.env` on the FAT boot partition; it does not rewrite the manifest or generic U-Boot environment.
 - The wizard intentionally uses `askenv`-based numbered prompts instead of U-Boot `bootmenu`, because upstream U-Boot documents `bootmenu` as an ANSI-terminal path and the simpler prompt flow is more reliable on the Pi 4 HDMI + USB-keyboard bring-up path while still preserving serial control via `minicom`.
-- The script reloads only `cohesix.env` from the FAT partition, reuses the Pi 4 preboot USB session, and switches `stdin` to `usbkbd,serial` so the HDMI wizard prefers the USB keyboard while retaining serial fallback; it then stops the U-Boot USB host stack before `bootm` so seL4/root-task receive a fixed post-U-Boot image and DTB handoff.
+- The script reloads only `cohesix.env` from the FAT partition, reuses the Pi 4 preboot USB session, and switches `stdin` to `usbkbd,serial` so the HDMI wizard prefers the USB keyboard while retaining serial fallback; on first menu entry it emits one bounded USB diagnostic snapshot (`printenv stdin/stdout/stderr`, `coninfo`, `usb tree`, `usb info`) and exposes a `USB keyboard diagnostics` menu action that runs the same snapshot, enters `conitrace`, then performs one cold `usb stop`/`usb start` re-enumeration with a temporary `usb_pgood_delay=8000` before capturing the snapshot again.
 - The Pi 4 U-Boot build stays on the seL4-aligned `usbkbd` interrupt-polling baseline (`CONFIG_SYS_USB_EVENT_POLL=y`) so the HDMI wizard matches the previously working Pi 4 input path.
 - Optional Cohesix net-policy overrides mirrored into DTB `/chosen` by the staged boot script:
 - `setenv coh_net_mode <off|static|dhcp>`
@@ -77,7 +77,7 @@
 - The staged `bcm2711-rpi-4-b.dtb` is padded to 128 KiB before flashing, so U-Boot can add `/chosen/cohesix,*` properties in place without `fdt resize`.
 - `setenv coh_show_logo <0|1>` (controls whether the staged `boot.bmp` splash is displayed on HDMI before the menu)
 - The staged Pi 4 U-Boot build enables 24bpp BMP drawing, so the centered `boot.bmp` splash uses the same HDMI framebuffer path as `bmp display`.
-- Pi 4 U-Boot keeps the seL4-aligned preboot USB-start path, but now rebinds the live console during `CONFIG_PREBOOT` (`pci enum; usb start; setenv stdin usbkbd,serial; ...`) and in the default board env (`stdin=usbkbd,serial`) so the HDMI wizard prefers the USB keyboard without issuing a second bus reset on the VL805 path.
+- Pi 4 U-Boot keeps the seL4-aligned preboot USB-start path, but now also dumps an early USB/console snapshot during `CONFIG_PREBOOT` (`pci enum; usb start; usb tree; usb info; ...; coninfo; printenv stdin; ...`) and rebinds the live console in both `CONFIG_PREBOOT` and the default board env (`stdin=usbkbd,serial`). The default board env now keeps `usb_pgood_delay=5000` and the Pi 4 defconfig keeps `CONFIG_USB_HUB_DEBOUNCE_TIMEOUT=5000` so compound keyboard hubs get a full first-pass settle window without issuing the old fatal second `usb reset` on VL805.
 - On first entry to the root menu, the staged `boot.bmp` copy of the Cohesix logo is shown centered for a short splash delay and the interactive menu is then drawn on a cleared console, so the splash is visible without being left behind the menu text.
 - `ping ${serverip}`
 - `fatwrite mmc 0:1 ${coh_policy_addr} cohesix.env ${filesize}` (only when explicitly persisting Cohesix policy)
@@ -106,6 +106,7 @@
   - `Wired Ethernet (GENET)` or `Wi-Fi (CYW43455)`
   - when `DHCP OFF`, enter `Static IPv4 address`, `Prefix length`, and optional `Gateway IPv4`
   - when `Wi-Fi`, enter `Wi-Fi SSID` and optional `Wi-Fi PSK`
+- choose `USB keyboard diagnostics` when isolating pre-kernel input faults; the action captures `stdin/stdout/stderr`, `coninfo`, `usb tree`, `usb info`, runs `conitrace`, then forces one cold `usb stop`/`usb start` re-enumeration with `usb_pgood_delay=8000` and captures the snapshot again
 3. Optional persistence:
 - choose `Save current settings and reboot` or `Save settings and reboot` to persist only the Cohesix policy fields into `cohesix.env`.
 4. Boot and confirm policy evidence:
@@ -117,6 +118,7 @@
 - for wizard-selected `mode=dhcp`, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...` and then `[net-console] ready ip=<lease-ip> ...`
 - for wizard-selected `mode=static`, `[net-console] init: bringing up backend=... mode=static interface=... ip=<static-ip>/<prefix> ...`
 - when saved wizard settings are used after reboot, root-task must not print `[boot] dtb locate skipped/failed: bootinfo extra truncated`; that message indicates the DTB handoff was lost before policy resolution and is a regression.
+- when Wi-Fi bring-up fails, the serial log must now identify the failing stage with `[cyw43] step: ...` and `[pi4-wifi] ...` breadcrumbs before the final `mailbox-*`, `sdio-*`, or `cyw43-*` error detail.
 5. Validate diagnostics surfaces:
 - on the manifest-default boot, `netstats` includes `mode=static policy=wired active=wired standby=none addr_src=manifest-static ip=192.168.10.42 gateway=192.168.10.1 dhcp=disabled`
 - on the manifest-default boot, `netstatus` prints `ip=192.168.10.42 gateway=192.168.10.1 src=manifest-static dhcp=disabled`
