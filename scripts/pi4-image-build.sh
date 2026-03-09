@@ -88,6 +88,13 @@ verify_u_boot_pi4_target() {
     local config_file="${u_boot_source_dir}/.config"
     local u_boot_elf="${u_boot_source_dir}/u-boot"
     local device_tree
+    local -a u_boot_inputs=(
+        "${u_boot_source_dir}/configs/rpi_4_defconfig"
+        "${u_boot_source_dir}/board/raspberrypi/rpi/rpi.env"
+        "${u_boot_source_dir}/common/usb_hub.c"
+        "${u_boot_source_dir}/drivers/usb/host/xhci-ring.c"
+    )
+    local input=""
 
     if [[ "${U_BOOT_BIN}" != "${default_u_boot_bin}" ]]; then
         return 0
@@ -107,6 +114,15 @@ verify_u_boot_pi4_target() {
     if [[ -f "${u_boot_elf}" && "${config_file}" -nt "${u_boot_elf}" ]]; then
         fail "u-boot ELF is older than ${config_file}; rebuild U-Boot so the flashed binary matches the requested commands"
     fi
+    for input in "${u_boot_inputs[@]}"; do
+        [[ -f "${input}" ]] || continue
+        if [[ "${input}" -nt "${default_u_boot_bin}" ]]; then
+            fail "u-boot.bin is older than ${input}; rebuild U-Boot so the flashed binary matches the requested Pi 4 bring-up sources"
+        fi
+        if [[ -f "${u_boot_elf}" && "${input}" -nt "${u_boot_elf}" ]]; then
+            fail "u-boot ELF is older than ${input}; rebuild U-Boot so the flashed binary matches the requested Pi 4 bring-up sources"
+        fi
+    done
 
     device_tree="$(awk -F= '/^CONFIG_DEFAULT_DEVICE_TREE=/{gsub(/"/, "", $2); print $2}' "${config_file}" | tail -n 1)"
     if [[ "${device_tree}" != "bcm2711-rpi-4-b" ]]; then

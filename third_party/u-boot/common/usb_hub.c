@@ -62,8 +62,6 @@
 #define HUB_PORT_IFACE_FALLBACK_MAX		3
 #define HUB_PORT_INDEX_CANDIDATES_MAX \
 	(2 + HUB_PORT_IFACE_FALLBACK_MAX)
-#define HUB_APPLE_KEYBOARD_SETTLE_MS		250
-
 struct usb_device_scan {
 	struct usb_device *dev;		/* USB hub device to scan */
 	struct usb_hub_device *hub;	/* USB hub struct */
@@ -986,11 +984,6 @@ static int usb_hub_configure(struct usb_device *dev)
 		       hub->connect_timeout > hub->query_delay ?
 				hub->connect_timeout - hub->query_delay : 0,
 		       descriptor->bHubContrCurrent);
-		mdelay(HUB_APPLE_KEYBOARD_SETTLE_MS);
-		printf("[usb-hub] hub settle hub=%04x:%04x delay=%dms\n",
-		       le16_to_cpu(dev->descriptor.idVendor),
-		       le16_to_cpu(dev->descriptor.idProduct),
-		       HUB_APPLE_KEYBOARD_SETTLE_MS);
 	}
 
 	for (i = 0; i < dev->maxchild; i++)

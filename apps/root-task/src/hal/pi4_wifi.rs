@@ -116,6 +116,15 @@ fn sdio_bus_width_name(width: SdioBusWidth) -> &'static str {
     }
 }
 
+#[inline]
+fn yn(flag: bool) -> &'static str {
+    if flag {
+        "y"
+    } else {
+        "n"
+    }
+}
+
 fn bounded_spin_settle(stage: &'static str, loops: usize) {
     emit_breadcrumb(format_args!(
         "[pi4-wifi] settle stage={stage} loops={loops}"
@@ -288,8 +297,14 @@ const SDHCI_CMD_DATA: u16 = 0x20;
 
 const SDHCI_CMD_INHIBIT: u32 = 1 << 0;
 const SDHCI_DATA_INHIBIT: u32 = 1 << 1;
+const SDHCI_DAT_ACTIVE: u32 = 1 << 2;
 const SDHCI_SPACE_AVAILABLE: u32 = 1 << 10;
 const SDHCI_DATA_AVAILABLE: u32 = 1 << 11;
+const SDHCI_CARD_PRESENT: u32 = 1 << 16;
+const SDHCI_CARD_STATE_STABLE: u32 = 1 << 17;
+const SDHCI_CARD_DETECT_PIN_LEVEL: u32 = 1 << 18;
+const SDHCI_WRITE_PROTECT: u32 = 1 << 19;
+const SDHCI_DATA_LVL_MASK: u32 = 0x00F0_0000;
 
 const SDHCI_CTRL_4BITBUS: u8 = 1 << 1;
 
@@ -1723,31 +1738,47 @@ impl SdioHost {
 
     fn log_command_state(&self, stage: &'static str, cmd: u16, arg: u32, status: u32) {
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] sdhci cmd {stage} cmd={cmd} arg=0x{arg:08x} status=0x{status:08x} reason={} present=0x{:08x} power=0x{:02x} clock=0x{:04x} host=0x{:02x}",
-            sdhci_status_reason(status),
-            self.read32(SDHCI_PRESENT_STATE),
-            self.read8(SDHCI_POWER_CONTROL),
-            self.read16(SDHCI_CLOCK_CONTROL),
-            self.read8(SDHCI_HOST_CONTROL),
+            "[pi4-wifi] sdhci cmd {stage} cmd={cmd} arg=0x{arg:08x} st=0x{status:08x} why={}",
+            sdhci_status_reason(status)
         ));
         self.log_host_state("cmd-fail");
     }
 
     fn log_host_state(&self, stage: &'static str) {
+        let present = self.read32(SDHCI_PRESENT_STATE);
+        let power = self.read8(SDHCI_POWER_CONTROL);
+        let clock = self.read16(SDHCI_CLOCK_CONTROL);
+        let timeout = self.read8(SDHCI_TIMEOUT_CONTROL);
+        let host = self.read8(SDHCI_HOST_CONTROL);
+        let int_status = self.read32(SDHCI_INT_STATUS);
+        let int_enable = self.read32(SDHCI_INT_ENABLE);
+        let signal_enable = self.read32(SDHCI_SIGNAL_ENABLE);
+        let caps = self.read32(SDHCI_CAPABILITIES);
+        let version = self.read16(SDHCI_HOST_VERSION);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] sdhci state {stage} present=0x{:08x} power=0x{:02x} clock=0x{:04x} timeout=0x{:02x} host=0x{:02x} int_status=0x{:08x} int_enable=0x{:08x} signal=0x{:08x} caps=0x{:08x} ver=0x{:04x} hz={} width={}",
-            self.read32(SDHCI_PRESENT_STATE),
-            self.read8(SDHCI_POWER_CONTROL),
-            self.read16(SDHCI_CLOCK_CONTROL),
-            self.read8(SDHCI_TIMEOUT_CONTROL),
-            self.read8(SDHCI_HOST_CONTROL),
-            self.read32(SDHCI_INT_STATUS),
-            self.read32(SDHCI_INT_ENABLE),
-            self.read32(SDHCI_SIGNAL_ENABLE),
-            self.read32(SDHCI_CAPABILITIES),
-            self.read16(SDHCI_HOST_VERSION),
+            "[pi4-wifi] sdhci regs {stage} ps=0x{present:08x} pwr=0x{power:02x} clk=0x{clock:04x} host=0x{host:02x} to=0x{timeout:02x}",
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdhci ints {stage} stat=0x{int_status:08x} en=0x{int_enable:08x} sig=0x{signal_enable:08x}",
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdhci caps {stage} caps=0x{caps:08x} ver=0x{version:04x} hz={} width={}",
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdhci flags {stage} cmdi={} dati={} datact={} card={} stable={} detect={} wp={} dat=0x{:x} iclk={} sclk={} pwron={}",
+            yn((present & SDHCI_CMD_INHIBIT) != 0),
+            yn((present & SDHCI_DATA_INHIBIT) != 0),
+            yn((present & SDHCI_DAT_ACTIVE) != 0),
+            yn((present & SDHCI_CARD_PRESENT) != 0),
+            yn((present & SDHCI_CARD_STATE_STABLE) != 0),
+            yn((present & SDHCI_CARD_DETECT_PIN_LEVEL) != 0),
+            yn((present & SDHCI_WRITE_PROTECT) != 0),
+            (present & SDHCI_DATA_LVL_MASK) >> 20,
+            yn((clock & SDHCI_CLOCK_INT_STABLE) != 0),
+            yn((clock & SDHCI_CLOCK_CARD_EN) != 0),
+            yn((power & SDHCI_POWER_ON) != 0),
         ));
     }
 
