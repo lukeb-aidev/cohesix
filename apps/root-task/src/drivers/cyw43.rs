@@ -190,6 +190,16 @@ impl From<HalError> for DriverError {
     }
 }
 
+fn is_transport_retryable(err: &HalError) -> bool {
+    matches!(
+        err,
+        HalError::Unsupported("sdhci-command-error")
+            | HalError::Unsupported("sdio-ocr-timeout")
+            | HalError::Unsupported("sdio-card-not-ready")
+            | HalError::Unsupported("sdhci-int-timeout")
+    )
+}
+
 impl NetDriverError for DriverError {
     fn is_absent(&self) -> bool {
         matches!(self, Self::NoDevice)
@@ -244,7 +254,7 @@ impl Cyw43NetDevice {
         info!("[cyw43] step: reset_host");
         state.reset_host()?;
         info!("[cyw43] step: set_clock(startup)");
-        let effective_clock_hz = state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
+        let mut effective_clock_hz = state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
         info!("[cyw43] step: set_bus_width(1bit)");
         state.set_bus_width(SdioBusWidth::OneBit)?;
         info!("[cyw43] step: set_reset(deasserted)");
@@ -264,7 +274,30 @@ impl Cyw43NetDevice {
         );
 
         info!("[cyw43] step: init_transport");
-        state.init_cyw43_transport()?;
+        if let Err(err) = state.init_cyw43_transport() {
+            if !is_transport_retryable(&err) {
+                return Err(err.into());
+            }
+            warn!("[cyw43] init_transport retryable failure: {err}");
+            info!("[cyw43] step: recover_transport(assert-reset)");
+            state.set_reset(WifiResetState::Asserted)?;
+            info!("[cyw43] step: recover_transport(power-off)");
+            state.set_power(WifiPowerState::Off)?;
+            info!("[cyw43] step: recover_transport(power-on)");
+            state.set_power(WifiPowerState::On)?;
+            info!("[cyw43] step: recover_transport(assert-reset)");
+            state.set_reset(WifiResetState::Asserted)?;
+            info!("[cyw43] step: recover_transport(reset_host)");
+            state.reset_host()?;
+            info!("[cyw43] step: recover_transport(set_clock)");
+            state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
+            info!("[cyw43] step: recover_transport(set_bus_width)");
+            state.set_bus_width(SdioBusWidth::OneBit)?;
+            info!("[cyw43] step: recover_transport(deassert-reset)");
+            state.set_reset(WifiResetState::Deasserted)?;
+            info!("[cyw43] step: init_transport(retry)");
+            state.init_cyw43_transport()?;
+        }
         info!("[cyw43] step: set_bus_width(4bit)");
         state.set_bus_width(SdioBusWidth::FourBit)?;
         info!("[cyw43] step: set_clock(data)");
@@ -1087,7 +1120,10 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{align4, bdc_payload, put_u16_le, EVENT_AUTH, EVENT_SET_SSID};
+    use super::{
+        align4, bdc_payload, is_transport_retryable, put_u16_le, EVENT_AUTH, EVENT_SET_SSID,
+    };
+    use crate::hal::HalError;
 
     #[test]
     fn align4_rounds_up() {
@@ -1115,5 +1151,18 @@ mod tests {
         let mut buf = [0u8; 4];
         put_u16_le(&mut buf, 1, 0x1234);
         assert_eq!(buf, [0x00, 0x34, 0x12, 0x00]);
+    }
+
+    #[test]
+    fn transport_retry_matches_enumeration_failures() {
+        assert!(is_transport_retryable(&HalError::Unsupported(
+            "sdhci-command-error"
+        )));
+        assert!(is_transport_retryable(&HalError::Unsupported(
+            "sdio-ocr-timeout"
+        )));
+        assert!(!is_transport_retryable(&HalError::Unsupported(
+            "mailbox-protocol"
+        )));
     }
 }

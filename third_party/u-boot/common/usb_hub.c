@@ -62,6 +62,7 @@
 #define HUB_PORT_IFACE_FALLBACK_MAX		3
 #define HUB_PORT_INDEX_CANDIDATES_MAX \
 	(2 + HUB_PORT_IFACE_FALLBACK_MAX)
+#define HUB_APPLE_KEYBOARD_SETTLE_MS		250
 struct usb_device_scan {
 	struct usb_device *dev;		/* USB hub device to scan */
 	struct usb_hub_device *hub;	/* USB hub struct */
@@ -147,6 +148,15 @@ static int usb_hub_port_control_with_fallback(struct usb_device *dev,
 	ret = usb_control_msg(dev, pipe, request, requesttype, value, port, data,
 			      size, timeout);
 	if (ret >= 0 || !usb_hub_is_apple_keyboard_hub(dev))
+		return ret;
+
+	/*
+	 * Alternate wIndex probing is only useful when the hub explicitly
+	 * stalled the class request. Transport failures (the Apple keyboard
+	 * hub currently surfaces these as EP0 halts after xHCI transaction
+	 * errors) need more settle time, not more malformed retries.
+	 */
+	if (dev->status != USB_ST_STALLED)
 		return ret;
 
 	iface = usb_hub_primary_interface_number(dev);
@@ -984,6 +994,11 @@ static int usb_hub_configure(struct usb_device *dev)
 		       hub->connect_timeout > hub->query_delay ?
 				hub->connect_timeout - hub->query_delay : 0,
 		       descriptor->bHubContrCurrent);
+		mdelay(HUB_APPLE_KEYBOARD_SETTLE_MS);
+		printf("[usb-hub] hub settle hub=%04x:%04x delay=%dms\n",
+		       le16_to_cpu(dev->descriptor.idVendor),
+		       le16_to_cpu(dev->descriptor.idProduct),
+		       HUB_APPLE_KEYBOARD_SETTLE_MS);
 	}
 
 	for (i = 0; i < dev->maxchild; i++)

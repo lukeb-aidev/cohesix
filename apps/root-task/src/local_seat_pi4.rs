@@ -847,9 +847,18 @@ const fn vl805_runtime_cfg_touch_allowed(runtime_enabled: bool, has_cfg_window: 
 }
 
 #[inline]
-const fn xhci_runtime_mmio_candidate_allowed(mmio: usize, has_safe_cfg_window: bool) -> bool {
+fn xhci_runtime_mmio_candidate_allowed(
+    mmio: usize,
+    has_safe_cfg_window: bool,
+    pinned_mmio: Option<usize>,
+    firmware_hint: Option<usize>,
+    verified_vl805_hint: Option<usize>,
+) -> bool {
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
         has_safe_cfg_window
+            || pinned_mmio == Some(mmio)
+            || firmware_hint == Some(mmio)
+            || verified_vl805_hint == Some(mmio)
     } else {
         true
     }
@@ -2819,12 +2828,18 @@ impl UsbKeyboard {
             if candidate_count >= candidates.len() {
                 return;
             }
-            if !xhci_runtime_mmio_candidate_allowed(mmio, has_safe_cfg_window) {
+            if !xhci_runtime_mmio_candidate_allowed(
+                mmio,
+                has_safe_cfg_window,
+                pinned_xhci_mmio,
+                xhci_mmio_hint,
+                verified_vl805_hint,
+            ) {
                 let mut line = heapless::String::<208>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-safe-cfg-window"
+                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-trusted-source"
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -7299,18 +7314,48 @@ mod tests {
     }
 
     #[test]
-    fn xhci_high_candidate_requires_safe_cfg_window() {
+    fn xhci_high_candidate_requires_safe_cfg_or_trusted_source() {
         assert!(!xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             false,
+            None,
+            None,
+            None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             true,
+            None,
+            None,
+            None,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            None,
+            None,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+            None,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            None,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+            None,
+            None,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             false,
+            None,
+            None,
+            None,
         ));
     }
 

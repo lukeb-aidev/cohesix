@@ -1107,6 +1107,7 @@ fn collect_pi4_uefi_xhci_mmio_hint(
     dtb: &bi_extra::Dtb<'_>,
 ) -> Result<Option<usize>, bi_extra::ParseError> {
     let mut hint = None;
+    let mut disabled_hint = None;
     let mut candidate_depth = None;
     let mut candidate_reg = None;
     let mut candidate_disabled = false;
@@ -1123,8 +1124,14 @@ fn collect_pi4_uefi_xhci_mmio_hint(
             }
             bi_extra::StructureItem::EndNode => {
                 if candidate_depth == Some(path.len()) {
-                    if hint.is_none() && !candidate_disabled {
-                        hint = candidate_reg;
+                    if let Some(reg) = candidate_reg {
+                        if candidate_disabled {
+                            if disabled_hint.is_none() {
+                                disabled_hint = Some(reg);
+                            }
+                        } else if hint.is_none() {
+                            hint = Some(reg);
+                        }
                     }
                     candidate_depth = None;
                     candidate_reg = None;
@@ -1156,7 +1163,7 @@ fn collect_pi4_uefi_xhci_mmio_hint(
             break;
         }
     }
-    Ok(hint)
+    Ok(hint.or(disabled_hint))
 }
 
 fn infer_pi4_uefi_xhci_mmio_hint(extra_bytes: &[u8], extra_range: Range<usize>) -> Option<usize> {
@@ -1361,7 +1368,7 @@ fn emit_pi4_uefi_dtb_diagnostics<P: Platform>(
         }
     } else if diagnostics.has_xhci_disabled {
         console.writeln_prefixed(
-            "[uefi-diag] xHCI DT node is disabled; inferred stale DT, set XhciReload=1 and reboot",
+            "[uefi-diag] xHCI DT node is disabled; inferred stale DT, set XhciReload=1 and reboot; retaining any valid reg hint for local-seat recovery",
         );
     } else {
         console

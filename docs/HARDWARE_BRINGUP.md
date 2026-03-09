@@ -63,7 +63,7 @@
 - `Configure networking` walks DHCP `ON|OFF`, `wired|wifi`, Wi-Fi credentials when needed, and static IPv4 prompts only when DHCP is off.
 - `Save current settings and reboot` persists only the user-facing Cohesix policy fields to `cohesix.env` on the FAT boot partition; it does not rewrite the manifest or generic U-Boot environment.
 - The wizard intentionally uses `askenv`-based numbered prompts instead of U-Boot `bootmenu`, because upstream U-Boot documents `bootmenu` as an ANSI-terminal path and the simpler prompt flow is more reliable on the Pi 4 HDMI + USB-keyboard bring-up path while still preserving serial control via `minicom`.
-- The script reloads only `cohesix.env` from the FAT partition, reuses the Pi 4 preboot USB session, and switches `stdin` to `usbkbd,serial` so the HDMI wizard prefers the USB keyboard while retaining serial fallback; on first menu entry it emits one bounded USB diagnostic snapshot (`printenv stdin/stdout/stderr`, `coninfo`, `usb tree`, `usb info`) and exposes a `USB keyboard diagnostics` menu action that runs the same snapshot, enters `conitrace`, then performs one cold `usb stop`/`usb start` re-enumeration with a temporary `usb_pgood_delay=8000` before capturing the snapshot again.
+- The script reloads only `cohesix.env` from the FAT partition, reuses the Pi 4 preboot USB session, and switches `stdin` to `usbkbd,serial` so the HDMI wizard prefers the USB keyboard while retaining serial fallback; on first menu entry it emits one bounded USB diagnostic snapshot (`printenv stdin/stdout/stderr`, `coninfo`, `usb tree`, `usb info`) and exposes a `USB keyboard diagnostics` menu action that runs the same snapshot, enters `conitrace`, then performs one cold `usb stop`/`usb start` re-enumeration with a temporary `usb_pgood_delay=8000` before capturing the snapshot again. When `usb_pgood_delay` is otherwise unset, both the preboot and menu diagnostics print `usb_pgood_delay=<unset>` instead of an env error.
 - The Pi 4 U-Boot build stays on the seL4-aligned `usbkbd` interrupt-polling baseline (`CONFIG_SYS_USB_EVENT_POLL=y`) so the HDMI wizard matches the previously working Pi 4 input path.
 - Optional Cohesix net-policy overrides mirrored into DTB `/chosen` by the staged boot script:
 - `setenv coh_net_mode <off|static|dhcp>`
@@ -77,7 +77,7 @@
 - The staged `bcm2711-rpi-4-b.dtb` is padded to 128 KiB before flashing, so U-Boot can add `/chosen/cohesix,*` properties in place without `fdt resize`.
 - `setenv coh_show_logo <0|1>` (controls whether the staged `boot.bmp` splash is displayed on HDMI before the menu)
 - The staged Pi 4 U-Boot build enables 24bpp BMP drawing, so the centered `boot.bmp` splash uses the same HDMI framebuffer path as `bmp display`.
-- Pi 4 U-Boot keeps the seL4-aligned preboot USB-start path, but now also dumps an early USB/console snapshot during `CONFIG_PREBOOT` (`pci enum; usb start; usb tree; usb info; ...; coninfo; printenv stdin; ...`) and rebinds the live console in both `CONFIG_PREBOOT` and the default board env (`stdin=usbkbd,serial`). The default Pi 4 path no longer forces an added USB startup settle delay; only the explicit `USB keyboard diagnostics` action temporarily raises `usb_pgood_delay` during its cold re-enumeration path.
+- Pi 4 U-Boot keeps the seL4-aligned preboot USB-start path, but now also dumps an early USB/console snapshot during `CONFIG_PREBOOT` (`pci enum; usb start; usb tree; usb info; ...; coninfo; printenv stdin; ...`) and rebinds the live console in both `CONFIG_PREBOOT` and the default board env (`stdin=usbkbd,serial`). The default Pi 4 path still avoids a global scripted USB startup delay, but it now keeps a targeted Apple `05ac:1006` keyboard-hub quirk in the U-Boot hub driver: a 250 ms post-config settle and a 5 s hub debounce timeout before downstream child probing. Only the explicit `USB keyboard diagnostics` action temporarily raises `usb_pgood_delay` during its cold re-enumeration path.
 - On first entry to the root menu, the staged `boot.bmp` copy of the Cohesix logo is shown centered for a short splash delay and the interactive menu is then drawn on a cleared console, so the splash is visible without being left behind the menu text.
 - `ping ${serverip}`
 - `fatwrite mmc 0:1 ${coh_policy_addr} cohesix.env ${filesize}` (only when explicitly persisting Cohesix policy)
@@ -152,6 +152,7 @@
 - HDMI displays `cohesix>` prompt.
 - USB keyboard input reaches the existing root-console parser.
 - Typed commands produce visible responses on HDMI with deterministic ordering relative to serial.
+- A stale firmware DT handoff with `xhci` marked `status = "disabled"` does not strand local-seat: root-task retains any valid xHCI `reg` hint, recovers the VL805 controller BAR, and either brings up the USB keyboard or emits an explicit degraded/unavailable reason.
 - Pi 4 USB local-seat DMA buffers must remain below `0xC0000000` (first 3 GiB), matching the BCM2711 PCIe `dma-ranges` limit used by VL805/xHCI.
 - Boot must fail before ticket registration if:
 - attestation is required/enabled and policy cannot be satisfied.
