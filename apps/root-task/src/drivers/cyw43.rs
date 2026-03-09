@@ -254,7 +254,7 @@ impl Cyw43NetDevice {
         info!("[cyw43] step: reset_host");
         state.reset_host()?;
         info!("[cyw43] step: set_clock(startup)");
-        let mut effective_clock_hz = state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
+        let effective_clock_hz = state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
         info!("[cyw43] step: set_bus_width(1bit)");
         state.set_bus_width(SdioBusWidth::OneBit)?;
         info!("[cyw43] step: set_reset(deasserted)");

@@ -158,7 +158,7 @@ verify_boot_cmd_diagnostics() {
     grep -q 'conitrace' "$path" || fail "boot.cmd is missing conitrace USB test path"
     grep -q 'usb tree' "$path" || fail "boot.cmd is missing usb tree diagnostics"
     grep -q 'usb info' "$path" || fail "boot.cmd is missing usb info diagnostics"
-    grep -q 'printenv usb_pgood_delay' "$path" || fail "boot.cmd is missing usb_pgood_delay diagnostics"
+    grep -q 'env exists usb_pgood_delay' "$path" || fail "boot.cmd is missing usb_pgood_delay diagnostics"
     grep -q 'printenv stdin' "$path" || fail "boot.cmd is missing stdin diagnostics"
 }
 
@@ -608,7 +608,7 @@ setenv coh_logo_x 20
 setenv coh_logo_y 20
 setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""'
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
-setenv coh_usb_capture_diag 'echo "[cohesix] USB input diagnostics"; if printenv usb_pgood_delay; then true; else echo "usb_pgood_delay=<unset>"; fi; printenv stdin; printenv stdout; printenv stderr; coninfo; if usb tree; then true; else echo "[cohesix] WARNING: usb tree failed"; fi; if usb info; then true; else echo "[cohesix] WARNING: usb info failed"; fi'
+setenv coh_usb_capture_diag 'echo "[cohesix] USB input diagnostics"; if env exists usb_pgood_delay; then printenv usb_pgood_delay; else echo "usb_pgood_delay=<unset>"; fi; printenv stdin; printenv stdout; printenv stderr; coninfo; if usb tree; then true; else echo "[cohesix] WARNING: usb tree failed"; fi; if usb info; then true; else echo "[cohesix] WARNING: usb info failed"; fi'
 setenv coh_usb_menu_diag 'if test "${coh_usb_diag_done}" != "1"; then setenv coh_usb_diag_done 1; run coh_usb_capture_diag; fi'
 setenv coh_usb_cold_diag 'echo "[cohesix] USB cold re-enumeration diagnostics"; setenv coh_usb_saved_pgood ${usb_pgood_delay}; setenv usb_pgood_delay 8000; echo "[cohesix] usb_pgood_delay=8000 (diagnostic only)"; if usb stop; then true; else echo "[cohesix] WARNING: usb stop failed during diagnostics"; fi; if usb start; then true; else echo "[cohesix] WARNING: usb start failed during diagnostics"; fi; run coh_usb_capture_diag; setenv usb_pgood_delay ${coh_usb_saved_pgood}; setenv stdin usbkbd,serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
 setenv coh_usb_trace_diag 'run coh_prepare_input; cls; echo "[cohesix] USB keyboard diagnostics"; echo "[cohesix] Press keys on the USB keyboard now"; echo "[cohesix] Type x on serial to exit if the keyboard is still dead"; run coh_usb_capture_diag; conitrace; run coh_usb_cold_diag; echo "[cohesix] USB keyboard diagnostics complete"'

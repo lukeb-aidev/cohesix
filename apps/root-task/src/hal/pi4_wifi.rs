@@ -446,10 +446,12 @@ const SDIO_CLOCK_STABLE_LOOPS: usize = 50_000;
 const SDIO_CMD_WAIT_LOOPS: usize = 200_000;
 const SDIO_DATA_WAIT_LOOPS: usize = 200_000;
 const SDIO_CARD_INIT_ATTEMPTS: usize = 2;
+const SDHCI_POWER_OFF_SETTLE_LOOPS: usize = 500_000;
 const SDHCI_POWER_SETTLE_LOOPS: usize = 20_000_000;
 const SDIO_CARD_INIT_RETRY_SETTLE_LOOPS: usize = 20_000_000;
 const WIFI_RESET_SETTLE_LOOPS: usize = 20_000_000;
 const WIFI_POWER_SETTLE_LOOPS: usize = 500_000;
+const WIFI_POWER_DROP_SETTLE_LOOPS: usize = 20_000_000;
 const SDHCI_WRITE_DELAY_LOOPS: usize = 256;
 const CYW43_READY_LOOPS: usize = 1_000;
 const CYW43_TRANSFER_CHUNK: usize = 256;
@@ -614,11 +616,9 @@ impl Pi4WifiState {
         self.mailbox
             .configure_gpio_output(PI4_WIFI_GPIO, enabled as u32)?;
         if enabled {
-            for _ in 0..WIFI_POWER_SETTLE_LOOPS {
-                spin_loop();
-            }
-        }
-        if !enabled {
+            bounded_spin_settle("wifi-power-on", WIFI_POWER_SETTLE_LOOPS);
+        } else {
+            bounded_spin_settle("wifi-power-off", WIFI_POWER_DROP_SETTLE_LOOPS);
             self.host.mark_power_cycled();
         }
         Ok(())
@@ -979,6 +979,9 @@ impl SdioHost {
     }
 
     fn reset_controller(&mut self) -> Result<(), HalError> {
+        self.write16(SDHCI_CLOCK_CONTROL, 0);
+        self.write8(SDHCI_POWER_CONTROL, 0);
+        bounded_spin_settle("sdhci-power-off", SDHCI_POWER_OFF_SETTLE_LOOPS);
         self.software_reset(SDHCI_RESET_ALL)?;
         self.write8(SDHCI_POWER_CONTROL, SDHCI_POWER_330 | SDHCI_POWER_ON);
         bounded_spin_settle("sdhci-power-on", SDHCI_POWER_SETTLE_LOOPS);
@@ -1737,9 +1740,15 @@ impl SdioHost {
     }
 
     fn log_command_state(&self, stage: &'static str, cmd: u16, arg: u32, status: u32) {
+        let mode = self.read16(SDHCI_TRANSFER_MODE);
+        let cmd_reg = self.read16(SDHCI_COMMAND);
+        let host = self.read8(SDHCI_HOST_CONTROL);
         emit_breadcrumb(format_args!(
             "[pi4-wifi] sdhci cmd {stage} cmd={cmd} arg=0x{arg:08x} st=0x{status:08x} why={}",
             sdhci_status_reason(status)
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdhci issue {stage} mode=0x{mode:04x} cmdreg=0x{cmd_reg:04x} host=0x{host:02x}",
         ));
         self.log_host_state("cmd-fail");
     }

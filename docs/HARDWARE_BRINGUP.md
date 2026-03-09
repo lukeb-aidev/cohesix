@@ -153,6 +153,8 @@
 - USB keyboard input reaches the existing root-console parser.
 - Typed commands produce visible responses on HDMI with deterministic ordering relative to serial.
 - A stale firmware DT handoff with `xhci` marked `status = "disabled"` does not strand local-seat: root-task retains any valid xHCI `reg` hint, recovers the VL805 controller BAR, and either brings up the USB keyboard or emits an explicit degraded/unavailable reason.
+- If runtime already pinned a legacy xHCI alias but firmware also supplies a different valid xHCI `reg` hint, local-seat must probe the firmware hint instead of discarding it as stale so the HDMI keyboard path does not get trapped on an invalid `0xfe980000` alias.
+- Pi 4 U-Boot USB proof for common keyboards must show that downstream hubs do not get stuck in repeated EP0 halts during early hub-class port control: per-port `PORT_POWER` is deferred for unsafe downstream hubs, Apple `05ac:1006` still gets its 250 ms post-config settle, and delayed child `status-error` retries do not issue extra `PORT_POWER` writes.
 - Pi 4 USB local-seat DMA buffers must remain below `0xC0000000` (first 3 GiB), matching the BCM2711 PCIe `dma-ranges` limit used by VL805/xHCI.
 - Boot must fail before ticket registration if:
 - attestation is required/enabled and policy cannot be satisfied.

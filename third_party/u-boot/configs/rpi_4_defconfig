@@ -24,7 +24,7 @@ CONFIG_OF_BOARD_SETUP=y
 CONFIG_FDT_SIMPLEFB=y
 CONFIG_BOOTDELAY=0
 CONFIG_USE_PREBOOT=y
-CONFIG_PREBOOT="pci enum; usb start; usb tree; usb info; setenv stdin usbkbd,serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole; coninfo; if printenv usb_pgood_delay; then true; else echo \"usb_pgood_delay=<unset>\"; fi; printenv stdin; printenv stdout; printenv stderr"
+CONFIG_PREBOOT="pci enum; usb start; usb tree; usb info; setenv stdin usbkbd,serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole; coninfo; if env exists usb_pgood_delay; then printenv usb_pgood_delay; else echo \"usb_pgood_delay=<unset>\"; fi; printenv stdin; printenv stdout; printenv stderr"
 CONFIG_SYS_PBSIZE=1049
 # CONFIG_DISPLAY_CPUINFO is not set
 # CONFIG_DISPLAY_BOARDINFO is not set

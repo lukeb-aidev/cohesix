@@ -208,6 +208,35 @@ static bool usb_hub_has_internal_children(struct usb_hub_device *hub)
 	return !!(hub_characteristics & HUB_CHAR_COMPOUND);
 }
 
+static u16 usb_hub_port_power_mode(struct usb_hub_device *hub)
+{
+	return get_unaligned(&hub->desc.wHubCharacteristics) & HUB_CHAR_LPSM;
+}
+
+static bool usb_hub_supports_port_power(struct usb_hub_device *hub)
+{
+	u16 power_mode = usb_hub_port_power_mode(hub);
+
+	return power_mode == 0 || power_mode == HUB_CHAR_INDV_PORT_LPSM;
+}
+
+static bool usb_hub_should_defer_port_power(struct usb_hub_device *hub)
+{
+	if (!usb_hub_supports_port_power(hub))
+		return false;
+
+	/*
+	 * Some downstream combo hubs stall hub-class control traffic if we
+	 * eagerly drive PORT_POWER during early enumeration. Defer that path
+	 * for per-port switching hubs and let connect/status recovery decide
+	 * if a later power kick is actually required.
+	 */
+	if (usb_hub_port_power_mode(hub) == HUB_CHAR_INDV_PORT_LPSM)
+		return true;
+
+	return usb_hub_is_apple_keyboard_hub(hub->pusb_dev);
+}
+
 static bool usb_hub_should_retry_delayed_child(struct usb_device_scan *usb_scan)
 {
 	if (usb_scan->recovery_attempts >= HUB_DELAYED_CHILD_RETRY_COUNT)
@@ -229,11 +258,11 @@ static void usb_hub_schedule_delayed_child_retry(struct usb_device_scan *usb_sca
 	struct usb_device *dev = usb_scan->dev;
 	ulong now = get_timer(0);
 
-	if (power_cycle) {
+	if (power_cycle && usb_hub_supports_port_power(usb_scan->hub)) {
 		usb_clear_port_feature(dev, usb_scan->port + 1, USB_PORT_FEAT_POWER);
 		mdelay(HUB_DELAYED_CHILD_POWER_TOGGLE_MS);
+		usb_set_port_feature(dev, usb_scan->port + 1, USB_PORT_FEAT_POWER);
 	}
-	usb_set_port_feature(dev, usb_scan->port + 1, USB_PORT_FEAT_POWER);
 
 	usb_scan->recovery_attempts++;
 	usb_scan->query_ready = now + HUB_DELAYED_CHILD_QUERY_DELAY_MS;
@@ -350,8 +379,11 @@ static void usb_hub_power_on(struct usb_hub_device *hub)
 	struct usb_device *dev;
 	unsigned pgood_delay = hub->desc.bPwrOn2PwrGood * 2;
 	const char __maybe_unused *env;
+	bool eager_port_power;
 
 	dev = hub->pusb_dev;
+	eager_port_power = usb_hub_supports_port_power(hub) &&
+			   !usb_hub_should_defer_port_power(hub);
 
 	debug("enabling power on all ports\n");
 	for (i = 0; i < dev->maxchild; i++) {
@@ -359,9 +391,17 @@ static void usb_hub_power_on(struct usb_hub_device *hub)
 			usb_set_port_feature(dev, i + 1, USB_PORT_FEAT_RESET);
 			debug("Reset : port %d returns %lX\n", i + 1, dev->status);
 		}
-		usb_set_port_feature(dev, i + 1, USB_PORT_FEAT_POWER);
-		debug("PowerOn : port %d returns %lX\n", i + 1, dev->status);
+		if (eager_port_power) {
+			usb_set_port_feature(dev, i + 1, USB_PORT_FEAT_POWER);
+			debug("PowerOn : port %d returns %lX\n", i + 1, dev->status);
+		}
 	}
+
+	if (!eager_port_power && usb_hub_is_apple_keyboard_hub(dev))
+		printf("[usb-hub] port power deferred hub=%04x:%04x mode=%u\n",
+		       le16_to_cpu(dev->descriptor.idVendor),
+		       le16_to_cpu(dev->descriptor.idProduct),
+		       usb_hub_port_power_mode(hub));
 
 #ifdef CONFIG_SANDBOX
 	/*
@@ -682,10 +722,14 @@ static int usb_scan_port(struct usb_device_scan *usb_scan)
 	if (!(portchange & USB_PORT_STAT_C_CONNECTION) &&
 	    !(portstatus & USB_PORT_STAT_CONNECTION)) {
 		if (get_timer(0) >= usb_scan->deadline) {
+			bool power_cycle = usb_hub_supports_port_power(hub) &&
+				(!(portstatus & USB_PORT_STAT_POWER) ||
+				 !usb_hub_should_defer_port_power(hub));
+
 			if (usb_hub_should_retry_delayed_child(usb_scan)) {
 				usb_hub_schedule_delayed_child_retry(usb_scan,
 								 "no-connection",
-								 true);
+								 power_cycle);
 				return 0;
 			}
 			if (usb_hub_is_apple_keyboard_hub(dev)) {

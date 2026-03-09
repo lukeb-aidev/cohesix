@@ -321,6 +321,7 @@ struct PinnedMmioWindow {
     phys_start: usize,
     length: usize,
     virt_start: usize,
+    trusted_for_runtime: bool,
 }
 
 /// Optional DT/firmware framebuffer hint for Pi4 HDMI output.
@@ -632,12 +633,27 @@ fn map_device_exact(
 }
 
 fn pinned_xhci_window_lookup(phys: usize, size: usize) -> Option<usize> {
+    pinned_xhci_window_lookup_with_trust(phys, size, false)
+}
+
+fn pinned_xhci_window_lookup_trusted(phys: usize, size: usize) -> Option<usize> {
+    pinned_xhci_window_lookup_with_trust(phys, size, true)
+}
+
+fn pinned_xhci_window_lookup_with_trust(
+    phys: usize,
+    size: usize,
+    trusted_only: bool,
+) -> Option<usize> {
     if size == 0 {
         return None;
     }
     let request_end = phys.checked_add(size)?;
     let pinned = PINNED_XHCI_MMIO.lock();
     let window = pinned.as_ref()?;
+    if trusted_only && !window.trusted_for_runtime {
+        return None;
+    }
     let window_end = window.phys_start.checked_add(window.length)?;
     if phys < window.phys_start || request_end > window_end {
         return None;
@@ -646,11 +662,14 @@ fn pinned_xhci_window_lookup(phys: usize, size: usize) -> Option<usize> {
     window.virt_start.checked_add(offset)
 }
 
-fn pinned_xhci_phys_start() -> Option<usize> {
-    PINNED_XHCI_MMIO
-        .lock()
-        .as_ref()
-        .map(|window| window.phys_start)
+fn pinned_xhci_phys_start_trusted() -> Option<usize> {
+    PINNED_XHCI_MMIO.lock().as_ref().and_then(|window| {
+        if window.trusted_for_runtime {
+            Some(window.phys_start)
+        } else {
+            None
+        }
+    })
 }
 
 fn pinned_vl805_cfg_lookup(phys: usize, size: usize) -> Option<usize> {
@@ -835,10 +854,26 @@ fn record_vl805_xhci_mmio_hint(
 
 #[inline]
 fn preferred_xhci_runtime_mmio(
-    pinned_mmio: Option<usize>,
+    trusted_pinned_mmio: Option<usize>,
+    firmware_hint: Option<usize>,
     vl805_pci_mmio: Option<usize>,
+    verified_vl805_hint: Option<usize>,
 ) -> Option<usize> {
-    vl805_pci_mmio.or(pinned_mmio)
+    let preferred_verified = match verified_vl805_hint {
+        Some(mmio)
+            if xhci_mmio_is_legacy_alias(mmio)
+                && firmware_hint.is_some()
+                && firmware_hint != Some(mmio) =>
+        {
+            None
+        }
+        other => other,
+    };
+
+    vl805_pci_mmio
+        .or(preferred_verified)
+        .or(firmware_hint)
+        .or(trusted_pinned_mmio)
 }
 
 #[inline]
@@ -850,13 +885,17 @@ const fn vl805_runtime_cfg_touch_allowed(runtime_enabled: bool, has_cfg_window: 
 fn xhci_runtime_mmio_candidate_allowed(
     mmio: usize,
     has_safe_cfg_window: bool,
-    pinned_mmio: Option<usize>,
+    trusted_pinned_mmio: Option<usize>,
     firmware_hint: Option<usize>,
     verified_vl805_hint: Option<usize>,
 ) -> bool {
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
         has_safe_cfg_window
-            || pinned_mmio == Some(mmio)
+            || trusted_pinned_mmio == Some(mmio)
+            || firmware_hint == Some(mmio)
+            || verified_vl805_hint == Some(mmio)
+    } else if xhci_mmio_is_legacy_alias(mmio) {
+        trusted_pinned_mmio == Some(mmio)
             || firmware_hint == Some(mmio)
             || verified_vl805_hint == Some(mmio)
     } else {
@@ -1166,6 +1205,7 @@ fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>) {
             phys_start: config_page,
             length: PAGE_SIZE,
             virt_start: virt,
+            trusted_for_runtime: false,
         });
 
         if VL805_CFG_PRESEED_TOUCH_ENABLED {
@@ -1242,7 +1282,25 @@ fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>) {
                 ),
             );
             boot_log::force_uart_line(bar_line.as_str());
-            let _ = record_vl805_xhci_mmio_hint(&snapshot, "read-only");
+            if let Some(mmio) = snapshot.bar_mmio {
+                let source = if xhci_mmio_candidate_valid(mmio) {
+                    "provisional"
+                } else {
+                    "provisional-invalid"
+                };
+                let mut hint = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut hint,
+                    format_args!(
+                        "[local-seat] vl805 pci cfg hint mmio=0x{mmio:016x} source={source} reason=pin-only-not-trusted"
+                    ),
+                );
+                boot_log::force_uart_line(hint.as_str());
+            } else {
+                boot_log::force_uart_line(
+                    "[local-seat] vl805 pci cfg hint missing source=read-only reason=bar-decode",
+                );
+            }
         }
         return;
     }
@@ -1358,7 +1416,7 @@ fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usiz
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
-                if pin_xhci_mmio_window(hal, mmio, length).is_ok() {
+                if pin_xhci_mmio_window(hal, mmio, length, false).is_ok() {
                     let mut line = heapless::String::<208>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
@@ -1408,7 +1466,7 @@ fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usiz
                 );
                 boot_log::force_uart_line(line.as_str());
             }
-            if pin_xhci_mmio_window(hal, validated_mmio, pin_length).is_ok() {
+            if pin_xhci_mmio_window(hal, validated_mmio, pin_length, true).is_ok() {
                 remember_vl805_xhci_mmio_hint(validated_mmio);
                 let mut line = heapless::String::<176>::new();
                 let _ = core::fmt::Write::write_fmt(
@@ -1440,6 +1498,7 @@ fn pin_xhci_mmio_window(
     hal: &mut KernelHal<'_>,
     phys_start: usize,
     length: usize,
+    trusted_for_runtime: bool,
 ) -> Result<(), Pi4SeatError> {
     if (phys_start & PAGE_MASK) != 0
         || length < XHCI_MMIO_INIT_BYTES
@@ -1515,6 +1574,7 @@ fn pin_xhci_mmio_window(
         phys_start,
         length,
         virt_start: first_virt,
+        trusted_for_runtime,
     });
     Ok(())
 }
@@ -2819,19 +2879,19 @@ impl UsbKeyboard {
             (None, false)
         };
 
-        let pinned_xhci_mmio = pinned_xhci_phys_start();
+        let trusted_pinned_xhci_mmio = pinned_xhci_phys_start_trusted();
         let verified_vl805_hint = current_vl805_xhci_mmio_hint();
         let has_safe_cfg_window = current_vl805_cfg_virt().is_some();
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
-        let mut consider_candidate = |mmio: usize| {
+        let mut consider_candidate = |mmio: usize| -> bool {
             if candidate_count >= candidates.len() {
-                return;
+                return false;
             }
             if !xhci_runtime_mmio_candidate_allowed(
                 mmio,
                 has_safe_cfg_window,
-                pinned_xhci_mmio,
+                trusted_pinned_xhci_mmio,
                 xhci_mmio_hint,
                 verified_vl805_hint,
             ) {
@@ -2843,7 +2903,7 @@ impl UsbKeyboard {
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
-                return;
+                return false;
             }
             if !xhci_mmio_candidate_valid(mmio) {
                 let mut line = heapless::String::<184>::new();
@@ -2854,50 +2914,50 @@ impl UsbKeyboard {
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
-                return;
+                return false;
             }
             if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none()
-                && pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_none()
+                && pinned_xhci_window_lookup_trusted(mmio, PAGE_SIZE).is_none()
             {
-                if mmio == RPI4_XHCI_MMIO_PRIMARY_CANDIDATE || mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
-                {
-                    let mut line = heapless::String::<208>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] xhci candidate forcing probe mmio=0x{mmio:016x} reason=no-device-coverage"
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                } else {
-                    let mut line = heapless::String::<192>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-device-coverage"
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    return;
-                }
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-device-coverage"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return false;
             }
             if candidates[..candidate_count].contains(&mmio) {
-                return;
+                return true;
             }
             candidates[candidate_count] = mmio;
             candidate_count = candidate_count.saturating_add(1);
+            true
         };
-        match preferred_xhci_runtime_mmio(pinned_xhci_mmio, vl805_pci_mmio) {
+        match preferred_xhci_runtime_mmio(
+            trusted_pinned_xhci_mmio,
+            xhci_mmio_hint,
+            vl805_pci_mmio,
+            verified_vl805_hint,
+        ) {
             Some(preferred_mmio) => {
                 consider_candidate(preferred_mmio);
                 if let Some(hint) = xhci_mmio_hint {
                     if hint != preferred_mmio {
+                        let hint_retained = consider_candidate(hint);
                         let mut line = heapless::String::<208>::new();
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] xhci hint ignored hint=0x{hint:016x} verified=0x{verified:016x}",
-                                verified = preferred_mmio
+                                "[local-seat] xhci hint {} hint=0x{hint:016x} preferred=0x{preferred:016x}",
+                                if hint_retained {
+                                    "retained"
+                                } else {
+                                    "ignored"
+                                },
+                                preferred = preferred_mmio
                             ),
                         );
                         boot_log::force_uart_line(line.as_str());
@@ -7350,11 +7410,25 @@ mod tests {
             None,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
         ));
-        assert!(xhci_runtime_mmio_candidate_allowed(
+        assert!(!xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             false,
             None,
             None,
+            None,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            false,
+            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+            None,
+            None,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            false,
+            None,
+            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
             None,
         ));
     }
@@ -7383,12 +7457,41 @@ mod tests {
         assert_eq!(
             super::preferred_xhci_runtime_mmio(
                 Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+                None,
                 Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                None,
             ),
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
         );
         assert_eq!(
-            super::preferred_xhci_runtime_mmio(None, Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)),
+            super::preferred_xhci_runtime_mmio(
+                None,
+                None,
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                None,
+            ),
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+        );
+    }
+
+    #[test]
+    fn preferred_xhci_runtime_mmio_prefers_firmware_hint_over_stale_legacy_alias() {
+        assert_eq!(
+            super::preferred_xhci_runtime_mmio(
+                Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+                Some(0x0000_0000_7E9C_0000),
+                None,
+                Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+            ),
+            Some(0x0000_0000_7E9C_0000)
+        );
+        assert_eq!(
+            super::preferred_xhci_runtime_mmio(
+                Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+                Some(0x0000_0000_7E9C_0000),
+                None,
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            ),
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
         );
     }
