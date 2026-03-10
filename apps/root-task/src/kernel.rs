@@ -640,6 +640,7 @@ struct Pi4UefiDtbDiagnostics {
 }
 
 const COHESIX_DTB_XHCI_MMIO_PROP: &str = "cohesix,xhci-mmio";
+const COHESIX_DTB_XHCI_PCI_CMD_PROP: &str = "cohesix,xhci-pci-cmd";
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const COHESIX_DTB_NET_MODE_PROP: &str = "cohesix,net-mode";
@@ -1201,6 +1202,12 @@ fn parse_pi4_uefi_xhci_mmio_hint(
     dtb_first_reg_addr(value).map(|raw_mmio| pi4_uefi_xhci_mmio_hint(raw_mmio, source))
 }
 
+fn parse_pi4_uefi_xhci_pci_command(value: &[u8]) -> Option<u16> {
+    let text = dtb_prop_cstr(value)?;
+    let raw = parse_hex(text)?;
+    u16::try_from(raw).ok()
+}
+
 fn collect_pi4_uefi_xhci_mmio_hint(
     dtb: &bi_extra::Dtb<'_>,
 ) -> Result<Option<Pi4UefiXhciMmioHint>, bi_extra::ParseError> {
@@ -1285,6 +1292,31 @@ fn infer_pi4_uefi_xhci_mmio_hint_info(
 
 fn infer_pi4_uefi_xhci_mmio_hint(extra_bytes: &[u8], extra_range: Range<usize>) -> Option<usize> {
     infer_pi4_uefi_xhci_mmio_hint_info(extra_bytes, extra_range).map(|hint| hint.mmio)
+}
+
+fn infer_pi4_uefi_xhci_pci_command(extra_bytes: &[u8], extra_range: Range<usize>) -> Option<u16> {
+    let dtb_blob = bi_extra::locate_dtb(extra_bytes, extra_range).ok()?;
+    let dtb = bi_extra::parse_dtb(dtb_blob).ok()?;
+    let mut path = HeaplessVec::<&str, 16>::new();
+    let mut cursor = dtb.structure_cursor();
+    while let Some(item) = cursor.next().ok()? {
+        match item {
+            bi_extra::StructureItem::BeginNode(name) => {
+                let _ = path.push(name);
+            }
+            bi_extra::StructureItem::EndNode => {
+                let _ = path.pop();
+            }
+            bi_extra::StructureItem::Property { name, value } => {
+                if path.iter().any(|segment| *segment == "chosen")
+                    && name == COHESIX_DTB_XHCI_PCI_CMD_PROP
+                {
+                    return parse_pi4_uefi_xhci_pci_command(value);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn collect_pi4_uefi_framebuffer_hint(
@@ -1755,6 +1787,11 @@ fn init_local_seat_runtime<P: Platform>(
         None
     };
     let xhci_mmio_hint = xhci_mmio_hint_info.map(|hint| hint.mmio);
+    let xhci_pci_cmd = if local_seat_enabled {
+        infer_pi4_uefi_xhci_pci_command(extra_bytes, extra_range.clone())
+    } else {
+        None
+    };
     let display_hint = if local_seat_enabled {
         infer_pi4_uefi_framebuffer_hint(extra_bytes, extra_range.clone())
     } else {
@@ -1787,6 +1824,19 @@ fn init_local_seat_runtime<P: Platform>(
             console.writeln_prefixed("[local-seat] xhci-mmio-hint=none source=absent");
             boot_log::force_uart_line("[local-seat] xhci-mmio-hint=none source=absent");
         }
+        if let Some(cmd) = xhci_pci_cmd {
+            let mut line = heapless::String::<144>::new();
+            let _ = write!(
+                line,
+                "[local-seat] xhci-pci-cmd=0x{cmd:04x} safe={}",
+                (((cmd & 0x0406) == 0x0406) as u8)
+            );
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
+        } else {
+            console.writeln_prefixed("[local-seat] xhci-pci-cmd=absent safe=0");
+            boot_log::force_uart_line("[local-seat] xhci-pci-cmd=absent safe=0");
+        }
         if let Some(hint) = display_hint {
             let mut line = heapless::String::<192>::new();
             let _ = write!(
@@ -1806,6 +1856,7 @@ fn init_local_seat_runtime<P: Platform>(
     }
     let local_seat_hints = local_seat::LocalSeatPlatformHints {
         xhci_mmio_hint,
+        xhci_pci_cmd,
         display_hint,
     };
     match local_seat::evaluate(hardware, local_seat::runtime_backend_available()) {
@@ -6126,6 +6177,15 @@ mod tests {
                 source: super::Pi4UefiXhciHintSource::ChosenPciBar,
             })
         );
+    }
+
+    #[test]
+    fn parse_pi4_uefi_xhci_pci_command_accepts_hex_string() {
+        assert_eq!(
+            super::parse_pi4_uefi_xhci_pci_command(b"406\0"),
+            Some(0x0406)
+        );
+        assert_eq!(super::parse_pi4_uefi_xhci_pci_command(b"zz\0"), None);
     }
 }
 

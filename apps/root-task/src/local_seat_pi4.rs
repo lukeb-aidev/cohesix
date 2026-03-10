@@ -86,8 +86,8 @@ const BCM2711_ARM_LOCAL_PHYS_BASE: usize = 0xFF80_0000;
 const BCM2711_ARM_LOCAL_SIZE: usize = 0x0080_0000;
 
 // Runtime xHCI probing falls back to the DTB-backed legacy aliases first.
-// The high PCIe aperture is only trusted when runtime BAR decode or an
-// already-validated hint proves it.
+// The high PCIe aperture is only trusted when runtime BAR decode, a verified
+// hint, or an explicit bootloader handoff proves it.
 const RPI4_XHCI_MMIO_FALLBACKS: [usize; 2] = [
     RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
     RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
@@ -352,6 +352,8 @@ pub struct Pi4FramebufferHint {
 pub struct Pi4LocalSeatHints {
     /// Optional MMIO base for Pi4 xHCI.
     pub xhci_mmio_hint: Option<usize>,
+    /// Optional PCI command state exported by the bootloader for xHCI handoff.
+    pub xhci_pci_cmd: Option<u16>,
     /// Optional DT/firmware framebuffer hint.
     pub framebuffer_hint: Option<Pi4FramebufferHint>,
 }
@@ -403,6 +405,7 @@ pub struct Pi4LocalSeat {
     keyboard: Option<UsbKeyboard>,
     keyboard_init_attempted: bool,
     xhci_mmio_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
     hal_ptr: usize,
 }
 
@@ -452,6 +455,7 @@ impl Pi4LocalSeat {
             keyboard: None,
             keyboard_init_attempted: false,
             xhci_mmio_hint,
+            xhci_pci_cmd: hints.xhci_pci_cmd,
             hal_ptr: hal as *mut _ as usize,
         })
     }
@@ -525,7 +529,7 @@ impl Pi4LocalSeat {
                         format_args!("[local-seat] pi4 keyboard probe attempt={attempt}"),
                     );
                     boot_log::force_uart_line(line.as_str());
-                    match UsbKeyboard::new(hal, self.xhci_mmio_hint) {
+                    match UsbKeyboard::new(hal, self.xhci_mmio_hint, self.xhci_pci_cmd) {
                         Ok(found) => {
                             self.keyboard = Some(found);
                             if attempt > 1 {
@@ -865,11 +869,25 @@ fn xhci_preseed_pin_only_reason(
     if xhci_mmio_is_legacy_alias(mmio) && vl805_hint.is_none() {
         return Some("no-verified-vl805-hint");
     }
-    if mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE && firmware_hint == Some(mmio) && vl805_hint.is_none()
-    {
+    if firmware_hint == Some(mmio) && vl805_hint.is_none() {
         return Some("firmware-hint-unverified");
     }
     None
+}
+
+#[inline]
+const fn xhci_firmware_handoff_safe(xhci_pci_cmd: Option<u16>) -> bool {
+    match xhci_pci_cmd {
+        Some(cmd) => {
+            (cmd & (PCI_COMMAND_MEMORY_SPACE
+                | PCI_COMMAND_BUS_MASTER
+                | PCI_COMMAND_INTERRUPT_DISABLE))
+                == (PCI_COMMAND_MEMORY_SPACE
+                    | PCI_COMMAND_BUS_MASTER
+                    | PCI_COMMAND_INTERRUPT_DISABLE)
+        }
+        None => false,
+    }
 }
 
 #[inline]
@@ -999,12 +1017,13 @@ fn xhci_runtime_mmio_candidate_allowed(
     pinned_xhci_state: Option<(usize, bool)>,
     trusted_pinned_mmio: Option<usize>,
     firmware_hint: Option<usize>,
+    firmware_hint_safe: bool,
     verified_vl805_hint: Option<usize>,
 ) -> bool {
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
         has_safe_cfg_window
             || trusted_pinned_mmio == Some(mmio)
-            || firmware_hint == Some(mmio)
+            || (firmware_hint == Some(mmio) && firmware_hint_safe)
             || verified_vl805_hint == Some(mmio)
     } else if xhci_mmio_is_legacy_alias(mmio) {
         trusted_pinned_mmio == Some(mmio)
@@ -2965,7 +2984,11 @@ impl HubPortStatus {
 }
 
 impl UsbKeyboard {
-    fn new(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usize>) -> Result<Self, Pi4SeatError> {
+    fn new(
+        hal: &mut KernelHal<'_>,
+        xhci_mmio_hint: Option<usize>,
+        xhci_pci_cmd: Option<u16>,
+    ) -> Result<Self, Pi4SeatError> {
         if !KEYBOARD_RUNTIME_INIT_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] usb keyboard init path entered");
         }
@@ -3023,6 +3046,7 @@ impl UsbKeyboard {
         let trusted_pinned_xhci_mmio = pinned_xhci_phys_start_trusted();
         let verified_vl805_hint = current_vl805_xhci_mmio_hint();
         let has_safe_cfg_window = current_vl805_cfg_virt().is_some();
+        let firmware_hint_safe = xhci_firmware_handoff_safe(xhci_pci_cmd);
         let mut source_line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_str(&mut source_line, "[local-seat] xhci source fw=");
         match xhci_mmio_hint {
@@ -3066,6 +3090,18 @@ impl UsbKeyboard {
                 let _ = core::fmt::Write::write_str(&mut source_line, "none");
             }
         }
+        let _ = core::fmt::Write::write_str(&mut source_line, " cmd=");
+        match xhci_pci_cmd {
+            Some(cmd) => {
+                let _ = core::fmt::Write::write_fmt(
+                    &mut source_line,
+                    format_args!("0x{cmd:04x}/safe{}", firmware_hint_safe as u8),
+                );
+            }
+            None => {
+                let _ = core::fmt::Write::write_str(&mut source_line, "none/safe0");
+            }
+        }
         boot_log::force_uart_line(source_line.as_str());
         if let Some((mmio, false)) = pinned_xhci_state {
             if xhci_runtime_allows_pinned_legacy_fallback(
@@ -3097,6 +3133,7 @@ impl UsbKeyboard {
                 pinned_xhci_state,
                 trusted_pinned_xhci_mmio,
                 xhci_mmio_hint,
+                firmware_hint_safe,
                 verified_vl805_hint,
             ) {
                 let mut line = heapless::String::<208>::new();
@@ -3164,12 +3201,13 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] xhci hint {} hint=0x{hint:016x} preferred=0x{preferred:016x}",
+                                "[local-seat] xhci hint {} hint=0x{hint:016x} preferred=0x{preferred:016x} safe={}",
                                 if hint_retained {
                                     "retained"
                                 } else {
                                     "ignored"
                                 },
+                                firmware_hint_safe as u8,
                                 preferred = preferred_mmio
                             ),
                         );
@@ -7604,6 +7642,15 @@ mod tests {
     }
 
     #[test]
+    fn xhci_firmware_handoff_requires_memory_master_and_intx_disable() {
+        assert!(!xhci_firmware_handoff_safe(None));
+        assert!(!xhci_firmware_handoff_safe(Some(PCI_COMMAND_MEMORY_SPACE)));
+        assert!(xhci_firmware_handoff_safe(Some(
+            PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE
+        )));
+    }
+
+    #[test]
     fn xhci_high_candidate_requires_safe_cfg_or_trusted_source() {
         assert!(!xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -7611,6 +7658,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
@@ -7619,6 +7667,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
@@ -7627,6 +7676,16 @@ mod tests {
             None,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             None,
+            false,
+            None,
+        ));
+        assert!(!xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+            None,
+            None,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            false,
             None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
@@ -7635,6 +7694,7 @@ mod tests {
             None,
             None,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            true,
             None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
@@ -7643,6 +7703,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
         ));
         assert!(!xhci_runtime_mmio_candidate_allowed(
@@ -7651,6 +7712,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
@@ -7659,6 +7721,7 @@ mod tests {
             None,
             Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
             None,
+            false,
             None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
@@ -7667,6 +7730,7 @@ mod tests {
             None,
             None,
             Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+            false,
             None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
@@ -7675,6 +7739,7 @@ mod tests {
             Some((RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, false)),
             None,
             None,
+            false,
             None,
         ));
     }
@@ -7797,7 +7862,7 @@ mod tests {
                 Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
                 None,
             ),
-            None
+            Some("firmware-hint-unverified")
         );
     }
 

@@ -21,9 +21,26 @@
 #include <usb.h>
 #include <usb/xhci.h>
 
+#ifndef PCI_COMMAND_INTX_DISABLE
+#define PCI_COMMAND_INTX_DISABLE	0x0400
+#endif
+
 struct xhci_pci_plat {
 	struct reset_ctl reset;
 };
+
+static u16 xhci_pci_configure_command(struct udevice *dev)
+{
+	u16 cmd;
+
+	dm_pci_read_config16(dev, PCI_COMMAND, &cmd);
+	cmd |= PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER | PCI_COMMAND_INTX_DISABLE;
+	dm_pci_write_config16(dev, PCI_COMMAND, cmd);
+	dm_pci_read_config16(dev, PCI_COMMAND, &cmd);
+	env_set_hex("coh_xhci_pci_cmd", cmd);
+
+	return cmd;
+}
 
 static ulong xhci_pci_bar0_addr(struct udevice *dev)
 {
@@ -55,7 +72,7 @@ static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 	struct xhci_hcor *hcor;
 	ulong bar0_addr;
 	ulong bar0_phys;
-	u32 cmd;
+	u16 cmd;
 
 	hccr = (struct xhci_hccr *)dm_pci_map_bar(dev,
 			PCI_BASE_ADDRESS_0, 0, 0, PCI_REGION_TYPE,
@@ -84,10 +101,13 @@ static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 	*ret_hccr = hccr;
 	*ret_hcor = hcor;
 
-	/* enable busmaster */
-	dm_pci_read_config32(dev, PCI_COMMAND, &cmd);
-	cmd |= PCI_COMMAND_MASTER;
-	dm_pci_write_config32(dev, PCI_COMMAND, cmd);
+	/*
+	 * Cohesix consumes the BAR again after U-Boot's `usb stop`, so keep
+	 * memory decoding and bus mastering enabled while masking INTx. U-Boot
+	 * polls xHCI and does not rely on legacy PCI interrupts here.
+	 */
+	cmd = xhci_pci_configure_command(dev);
+	debug("XHCI-PCI command configured for Cohesix handoff: %x\n", cmd);
 	return 0;
 }
 
@@ -134,8 +154,12 @@ err_reset:
 static int xhci_pci_remove(struct udevice *dev)
 {
 	struct xhci_pci_plat *plat = dev_get_plat(dev);
+	u16 cmd;
 
 	xhci_deregister(dev);
+	cmd = xhci_pci_configure_command(dev);
+	debug("XHCI-PCI stop preserved command bits for Cohesix handoff: %x\n",
+	      cmd);
 	if (reset_valid(&plat->reset))
 		reset_free(&plat->reset);
 
