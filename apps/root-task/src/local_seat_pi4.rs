@@ -173,16 +173,17 @@ const VL805_NOTIFY_SETTLE_SPINS: usize = 50_000;
 // bring-up. Keep it disabled for now.
 const VL805_RESET_NOTIFY_BEFORE_USB_PROBE: bool = false;
 // Touching VL805 PCI config space during early bootstrap has correlated with
-// fatal IRQ 27 entries on Pi4/seL4. Keep preseed writes disabled, but still
-// pin the already-covered config page so runtime can reuse it without new ECAM
-// probing.
+// fatal IRQ 27 entries on Pi4/seL4. Keep preseed ECAM access disabled in safe
+// mode and prefer the xHCI MMIO handoff exported by U-Boot instead of issuing
+// fresh config-space reads during bootstrap.
 const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
 // Runtime VL805 PCI preflight would ideally ensure MEMORY_SPACE + BUS_MASTER
 // are set before xHCI bring-up. In practice, direct ECAM probing on Pi4/seL4
 // is still causing fatal IRQ 27 entries during runtime keyboard attach even
-// after a safe cfg window was pinned during preseed. Keep runtime config-space
-// touches disabled and rely on the already-running firmware/U-Boot controller
-// state plus the preseeded xHCI MMIO window until ECAM access is proven safe.
+// after earlier safe-mode experiments. Keep runtime config-space touches
+// disabled and rely on the already-running firmware/U-Boot controller state
+// plus the bootloader-exported xHCI MMIO handoff until ECAM access is proven
+// safe.
 const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = false;
 const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
@@ -387,6 +388,15 @@ impl Pi4SeatError {
     }
 }
 
+#[inline]
+const fn keyboard_attach_retry_allowed(
+    err: Pi4SeatError,
+    attempt: usize,
+    max_attempts: usize,
+) -> bool {
+    attempt < max_attempts && !matches!(err, Pi4SeatError::XhciInit)
+}
+
 /// Concrete local-seat backend for Pi 4 (HDMI text + USB keyboard).
 pub struct Pi4LocalSeat {
     display: HdmiTextSink,
@@ -532,6 +542,18 @@ impl Pi4LocalSeat {
                         }
                         Err(err) => {
                             keyboard_error = Some(err);
+                            if !keyboard_attach_retry_allowed(
+                                err,
+                                attempt,
+                                KEYBOARD_ATTACH_ATTEMPTS,
+                            ) {
+                                if matches!(err, Pi4SeatError::XhciInit) {
+                                    boot_log::force_uart_line(
+                                        "[local-seat] pi4 keyboard retry skipped reason=terminal-xhci-init",
+                                    );
+                                }
+                                break;
+                            }
                             if attempt < KEYBOARD_ATTACH_ATTEMPTS {
                                 for _ in 0..KEYBOARD_RETRY_SPINS {
                                     spin_loop();
@@ -861,6 +883,19 @@ const fn xhci_runtime_allows_alias_scan(mmio: usize, verified_vl805_hint: Option
     false
 }
 
+#[inline]
+fn xhci_runtime_allows_pinned_legacy_fallback(
+    mmio: usize,
+    pinned_xhci_state: Option<(usize, bool)>,
+    firmware_hint: Option<usize>,
+    verified_vl805_hint: Option<usize>,
+) -> bool {
+    xhci_mmio_is_legacy_alias(mmio)
+        && pinned_xhci_state == Some((mmio, false))
+        && firmware_hint.is_none()
+        && verified_vl805_hint.is_none()
+}
+
 #[derive(Clone, Copy)]
 struct Vl805PciCfgSnapshot {
     vendor_device: u32,
@@ -961,6 +996,7 @@ const fn vl805_runtime_cfg_touch_allowed(runtime_enabled: bool, has_cfg_window: 
 fn xhci_runtime_mmio_candidate_allowed(
     mmio: usize,
     has_safe_cfg_window: bool,
+    pinned_xhci_state: Option<(usize, bool)>,
     trusted_pinned_mmio: Option<usize>,
     firmware_hint: Option<usize>,
     verified_vl805_hint: Option<usize>,
@@ -974,6 +1010,12 @@ fn xhci_runtime_mmio_candidate_allowed(
         trusted_pinned_mmio == Some(mmio)
             || firmware_hint == Some(mmio)
             || verified_vl805_hint == Some(mmio)
+            || xhci_runtime_allows_pinned_legacy_fallback(
+                mmio,
+                pinned_xhci_state,
+                firmware_hint,
+                verified_vl805_hint,
+            )
     } else {
         true
     }
@@ -984,6 +1026,7 @@ fn xhci_runtime_mmio_has_accessible_window(
     mmio: usize,
     has_device_coverage: bool,
     has_pinned_window: bool,
+    pinned_xhci_state: Option<(usize, bool)>,
     trusted_pinned_mmio: Option<usize>,
     firmware_hint: Option<usize>,
     verified_vl805_hint: Option<usize>,
@@ -991,6 +1034,13 @@ fn xhci_runtime_mmio_has_accessible_window(
     has_device_coverage
         || trusted_pinned_mmio == Some(mmio)
         || (has_pinned_window && (firmware_hint == Some(mmio) || verified_vl805_hint == Some(mmio)))
+        || (has_pinned_window
+            && xhci_runtime_allows_pinned_legacy_fallback(
+                mmio,
+                pinned_xhci_state,
+                firmware_hint,
+                verified_vl805_hint,
+            ))
 }
 
 fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
@@ -3017,6 +3067,23 @@ impl UsbKeyboard {
             }
         }
         boot_log::force_uart_line(source_line.as_str());
+        if let Some((mmio, false)) = pinned_xhci_state {
+            if xhci_runtime_allows_pinned_legacy_fallback(
+                mmio,
+                pinned_xhci_state,
+                xhci_mmio_hint,
+                verified_vl805_hint,
+            ) {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci legacy blind probe enabled mmio=0x{mmio:016x} mode=pinned-no-alias-scan"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+        }
 
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
@@ -3027,6 +3094,7 @@ impl UsbKeyboard {
             if !xhci_runtime_mmio_candidate_allowed(
                 mmio,
                 has_safe_cfg_window,
+                pinned_xhci_state,
                 trusted_pinned_xhci_mmio,
                 xhci_mmio_hint,
                 verified_vl805_hint,
@@ -3058,6 +3126,7 @@ impl UsbKeyboard {
                 mmio,
                 has_device_coverage,
                 has_pinned_window,
+                pinned_xhci_state,
                 trusted_pinned_xhci_mmio,
                 xhci_mmio_hint,
                 verified_vl805_hint,
@@ -7456,13 +7525,14 @@ mod tests {
         append_wrapped_scrollback_rows, clamp_visible_height, clamp_visible_width,
         config_value_for_set, decode_pci_mmio_bar, hid_keyboard_attach_rank,
         hid_keyboard_attach_source, hid_keyboard_candidate_requires_force_mode,
-        hub_retry_wait_spins, hub_should_eager_port_power, keyboard_display_scroll_delta_for_key,
-        keyboard_scancode_to_char, mailbox_visible_dimension, normalize_hub_tt_profile,
-        normalize_pi4_xhci_mmio_hint, text_backspace_target, text_row_count, text_viewport_height,
+        hub_retry_wait_spins, hub_should_eager_port_power, keyboard_attach_retry_allowed,
+        keyboard_display_scroll_delta_for_key, keyboard_scancode_to_char,
+        mailbox_visible_dimension, normalize_hub_tt_profile, normalize_pi4_xhci_mmio_hint,
+        text_backspace_target, text_row_count, text_viewport_height,
         translate_bcm2711_soc_reg_addr, vl805_runtime_cfg_touch_allowed,
         xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
         xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window, ConfigDesc,
-        UsbKeyboard, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        Pi4SeatError, UsbKeyboard, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
         RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, XHCI_MMIO_ALIAS_SCAN_STEPS,
     };
     use super::{
@@ -7485,6 +7555,21 @@ mod tests {
         let low = 0x0000_0004;
         let high = 0x0000_0006;
         assert_eq!(decode_pci_mmio_bar(low, high), Some(0x0000_0006_0000_0000));
+    }
+
+    #[test]
+    fn keyboard_attach_retry_stops_after_terminal_xhci_failure() {
+        assert!(keyboard_attach_retry_allowed(
+            Pi4SeatError::UsbKeyboardInit,
+            1,
+            2
+        ));
+        assert!(!keyboard_attach_retry_allowed(Pi4SeatError::XhciInit, 1, 2));
+        assert!(!keyboard_attach_retry_allowed(
+            Pi4SeatError::UsbKeyboardInit,
+            2,
+            2
+        ));
     }
 
     #[test]
@@ -7526,6 +7611,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -7533,12 +7619,6 @@ mod tests {
             None,
             None,
             None,
-        ));
-        assert!(xhci_runtime_mmio_candidate_allowed(
-            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            false,
-            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
-            None,
             None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
@@ -7547,10 +7627,20 @@ mod tests {
             None,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             None,
+            None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             false,
+            None,
+            None,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            None,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+            None,
             None,
             None,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
@@ -7561,12 +7651,6 @@ mod tests {
             None,
             None,
             None,
-        ));
-        assert!(xhci_runtime_mmio_candidate_allowed(
-            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            false,
-            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
-            None,
             None,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
@@ -7574,6 +7658,23 @@ mod tests {
             false,
             None,
             Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+            None,
+            None,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            false,
+            None,
+            None,
+            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+            None,
+        ));
+        assert!(xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            false,
+            Some((RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, false)),
+            None,
+            None,
             None,
         ));
     }
@@ -7724,6 +7825,7 @@ mod tests {
             false,
             true,
             None,
+            None,
             Some(0x0000_0000_FE9C_0000),
             None,
         ));
@@ -7732,6 +7834,7 @@ mod tests {
             false,
             false,
             None,
+            None,
             Some(0x0000_0000_FE9C_0000),
             None,
         ));
@@ -7739,7 +7842,17 @@ mod tests {
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             false,
             false,
+            None,
             Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+            None,
+            None,
+        ));
+        assert!(xhci_runtime_mmio_has_accessible_window(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            false,
+            true,
+            Some((RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, false)),
+            None,
             None,
             None,
         ));

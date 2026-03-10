@@ -639,6 +639,8 @@ struct Pi4UefiDtbDiagnostics {
     has_pcie_disabled: bool,
 }
 
+const COHESIX_DTB_XHCI_MMIO_PROP: &str = "cohesix,xhci-mmio";
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const COHESIX_DTB_NET_MODE_PROP: &str = "cohesix,net-mode";
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -1104,9 +1106,25 @@ fn dtb_first_reg_addr_size(value: &[u8]) -> Option<(usize, usize)> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pi4UefiXhciHintSource {
+    ChosenPciBar,
+    EnabledNodeReg,
+}
+
+impl Pi4UefiXhciHintSource {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::ChosenPciBar => "chosen-pci-bar",
+            Self::EnabledNodeReg => "dt-node-reg",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Pi4UefiXhciMmioHint {
     raw_mmio: usize,
     mmio: usize,
+    source: Pi4UefiXhciHintSource,
 }
 
 const BCM2711_COMMON_PERIPH_BUS_BASE: usize = 0x7E00_0000;
@@ -1141,16 +1159,39 @@ fn translate_bcm2711_soc_reg_addr(addr: usize) -> usize {
     addr
 }
 
-fn pi4_uefi_xhci_mmio_hint_from_reg(raw_mmio: usize) -> Pi4UefiXhciMmioHint {
+fn pi4_uefi_xhci_mmio_hint(raw_mmio: usize, source: Pi4UefiXhciHintSource) -> Pi4UefiXhciMmioHint {
     Pi4UefiXhciMmioHint {
         raw_mmio,
         mmio: translate_bcm2711_soc_reg_addr(raw_mmio),
+        source,
     }
+}
+
+fn finalize_pi4_uefi_xhci_mmio_hint(
+    chosen_hint: Option<Pi4UefiXhciMmioHint>,
+    enabled_hint: Option<Pi4UefiXhciMmioHint>,
+    disabled_hint: Option<Pi4UefiXhciMmioHint>,
+) -> Option<Pi4UefiXhciMmioHint> {
+    let _ = disabled_hint;
+    chosen_hint.or(enabled_hint)
+}
+
+fn parse_pi4_uefi_xhci_mmio_hint(
+    value: &[u8],
+    source: Pi4UefiXhciHintSource,
+) -> Option<Pi4UefiXhciMmioHint> {
+    if let Some(text) = dtb_prop_cstr(value) {
+        if let Some(raw_mmio) = parse_hex(text) {
+            return Some(pi4_uefi_xhci_mmio_hint(raw_mmio, source));
+        }
+    }
+    dtb_first_reg_addr(value).map(|raw_mmio| pi4_uefi_xhci_mmio_hint(raw_mmio, source))
 }
 
 fn collect_pi4_uefi_xhci_mmio_hint(
     dtb: &bi_extra::Dtb<'_>,
 ) -> Result<Option<Pi4UefiXhciMmioHint>, bi_extra::ParseError> {
+    let mut chosen_hint = None;
     let mut hint = None;
     let mut disabled_hint = None;
     let mut candidate_depth = None;
@@ -1185,6 +1226,11 @@ fn collect_pi4_uefi_xhci_mmio_hint(
                 let _ = path.pop();
             }
             bi_extra::StructureItem::Property { name, value } => {
+                let in_chosen = path.iter().any(|segment| *segment == "chosen");
+                if in_chosen && name == COHESIX_DTB_XHCI_MMIO_PROP && chosen_hint.is_none() {
+                    chosen_hint =
+                        parse_pi4_uefi_xhci_mmio_hint(value, Pi4UefiXhciHintSource::ChosenPciBar);
+                }
                 let Some(depth) = candidate_depth else {
                     continue;
                 };
@@ -1198,18 +1244,21 @@ fn collect_pi4_uefi_xhci_mmio_hint(
                             .unwrap_or(false);
                     }
                     "reg" => {
-                        candidate_reg =
-                            dtb_first_reg_addr(value).map(pi4_uefi_xhci_mmio_hint_from_reg);
+                        candidate_reg = parse_pi4_uefi_xhci_mmio_hint(
+                            value,
+                            Pi4UefiXhciHintSource::EnabledNodeReg,
+                        );
                     }
                     _ => {}
                 }
             }
         }
-        if hint.is_some() {
-            break;
-        }
     }
-    Ok(hint.or(disabled_hint))
+    Ok(finalize_pi4_uefi_xhci_mmio_hint(
+        chosen_hint,
+        hint,
+        disabled_hint,
+    ))
 }
 
 fn infer_pi4_uefi_xhci_mmio_hint_info(
@@ -1421,7 +1470,7 @@ fn emit_pi4_uefi_dtb_diagnostics<P: Platform>(
         }
     } else if diagnostics.has_xhci_disabled {
         console.writeln_prefixed(
-            "[uefi-diag] xHCI DT node is disabled; inferred stale DT, set XhciReload=1 and reboot; retaining any valid reg hint for local-seat recovery",
+            "[uefi-diag] xHCI DT node is disabled; inferred stale DT, set XhciReload=1 and reboot; ignoring stale reg hint for local-seat safety",
         );
     } else {
         console
@@ -1701,19 +1750,29 @@ fn init_local_seat_runtime<P: Platform>(
     if local_seat_enabled {
         if let Some(hint) = xhci_mmio_hint_info {
             if hint.raw_mmio != hint.mmio {
-                let mut line = heapless::String::<128>::new();
+                let mut line = heapless::String::<192>::new();
                 let _ = write!(
                     line,
-                    "[uefi-diag] xhci reg translate raw=0x{:016x} phys=0x{:016x}",
-                    hint.raw_mmio, hint.mmio
+                    "[uefi-diag] xhci hint translate source={} raw=0x{:016x} phys=0x{:016x}",
+                    hint.source.label(),
+                    hint.raw_mmio,
+                    hint.mmio
                 );
                 console.writeln_prefixed(line.as_str());
                 boot_log::force_uart_line(line.as_str());
             }
-            let mut line = heapless::String::<96>::new();
-            let _ = write!(line, "[local-seat] xhci-mmio-hint=0x{:016x}", hint.mmio);
+            let mut line = heapless::String::<144>::new();
+            let _ = write!(
+                line,
+                "[local-seat] xhci-mmio-hint=0x{:016x} source={}",
+                hint.mmio,
+                hint.source.label()
+            );
             console.writeln_prefixed(line.as_str());
             boot_log::force_uart_line(line.as_str());
+        } else {
+            console.writeln_prefixed("[local-seat] xhci-mmio-hint=none source=absent");
+            boot_log::force_uart_line("[local-seat] xhci-mmio-hint=none source=absent");
         }
         if let Some(hint) = display_hint {
             let mut line = heapless::String::<192>::new();
@@ -3433,10 +3492,11 @@ fn bootstrap<P: Platform>(
     }
 
     let hardware = generated::hardware_config();
-    // Reserve the low mailbox page before mid/high Pi4 MMIO mappings advance the
-    // device-untyped cursor. Defer SDHCI until after UART so the FE300000 page
-    // cannot consume past the FE215000 UART window first.
+    // Reserve the low mailbox/GPIO pages before mid/high Pi4 MMIO mappings
+    // advance the device-untyped cursor. Defer SDHCI until after UART so the
+    // FE300000 page cannot consume past the FE215000 UART window first.
     crate::hal::pi4_wifi::preseed_mailbox_mmio(hal);
+    crate::hal::pi4_wifi::preseed_gpio_mmio(hal);
 
     let mut uart_slot: Option<sel4_sys::seL4_CPtr> = None;
     let mut uart_mmio: Option<KernelUartMmio> = None;
@@ -5986,6 +6046,53 @@ mod tests {
         assert_eq!(
             super::translate_bcm2711_soc_reg_addr(0x0000_0000_fe9c_0000),
             0x0000_0000_fe9c_0000
+        );
+    }
+
+    #[test]
+    fn finalize_pi4_uefi_xhci_mmio_hint_ignores_disabled_nodes() {
+        let disabled = super::Pi4UefiXhciMmioHint {
+            raw_mmio: 0x0000_0000_7e9c_0000,
+            mmio: 0x0000_0000_fe9c_0000,
+            source: super::Pi4UefiXhciHintSource::EnabledNodeReg,
+        };
+        let enabled = super::Pi4UefiXhciMmioHint {
+            raw_mmio: 0x0000_0000_6000_0000,
+            mmio: 0x0000_0000_6000_0000,
+            source: super::Pi4UefiXhciHintSource::EnabledNodeReg,
+        };
+        let chosen = super::Pi4UefiXhciMmioHint {
+            raw_mmio: 0x0000_0000_6001_0000,
+            mmio: 0x0000_0000_6001_0000,
+            source: super::Pi4UefiXhciHintSource::ChosenPciBar,
+        };
+
+        assert_eq!(
+            super::finalize_pi4_uefi_xhci_mmio_hint(None, None, Some(disabled)),
+            None
+        );
+        assert_eq!(
+            super::finalize_pi4_uefi_xhci_mmio_hint(None, Some(enabled), Some(disabled)),
+            Some(enabled)
+        );
+        assert_eq!(
+            super::finalize_pi4_uefi_xhci_mmio_hint(Some(chosen), Some(enabled), Some(disabled)),
+            Some(chosen)
+        );
+    }
+
+    #[test]
+    fn parse_pi4_uefi_xhci_mmio_hint_accepts_hex_string() {
+        assert_eq!(
+            super::parse_pi4_uefi_xhci_mmio_hint(
+                b"600000000\0",
+                super::Pi4UefiXhciHintSource::ChosenPciBar,
+            ),
+            Some(super::Pi4UefiXhciMmioHint {
+                raw_mmio: 0x0000_0006_0000_0000,
+                mmio: 0x0000_0006_0000_0000,
+                source: super::Pi4UefiXhciHintSource::ChosenPciBar,
+            })
         );
     }
 }

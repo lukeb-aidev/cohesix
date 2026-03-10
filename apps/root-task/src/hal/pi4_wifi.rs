@@ -201,6 +201,67 @@ fn emit_breadcrumb(args: core::fmt::Arguments<'_>) {
     boot_log::force_uart_line(line.as_str());
 }
 
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn read_cntpct() -> u64 {
+    let value: u64;
+    // SAFETY: Reading CNTVCT_EL0 is side-effect free and already used by other
+    // root-task timing paths on AArch64.
+    unsafe {
+        core::arch::asm!("mrs {value}, cntpct_el0", value = out(reg) value);
+    }
+    value
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline]
+fn read_cntpct() -> u64 {
+    0
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn read_cntfrq() -> u64 {
+    let value: u64;
+    // SAFETY: Reading CNTFRQ_EL0 is side-effect free and already used by other
+    // root-task timing paths on AArch64.
+    unsafe {
+        core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value);
+    }
+    value
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[inline]
+fn read_cntfrq() -> u64 {
+    0
+}
+
+#[inline]
+fn sdhci_write_gap_ticks(counter_hz: u64) -> u64 {
+    if counter_hz == 0 {
+        return 0;
+    }
+    counter_hz
+        .saturating_mul(SDHCI_MIN_WRITE_GAP_US)
+        .saturating_add(999_999)
+        / 1_000_000
+}
+
+#[inline]
+fn merge_u8_word(word: u32, offset: usize, value: u8) -> u32 {
+    let shift = ((offset & 0x3) * 8) as u32;
+    let mask = !(0xFFu32 << shift);
+    (word & mask) | (u32::from(value) << shift)
+}
+
+#[inline]
+fn merge_u16_word(word: u32, offset: usize, value: u16) -> u32 {
+    let shift = ((offset & 0x2) * 8) as u32;
+    let mask = !(0xFFFFu32 << shift);
+    (word & mask) | (u32::from(value) << shift)
+}
+
 fn wifi_power_state_name(state: WifiPowerState) -> &'static str {
     match state {
         WifiPowerState::Off => "off",
@@ -213,6 +274,11 @@ fn wifi_reset_state_name(state: WifiResetState) -> &'static str {
         WifiResetState::Asserted => "asserted",
         WifiResetState::Deasserted => "deasserted",
     }
+}
+
+#[inline]
+const fn wifi_gpio_line_enabled(power_state: WifiPowerState) -> bool {
+    matches!(power_state, WifiPowerState::On)
 }
 
 fn sdio_bus_width_name(width: SdioBusWidth) -> &'static str {
@@ -336,6 +402,19 @@ where
     mailbox
 }
 
+pub fn preseed_gpio_mmio<H>(hal: &mut H) -> bool
+where
+    H: Hardware<Error = HalError>,
+{
+    let gpio = preseed_register_block(hal, &GPIO_PAGE_PADDR_CANDIDATES, &PINNED_GPIO_REGS);
+    boot_log::force_uart_line(if gpio {
+        "[pi4-wifi] mmio preseeded gpio=yes"
+    } else {
+        "[pi4-wifi] mmio preseeded gpio=no"
+    });
+    gpio
+}
+
 pub fn preseed_sdhci_mmio<H>(hal: &mut H) -> bool
 where
     H: Hardware<Error = HalError>,
@@ -354,19 +433,32 @@ where
     H: Hardware<Error = HalError>,
 {
     let mailbox = preseed_mailbox_mmio(hal);
+    let gpio = preseed_gpio_mmio(hal);
     let sdhci = preseed_sdhci_mmio(hal);
-    match (mailbox, sdhci) {
-        (true, true) => {
-            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=yes sdhci=yes")
-        }
-        (true, false) => {
-            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=yes sdhci=no")
-        }
-        (false, true) => {
-            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=no sdhci=yes")
-        }
-        (false, false) => {
-            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=no sdhci=no")
+    match (mailbox, gpio, sdhci) {
+        (true, true, true) => boot_log::force_uart_line(
+            "[pi4-wifi] mmio preseed summary mailbox=yes gpio=yes sdhci=yes",
+        ),
+        (true, true, false) => boot_log::force_uart_line(
+            "[pi4-wifi] mmio preseed summary mailbox=yes gpio=yes sdhci=no",
+        ),
+        (true, false, true) => boot_log::force_uart_line(
+            "[pi4-wifi] mmio preseed summary mailbox=yes gpio=no sdhci=yes",
+        ),
+        (true, false, false) => boot_log::force_uart_line(
+            "[pi4-wifi] mmio preseed summary mailbox=yes gpio=no sdhci=no",
+        ),
+        (false, true, true) => boot_log::force_uart_line(
+            "[pi4-wifi] mmio preseed summary mailbox=no gpio=yes sdhci=yes",
+        ),
+        (false, true, false) => boot_log::force_uart_line(
+            "[pi4-wifi] mmio preseed summary mailbox=no gpio=yes sdhci=no",
+        ),
+        (false, false, true) => boot_log::force_uart_line(
+            "[pi4-wifi] mmio preseed summary mailbox=no gpio=no sdhci=yes",
+        ),
+        (false, false, false) => {
+            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=no gpio=no sdhci=no")
         }
     }
 }
@@ -559,6 +651,7 @@ const WIFI_RESET_SETTLE_LOOPS: usize = 20_000_000;
 const WIFI_POWER_SETTLE_LOOPS: usize = 500_000;
 const WIFI_POWER_DROP_SETTLE_LOOPS: usize = 20_000_000;
 const SDHCI_WRITE_DELAY_LOOPS: usize = 256;
+const SDHCI_MIN_WRITE_GAP_US: u64 = 5;
 const CYW43_READY_LOOPS: usize = 1_000;
 const CYW43_TRANSFER_CHUNK: usize = 256;
 const SDIO_MAX_BYTE_MODE: usize = 511;
@@ -633,8 +726,9 @@ impl Pi4WifiState {
             "[pi4-wifi] power state={}",
             wifi_power_state_name(state)
         ));
+        let was_enabled = wifi_gpio_line_enabled(self.power_state);
         self.power_state = state;
-        self.apply_wifi_line()
+        self.apply_wifi_line(was_enabled)
     }
 
     pub fn set_reset(&mut self, state: WifiResetState) -> Result<(), HalError> {
@@ -642,8 +736,9 @@ impl Pi4WifiState {
             "[pi4-wifi] reset state={}",
             wifi_reset_state_name(state)
         ));
+        let was_enabled = wifi_gpio_line_enabled(self.power_state);
         self.reset_state = state;
-        self.apply_wifi_line()?;
+        self.apply_wifi_line(was_enabled)?;
         if matches!(state, WifiResetState::Deasserted) {
             bounded_spin_settle("wifi-reset-deassert", WIFI_RESET_SETTLE_LOOPS);
         }
@@ -715,20 +810,25 @@ impl Pi4WifiState {
         self.host.write_frame(frame)
     }
 
-    fn apply_wifi_line(&mut self) -> Result<(), HalError> {
-        let enabled = matches!(self.power_state, WifiPowerState::On)
-            && matches!(self.reset_state, WifiResetState::Deasserted);
+    fn apply_wifi_line(&mut self, was_enabled: bool) -> Result<(), HalError> {
+        let enabled = wifi_gpio_line_enabled(self.power_state);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] gpio line enabled={} power={} reset={}",
+            "[pi4-wifi] gpio wl-on={} power={} reset={}",
             enabled as u8,
             wifi_power_state_name(self.power_state),
             wifi_reset_state_name(self.reset_state),
         ));
+        if was_enabled != enabled {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] gpio wl-on transition {}->{}",
+                was_enabled as u8, enabled as u8
+            ));
+        }
         self.mailbox
             .configure_gpio_output(PI4_WIFI_GPIO, enabled as u32)?;
-        if enabled {
+        if !was_enabled && enabled {
             bounded_spin_settle("wifi-power-on", WIFI_POWER_SETTLE_LOOPS);
-        } else {
+        } else if was_enabled && !enabled {
             bounded_spin_settle("wifi-power-off", WIFI_POWER_DROP_SETTLE_LOOPS);
             self.host.mark_power_cycled();
         }
@@ -1043,6 +1143,9 @@ struct SdioHost {
     current_clock_hz: u32,
     desired_bus_width: SdioBusWidth,
     card: Option<CardInfo>,
+    transfer_mode_shadow: u32,
+    write_gap_ticks: u64,
+    last_write_ticks: u64,
 }
 
 impl SdioHost {
@@ -1074,6 +1177,12 @@ impl SdioHost {
                 100_000_000
             }
         };
+        let counter_hz = read_cntfrq();
+        let write_gap_ticks = sdhci_write_gap_ticks(counter_hz);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdhci access mode=bcm2835-shadow gap_us={} ticks={} cntfrq={}Hz",
+            SDHCI_MIN_WRITE_GAP_US, write_gap_ticks, counter_hz
+        ));
         Ok(Self {
             regs,
             regs_paddr,
@@ -1081,6 +1190,9 @@ impl SdioHost {
             current_clock_hz: 0,
             desired_bus_width: SdioBusWidth::OneBit,
             card: None,
+            transfer_mode_shadow: 0,
+            write_gap_ticks,
+            last_write_ticks: 0,
         })
     }
 
@@ -1924,53 +2036,79 @@ impl SdioHost {
     }
 
     fn read8(&self, offset: usize) -> u8 {
-        let base = self.regs.vaddr();
-        unsafe { ptr::read_volatile((base + offset) as *const u8) }
+        let aligned = offset & !0x3;
+        let word = self.raw_read32(aligned);
+        let shift = ((offset & 0x3) * 8) as u32;
+        ((word >> shift) & 0xFF) as u8
     }
 
     fn read16(&self, offset: usize) -> u16 {
-        let base = self.regs.vaddr();
         let aligned = offset & !0x3;
-        let word = unsafe { ptr::read_volatile((base + aligned) as *const u32) };
+        let word = self.raw_read32(aligned);
         let shift = ((offset & 0x2) * 8) as u32;
         ((word >> shift) & 0xFFFF) as u16
     }
 
     fn read32(&self, offset: usize) -> u32 {
+        self.raw_read32(offset)
+    }
+
+    fn write8(&mut self, offset: usize, value: u8) {
+        let aligned = offset & !0x3;
+        let word = self.raw_read32(aligned);
+        self.raw_write32(aligned, merge_u8_word(word, offset, value));
+    }
+
+    fn write16(&mut self, offset: usize, value: u16) {
+        let aligned = offset & !0x3;
+        let word = if offset == SDHCI_COMMAND {
+            self.transfer_mode_shadow
+        } else {
+            self.raw_read32(aligned)
+        };
+        let new_word = merge_u16_word(word, offset, value);
+        if offset == SDHCI_TRANSFER_MODE {
+            self.transfer_mode_shadow = new_word;
+            return;
+        }
+        self.raw_write32(aligned, new_word);
+    }
+
+    fn write32(&mut self, offset: usize, value: u32) {
+        self.raw_write32(offset, value);
+    }
+
+    fn raw_read32(&self, offset: usize) -> u32 {
         let base = self.regs.vaddr();
+        // SAFETY: `regs` is a mapped BCM2711 SDHCI window owned by the HAL, and
+        // callers pass only fixed register offsets within that page.
         unsafe { ptr::read_volatile((base + offset) as *const u32) }
     }
 
-    fn write8(&self, offset: usize, value: u8) {
-        let aligned = offset & !0x3;
-        let word = self.read32(aligned);
-        let shift = ((offset & 0x3) * 8) as u32;
-        let mask = !(0xFFu32 << shift);
-        self.write32(aligned, (word & mask) | (u32::from(value) << shift));
-    }
-
-    fn write16(&self, offset: usize, value: u16) {
-        let aligned = offset & !0x3;
-        let word = self.read32(aligned);
-        let shift = ((offset & 0x2) * 8) as u32;
-        let mask = !(0xFFFFu32 << shift);
-        let new_word = (word & mask) | (u32::from(value) << shift);
+    fn raw_write32(&mut self, offset: usize, value: u32) {
+        self.wait_write_gap(offset);
         let base = self.regs.vaddr();
-        unsafe { ptr::write_volatile((base + aligned) as *mut u32, new_word) };
-        self.write_delay(aligned);
-    }
-
-    fn write32(&self, offset: usize, value: u32) {
-        let base = self.regs.vaddr();
+        // SAFETY: `regs` is a mapped BCM2711 SDHCI window owned by the HAL, and
+        // callers pass only fixed register offsets within that page.
         unsafe { ptr::write_volatile((base + offset) as *mut u32, value) };
-        self.write_delay(offset);
+        self.last_write_ticks = read_cntpct();
     }
 
-    fn write_delay(&self, offset: usize) {
+    fn wait_write_gap(&self, offset: usize) {
         if offset == SDHCI_BUFFER {
             return;
         }
-        for _ in 0..SDHCI_WRITE_DELAY_LOOPS {
+        if self.write_gap_ticks != 0 && self.last_write_ticks != 0 {
+            loop {
+                let now = read_cntpct();
+                if now.wrapping_sub(self.last_write_ticks) >= self.write_gap_ticks {
+                    break;
+                }
+                spin_loop();
+            }
+            return;
+        }
+        for _ in 0..SDHCI_WRITE_DELAY_LOOPS.saturating_mul(32) {
             spin_loop();
         }
     }
@@ -2085,11 +2223,11 @@ pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
 mod tests {
     use super::{
         bcm2711_gpfsel_offset, bcm2711_puppdn_offset, is_mailbox_protocol_error, mailbox_tag_name,
-        make_command, normalize_nvram, phys_to_bus, r5_status, sdhci_status_reason,
-        update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
-        BCM2711_GPIO_ALT3, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SDHCI_INT_CRC,
-        SDHCI_INT_DATA_CRC, SDHCI_INT_TIMEOUT, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG,
-        TAG_SET_POWER_STATE,
+        make_command, merge_u16_word, normalize_nvram, phys_to_bus, r5_status, sdhci_status_reason,
+        sdhci_write_gap_ticks, update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError,
+        ResponseType, BCM2711_GPIO_ALT3, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SDHCI_COMMAND,
+        SDHCI_INT_CRC, SDHCI_INT_DATA_CRC, SDHCI_INT_TIMEOUT, SDHCI_MIN_WRITE_GAP_US,
+        SDHCI_TRANSFER_MODE, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -2149,6 +2287,12 @@ mod tests {
     }
 
     #[test]
+    fn wifi_gpio_line_follows_power_state() {
+        assert!(!wifi_gpio_line_enabled(WifiPowerState::Off));
+        assert!(wifi_gpio_line_enabled(WifiPowerState::On));
+    }
+
+    #[test]
     fn wifi_sdio_pinmux_matches_pi4_dtb_state() {
         let mut fsel3 = 0u32;
         let mut pud2 = 0u32;
@@ -2163,5 +2307,19 @@ mod tests {
 
         assert_eq!(fsel3, 0x00ff_fc00);
         assert_eq!(pud2, 0x00000aa0);
+    }
+
+    #[test]
+    fn sdhci_command_word_uses_transfer_mode_shadow() {
+        let shadow = merge_u16_word(0, SDHCI_TRANSFER_MODE, 0x1234);
+        let combined = merge_u16_word(shadow, SDHCI_COMMAND, 0xabcd);
+        assert_eq!(combined, 0xabcd_1234);
+    }
+
+    #[test]
+    fn sdhci_write_gap_ticks_matches_two_card_clocks() {
+        assert_eq!(SDHCI_MIN_WRITE_GAP_US, 5);
+        assert_eq!(sdhci_write_gap_ticks(62_500_000), 313);
+        assert_eq!(sdhci_write_gap_ticks(0), 0);
     }
 }

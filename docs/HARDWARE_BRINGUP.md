@@ -8,7 +8,7 @@
 - Cohesix supports two bring-up paths:
 - QEMU `aarch64/virt` (development/CI baseline).
 - Raspberry Pi 4 (`bcm2711`) via upstream-style boot chain: `Pi firmware -> U-Boot -> seL4 image -> root-task`.
-- Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4; the current 26b as-built state adds the interactive U-Boot policy wizard, DTB `/chosen/cohesix,*` handoff, wired DHCP, and the staged Pi 4 Wi-Fi runtime path.
+- Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4; the current 26b as-built state adds the interactive U-Boot policy wizard, DTB `/chosen/cohesix,*` handoff, bootloader-exported xHCI BAR handoff for local-seat, wired DHCP, and the staged Pi 4 Wi-Fi runtime path.
 
 ## Canonical Pi 4 boot chain
 1. Pi boot firmware loads `start4.elf` and `fixup4.dat`.
@@ -152,8 +152,8 @@
 - HDMI displays `cohesix>` prompt.
 - USB keyboard input reaches the existing root-console parser.
 - Typed commands produce visible responses on HDMI with deterministic ordering relative to serial.
-- A stale firmware DT handoff with `xhci` marked `status = "disabled"` does not strand local-seat: root-task retains any valid xHCI `reg` hint, recovers the VL805 controller BAR, and either brings up the USB keyboard or emits an explicit degraded/unavailable reason.
-- If runtime already pinned a legacy xHCI alias but firmware also supplies a different valid xHCI `reg` hint, local-seat must probe the firmware hint instead of discarding it as stale so the HDMI keyboard path does not get trapped on an invalid `0xfe980000` alias.
+- A stale firmware DT handoff with `xhci` marked `status = "disabled"` does not strand local-seat: root-task ignores that stale node as an active runtime source, prefers the U-Boot-exported `/chosen/cohesix,xhci-mmio` BAR handoff when present, and either brings up the USB keyboard or emits an explicit degraded/unavailable reason.
+- If firmware DT hands off an `xhci` node with `status = "disabled"`, local-seat must treat that `reg` as stale for runtime safety, ignore it as an active xHCI source, and either use a verified runtime source or emit explicit degraded/unavailable diagnostics instead of cycling between blind legacy aliases.
 - Pi 4 firmware DT `xhci` `reg` values authored in the BCM2711 `0x7e...` SoC bus window must be translated through the DT `ranges` mapping into CPU physical addresses before local-seat runtime candidate selection. Boot breadcrumbs must make that translation explicit.
 - Pi 4 U-Boot USB proof for common keyboards must show that downstream hubs do not get stuck in repeated EP0 halts during early hub-class port control: per-port `PORT_POWER` is deferred for unsafe downstream hubs, Apple `05ac:1006` still gets its 250 ms post-config settle, and delayed child `status-error` retries do not issue extra `PORT_POWER` writes.
 - Pi 4 USB local-seat DMA buffers must remain below `0xC0000000` (first 3 GiB), matching the BCM2711 PCIe `dma-ranges` limit used by VL805/xHCI.

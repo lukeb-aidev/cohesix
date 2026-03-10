@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
+ * Copyright 2026 Lukas Bower
+ * Purpose: Bring up PCI-backed xHCI controllers and export the active BAR for Cohesix handoff.
+ * Author: Lukas Bower
+ */
+/*
  * Copyright (c) 2015, Google, Inc
  * Written by Simon Glass <sjg@chromium.org>
  * All rights reserved.
@@ -7,6 +12,7 @@
 
 #include <dm.h>
 #include <dm/device_compat.h>
+#include <env.h>
 #include <init.h>
 #include <log.h>
 #include <pci.h>
@@ -18,11 +24,30 @@ struct xhci_pci_plat {
 	struct reset_ctl reset;
 };
 
+static ulong xhci_pci_bar0_addr(struct udevice *dev)
+{
+	u32 bar0, bar1 = 0;
+	u64 base;
+
+	dm_pci_read_config32(dev, PCI_BASE_ADDRESS_0, &bar0);
+	if (bar0 == 0xffffffff || (bar0 & PCI_BASE_ADDRESS_SPACE_IO))
+		return 0;
+
+	base = bar0 & PCI_BASE_ADDRESS_MEM_MASK;
+	if ((bar0 & PCI_BASE_ADDRESS_MEM_TYPE_MASK) == PCI_BASE_ADDRESS_MEM_TYPE_64) {
+		dm_pci_read_config32(dev, PCI_BASE_ADDRESS_1, &bar1);
+		base |= (u64)bar1 << 32;
+	}
+
+	return (ulong)base;
+}
+
 static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 			 struct xhci_hcor **ret_hcor)
 {
 	struct xhci_hccr *hccr;
 	struct xhci_hcor *hcor;
+	ulong bar0_addr;
 	u32 cmd;
 
 	hccr = (struct xhci_hccr *)dm_pci_map_bar(dev,
@@ -38,6 +63,12 @@ static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 
 	debug("XHCI-PCI init hccr %p and hcor %p hc_length %d\n",
 	      hccr, hcor, (u32)HC_LENGTH(xhci_readl(&hccr->cr_capbase)));
+
+	bar0_addr = xhci_pci_bar0_addr(dev);
+	if (bar0_addr) {
+		if (!env_set_hex("coh_xhci_mmio", bar0_addr))
+			debug("XHCI-PCI exported Cohesix BAR0 %lx\n", bar0_addr);
+	}
 
 	*ret_hccr = hccr;
 	*ret_hcor = hcor;
