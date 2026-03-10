@@ -201,53 +201,6 @@ fn emit_breadcrumb(args: core::fmt::Arguments<'_>) {
     boot_log::force_uart_line(line.as_str());
 }
 
-#[cfg(target_arch = "aarch64")]
-#[inline]
-fn read_cntpct() -> u64 {
-    let value: u64;
-    // SAFETY: Reading CNTVCT_EL0 is side-effect free and already used by other
-    // root-task timing paths on AArch64.
-    unsafe {
-        core::arch::asm!("mrs {value}, cntpct_el0", value = out(reg) value);
-    }
-    value
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-#[inline]
-fn read_cntpct() -> u64 {
-    0
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline]
-fn read_cntfrq() -> u64 {
-    let value: u64;
-    // SAFETY: Reading CNTFRQ_EL0 is side-effect free and already used by other
-    // root-task timing paths on AArch64.
-    unsafe {
-        core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value);
-    }
-    value
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-#[inline]
-fn read_cntfrq() -> u64 {
-    0
-}
-
-#[inline]
-fn sdhci_write_gap_ticks(counter_hz: u64) -> u64 {
-    if counter_hz == 0 {
-        return 0;
-    }
-    counter_hz
-        .saturating_mul(SDHCI_MIN_WRITE_GAP_US)
-        .saturating_add(999_999)
-        / 1_000_000
-}
-
 #[inline]
 fn merge_u8_word(word: u32, offset: usize, value: u8) -> u32 {
     let shift = ((offset & 0x3) * 8) as u32;
@@ -651,7 +604,7 @@ const WIFI_RESET_SETTLE_LOOPS: usize = 20_000_000;
 const WIFI_POWER_SETTLE_LOOPS: usize = 500_000;
 const WIFI_POWER_DROP_SETTLE_LOOPS: usize = 20_000_000;
 const SDHCI_WRITE_DELAY_LOOPS: usize = 256;
-const SDHCI_MIN_WRITE_GAP_US: u64 = 5;
+const SDHCI_WRITE_GAP_SPIN_LOOPS: usize = SDHCI_WRITE_DELAY_LOOPS * 32;
 const CYW43_READY_LOOPS: usize = 1_000;
 const CYW43_TRANSFER_CHUNK: usize = 256;
 const SDIO_MAX_BYTE_MODE: usize = 511;
@@ -1144,8 +1097,6 @@ struct SdioHost {
     desired_bus_width: SdioBusWidth,
     card: Option<CardInfo>,
     transfer_mode_shadow: u32,
-    write_gap_ticks: u64,
-    last_write_ticks: u64,
 }
 
 impl SdioHost {
@@ -1177,11 +1128,9 @@ impl SdioHost {
                 100_000_000
             }
         };
-        let counter_hz = read_cntfrq();
-        let write_gap_ticks = sdhci_write_gap_ticks(counter_hz);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] sdhci access mode=bcm2835-shadow gap_us={} ticks={} cntfrq={}Hz",
-            SDHCI_MIN_WRITE_GAP_US, write_gap_ticks, counter_hz
+            "[pi4-wifi] sdhci access mode=bcm2835-shadow gap=spin delay_loops={}",
+            SDHCI_WRITE_GAP_SPIN_LOOPS
         ));
         Ok(Self {
             regs,
@@ -1191,8 +1140,6 @@ impl SdioHost {
             desired_bus_width: SdioBusWidth::OneBit,
             card: None,
             transfer_mode_shadow: 0,
-            write_gap_ticks,
-            last_write_ticks: 0,
         })
     }
 
@@ -2091,24 +2038,13 @@ impl SdioHost {
         // SAFETY: `regs` is a mapped BCM2711 SDHCI window owned by the HAL, and
         // callers pass only fixed register offsets within that page.
         unsafe { ptr::write_volatile((base + offset) as *mut u32, value) };
-        self.last_write_ticks = read_cntpct();
     }
 
     fn wait_write_gap(&self, offset: usize) {
         if offset == SDHCI_BUFFER {
             return;
         }
-        if self.write_gap_ticks != 0 && self.last_write_ticks != 0 {
-            loop {
-                let now = read_cntpct();
-                if now.wrapping_sub(self.last_write_ticks) >= self.write_gap_ticks {
-                    break;
-                }
-                spin_loop();
-            }
-            return;
-        }
-        for _ in 0..SDHCI_WRITE_DELAY_LOOPS.saturating_mul(32) {
+        for _ in 0..SDHCI_WRITE_GAP_SPIN_LOOPS {
             spin_loop();
         }
     }
@@ -2224,10 +2160,10 @@ mod tests {
     use super::{
         bcm2711_gpfsel_offset, bcm2711_puppdn_offset, is_mailbox_protocol_error, mailbox_tag_name,
         make_command, merge_u16_word, normalize_nvram, phys_to_bus, r5_status, sdhci_status_reason,
-        sdhci_write_gap_ticks, update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError,
-        ResponseType, BCM2711_GPIO_ALT3, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SDHCI_COMMAND,
-        SDHCI_INT_CRC, SDHCI_INT_DATA_CRC, SDHCI_INT_TIMEOUT, SDHCI_MIN_WRITE_GAP_US,
-        SDHCI_TRANSFER_MODE, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+        update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
+        BCM2711_GPIO_ALT3, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SDHCI_COMMAND, SDHCI_INT_CRC,
+        SDHCI_INT_DATA_CRC, SDHCI_INT_TIMEOUT, SDHCI_TRANSFER_MODE, SDHCI_WRITE_DELAY_LOOPS,
+        SDHCI_WRITE_GAP_SPIN_LOOPS, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -2317,9 +2253,8 @@ mod tests {
     }
 
     #[test]
-    fn sdhci_write_gap_ticks_matches_two_card_clocks() {
-        assert_eq!(SDHCI_MIN_WRITE_GAP_US, 5);
-        assert_eq!(sdhci_write_gap_ticks(62_500_000), 313);
-        assert_eq!(sdhci_write_gap_ticks(0), 0);
+    fn sdhci_write_gap_spin_delay_is_bounded() {
+        assert_eq!(SDHCI_WRITE_DELAY_LOOPS, 256);
+        assert_eq!(SDHCI_WRITE_GAP_SPIN_LOOPS, 8192);
     }
 }

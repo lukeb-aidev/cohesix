@@ -15,6 +15,7 @@
 #include <env.h>
 #include <init.h>
 #include <log.h>
+#include <mapmem.h>
 #include <pci.h>
 #include <reset.h>
 #include <usb.h>
@@ -42,12 +43,18 @@ static ulong xhci_pci_bar0_addr(struct udevice *dev)
 	return (ulong)base;
 }
 
+static ulong xhci_pci_bar0_phys(struct xhci_hccr *hccr)
+{
+	return (ulong)map_to_sysmem(hccr);
+}
+
 static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 			 struct xhci_hcor **ret_hcor)
 {
 	struct xhci_hccr *hccr;
 	struct xhci_hcor *hcor;
 	ulong bar0_addr;
+	ulong bar0_phys;
 	u32 cmd;
 
 	hccr = (struct xhci_hccr *)dm_pci_map_bar(dev,
@@ -65,9 +72,13 @@ static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 	      hccr, hcor, (u32)HC_LENGTH(xhci_readl(&hccr->cr_capbase)));
 
 	bar0_addr = xhci_pci_bar0_addr(dev);
-	if (bar0_addr) {
-		if (!env_set_hex("coh_xhci_mmio", bar0_addr))
-			debug("XHCI-PCI exported Cohesix BAR0 %lx\n", bar0_addr);
+	bar0_phys = xhci_pci_bar0_phys(hccr);
+	if (bar0_addr)
+		env_set_hex("coh_xhci_mmio_raw", bar0_addr);
+	if (bar0_phys) {
+		if (!env_set_hex("coh_xhci_mmio", bar0_phys))
+			debug("XHCI-PCI exported Cohesix BAR0 raw=%lx phys=%lx\n",
+			      bar0_addr, bar0_phys);
 	}
 
 	*ret_hccr = hccr;

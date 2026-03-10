@@ -1136,6 +1136,8 @@ const BCM2711_SOC_PERIPH_SIZE: usize = 0x0200_0000;
 const BCM2711_ARM_LOCAL_BUS_BASE: usize = 0x4000_0000;
 const BCM2711_ARM_LOCAL_PHYS_BASE: usize = 0xFF80_0000;
 const BCM2711_ARM_LOCAL_SIZE: usize = 0x0080_0000;
+const BCM2711_DMA_ALIAS_BUS_BASE: usize = 0xC000_0000;
+const BCM2711_DMA_ALIAS_SIZE: usize = 0x4000_0000;
 
 fn translate_bcm2711_soc_reg_addr(addr: usize) -> usize {
     if (BCM2711_COMMON_PERIPH_BUS_BASE..BCM2711_COMMON_PERIPH_BUS_BASE + BCM2711_COMMON_PERIPH_SIZE)
@@ -1167,13 +1169,24 @@ fn pi4_uefi_xhci_mmio_hint(raw_mmio: usize, source: Pi4UefiXhciHintSource) -> Pi
     }
 }
 
+fn pi4_uefi_xhci_mmio_hint_safe(hint: Pi4UefiXhciMmioHint) -> bool {
+    match hint.source {
+        Pi4UefiXhciHintSource::ChosenPciBar => !(BCM2711_DMA_ALIAS_BUS_BASE
+            ..BCM2711_DMA_ALIAS_BUS_BASE + BCM2711_DMA_ALIAS_SIZE)
+            .contains(&hint.raw_mmio),
+        Pi4UefiXhciHintSource::EnabledNodeReg => true,
+    }
+}
+
 fn finalize_pi4_uefi_xhci_mmio_hint(
     chosen_hint: Option<Pi4UefiXhciMmioHint>,
     enabled_hint: Option<Pi4UefiXhciMmioHint>,
     disabled_hint: Option<Pi4UefiXhciMmioHint>,
 ) -> Option<Pi4UefiXhciMmioHint> {
     let _ = disabled_hint;
-    chosen_hint.or(enabled_hint)
+    chosen_hint
+        .filter(|hint| pi4_uefi_xhci_mmio_hint_safe(*hint))
+        .or(enabled_hint)
 }
 
 fn parse_pi4_uefi_xhci_mmio_hint(
@@ -6078,6 +6091,25 @@ mod tests {
         assert_eq!(
             super::finalize_pi4_uefi_xhci_mmio_hint(Some(chosen), Some(enabled), Some(disabled)),
             Some(chosen)
+        );
+    }
+
+    #[test]
+    fn finalize_pi4_uefi_xhci_mmio_hint_rejects_dma_alias_chosen_bar() {
+        let chosen = super::Pi4UefiXhciMmioHint {
+            raw_mmio: 0x0000_0000_c000_0000,
+            mmio: 0x0000_0000_c000_0000,
+            source: super::Pi4UefiXhciHintSource::ChosenPciBar,
+        };
+        let enabled = super::Pi4UefiXhciMmioHint {
+            raw_mmio: 0x0000_0006_0000_0000,
+            mmio: 0x0000_0006_0000_0000,
+            source: super::Pi4UefiXhciHintSource::EnabledNodeReg,
+        };
+
+        assert_eq!(
+            super::finalize_pi4_uefi_xhci_mmio_hint(Some(chosen), Some(enabled), None),
+            Some(enabled)
         );
     }
 
