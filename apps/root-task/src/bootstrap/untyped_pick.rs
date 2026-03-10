@@ -203,7 +203,17 @@ pub fn ensure_device_pt_pool(bi: &'static BootInfo) {
 
 fn plan_for_untyped(cap: sys::seL4_CPtr, size_bits: u8, dest_start: sys::seL4_CPtr) -> RetypePlan {
     let capacity_bytes: u128 = 1u128 << size_bits;
-    let mut used_bytes: u128 = 0;
+    plan_for_untyped_with_reserved(cap, size_bits, dest_start, 0, capacity_bytes)
+}
+
+fn plan_for_untyped_with_reserved(
+    cap: sys::seL4_CPtr,
+    size_bits: u8,
+    dest_start: sys::seL4_CPtr,
+    reserved_bytes: u128,
+    capacity_bytes: u128,
+) -> RetypePlan {
+    let mut used_bytes: u128 = reserved_bytes.min(capacity_bytes);
 
     let page_table_bits = PAGE_TABLE_BITS as u8;
     let page_bits = PAGE_BITS as u8;
@@ -259,10 +269,12 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
     let total = (bi.untyped.end - bi.untyped.start) as usize;
     let entries = &bi.untypedList[..total];
     let dest_start = bi.empty_first_slot() as sys::seL4_CPtr;
+    let notification_bytes = 1u128 << min_bits;
 
     ensure_device_pt_pool(bi);
     let reserved_device_pool = device_pt_pool_index();
 
+    let mut notification_only_fallback: Option<UntypedSelection> = None;
     for (offset, ut) in entries.iter().enumerate() {
         if Some(offset) == reserved_device_pool {
             continue;
@@ -270,16 +282,34 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
 
         if ut.isDevice == 0 && (ut.sizeBits as u8) >= min_bits {
             let cap = bi.untyped.start + offset as sys::seL4_CPtr;
+            let capacity_bytes: u128 = 1u128 << (ut.sizeBits as u8);
+            let plan = plan_for_untyped_with_reserved(
+                cap,
+                ut.sizeBits as u8,
+                dest_start,
+                notification_bytes,
+                capacity_bytes,
+            );
             let selection = UntypedSelection {
                 cap,
                 index: offset,
                 size_bits: ut.sizeBits as u8,
                 used_bytes: 0,
-                plan: plan_for_untyped(cap, ut.sizeBits as u8, dest_start),
+                plan,
             };
-            log_plan(&selection);
-            return selection;
+            if selection.plan.total > 0 {
+                log_plan(&selection);
+                return selection;
+            }
+            if notification_only_fallback.is_none() {
+                notification_only_fallback = Some(selection);
+            }
         }
+    }
+
+    if let Some(selection) = notification_only_fallback {
+        log_plan(&selection);
+        return selection;
     }
 
     let (offset, ut) = entries
@@ -332,5 +362,21 @@ mod tests {
         assert_eq!(plan.page_tables, 1);
         assert_eq!(plan.small_pages, 14);
         assert_eq!(plan.total, 15);
+    }
+
+    #[test]
+    fn notification_reserve_skips_impossible_four_kib_plan() {
+        let capacity_bytes = 1u128 << 12;
+        let reserved_notification_bytes = 1u128 << 5;
+        let plan = plan_for_untyped_with_reserved(
+            0x0100,
+            12,
+            0x0200,
+            reserved_notification_bytes,
+            capacity_bytes,
+        );
+        assert_eq!(plan.page_tables, 0);
+        assert_eq!(plan.small_pages, 0);
+        assert_eq!(plan.total, 0);
     }
 }

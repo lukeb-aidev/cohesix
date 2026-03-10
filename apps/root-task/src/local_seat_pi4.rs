@@ -75,6 +75,15 @@ const BG_COLOR: u32 = 0xFF00_0000;
 const RPI4_XHCI_MMIO_HIGH_CANDIDATE: usize = 0x0000_0006_0000_0000;
 const RPI4_XHCI_MMIO_PRIMARY_CANDIDATE: usize = 0x0000_0000_FE98_0000;
 const RPI4_XHCI_MMIO_SECONDARY_CANDIDATE: usize = 0x0000_0000_7E98_0000;
+const BCM2711_COMMON_PERIPH_BUS_BASE: usize = 0x7E00_0000;
+const BCM2711_COMMON_PERIPH_PHYS_BASE: usize = 0xFE00_0000;
+const BCM2711_COMMON_PERIPH_SIZE: usize = 0x0180_0000;
+const BCM2711_SOC_PERIPH_BUS_BASE: usize = 0x7C00_0000;
+const BCM2711_SOC_PERIPH_PHYS_BASE: usize = 0xFC00_0000;
+const BCM2711_SOC_PERIPH_SIZE: usize = 0x0200_0000;
+const BCM2711_ARM_LOCAL_BUS_BASE: usize = 0x4000_0000;
+const BCM2711_ARM_LOCAL_PHYS_BASE: usize = 0xFF80_0000;
+const BCM2711_ARM_LOCAL_SIZE: usize = 0x0080_0000;
 
 // Runtime xHCI probing falls back to the DTB-backed legacy aliases first.
 // The high PCIe aperture is only trusted when runtime BAR decode or an
@@ -396,6 +405,21 @@ impl core::fmt::Debug for Pi4LocalSeat {
 impl Pi4LocalSeat {
     /// Initialize the Pi4 local-seat backend.
     pub fn new(hal: &mut KernelHal<'_>, hints: Pi4LocalSeatHints) -> Result<Self, Pi4SeatError> {
+        let xhci_mmio_hint = normalize_pi4_xhci_mmio_hint(hints.xhci_mmio_hint);
+        if let (Some(raw_hint), Some(normalized_hint)) = (hints.xhci_mmio_hint, xhci_mmio_hint) {
+            if raw_hint != normalized_hint {
+                let mut line = heapless::String::<144>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci hint normalized raw=0x{raw:016x} phys=0x{phys:016x}",
+                        raw = raw_hint,
+                        phys = normalized_hint
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+        }
         boot_log::force_uart_line("[local-seat] pi4 display init begin");
         let mut display = HdmiTextSink::new(hal, hints.framebuffer_hint)?;
         boot_log::force_uart_line("[local-seat] pi4 display init ok");
@@ -417,7 +441,7 @@ impl Pi4LocalSeat {
             display,
             keyboard: None,
             keyboard_init_attempted: false,
-            xhci_mmio_hint: hints.xhci_mmio_hint,
+            xhci_mmio_hint,
             hal_ptr: hal as *mut _ as usize,
         })
     }
@@ -672,6 +696,13 @@ fn pinned_xhci_phys_start_trusted() -> Option<usize> {
     })
 }
 
+fn pinned_xhci_phys_state() -> Option<(usize, bool)> {
+    PINNED_XHCI_MMIO
+        .lock()
+        .as_ref()
+        .map(|window| (window.phys_start, window.trusted_for_runtime))
+}
+
 fn pinned_vl805_cfg_lookup(phys: usize, size: usize) -> Option<usize> {
     if size == 0 {
         return None;
@@ -766,6 +797,34 @@ fn current_vl805_xhci_mmio_hint() -> Option<usize> {
 }
 
 #[inline]
+fn translate_bcm2711_soc_reg_addr(addr: usize) -> usize {
+    if (BCM2711_COMMON_PERIPH_BUS_BASE..BCM2711_COMMON_PERIPH_BUS_BASE + BCM2711_COMMON_PERIPH_SIZE)
+        .contains(&addr)
+    {
+        return BCM2711_COMMON_PERIPH_PHYS_BASE
+            .saturating_add(addr.saturating_sub(BCM2711_COMMON_PERIPH_BUS_BASE));
+    }
+    if (BCM2711_SOC_PERIPH_BUS_BASE..BCM2711_SOC_PERIPH_BUS_BASE + BCM2711_SOC_PERIPH_SIZE)
+        .contains(&addr)
+    {
+        return BCM2711_SOC_PERIPH_PHYS_BASE
+            .saturating_add(addr.saturating_sub(BCM2711_SOC_PERIPH_BUS_BASE));
+    }
+    if (BCM2711_ARM_LOCAL_BUS_BASE..BCM2711_ARM_LOCAL_BUS_BASE + BCM2711_ARM_LOCAL_SIZE)
+        .contains(&addr)
+    {
+        return BCM2711_ARM_LOCAL_PHYS_BASE
+            .saturating_add(addr.saturating_sub(BCM2711_ARM_LOCAL_BUS_BASE));
+    }
+    addr
+}
+
+#[inline]
+fn normalize_pi4_xhci_mmio_hint(mmio: Option<usize>) -> Option<usize> {
+    mmio.map(translate_bcm2711_soc_reg_addr)
+}
+
+#[inline]
 const fn xhci_mmio_is_legacy_alias(mmio: usize) -> bool {
     mmio == RPI4_XHCI_MMIO_PRIMARY_CANDIDATE || mmio == RPI4_XHCI_MMIO_SECONDARY_CANDIDATE
 }
@@ -776,13 +835,30 @@ const fn xhci_preseed_allows_static_legacy_fallbacks(_vl805_hint: Option<usize>)
 }
 
 #[inline]
-const fn xhci_preseed_requires_pin_only(mmio: usize, vl805_hint: Option<usize>) -> bool {
-    xhci_mmio_is_legacy_alias(mmio) && vl805_hint.is_none()
+fn xhci_preseed_pin_only_reason(
+    mmio: usize,
+    firmware_hint: Option<usize>,
+    vl805_hint: Option<usize>,
+) -> Option<&'static str> {
+    if xhci_mmio_is_legacy_alias(mmio) && vl805_hint.is_none() {
+        return Some("no-verified-vl805-hint");
+    }
+    if mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE && firmware_hint == Some(mmio) && vl805_hint.is_none()
+    {
+        return Some("firmware-hint-unverified");
+    }
+    None
 }
 
 #[inline]
 const fn xhci_runtime_allows_alias_scan(mmio: usize, verified_vl805_hint: Option<usize>) -> bool {
-    !xhci_mmio_is_legacy_alias(mmio) || verified_vl805_hint.is_some()
+    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
+        return true;
+    }
+    if xhci_mmio_is_legacy_alias(mmio) {
+        return verified_vl805_hint.is_some();
+    }
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -901,6 +977,20 @@ fn xhci_runtime_mmio_candidate_allowed(
     } else {
         true
     }
+}
+
+#[inline]
+fn xhci_runtime_mmio_has_accessible_window(
+    mmio: usize,
+    has_device_coverage: bool,
+    has_pinned_window: bool,
+    trusted_pinned_mmio: Option<usize>,
+    firmware_hint: Option<usize>,
+    verified_vl805_hint: Option<usize>,
+) -> bool {
+    has_device_coverage
+        || trusted_pinned_mmio == Some(mmio)
+        || (has_pinned_window && (firmware_hint == Some(mmio) || verified_vl805_hint == Some(mmio)))
 }
 
 fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
@@ -1407,12 +1497,12 @@ fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usiz
                 ),
             );
             boot_log::force_uart_line(attempt.as_str());
-            if xhci_preseed_requires_pin_only(mmio, vl805_hint) {
+            if let Some(reason) = xhci_preseed_pin_only_reason(mmio, xhci_mmio_hint, vl805_hint) {
                 let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci preseed pin-only mmio=0x{mmio:016x} reason=no-verified-vl805-hint"
+                        "[local-seat] xhci preseed pin-only mmio=0x{mmio:016x} reason={reason}"
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -2879,9 +2969,55 @@ impl UsbKeyboard {
             (None, false)
         };
 
+        let pinned_xhci_state = pinned_xhci_phys_state();
         let trusted_pinned_xhci_mmio = pinned_xhci_phys_start_trusted();
         let verified_vl805_hint = current_vl805_xhci_mmio_hint();
         let has_safe_cfg_window = current_vl805_cfg_virt().is_some();
+        let mut source_line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_str(&mut source_line, "[local-seat] xhci source fw=");
+        match xhci_mmio_hint {
+            Some(mmio) => {
+                let _ =
+                    core::fmt::Write::write_fmt(&mut source_line, format_args!("0x{mmio:016x}"));
+            }
+            None => {
+                let _ = core::fmt::Write::write_str(&mut source_line, "none");
+            }
+        }
+        let _ = core::fmt::Write::write_str(&mut source_line, " pin=");
+        match pinned_xhci_state {
+            Some((mmio, trusted)) => {
+                let _ = core::fmt::Write::write_fmt(
+                    &mut source_line,
+                    format_args!("0x{mmio:016x}/t{}", trusted as u8),
+                );
+            }
+            None => {
+                let _ = core::fmt::Write::write_str(&mut source_line, "none");
+            }
+        }
+        let _ = core::fmt::Write::write_str(&mut source_line, " ver=");
+        match verified_vl805_hint {
+            Some(mmio) => {
+                let _ =
+                    core::fmt::Write::write_fmt(&mut source_line, format_args!("0x{mmio:016x}"));
+            }
+            None => {
+                let _ = core::fmt::Write::write_str(&mut source_line, "none");
+            }
+        }
+        let _ = core::fmt::Write::write_str(&mut source_line, " pci=");
+        match vl805_pci_mmio {
+            Some(mmio) => {
+                let _ =
+                    core::fmt::Write::write_fmt(&mut source_line, format_args!("0x{mmio:016x}"));
+            }
+            None => {
+                let _ = core::fmt::Write::write_str(&mut source_line, "none");
+            }
+        }
+        boot_log::force_uart_line(source_line.as_str());
+
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
         let mut consider_candidate = |mmio: usize| -> bool {
@@ -2916,14 +3052,22 @@ impl UsbKeyboard {
                 boot_log::force_uart_line(line.as_str());
                 return false;
             }
-            if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none()
-                && pinned_xhci_window_lookup_trusted(mmio, PAGE_SIZE).is_none()
-            {
-                let mut line = heapless::String::<192>::new();
+            let has_device_coverage = hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_some();
+            let has_pinned_window = pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_some();
+            if !xhci_runtime_mmio_has_accessible_window(
+                mmio,
+                has_device_coverage,
+                has_pinned_window,
+                trusted_pinned_xhci_mmio,
+                xhci_mmio_hint,
+                verified_vl805_hint,
+            ) {
+                let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-device-coverage"
+                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-device-coverage trusted-pin={}",
+                        if trusted_pinned_xhci_mmio.is_some() { "yes" } else { "no" }
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -7314,15 +7458,16 @@ mod tests {
         hid_keyboard_attach_source, hid_keyboard_candidate_requires_force_mode,
         hub_retry_wait_spins, hub_should_eager_port_power, keyboard_display_scroll_delta_for_key,
         keyboard_scancode_to_char, mailbox_visible_dimension, normalize_hub_tt_profile,
-        text_backspace_target, text_row_count, text_viewport_height,
-        vl805_runtime_cfg_touch_allowed, xhci_preseed_allows_static_legacy_fallbacks,
-        xhci_runtime_mmio_candidate_allowed, ConfigDesc, UsbKeyboard, HUB_PORT_IFACE_FALLBACK_MAX,
-        RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-        XHCI_MMIO_ALIAS_SCAN_STEPS,
+        normalize_pi4_xhci_mmio_hint, text_backspace_target, text_row_count, text_viewport_height,
+        translate_bcm2711_soc_reg_addr, vl805_runtime_cfg_touch_allowed,
+        xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
+        xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window, ConfigDesc,
+        UsbKeyboard, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, XHCI_MMIO_ALIAS_SCAN_STEPS,
     };
     use super::{
         hid_protocol, hid_subclass, scancode, CHAR_HEIGHT, HUB_CLASS_CONTROL_WAIT_SPINS,
-        HUB_CLASS_CONTROL_WAIT_SPINS_FAST,
+        HUB_CLASS_CONTROL_WAIT_SPINS_FAST, RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
     };
 
     #[test]
@@ -7509,42 +7654,111 @@ mod tests {
 
     #[test]
     fn xhci_preseed_uses_pin_only_for_legacy_aliases_without_vl805_hint() {
-        assert!(xhci_preseed_requires_pin_only(
+        assert_eq!(
+            xhci_preseed_pin_only_reason(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, None, None),
+            Some("no-verified-vl805-hint")
+        );
+        assert_eq!(
+            xhci_preseed_pin_only_reason(RPI4_XHCI_MMIO_SECONDARY_CANDIDATE, None, None),
+            Some("no-verified-vl805-hint")
+        );
+        assert_eq!(
+            xhci_preseed_pin_only_reason(
+                RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+                None,
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            ),
+            None
+        );
+        assert_eq!(
+            xhci_preseed_pin_only_reason(RPI4_XHCI_MMIO_HIGH_CANDIDATE, None, None),
+            None
+        );
+    }
+
+    #[test]
+    fn xhci_preseed_uses_pin_only_for_unverified_firmware_hint() {
+        assert_eq!(
+            xhci_preseed_pin_only_reason(0x0000_0000_FE9C_0000, Some(0x0000_0000_FE9C_0000), None,),
+            Some("firmware-hint-unverified")
+        );
+        assert_eq!(
+            xhci_preseed_pin_only_reason(
+                0x0000_0000_FE9C_0000,
+                Some(0x0000_0000_FE9C_0000),
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            ),
+            None
+        );
+        assert_eq!(
+            xhci_preseed_pin_only_reason(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn xhci_runtime_alias_scan_requires_verified_source_for_non_high_candidates() {
+        assert!(!xhci_runtime_allows_alias_scan(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             None,
         ));
-        assert!(xhci_preseed_requires_pin_only(
-            RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
-            None,
-        ));
-        assert!(!xhci_preseed_requires_pin_only(
+        assert!(!xhci_runtime_allows_alias_scan(0x0000_0000_FE9C_0000, None,));
+        assert!(xhci_runtime_allows_alias_scan(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
         ));
-        assert!(!xhci_preseed_requires_pin_only(
+        assert!(xhci_runtime_allows_alias_scan(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             None,
         ));
     }
 
     #[test]
-    fn xhci_runtime_alias_scan_requires_verified_source_for_legacy_aliases() {
-        assert!(!xhci_runtime_allows_alias_scan(
+    fn xhci_runtime_accessible_window_accepts_pinned_firmware_hint() {
+        assert!(xhci_runtime_mmio_has_accessible_window(
+            0x0000_0000_FE9C_0000,
+            false,
+            true,
+            None,
+            Some(0x0000_0000_FE9C_0000),
+            None,
+        ));
+        assert!(!xhci_runtime_mmio_has_accessible_window(
+            0x0000_0000_FE9C_0000,
+            false,
+            false,
+            None,
+            Some(0x0000_0000_FE9C_0000),
+            None,
+        ));
+        assert!(xhci_runtime_mmio_has_accessible_window(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            false,
+            false,
+            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+            None,
             None,
         ));
-        assert!(!xhci_runtime_allows_alias_scan(
-            RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
-            None,
-        ));
-        assert!(xhci_runtime_allows_alias_scan(
-            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
-        ));
-        assert!(xhci_runtime_allows_alias_scan(
-            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            None,
-        ));
+    }
+
+    #[test]
+    fn normalize_pi4_xhci_hint_translates_bcm2711_bus_aliases() {
+        assert_eq!(
+            translate_bcm2711_soc_reg_addr(0x0000_0000_7e9c_0000),
+            0x0000_0000_fe9c_0000
+        );
+        assert_eq!(
+            normalize_pi4_xhci_mmio_hint(Some(0x0000_0000_7e9c_0000)),
+            Some(0x0000_0000_fe9c_0000)
+        );
+        assert_eq!(
+            normalize_pi4_xhci_mmio_hint(Some(0x0000_0000_fe9c_0000)),
+            Some(0x0000_0000_fe9c_0000)
+        );
     }
 
     #[test]

@@ -23,6 +23,7 @@ use spin::Mutex;
 include!(concat!(env!("OUT_DIR"), "/pi4_wifi_firmware.rs"));
 
 const MAILBOX_PAGE_PADDR_CANDIDATES: [usize; 2] = [0xFE00_B000, 0x7E00_B000];
+const GPIO_PAGE_PADDR_CANDIDATES: [usize; 2] = [0xFE20_0000, 0x7E20_0000];
 const SDHCI_PAGE_PADDR_CANDIDATES: [usize; 2] = [0xFE30_0000, 0x7E30_0000];
 const VC_BUS_ALIAS_BASES: [u32; 2] = [0xC000_0000, 0x4000_0000];
 const VC_BUS_MASK: u32 = 0x3FFF_FFFF;
@@ -58,8 +59,16 @@ const CLOCK_ID_EMMC2: u32 = 12;
 const EXPGPIO_BASE: u32 = 128;
 const PI4_WIFI_GPIO: u32 = EXPGPIO_BASE + 1;
 const GPIO_DIR_OUT: u32 = 1;
+const PI4_WIFI_SDIO_PINS: [u32; 6] = [34, 35, 36, 37, 38, 39];
+const PI4_WIFI_SDIO_PULLS: [u32; 6] = [0, 2, 2, 2, 2, 2];
+const BCM2835_GPIO_FSEL_MASK: u32 = 0x7;
+const BCM2711_GPIO_PULL_MASK: u32 = 0x3;
+const BCM2711_GPIO_ALT3: u32 = 0x7;
+const BCM2711_GPFSEL0: usize = 0x00;
+const BCM2711_GPPUPPDN0: usize = 0xE4;
 
 static PINNED_MAILBOX_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
+static PINNED_GPIO_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_SDHCI_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 
 #[derive(Clone, Copy)]
@@ -87,6 +96,103 @@ impl MappedRegs {
 
 fn cloned_pinned_regs(pinned: &Mutex<Option<MappedRegs>>) -> Option<MappedRegs> {
     pinned.lock().as_ref().copied()
+}
+
+struct GpioBank {
+    regs: MappedRegs,
+}
+
+impl GpioBank {
+    fn new<H>(hal: &mut H) -> Result<Self, HalError>
+    where
+        H: Hardware<Error = HalError>,
+    {
+        let regs = if let Some(regs) = cloned_pinned_regs(&PINNED_GPIO_REGS) {
+            regs
+        } else {
+            let mut prefix_maps = Vec::new();
+            let regs = map_exact(hal, &GPIO_PAGE_PADDR_CANDIDATES, &mut prefix_maps)?;
+            let regs = MappedRegs::from_frame(&regs);
+            let mut slot = PINNED_GPIO_REGS.lock();
+            if slot.is_none() {
+                *slot = Some(regs);
+            }
+            regs
+        };
+        Ok(Self { regs })
+    }
+
+    fn configure_wifi_sdio_pins(&self) {
+        emit_breadcrumb(format_args!("[pi4-wifi] gpio sdio mux begin"));
+        for &pin in &PI4_WIFI_SDIO_PINS {
+            self.set_function(pin, BCM2711_GPIO_ALT3);
+        }
+        for (&pin, &pull) in PI4_WIFI_SDIO_PINS.iter().zip(PI4_WIFI_SDIO_PULLS.iter()) {
+            self.set_pull(pin, pull);
+        }
+        let fsel3 = self.read32(bcm2711_gpfsel_offset(PI4_WIFI_SDIO_PINS[0]));
+        let pud2 = self.read32(bcm2711_puppdn_offset(PI4_WIFI_SDIO_PINS[0]));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] gpio sdio mux ready fsel3=0x{fsel3:08x} pud2=0x{pud2:08x}"
+        ));
+    }
+
+    fn set_function(&self, gpio: u32, function: u32) {
+        let offset = bcm2711_gpfsel_offset(gpio);
+        let value = update_bcm2711_gpio_function(self.read32(offset), gpio, function);
+        self.write32(offset, value);
+    }
+
+    fn set_pull(&self, gpio: u32, pull: u32) {
+        let offset = bcm2711_puppdn_offset(gpio);
+        let value = update_bcm2711_gpio_pull(self.read32(offset), gpio, pull);
+        self.write32(offset, value);
+    }
+
+    fn read32(&self, offset: usize) -> u32 {
+        let base = self.regs.vaddr();
+        // SAFETY: `regs` is a mapped BCM2711 GPIO MMIO page owned by the HAL, and
+        // all accesses use aligned 32-bit register offsets within that page.
+        unsafe { ptr::read_volatile((base + offset) as *const u32) }
+    }
+
+    fn write32(&self, offset: usize, value: u32) {
+        let base = self.regs.vaddr();
+        // SAFETY: `regs` is a mapped BCM2711 GPIO MMIO page owned by the HAL, and
+        // all accesses use aligned 32-bit register offsets within that page.
+        unsafe { ptr::write_volatile((base + offset) as *mut u32, value) };
+        for _ in 0..SDHCI_WRITE_DELAY_LOOPS {
+            spin_loop();
+        }
+    }
+}
+
+fn bcm2711_gpfsel_offset(gpio: u32) -> usize {
+    BCM2711_GPFSEL0 + ((gpio as usize) / 10) * 4
+}
+
+fn bcm2711_gpfsel_shift(gpio: u32) -> u32 {
+    (gpio % 10) * 3
+}
+
+fn bcm2711_puppdn_offset(gpio: u32) -> usize {
+    BCM2711_GPPUPPDN0 + ((gpio as usize) / 16) * 4
+}
+
+fn bcm2711_puppdn_shift(gpio: u32) -> u32 {
+    (gpio % 16) * 2
+}
+
+fn update_bcm2711_gpio_function(word: u32, gpio: u32, function: u32) -> u32 {
+    let shift = bcm2711_gpfsel_shift(gpio);
+    let mask = BCM2835_GPIO_FSEL_MASK << shift;
+    (word & !mask) | ((function & BCM2835_GPIO_FSEL_MASK) << shift)
+}
+
+fn update_bcm2711_gpio_pull(word: u32, gpio: u32, pull: u32) -> u32 {
+    let shift = bcm2711_puppdn_shift(gpio);
+    let mask = BCM2711_GPIO_PULL_MASK << shift;
+    (word & !mask) | ((pull & BCM2711_GPIO_PULL_MASK) << shift)
 }
 
 fn emit_breadcrumb(args: core::fmt::Arguments<'_>) {
@@ -489,10 +595,15 @@ impl Pi4WifiState {
             log::warn!("[pi4-wifi] hal init: mailbox failed: {err}");
             err
         })?;
+        let gpio = GpioBank::new(hal).map_err(|err| {
+            log::warn!("[pi4-wifi] hal init: gpio failed: {err}");
+            err
+        })?;
         let host = SdioHost::new(hal, &mailbox).map_err(|err| {
             log::warn!("[pi4-wifi] hal init: sdhci failed: {err}");
             err
         })?;
+        gpio.configure_wifi_sdio_pins();
         log::info!(
             "[pi4-wifi] hal init: mailbox=0x{:08x} sdhci=0x{:08x} base_clock={}Hz",
             mailbox.regs.paddr(),
@@ -1973,9 +2084,12 @@ pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_mailbox_protocol_error, mailbox_tag_name, make_command, normalize_nvram, phys_to_bus,
-        r5_status, sdhci_status_reason, HalError, ResponseType, SDHCI_INT_CRC, SDHCI_INT_DATA_CRC,
-        SDHCI_INT_TIMEOUT, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+        bcm2711_gpfsel_offset, bcm2711_puppdn_offset, is_mailbox_protocol_error, mailbox_tag_name,
+        make_command, normalize_nvram, phys_to_bus, r5_status, sdhci_status_reason,
+        update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
+        BCM2711_GPIO_ALT3, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SDHCI_INT_CRC,
+        SDHCI_INT_DATA_CRC, SDHCI_INT_TIMEOUT, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG,
+        TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -2032,5 +2146,22 @@ mod tests {
         assert_eq!(sdhci_status_reason(SDHCI_INT_CRC), "crc");
         assert_eq!(sdhci_status_reason(SDHCI_INT_DATA_CRC), "data-crc");
         assert_eq!(sdhci_status_reason(0), "unknown");
+    }
+
+    #[test]
+    fn wifi_sdio_pinmux_matches_pi4_dtb_state() {
+        let mut fsel3 = 0u32;
+        let mut pud2 = 0u32;
+        for &pin in &PI4_WIFI_SDIO_PINS {
+            assert_eq!(bcm2711_gpfsel_offset(pin), bcm2711_gpfsel_offset(34));
+            fsel3 = update_bcm2711_gpio_function(fsel3, pin, BCM2711_GPIO_ALT3);
+        }
+        for (&pin, &pull) in PI4_WIFI_SDIO_PINS.iter().zip(PI4_WIFI_SDIO_PULLS.iter()) {
+            assert_eq!(bcm2711_puppdn_offset(pin), bcm2711_puppdn_offset(34));
+            pud2 = update_bcm2711_gpio_pull(pud2, pin, pull);
+        }
+
+        assert_eq!(fsel3, 0x00ff_fc00);
+        assert_eq!(pud2, 0x00000aa0);
     }
 }

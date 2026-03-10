@@ -1103,9 +1103,54 @@ fn dtb_first_reg_addr_size(value: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Pi4UefiXhciMmioHint {
+    raw_mmio: usize,
+    mmio: usize,
+}
+
+const BCM2711_COMMON_PERIPH_BUS_BASE: usize = 0x7E00_0000;
+const BCM2711_COMMON_PERIPH_PHYS_BASE: usize = 0xFE00_0000;
+const BCM2711_COMMON_PERIPH_SIZE: usize = 0x0180_0000;
+const BCM2711_SOC_PERIPH_BUS_BASE: usize = 0x7C00_0000;
+const BCM2711_SOC_PERIPH_PHYS_BASE: usize = 0xFC00_0000;
+const BCM2711_SOC_PERIPH_SIZE: usize = 0x0200_0000;
+const BCM2711_ARM_LOCAL_BUS_BASE: usize = 0x4000_0000;
+const BCM2711_ARM_LOCAL_PHYS_BASE: usize = 0xFF80_0000;
+const BCM2711_ARM_LOCAL_SIZE: usize = 0x0080_0000;
+
+fn translate_bcm2711_soc_reg_addr(addr: usize) -> usize {
+    if (BCM2711_COMMON_PERIPH_BUS_BASE..BCM2711_COMMON_PERIPH_BUS_BASE + BCM2711_COMMON_PERIPH_SIZE)
+        .contains(&addr)
+    {
+        return BCM2711_COMMON_PERIPH_PHYS_BASE
+            .saturating_add(addr.saturating_sub(BCM2711_COMMON_PERIPH_BUS_BASE));
+    }
+    if (BCM2711_SOC_PERIPH_BUS_BASE..BCM2711_SOC_PERIPH_BUS_BASE + BCM2711_SOC_PERIPH_SIZE)
+        .contains(&addr)
+    {
+        return BCM2711_SOC_PERIPH_PHYS_BASE
+            .saturating_add(addr.saturating_sub(BCM2711_SOC_PERIPH_BUS_BASE));
+    }
+    if (BCM2711_ARM_LOCAL_BUS_BASE..BCM2711_ARM_LOCAL_BUS_BASE + BCM2711_ARM_LOCAL_SIZE)
+        .contains(&addr)
+    {
+        return BCM2711_ARM_LOCAL_PHYS_BASE
+            .saturating_add(addr.saturating_sub(BCM2711_ARM_LOCAL_BUS_BASE));
+    }
+    addr
+}
+
+fn pi4_uefi_xhci_mmio_hint_from_reg(raw_mmio: usize) -> Pi4UefiXhciMmioHint {
+    Pi4UefiXhciMmioHint {
+        raw_mmio,
+        mmio: translate_bcm2711_soc_reg_addr(raw_mmio),
+    }
+}
+
 fn collect_pi4_uefi_xhci_mmio_hint(
     dtb: &bi_extra::Dtb<'_>,
-) -> Result<Option<usize>, bi_extra::ParseError> {
+) -> Result<Option<Pi4UefiXhciMmioHint>, bi_extra::ParseError> {
     let mut hint = None;
     let mut disabled_hint = None;
     let mut candidate_depth = None;
@@ -1153,7 +1198,8 @@ fn collect_pi4_uefi_xhci_mmio_hint(
                             .unwrap_or(false);
                     }
                     "reg" => {
-                        candidate_reg = dtb_first_reg_addr(value);
+                        candidate_reg =
+                            dtb_first_reg_addr(value).map(pi4_uefi_xhci_mmio_hint_from_reg);
                     }
                     _ => {}
                 }
@@ -1166,10 +1212,17 @@ fn collect_pi4_uefi_xhci_mmio_hint(
     Ok(hint.or(disabled_hint))
 }
 
-fn infer_pi4_uefi_xhci_mmio_hint(extra_bytes: &[u8], extra_range: Range<usize>) -> Option<usize> {
+fn infer_pi4_uefi_xhci_mmio_hint_info(
+    extra_bytes: &[u8],
+    extra_range: Range<usize>,
+) -> Option<Pi4UefiXhciMmioHint> {
     let dtb_blob = bi_extra::locate_dtb(extra_bytes, extra_range).ok()?;
     let dtb = bi_extra::parse_dtb(dtb_blob).ok()?;
     collect_pi4_uefi_xhci_mmio_hint(&dtb).ok().flatten()
+}
+
+fn infer_pi4_uefi_xhci_mmio_hint(extra_bytes: &[u8], extra_range: Range<usize>) -> Option<usize> {
+    infer_pi4_uefi_xhci_mmio_hint_info(extra_bytes, extra_range).map(|hint| hint.mmio)
 }
 
 fn collect_pi4_uefi_framebuffer_hint(
@@ -1634,20 +1687,31 @@ fn init_local_seat_runtime<P: Platform>(
     let mut local_seat_runtime: Option<&'static mut local_seat::LocalSeatRuntime> = None;
     let local_seat_required = hardware.local_seat.required;
     let local_seat_enabled = hardware.local_seat.enabled;
-    let xhci_mmio_hint = if local_seat_enabled {
-        infer_pi4_uefi_xhci_mmio_hint(extra_bytes, extra_range.clone())
+    let xhci_mmio_hint_info = if local_seat_enabled {
+        infer_pi4_uefi_xhci_mmio_hint_info(extra_bytes, extra_range.clone())
     } else {
         None
     };
+    let xhci_mmio_hint = xhci_mmio_hint_info.map(|hint| hint.mmio);
     let display_hint = if local_seat_enabled {
         infer_pi4_uefi_framebuffer_hint(extra_bytes, extra_range.clone())
     } else {
         None
     };
     if local_seat_enabled {
-        if let Some(mmio_base) = xhci_mmio_hint {
+        if let Some(hint) = xhci_mmio_hint_info {
+            if hint.raw_mmio != hint.mmio {
+                let mut line = heapless::String::<128>::new();
+                let _ = write!(
+                    line,
+                    "[uefi-diag] xhci reg translate raw=0x{:016x} phys=0x{:016x}",
+                    hint.raw_mmio, hint.mmio
+                );
+                console.writeln_prefixed(line.as_str());
+                boot_log::force_uart_line(line.as_str());
+            }
             let mut line = heapless::String::<96>::new();
-            let _ = write!(line, "[local-seat] xhci-mmio-hint=0x{mmio_base:016x}");
+            let _ = write!(line, "[local-seat] xhci-mmio-hint=0x{:016x}", hint.mmio);
             console.writeln_prefixed(line.as_str());
             boot_log::force_uart_line(line.as_str());
         }
@@ -3284,6 +3348,7 @@ fn bootstrap<P: Platform>(
         Ok(count) => {
             consumed_slots += count as usize;
             retyped_objects += count;
+            boot_log::force_uart_line("[boot] retype selection complete");
         }
         Err(err) if err == sel4_sys::seL4_NotEnoughMemory => {
             let mut line = heapless::String::<160>::new();
@@ -5906,6 +5971,22 @@ mod tests {
         assert_eq!(super::parse_dtb_prefix_len(b"24\0"), Some(24));
         assert_eq!(super::parse_dtb_prefix_len(b"0\0"), None);
         assert_eq!(super::parse_dtb_prefix_len(b"33\0"), None);
+    }
+
+    #[test]
+    fn translate_bcm2711_soc_reg_addr_maps_common_peripheral_aliases() {
+        assert_eq!(
+            super::translate_bcm2711_soc_reg_addr(0x0000_0000_7e9c_0000),
+            0x0000_0000_fe9c_0000
+        );
+        assert_eq!(
+            super::translate_bcm2711_soc_reg_addr(0x0000_0000_7d58_0000),
+            0x0000_0000_fd58_0000
+        );
+        assert_eq!(
+            super::translate_bcm2711_soc_reg_addr(0x0000_0000_fe9c_0000),
+            0x0000_0000_fe9c_0000
+        );
     }
 }
 
