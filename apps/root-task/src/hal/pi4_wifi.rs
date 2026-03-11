@@ -520,6 +520,8 @@ const SDIO_FUNC_ENABLE_1: u8 = 0x02;
 const SDIO_FUNC_ENABLE_2: u8 = 0x04;
 const SDIO_FUNC_READY_1: u8 = 0x02;
 const SDIO_FUNC_READY_2: u8 = 0x04;
+const SDIO_FUNCTION_READY_POLLS: usize = 64;
+const SDIO_FUNCTION_READY_SETTLE_LOOPS: usize = 200_000;
 const SDIO_CCCR_IEN_FUNC0: u8 = 1 << 0;
 const SDIO_CCCR_IEN_FUNC1: u8 = 1 << 1;
 const SDIO_CCCR_IEN_FUNC2: u8 = 1 << 2;
@@ -623,6 +625,41 @@ struct CardInfo {
     rca: u16,
     ocr: u32,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SdioTransferPlan {
+    block_size: u16,
+    block_count: u16,
+    transfer_mode: u16,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct SdioFunctionEnableStep {
+    function: SdioFunction,
+    enable_bit: u8,
+    ready_bit: u8,
+    block_size: u16,
+    timeout_error: &'static str,
+}
+
+const SDIO_FUNCTION_ENABLE_F1: SdioFunctionEnableStep = SdioFunctionEnableStep {
+    function: SdioFunction::Function1,
+    enable_bit: SDIO_FUNC_ENABLE_1,
+    ready_bit: SDIO_FUNC_READY_1,
+    block_size: 64,
+    timeout_error: "sdio-function1-ready-timeout",
+};
+
+const SDIO_FUNCTION_ENABLE_F2: SdioFunctionEnableStep = SdioFunctionEnableStep {
+    function: SdioFunction::Function2,
+    enable_bit: SDIO_FUNC_ENABLE_2,
+    ready_bit: SDIO_FUNC_READY_2,
+    block_size: 256,
+    timeout_error: "sdio-function2-ready-timeout",
+};
+
+const SDIO_FUNCTION_ENABLE_SEQUENCE: [SdioFunctionEnableStep; 2] =
+    [SDIO_FUNCTION_ENABLE_F1, SDIO_FUNCTION_ENABLE_F2];
 
 pub struct Pi4WifiState {
     mailbox: Mailbox,
@@ -1159,7 +1196,12 @@ impl SdioHost {
         self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
         self.write32(SDHCI_INT_ENABLE, SDHCI_INT_ALL_MASK);
         self.write32(SDHCI_SIGNAL_ENABLE, 0);
-        self.set_clock_hz(400_000)?;
+        if let Err(err) = self.set_clock_hz(400_000) {
+            emit_breadcrumb(format_args!("[pi4-wifi] host reset clock-retry err={err}"));
+            self.software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA).ok();
+            self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
+            self.set_clock_hz(400_000)?;
+        }
         self.apply_host_bus_width(self.desired_bus_width);
         self.card = None;
         self.log_host_state("after-reset");
@@ -1298,7 +1340,7 @@ impl SdioHost {
     }
 
     fn io_direct_read(&mut self, function: SdioFunction, addr: u32) -> Result<u8, HalError> {
-        let arg = (u32::from(function.number()) << 28) | ((addr & 0x1_FFFF) << 9);
+        let arg = cmd52_argument(function, addr, false, 0);
         let resp = self.send_command(SDIO_CMD52, arg, ResponseType::Short)?[0];
         if r5_status(resp) != 0 {
             return Err(HalError::Unsupported("sdio-cmd52-read"));
@@ -1312,10 +1354,7 @@ impl SdioHost {
         addr: u32,
         value: u8,
     ) -> Result<(), HalError> {
-        let arg = (1u32 << 31)
-            | (u32::from(function.number()) << 28)
-            | ((addr & 0x1_FFFF) << 9)
-            | u32::from(value);
+        let arg = cmd52_argument(function, addr, true, value);
         let resp = self.send_command(SDIO_CMD52, arg, ResponseType::Short)?[0];
         if r5_status(resp) != 0 {
             return Err(HalError::Unsupported("sdio-cmd52-write"));
@@ -1350,70 +1389,129 @@ impl SdioHost {
         Ok(())
     }
 
-    fn enable_functions(&mut self) -> Result<(), HalError> {
-        emit_breadcrumb(format_args!("[pi4-wifi] sdio enable-functions begin"));
+    fn read_function_enable_state(&mut self, stage: &'static str) -> Result<(u8, u8), HalError> {
         let ioex = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
-        let desired = ioex | SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
-        if desired != ioex {
+        let ready = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio enable-functions state stage={stage} ioex=0x{ioex:02x} ready=0x{ready:02x}"
+        ));
+        Ok((ioex, ready))
+    }
+
+    fn enable_function1(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] sdio enable-function1 begin"));
+        self.read_function_enable_state("before-f1")?;
+        self.enable_function_step(SDIO_FUNCTION_ENABLE_F1)?;
+        let (ioex, ready) = self.read_function_enable_state("after-f1")?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio enable-function1 ready ioex=0x{ioex:02x} ready=0x{ready:02x}"
+        ));
+        Ok(())
+    }
+
+    fn enable_function2(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] sdio enable-function2 begin"));
+        self.read_function_enable_state("before-f2")?;
+        self.enable_function_step(SDIO_FUNCTION_ENABLE_F2)?;
+        let ien = SDIO_CCCR_IEN_FUNC0 | SDIO_CCCR_IEN_FUNC1 | SDIO_CCCR_IEN_FUNC2;
+        self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_IENX, ien)?;
+        let (ioex, ready) = self.read_function_enable_state("after-f2")?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio enable-function2 ready ioex=0x{ioex:02x} ready=0x{ready:02x} ien=0x{ien:02x}"
+        ));
+        Ok(())
+    }
+
+    fn enable_function_step(&mut self, step: SdioFunctionEnableStep) -> Result<(), HalError> {
+        let function_number = step.function.number();
+        let ioex_before = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
+        let ready_before = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)?;
+        let desired = ioex_before | step.enable_bit;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio function-enable fn={} ioex=0x{ioex_before:02x} ready=0x{ready_before:02x} desired=0x{desired:02x}",
+            function_number
+        ));
+        if desired != ioex_before {
             self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_IOEX, desired)?;
         }
-        for _ in 0..SDIO_INIT_WAIT_LOOPS {
+        let ioex_after = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio function-enable fn={} ioex-after=0x{ioex_after:02x}",
+            function_number
+        ));
+        if (ioex_after & step.enable_bit) != step.enable_bit {
+            return Err(HalError::Unsupported("sdio-function-enable-latch"));
+        }
+
+        let mut last_ready = u8::MAX;
+        for poll in 0..SDIO_FUNCTION_READY_POLLS {
             let ready = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)?;
-            if (ready & (SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2))
-                == (SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2)
-            {
-                let ien = SDIO_CCCR_IEN_FUNC0 | SDIO_CCCR_IEN_FUNC1 | SDIO_CCCR_IEN_FUNC2;
-                self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_IENX, ien)?;
-                self.set_function_block_size(SdioFunction::Function1, 64)?;
-                self.set_function_block_size(SdioFunction::Function2, 256)?;
+            if poll == 0 || poll + 1 == SDIO_FUNCTION_READY_POLLS || ready != last_ready {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] sdio enable-functions ready ioex=0x{desired:02x}"
+                    "[pi4-wifi] sdio function-ready fn={} poll={}/{} ready=0x{ready:02x} need=0x{need:02x}",
+                    function_number,
+                    poll + 1,
+                    SDIO_FUNCTION_READY_POLLS,
+                    need = step.ready_bit
+                ));
+                last_ready = ready;
+            }
+            if (ready & step.ready_bit) == step.ready_bit {
+                self.set_function_block_size(step.function, step.block_size)?;
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdio function-ready fn={} block={} ready=0x{ready:02x}",
+                    function_number, step.block_size
                 ));
                 return Ok(());
             }
-            spin_loop();
+            if poll + 1 != SDIO_FUNCTION_READY_POLLS {
+                for _ in 0..SDIO_FUNCTION_READY_SETTLE_LOOPS {
+                    spin_loop();
+                }
+            }
         }
-        Err(HalError::Unsupported("sdio-function-ready-timeout"))
+        Err(HalError::Unsupported(step.timeout_error))
     }
 
     fn bring_up_backplane(&mut self) -> Result<(), HalError> {
         emit_breadcrumb(format_args!("[pi4-wifi] cyw43 backplane begin"));
+        emit_breadcrumb(format_args!("[pi4-wifi] cyw43 backplane stage=alp-request"));
         self.io_direct_write(
             SdioFunction::Function1,
             SBSDIO_FUNC1_CHIPCLKCSR,
-            SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_ALP_AVAIL_REQ,
+            SBSDIO_ALP_AVAIL_REQ,
         )?;
+        let mut alp_ready = false;
         for _ in 0..SDIO_INIT_WAIT_LOOPS {
-            if (self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?
-                & SBSDIO_ALP_AVAIL)
-                != 0
-            {
+            let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+            if (chipclk & SBSDIO_ALP_AVAIL) != 0 {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] cyw43 backplane stage=alp-ready csr=0x{chipclk:02x}"
+                ));
+                alp_ready = true;
                 break;
             }
             spin_loop();
         }
-        self.io_direct_write(
-            SdioFunction::Function1,
-            SBSDIO_FUNC1_CHIPCLKCSR,
-            SBSDIO_FORCE_HW_CLKREQ_OFF,
-        )?;
-        self.io_direct_write(
-            SdioFunction::Function1,
-            SBSDIO_FUNC1_SLEEPCSR,
-            SBSDIO_FUNC1_SLEEPCSR_KSO_EN,
-        )?;
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SDIOPULLUP, 0)?;
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL, 1 << 1)
-            .ok();
+        if !alp_ready {
+            return Err(HalError::Unsupported("cyw43-alp-clock-timeout"));
+        }
+        emit_breadcrumb(format_args!("[pi4-wifi] cyw43 backplane stage=alp-clear"));
+        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, 0)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] cyw43 backplane stage=misc-config deferred reason=minimal-sdio-bringup"
+        ));
         emit_breadcrumb(format_args!("[pi4-wifi] cyw43 backplane ready"));
         Ok(())
     }
 
     fn setup_firmware_channel(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!("[pi4-wifi] firmware channel begin"));
         self.write_f1_u32(
             SDPCMD_REG_TOSBMAILBOXDATA,
             SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT,
         )?;
+        self.enable_function2()?;
         self.write_f1_u32(SDPCMD_REG_HOSTINTMASK, HOSTINTMASK)?;
         self.io_direct_write(
             SdioFunction::Function1,
@@ -1431,6 +1529,7 @@ impl SdioHost {
             SBSDIO_FUNC1_MESBUSYCTRL,
             CY_43455_MESBUSYCTRL,
         )?;
+        emit_breadcrumb(format_args!("[pi4-wifi] firmware channel ready"));
         Ok(())
     }
 
@@ -1460,13 +1559,39 @@ impl SdioHost {
         self.backplane_write(addr, &[value])
     }
 
+    fn backplane_read16(&mut self, addr: u32) -> Result<u16, HalError> {
+        Ok((self.backplane_read32(addr)? & 0xFFFF) as u16)
+    }
+
+    fn backplane_write16(&mut self, addr: u32, value: u16) -> Result<(), HalError> {
+        self.backplane_write(addr, &value.to_le_bytes())
+    }
+
     fn backplane_read32(&mut self, addr: u32) -> Result<u32, HalError> {
-        let bytes = self.backplane_read(addr | BACKPLANE_32BIT_FLAG, 4)?;
-        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        let mut bytes = [0u8; 4];
+        self.with_backplane_window(addr | BACKPLANE_32BIT_FLAG, |this, function_addr| {
+            this.io_extended(
+                SdioFunction::Function1,
+                function_addr,
+                true,
+                false,
+                &mut bytes,
+            )
+        })?;
+        Ok(u32::from_le_bytes(bytes))
     }
 
     fn backplane_write32(&mut self, addr: u32, value: u32) -> Result<(), HalError> {
-        self.backplane_write(addr | BACKPLANE_32BIT_FLAG, &value.to_le_bytes())
+        let mut bytes = value.to_le_bytes();
+        self.with_backplane_window(addr | BACKPLANE_32BIT_FLAG, |this, function_addr| {
+            this.io_extended(
+                SdioFunction::Function1,
+                function_addr,
+                true,
+                true,
+                &mut bytes,
+            )
+        })
     }
 
     fn backplane_read(&mut self, addr: u32, len: usize) -> Result<[u8; 4], HalError> {
@@ -1575,13 +1700,23 @@ impl SdioHost {
 
     fn read_f1_u32(&mut self, addr: u32) -> Result<u32, HalError> {
         let mut bytes = [0u8; 4];
-        self.io_extended(SdioFunction::Function1, addr, true, false, &mut bytes)?;
+        for (index, slot) in bytes.iter_mut().enumerate() {
+            let byte_addr = addr
+                .checked_add(index as u32)
+                .ok_or(HalError::Unsupported("f1-read32-overflow"))?;
+            *slot = self.io_direct_read(SdioFunction::Function1, byte_addr)?;
+        }
         Ok(u32::from_le_bytes(bytes))
     }
 
     fn write_f1_u32(&mut self, addr: u32, value: u32) -> Result<(), HalError> {
-        let mut bytes = value.to_le_bytes();
-        self.io_extended(SdioFunction::Function1, addr, true, true, &mut bytes)
+        for (index, value) in value.to_le_bytes().into_iter().enumerate() {
+            let byte_addr = addr
+                .checked_add(index as u32)
+                .ok_or(HalError::Unsupported("f1-write32-overflow"))?;
+            self.io_direct_write(SdioFunction::Function1, byte_addr, value)?;
+        }
+        Ok(())
     }
 
     fn next_frame_len(&mut self) -> Result<usize, HalError> {
@@ -1615,7 +1750,8 @@ impl SdioHost {
     }
 
     fn chip_id(&mut self) -> Result<u32, HalError> {
-        self.backplane_read32(CYW43_CHIPCOMMON_BASE)
+        emit_breadcrumb(format_args!("[pi4-wifi] cyw43 transport stage=chip-id"));
+        Ok(self.backplane_read32(CYW43_CHIPCOMMON_BASE)? & 0xFFFF)
     }
 
     fn ram_size(&mut self) -> Result<u32, HalError> {
@@ -1643,9 +1779,12 @@ impl SdioHost {
     fn init_cyw43_transport(&mut self) -> Result<(), HalError> {
         emit_breadcrumb(format_args!("[pi4-wifi] cyw43 transport init begin"));
         self.ensure_card_ready()?;
-        self.enable_functions()?;
+        self.enable_function1()?;
         self.bring_up_backplane()?;
         let chip_id = self.chip_id()?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] cyw43 transport stage=chip-id-ready value=0x{chip_id:08x}"
+        ));
         emit_breadcrumb(format_args!(
             "[pi4-wifi] cyw43 transport ready chip=0x{chip_id:08x}"
         ));
@@ -1790,6 +1929,11 @@ impl SdioHost {
             }
             spin_loop();
         }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdhci inhibit timeout wait_data={} mask=0x{mask:08x}",
+            if wait_data { "yes" } else { "no" }
+        ));
+        self.log_host_state("inhibit-timeout");
         Err(HalError::Unsupported("sdhci-inhibit-timeout"))
     }
 
@@ -1843,23 +1987,34 @@ impl SdioHost {
         buffer: &mut [u8],
         write: bool,
     ) -> Result<(), HalError> {
+        let plan = sdio_transfer_plan(buffer.len(), write)?;
         self.wait_inhibit_clear(true)?;
         self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
-        self.write16(
-            SDHCI_BLOCK_SIZE,
-            u16::try_from(buffer.len()).map_err(|_| HalError::Unsupported("sdhci-block-size"))?,
-        );
-        self.write16(SDHCI_BLOCK_COUNT, 1);
+        self.write16(SDHCI_BLOCK_SIZE, plan.block_size);
+        self.write16(SDHCI_BLOCK_COUNT, plan.block_count);
         self.write32(SDHCI_ARGUMENT, arg);
-        let mut transfer_mode = SDHCI_TRNS_BLK_CNT_EN;
-        if !write {
-            transfer_mode |= SDHCI_TRNS_READ;
-        }
-        self.write16(SDHCI_TRANSFER_MODE, transfer_mode);
+        self.write16(SDHCI_TRANSFER_MODE, plan.transfer_mode);
         self.write16(SDHCI_COMMAND, make_command(cmd, ResponseType::Short, true));
 
-        let cmd_status = self.wait_int(SDHCI_INT_CMD_MASK)?;
+        let cmd_status = match self.wait_int(SDHCI_INT_CMD_MASK) {
+            Ok(status) => status,
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=command-wait err={err}",
+                    buffer.len(),
+                ));
+                self.log_host_state("xfer-command-wait");
+                self.software_reset(SDHCI_RESET_CMD).ok();
+                return Err(err);
+            }
+        };
         if (cmd_status & SDHCI_INT_ERROR) != 0 {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=command st=0x{cmd_status:08x} why={}",
+                buffer.len(),
+                sdhci_status_reason(cmd_status)
+            ));
+            self.log_host_state("xfer-command-fail");
             self.software_reset(SDHCI_RESET_CMD).ok();
             return Err(HalError::Unsupported("sdhci-transfer-command"));
         }
@@ -1871,8 +2026,25 @@ impl SdioHost {
             } else {
                 SDHCI_INT_DATA_AVAIL
             };
-            let status = self.wait_int(wait_mask | SDHCI_INT_ERROR | SDHCI_INT_DATA_MASK)?;
+            let status = match self.wait_int(wait_mask | SDHCI_INT_ERROR | SDHCI_INT_DATA_MASK) {
+                Ok(status) => status,
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data-wait err={err}",
+                        buffer.len(),
+                    ));
+                    self.log_host_state("xfer-data-wait");
+                    self.software_reset(SDHCI_RESET_DATA).ok();
+                    return Err(err);
+                }
+            };
             if (status & SDHCI_INT_ERROR) != 0 {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data st=0x{status:08x} why={}",
+                    buffer.len(),
+                    sdhci_status_reason(status)
+                ));
+                self.log_host_state("xfer-data-fail");
                 self.software_reset(SDHCI_RESET_DATA).ok();
                 return Err(HalError::Unsupported("sdhci-transfer-data"));
             }
@@ -1888,9 +2060,27 @@ impl SdioHost {
             offset += chunk_len;
         }
 
-        let data_status =
-            self.wait_int(SDHCI_INT_DATA_END | SDHCI_INT_ERROR | SDHCI_INT_DATA_MASK)?;
+        let data_status = match self
+            .wait_int(SDHCI_INT_DATA_END | SDHCI_INT_ERROR | SDHCI_INT_DATA_MASK)
+        {
+            Ok(status) => status,
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                        "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=finish-wait err={err}",
+                        buffer.len(),
+                    ));
+                self.log_host_state("xfer-finish-wait");
+                self.software_reset(SDHCI_RESET_DATA).ok();
+                return Err(err);
+            }
+        };
         if (data_status & SDHCI_INT_ERROR) != 0 {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=finish st=0x{data_status:08x} why={}",
+                buffer.len(),
+                sdhci_status_reason(data_status)
+            ));
+            self.log_host_state("xfer-finish-fail");
             self.software_reset(SDHCI_RESET_DATA).ok();
             return Err(HalError::Unsupported("sdhci-transfer-finish"));
         }
@@ -2133,6 +2323,27 @@ fn make_command(cmd: u16, response: ResponseType, data: bool) -> u16 {
     (cmd << 8) | flags
 }
 
+#[inline]
+fn cmd52_argument(function: SdioFunction, addr: u32, write: bool, value: u8) -> u32 {
+    ((write as u32) << 31)
+        | ((function.number() as u32) << 28)
+        | ((addr & 0x1_FFFF) << 9)
+        | (value as u32)
+}
+
+fn sdio_transfer_plan(len: usize, write: bool) -> Result<SdioTransferPlan, HalError> {
+    let block_size = u16::try_from(len).map_err(|_| HalError::Unsupported("sdhci-block-size"))?;
+    let mut transfer_mode = 0u16;
+    if !write {
+        transfer_mode |= SDHCI_TRNS_READ;
+    }
+    Ok(SdioTransferPlan {
+        block_size,
+        block_count: 0,
+        transfer_mode,
+    })
+}
+
 fn r5_status(response: u32) -> u32 {
     response & 0xCB00
 }
@@ -2158,12 +2369,15 @@ pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bcm2711_gpfsel_offset, bcm2711_puppdn_offset, is_mailbox_protocol_error, mailbox_tag_name,
-        make_command, merge_u16_word, normalize_nvram, phys_to_bus, r5_status, sdhci_status_reason,
-        update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
-        BCM2711_GPIO_ALT3, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SDHCI_COMMAND, SDHCI_INT_CRC,
-        SDHCI_INT_DATA_CRC, SDHCI_INT_TIMEOUT, SDHCI_TRANSFER_MODE, SDHCI_WRITE_DELAY_LOOPS,
-        SDHCI_WRITE_GAP_SPIN_LOOPS, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+        bcm2711_gpfsel_offset, bcm2711_puppdn_offset, cmd52_argument, is_mailbox_protocol_error,
+        mailbox_tag_name, make_command, merge_u16_word, normalize_nvram, phys_to_bus, r5_status,
+        sdhci_status_reason, sdio_transfer_plan, update_bcm2711_gpio_function,
+        update_bcm2711_gpio_pull, HalError, ResponseType, SdioFunction, BCM2711_GPIO_ALT3,
+        PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SDHCI_COMMAND, SDHCI_INT_CRC, SDHCI_INT_DATA_CRC,
+        SDHCI_INT_TIMEOUT, SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_READ,
+        SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_FUNCTION_ENABLE_SEQUENCE,
+        SDIO_FUNC_ENABLE_1, SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1, SDIO_FUNC_READY_2,
+        TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -2181,6 +2395,30 @@ mod tests {
         assert_eq!(cmd5 & (SDHCI_CMD_CRC | SDHCI_CMD_INDEX), 0);
         assert_ne!(make_command(52, ResponseType::Short, false) & 0x1C, 0);
         assert_ne!(make_command(53, ResponseType::Short, true) & 0x20, 0);
+    }
+
+    #[test]
+    fn sdio_transfer_plan_uses_single_byte_mode_transfers() {
+        let read = sdio_transfer_plan(4, false).expect("read transfer plan");
+        assert_eq!(read.block_size, 4);
+        assert_eq!(read.block_count, 0);
+        assert_eq!(read.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
+        assert_ne!(read.transfer_mode & SDHCI_TRNS_READ, 0);
+
+        let write = sdio_transfer_plan(64, true).expect("write transfer plan");
+        assert_eq!(write.block_size, 64);
+        assert_eq!(write.block_count, 0);
+        assert_eq!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
+        assert_eq!(write.transfer_mode & SDHCI_TRNS_READ, 0);
+    }
+
+    #[test]
+    fn backplane_word_access_sets_32bit_flag() {
+        assert_eq!(CYW43_CHIPCOMMON_BASE | BACKPLANE_32BIT_FLAG, 0x1800_8000);
+        assert_eq!(
+            (CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP) | BACKPLANE_32BIT_FLAG,
+            0x1810_b004
+        );
     }
 
     #[test]
@@ -2206,6 +2444,18 @@ mod tests {
         assert_eq!(r5_status(0), 0);
         assert_eq!(r5_status(0xCB00), 0xCB00);
         assert_eq!(r5_status(0xFFFF_FFFF), 0xCB00);
+    }
+
+    #[test]
+    fn cmd52_argument_encodes_backplane_register_accesses() {
+        assert_eq!(
+            cmd52_argument(SdioFunction::Function1, 0x1000E, true, 0x08),
+            0x9200_1c08
+        );
+        assert_eq!(
+            cmd52_argument(SdioFunction::Function1, 0x1000F, true, 0x00),
+            0x9200_1e00
+        );
     }
 
     #[test]
@@ -2256,5 +2506,35 @@ mod tests {
     fn sdhci_write_gap_spin_delay_is_bounded() {
         assert_eq!(SDHCI_WRITE_DELAY_LOOPS, 256);
         assert_eq!(SDHCI_WRITE_GAP_SPIN_LOOPS, 8192);
+    }
+
+    #[test]
+    fn sdio_function_enable_sequence_brings_up_f1_then_f2() {
+        assert_eq!(
+            SDIO_FUNCTION_ENABLE_SEQUENCE[0].function,
+            SdioFunction::Function1
+        );
+        assert_eq!(
+            SDIO_FUNCTION_ENABLE_SEQUENCE[0].enable_bit,
+            SDIO_FUNC_ENABLE_1
+        );
+        assert_eq!(
+            SDIO_FUNCTION_ENABLE_SEQUENCE[0].ready_bit,
+            SDIO_FUNC_READY_1
+        );
+        assert_eq!(SDIO_FUNCTION_ENABLE_SEQUENCE[0].block_size, 64);
+        assert_eq!(
+            SDIO_FUNCTION_ENABLE_SEQUENCE[1].function,
+            SdioFunction::Function2
+        );
+        assert_eq!(
+            SDIO_FUNCTION_ENABLE_SEQUENCE[1].enable_bit,
+            SDIO_FUNC_ENABLE_2
+        );
+        assert_eq!(
+            SDIO_FUNCTION_ENABLE_SEQUENCE[1].ready_bit,
+            SDIO_FUNC_READY_2
+        );
+        assert_eq!(SDIO_FUNCTION_ENABLE_SEQUENCE[1].block_size, 256);
     }
 }
