@@ -202,6 +202,14 @@ const fn vl805_cfg_preseed_mode(preseed_touch_enabled: bool) -> Vl805CfgPreseedM
     }
 }
 
+#[inline]
+const fn vl805_cfg_preseed_needed(
+    preseed_touch_enabled: bool,
+    runtime_touch_enabled: bool,
+) -> bool {
+    preseed_touch_enabled || runtime_touch_enabled
+}
+
 const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
 const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
@@ -484,11 +492,21 @@ impl Pi4LocalSeat {
         };
         let first_preseed = !KEYBOARD_PRESEED_LOGGED.swap(true, Ordering::AcqRel);
         let cfg_preseed_mode = vl805_cfg_preseed_mode(VL805_CFG_PRESEED_TOUCH_ENABLED);
+        let cfg_preseed_needed = vl805_cfg_preseed_needed(
+            VL805_CFG_PRESEED_TOUCH_ENABLED,
+            VL805_CFG_RUNTIME_TOUCH_ENABLED,
+        );
         if first_preseed {
             boot_log::force_uart_line("[local-seat] pi4 keyboard preseed begin");
         }
-        prime_pinned_vl805_cfg_window(hal, cfg_preseed_mode);
-        if matches!(cfg_preseed_mode, Vl805CfgPreseedMode::MapOnly) {
+        if cfg_preseed_needed {
+            prime_pinned_vl805_cfg_window(hal, cfg_preseed_mode);
+        } else if first_preseed {
+            boot_log::force_uart_line(
+                "[local-seat] vl805 pci cfg preseed deferred reason=safe-mode-runtime-discovery-disabled",
+            );
+        }
+        if cfg_preseed_needed && matches!(cfg_preseed_mode, Vl805CfgPreseedMode::MapOnly) {
             if first_preseed {
                 boot_log::force_uart_line(
                     "[local-seat] vl805 pci cfg preseed mode=map-only reason=safe-mode-no-config-reads",
@@ -649,6 +667,14 @@ fn map_device_exact(
     prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
 ) -> Result<crate::sel4::DeviceFrame, Pi4SeatError> {
     let Some(coverage) = hal.device_coverage(paddr, crate::sel4::PAGE_BITS) else {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] {label} map exact miss paddr=0x{paddr:016x} reason=no-device-coverage"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
         return Err(error);
     };
     let span_bytes = coverage.limit.saturating_sub(coverage.base);
@@ -656,7 +682,24 @@ fn map_device_exact(
     let max_attempts = cmp::max(1usize, cmp::min(span_pages.saturating_add(1), attempt_cap));
 
     for attempt in 0..max_attempts {
-        let frame = hal.map_device(paddr).map_err(|_| error)?;
+        let frame = match hal.map_device(paddr) {
+            Ok(frame) => frame,
+            Err(_) => {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] {label} map exact fail paddr=0x{paddr:016x} attempt={}/{} base=0x{:08x} limit=0x{:08x}",
+                        attempt + 1,
+                        max_attempts,
+                        coverage.base,
+                        coverage.limit
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return Err(error);
+            }
+        };
         let actual_paddr = crate::sel4::page_get_address(frame.cap()).map_err(|_| error)?;
         if actual_paddr == paddr {
             if attempt > 0 {
@@ -1082,6 +1125,97 @@ fn xhci_runtime_mmio_has_accessible_window(
                 firmware_hint,
                 verified_vl805_hint,
             ))
+}
+
+#[inline]
+fn xhci_runtime_candidate_skip_reason(
+    mmio: usize,
+    has_safe_cfg_window: bool,
+    trusted_pinned_mmio: Option<usize>,
+    firmware_hint: Option<usize>,
+    verified_vl805_hint: Option<usize>,
+    firmware_hint_safe: bool,
+) -> &'static str {
+    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && firmware_hint == Some(mmio)
+        && !has_safe_cfg_window
+        && trusted_pinned_mmio != Some(mmio)
+        && verified_vl805_hint != Some(mmio)
+    {
+        if firmware_hint_safe {
+            "fw-handoff-unverified"
+        } else {
+            "fw-handoff-unsafe"
+        }
+    } else {
+        "no-trusted-source"
+    }
+}
+
+#[inline]
+fn xhci_runtime_candidate_kind(mmio: usize, firmware_hint: Option<usize>) -> &'static str {
+    if firmware_hint == Some(mmio) {
+        if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
+            "fw-high"
+        } else {
+            "fw"
+        }
+    } else if xhci_mmio_is_legacy_alias(mmio) {
+        "legacy"
+    } else {
+        "other"
+    }
+}
+
+fn log_xhci_runtime_candidate_diag(
+    mmio: usize,
+    has_safe_cfg_window: bool,
+    has_device_coverage: bool,
+    has_pinned_window: bool,
+    pinned_xhci_state: Option<(usize, bool)>,
+    trusted_pinned_mmio: Option<usize>,
+    firmware_hint: Option<usize>,
+    verified_vl805_hint: Option<usize>,
+    firmware_hint_safe: bool,
+) {
+    let pin_match = matches!(pinned_xhci_state, Some((pinned_mmio, _)) if pinned_mmio == mmio);
+    let mut line = heapless::String::<224>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] xhci cand mmio=0x{mmio:016x} kind={} cfg={} cov={} pwin={} pin={} fh={} fs={} vh={}",
+            xhci_runtime_candidate_kind(mmio, firmware_hint),
+            has_safe_cfg_window as u8,
+            has_device_coverage as u8,
+            has_pinned_window as u8,
+            pin_match as u8,
+            (firmware_hint == Some(mmio)) as u8,
+            firmware_hint_safe as u8,
+            (verified_vl805_hint == Some(mmio)) as u8,
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    if trusted_pinned_mmio == Some(mmio) {
+        boot_log::force_uart_line(
+            "[local-seat] xhci cand trust=trusted-pinned runtime-probe-eligible",
+        );
+    }
+    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE && firmware_hint == Some(mmio) {
+        let mut gate = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut gate,
+            format_args!(
+                "[local-seat] xhci cand gate mmio=0x{mmio:016x} safe={} cfg={} tp={} vv={} pwin={} cov={}",
+                firmware_hint_safe as u8,
+                has_safe_cfg_window as u8,
+                (trusted_pinned_mmio == Some(mmio)) as u8,
+                (verified_vl805_hint == Some(mmio)) as u8,
+                has_pinned_window as u8,
+                has_device_coverage as u8,
+            ),
+        );
+        boot_log::force_uart_line(gate.as_str());
+    }
 }
 
 fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
@@ -3116,6 +3250,8 @@ impl UsbKeyboard {
             if candidate_count >= candidates.len() {
                 return false;
             }
+            let has_device_coverage = hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_some();
+            let has_pinned_window = pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_some();
             if !xhci_runtime_mmio_candidate_allowed(
                 mmio,
                 has_safe_cfg_window,
@@ -3124,20 +3260,25 @@ impl UsbKeyboard {
                 xhci_mmio_hint,
                 verified_vl805_hint,
             ) {
-                let reason = if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
-                    && xhci_mmio_hint == Some(mmio)
-                    && !has_safe_cfg_window
-                    && trusted_pinned_xhci_mmio != Some(mmio)
-                    && verified_vl805_hint != Some(mmio)
-                {
-                    if firmware_hint_safe {
-                        "firmware-handoff-unverified"
-                    } else {
-                        "firmware-handoff-unsafe"
-                    }
-                } else {
-                    "no-trusted-source"
-                };
+                log_xhci_runtime_candidate_diag(
+                    mmio,
+                    has_safe_cfg_window,
+                    has_device_coverage,
+                    has_pinned_window,
+                    pinned_xhci_state,
+                    trusted_pinned_xhci_mmio,
+                    xhci_mmio_hint,
+                    verified_vl805_hint,
+                    firmware_hint_safe,
+                );
+                let reason = xhci_runtime_candidate_skip_reason(
+                    mmio,
+                    has_safe_cfg_window,
+                    trusted_pinned_xhci_mmio,
+                    xhci_mmio_hint,
+                    verified_vl805_hint,
+                    firmware_hint_safe,
+                );
                 let mut line = heapless::String::<208>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
@@ -3159,8 +3300,6 @@ impl UsbKeyboard {
                 boot_log::force_uart_line(line.as_str());
                 return false;
             }
-            let has_device_coverage = hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_some();
-            let has_pinned_window = pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_some();
             if !xhci_runtime_mmio_has_accessible_window(
                 mmio,
                 has_device_coverage,
@@ -3170,12 +3309,27 @@ impl UsbKeyboard {
                 xhci_mmio_hint,
                 verified_vl805_hint,
             ) {
+                log_xhci_runtime_candidate_diag(
+                    mmio,
+                    has_safe_cfg_window,
+                    has_device_coverage,
+                    has_pinned_window,
+                    pinned_xhci_state,
+                    trusted_pinned_xhci_mmio,
+                    xhci_mmio_hint,
+                    verified_vl805_hint,
+                    firmware_hint_safe,
+                );
                 let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-device-coverage trusted-pin={}",
-                        if trusted_pinned_xhci_mmio.is_some() { "yes" } else { "no" }
+                        "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-accessible-window trusted-pin={}",
+                        if trusted_pinned_xhci_mmio == Some(mmio) {
+                            "yes"
+                        } else {
+                            "no"
+                        }
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -7654,12 +7808,67 @@ mod tests {
     }
 
     #[test]
+    fn vl805_cfg_preseed_needed_tracks_runtime_discovery_requirement() {
+        assert!(!vl805_cfg_preseed_needed(false, false));
+        assert!(vl805_cfg_preseed_needed(true, false));
+        assert!(vl805_cfg_preseed_needed(false, true));
+    }
+
+    #[test]
     fn xhci_firmware_handoff_requires_memory_master_and_intx_disable() {
         assert!(!xhci_firmware_handoff_safe(None));
         assert!(!xhci_firmware_handoff_safe(Some(PCI_COMMAND_MEMORY_SPACE)));
         assert!(xhci_firmware_handoff_safe(Some(
             PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE
         )));
+    }
+
+    #[test]
+    fn xhci_runtime_candidate_breadcrumb_helpers_classify_firmware_handoff() {
+        assert_eq!(
+            super::xhci_runtime_candidate_kind(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            ),
+            "fw-high"
+        );
+        assert_eq!(
+            super::xhci_runtime_candidate_kind(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, None),
+            "legacy"
+        );
+        assert_eq!(
+            super::xhci_runtime_candidate_skip_reason(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                false,
+                None,
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                None,
+                true,
+            ),
+            "fw-handoff-unverified"
+        );
+        assert_eq!(
+            super::xhci_runtime_candidate_skip_reason(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                false,
+                None,
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                None,
+                false,
+            ),
+            "fw-handoff-unsafe"
+        );
+        assert_eq!(
+            super::xhci_runtime_candidate_skip_reason(
+                RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+                false,
+                None,
+                None,
+                None,
+                false,
+            ),
+            "no-trusted-source"
+        );
     }
 
     #[test]

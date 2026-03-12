@@ -298,12 +298,12 @@ impl Cyw43NetDevice {
             info!("[cyw43] step: init_transport(retry)");
             state.init_cyw43_transport()?;
         }
+        info!("[cyw43] step: load_firmware(startup-link)");
+        state.load_cyw43_firmware()?;
         info!("[cyw43] step: set_bus_width(4bit)");
         state.set_bus_width(SdioBusWidth::FourBit)?;
         info!("[cyw43] step: set_clock(data)");
         let data_clock_hz = state.set_clock_hz(SDIO_DATA_CLOCK_HZ)?;
-        info!("[cyw43] step: load_firmware");
-        state.load_cyw43_firmware()?;
         info!("[cyw43] step: read_ioex");
         let ioex = state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
 
