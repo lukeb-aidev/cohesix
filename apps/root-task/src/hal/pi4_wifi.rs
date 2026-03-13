@@ -49,6 +49,9 @@ const TAG_GET_GPIO_STATE: u32 = 0x0003_0041;
 const TAG_SET_GPIO_STATE: u32 = 0x0003_8041;
 const TAG_GET_GPIO_CONFIG: u32 = 0x0003_0043;
 const TAG_SET_GPIO_CONFIG: u32 = 0x0003_8043;
+const TAG_NOTIFY_XHCI_RESET: u32 = 0x0003_0058;
+const VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
+const VL805_NOTIFY_SETTLE_SPINS: usize = 50_000;
 
 const POWER_STATE_REQ_ON: u32 = 1 << 0;
 const POWER_STATE_REQ_WAIT: u32 = 1 << 1;
@@ -217,6 +220,11 @@ fn merge_u16_word(word: u32, offset: usize, value: u16) -> u32 {
 
 #[inline]
 const fn backplane_small_access_addr(addr: u32) -> u32 {
+    addr
+}
+
+#[inline]
+const fn backplane_word_access_addr(addr: u32) -> u32 {
     addr | BACKPLANE_32BIT_FLAG
 }
 
@@ -273,6 +281,7 @@ fn mailbox_tag_name(tag: u32) -> &'static str {
         TAG_SET_GPIO_STATE => "set-gpio-state",
         TAG_GET_GPIO_CONFIG => "get-gpio-config",
         TAG_SET_GPIO_CONFIG => "set-gpio-config",
+        TAG_NOTIFY_XHCI_RESET => "notify-xhci-reset",
         _ => "unknown",
     }
 }
@@ -442,6 +451,7 @@ const SDHCI_HOST_VERSION: usize = 0xFE;
 
 const SDHCI_TRNS_BLK_CNT_EN: u16 = 1 << 1;
 const SDHCI_TRNS_READ: u16 = 1 << 4;
+const SDHCI_TRNS_MULTI: u16 = 1 << 5;
 
 const SDHCI_CMD_RESP_NONE: u16 = 0x00;
 const SDHCI_CMD_RESP_LONG: u16 = 0x01;
@@ -639,7 +649,27 @@ struct CardInfo {
 struct SdioTransferPlan {
     block_size: u16,
     block_count: u16,
+    cmd53_count: u16,
+    block_mode: bool,
     transfer_mode: u16,
+}
+
+#[inline]
+const fn sdhci_present_buffer_ready_mask(write: bool) -> u32 {
+    if write {
+        SDHCI_SPACE_AVAILABLE
+    } else {
+        SDHCI_DATA_AVAILABLE
+    }
+}
+
+#[inline]
+const fn sdhci_interrupt_buffer_ready_mask(write: bool) -> u32 {
+    if write {
+        SDHCI_INT_SPACE_AVAIL
+    } else {
+        SDHCI_INT_DATA_AVAIL
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -943,6 +973,15 @@ impl Mailbox {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] mailbox gpio complete gpio={gpio} state={state}"
         ));
+        Ok(())
+    }
+
+    fn notify_vl805_reset(&mut self) -> Result<(), HalError> {
+        let mut payload = [VL805_PCI_DEV_ADDR];
+        self.call_tag(TAG_NOTIFY_XHCI_RESET, 4, &mut payload)?;
+        for _ in 0..VL805_NOTIFY_SETTLE_SPINS {
+            spin_loop();
+        }
         Ok(())
     }
 
@@ -1397,12 +1436,14 @@ impl SdioHost {
         while offset < buffer.len() {
             let chunk_len = cmp::min(buffer.len() - offset, SDIO_MAX_BYTE_MODE);
             let chunk = &mut buffer[offset..offset + chunk_len];
+            let plan = sdio_transfer_plan(function, chunk_len, write)?;
             let arg = (u32::from(write) << 31)
                 | (u32::from(function.number()) << 28)
+                | (u32::from(plan.block_mode) << 27)
                 | (u32::from(increment_addr) << 26)
                 | ((addr & 0x1_FFFF) << 9)
-                | u32::try_from(chunk_len).map_err(|_| HalError::Unsupported("sdio-cmd53-len"))?;
-            self.transfer_command(SDIO_CMD53, arg, chunk, write)?;
+                | u32::from(plan.cmd53_count);
+            self.transfer_command(SDIO_CMD53, arg, chunk, write, plan)?;
             offset += chunk_len;
         }
         Ok(())
@@ -1600,6 +1641,16 @@ impl SdioHost {
 
     fn backplane_write32(&mut self, addr: u32, value: u32) -> Result<(), HalError> {
         self.backplane_write_small(backplane_small_access_addr(addr), &value.to_le_bytes())
+    }
+
+    fn backplane_word_read32(&mut self, addr: u32) -> Result<u32, HalError> {
+        let mut bytes = [0u8; 4];
+        self.backplane_read_small(backplane_word_access_addr(addr), &mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn backplane_word_write32(&mut self, addr: u32, value: u32) -> Result<(), HalError> {
+        self.backplane_write_small(backplane_word_access_addr(addr), &value.to_le_bytes())
     }
 
     fn backplane_read(&mut self, addr: u32, len: usize) -> Result<[u8; 4], HalError> {
@@ -1902,23 +1953,26 @@ impl SdioHost {
     }
 
     fn core_disable(&mut self, base: u32) -> Result<(), HalError> {
-        let reset = (self.backplane_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8;
+        let reset = (self.backplane_word_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8;
         if (reset & AI_RESETCTRL_BIT_RESET) == 0 {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=fgc-clock"
             ));
-            self.backplane_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_PRERESET_IOCTRL))?;
-            let _ = self.backplane_read32(base + AI_IOCTRL_OFFSET)?;
+            self.backplane_word_write32(
+                base + AI_IOCTRL_OFFSET,
+                u32::from(AI_CORE_PRERESET_IOCTRL),
+            )?;
+            let _ = self.backplane_word_read32(base + AI_IOCTRL_OFFSET)?;
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset"
             ));
-            self.backplane_write32(
+            self.backplane_word_write32(
                 base + AI_RESETCTRL_OFFSET,
                 u32::from(AI_RESETCTRL_BIT_RESET),
             )?;
             bounded_spin_settle("cyw43-core-reset-assert", CYW43_CORE_CONTROL_SETTLE_LOOPS);
             for _ in 0..CYW43_CORE_RESET_RETRY_LIMIT {
-                if ((self.backplane_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8
+                if ((self.backplane_word_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8
                     & AI_RESETCTRL_BIT_RESET)
                     != 0
                 {
@@ -1934,8 +1988,8 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=in-reset-config"
         ));
-        self.backplane_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_PRERESET_IOCTRL))?;
-        let _ = self.backplane_read32(base + AI_IOCTRL_OFFSET)?;
+        self.backplane_word_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_PRERESET_IOCTRL))?;
+        let _ = self.backplane_word_read32(base + AI_IOCTRL_OFFSET)?;
         Ok(())
     }
 
@@ -1945,8 +1999,8 @@ impl SdioHost {
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset"
         ));
         for _ in 0..CYW43_CORE_RESET_RETRY_LIMIT {
-            self.backplane_write32(base + AI_RESETCTRL_OFFSET, 0)?;
-            if ((self.backplane_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8
+            self.backplane_word_write32(base + AI_RESETCTRL_OFFSET, 0)?;
+            if ((self.backplane_word_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8
                 & AI_RESETCTRL_BIT_RESET)
                 == 0
             {
@@ -1957,8 +2011,8 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clock-en"
         ));
-        self.backplane_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_POSTRESET_IOCTRL))?;
-        let _ = self.backplane_read32(base + AI_IOCTRL_OFFSET)?;
+        self.backplane_word_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_POSTRESET_IOCTRL))?;
+        let _ = self.backplane_word_read32(base + AI_IOCTRL_OFFSET)?;
         Ok(())
     }
 
@@ -2081,8 +2135,8 @@ impl SdioHost {
         arg: u32,
         buffer: &mut [u8],
         write: bool,
+        plan: SdioTransferPlan,
     ) -> Result<(), HalError> {
-        let plan = sdio_transfer_plan(buffer.len(), write)?;
         self.wait_inhibit_clear(true)?;
         self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
         self.write16(SDHCI_BLOCK_SIZE, plan.block_size);
@@ -2115,44 +2169,48 @@ impl SdioHost {
         }
 
         let mut offset = 0usize;
+        let wait_mask = sdhci_interrupt_buffer_ready_mask(write);
+        let present_ready_mask = sdhci_present_buffer_ready_mask(write);
         while offset < buffer.len() {
-            let wait_mask = if write {
-                SDHCI_INT_SPACE_AVAIL
-            } else {
-                SDHCI_INT_DATA_AVAIL
-            };
-            let status = match self.wait_int(wait_mask | SDHCI_INT_ERROR | SDHCI_INT_DATA_MASK) {
-                Ok(status) => status,
-                Err(err) => {
+            if (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) == 0 {
+                let status = match self.wait_int(wait_mask | SDHCI_INT_ERROR) {
+                    Ok(status) => status,
+                    Err(err) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data-wait err={err}",
+                            buffer.len(),
+                        ));
+                        self.log_host_state("xfer-data-wait");
+                        self.software_reset(SDHCI_RESET_DATA).ok();
+                        return Err(err);
+                    }
+                };
+                if (status & SDHCI_INT_ERROR) != 0 {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data-wait err={err}",
+                        "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data st=0x{status:08x} why={}",
                         buffer.len(),
+                        sdhci_status_reason(status)
                     ));
-                    self.log_host_state("xfer-data-wait");
+                    self.log_host_state("xfer-data-fail");
                     self.software_reset(SDHCI_RESET_DATA).ok();
-                    return Err(err);
+                    return Err(HalError::Unsupported("sdhci-transfer-data"));
                 }
-            };
-            if (status & SDHCI_INT_ERROR) != 0 {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data st=0x{status:08x} why={}",
-                    buffer.len(),
-                    sdhci_status_reason(status)
-                ));
-                self.log_host_state("xfer-data-fail");
-                self.software_reset(SDHCI_RESET_DATA).ok();
-                return Err(HalError::Unsupported("sdhci-transfer-data"));
             }
-            let mut word = [0u8; 4];
-            let chunk_len = cmp::min(4, buffer.len() - offset);
-            if write {
-                word[..chunk_len].copy_from_slice(&buffer[offset..offset + chunk_len]);
-                self.write32(SDHCI_BUFFER, u32::from_le_bytes(word));
-            } else {
-                word = self.read32(SDHCI_BUFFER).to_le_bytes();
-                buffer[offset..offset + chunk_len].copy_from_slice(&word[..chunk_len]);
+
+            while offset < buffer.len()
+                && (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) != 0
+            {
+                let mut word = [0u8; 4];
+                let chunk_len = cmp::min(4, buffer.len() - offset);
+                if write {
+                    word[..chunk_len].copy_from_slice(&buffer[offset..offset + chunk_len]);
+                    self.write32(SDHCI_BUFFER, u32::from_le_bytes(word));
+                } else {
+                    word = self.read32(SDHCI_BUFFER).to_le_bytes();
+                    buffer[offset..offset + chunk_len].copy_from_slice(&word[..chunk_len]);
+                }
+                offset += chunk_len;
             }
-            offset += chunk_len;
         }
 
         let data_status = match self
@@ -2350,6 +2408,14 @@ impl MailboxRef<'_> {
     }
 }
 
+pub(crate) fn notify_vl805_reset<H>(hal: &mut H) -> Result<(), HalError>
+where
+    H: Hardware<Error = HalError>,
+{
+    let mut mailbox = Mailbox::new(hal)?;
+    mailbox.notify_vl805_reset()
+}
+
 fn map_exact<H>(
     hal: &mut H,
     candidates: &[usize],
@@ -2426,17 +2492,51 @@ fn cmd52_argument(function: SdioFunction, addr: u32, write: bool, value: u8) -> 
         | (value as u32)
 }
 
-fn sdio_transfer_plan(len: usize, write: bool) -> Result<SdioTransferPlan, HalError> {
-    let block_size = u16::try_from(len).map_err(|_| HalError::Unsupported("sdhci-block-size"))?;
+fn sdio_transfer_plan(
+    function: SdioFunction,
+    len: usize,
+    write: bool,
+) -> Result<SdioTransferPlan, HalError> {
     let mut transfer_mode = 0u16;
     if !write {
         transfer_mode |= SDHCI_TRNS_READ;
     }
+    if let Some(block_size) = sdio_function_block_size(function) {
+        let block_len = usize::from(block_size);
+        if len >= block_len && len % block_len == 0 {
+            let block_count = u16::try_from(len / block_len)
+                .map_err(|_| HalError::Unsupported("sdhci-block-count"))?;
+            if block_count != 0 {
+                transfer_mode |= SDHCI_TRNS_BLK_CNT_EN;
+                if block_count > 1 {
+                    transfer_mode |= SDHCI_TRNS_MULTI;
+                }
+                return Ok(SdioTransferPlan {
+                    block_size,
+                    block_count,
+                    cmd53_count: block_count,
+                    block_mode: true,
+                    transfer_mode,
+                });
+            }
+        }
+    }
+    let block_size = u16::try_from(len).map_err(|_| HalError::Unsupported("sdhci-block-size"))?;
     Ok(SdioTransferPlan {
         block_size,
         block_count: 0,
+        cmd53_count: block_size,
+        block_mode: false,
         transfer_mode,
     })
+}
+
+fn sdio_function_block_size(function: SdioFunction) -> Option<u16> {
+    match function {
+        SdioFunction::Function1 => Some(SDIO_FUNCTION_ENABLE_F1.block_size),
+        SdioFunction::Function2 => Some(SDIO_FUNCTION_ENABLE_F2.block_size),
+        _ => None,
+    }
 }
 
 fn r5_status(response: u32) -> u32 {
@@ -2464,18 +2564,21 @@ pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        backplane_small_access_addr, bcm2711_gpfsel_offset, bcm2711_puppdn_offset, cmd52_argument,
-        is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word, normalize_nvram,
-        phys_to_bus, r5_status, sdhci_status_reason, sdio_transfer_plan,
-        update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
-        SdioFunction, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL, AI_IOCTRL_BIT_CLOCK_EN,
-        AI_IOCTRL_BIT_FGC, ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BCM2711_GPIO_ALT3,
-        CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS,
-        SDHCI_COMMAND, SDHCI_INT_CRC, SDHCI_INT_DATA_CRC, SDHCI_INT_TIMEOUT, SDHCI_TRANSFER_MODE,
-        SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS,
-        SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1,
-        SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1, SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE,
-        TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+        backplane_small_access_addr, backplane_word_access_addr, bcm2711_gpfsel_offset,
+        bcm2711_puppdn_offset, cmd52_argument, is_mailbox_protocol_error, mailbox_tag_name,
+        make_command, merge_u16_word, normalize_nvram, phys_to_bus, r5_status,
+        sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
+        sdio_transfer_plan, update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError,
+        ResponseType, SdioFunction, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL,
+        AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, ARMCR4_CAP, BACKPLANE_32BIT_FLAG,
+        BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE, PI4_WIFI_SDIO_PINS,
+        PI4_WIFI_SDIO_PULLS, SDHCI_COMMAND, SDHCI_DATA_AVAILABLE, SDHCI_INT_CRC,
+        SDHCI_INT_DATA_AVAIL, SDHCI_INT_DATA_CRC, SDHCI_INT_SPACE_AVAIL, SDHCI_INT_TIMEOUT,
+        SDHCI_SPACE_AVAILABLE, SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_MULTI,
+        SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS,
+        SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1, SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1,
+        SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE, TAG_NOTIFY_XHCI_RESET, TAG_SET_GPIO_CONFIG,
+        TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -2496,28 +2599,47 @@ mod tests {
     }
 
     #[test]
-    fn sdio_transfer_plan_uses_single_byte_mode_transfers() {
-        let read = sdio_transfer_plan(4, false).expect("read transfer plan");
+    fn sdio_transfer_plan_uses_byte_mode_for_small_transfers() {
+        let read =
+            sdio_transfer_plan(SdioFunction::Function1, 4, false).expect("read transfer plan");
         assert_eq!(read.block_size, 4);
         assert_eq!(read.block_count, 0);
+        assert_eq!(read.cmd53_count, 4);
+        assert!(!read.block_mode);
         assert_eq!(read.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
         assert_ne!(read.transfer_mode & SDHCI_TRNS_READ, 0);
 
-        let write = sdio_transfer_plan(64, true).expect("write transfer plan");
+        let write =
+            sdio_transfer_plan(SdioFunction::Function0, 64, true).expect("write transfer plan");
         assert_eq!(write.block_size, 64);
         assert_eq!(write.block_count, 0);
+        assert_eq!(write.cmd53_count, 64);
+        assert!(!write.block_mode);
         assert_eq!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
         assert_eq!(write.transfer_mode & SDHCI_TRNS_READ, 0);
     }
 
     #[test]
-    fn backplane_small_word_access_sets_32bit_flag() {
+    fn sdio_transfer_plan_uses_block_mode_for_function_aligned_bulk_write() {
+        let write = sdio_transfer_plan(SdioFunction::Function1, 256, true)
+            .expect("function1 bulk write transfer plan");
+        assert_eq!(write.block_size, 64);
+        assert_eq!(write.block_count, 4);
+        assert_eq!(write.cmd53_count, 4);
+        assert!(write.block_mode);
+        assert_ne!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
+        assert_ne!(write.transfer_mode & SDHCI_TRNS_MULTI, 0);
+        assert_eq!(write.transfer_mode & SDHCI_TRNS_READ, 0);
+    }
+
+    #[test]
+    fn backplane_access_modes_split_small_and_word_paths() {
         assert_eq!(
             backplane_small_access_addr(CYW43_CHIPCOMMON_BASE),
-            CYW43_CHIPCOMMON_BASE | BACKPLANE_32BIT_FLAG
+            CYW43_CHIPCOMMON_BASE
         );
         assert_eq!(
-            backplane_small_access_addr(CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP),
+            backplane_word_access_addr(CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP),
             (CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP) | BACKPLANE_32BIT_FLAG
         );
     }
@@ -2527,7 +2649,22 @@ mod tests {
         assert_eq!(mailbox_tag_name(TAG_SET_POWER_STATE), "set-power-state");
         assert_eq!(mailbox_tag_name(TAG_GET_CLOCK_RATE), "get-clock-rate");
         assert_eq!(mailbox_tag_name(TAG_SET_GPIO_CONFIG), "set-gpio-config");
+        assert_eq!(mailbox_tag_name(TAG_NOTIFY_XHCI_RESET), "notify-xhci-reset");
         assert_eq!(mailbox_tag_name(0xffff_ffff), "unknown");
+    }
+
+    #[test]
+    fn sdhci_buffer_ready_masks_follow_transfer_direction() {
+        assert_eq!(sdhci_present_buffer_ready_mask(true), SDHCI_SPACE_AVAILABLE);
+        assert_eq!(sdhci_present_buffer_ready_mask(false), SDHCI_DATA_AVAILABLE);
+        assert_eq!(
+            sdhci_interrupt_buffer_ready_mask(true),
+            SDHCI_INT_SPACE_AVAIL
+        );
+        assert_eq!(
+            sdhci_interrupt_buffer_ready_mask(false),
+            SDHCI_INT_DATA_AVAIL
+        );
     }
 
     #[test]

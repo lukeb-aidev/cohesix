@@ -143,7 +143,8 @@ static int usb_hub_port_control_with_fallback(struct usb_device *dev,
 {
 	u16 candidates[HUB_PORT_INDEX_CANDIDATES_MAX];
 	int count, ret, last_ret, idx;
-	u8 iface;
+
+	(void)stage;
 
 	ret = usb_control_msg(dev, pipe, request, requesttype, value, port, data,
 			      size, timeout);
@@ -159,35 +160,15 @@ static int usb_hub_port_control_with_fallback(struct usb_device *dev,
 	if (dev->status != USB_ST_STALLED)
 		return ret;
 
-	iface = usb_hub_primary_interface_number(dev);
-	printf("[usb-hub] %s primary-fail hub=%04x:%04x dev=%d port=%d iface=%u req=0x%02x type=0x%02x value=0x%04x wIndex=0x%04x size=%d timeout=%d pipe=0x%x ret=%d\n",
-	       stage, le16_to_cpu(dev->descriptor.idVendor),
-	       le16_to_cpu(dev->descriptor.idProduct), dev->devnum, port, iface,
-	       request, requesttype, value, port, size, timeout, pipe, ret);
 	count = usb_hub_port_index_candidates(dev, port, candidates,
 					      ARRAY_SIZE(candidates));
 	last_ret = ret;
 	for (idx = 1; idx < count; idx++) {
 		last_ret = usb_control_msg(dev, pipe, request, requesttype, value,
 					   candidates[idx], data, size, timeout);
-		printf("[usb-hub] %s retry hub=%04x:%04x dev=%d port=%d iface=%u try=%d/%d req=0x%02x type=0x%02x value=0x%04x wIndex=0x%04x ret=%d\n",
-		       stage, le16_to_cpu(dev->descriptor.idVendor),
-		       le16_to_cpu(dev->descriptor.idProduct), dev->devnum, port,
-		       iface, idx, count - 1, request, requesttype, value,
-		       candidates[idx], last_ret);
-		if (last_ret >= 0) {
-			printf("[usb-hub] %s fallback hub=%04x:%04x port=%d iface=%u wIndex=0x%04x primary=%d fallback=%d\n",
-			       stage, le16_to_cpu(dev->descriptor.idVendor),
-			       le16_to_cpu(dev->descriptor.idProduct), port, iface,
-			       candidates[idx], ret, last_ret);
+		if (last_ret >= 0)
 			return last_ret;
-		}
 	}
-
-	printf("[usb-hub] %s detail hub=%04x:%04x dev=%d port=%d iface=%u req=0x%02x type=0x%02x value=0x%04x tries=%d primary=%d last=%d\n",
-	       stage, le16_to_cpu(dev->descriptor.idVendor),
-	       le16_to_cpu(dev->descriptor.idProduct), dev->devnum, port, iface,
-	       request, requesttype, value, count - 1, ret, last_ret);
 
 	return last_ret;
 }
@@ -258,6 +239,8 @@ static void usb_hub_schedule_delayed_child_retry(struct usb_device_scan *usb_sca
 	struct usb_device *dev = usb_scan->dev;
 	ulong now = get_timer(0);
 
+	(void)reason;
+
 	if (power_cycle && usb_hub_supports_port_power(usb_scan->hub)) {
 		usb_clear_port_feature(dev, usb_scan->port + 1, USB_PORT_FEAT_POWER);
 		mdelay(HUB_DELAYED_CHILD_POWER_TOGGLE_MS);
@@ -267,13 +250,6 @@ static void usb_hub_schedule_delayed_child_retry(struct usb_device_scan *usb_sca
 	usb_scan->recovery_attempts++;
 	usb_scan->query_ready = now + HUB_DELAYED_CHILD_QUERY_DELAY_MS;
 	usb_scan->deadline = usb_scan->query_ready + HUB_DELAYED_CHILD_TIMEOUT_MS;
-
-	printf("[usb-hub] delayed child retry hub=%04x:%04x port=%d reason=%s retry=%u nonremovable=%s compound=%s\n",
-	       le16_to_cpu(dev->descriptor.idVendor),
-	       le16_to_cpu(dev->descriptor.idProduct),
-	       usb_scan->port + 1, reason, usb_scan->recovery_attempts,
-	       usb_hub_port_non_removable(usb_scan->hub, usb_scan->port) ? "yes" : "no",
-	       usb_hub_has_internal_children(usb_scan->hub) ? "yes" : "no");
 }
 
 #if CONFIG_IS_ENABLED(DM_USB)
@@ -396,12 +372,6 @@ static void usb_hub_power_on(struct usb_hub_device *hub)
 			debug("PowerOn : port %d returns %lX\n", i + 1, dev->status);
 		}
 	}
-
-	if (!eager_port_power && usb_hub_is_apple_keyboard_hub(dev))
-		printf("[usb-hub] port power deferred hub=%04x:%04x mode=%u\n",
-		       le16_to_cpu(dev->descriptor.idVendor),
-		       le16_to_cpu(dev->descriptor.idProduct),
-		       usb_hub_port_power_mode(hub));
 
 #ifdef CONFIG_SANDBOX
 	/*
@@ -691,13 +661,6 @@ static int usb_scan_port(struct usb_device_scan *usb_scan)
 								 false);
 				return 0;
 			}
-			if (usb_hub_is_apple_keyboard_hub(dev)) {
-				printf("[usb-hub] port status failed hub=%04x:%04x port=%d iface=%u retry=%u err=%d\n",
-				       le16_to_cpu(dev->descriptor.idVendor),
-				       le16_to_cpu(dev->descriptor.idProduct),
-				       i + 1, usb_hub_primary_interface_number(dev),
-				       usb_scan->recovery_attempts, ret);
-			}
 			debug("devnum=%d port=%d: timeout\n",
 			      dev->devnum, i + 1);
 			/* Remove this device from scanning list */
@@ -732,13 +695,6 @@ static int usb_scan_port(struct usb_device_scan *usb_scan)
 								 power_cycle);
 				return 0;
 			}
-			if (usb_hub_is_apple_keyboard_hub(dev)) {
-				printf("[usb-hub] no child hub=%04x:%04x port=%d status=0x%04x change=0x%04x retry=%u\n",
-				       le16_to_cpu(dev->descriptor.idVendor),
-				       le16_to_cpu(dev->descriptor.idProduct),
-				       i + 1, portstatus, portchange,
-				       usb_scan->recovery_attempts);
-			}
 			debug("devnum=%d port=%d: timeout\n",
 			      dev->devnum, i + 1);
 			/* Remove this device from scanning list */
@@ -764,19 +720,6 @@ static int usb_scan_port(struct usb_device_scan *usb_scan)
 	debug("devnum=%d port=%d: USB dev found\n", dev->devnum, i + 1);
 
 	ret = usb_hub_port_connect_change(dev, i);
-	if (usb_hub_is_apple_keyboard_hub(dev)) {
-		if (ret < 0) {
-			printf("[usb-hub] child attach failed hub=%04x:%04x port=%d status=0x%04x change=0x%04x err=%d\n",
-			       le16_to_cpu(dev->descriptor.idVendor),
-			       le16_to_cpu(dev->descriptor.idProduct),
-			       i + 1, portstatus, portchange, ret);
-		} else {
-			printf("[usb-hub] child detected hub=%04x:%04x port=%d status=0x%04x change=0x%04x\n",
-			       le16_to_cpu(dev->descriptor.idVendor),
-			       le16_to_cpu(dev->descriptor.idProduct),
-			       i + 1, portstatus, portchange);
-		}
-	}
 
 	if (portchange & USB_PORT_STAT_C_ENABLE) {
 		debug("port %d enable change, status %x\n", i + 1, portstatus);
@@ -1028,21 +971,7 @@ static int usb_hub_configure(struct usb_device *dev)
 	debug("hub controller current requirement: %dmA\n",
 	      descriptor->bHubContrCurrent);
 	if (usb_hub_is_apple_keyboard_hub(dev)) {
-		printf("[usb-hub] hub summary dev=%d vid=%04x pid=%04x iface=%u ports=%d pgood_cfg=%ums query=%lums timeout=%lums current=%dmA\n",
-		       dev->devnum, le16_to_cpu(dev->descriptor.idVendor),
-		       le16_to_cpu(dev->descriptor.idProduct),
-		       usb_hub_primary_interface_number(dev), dev->maxchild,
-		       descriptor->bPwrOn2PwrGood * 2,
-		       hub->query_delay > get_timer(0) ?
-				hub->query_delay - get_timer(0) : 0,
-		       hub->connect_timeout > hub->query_delay ?
-				hub->connect_timeout - hub->query_delay : 0,
-		       descriptor->bHubContrCurrent);
 		mdelay(HUB_APPLE_KEYBOARD_SETTLE_MS);
-		printf("[usb-hub] hub settle hub=%04x:%04x delay=%dms\n",
-		       le16_to_cpu(dev->descriptor.idVendor),
-		       le16_to_cpu(dev->descriptor.idProduct),
-		       HUB_APPLE_KEYBOARD_SETTLE_MS);
 	}
 
 	for (i = 0; i < dev->maxchild; i++)
