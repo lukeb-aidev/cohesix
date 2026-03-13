@@ -217,7 +217,7 @@ fn merge_u16_word(word: u32, offset: usize, value: u16) -> u32 {
 
 #[inline]
 const fn backplane_small_access_addr(addr: u32) -> u32 {
-    addr
+    addr | BACKPLANE_32BIT_FLAG
 }
 
 fn wifi_power_state_name(state: WifiPowerState) -> &'static str {
@@ -1902,20 +1902,25 @@ impl SdioHost {
     }
 
     fn core_disable(&mut self, base: u32) -> Result<(), HalError> {
-        let reset = self.backplane_read8(base + AI_RESETCTRL_OFFSET)?;
+        let reset = (self.backplane_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8;
         if (reset & AI_RESETCTRL_BIT_RESET) == 0 {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=fgc-clock"
             ));
-            self.backplane_write8(base + AI_IOCTRL_OFFSET, AI_CORE_PRERESET_IOCTRL)?;
-            let _ = self.backplane_read8(base + AI_IOCTRL_OFFSET)?;
+            self.backplane_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_PRERESET_IOCTRL))?;
+            let _ = self.backplane_read32(base + AI_IOCTRL_OFFSET)?;
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset"
             ));
-            self.backplane_write8(base + AI_RESETCTRL_OFFSET, AI_RESETCTRL_BIT_RESET)?;
+            self.backplane_write32(
+                base + AI_RESETCTRL_OFFSET,
+                u32::from(AI_RESETCTRL_BIT_RESET),
+            )?;
             bounded_spin_settle("cyw43-core-reset-assert", CYW43_CORE_CONTROL_SETTLE_LOOPS);
             for _ in 0..CYW43_CORE_RESET_RETRY_LIMIT {
-                if (self.backplane_read8(base + AI_RESETCTRL_OFFSET)? & AI_RESETCTRL_BIT_RESET) != 0
+                if ((self.backplane_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8
+                    & AI_RESETCTRL_BIT_RESET)
+                    != 0
                 {
                     break;
                 }
@@ -1929,8 +1934,8 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=in-reset-config"
         ));
-        self.backplane_write8(base + AI_IOCTRL_OFFSET, AI_CORE_PRERESET_IOCTRL)?;
-        let _ = self.backplane_read8(base + AI_IOCTRL_OFFSET)?;
+        self.backplane_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_PRERESET_IOCTRL))?;
+        let _ = self.backplane_read32(base + AI_IOCTRL_OFFSET)?;
         Ok(())
     }
 
@@ -1940,8 +1945,11 @@ impl SdioHost {
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset"
         ));
         for _ in 0..CYW43_CORE_RESET_RETRY_LIMIT {
-            self.backplane_write8(base + AI_RESETCTRL_OFFSET, 0)?;
-            if (self.backplane_read8(base + AI_RESETCTRL_OFFSET)? & AI_RESETCTRL_BIT_RESET) == 0 {
+            self.backplane_write32(base + AI_RESETCTRL_OFFSET, 0)?;
+            if ((self.backplane_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8
+                & AI_RESETCTRL_BIT_RESET)
+                == 0
+            {
                 break;
             }
             bounded_spin_settle("cyw43-core-reset-clear", CYW43_CORE_CONTROL_SETTLE_LOOPS);
@@ -1949,8 +1957,8 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clock-en"
         ));
-        self.backplane_write8(base + AI_IOCTRL_OFFSET, AI_CORE_POSTRESET_IOCTRL)?;
-        let _ = self.backplane_read8(base + AI_IOCTRL_OFFSET)?;
+        self.backplane_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_POSTRESET_IOCTRL))?;
+        let _ = self.backplane_read32(base + AI_IOCTRL_OFFSET)?;
         Ok(())
     }
 
@@ -2461,9 +2469,9 @@ mod tests {
         phys_to_bus, r5_status, sdhci_status_reason, sdio_transfer_plan,
         update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
         SdioFunction, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL, AI_IOCTRL_BIT_CLOCK_EN,
-        AI_IOCTRL_BIT_FGC, ARMCR4_CAP, BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE,
-        CYW43_CHIPCOMMON_BASE, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SDHCI_COMMAND,
-        SDHCI_INT_CRC, SDHCI_INT_DATA_CRC, SDHCI_INT_TIMEOUT, SDHCI_TRANSFER_MODE,
+        AI_IOCTRL_BIT_FGC, ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BCM2711_GPIO_ALT3,
+        CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS,
+        SDHCI_COMMAND, SDHCI_INT_CRC, SDHCI_INT_DATA_CRC, SDHCI_INT_TIMEOUT, SDHCI_TRANSFER_MODE,
         SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS,
         SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1,
         SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1, SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE,
@@ -2503,14 +2511,14 @@ mod tests {
     }
 
     #[test]
-    fn backplane_small_word_access_uses_plain_window_address() {
+    fn backplane_small_word_access_sets_32bit_flag() {
         assert_eq!(
             backplane_small_access_addr(CYW43_CHIPCOMMON_BASE),
-            CYW43_CHIPCOMMON_BASE
+            CYW43_CHIPCOMMON_BASE | BACKPLANE_32BIT_FLAG
         );
         assert_eq!(
             backplane_small_access_addr(CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP),
-            CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP
+            (CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP) | BACKPLANE_32BIT_FLAG
         );
     }
 

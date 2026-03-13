@@ -87,9 +87,10 @@ const BCM2711_ARM_LOCAL_SIZE: usize = 0x0080_0000;
 
 // Runtime xHCI probing falls back to the DTB-backed legacy aliases first.
 // The high PCIe aperture is only trusted when runtime BAR decode or a verified
-// runtime hint proves it. A bootloader BAR handoff alone is recorded for
-// diagnostics, but remains pin-only because probing it directly has still
-// tripped irq 27 on Pi 4/seL4.
+// runtime hint proves it. The one exception is the standard Pi 4 U-Boot
+// handoff path: the boot script explicitly quiesces USB with `usb stop` before
+// entering seL4, so a safe bootloader BAR handoff can be reused as a cold-start
+// source without forcing unsafe VL805 config-space rediscovery in safe mode.
 const RPI4_XHCI_MMIO_FALLBACKS: [usize; 2] = [
     RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
     RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
@@ -521,7 +522,7 @@ impl Pi4LocalSeat {
         if first_preseed {
             boot_log::force_uart_line("[local-seat] pi4 xhci preseed begin");
         }
-        prime_pinned_xhci_window(hal, self.xhci_mmio_hint);
+        prime_pinned_xhci_window(hal, self.xhci_mmio_hint, self.xhci_pci_cmd);
         if first_preseed {
             boot_log::force_uart_line("[local-seat] pi4 xhci preseed end");
         }
@@ -946,6 +947,17 @@ const fn xhci_firmware_handoff_safe(xhci_pci_cmd: Option<u16>) -> bool {
         }
         None => false,
     }
+}
+
+#[inline]
+fn xhci_firmware_handoff_cold_start_trusted(
+    mmio: usize,
+    firmware_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+) -> bool {
+    mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && firmware_hint == Some(mmio)
+        && xhci_firmware_handoff_safe(xhci_pci_cmd)
 }
 
 #[inline]
@@ -1590,7 +1602,11 @@ fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>, mode: Vl805CfgPreseedM
     boot_log::force_uart_line("[local-seat] vl805 pci cfg preseed unavailable");
 }
 
-fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usize>) {
+fn prime_pinned_xhci_window(
+    hal: &mut KernelHal<'_>,
+    xhci_mmio_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+) {
     if PINNED_XHCI_MMIO.lock().is_some() {
         if !XHCI_PRESEED_ALREADY_PINNED_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] xhci preseed skipped (already pinned)");
@@ -1689,6 +1705,38 @@ fn prime_pinned_xhci_window(hal: &mut KernelHal<'_>, xhci_mmio_hint: Option<usiz
                 ),
             );
             boot_log::force_uart_line(attempt.as_str());
+            if xhci_firmware_handoff_cold_start_trusted(mmio, xhci_mmio_hint, xhci_pci_cmd) {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci preseed trusted mmio=0x{mmio:016x} reason=fw-handoff-cold-start"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                if pin_xhci_mmio_window(hal, mmio, length, true).is_ok() {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci mmio preseeded mmio=0x{mmio:016x} bytes=0x{bytes:05x} mode=trusted-cold-start",
+                            bytes = length
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    return;
+                }
+                let mut fail = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut fail,
+                    format_args!(
+                        "[local-seat] xhci preseed failed mmio=0x{mmio:016x} bytes=0x{bytes:05x} mode=trusted-cold-start",
+                        bytes = length
+                    ),
+                );
+                boot_log::force_uart_line(fail.as_str());
+                continue;
+            }
             if let Some(reason) = xhci_preseed_pin_only_reason(mmio, xhci_mmio_hint, vl805_hint) {
                 let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
@@ -8080,6 +8128,33 @@ mod tests {
             ),
             Some("firmware-hint-unverified")
         );
+    }
+
+    #[test]
+    fn xhci_firmware_handoff_cold_start_trusts_safe_high_bar() {
+        assert!(super::xhci_firmware_handoff_cold_start_trusted(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            Some(
+                super::PCI_COMMAND_MEMORY_SPACE
+                    | super::PCI_COMMAND_BUS_MASTER
+                    | super::PCI_COMMAND_INTERRUPT_DISABLE,
+            ),
+        ));
+        assert!(!super::xhci_firmware_handoff_cold_start_trusted(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+            Some(
+                super::PCI_COMMAND_MEMORY_SPACE
+                    | super::PCI_COMMAND_BUS_MASTER
+                    | super::PCI_COMMAND_INTERRUPT_DISABLE,
+            ),
+        ));
+        assert!(!super::xhci_firmware_handoff_cold_start_trusted(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            Some(super::PCI_COMMAND_MEMORY_SPACE | super::PCI_COMMAND_BUS_MASTER),
+        ));
     }
 
     #[test]
