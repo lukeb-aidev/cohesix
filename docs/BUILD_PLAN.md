@@ -6491,6 +6491,8 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Generic restatement comments ("Defines the X module", "Provides the Y library surface", "CLI entry point") are prohibited once 26c lands; comments must explain invariants, authority boundaries, limits, operator-visible behavior, or rationale.
 - Required file headers may be narrowed, reformatted, or reduced only by updating `AGENTS.md`, `CONTRIBUTING.md`, and `docs/CODING_GUIDELINES.md` in the same change.
 - Large `root-task` and driver monoliths are not first-wave cleanup targets; extraction is allowed only when characterization tests already pin behavior.
+- Milestone 26c must not collapse host-side `std` capability into the seL4 build. VM-side Cohesix remains `no_std`; any "convergence" under 26c is limited to contracts, fixtures, generated artifacts, and explicitly `no_std`-safe semantic helpers.
+- `apps/root-task/src/ninedoor.rs` and `apps/nine-door/src/host/*` are runtime-boundary-sensitive surfaces. 26c may add documentation, characterization tests, parity evidence, and comment cleanup around them, but structural runtime extraction or host/VM adapter collapse is out of scope.
 - `docs/snippets/*.md`, release snapshot docs under `releases/**/*.md`, and other generated/derived documentation remain update-by-source artifacts; they are not to be hand-edited as a shortcut.
 - Vendored/reference Markdown under `third_party/**/*.md` is inventory-only unless provenance, licensing, or linkage is wrong.
 - Milestone closure is blocked until the full Test Plan succeeds on QEMU and Pi 4 with no `INCOMPLETE` markers.
@@ -6503,8 +6505,9 @@ Humanize the authored Cohesix code and documentation surfaces without protocol o
 1. replacing template-heavy comments and test naming with invariant-focused prose,
 2. classifying and reviewing every `*.md` file in the repository,
 3. auditing canonical documentation against generated artifacts, manifest outputs, and observed staged-run evidence before prose cleanup lands,
-4. adding characterization/CI gates before touching riskier host-side cleanup targets, and
-5. requiring the full staged Test Plan to pass on both QEMU and Pi 4 before closure.
+4. recording the intentional host-`std` / VM-`no_std` runtime boundary and proving parity for overlapping NineDoor semantics without implying runtime merger,
+5. adding characterization/CI gates before touching riskier host-side cleanup targets or runtime-boundary-sensitive adapter code, and
+6. requiring the full staged Test Plan to pass on both QEMU and Pi 4 before closure.
 
 ### Markdown review scope (all `*.md` files)
 Milestone 26c must inventory every Markdown file returned by:
@@ -6543,20 +6546,25 @@ For each inventory entry, 26c must record one of:
   - Record where documentation is sourced from compiler outputs, where it is manually maintained, and what exact commands prove alignment.
   - Reject any humanizing change that makes prose nicer but less faithful to the observed system.
 
+- **Runtime boundary + semantic parity audit**
+  - Record the intentional split between the host `std` NineDoor server and the VM `no_std` NineDoor bridge, including what may be shared, what must remain separate, and which crates/capabilities are forbidden inside the VM TCB.
+  - Produce a checked-in parity matrix for overlapping operator-visible semantics (`attach`, path validation, append-only behavior, selected `/proc`, `/log`, `/queen`, `/gpu/bridge`, and permission-denial surfaces) covering host and VM adapters.
+  - Treat undocumented divergence as a defect unless the surface is explicitly classified as host-only, VM-only, generated-only, or release-derived.
+
 - **Low-risk surface cleanup**
   - Clean up public crate surfaces, tiny modules, tests, READMEs, and operator docs first.
   - Prefer renaming tests, tightening doc comments, and deleting generic noise before any control-flow refactor.
   - Keep changes behavior-preserving and small enough to review mechanically.
 
 - **Characterization and gate expansion**
-  - Add or expand tests around crates currently most exposed to cleanup risk and currently weaker in CI coverage, especially `coh`, `host-ticket-agent`, and selected `root-task` helper modules.
-  - Extend CI/test-plan execution so cleanup work in these areas is exercised automatically before merge.
+  - Add or expand tests around crates currently most exposed to cleanup risk and currently weaker in CI coverage, especially `coh`, `host-ticket-agent`, selected `root-task` helper modules, and the overlapping semantics exercised by `apps/nine-door` and `apps/root-task/src/ninedoor.rs`.
+  - Extend CI/test-plan execution so cleanup work in these areas is exercised automatically before merge, including a VM-target `no_std` boundary check and parity evidence capture for overlapping host/VM semantics.
   - Fail the gate on protocol drift, fixture drift, or undocumented output changes.
 
 - **Selected structural cleanup**
   - Refactor repetitive validation and processing code in host-side crates only after characterization tests exist.
   - Focus on readability wins that reduce duplication or make invariants explicit, not aesthetic churn.
-  - Defer monolithic kernel/driver rewrites until dedicated milestone work justifies the risk.
+  - Defer monolithic kernel/driver rewrites until dedicated milestone work justifies the risk; 26c must not use readability as cover for merging host `std` runtime logic into the VM.
 
 - **QEMU + Pi 4 full regression evidence**
   - Extend the staged Test Plan runner and docs so "PASS" can be asserted separately for QEMU and Pi 4 hardware runs using the same stage contract and evidence layout.
@@ -6569,9 +6577,12 @@ For each inventory entry, 26c must record one of:
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test -p secure9p-core`
+- `cargo test -p nine-door --test integration`
 - `cargo test -p coh --features mock`
 - `cargo test -p host-ticket-agent`
 - `cargo test -p root-task --lib`
+- `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel serial-console"`
+- `cargo tree -p root-task --target aarch64-unknown-none -e normal > out/audit/m26c_root_task_tree.txt`
 - `scripts/ci/check_test_plan.sh`
 - `scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-qemu`
 - `COHESIX_TEST_TARGET=pi4 scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-pi4`
@@ -6580,9 +6591,12 @@ For each inventory entry, 26c must record one of:
 - Every Markdown file returned by `rg --files -g '*.md'` is present in the checked-in 26c inventory with an explicit disposition.
 - Cohesix-authored canonical docs are audited against generated snippets, manifest fingerprints, fixture outputs, release artifacts, and staged-run evidence before and after prose cleanup.
 - Cohesix-authored canonical docs are rewritten to remove generic template prose and to describe the as-built system, invariants, or operator contract.
+- The checked-in 26c audit artifacts explicitly document the intentional host `std` / VM `no_std` boundary and do not imply runtime convergence where the design requires separate adapters.
+- Overlapping NineDoor semantics exercised by host and VM adapters are recorded in a parity matrix and backed by tests or staged-run evidence; undocumented differences are rejected.
 - Release snapshots, generated snippets, seL4 mirrors, and vendored docs are handled according to their disposition rules; no ad-hoc edits hide provenance.
 - Low-risk code/comment cleanup lands with no console grammar, Secure9P semantics, manifest output, telemetry format, or release workflow drift.
 - Cleanup candidates previously excluded or weakly covered in CI have characterization tests and staged-run coverage before structural refactors are accepted.
+- VM-target boundary evidence demonstrates that the kernel/root-task build remains `no_std` and does not absorb host-only operator/tooling crates.
 - QEMU full Test Plan run is `PASS` via the staged runner with `stage_01.done` through `stage_05.done` and no `*.incomplete` markers.
 - Pi 4 full Test Plan run is `PASS` via the staged runner with the same stage completeness requirements and archived evidence/logs.
 - Milestone closure evidence includes before/after reviewer-facing artifacts: representative code diffs, Markdown inventory/disposition, QEMU test-plan state dir, Pi 4 test-plan state dir, and due-diligence outputs.
@@ -6591,6 +6605,7 @@ For each inventory entry, 26c must record one of:
 - `coh-rtc` generated snippets referenced by `docs/snippets/*.md` remain authoritative; 26c may only change their source schemas or generators, never hand-edit the derived snippet text.
 - Release snapshot documentation under `releases/**/*.md` remains derived from canonical docs and release packaging; if snapshot wording changes, the corresponding release-cut flow and notes must change in the same work.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
+- Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe and must not import host-side capabilities, transports, or provider crates into the VM build.
 
 ### Task Breakdown
 ```
@@ -6646,6 +6661,25 @@ Checks:
 Deliverables:
   - Auditable docs-as-built report proving documentation truth before presentation cleanup.
 
+Title/ID: m26c-runtime-boundary-and-semantic-parity-audit
+Goal: Document the intentional host `std` / VM `no_std` runtime split and prove overlapping NineDoor semantics remain aligned without runtime convergence.
+Inputs: apps/root-task/src/ninedoor.rs, apps/root-task/tests/**, apps/nine-door/src/host/*.rs, apps/nine-door/tests/*.rs, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURE9P.md, docs/SECURITY.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
+Changes:
+  - docs/audit/M26C_RUNTIME_BOUNDARY_AUDIT.md — record VM TCB boundaries, forbidden host-side capabilities in the VM, and adapter ownership of host/VM surfaces.
+  - docs/audit/M26C_NINEDOOR_PARITY_MATRIX.md — enumerate overlapping host/VM semantics, expected outputs, and evidence paths for each parity claim.
+  - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURE9P.md + docs/SECURITY.md — replace any ambiguous "eventual merge" language with explicit boundary language: separate adapters, shared contracts only.
+  - apps/nine-door/tests/*.rs + apps/root-task/tests/** or existing root-task bridge tests — add/extend parity coverage for overlapping operator-visible surfaces without changing protocol grammar.
+Commands:
+  - cargo test -p nine-door --test integration
+  - cargo test -p root-task --lib
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+Checks:
+  - Checked-in audit artifacts state clearly that VM-side Cohesix remains `no_std` and that host `std` capability is not a valid convergence target.
+  - Every overlapping host/VM semantic surface in the parity matrix has either passing test evidence or an explicit host-only/VM-only disposition.
+  - Canonical docs describe the runtime split as intentional architecture rather than an accidental temporary inconsistency.
+Deliverables:
+  - Auditable runtime-boundary report and semantic-parity matrix that reduce drift risk without introducing runtime refactors.
+
 Title/ID: m26c-low-risk-surface-cleanup
 Goal: Humanize the highest-visibility low-risk code and doc surfaces after docs-as-built alignment is proven.
 Inputs: apps/*/README.md, crates/**/README.md, tools/cohesix-py/README.md, tests/integration/README.md, public crate roots under apps/*/src/lib.rs, tests/**/*.rs, docs/OPERATOR_WALKTHROUGH.md, docs/QUICKSTART.md, docs/QUICKSTART_ALPHA.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
@@ -6667,22 +6701,43 @@ Deliverables:
 
 Title/ID: m26c-characterization-gates-before-refactor
 Goal: Add characterization tests and merge gates around cleanup-sensitive crates before accepting structural refactors.
-Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, apps/coh/src/mount.rs, apps/host-ticket-agent/src/*.rs, apps/root-task/src/net/stack.rs, docs/TEST_PLAN.md
+Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, apps/coh/src/mount.rs, apps/host-ticket-agent/src/*.rs, apps/root-task/src/net/stack.rs, apps/root-task/src/ninedoor.rs, apps/nine-door/tests/*.rs, docs/TEST_PLAN.md
 Changes:
   - .github/workflows/ci.yml — stop excluding cleanup-sensitive crates without compensating gate coverage, or add explicit targeted jobs for them.
-  - scripts/ci/test_plan_stage_02_host_fast.sh — exercise `coh`, `host-ticket-agent`, and other cleanup targets as first-class checks.
-  - docs/TEST_PLAN.md — document the expanded cleanup-target coverage and required artifact retention.
-  - apps/coh/src/mount.rs + apps/host-ticket-agent/src/*.rs + selected apps/root-task/src/* helpers — add characterization tests for current outputs, errors, and state transitions before refactor.
+  - scripts/ci/test_plan_stage_02_host_fast.sh — exercise `coh`, `host-ticket-agent`, `nine-door` integration coverage, and VM-target boundary checks as first-class checks.
+  - docs/TEST_PLAN.md — document the expanded cleanup-target coverage, VM boundary evidence, and required artifact retention.
+  - apps/coh/src/mount.rs + apps/host-ticket-agent/src/*.rs + selected apps/root-task/src/* helpers + selected `apps/nine-door` / root-task bridge parity surfaces — add characterization tests for current outputs, errors, and state transitions before refactor.
 Commands:
   - cargo test -p coh --features mock
   - cargo test -p host-ticket-agent
+  - cargo test -p nine-door --test integration
   - cargo test -p root-task --lib
+  - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel serial-console"
   - scripts/ci/check_test_plan.sh
 Checks:
   - Cleanup-sensitive crates have deterministic tests that pin current operator-visible behavior.
-  - CI and staged test-plan coverage run those tests automatically.
+  - CI and staged test-plan coverage run those tests automatically and retain root-task VM-boundary evidence as an artifact.
 Deliverables:
   - Regression safety net expanded ahead of structural cleanup.
+
+Title/ID: m26c-no-std-boundary-gates
+Goal: Add explicit CI and audit gates that fail if host-side capability leaks into the VM build.
+Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_stage_02_host_fast.sh, apps/root-task/Cargo.toml, apps/nine-door/Cargo.toml, docs/TEST_PLAN.md, docs/ARCHITECTURE.md
+Changes:
+  - .github/workflows/ci.yml — add a root-task kernel-target `no_std` check and archive the dependency tree artifact for audit review.
+  - scripts/ci/test_plan_stage_02_host_fast.sh — emit `out/audit/m26c_root_task_tree.txt` (or equivalent state-dir artifact) from the VM-target dependency tree as part of cleanup gating.
+  - docs/TEST_PLAN.md + docs/ARCHITECTURE.md — document the VM boundary gate, expected artifact, and interpretation rules.
+  - docs/BUILD_PLAN.md — record that shared semantic helpers are allowed only when they remain `no_std`-safe and do not drag host-side crates into the VM build.
+Commands:
+  - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel serial-console"
+  - cargo tree -p root-task --target aarch64-unknown-none -e normal > out/audit/m26c_root_task_tree.txt
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - The VM-target root-task build remains `no_std` and succeeds without host-side operator/tooling dependencies.
+  - The dependency-tree artifact is reviewed as part of 26c evidence and shows no accidental pull-in of host-only surfaces.
+  - Cleanup work cannot merge if boundary evidence is missing or contradicts the documented VM/host split.
+Deliverables:
+  - Explicit `no_std` boundary gate for cleanup-era work, reducing drift risk without touching runtime behavior.
 
 Title/ID: m26c-selected-host-structural-cleanup
 Goal: Refactor repetitive host-side validation and processing flows once characterization tests are in place.

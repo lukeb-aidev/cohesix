@@ -1973,6 +1973,8 @@ impl SdioHost {
         )?;
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-reset"));
         self.core_reset(CYW43_ARMCR4_CORE_BASE)?;
+        emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-core-up"));
+        self.wait_for_core_up(CYW43_ARMCR4_CORE_BASE, "armcr4-core-up")?;
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=wait-ht-clock"));
         self.wait_for_ht_clock()?;
         emit_breadcrumb(format_args!(
@@ -2050,6 +2052,28 @@ impl SdioHost {
             "[pi4-wifi] firmware stage=wait-ht-clock timeout csr=0x{last_chipclk:02x}"
         ));
         Err(HalError::Unsupported("cyw43-ht-clock-timeout"))
+    }
+
+    fn wait_for_core_up(&mut self, base: u32, stage: &'static str) -> Result<(), HalError> {
+        let mut last_ioctrl = 0u8;
+        let mut last_resetctrl = 0u8;
+        for _ in 0..CYW43_CORE_RESET_RETRY_LIMIT {
+            last_ioctrl = self.backplane_read8(base + AI_IOCTRL_OFFSET)?;
+            last_resetctrl = self.backplane_read8(base + AI_RESETCTRL_OFFSET)?;
+            if (last_ioctrl & AI_CORE_PRERESET_IOCTRL) == AI_CORE_POSTRESET_IOCTRL
+                && (last_resetctrl & AI_RESETCTRL_BIT_RESET) == 0
+            {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} ready io=0x{last_ioctrl:02x} reset=0x{last_resetctrl:02x}"
+                ));
+                return Ok(());
+            }
+            spin_settle(CYW43_CORE_CONTROL_SETTLE_LOOPS);
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} timeout io=0x{last_ioctrl:02x} reset=0x{last_resetctrl:02x}"
+        ));
+        Err(HalError::Unsupported("cyw43-core-up-timeout"))
     }
 
     fn enable_ht_clock_assist(&mut self) -> Result<(), HalError> {
