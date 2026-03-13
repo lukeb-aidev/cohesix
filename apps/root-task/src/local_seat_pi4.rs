@@ -268,6 +268,7 @@ const MAX_FB_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FB_MAP_PAGES: usize = MAX_FB_BYTES / PAGE_SIZE;
 
 static VL805_RESET_NOTIFIED: AtomicBool = AtomicBool::new(false);
+static VL805_RESET_NOTIFY_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 static VL805_RESET_BYPASSED_LOGGED: AtomicBool = AtomicBool::new(false);
 static USB_DMA_RANGE_WARNED: AtomicBool = AtomicBool::new(false);
 static VL805_CFG_SAFE_MODE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -521,6 +522,23 @@ impl Pi4LocalSeat {
             boot_log::force_uart_line("[local-seat] pi4 xhci preseed begin");
         }
         prime_pinned_xhci_window(hal, self.xhci_mmio_hint, self.xhci_pci_cmd);
+        if xhci_firmware_handoff_cold_start_should_notify_reset(
+            pinned_xhci_phys_start_trusted(),
+            self.xhci_mmio_hint,
+            self.xhci_pci_cmd,
+            VL805_RESET_NOTIFY_ATTEMPTED.load(Ordering::Acquire),
+        ) {
+            if crate::hal::pi4_wifi::mailbox_transport_ready() {
+                boot_log::force_uart_line(
+                    "[local-seat] vl805 reset notify=requested stage=preseed reason=fw-handoff-cold-start",
+                );
+                notify_vl805_reset_once(hal);
+            } else {
+                boot_log::force_uart_line(
+                    "[local-seat] vl805 reset notify=deferred stage=preseed detail=mailbox-unproven",
+                );
+            }
+        }
         if first_preseed {
             boot_log::force_uart_line("[local-seat] pi4 xhci preseed end");
         }
@@ -967,6 +985,72 @@ fn xhci_firmware_handoff_cold_start_reset_notify_required(
     trusted_pinned_mmio == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
         && xhci_firmware_handoff_cold_start_trusted(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            firmware_hint,
+            xhci_pci_cmd,
+        )
+}
+
+#[inline]
+fn xhci_firmware_handoff_cold_start_runtime_usable(
+    trusted_pinned_mmio: Option<usize>,
+    firmware_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    reset_notified: bool,
+) -> bool {
+    if !xhci_firmware_handoff_cold_start_trusted(
+        RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        firmware_hint,
+        xhci_pci_cmd,
+    ) {
+        return false;
+    }
+    if xhci_firmware_handoff_cold_start_reset_notify_required(
+        trusted_pinned_mmio,
+        firmware_hint,
+        xhci_pci_cmd,
+    ) {
+        reset_notified
+    } else {
+        true
+    }
+}
+
+#[inline]
+fn xhci_effective_runtime_trusted_mmio(
+    trusted_pinned_mmio: Option<usize>,
+    firmware_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    reset_notified: bool,
+) -> (Option<usize>, bool) {
+    let cold_start_runtime_usable = xhci_firmware_handoff_cold_start_runtime_usable(
+        trusted_pinned_mmio,
+        firmware_hint,
+        xhci_pci_cmd,
+        reset_notified,
+    );
+    if trusted_pinned_mmio == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+        && xhci_firmware_handoff_cold_start_trusted(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            firmware_hint,
+            xhci_pci_cmd,
+        )
+        && !cold_start_runtime_usable
+    {
+        return (None, true);
+    }
+    (trusted_pinned_mmio, false)
+}
+
+#[inline]
+fn xhci_firmware_handoff_cold_start_should_notify_reset(
+    trusted_pinned_mmio: Option<usize>,
+    firmware_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    reset_attempted: bool,
+) -> bool {
+    !reset_attempted
+        && xhci_firmware_handoff_cold_start_reset_notify_required(
+            trusted_pinned_mmio,
             firmware_hint,
             xhci_pci_cmd,
         )
@@ -2837,7 +2921,9 @@ fn hal_error_detail(err: HalError) -> &'static str {
 }
 
 fn notify_vl805_reset_once(hal: &mut KernelHal<'_>) {
-    if VL805_RESET_NOTIFIED.load(Ordering::Acquire) {
+    if VL805_RESET_NOTIFIED.load(Ordering::Acquire)
+        || VL805_RESET_NOTIFY_ATTEMPTED.swap(true, Ordering::AcqRel)
+    {
         return;
     }
 
@@ -3201,20 +3287,46 @@ impl UsbKeyboard {
         }
 
         let trusted_pinned_xhci_mmio = pinned_xhci_phys_start_trusted();
-        let cold_start_reset_notify = xhci_firmware_handoff_cold_start_reset_notify_required(
+        let cold_start_reset_notify = xhci_firmware_handoff_cold_start_should_notify_reset(
             trusted_pinned_xhci_mmio,
             xhci_mmio_hint,
             xhci_pci_cmd,
+            VL805_RESET_NOTIFY_ATTEMPTED.load(Ordering::Acquire),
         );
         if VL805_RESET_NOTIFY_BEFORE_USB_PROBE || cold_start_reset_notify {
-            if cold_start_reset_notify {
+            if cold_start_reset_notify && !crate::hal::pi4_wifi::mailbox_transport_ready() {
                 boot_log::force_uart_line(
-                    "[local-seat] vl805 reset notify=requested reason=fw-handoff-cold-start",
+                    "[local-seat] vl805 reset notify=deferred detail=mailbox-unproven",
                 );
+            } else {
+                if cold_start_reset_notify {
+                    boot_log::force_uart_line(
+                        "[local-seat] vl805 reset notify=requested reason=fw-handoff-cold-start",
+                    );
+                }
+                notify_vl805_reset_once(hal);
             }
-            notify_vl805_reset_once(hal);
         } else if !VL805_RESET_BYPASSED_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] vl805 reset notify=bypassed");
+        }
+        let reset_notified = VL805_RESET_NOTIFIED.load(Ordering::Acquire);
+        let cold_start_runtime_usable = xhci_firmware_handoff_cold_start_runtime_usable(
+            trusted_pinned_xhci_mmio,
+            xhci_mmio_hint,
+            xhci_pci_cmd,
+            reset_notified,
+        );
+        let (effective_trusted_pinned_xhci_mmio, revoked_cold_start_trust) =
+            xhci_effective_runtime_trusted_mmio(
+                trusted_pinned_xhci_mmio,
+                xhci_mmio_hint,
+                xhci_pci_cmd,
+                reset_notified,
+            );
+        if revoked_cold_start_trust {
+            boot_log::force_uart_line(
+                "[local-seat] xhci runtime trust revoked reason=fw-reset-notify-failed",
+            );
         }
         let (vl805_pci_mmio, pci_cfg_ready) = if runtime_cfg_touch_enabled {
             let vl805_pci_mmio = prepare_vl805_pci(hal);
@@ -3298,12 +3410,8 @@ impl UsbKeyboard {
             }
         }
         boot_log::force_uart_line(source_line.as_str());
-        if trusted_pinned_xhci_mmio == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
-            && xhci_firmware_handoff_cold_start_trusted(
-                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-                xhci_mmio_hint,
-                xhci_pci_cmd,
-            )
+        if effective_trusted_pinned_xhci_mmio == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+            && cold_start_runtime_usable
         {
             let mut line = heapless::String::<224>::new();
             let _ = core::fmt::Write::write_fmt(
@@ -3346,7 +3454,7 @@ impl UsbKeyboard {
                 mmio,
                 has_safe_cfg_window,
                 pinned_xhci_state,
-                trusted_pinned_xhci_mmio,
+                effective_trusted_pinned_xhci_mmio,
                 xhci_mmio_hint,
                 verified_vl805_hint,
             ) {
@@ -3356,7 +3464,7 @@ impl UsbKeyboard {
                     has_device_coverage,
                     has_pinned_window,
                     pinned_xhci_state,
-                    trusted_pinned_xhci_mmio,
+                    effective_trusted_pinned_xhci_mmio,
                     xhci_mmio_hint,
                     verified_vl805_hint,
                     firmware_hint_safe,
@@ -3364,7 +3472,7 @@ impl UsbKeyboard {
                 let reason = xhci_runtime_candidate_skip_reason(
                     mmio,
                     has_safe_cfg_window,
-                    trusted_pinned_xhci_mmio,
+                    effective_trusted_pinned_xhci_mmio,
                     xhci_mmio_hint,
                     verified_vl805_hint,
                     firmware_hint_safe,
@@ -3405,7 +3513,7 @@ impl UsbKeyboard {
                     has_device_coverage,
                     has_pinned_window,
                     pinned_xhci_state,
-                    trusted_pinned_xhci_mmio,
+                    effective_trusted_pinned_xhci_mmio,
                     xhci_mmio_hint,
                     verified_vl805_hint,
                     firmware_hint_safe,
@@ -3415,7 +3523,7 @@ impl UsbKeyboard {
                     &mut line,
                     format_args!(
                         "[local-seat] xhci candidate skipped mmio=0x{mmio:016x} reason=no-accessible-window trusted-pin={}",
-                        if trusted_pinned_xhci_mmio == Some(mmio) {
+                        if effective_trusted_pinned_xhci_mmio == Some(mmio) {
                             "yes"
                         } else {
                             "no"
@@ -3433,19 +3541,15 @@ impl UsbKeyboard {
             true
         };
         match preferred_xhci_runtime_mmio(
-            trusted_pinned_xhci_mmio,
+            effective_trusted_pinned_xhci_mmio,
             xhci_mmio_hint,
             vl805_pci_mmio,
             verified_vl805_hint,
         ) {
             Some(preferred_mmio) => {
                 if preferred_mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
-                    && trusted_pinned_xhci_mmio == Some(preferred_mmio)
-                    && xhci_firmware_handoff_cold_start_trusted(
-                        preferred_mmio,
-                        xhci_mmio_hint,
-                        xhci_pci_cmd,
-                    )
+                    && effective_trusted_pinned_xhci_mmio == Some(preferred_mmio)
+                    && cold_start_runtime_usable
                 {
                     let mut line = heapless::String::<224>::new();
                     let _ = core::fmt::Write::write_fmt(
@@ -8250,6 +8354,77 @@ mod tests {
                 Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
                 Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
                 Some(super::PCI_COMMAND_MEMORY_SPACE | super::PCI_COMMAND_BUS_MASTER),
+            )
+        );
+    }
+
+    #[test]
+    fn xhci_firmware_handoff_cold_start_runtime_requires_reset_success() {
+        let safe_cmd = Some(
+            super::PCI_COMMAND_MEMORY_SPACE
+                | super::PCI_COMMAND_BUS_MASTER
+                | super::PCI_COMMAND_INTERRUPT_DISABLE,
+        );
+        assert!(!super::xhci_firmware_handoff_cold_start_runtime_usable(
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            false,
+        ));
+        assert!(super::xhci_firmware_handoff_cold_start_runtime_usable(
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            true,
+        ));
+    }
+
+    #[test]
+    fn xhci_effective_runtime_trust_revokes_failed_cold_start_bar() {
+        let safe_cmd = Some(
+            super::PCI_COMMAND_MEMORY_SPACE
+                | super::PCI_COMMAND_BUS_MASTER
+                | super::PCI_COMMAND_INTERRUPT_DISABLE,
+        );
+        assert_eq!(
+            super::xhci_effective_runtime_trusted_mmio(
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                safe_cmd,
+                false,
+            ),
+            (None, true)
+        );
+        assert_eq!(
+            super::xhci_effective_runtime_trusted_mmio(
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                safe_cmd,
+                true,
+            ),
+            (Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE), false)
+        );
+    }
+
+    #[test]
+    fn xhci_firmware_handoff_cold_start_skips_duplicate_reset_notify() {
+        let safe_cmd = Some(
+            super::PCI_COMMAND_MEMORY_SPACE
+                | super::PCI_COMMAND_BUS_MASTER
+                | super::PCI_COMMAND_INTERRUPT_DISABLE,
+        );
+        assert!(super::xhci_firmware_handoff_cold_start_should_notify_reset(
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            false,
+        ));
+        assert!(
+            !super::xhci_firmware_handoff_cold_start_should_notify_reset(
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                safe_cmd,
+                true,
             )
         );
     }
