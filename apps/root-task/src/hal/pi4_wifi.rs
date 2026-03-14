@@ -49,9 +49,6 @@ const TAG_GET_GPIO_STATE: u32 = 0x0003_0041;
 const TAG_SET_GPIO_STATE: u32 = 0x0003_8041;
 const TAG_GET_GPIO_CONFIG: u32 = 0x0003_0043;
 const TAG_SET_GPIO_CONFIG: u32 = 0x0003_8043;
-const TAG_NOTIFY_XHCI_RESET: u32 = 0x0003_0058;
-const VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
-const VL805_NOTIFY_SETTLE_SPINS: usize = 50_000;
 
 const POWER_STATE_REQ_ON: u32 = 1 << 0;
 const POWER_STATE_REQ_WAIT: u32 = 1 << 1;
@@ -230,8 +227,66 @@ const fn backplane_small_access_addr(addr: u32) -> u32 {
 }
 
 #[inline]
-const fn backplane_word_access_addr(addr: u32) -> u32 {
-    addr | BACKPLANE_32BIT_FLAG
+const fn backplane_word_increment_addr() -> bool {
+    false
+}
+
+#[inline]
+const fn backplane_word_function_addr(addr: u32) -> u32 {
+    (addr & BACKPLANE_ADDRESS_MASK) | BACKPLANE_32BIT_FLAG
+}
+
+#[inline]
+const fn core_ctrl_access_mode_label() -> &'static str {
+    "cmd52-flagged fallback=cmd53-word"
+}
+
+fn log_core_ctrl_access(op: &'static str, base: u32, offset: u32, value: Option<u8>) {
+    let addr = base.saturating_add(offset);
+    let bus = backplane_word_function_addr(addr);
+    let shift = ((addr & 0x3) * 8) as u32;
+    match value {
+        Some(value) => emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware core-ctrl access op={op} mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} shift={shift} inc={} value=0x{value:02x}",
+            core_ctrl_access_mode_label(),
+            backplane_word_increment_addr() as u8,
+            window = addr & BACKPLANE_WINDOW_MASK,
+        )),
+        None => emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware core-ctrl access op={op} mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} shift={shift} inc={}",
+            core_ctrl_access_mode_label(),
+            backplane_word_increment_addr() as u8,
+            window = addr & BACKPLANE_WINDOW_MASK,
+        )),
+    }
+}
+
+fn log_sdio_cmd53_shape(
+    prefix: &'static str,
+    cmd: u16,
+    arg: u32,
+    len: usize,
+    plan: SdioTransferPlan,
+) {
+    let write = ((arg >> 31) & 1) != 0;
+    let function = ((arg >> 28) & 0x7) as u8;
+    let block_mode = ((arg >> 27) & 1) != 0;
+    let increment_addr = ((arg >> 26) & 1) != 0;
+    let addr = (arg >> 9) & 0x1_FFFF;
+    let count = arg & 0x1FF;
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] sdhci xfer meta stage={prefix} cmd={cmd} op={} fn={} addr=0x{addr:05x} inc={} blk={} count={} len={} blksz={} blkcnt={} flagged={} trn=0x{:04x}",
+        if write { "write" } else { "read" },
+        function,
+        increment_addr as u8,
+        block_mode as u8,
+        count,
+        len,
+        plan.block_size,
+        plan.block_count,
+        ((addr & BACKPLANE_32BIT_FLAG) != 0) as u8,
+        plan.transfer_mode,
+    ));
 }
 
 fn wifi_power_state_name(state: WifiPowerState) -> &'static str {
@@ -251,6 +306,19 @@ fn wifi_reset_state_name(state: WifiResetState) -> &'static str {
 #[inline]
 const fn wifi_gpio_line_enabled(power_state: WifiPowerState) -> bool {
     matches!(power_state, WifiPowerState::On)
+}
+
+#[inline]
+const fn wifi_gpio_transition_target(
+    was_enabled: bool,
+    power_state: WifiPowerState,
+) -> Option<bool> {
+    let enabled = wifi_gpio_line_enabled(power_state);
+    if was_enabled == enabled {
+        None
+    } else {
+        Some(enabled)
+    }
 }
 
 fn sdio_bus_width_name(width: SdioBusWidth) -> &'static str {
@@ -287,6 +355,47 @@ const fn ht_clock_request_value() -> u8 {
     SBSDIO_HT_AVAIL_REQ
 }
 
+#[inline]
+const fn ai_core_is_up(ioctrl: u8, resetctrl: u8) -> bool {
+    (ioctrl & AI_CORE_PRERESET_IOCTRL) == AI_CORE_POSTRESET_IOCTRL
+        && (resetctrl & AI_RESETCTRL_BIT_RESET) == 0
+}
+
+#[inline]
+const fn ai_core_clock_enabled(ioctrl: u8) -> bool {
+    (ioctrl & AI_IOCTRL_BIT_CLOCK_EN) != 0
+}
+
+#[inline]
+const fn ai_core_force_gated(ioctrl: u8) -> bool {
+    (ioctrl & AI_IOCTRL_BIT_FGC) != 0
+}
+
+#[inline]
+const fn ai_core_state_reason(ioctrl: u8, resetctrl: u8) -> &'static str {
+    if ai_core_is_up(ioctrl, resetctrl) {
+        "core-up"
+    } else if (resetctrl & AI_RESETCTRL_BIT_RESET) != 0 {
+        if ioctrl == 0 {
+            "reset-held-clock-off"
+        } else if ioctrl == AI_CORE_PRERESET_IOCTRL {
+            "reset-held-fgc-clock"
+        } else if ioctrl == AI_CORE_POSTRESET_IOCTRL {
+            "reset-held-clock-en"
+        } else {
+            "reset-held-unexpected-io"
+        }
+    } else if ioctrl == 0 {
+        "clock-off"
+    } else if ioctrl == AI_CORE_PRERESET_IOCTRL {
+        "fgc-still-set"
+    } else if ai_core_clock_enabled(ioctrl) && !ai_core_force_gated(ioctrl) {
+        "clock-en-unexpected-io"
+    } else {
+        "unexpected-state"
+    }
+}
+
 fn mailbox_tag_name(tag: u32) -> &'static str {
     match tag {
         TAG_SET_POWER_STATE => "set-power-state",
@@ -296,7 +405,6 @@ fn mailbox_tag_name(tag: u32) -> &'static str {
         TAG_SET_GPIO_STATE => "set-gpio-state",
         TAG_GET_GPIO_CONFIG => "get-gpio-config",
         TAG_SET_GPIO_CONFIG => "set-gpio-config",
-        TAG_NOTIFY_XHCI_RESET => "notify-xhci-reset",
         _ => "unknown",
     }
 }
@@ -785,9 +893,7 @@ impl Pi4WifiState {
             "[pi4-wifi] reset state={}",
             wifi_reset_state_name(state)
         ));
-        let was_enabled = wifi_gpio_line_enabled(self.power_state);
         self.reset_state = state;
-        self.apply_wifi_line(was_enabled)?;
         if matches!(state, WifiResetState::Deasserted) {
             bounded_spin_settle("wifi-reset-deassert", WIFI_RESET_SETTLE_LOOPS);
         }
@@ -867,17 +973,23 @@ impl Pi4WifiState {
             wifi_power_state_name(self.power_state),
             wifi_reset_state_name(self.reset_state),
         ));
-        if was_enabled != enabled {
+        let Some(target_enabled) = wifi_gpio_transition_target(was_enabled, self.power_state)
+        else {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] gpio wl-on transition {}->{}",
-                was_enabled as u8, enabled as u8
+                "[pi4-wifi] gpio wl-on unchanged={} action=skip-mailbox",
+                enabled as u8
             ));
-        }
+            return Ok(());
+        };
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] gpio wl-on transition {}->{}",
+            was_enabled as u8, target_enabled as u8
+        ));
         self.mailbox
-            .configure_gpio_output(PI4_WIFI_GPIO, enabled as u32)?;
-        if !was_enabled && enabled {
+            .configure_gpio_output(PI4_WIFI_GPIO, target_enabled as u32)?;
+        if !was_enabled && target_enabled {
             bounded_spin_settle("wifi-power-on", WIFI_POWER_SETTLE_LOOPS);
-        } else if was_enabled && !enabled {
+        } else if was_enabled && !target_enabled {
             bounded_spin_settle("wifi-power-off", WIFI_POWER_DROP_SETTLE_LOOPS);
             self.host.mark_power_cycled();
         }
@@ -1019,15 +1131,6 @@ impl Mailbox {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] mailbox gpio complete gpio={gpio} state={state}"
         ));
-        Ok(())
-    }
-
-    fn notify_vl805_reset(&mut self) -> Result<(), HalError> {
-        let mut payload = [VL805_PCI_DEV_ADDR];
-        self.call_tag(TAG_NOTIFY_XHCI_RESET, 4, &mut payload)?;
-        for _ in 0..VL805_NOTIFY_SETTLE_SPINS {
-            spin_loop();
-        }
         Ok(())
     }
 
@@ -1698,12 +1801,38 @@ impl SdioHost {
 
     fn backplane_word_read32(&mut self, addr: u32) -> Result<u32, HalError> {
         let mut bytes = [0u8; 4];
-        self.backplane_read_small(backplane_word_access_addr(addr), &mut bytes)?;
+        self.with_backplane_window_addr(
+            addr,
+            backplane_word_function_addr(addr),
+            |this, bus_addr| {
+                this.io_extended(
+                    SdioFunction::Function1,
+                    bus_addr,
+                    backplane_word_increment_addr(),
+                    false,
+                    &mut bytes,
+                )?;
+                Ok(())
+            },
+        )?;
         Ok(u32::from_le_bytes(bytes))
     }
 
     fn backplane_word_write32(&mut self, addr: u32, value: u32) -> Result<(), HalError> {
-        self.backplane_write_small(backplane_word_access_addr(addr), &value.to_le_bytes())
+        let mut bytes = value.to_le_bytes();
+        self.with_backplane_window_addr(
+            addr,
+            backplane_word_function_addr(addr),
+            |this, bus_addr| {
+                this.io_extended(
+                    SdioFunction::Function1,
+                    bus_addr,
+                    backplane_word_increment_addr(),
+                    true,
+                    &mut bytes,
+                )
+            },
+        )
     }
 
     fn backplane_read(&mut self, addr: u32, len: usize) -> Result<[u8; 4], HalError> {
@@ -1807,12 +1936,13 @@ impl SdioHost {
         })
     }
 
-    fn with_backplane_window<T>(
+    fn with_backplane_window_addr<T>(
         &mut self,
-        addr: u32,
+        window_addr: u32,
+        function_addr: u32,
         f: impl FnOnce(&mut Self, u32) -> Result<T, HalError>,
     ) -> Result<T, HalError> {
-        let window = addr & BACKPLANE_WINDOW_MASK;
+        let window = window_addr & BACKPLANE_WINDOW_MASK;
         self.io_direct_write(
             SdioFunction::Function1,
             SBSDIO_FUNC1_SBADDRLOW,
@@ -1828,9 +1958,18 @@ impl SdioHost {
             SBSDIO_FUNC1_SBADDRHIGH,
             ((window >> 24) & 0xFF) as u8,
         )?;
-        f(
-            self,
+        f(self, function_addr)
+    }
+
+    fn with_backplane_window<T>(
+        &mut self,
+        addr: u32,
+        f: impl FnOnce(&mut Self, u32) -> Result<T, HalError>,
+    ) -> Result<T, HalError> {
+        self.with_backplane_window_addr(
+            addr,
             (addr & BACKPLANE_ADDRESS_MASK) | (addr & BACKPLANE_32BIT_FLAG),
+            f,
         )
     }
 
@@ -1932,6 +2071,9 @@ impl SdioHost {
         let ram_size = self.ram_size()?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware load begin ram_base=0x{ram_base:08x} ram_size=0x{ram_size:08x}"
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware core-ctrl mode=cmd52-flagged fallback=cmd53-word split-window"
         ));
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-disable"));
         self.core_disable(CYW43_ARMCR4_CORE_BASE)?;
@@ -2057,23 +2199,116 @@ impl SdioHost {
     fn wait_for_core_up(&mut self, base: u32, stage: &'static str) -> Result<(), HalError> {
         let mut last_ioctrl = 0u8;
         let mut last_resetctrl = 0u8;
-        for _ in 0..CYW43_CORE_RESET_RETRY_LIMIT {
-            last_ioctrl = self.backplane_read8(base + AI_IOCTRL_OFFSET)?;
-            last_resetctrl = self.backplane_read8(base + AI_RESETCTRL_OFFSET)?;
-            if (last_ioctrl & AI_CORE_PRERESET_IOCTRL) == AI_CORE_POSTRESET_IOCTRL
-                && (last_resetctrl & AI_RESETCTRL_BIT_RESET) == 0
-            {
+        let mut attempts = 0usize;
+        for attempt in 0..CYW43_CORE_RESET_RETRY_LIMIT {
+            attempts = attempt.saturating_add(1);
+            last_ioctrl = self.core_ctrl_read8(base, AI_IOCTRL_OFFSET)?;
+            last_resetctrl = self.core_ctrl_read8(base, AI_RESETCTRL_OFFSET)?;
+            if ai_core_is_up(last_ioctrl, last_resetctrl) {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} ready io=0x{last_ioctrl:02x} reset=0x{last_resetctrl:02x}"
+                    "[pi4-wifi] firmware stage={stage} ready io=0x{last_ioctrl:02x} reset=0x{last_resetctrl:02x} attempts={attempts} reason={}",
+                    ai_core_state_reason(last_ioctrl, last_resetctrl),
                 ));
                 return Ok(());
             }
             spin_settle(CYW43_CORE_CONTROL_SETTLE_LOOPS);
         }
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} timeout io=0x{last_ioctrl:02x} reset=0x{last_resetctrl:02x}"
+            "[pi4-wifi] firmware stage={stage} timeout io=0x{last_ioctrl:02x} reset=0x{last_resetctrl:02x} attempts={attempts} reason={}",
+            ai_core_state_reason(last_ioctrl, last_resetctrl),
         ));
         Err(HalError::Unsupported("cyw43-core-up-timeout"))
+    }
+
+    fn core_ctrl_direct_read8(&mut self, base: u32, offset: u32) -> Result<u8, HalError> {
+        let addr = base.saturating_add(offset);
+        self.with_backplane_window_addr(addr, backplane_word_function_addr(addr), |this, bus| {
+            this.io_direct_read(SdioFunction::Function1, bus)
+        })
+    }
+
+    fn core_ctrl_direct_write8(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+    ) -> Result<(), HalError> {
+        let addr = base.saturating_add(offset);
+        self.with_backplane_window_addr(addr, backplane_word_function_addr(addr), |this, bus| {
+            this.io_direct_write(SdioFunction::Function1, bus, value)
+        })
+    }
+
+    fn core_ctrl_read8(&mut self, base: u32, offset: u32) -> Result<u8, HalError> {
+        match self.core_ctrl_direct_read8(base, offset) {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl fallback op=read8 base=0x{base:08x} off=0x{offset:03x} from=cmd52-flagged to=cmd53-word err={err}"
+                ));
+                match self.backplane_word_read32(base + offset) {
+                    Ok(word) => Ok((word & 0xFF) as u8),
+                    Err(fallback_err) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware core-ctrl fallback op=read8 base=0x{base:08x} off=0x{offset:03x} to=cmd53-word err={fallback_err}"
+                        ));
+                        Err(fallback_err)
+                    }
+                }
+            }
+        }
+    }
+
+    fn core_ctrl_write8(&mut self, base: u32, offset: u32, value: u8) -> Result<(), HalError> {
+        match self.core_ctrl_direct_write8(base, offset, value) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} from=cmd52-flagged to=cmd53-word err={err}"
+                ));
+                match self.backplane_word_write32(base + offset, u32::from(value)) {
+                    Ok(()) => Ok(()),
+                    Err(fallback_err) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} to=cmd53-word err={fallback_err}"
+                        ));
+                        Err(fallback_err)
+                    }
+                }
+            }
+        }
+    }
+
+    fn core_ctrl_write8_latched(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+        stage: &'static str,
+    ) -> Result<u8, HalError> {
+        log_core_ctrl_access("write8", base, offset, Some(value));
+        if let Err(err) = self.core_ctrl_write8(base, offset, value) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
+            ));
+            return Err(err);
+        }
+        log_core_ctrl_access("read8", base, offset, None);
+        let observed = match self.core_ctrl_read8(base, offset) {
+            Ok(value) => value,
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl access stage={stage} op=read8 err={err} base=0x{base:08x} off=0x{offset:03x}"
+                ));
+                return Err(err);
+            }
+        };
+        if observed != value {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-ctrl latch-mismatch stage={stage} off=0x{offset:03x} exp=0x{value:02x} got=0x{observed:02x}"
+            ));
+        }
+        Ok(observed)
     }
 
     fn enable_ht_clock_assist(&mut self) -> Result<(), HalError> {
@@ -2103,72 +2338,112 @@ impl SdioHost {
     }
 
     fn core_disable(&mut self, base: u32) -> Result<(), HalError> {
-        let reset = (self.backplane_word_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8;
+        let ioctrl = self.core_ctrl_read8(base, AI_IOCTRL_OFFSET)?;
+        let reset = self.core_ctrl_read8(base, AI_RESETCTRL_OFFSET)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=entry io=0x{ioctrl:02x} reset=0x{reset:02x} reason={}",
+            ai_core_state_reason(ioctrl, reset),
+        ));
         if (reset & AI_RESETCTRL_BIT_RESET) == 0 {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=fgc-clock"
+                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=ioctrl-zero"
             ));
-            self.backplane_word_write32(
-                base + AI_IOCTRL_OFFSET,
-                u32::from(AI_CORE_PRERESET_IOCTRL),
-            )?;
-            let _ = self.backplane_word_read32(base + AI_IOCTRL_OFFSET)?;
+            let ioctrl = self.core_ctrl_write8_latched(base, AI_IOCTRL_OFFSET, 0, "ioctrl-zero")?;
+            let reset = self.core_ctrl_read8(base, AI_RESETCTRL_OFFSET)?;
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=ioctrl-zero-ready io=0x{ioctrl:02x} reset=0x{reset:02x} reason={}",
+                ai_core_state_reason(ioctrl, reset),
+            ));
+            bounded_spin_settle("cyw43-core-ioctrl-zero", CYW43_CORE_CONTROL_SETTLE_LOOPS);
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset"
             ));
-            self.backplane_word_write32(
-                base + AI_RESETCTRL_OFFSET,
-                u32::from(AI_RESETCTRL_BIT_RESET),
+            let reset = self.core_ctrl_write8_latched(
+                base,
+                AI_RESETCTRL_OFFSET,
+                AI_RESETCTRL_BIT_RESET,
+                "assert-reset",
             )?;
+            let ioctrl = self.core_ctrl_read8(base, AI_IOCTRL_OFFSET)?;
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset-ready io=0x{ioctrl:02x} reset=0x{reset:02x} reason={}",
+                ai_core_state_reason(ioctrl, reset),
+            ));
             bounded_spin_settle("cyw43-core-reset-assert", CYW43_CORE_CONTROL_SETTLE_LOOPS);
-            for _ in 0..CYW43_CORE_RESET_RETRY_LIMIT {
-                if ((self.backplane_word_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8
-                    & AI_RESETCTRL_BIT_RESET)
-                    != 0
-                {
-                    break;
-                }
-                spin_loop();
-            }
         } else {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=already-reset"
+                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=already-reset io=0x{ioctrl:02x} reset=0x{reset:02x} reason={}",
+                ai_core_state_reason(ioctrl, reset),
             ));
         }
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=in-reset-config"
-        ));
-        self.backplane_word_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_PRERESET_IOCTRL))?;
-        let _ = self.backplane_word_read32(base + AI_IOCTRL_OFFSET)?;
         Ok(())
     }
 
     fn core_reset(&mut self, base: u32) -> Result<(), HalError> {
         self.core_disable(base)?;
         emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=fgc-clock"
+        ));
+        let prereq_ioctrl = self.core_ctrl_write8_latched(
+            base,
+            AI_IOCTRL_OFFSET,
+            AI_CORE_PRERESET_IOCTRL,
+            "fgc-clock",
+        )?;
+        let prereq_reset = self.core_ctrl_read8(base, AI_RESETCTRL_OFFSET)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=fgc-clock-ready io=0x{prereq_ioctrl:02x} reset=0x{prereq_reset:02x} reason={}",
+            ai_core_state_reason(prereq_ioctrl, prereq_reset),
+        ));
+        bounded_spin_settle("cyw43-core-fgc-clock", CYW43_CORE_CONTROL_SETTLE_LOOPS);
+        emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset"
         ));
-        let mut clear_reset_logged = false;
-        for _ in 0..CYW43_CORE_RESET_RETRY_LIMIT {
-            self.backplane_word_write32(base + AI_RESETCTRL_OFFSET, 0)?;
-            if ((self.backplane_word_read32(base + AI_RESETCTRL_OFFSET)? & 0xFF) as u8
-                & AI_RESETCTRL_BIT_RESET)
-                == 0
-            {
+        let mut last_reset = AI_RESETCTRL_BIT_RESET;
+        let mut last_ioctrl = AI_CORE_PRERESET_IOCTRL;
+        let mut cleared = false;
+        let mut attempts = 0usize;
+        for attempt in 0..CYW43_CORE_RESET_RETRY_LIMIT {
+            attempts = attempt.saturating_add(1);
+            last_reset =
+                self.core_ctrl_write8_latched(base, AI_RESETCTRL_OFFSET, 0, "clear-reset")?;
+            last_ioctrl = self.core_ctrl_read8(base, AI_IOCTRL_OFFSET)?;
+            if (last_reset & AI_RESETCTRL_BIT_RESET) == 0 {
+                cleared = true;
                 break;
             }
-            if !clear_reset_logged {
+            if attempt == 0 {
                 bounded_spin_settle("cyw43-core-reset-clear", CYW43_CORE_CONTROL_SETTLE_LOOPS);
-                clear_reset_logged = true;
             } else {
                 spin_settle(CYW43_CORE_CONTROL_SETTLE_LOOPS);
             }
         }
+        if !cleared {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-timeout io=0x{last_ioctrl:02x} reset=0x{last_reset:02x} attempts={attempts} reason={}",
+                ai_core_state_reason(last_ioctrl, last_reset),
+            ));
+            return Err(HalError::Unsupported("cyw43-core-reset-clear-timeout"));
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-ready io=0x{last_ioctrl:02x} reset=0x{last_reset:02x} attempts={attempts} reason={}",
+            ai_core_state_reason(last_ioctrl, last_reset),
+        ));
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clock-en"
         ));
-        self.backplane_word_write32(base + AI_IOCTRL_OFFSET, u32::from(AI_CORE_POSTRESET_IOCTRL))?;
-        let _ = self.backplane_word_read32(base + AI_IOCTRL_OFFSET)?;
+        let ioctrl = self.core_ctrl_write8_latched(
+            base,
+            AI_IOCTRL_OFFSET,
+            AI_CORE_POSTRESET_IOCTRL,
+            "clock-en",
+        )?;
+        let reset = self.core_ctrl_read8(base, AI_RESETCTRL_OFFSET)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=verify io=0x{ioctrl:02x} reset=0x{reset:02x} reason={}",
+            ai_core_state_reason(ioctrl, reset),
+        ));
+        bounded_spin_settle("cyw43-core-clock-en", CYW43_CORE_CONTROL_SETTLE_LOOPS);
         Ok(())
     }
 
@@ -2304,6 +2579,7 @@ impl SdioHost {
         let cmd_status = match self.wait_int(SDHCI_INT_CMD_MASK) {
             Ok(status) => status,
             Err(err) => {
+                log_sdio_cmd53_shape("command-wait", cmd, arg, buffer.len(), plan);
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=command-wait err={err}",
                     buffer.len(),
@@ -2314,6 +2590,7 @@ impl SdioHost {
             }
         };
         if (cmd_status & SDHCI_INT_ERROR) != 0 {
+            log_sdio_cmd53_shape("command", cmd, arg, buffer.len(), plan);
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=command st=0x{cmd_status:08x} why={}",
                 buffer.len(),
@@ -2332,6 +2609,7 @@ impl SdioHost {
                 let status = match self.wait_int(wait_mask | SDHCI_INT_ERROR) {
                     Ok(status) => status,
                     Err(err) => {
+                        log_sdio_cmd53_shape("data-wait", cmd, arg, buffer.len(), plan);
                         emit_breadcrumb(format_args!(
                             "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data-wait err={err}",
                             buffer.len(),
@@ -2342,6 +2620,7 @@ impl SdioHost {
                     }
                 };
                 if (status & SDHCI_INT_ERROR) != 0 {
+                    log_sdio_cmd53_shape("data", cmd, arg, buffer.len(), plan);
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data st=0x{status:08x} why={}",
                         buffer.len(),
@@ -2374,6 +2653,7 @@ impl SdioHost {
         {
             Ok(status) => status,
             Err(err) => {
+                log_sdio_cmd53_shape("finish-wait", cmd, arg, buffer.len(), plan);
                 emit_breadcrumb(format_args!(
                         "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=finish-wait err={err}",
                         buffer.len(),
@@ -2384,6 +2664,7 @@ impl SdioHost {
             }
         };
         if (data_status & SDHCI_INT_ERROR) != 0 {
+            log_sdio_cmd53_shape("finish", cmd, arg, buffer.len(), plan);
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=finish st=0x{data_status:08x} why={}",
                 buffer.len(),
@@ -2586,18 +2867,6 @@ impl MailboxRef<'_> {
     }
 }
 
-pub(crate) fn notify_vl805_reset<H>(hal: &mut H) -> Result<(), HalError>
-where
-    H: Hardware<Error = HalError>,
-{
-    let mut mailbox = Mailbox::new(hal)?;
-    mailbox.notify_vl805_reset()
-}
-
-pub(crate) fn mailbox_transport_ready() -> bool {
-    MAILBOX_TRANSPORT_READY.load(Ordering::Acquire)
-}
-
 fn map_exact<H>(
     hal: &mut H,
     candidates: &[usize],
@@ -2746,13 +3015,14 @@ pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        backplane_small_access_addr, backplane_word_access_addr, bcm2711_gpfsel_offset,
-        bcm2711_puppdn_offset, cmd52_argument, ht_clock_request_value, is_mailbox_protocol_error,
-        mailbox_tag_name, make_command, merge_u16_word, normalize_nvram, phys_to_bus, r5_status,
-        sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
-        sdio_transfer_plan, update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError,
-        ResponseType, SdioFunction, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL,
-        AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, ARMCR4_CAP, BACKPLANE_32BIT_FLAG,
+        backplane_small_access_addr, backplane_word_function_addr, bcm2711_gpfsel_offset,
+        bcm2711_puppdn_offset, cmd52_argument, core_ctrl_access_mode_label, ht_clock_request_value,
+        is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word, normalize_nvram,
+        phys_to_bus, r5_status, sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask,
+        sdhci_status_reason, sdio_transfer_plan, update_bcm2711_gpio_function,
+        update_bcm2711_gpio_pull, HalError, ResponseType, SdioFunction, AI_CORE_POSTRESET_IOCTRL,
+        AI_CORE_PRERESET_IOCTRL, AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET,
+        ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BACKPLANE_ADDRESS_MASK, BACKPLANE_WINDOW_MASK,
         BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE, PI4_WIFI_SDIO_PINS,
         PI4_WIFI_SDIO_PULLS, SBSDIO_ALP_AVAIL_REQ, SBSDIO_FORCE_HT, SBSDIO_HT_AVAIL_REQ,
         SBSDIO_WAKE_TILL_HT_AVAIL, SDHCI_COMMAND, SDHCI_DATA_AVAILABLE, SDHCI_INT_CRC,
@@ -2761,7 +3031,7 @@ mod tests {
         SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS,
         SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1,
         SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1, SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE,
-        TAG_NOTIFY_XHCI_RESET, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+        TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -2822,8 +3092,21 @@ mod tests {
             CYW43_CHIPCOMMON_BASE
         );
         assert_eq!(
-            backplane_word_access_addr(CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP),
-            (CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP) | BACKPLANE_32BIT_FLAG
+            backplane_word_function_addr(CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP),
+            ((CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP) & BACKPLANE_ADDRESS_MASK) | BACKPLANE_32BIT_FLAG
+        );
+        assert_eq!(
+            (CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP) & BACKPLANE_WINDOW_MASK,
+            CYW43_ARMCR4_CORE_BASE & BACKPLANE_WINDOW_MASK
+        );
+        assert!(!backplane_word_increment_addr());
+        assert_eq!(
+            backplane_word_function_addr(CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET),
+            0x0c408
+        );
+        assert_eq!(
+            core_ctrl_access_mode_label(),
+            "cmd52-flagged fallback=cmd53-word"
         );
     }
 
@@ -2832,7 +3115,6 @@ mod tests {
         assert_eq!(mailbox_tag_name(TAG_SET_POWER_STATE), "set-power-state");
         assert_eq!(mailbox_tag_name(TAG_GET_CLOCK_RATE), "get-clock-rate");
         assert_eq!(mailbox_tag_name(TAG_SET_GPIO_CONFIG), "set-gpio-config");
-        assert_eq!(mailbox_tag_name(TAG_NOTIFY_XHCI_RESET), "notify-xhci-reset");
         assert_eq!(mailbox_tag_name(0xffff_ffff), "unknown");
     }
 
@@ -2898,6 +3180,47 @@ mod tests {
             AI_IOCTRL_BIT_FGC | AI_IOCTRL_BIT_CLOCK_EN
         );
         assert_eq!(AI_CORE_POSTRESET_IOCTRL, AI_IOCTRL_BIT_CLOCK_EN);
+    }
+
+    #[test]
+    fn ai_core_is_up_matches_expected_reset_state() {
+        assert!(ai_core_is_up(AI_CORE_POSTRESET_IOCTRL, 0));
+        assert!(!ai_core_is_up(0, AI_RESETCTRL_BIT_RESET));
+        assert!(!ai_core_is_up(AI_CORE_PRERESET_IOCTRL, 0));
+    }
+
+    #[test]
+    fn ai_core_state_reason_classifies_reset_and_clock_states() {
+        assert_eq!(ai_core_state_reason(AI_CORE_POSTRESET_IOCTRL, 0), "core-up");
+        assert_eq!(
+            ai_core_state_reason(0, AI_RESETCTRL_BIT_RESET),
+            "reset-held-clock-off"
+        );
+        assert_eq!(
+            ai_core_state_reason(AI_CORE_PRERESET_IOCTRL, AI_RESETCTRL_BIT_RESET),
+            "reset-held-fgc-clock"
+        );
+        assert_eq!(
+            ai_core_state_reason(AI_CORE_PRERESET_IOCTRL, 0),
+            "fgc-still-set"
+        );
+    }
+
+    #[test]
+    fn wifi_gpio_transition_target_only_requests_real_power_changes() {
+        assert_eq!(
+            wifi_gpio_transition_target(false, WifiPowerState::Off),
+            None
+        );
+        assert_eq!(
+            wifi_gpio_transition_target(false, WifiPowerState::On),
+            Some(true)
+        );
+        assert_eq!(wifi_gpio_transition_target(true, WifiPowerState::On), None);
+        assert_eq!(
+            wifi_gpio_transition_target(true, WifiPowerState::Off),
+            Some(false)
+        );
     }
 
     #[test]

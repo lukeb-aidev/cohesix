@@ -24,10 +24,29 @@
 #ifndef PCI_COMMAND_INTX_DISABLE
 #define PCI_COMMAND_INTX_DISABLE	0x0400
 #endif
+#ifndef PCI_MSIX_FLAGS
+#define PCI_MSIX_FLAGS		2
+#endif
+#ifndef PCI_MSIX_FLAGS_MASKALL
+#define PCI_MSIX_FLAGS_MASKALL	0x4000
+#endif
+#ifndef PCI_MSIX_FLAGS_ENABLE
+#define PCI_MSIX_FLAGS_ENABLE	0x8000
+#endif
 
 struct xhci_pci_plat {
 	struct reset_ctl reset;
 };
+
+static void xhci_pci_export_handoff_ready(int ready)
+{
+	env_set("coh_xhci_handoff_ready", ready ? "1" : NULL);
+}
+
+static void xhci_pci_export_irq_quiesced(int ready)
+{
+	env_set("coh_xhci_irq_quiesced", ready ? "1" : NULL);
+}
 
 static u16 xhci_pci_configure_command(struct udevice *dev)
 {
@@ -40,6 +59,50 @@ static u16 xhci_pci_configure_command(struct udevice *dev)
 	env_set_hex("coh_xhci_pci_cmd", cmd);
 
 	return cmd;
+}
+
+static int xhci_pci_quiesce_interrupt_modes(struct udevice *dev)
+{
+	int cap;
+	u16 flags;
+	int ret;
+
+	xhci_pci_export_irq_quiesced(0);
+
+	cap = dm_pci_find_capability(dev, PCI_CAP_ID_MSI);
+	if (cap > 0) {
+		ret = dm_pci_read_config16(dev, cap + PCI_MSI_FLAGS, &flags);
+		if (ret)
+			return ret;
+		flags &= ~PCI_MSI_FLAGS_ENABLE;
+		ret = dm_pci_write_config16(dev, cap + PCI_MSI_FLAGS, flags);
+		if (ret)
+			return ret;
+		ret = dm_pci_read_config16(dev, cap + PCI_MSI_FLAGS, &flags);
+		if (ret)
+			return ret;
+		if (flags & PCI_MSI_FLAGS_ENABLE)
+			return -EIO;
+	}
+
+	cap = dm_pci_find_capability(dev, PCI_CAP_ID_MSIX);
+	if (cap > 0) {
+		ret = dm_pci_read_config16(dev, cap + PCI_MSIX_FLAGS, &flags);
+		if (ret)
+			return ret;
+		flags = (flags | PCI_MSIX_FLAGS_MASKALL) & ~PCI_MSIX_FLAGS_ENABLE;
+		ret = dm_pci_write_config16(dev, cap + PCI_MSIX_FLAGS, flags);
+		if (ret)
+			return ret;
+		ret = dm_pci_read_config16(dev, cap + PCI_MSIX_FLAGS, &flags);
+		if (ret)
+			return ret;
+		if (flags & PCI_MSIX_FLAGS_ENABLE)
+			return -EIO;
+	}
+
+	xhci_pci_export_irq_quiesced(1);
+	return 0;
 }
 
 static ulong xhci_pci_bar0_addr(struct udevice *dev)
@@ -118,6 +181,9 @@ static int xhci_pci_probe(struct udevice *dev)
 	struct xhci_hcor *hcor;
 	int ret;
 
+	xhci_pci_export_handoff_ready(0);
+	xhci_pci_export_irq_quiesced(0);
+
 	ret = reset_get_by_index(dev, 0, &plat->reset);
 	if (ret && ret != -ENOENT && ret != -ENOTSUPP) {
 		dev_err(dev, "failed to get reset\n");
@@ -142,6 +208,11 @@ static int xhci_pci_probe(struct udevice *dev)
 	if (ret)
 		goto err_reset;
 
+	ret = xhci_pci_quiesce_interrupt_modes(dev);
+	if (ret)
+		goto err_reset;
+
+	xhci_pci_export_handoff_ready(1);
 	return 0;
 
 err_reset:
@@ -160,6 +231,8 @@ static int xhci_pci_remove(struct udevice *dev)
 	cmd = xhci_pci_configure_command(dev);
 	debug("XHCI-PCI stop preserved command bits for Cohesix handoff: %x\n",
 	      cmd);
+	xhci_pci_quiesce_interrupt_modes(dev);
+	xhci_pci_export_handoff_ready(1);
 	if (reset_valid(&plat->reset))
 		reset_free(&plat->reset);
 

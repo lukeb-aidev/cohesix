@@ -91,6 +91,10 @@ pub struct LocalSeatPlatformHints {
     pub xhci_mmio_hint: Option<usize>,
     /// Optional bootloader-exported PCI command state for Pi4 xHCI handoff.
     pub xhci_pci_cmd: Option<u16>,
+    /// Whether the bootloader marked the Pi4 xHCI BAR safe for cold-start handoff.
+    pub xhci_handoff_ready: bool,
+    /// Whether the bootloader quiesced xHCI interrupt delivery before handoff.
+    pub xhci_irq_quiesced: bool,
     /// Optional DT/firmware framebuffer hint for HDMI rendering.
     pub display_hint: Option<LocalSeatDisplayHint>,
 }
@@ -287,6 +291,8 @@ pub fn attach_platform_backend(
     let backend_hints = Pi4LocalSeatHints {
         xhci_mmio_hint: hints.xhci_mmio_hint,
         xhci_pci_cmd: hints.xhci_pci_cmd,
+        xhci_handoff_ready: hints.xhci_handoff_ready,
+        xhci_irq_quiesced: hints.xhci_irq_quiesced,
         framebuffer_hint: hints.display_hint.map(|hint| Pi4FramebufferHint {
             paddr: hint.paddr,
             width: hint.width,

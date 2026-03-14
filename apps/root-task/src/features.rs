@@ -5,7 +5,7 @@
 
 //! Compile-time feature manifest and guard rails for root-task builds.
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", feature = "cohesix-dev"))]
 use crate::bootstrap::log as boot_log;
 
 /// Public dev umbrella flag for bring-up and instrumentation.
