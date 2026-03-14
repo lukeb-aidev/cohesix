@@ -38,6 +38,27 @@ struct xhci_pci_plat {
 	struct reset_ctl reset;
 };
 
+static const char *xhci_pci_env_or_absent(const char *name)
+{
+	const char *value = env_get(name);
+
+	return value ? value : "absent";
+}
+
+static void xhci_pci_emit_breadcrumb(struct udevice *dev, const char *stage,
+					 int ret)
+{
+	pci_dev_t bdf = dm_pci_get_bdf(dev);
+
+	printf("[cohesix:xhci-pci] stage=%s bdf=%02x:%02x.%x mmio_raw=%s mmio=%s cmd=%s ready=%s irq=%s ret=%d\n",
+	       stage, PCI_BUS(bdf), PCI_DEV(bdf), PCI_FUNC(bdf),
+	       xhci_pci_env_or_absent("coh_xhci_mmio_raw"),
+	       xhci_pci_env_or_absent("coh_xhci_mmio"),
+	       xhci_pci_env_or_absent("coh_xhci_pci_cmd"),
+	       xhci_pci_env_or_absent("coh_xhci_handoff_ready"),
+	       xhci_pci_env_or_absent("coh_xhci_irq_quiesced"), ret);
+}
+
 static void xhci_pci_export_handoff_ready(int ready)
 {
 	env_set("coh_xhci_handoff_ready", ready ? "1" : NULL);
@@ -171,6 +192,7 @@ static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 	 */
 	cmd = xhci_pci_configure_command(dev);
 	debug("XHCI-PCI command configured for Cohesix handoff: %x\n", cmd);
+	xhci_pci_emit_breadcrumb(dev, "init", 0);
 	return 0;
 }
 
@@ -179,43 +201,54 @@ static int xhci_pci_probe(struct udevice *dev)
 	struct xhci_pci_plat *plat = dev_get_plat(dev);
 	struct xhci_hccr *hccr;
 	struct xhci_hcor *hcor;
+	const char *fail_stage = "probe-entry";
 	int ret;
 
 	xhci_pci_export_handoff_ready(0);
 	xhci_pci_export_irq_quiesced(0);
+	xhci_pci_emit_breadcrumb(dev, "probe-entry", 0);
 
+	fail_stage = "reset-get";
 	ret = reset_get_by_index(dev, 0, &plat->reset);
 	if (ret && ret != -ENOENT && ret != -ENOTSUPP) {
 		dev_err(dev, "failed to get reset\n");
+		xhci_pci_emit_breadcrumb(dev, fail_stage, ret);
 		return ret;
 	}
 
 	if (reset_valid(&plat->reset)) {
+		fail_stage = "reset-assert";
 		ret = reset_assert(&plat->reset);
 		if (ret)
 			goto err_reset;
 
+		fail_stage = "reset-deassert";
 		ret = reset_deassert(&plat->reset);
 		if (ret)
 			goto err_reset;
 	}
 
+	fail_stage = "init";
 	ret = xhci_pci_init(dev, &hccr, &hcor);
 	if (ret)
 		goto err_reset;
 
+	fail_stage = "register";
 	ret = xhci_register(dev, hccr, hcor);
 	if (ret)
 		goto err_reset;
 
+	fail_stage = "irq-quiesce";
 	ret = xhci_pci_quiesce_interrupt_modes(dev);
 	if (ret)
 		goto err_reset;
 
 	xhci_pci_export_handoff_ready(1);
+	xhci_pci_emit_breadcrumb(dev, "probe-ready", 0);
 	return 0;
 
 err_reset:
+	xhci_pci_emit_breadcrumb(dev, fail_stage, ret);
 	if (reset_valid(&plat->reset))
 		reset_free(&plat->reset);
 
@@ -226,13 +259,22 @@ static int xhci_pci_remove(struct udevice *dev)
 {
 	struct xhci_pci_plat *plat = dev_get_plat(dev);
 	u16 cmd;
+	int ret;
 
+	xhci_pci_emit_breadcrumb(dev, "remove-entry", 0);
 	xhci_deregister(dev);
 	cmd = xhci_pci_configure_command(dev);
 	debug("XHCI-PCI stop preserved command bits for Cohesix handoff: %x\n",
 	      cmd);
-	xhci_pci_quiesce_interrupt_modes(dev);
+	ret = xhci_pci_quiesce_interrupt_modes(dev);
+	if (ret) {
+		xhci_pci_emit_breadcrumb(dev, "remove-irq-quiesce", ret);
+		if (reset_valid(&plat->reset))
+			reset_free(&plat->reset);
+		return ret;
+	}
 	xhci_pci_export_handoff_ready(1);
+	xhci_pci_emit_breadcrumb(dev, "remove-ready", 0);
 	if (reset_valid(&plat->reset))
 		reset_free(&plat->reset);
 

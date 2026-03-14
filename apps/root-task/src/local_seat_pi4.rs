@@ -197,10 +197,12 @@ const fn vl805_cfg_preseed_mode(preseed_touch_enabled: bool) -> Vl805CfgPreseedM
 
 #[inline]
 const fn vl805_cfg_preseed_needed(
-    preseed_touch_enabled: bool,
-    runtime_touch_enabled: bool,
+    _preseed_touch_enabled: bool,
+    _runtime_touch_enabled: bool,
 ) -> bool {
-    preseed_touch_enabled || runtime_touch_enabled
+    // Even in safe mode, keep the ECAM page pinned so runtime can replay the
+    // bootloader's verified PCI command bits before touching the handed-off BAR.
+    true
 }
 
 const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
@@ -918,6 +920,43 @@ fn vl805_cfg_bus_master_ready() -> bool {
         == (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
 }
 
+fn replay_vl805_handoff_command_bits(xhci_pci_cmd: Option<u16>) -> Result<u16, &'static str> {
+    let config_virt = current_vl805_cfg_virt().ok_or("cfg-window-absent")?;
+    let command_before = pci_cfg_read_u16(config_virt, PCI_CFG_COMMAND_STATUS);
+    let command_target = xhci_handoff_command_restore_target(command_before, xhci_pci_cmd)
+        .ok_or("unsafe-exported-cmd")?;
+    if command_target != command_before {
+        pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_target);
+    }
+    let command_after = pci_cfg_read_u16(config_virt, PCI_CFG_COMMAND_STATUS);
+    let mut line = heapless::String::<256>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 handoff pci-cmd restore before=0x{before:04x} target=0x{target:04x} after=0x{after:04x} ready={ready}",
+            before = command_before,
+            target = command_target,
+            after = command_after,
+            ready = ((command_after
+                & (PCI_COMMAND_MEMORY_SPACE
+                    | PCI_COMMAND_BUS_MASTER
+                    | PCI_COMMAND_INTERRUPT_DISABLE))
+                == (PCI_COMMAND_MEMORY_SPACE
+                    | PCI_COMMAND_BUS_MASTER
+                    | PCI_COMMAND_INTERRUPT_DISABLE)) as u8,
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    if (command_after
+        & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE))
+        == (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE)
+    {
+        Ok(command_after)
+    } else {
+        Err("command-bits-missing")
+    }
+}
+
 fn remember_vl805_xhci_mmio_hint(mmio: usize) {
     if mmio != 0 {
         VL805_XHCI_MMIO_HINT.store(mmio, Ordering::Release);
@@ -1013,6 +1052,23 @@ const fn xhci_firmware_handoff_safe(xhci_pci_cmd: Option<u16>) -> bool {
                     | PCI_COMMAND_INTERRUPT_DISABLE)
         }
         None => false,
+    }
+}
+
+#[inline]
+const fn xhci_handoff_command_restore_target(
+    current: u16,
+    xhci_pci_cmd: Option<u16>,
+) -> Option<u16> {
+    match xhci_pci_cmd {
+        Some(cmd) if xhci_firmware_handoff_safe(Some(cmd)) => Some(
+            current
+                | cmd
+                | PCI_COMMAND_MEMORY_SPACE
+                | PCI_COMMAND_BUS_MASTER
+                | PCI_COMMAND_INTERRUPT_DISABLE,
+        ),
+        _ => None,
     }
 }
 
@@ -1467,6 +1523,11 @@ struct XhciCapProbe {
     mmio_size: usize,
 }
 
+#[inline]
+const fn parse_xhci_capbase(capbase: u32) -> (u8, u16) {
+    ((capbase & 0xff) as u8, ((capbase >> 16) & 0xffff) as u16)
+}
+
 fn log_xhci_cap_probe_read(mmio_base: usize, reg: &'static str, offset: usize) {
     let mut line = heapless::String::<208>::new();
     let _ = core::fmt::Write::write_fmt(
@@ -1507,23 +1568,23 @@ fn probe_xhci_capability_window(
         ),
     );
     boot_log::force_uart_line(mapped_line.as_str());
-    log_xhci_cap_probe_read(mmio_base, "caplen", regs::CAPLENGTH);
-    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
-    let cap_length = unsafe { ptr::read_volatile((init_mmio + regs::CAPLENGTH) as *const u8) };
-    let mut cap_line = heapless::String::<192>::new();
+    log_xhci_cap_probe_read(mmio_base, "capbase", regs::CAPLENGTH);
+    // SAFETY: `init_mmio` points to a mapped MMIO page for aligned volatile reads.
+    let cap_base = unsafe { ptr::read_volatile((init_mmio + regs::CAPLENGTH) as *const u32) };
+    let (cap_length, hci_version) = parse_xhci_capbase(cap_base);
+    let mut cap_line = heapless::String::<224>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut cap_line,
         format_args!(
-            "[local-seat] xhci cap probe caplen-ok mmio=0x{mmio:016x} caplen=0x{caplen:02x}",
+            "[local-seat] xhci cap probe capbase-ok mmio=0x{mmio:016x} raw=0x{capbase:08x} caplen=0x{caplen:02x} hciver=0x{hciver:04x}",
             mmio = mmio_base,
+            capbase = cap_base,
             caplen = cap_length
+            ,
+            hciver = hci_version,
         ),
     );
     boot_log::force_uart_line(cap_line.as_str());
-    log_xhci_cap_probe_read(mmio_base, "hciver", regs::CAPLENGTH + 2);
-    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
-    let hci_version =
-        unsafe { ptr::read_volatile((init_mmio + regs::CAPLENGTH + 2) as *const u16) };
     log_xhci_cap_probe_read(mmio_base, "hcs1", regs::HCSPARAMS1);
     // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
     let hcs1 = unsafe { ptr::read_volatile((init_mmio + regs::HCSPARAMS1) as *const u32) };
@@ -3381,29 +3442,6 @@ impl UsbKeyboard {
         }
 
         let trusted_pinned_xhci_mmio = pinned_xhci_phys_start_trusted();
-        let effective_trusted_pinned_xhci_mmio = trusted_pinned_xhci_mmio.filter(|&mmio| {
-            !matches!(mmio, RPI4_XHCI_MMIO_HIGH_CANDIDATE)
-                || xhci_firmware_handoff_cold_start_trusted(
-                    mmio,
-                    xhci_mmio_hint,
-                    xhci_pci_cmd,
-                    xhci_handoff_ready,
-                    xhci_irq_quiesced,
-                )
-        });
-        if trusted_pinned_xhci_mmio == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
-            && effective_trusted_pinned_xhci_mmio.is_none()
-        {
-            let mut line = heapless::String::<192>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] xhci runtime trust revoked reason={}",
-                    xhci_firmware_handoff_revoked_reason(xhci_handoff_ready, xhci_irq_quiesced,)
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-        }
         let (vl805_pci_mmio, pci_cfg_ready) = if runtime_cfg_touch_enabled {
             let vl805_pci_mmio = prepare_vl805_pci(hal);
             if vl805_pci_mmio.is_none() {
@@ -3493,13 +3531,41 @@ impl UsbKeyboard {
             ),
         );
         boot_log::force_uart_line(source_line.as_str());
-        let trusted_fw_handoff_high_bar = xhci_firmware_handoff_cold_start_trusted(
+        let mut trusted_fw_handoff_high_bar = xhci_firmware_handoff_cold_start_trusted(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             xhci_mmio_hint,
             xhci_pci_cmd,
             xhci_handoff_ready,
             xhci_irq_quiesced,
         );
+        let mut handoff_restore_fail_reason = None;
+        if trusted_fw_handoff_high_bar {
+            match replay_vl805_handoff_command_bits(xhci_pci_cmd) {
+                Ok(_) => {}
+                Err(reason) => {
+                    handoff_restore_fail_reason = Some(reason);
+                    trusted_fw_handoff_high_bar = false;
+                }
+            }
+        }
+        let effective_trusted_pinned_xhci_mmio = trusted_pinned_xhci_mmio.filter(|&mmio| {
+            !matches!(mmio, RPI4_XHCI_MMIO_HIGH_CANDIDATE) || trusted_fw_handoff_high_bar
+        });
+        if trusted_pinned_xhci_mmio == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+            && effective_trusted_pinned_xhci_mmio.is_none()
+        {
+            let mut line = heapless::String::<224>::new();
+            let reason = if let Some(reason) = handoff_restore_fail_reason {
+                reason
+            } else {
+                xhci_firmware_handoff_revoked_reason(xhci_handoff_ready, xhci_irq_quiesced)
+            };
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!("[local-seat] xhci runtime trust revoked reason={reason}"),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         let legacy_mirror_allowed = xhci_firmware_handoff_allows_legacy_probe(
             xhci_mmio_hint,
             xhci_pci_cmd,
@@ -8093,9 +8159,10 @@ mod tests {
         hub_retry_wait_spins, hub_should_eager_port_power, keyboard_attach_retry_allowed,
         keyboard_display_scroll_delta_for_key, keyboard_scancode_to_char,
         mailbox_visible_dimension, normalize_hub_tt_profile, normalize_pi4_xhci_mmio_hint,
-        text_backspace_target, text_row_count, text_viewport_height,
-        translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode, vl805_runtime_cfg_touch_allowed,
-        xhci_firmware_handoff_hint_reason, xhci_preseed_allows_static_legacy_fallbacks,
+        parse_xhci_capbase, text_backspace_target, text_row_count, text_viewport_height,
+        translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode, vl805_cfg_preseed_needed,
+        vl805_runtime_cfg_touch_allowed, xhci_firmware_handoff_hint_reason,
+        xhci_handoff_command_restore_target, xhci_preseed_allows_static_legacy_fallbacks,
         xhci_preseed_pin_only_reason, xhci_runtime_mmio_candidate_allowed,
         xhci_runtime_mmio_has_accessible_window, ConfigDesc, Pi4SeatError, UsbKeyboard,
         Vl805CfgPreseedMode, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -8121,6 +8188,11 @@ mod tests {
         let low = 0x0000_0004;
         let high = 0x0000_0006;
         assert_eq!(decode_pci_mmio_bar(low, high), Some(0x0000_0006_0000_0000));
+    }
+
+    #[test]
+    fn parse_xhci_capbase_extracts_caplen_and_version() {
+        assert_eq!(parse_xhci_capbase(0x0010_0040), (0x40, 0x0010));
     }
 
     #[test]
@@ -8179,10 +8251,31 @@ mod tests {
     }
 
     #[test]
-    fn vl805_cfg_preseed_needed_tracks_runtime_discovery_requirement() {
-        assert!(!vl805_cfg_preseed_needed(false, false));
+    fn vl805_cfg_preseed_needed_keeps_safe_mode_ecam_window_pinned() {
+        assert!(vl805_cfg_preseed_needed(false, false));
         assert!(vl805_cfg_preseed_needed(true, false));
         assert!(vl805_cfg_preseed_needed(false, true));
+    }
+
+    #[test]
+    fn xhci_handoff_command_restore_target_preserves_required_bits() {
+        let safe_cmd = Some(
+            super::PCI_COMMAND_MEMORY_SPACE
+                | super::PCI_COMMAND_BUS_MASTER
+                | super::PCI_COMMAND_INTERRUPT_DISABLE,
+        );
+        assert_eq!(
+            xhci_handoff_command_restore_target(0x0000, safe_cmd),
+            Some(0x0406)
+        );
+        assert_eq!(
+            xhci_handoff_command_restore_target(0x0040, safe_cmd),
+            Some(0x0446)
+        );
+        assert_eq!(
+            xhci_handoff_command_restore_target(0x0000, Some(super::PCI_COMMAND_MEMORY_SPACE)),
+            None
+        );
     }
 
     #[test]
