@@ -648,6 +648,13 @@ const COHESIX_DTB_XHCI_PRESTOP_READY_PROP: &str = "cohesix,xhci-handoff-prestop-
 const COHESIX_DTB_XHCI_PRESTOP_IRQ_PROP: &str = "cohesix,xhci-handoff-prestop-irq";
 const COHESIX_DTB_XHCI_POSTSTOP_READY_PROP: &str = "cohesix,xhci-handoff-poststop-ready";
 const COHESIX_DTB_XHCI_POSTSTOP_IRQ_PROP: &str = "cohesix,xhci-handoff-poststop-irq";
+const COHESIX_DTB_XHCI_CAP_LENGTH_PROP: &str = "cohesix,xhci-cap-length";
+const COHESIX_DTB_XHCI_HCI_VERSION_PROP: &str = "cohesix,xhci-hci-version";
+const COHESIX_DTB_XHCI_HCS1_PROP: &str = "cohesix,xhci-hcs1";
+const COHESIX_DTB_XHCI_HCS2_PROP: &str = "cohesix,xhci-hcs2";
+const COHESIX_DTB_XHCI_HCCPARAMS1_PROP: &str = "cohesix,xhci-hccparams1";
+const COHESIX_DTB_XHCI_DBOFF_PROP: &str = "cohesix,xhci-dboff";
+const COHESIX_DTB_XHCI_RTSOFF_PROP: &str = "cohesix,xhci-rtsoff";
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const COHESIX_DTB_NET_MODE_PROP: &str = "cohesix,net-mode";
@@ -1215,6 +1222,23 @@ fn parse_pi4_uefi_xhci_pci_command(value: &[u8]) -> Option<u16> {
     u16::try_from(raw).ok()
 }
 
+fn parse_pi4_uefi_xhci_u32_prop(value: &[u8]) -> Option<u32> {
+    if let Some(text) = dtb_prop_cstr(value) {
+        return parse_hex(text).and_then(|raw| u32::try_from(raw).ok());
+    }
+    dtb_prop_u32_be(value, 0)
+}
+
+fn parse_pi4_uefi_xhci_u16_prop(value: &[u8]) -> Option<u16> {
+    let raw = parse_pi4_uefi_xhci_u32_prop(value)?;
+    u16::try_from(raw).ok()
+}
+
+fn parse_pi4_uefi_xhci_u8_prop(value: &[u8]) -> Option<u8> {
+    let raw = parse_pi4_uefi_xhci_u32_prop(value)?;
+    u8::try_from(raw).ok()
+}
+
 fn parse_pi4_uefi_xhci_bool_flag(value: &[u8]) -> Option<bool> {
     if let Some(text) = dtb_prop_cstr(value) {
         let normalized = text.trim().to_ascii_lowercase();
@@ -1400,6 +1424,71 @@ fn infer_pi4_uefi_xhci_irq_quiesced(
         COHESIX_DTB_XHCI_IRQ_QUIESCED_PROP,
         parse_pi4_uefi_xhci_irq_quiesced,
     )
+}
+
+fn infer_pi4_uefi_xhci_capability_snapshot(
+    extra_bytes: &[u8],
+    extra_range: Range<usize>,
+) -> Option<crate::local_seat::LocalSeatXhciCapabilitySnapshot> {
+    let dtb_blob = bi_extra::locate_dtb(extra_bytes, extra_range).ok()?;
+    let dtb = bi_extra::parse_dtb(dtb_blob).ok()?;
+    let mut path = HeaplessVec::<&str, 16>::new();
+    let mut cap_length = None;
+    let mut hci_version = None;
+    let mut hcs1 = None;
+    let mut hcs2 = None;
+    let mut hccparams1 = None;
+    let mut db_offset = None;
+    let mut rts_offset = None;
+    let mut cursor = dtb.structure_cursor();
+    while let Some(item) = cursor.next().ok().flatten() {
+        match item {
+            bi_extra::StructureItem::BeginNode(name) => {
+                let _ = path.push(name);
+            }
+            bi_extra::StructureItem::EndNode => {
+                let _ = path.pop();
+            }
+            bi_extra::StructureItem::Property { name, value } => {
+                if !path.iter().any(|segment| *segment == "chosen") {
+                    continue;
+                }
+                match name {
+                    COHESIX_DTB_XHCI_CAP_LENGTH_PROP => {
+                        cap_length = parse_pi4_uefi_xhci_u8_prop(value);
+                    }
+                    COHESIX_DTB_XHCI_HCI_VERSION_PROP => {
+                        hci_version = parse_pi4_uefi_xhci_u16_prop(value);
+                    }
+                    COHESIX_DTB_XHCI_HCS1_PROP => {
+                        hcs1 = parse_pi4_uefi_xhci_u32_prop(value);
+                    }
+                    COHESIX_DTB_XHCI_HCS2_PROP => {
+                        hcs2 = parse_pi4_uefi_xhci_u32_prop(value);
+                    }
+                    COHESIX_DTB_XHCI_HCCPARAMS1_PROP => {
+                        hccparams1 = parse_pi4_uefi_xhci_u32_prop(value);
+                    }
+                    COHESIX_DTB_XHCI_DBOFF_PROP => {
+                        db_offset = parse_pi4_uefi_xhci_u32_prop(value);
+                    }
+                    COHESIX_DTB_XHCI_RTSOFF_PROP => {
+                        rts_offset = parse_pi4_uefi_xhci_u32_prop(value);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Some(crate::local_seat::LocalSeatXhciCapabilitySnapshot {
+        cap_length: cap_length?,
+        hci_version: hci_version?,
+        hcs1: hcs1?,
+        hcs2: hcs2?,
+        hccparams1: hccparams1?,
+        db_offset: db_offset?,
+        rts_offset: rts_offset?,
+    })
 }
 
 fn infer_pi4_uefi_xhci_chosen_flag_prop(
@@ -1969,6 +2058,11 @@ fn init_local_seat_runtime<P: Platform>(
         Pi4UefiXhciChosenFlag::absent()
     };
     let xhci_irq_quiesced = xhci_irq_quiesced_info.value;
+    let xhci_capability_snapshot = if local_seat_enabled {
+        infer_pi4_uefi_xhci_capability_snapshot(extra_bytes, extra_range.clone())
+    } else {
+        None
+    };
     let xhci_handoff_source = if local_seat_enabled {
         infer_pi4_uefi_xhci_chosen_text_prop(extra_bytes, extra_range.clone())
     } else {
@@ -2102,6 +2196,25 @@ fn init_local_seat_runtime<P: Platform>(
             console.writeln_prefixed(line.as_str());
             boot_log::force_uart_line(line.as_str());
         }
+        if let Some(snapshot) = xhci_capability_snapshot {
+            let mut line = heapless::String::<320>::new();
+            let _ = write!(
+                line,
+                "[local-seat] xhci-cap-snapshot=1 source=chosen caplen=0x{:02x} hciver=0x{:04x} hcs1=0x{:08x} hcs2=0x{:08x} hcc1=0x{:08x} dboff=0x{:08x} rtsoff=0x{:08x}",
+                snapshot.cap_length,
+                snapshot.hci_version,
+                snapshot.hcs1,
+                snapshot.hcs2,
+                snapshot.hccparams1,
+                snapshot.db_offset,
+                snapshot.rts_offset,
+            );
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
+        } else {
+            console.writeln_prefixed("[local-seat] xhci-cap-snapshot=0 source=absent");
+            boot_log::force_uart_line("[local-seat] xhci-cap-snapshot=0 source=absent");
+        }
         if xhci_handoff_source.is_some()
             || xhci_prestop_ready_info.source != Pi4UefiXhciChosenFlagSource::Absent
             || xhci_prestop_irq_info.source != Pi4UefiXhciChosenFlagSource::Absent
@@ -2143,6 +2256,7 @@ fn init_local_seat_runtime<P: Platform>(
         xhci_pci_cmd,
         xhci_handoff_ready,
         xhci_irq_quiesced,
+        xhci_capability_snapshot,
         display_hint,
     };
     match local_seat::evaluate(hardware, local_seat::runtime_backend_available()) {
@@ -6472,6 +6586,20 @@ mod tests {
             Some(0x0406)
         );
         assert_eq!(super::parse_pi4_uefi_xhci_pci_command(b"zz\0"), None);
+    }
+
+    #[test]
+    fn parse_pi4_uefi_xhci_numeric_props_accept_hex_strings_and_be_words() {
+        assert_eq!(super::parse_pi4_uefi_xhci_u8_prop(b"20\0"), Some(0x20));
+        assert_eq!(
+            super::parse_pi4_uefi_xhci_u16_prop(&0x0100u32.to_be_bytes()),
+            Some(0x0100)
+        );
+        assert_eq!(
+            super::parse_pi4_uefi_xhci_u32_prop(b"18000010\0"),
+            Some(0x1800_0010)
+        );
+        assert_eq!(super::parse_pi4_uefi_xhci_u32_prop(b"bogus\0"), None);
     }
 
     #[test]

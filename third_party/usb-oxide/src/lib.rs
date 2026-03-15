@@ -51,7 +51,7 @@ pub use crate::{
     err::{Result, UsbError},
     ram::Dma,
     ring::{PhysMem, Trb},
-    xhci::{XhciCtrl, XhciDiagHook, set_xhci_diag_hook},
+    xhci::{XhciControllerParams, XhciCtrl, XhciDiagHook, set_xhci_diag_hook},
 };
 
 // Re-export descriptor types and constants

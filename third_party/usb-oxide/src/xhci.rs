@@ -184,6 +184,48 @@ fn parse_controller_params(
     Some((max_slots, max_ports, max_scratchpad, mmio_size))
 }
 
+/// Pre-validated xHCI capability register snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XhciControllerParams {
+    /// Capability register length.
+    pub cap_length: u8,
+    /// Structural Parameters 1.
+    pub hcs1: u32,
+    /// Structural Parameters 2.
+    pub hcs2: u32,
+    /// Capability Parameters 1.
+    pub hccparams1: u32,
+    /// Doorbell offset.
+    pub db_offset: u32,
+    /// Runtime space offset.
+    pub rts_offset: u32,
+}
+
+impl XhciControllerParams {
+    #[inline]
+    fn validated(self) -> Option<(u8, u8, u16, usize, usize)> {
+        let (max_slots, max_ports, max_scratchpad, mmio_size) = parse_controller_params(
+            self.cap_length,
+            self.hcs1,
+            self.hcs2,
+            self.db_offset,
+            self.rts_offset,
+        )?;
+        let ctx_size_bytes = if (self.hccparams1 & (1 << 2)) != 0 {
+            64
+        } else {
+            32
+        };
+        Some((
+            max_slots,
+            max_ports,
+            max_scratchpad,
+            mmio_size,
+            ctx_size_bytes,
+        ))
+    }
+}
+
 /// xHCI Controller
 pub struct XhciCtrl<H: Dma> {
     mmio: usize,
@@ -300,17 +342,43 @@ impl<H: Dma> XhciCtrl<H> {
             ((hcs1 as u64) << 32) | hcs2 as u64,
             ((db_offset as u64) << 32) | rts_offset as u64,
         );
-
-        let parsed = parse_controller_params(cap_length, hcs1, hcs2, db_offset, rts_offset);
+        let params = XhciControllerParams {
+            cap_length,
+            hcs1,
+            hcs2,
+            hccparams1,
+            db_offset,
+            rts_offset,
+        };
 
         unsafe {
             host.unmap_mmio(init_mmio, MMIO_INIT_SIZE);
         }
-        let Some((max_slots, max_ports, max_scratchpad, mmio_size)) = parsed else {
+        Self::new_from_params_arc(mmio_phys, host, params)
+    }
+
+    /// Create and initialize a new xHCI controller using a caller-supplied
+    /// capability snapshot captured from a prior safe probe.
+    pub fn new_with_params(
+        mmio_phys: usize,
+        host: H,
+        params: XhciControllerParams,
+    ) -> Result<Self> {
+        emit_xhci_diag(0x0100, mmio_phys as u64, 1, 0);
+        Self::new_from_params_arc(mmio_phys, Arc::new(host), params)
+    }
+
+    fn new_from_params_arc(
+        mmio_phys: usize,
+        host: Arc<H>,
+        params: XhciControllerParams,
+    ) -> Result<Self> {
+        let Some((max_slots, max_ports, max_scratchpad, mmio_size, ctx_size_bytes)) =
+            params.validated()
+        else {
             emit_xhci_diag(0x0103, 0, 0, 0);
             return Err(UsbError::MapFail);
         };
-        let ctx_size_bytes = if (hccparams1 & (1 << 2)) != 0 { 64 } else { 32 };
         emit_xhci_diag(
             0x0104,
             ((max_slots as u64) << 32) | max_ports as u64,
@@ -322,26 +390,24 @@ impl<H: Dma> XhciCtrl<H> {
         let mmio = unsafe { host.map_mmio(mmio_phys, mmio_size) }.ok_or(UsbError::MapFail)?;
         emit_xhci_diag(0x0105, mmio as u64, mmio_size as u64, 0);
 
-        let op_base = mmio + cap_length as usize;
-        let rt_base = mmio + rts_offset as usize;
+        let op_base = mmio + params.cap_length as usize;
+        let rt_base = mmio + params.rts_offset as usize;
         let op_offset = op_base - mmio;
+        let int_base = rt_base + 0x20;
 
-        // Quiesce interrupt delivery immediately after mapping to minimize the
-        // window where firmware-owned xHCI state can trigger unhandled IRQs.
-        let usbcmd_early = Self::read_reg_at::<u32>(mmio, op_offset + reg::USBCMD);
-        let usbcmd_masked = usbcmd_early & !(reg::USBCMD_INTE | reg::USBCMD_HSEE);
-        emit_xhci_diag(
-            0x0106,
-            usbcmd_early as u64,
-            usbcmd_masked as u64,
-            op_offset as u64,
-        );
-        Self::write_reg_at(mmio, op_offset + reg::USBCMD, usbcmd_masked);
+        // Quiesce interrupt delivery immediately after mapping, before any
+        // runtime xHCI register reads. Pi4 handoff can arrive with a pending
+        // interrupter state that survives `usb stop`; clearing it by write-only
+        // MMIO avoids repeating the first unsafe capability read path.
+        emit_xhci_diag(0x0106, op_offset as u64, rt_base as u64, int_base as u64);
+        Self::write_reg_at(mmio, op_offset + reg::USBCMD, 0u32);
         Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
+        Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
+        Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
         emit_xhci_diag(
             0x0107,
-            Self::read_reg_at::<u32>(mmio, op_offset + reg::USBCMD) as u64,
-            Self::read_reg_at::<u32>(mmio, op_offset + reg::USBSTS) as u64,
+            USBSTS_CLEAR_MASK as u64,
+            polling_iman_value() as u64,
             0,
         );
 
@@ -379,10 +445,10 @@ impl<H: Dma> XhciCtrl<H> {
         let mut ctrl = Self {
             mmio,
             mmio_size,
-            cap_length,
+            cap_length: params.cap_length,
             op_base,
             rt_base,
-            db_offset,
+            db_offset: params.db_offset,
             ctx_size_bytes,
             max_slots,
             max_ports,
@@ -1097,7 +1163,10 @@ impl<H: Dma> XhciCtrl<H> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_controller_params, polling_iman_value, port_ready_for_enumeration};
+    use super::{
+        XhciControllerParams, parse_controller_params, polling_iman_value,
+        port_ready_for_enumeration,
+    };
     use crate::reg;
 
     #[test]
@@ -1113,6 +1182,20 @@ mod tests {
         let hcs1 = 32u32 | (8u32 << 24);
         let parsed = parse_controller_params(0x40, hcs1, 0, 0x1000, 0x2000);
         assert!(parsed.is_some());
+    }
+
+    #[test]
+    fn controller_params_derive_context_size_from_hccparams1() {
+        let params = XhciControllerParams {
+            cap_length: 0x40,
+            hcs1: 32u32 | (8u32 << 24),
+            hcs2: 0,
+            hccparams1: 1 << 2,
+            db_offset: 0x1000,
+            rts_offset: 0x2000,
+        };
+        let validated = params.validated().expect("validated controller params");
+        assert_eq!(validated.4, 64);
     }
 
     #[test]

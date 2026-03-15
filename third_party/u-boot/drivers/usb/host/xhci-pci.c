@@ -69,6 +69,19 @@ static void xhci_pci_export_irq_quiesced(int ready)
 	env_set("coh_xhci_irq_quiesced", ready ? "1" : NULL);
 }
 
+static void xhci_pci_export_capability_snapshot(struct xhci_hccr *hccr)
+{
+	u32 capbase = xhci_readl(&hccr->cr_capbase);
+
+	env_set_hex("coh_xhci_cap_length", HC_LENGTH(capbase));
+	env_set_hex("coh_xhci_hci_version", HC_VERSION(capbase));
+	env_set_hex("coh_xhci_hcs1", xhci_readl(&hccr->cr_hcsparams1));
+	env_set_hex("coh_xhci_hcs2", xhci_readl(&hccr->cr_hcsparams2));
+	env_set_hex("coh_xhci_hccparams1", xhci_readl(&hccr->cr_hccparams));
+	env_set_hex("coh_xhci_dboff", xhci_readl(&hccr->cr_dboff));
+	env_set_hex("coh_xhci_rtsoff", xhci_readl(&hccr->cr_rtsoff));
+}
+
 static u16 xhci_pci_configure_command(struct udevice *dev)
 {
 	u16 cmd;
@@ -80,6 +93,28 @@ static u16 xhci_pci_configure_command(struct udevice *dev)
 	env_set_hex("coh_xhci_pci_cmd", cmd);
 
 	return cmd;
+}
+
+static int xhci_pci_quiesce_controller_handoff(struct udevice *dev)
+{
+	struct xhci_ctrl *ctrl = dev_get_priv(dev);
+	u32 iman;
+	u32 usbcmd;
+
+	if (!ctrl || !ctrl->hcor || !ctrl->ir_set)
+		return -ENODEV;
+
+	usbcmd = xhci_readl(&ctrl->hcor->or_usbcmd);
+	usbcmd &= ~(XHCI_IRQS | CMD_RUN);
+	xhci_writel(&ctrl->hcor->or_usbcmd, usbcmd);
+	xhci_writel(&ctrl->hcor->or_usbsts,
+		    STS_FATAL | STS_EINT | STS_PORT | STS_SAVE |
+		    STS_RESTORE | STS_SRE | STS_HCE);
+	xhci_writel(&ctrl->ir_set->irq_control, 0);
+	iman = xhci_readl(&ctrl->ir_set->irq_pending);
+	xhci_writel(&ctrl->ir_set->irq_pending, (iman & ~0x2) | 0x1);
+
+	return 0;
 }
 
 static int xhci_pci_quiesce_interrupt_modes(struct udevice *dev)
@@ -181,6 +216,7 @@ static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 			debug("XHCI-PCI exported Cohesix BAR0 raw=%lx phys=%lx\n",
 			      bar0_addr, bar0_phys);
 	}
+	xhci_pci_export_capability_snapshot(hccr);
 
 	*ret_hccr = hccr;
 	*ret_hcor = hcor;
@@ -263,6 +299,13 @@ static int xhci_pci_remove(struct udevice *dev)
 
 	xhci_pci_emit_breadcrumb(dev, "remove-entry", 0);
 	xhci_deregister(dev);
+	ret = xhci_pci_quiesce_controller_handoff(dev);
+	if (ret) {
+		xhci_pci_emit_breadcrumb(dev, "remove-ctrl-quiesce", ret);
+		if (reset_valid(&plat->reset))
+			reset_free(&plat->reset);
+		return ret;
+	}
 	cmd = xhci_pci_configure_command(dev);
 	debug("XHCI-PCI stop preserved command bits for Cohesix handoff: %x\n",
 	      cmd);

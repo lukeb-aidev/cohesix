@@ -23,11 +23,12 @@ use usb_oxide::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
     hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook, ConfigDesc,
     DeviceDesc, Dma, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice, UsbError,
-    XhciCtrl,
+    XhciControllerParams, XhciCtrl,
 };
 
 use crate::bootstrap::log as boot_log;
 use crate::hal::{Hardware, KernelHal};
+use crate::local_seat::LocalSeatXhciCapabilitySnapshot;
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_MASK: usize = PAGE_SIZE - 1;
@@ -167,10 +168,12 @@ const USB_PROGRESS_MAX_DOTS: usize = 64;
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
 const KEYBOARD_RETRY_SPINS: usize = 200_000;
 const VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
-// Touching VL805 PCI config space during early bootstrap has correlated with
-// fatal IRQ 27 entries on Pi4/seL4. Keep preseed config-register reads disabled
-// in safe mode, but still pin the ECAM window so runtime can perform bounded
-// BAR discovery without depending on a mailbox reset notification at runtime.
+// Pin the handed-off xHCI BAR before touching the VL805 ECAM page: seL4 device
+// retype is monotonic within a device-untyped, and the Pi 4 ECAM page sits
+// above the handed-off BAR in the same PCIe aperture. Live VL805 ECAM reads on
+// the safe-mode Pi 4 path still trigger fatal irq 27 entries, so keep preseed
+// on the map-only path and surface handoff coverage from the bootloader BAR
+// contract instead of touching config space directly.
 const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
 // Local-seat should rediscover the active xHCI MMIO source itself instead of
 // trusting a bootloader-exported BAR, but live VL805 config-space reads are
@@ -377,6 +380,8 @@ pub struct Pi4LocalSeatHints {
     pub xhci_handoff_ready: bool,
     /// Whether the bootloader masked legacy/MSI/MSI-X interrupt delivery before handoff.
     pub xhci_irq_quiesced: bool,
+    /// Optional xHCI capability snapshot exported by the bootloader handoff.
+    pub xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
     /// Optional DT/firmware framebuffer hint.
     pub framebuffer_hint: Option<Pi4FramebufferHint>,
 }
@@ -431,6 +436,7 @@ pub struct Pi4LocalSeat {
     xhci_pci_cmd: Option<u16>,
     xhci_handoff_ready: bool,
     xhci_irq_quiesced: bool,
+    xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
     hal_ptr: usize,
 }
 
@@ -483,6 +489,7 @@ impl Pi4LocalSeat {
             xhci_pci_cmd: hints.xhci_pci_cmd,
             xhci_handoff_ready: hints.xhci_handoff_ready,
             xhci_irq_quiesced: hints.xhci_irq_quiesced,
+            xhci_capability_snapshot: hints.xhci_capability_snapshot,
             hal_ptr: hal as *mut _ as usize,
         })
     }
@@ -501,6 +508,21 @@ impl Pi4LocalSeat {
         if first_preseed {
             boot_log::force_uart_line("[local-seat] pi4 keyboard preseed begin");
         }
+        if first_preseed {
+            boot_log::force_uart_line("[local-seat] pi4 xhci preseed begin");
+        }
+        // Reserve the handed-off xHCI BAR first. The VL805 ECAM page lives at a
+        // higher physical address inside the same device-untyped aperture, so
+        // pinning config space first can advance the device cursor past the BAR
+        // and make the lower handed-off page appear uncovered.
+        prime_pinned_xhci_window(
+            hal,
+            self.xhci_mmio_hint,
+            self.xhci_pci_cmd,
+            self.xhci_handoff_ready,
+            self.xhci_irq_quiesced,
+        );
+        log_xhci_handoff_window_state(hal, self.xhci_mmio_hint, self.xhci_pci_cmd);
         if cfg_preseed_needed {
             prime_pinned_vl805_cfg_window(hal, cfg_preseed_mode);
         } else if first_preseed {
@@ -511,7 +533,7 @@ impl Pi4LocalSeat {
         if cfg_preseed_needed && matches!(cfg_preseed_mode, Vl805CfgPreseedMode::MapOnly) {
             if first_preseed {
                 boot_log::force_uart_line(
-                    "[local-seat] vl805 pci cfg preseed mode=map-only reason=safe-mode-no-config-reads",
+                    "[local-seat] vl805 pci cfg preseed mode=map-only reason=irq27-on-ecam-read",
                 );
             }
             if !VL805_CFG_SAFE_MODE_LOGGED.swap(true, Ordering::AcqRel) {
@@ -520,16 +542,6 @@ impl Pi4LocalSeat {
                 );
             }
         }
-        if first_preseed {
-            boot_log::force_uart_line("[local-seat] pi4 xhci preseed begin");
-        }
-        prime_pinned_xhci_window(
-            hal,
-            self.xhci_mmio_hint,
-            self.xhci_pci_cmd,
-            self.xhci_handoff_ready,
-            self.xhci_irq_quiesced,
-        );
         log_xhci_firmware_handoff_summary(
             "preseed",
             self.xhci_mmio_hint,
@@ -617,6 +629,7 @@ impl Pi4LocalSeat {
                         self.xhci_pci_cmd,
                         self.xhci_handoff_ready,
                         self.xhci_irq_quiesced,
+                        self.xhci_capability_snapshot,
                     ) {
                         Ok(found) => {
                             self.keyboard = Some(found);
@@ -1321,6 +1334,22 @@ const fn vl805_runtime_cfg_touch_allowed(runtime_enabled: bool, has_cfg_window: 
 }
 
 #[inline]
+const fn xhci_runtime_command_replay_allowed(
+    runtime_cfg_touch_enabled: bool,
+    has_cfg_window: bool,
+) -> bool {
+    runtime_cfg_touch_enabled && has_cfg_window
+}
+
+#[inline]
+const fn xhci_safe_mode_skip_command(xhci_pci_cmd: Option<u16>) -> u16 {
+    match xhci_pci_cmd {
+        Some(cmd) => cmd,
+        None => 0,
+    }
+}
+
+#[inline]
 fn xhci_runtime_mmio_candidate_allowed(
     mmio: usize,
     has_safe_cfg_window: bool,
@@ -1515,6 +1544,7 @@ struct XhciCapProbe {
     hci_version: u16,
     hcs1: u32,
     hcs2: u32,
+    hccparams1: u32,
     db_offset: u32,
     rts_offset: u32,
     max_slots: u8,
@@ -1568,10 +1598,17 @@ fn probe_xhci_capability_window(
         ),
     );
     boot_log::force_uart_line(mapped_line.as_str());
-    log_xhci_cap_probe_read(mmio_base, "capbase", regs::CAPLENGTH);
-    // SAFETY: `init_mmio` points to a mapped MMIO page for aligned volatile reads.
-    let cap_base = unsafe { ptr::read_volatile((init_mmio + regs::CAPLENGTH) as *const u32) };
-    let (cap_length, hci_version) = parse_xhci_capbase(cap_base);
+    // Match usb-oxide's byte/halfword probe sequence. On Pi4, the combined
+    // 32-bit CAPBASE read is the exact first runtime xHCI touch still matching
+    // the fatal irq 27 logs, so keep the first access width-bounded here.
+    log_xhci_cap_probe_read(mmio_base, "caplength", regs::CAPLENGTH);
+    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
+    let cap_length = unsafe { ptr::read_volatile(init_mmio as *const u8) };
+    log_xhci_cap_probe_read(mmio_base, "hciversion", regs::CAPLENGTH + 0x2);
+    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
+    let hci_version =
+        unsafe { ptr::read_volatile((init_mmio + regs::CAPLENGTH + 0x2) as *const u16) };
+    let cap_base = u32::from(cap_length) | (u32::from(hci_version) << 16);
     let mut cap_line = heapless::String::<224>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut cap_line,
@@ -1591,6 +1628,9 @@ fn probe_xhci_capability_window(
     log_xhci_cap_probe_read(mmio_base, "hcs2", regs::HCSPARAMS2);
     // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
     let hcs2 = unsafe { ptr::read_volatile((init_mmio + regs::HCSPARAMS2) as *const u32) };
+    log_xhci_cap_probe_read(mmio_base, "hccparams1", regs::HCCPARAMS1);
+    // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
+    let hccparams1 = unsafe { ptr::read_volatile((init_mmio + regs::HCCPARAMS1) as *const u32) };
     log_xhci_cap_probe_read(mmio_base, "dboff", regs::DBOFF);
     // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
     let db_offset = unsafe { ptr::read_volatile((init_mmio + regs::DBOFF) as *const u32) };
@@ -1601,11 +1641,12 @@ fn probe_xhci_capability_window(
     let _ = core::fmt::Write::write_fmt(
         &mut topo_line,
         format_args!(
-            "[local-seat] xhci cap probe regs-ok mmio=0x{mmio:016x} hciver=0x{hciver:04x} hcs1=0x{hcs1:08x} hcs2=0x{hcs2:08x} dboff=0x{dboff:08x} rtsoff=0x{rtsoff:08x}",
+            "[local-seat] xhci cap probe regs-ok mmio=0x{mmio:016x} hciver=0x{hciver:04x} hcs1=0x{hcs1:08x} hcs2=0x{hcs2:08x} hcc1=0x{hccparams1:08x} dboff=0x{dboff:08x} rtsoff=0x{rtsoff:08x}",
             mmio = mmio_base,
             hciver = hci_version,
             hcs1 = hcs1,
             hcs2 = hcs2,
+            hccparams1 = hccparams1,
             dboff = db_offset,
             rtsoff = rts_offset,
         ),
@@ -1627,6 +1668,7 @@ fn probe_xhci_capability_window(
         hci_version,
         hcs1,
         hcs2,
+        hccparams1,
         db_offset,
         rts_offset,
         max_slots,
@@ -1659,6 +1701,42 @@ fn validate_xhci_capability_window(probe: &XhciCapProbe) -> Result<(), &'static 
         return Err("span");
     }
     Ok(())
+}
+
+#[inline]
+fn xhci_controller_params_from_probe(probe: XhciCapProbe) -> XhciControllerParams {
+    XhciControllerParams {
+        cap_length: probe.cap_length,
+        hcs1: probe.hcs1,
+        hcs2: probe.hcs2,
+        hccparams1: probe.hccparams1,
+        db_offset: probe.db_offset,
+        rts_offset: probe.rts_offset,
+    }
+}
+
+#[inline]
+fn xhci_cap_probe_from_snapshot(snapshot: LocalSeatXhciCapabilitySnapshot) -> XhciCapProbe {
+    let max_slots = (snapshot.hcs1 & 0xff) as u8;
+    let max_ports = ((snapshot.hcs1 >> 24) & 0xff) as u8;
+    let max_scratchpad =
+        (((snapshot.hcs2 >> 27) & 0x1f) | (((snapshot.hcs2 >> 21) & 0x1f) << 5)) as u16;
+    let mmio_size = (snapshot.rts_offset as usize + 0x20 + 0x20)
+        .max(snapshot.db_offset as usize + (max_slots as usize + 1) * 4)
+        .max(0x10000);
+    XhciCapProbe {
+        cap_length: snapshot.cap_length,
+        hci_version: snapshot.hci_version,
+        hcs1: snapshot.hcs1,
+        hcs2: snapshot.hcs2,
+        hccparams1: snapshot.hccparams1,
+        db_offset: snapshot.db_offset,
+        rts_offset: snapshot.rts_offset,
+        max_slots,
+        max_ports,
+        max_scratchpad,
+        mmio_size,
+    }
 }
 
 fn xhci_alias_scan_candidate(mmio_base: usize, step: usize) -> Option<usize> {
@@ -1844,7 +1922,21 @@ fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>, mode: Vl805CfgPreseedM
                 ),
             );
             boot_log::force_uart_line(bar_line.as_str());
-            let _ = record_vl805_xhci_mmio_hint(&snapshot_after, "rw-cfg");
+            if let Some(mmio) = record_vl805_xhci_mmio_hint(&snapshot_after, "rw-cfg") {
+                let has_coverage = hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_some();
+                let has_pinned = pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_some();
+                let mut handoff_line = heapless::String::<240>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut handoff_line,
+                    format_args!(
+                        "[local-seat] vl805 pci cfg handoff mmio=0x{mmio:016x} coverage={} pinned={} cmd_safe={} source=rw-cfg",
+                        if has_coverage { "yes" } else { "no" },
+                        if has_pinned { "yes" } else { "no" },
+                        xhci_firmware_handoff_safe(Some(command_after)) as u8,
+                    ),
+                );
+                boot_log::force_uart_line(handoff_line.as_str());
+            }
             if (command_after & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER))
                 != (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
             {
@@ -1857,7 +1949,7 @@ fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>, mode: Vl805CfgPreseedM
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] vl805 pci cfg preseeded ecam=0x{ecam:016x} cfg=0x{cfg:016x} mode=map-only cfg-read=deferred",
+                    "[local-seat] vl805 pci cfg preseeded ecam=0x{ecam:016x} cfg=0x{cfg:016x} mode=map-only cfg-read=deferred reason=irq27-on-ecam-read",
                     ecam = ecam_base,
                     cfg = config_paddr,
                 ),
@@ -2109,6 +2201,29 @@ fn prime_pinned_xhci_window(
         }
     }
     boot_log::force_uart_line("[local-seat] xhci preseed exhausted all candidates");
+}
+
+fn log_xhci_handoff_window_state(
+    hal: &KernelHal<'_>,
+    xhci_mmio_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+) {
+    let Some(mmio) = xhci_mmio_hint else {
+        return;
+    };
+    let has_coverage = hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_some();
+    let has_pinned = pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_some();
+    let mut line = heapless::String::<240>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] xhci handoff window mmio=0x{mmio:016x} coverage={} pinned={} cmd_safe={} source=chosen",
+            if has_coverage { "yes" } else { "no" },
+            if has_pinned { "yes" } else { "no" },
+            xhci_firmware_handoff_safe(xhci_pci_cmd) as u8,
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
 }
 
 fn pin_xhci_mmio_window(
@@ -3414,6 +3529,7 @@ impl UsbKeyboard {
         xhci_pci_cmd: Option<u16>,
         xhci_handoff_ready: bool,
         xhci_irq_quiesced: bool,
+        xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
     ) -> Result<Self, Pi4SeatError> {
         if !KEYBOARD_RUNTIME_INIT_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] usb keyboard init path entered");
@@ -3467,6 +3583,8 @@ impl UsbKeyboard {
         let pinned_xhci_state = pinned_xhci_phys_state();
         let verified_vl805_hint = current_vl805_xhci_mmio_hint();
         let has_safe_cfg_window = current_vl805_cfg_virt().is_some();
+        let allow_runtime_command_replay =
+            xhci_runtime_command_replay_allowed(runtime_cfg_touch_enabled, has_safe_cfg_window);
         let firmware_hint_safe = xhci_firmware_handoff_safe(xhci_pci_cmd);
         let mut source_line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_str(&mut source_line, "[local-seat] xhci source fw=");
@@ -3540,12 +3658,28 @@ impl UsbKeyboard {
         );
         let mut handoff_restore_fail_reason = None;
         if trusted_fw_handoff_high_bar {
-            match replay_vl805_handoff_command_bits(xhci_pci_cmd) {
-                Ok(_) => {}
-                Err(reason) => {
-                    handoff_restore_fail_reason = Some(reason);
-                    trusted_fw_handoff_high_bar = false;
+            if allow_runtime_command_replay {
+                match replay_vl805_handoff_command_bits(xhci_pci_cmd) {
+                    Ok(_) => {}
+                    Err(reason) => {
+                        handoff_restore_fail_reason = Some(reason);
+                        trusted_fw_handoff_high_bar = false;
+                    }
                 }
+            } else if has_safe_cfg_window {
+                let command = xhci_safe_mode_skip_command(xhci_pci_cmd);
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] vl805 handoff pci-cmd replay skipped reason=safe-mode-preseed-verified exported=0x{command:04x}"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            } else {
+                boot_log::force_uart_line(
+                    "[local-seat] vl805 handoff pci-cmd replay skipped reason=cfg-window-absent",
+                );
             }
         }
         let effective_trusted_pinned_xhci_mmio = trusted_pinned_xhci_mmio.filter(|&mmio| {
@@ -3871,81 +4005,55 @@ impl UsbKeyboard {
         let mut saw_controller = false;
         let mut saw_keyboard_init_error = false;
         for &mmio_base in &candidates[..candidate_count] {
-            let raw_probe = match probe_xhci_capability_window(hal, mmio_base) {
-                Ok(probe) => probe,
-                Err(reason) => {
-                    let mut line = heapless::String::<192>::new();
+            let (effective_mmio, cap_probe) = {
+                let trusted_handoff_snapshot = xhci_capability_snapshot.filter(|_| {
+                    xhci_handoff_ready && xhci_irq_quiesced && xhci_mmio_hint == Some(mmio_base)
+                });
+
+                let raw_probe = if let Some(snapshot) = trusted_handoff_snapshot {
+                    let raw_probe = xhci_cap_probe_from_snapshot(snapshot);
+                    let mut line = heapless::String::<352>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] xhci cap probe failed mmio=0x{mmio:016x} detail={reason}",
-                            mmio = mmio_base
+                            "[local-seat] xhci cap snapshot mmio=0x{mmio:016x} caplen=0x{caplen:02x} hciver=0x{hciver:04x} hcs1=0x{hcs1:08x} hcs2=0x{hcs2:08x} hcc1=0x{hccparams1:08x} dboff=0x{dboff:08x} rtsoff=0x{rtsoff:08x} slots={} ports={} scratch={} span=0x{span:05x}",
+                            raw_probe.max_slots,
+                            raw_probe.max_ports,
+                            raw_probe.max_scratchpad,
+                            mmio = mmio_base,
+                            caplen = raw_probe.cap_length,
+                            hciver = raw_probe.hci_version,
+                            hcs1 = raw_probe.hcs1,
+                            hcs2 = raw_probe.hcs2,
+                            hccparams1 = raw_probe.hccparams1,
+                            dboff = raw_probe.db_offset,
+                            rtsoff = raw_probe.rts_offset,
+                            span = raw_probe.mmio_size,
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
-                    continue;
-                }
-            };
-
-            let mut cap_line = heapless::String::<320>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut cap_line,
-                format_args!(
-                    "[local-seat] xhci cap mmio=0x{mmio:016x} caplen=0x{caplen:02x} hciver=0x{hciver:04x} hcs1=0x{hcs1:08x} hcs2=0x{hcs2:08x} dboff=0x{dboff:08x} rtsoff=0x{rtsoff:08x} slots={} ports={} scratch={} span=0x{span:05x}",
-                    raw_probe.max_slots,
-                    raw_probe.max_ports,
-                    raw_probe.max_scratchpad,
-                    mmio = mmio_base,
-                    caplen = raw_probe.cap_length,
-                    hciver = raw_probe.hci_version,
-                    hcs1 = raw_probe.hcs1,
-                    hcs2 = raw_probe.hcs2,
-                    dboff = raw_probe.db_offset,
-                    rtsoff = raw_probe.rts_offset,
-                    span = raw_probe.mmio_size,
-                ),
-            );
-            boot_log::force_uart_line(cap_line.as_str());
-
-            let (effective_mmio, _cap_probe) = match validate_xhci_capability_window(&raw_probe) {
-                Ok(()) => (mmio_base, raw_probe),
-                Err(reason) => {
-                    if !xhci_runtime_allows_alias_scan(
-                        mmio_base,
-                        verified_vl805_hint,
-                        legacy_mirror_allowed,
-                    ) {
-                        let mut line = heapless::String::<208>::new();
+                    if let Err(reason) = validate_xhci_capability_window(&raw_probe) {
+                        let mut invalid = heapless::String::<224>::new();
                         let _ = core::fmt::Write::write_fmt(
-                            &mut line,
+                            &mut invalid,
                             format_args!(
-                                "[local-seat] xhci candidate rejected mmio=0x{mmio:016x} detail={reason} mode=no-alias-scan",
-                                mmio = mmio_base
+                                "[local-seat] xhci cap snapshot invalid mmio=0x{mmio:016x} detail={reason} action=reject-without-live-probe",
+                                mmio = mmio_base,
                             ),
                         );
-                        boot_log::force_uart_line(line.as_str());
+                        boot_log::force_uart_line(invalid.as_str());
                         continue;
                     }
-                    match probe_xhci_capability_with_alias_scan(hal, mmio_base) {
-                        Ok((candidate, scanned_probe)) => {
-                            let mut line = heapless::String::<224>::new();
+                    raw_probe
+                } else {
+                    match probe_xhci_capability_window(hal, mmio_base) {
+                        Ok(probe) => probe,
+                        Err(reason) => {
+                            let mut line = heapless::String::<192>::new();
                             let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
-                                    "[local-seat] xhci candidate shifted base=0x{base:016x} selected=0x{selected:016x}",
-                                    base = mmio_base,
-                                    selected = candidate
-                                ),
-                            );
-                            boot_log::force_uart_line(line.as_str());
-                            (candidate, scanned_probe)
-                        }
-                        Err(_) => {
-                            let mut line = heapless::String::<208>::new();
-                            let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
-                                    "[local-seat] xhci candidate rejected mmio=0x{mmio:016x} detail={reason}",
+                                    "[local-seat] xhci cap probe failed mmio=0x{mmio:016x} detail={reason}",
                                     mmio = mmio_base
                                 ),
                             );
@@ -3953,8 +4061,79 @@ impl UsbKeyboard {
                             continue;
                         }
                     }
+                };
+
+                let mut cap_line = heapless::String::<352>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut cap_line,
+                    format_args!(
+                        "[local-seat] xhci cap mmio=0x{mmio:016x} caplen=0x{caplen:02x} hciver=0x{hciver:04x} hcs1=0x{hcs1:08x} hcs2=0x{hcs2:08x} hcc1=0x{hccparams1:08x} dboff=0x{dboff:08x} rtsoff=0x{rtsoff:08x} slots={} ports={} scratch={} span=0x{span:05x}",
+                        raw_probe.max_slots,
+                        raw_probe.max_ports,
+                        raw_probe.max_scratchpad,
+                        mmio = mmio_base,
+                        caplen = raw_probe.cap_length,
+                        hciver = raw_probe.hci_version,
+                        hcs1 = raw_probe.hcs1,
+                        hcs2 = raw_probe.hcs2,
+                        hccparams1 = raw_probe.hccparams1,
+                        dboff = raw_probe.db_offset,
+                        rtsoff = raw_probe.rts_offset,
+                        span = raw_probe.mmio_size,
+                    ),
+                );
+                boot_log::force_uart_line(cap_line.as_str());
+
+                match validate_xhci_capability_window(&raw_probe) {
+                    Ok(()) => (mmio_base, raw_probe),
+                    Err(reason) => {
+                        if !xhci_runtime_allows_alias_scan(
+                            mmio_base,
+                            verified_vl805_hint,
+                            legacy_mirror_allowed,
+                        ) {
+                            let mut line = heapless::String::<208>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci candidate rejected mmio=0x{mmio:016x} detail={reason} mode=no-alias-scan",
+                                    mmio = mmio_base
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            continue;
+                        }
+                        match probe_xhci_capability_with_alias_scan(hal, mmio_base) {
+                            Ok((candidate, scanned_probe)) => {
+                                let mut line = heapless::String::<224>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] xhci candidate shifted base=0x{base:016x} selected=0x{selected:016x}",
+                                        base = mmio_base,
+                                        selected = candidate
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                                (candidate, scanned_probe)
+                            }
+                            Err(_) => {
+                                let mut line = heapless::String::<208>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] xhci candidate rejected mmio=0x{mmio:016x} detail={reason}",
+                                        mmio = mmio_base
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                                continue;
+                            }
+                        }
+                    }
                 }
             };
+            let controller_params = xhci_controller_params_from_probe(cap_probe);
 
             // Keep probe order deterministic so field logs are directly
             // comparable across boots.
@@ -3990,7 +4169,11 @@ impl UsbKeyboard {
                     boot_log::force_uart_line(probe_line.as_str());
 
                     let dma = SeatDma::new(hal, prefer_high, pcie_dma_bus_alias);
-                    let ctrl = match XhciCtrl::new(effective_mmio, dma) {
+                    let ctrl = match XhciCtrl::new_with_params(
+                        effective_mmio,
+                        dma,
+                        controller_params,
+                    ) {
                         Ok(ctrl) => {
                             saw_controller = true;
                             Arc::new(ctrl)
@@ -8161,12 +8344,14 @@ mod tests {
         mailbox_visible_dimension, normalize_hub_tt_profile, normalize_pi4_xhci_mmio_hint,
         parse_xhci_capbase, text_backspace_target, text_row_count, text_viewport_height,
         translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode, vl805_cfg_preseed_needed,
-        vl805_runtime_cfg_touch_allowed, xhci_firmware_handoff_hint_reason,
-        xhci_handoff_command_restore_target, xhci_preseed_allows_static_legacy_fallbacks,
-        xhci_preseed_pin_only_reason, xhci_runtime_mmio_candidate_allowed,
-        xhci_runtime_mmio_has_accessible_window, ConfigDesc, Pi4SeatError, UsbKeyboard,
-        Vl805CfgPreseedMode, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-        RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, XHCI_MMIO_ALIAS_SCAN_STEPS,
+        vl805_runtime_cfg_touch_allowed, xhci_controller_params_from_probe,
+        xhci_firmware_handoff_hint_reason, xhci_handoff_command_restore_target,
+        xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
+        xhci_runtime_command_replay_allowed, xhci_runtime_mmio_candidate_allowed,
+        xhci_runtime_mmio_has_accessible_window, xhci_safe_mode_skip_command, ConfigDesc,
+        Pi4SeatError, UsbKeyboard, Vl805CfgPreseedMode, XhciCapProbe, HUB_PORT_IFACE_FALLBACK_MAX,
+        RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+        XHCI_MMIO_ALIAS_SCAN_STEPS,
     };
     use super::{
         hid_protocol, hid_subclass, scancode, CHAR_HEIGHT, HUB_CLASS_CONTROL_WAIT_SPINS,
@@ -8239,6 +8424,59 @@ mod tests {
     #[test]
     fn vl805_runtime_cfg_touch_respects_global_disable() {
         assert!(!vl805_runtime_cfg_touch_allowed(false, true));
+    }
+
+    #[test]
+    fn xhci_runtime_command_replay_requires_live_runtime_cfg_touch() {
+        assert!(!xhci_runtime_command_replay_allowed(false, false));
+        assert!(!xhci_runtime_command_replay_allowed(false, true));
+        assert!(!xhci_runtime_command_replay_allowed(true, false));
+        assert!(xhci_runtime_command_replay_allowed(true, true));
+    }
+
+    #[test]
+    fn xhci_safe_mode_skip_command_prefers_bootloader_export() {
+        assert_eq!(xhci_safe_mode_skip_command(None), 0);
+        assert_eq!(xhci_safe_mode_skip_command(Some(0x0546)), 0x0546);
+    }
+
+    #[test]
+    fn xhci_controller_params_preserve_hccparams1_for_runtime_init() {
+        let params = xhci_controller_params_from_probe(XhciCapProbe {
+            cap_length: 0x40,
+            hci_version: 0x0100,
+            hcs1: 32u32 | (8u32 << 24),
+            hcs2: 0,
+            hccparams1: 1 << 2,
+            db_offset: 0x1000,
+            rts_offset: 0x2000,
+            max_slots: 32,
+            max_ports: 8,
+            max_scratchpad: 0,
+            mmio_size: 0x10000,
+        });
+        assert_eq!(params.hccparams1, 1 << 2);
+        assert_eq!(params.cap_length, 0x40);
+        assert_eq!(params.db_offset, 0x1000);
+    }
+
+    #[test]
+    fn xhci_cap_probe_from_snapshot_preserves_handoff_snapshot_fields() {
+        let probe = xhci_cap_probe_from_snapshot(LocalSeatXhciCapabilitySnapshot {
+            cap_length: 0x40,
+            hci_version: 0x0100,
+            hcs1: 32u32 | (8u32 << 24),
+            hcs2: 0,
+            hccparams1: 1 << 2,
+            db_offset: 0x1000,
+            rts_offset: 0x2000,
+        });
+        assert_eq!(probe.cap_length, 0x40);
+        assert_eq!(probe.hci_version, 0x0100);
+        assert_eq!(probe.hccparams1, 1 << 2);
+        assert_eq!(probe.max_slots, 32);
+        assert_eq!(probe.max_ports, 8);
+        assert_eq!(probe.mmio_size, 0x10000);
     }
 
     #[test]

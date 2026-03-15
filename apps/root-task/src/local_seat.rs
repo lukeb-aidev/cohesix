@@ -84,6 +84,25 @@ pub struct LocalSeatDisplayHint {
     pub pitch: usize,
 }
 
+/// Optional bootloader-provided xHCI capability snapshot for local-seat handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalSeatXhciCapabilitySnapshot {
+    /// Capability register length.
+    pub cap_length: u8,
+    /// xHCI interface version.
+    pub hci_version: u16,
+    /// Structural Parameters 1.
+    pub hcs1: u32,
+    /// Structural Parameters 2.
+    pub hcs2: u32,
+    /// Capability Parameters 1.
+    pub hccparams1: u32,
+    /// Doorbell offset.
+    pub db_offset: u32,
+    /// Runtime space offset.
+    pub rts_offset: u32,
+}
+
 /// Optional platform-specific hints for local-seat backend attachment.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LocalSeatPlatformHints {
@@ -95,6 +114,8 @@ pub struct LocalSeatPlatformHints {
     pub xhci_handoff_ready: bool,
     /// Whether the bootloader quiesced xHCI interrupt delivery before handoff.
     pub xhci_irq_quiesced: bool,
+    /// Optional validated capability snapshot exported by the bootloader.
+    pub xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
     /// Optional DT/firmware framebuffer hint for HDMI rendering.
     pub display_hint: Option<LocalSeatDisplayHint>,
 }
@@ -293,6 +314,7 @@ pub fn attach_platform_backend(
         xhci_pci_cmd: hints.xhci_pci_cmd,
         xhci_handoff_ready: hints.xhci_handoff_ready,
         xhci_irq_quiesced: hints.xhci_irq_quiesced,
+        xhci_capability_snapshot: hints.xhci_capability_snapshot,
         framebuffer_hint: hints.display_hint.map(|hint| Pi4FramebufferHint {
             paddr: hint.paddr,
             width: hint.width,
