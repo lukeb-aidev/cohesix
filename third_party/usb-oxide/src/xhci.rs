@@ -199,6 +199,9 @@ pub struct XhciControllerParams {
     pub db_offset: u32,
     /// Runtime space offset.
     pub rts_offset: u32,
+    /// Whether firmware already halted the controller and quiesced interrupt
+    /// delivery before runtime initialization begins.
+    pub firmware_handoff_quiesced: bool,
 }
 
 impl XhciControllerParams {
@@ -237,6 +240,7 @@ pub struct XhciCtrl<H: Dma> {
     ctx_size_bytes: usize,
     max_slots: u8,
     max_ports: u8,
+    firmware_handoff_quiesced: bool,
     dcbaa: PhysMem<H>,
     scratchpad: Option<ScratchpadSet<H>>,
     cmd_ring: Mutex<Box<Ring<H>>>,
@@ -349,6 +353,7 @@ impl<H: Dma> XhciCtrl<H> {
             hccparams1,
             db_offset,
             rts_offset,
+            firmware_handoff_quiesced: false,
         };
 
         unsafe {
@@ -395,20 +400,23 @@ impl<H: Dma> XhciCtrl<H> {
         let op_offset = op_base - mmio;
         let int_base = rt_base + 0x20;
 
-        // Quiesce interrupt delivery immediately after mapping, before any
-        // runtime xHCI register reads. Pi4 handoff can arrive with a pending
-        // interrupter state that survives `usb stop`; clearing it by write-only
-        // MMIO avoids repeating the first unsafe capability read path.
+        // Generic xHCI probing still needs to quiesce interrupt delivery
+        // immediately after mapping, before any runtime register reads. On the
+        // Pi4 trusted-handoff path, firmware already exported a halted,
+        // interrupt-quiesced controller so runtime can skip these first
+        // write-only touches.
         emit_xhci_diag(0x0106, op_offset as u64, rt_base as u64, int_base as u64);
-        Self::write_reg_at(mmio, op_offset + reg::USBCMD, 0u32);
-        Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
-        Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
-        Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
+        if !params.firmware_handoff_quiesced {
+            Self::write_reg_at(mmio, op_offset + reg::USBCMD, 0u32);
+            Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
+            Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
+            Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
+        }
         emit_xhci_diag(
             0x0107,
             USBSTS_CLEAR_MASK as u64,
             polling_iman_value() as u64,
-            0,
+            params.firmware_handoff_quiesced as u64,
         );
 
         // Allocate DCBAA (Device Context Base Address Array)
@@ -452,6 +460,7 @@ impl<H: Dma> XhciCtrl<H> {
             ctx_size_bytes,
             max_slots,
             max_ports,
+            firmware_handoff_quiesced: params.firmware_handoff_quiesced,
             dcbaa,
             scratchpad,
             cmd_ring: Mutex::new(cmd_ring),
@@ -469,15 +478,19 @@ impl<H: Dma> XhciCtrl<H> {
         // Keep host-system and event interrupts masked during bring-up. Pi4
         // local-seat uses polling and does not install xHCI IRQ handlers in
         // this phase.
-        let mut usbcmd = self.read_op::<u32>(reg::USBCMD);
-        let usbsts_start = self.read_op::<u32>(reg::USBSTS);
-        emit_xhci_diag(0x0200, usbcmd as u64, usbsts_start as u64, self.mmio as u64);
-        usbcmd &= !(reg::USBCMD_INTE | reg::USBCMD_HSEE);
-        emit_xhci_diag(0x0201, usbcmd as u64, 0, 0);
-        self.write_op(reg::USBCMD, usbcmd);
-        emit_xhci_diag(0x0202, self.read_op::<u32>(reg::USBCMD) as u64, 0, 0);
-        self.write_op(reg::USBSTS, USBSTS_CLEAR_MASK);
-        emit_xhci_diag(0x0203, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0204, self.mmio as u64, 1, 0);
+        } else {
+            let mut usbcmd = self.read_op::<u32>(reg::USBCMD);
+            let usbsts_start = self.read_op::<u32>(reg::USBSTS);
+            emit_xhci_diag(0x0200, usbcmd as u64, usbsts_start as u64, self.mmio as u64);
+            usbcmd &= !(reg::USBCMD_INTE | reg::USBCMD_HSEE);
+            emit_xhci_diag(0x0201, usbcmd as u64, 0, 0);
+            self.write_op(reg::USBCMD, usbcmd);
+            emit_xhci_diag(0x0202, self.read_op::<u32>(reg::USBCMD) as u64, 0, 0);
+            self.write_op(reg::USBSTS, USBSTS_CLEAR_MASK);
+            emit_xhci_diag(0x0203, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
+        }
 
         // Some firmware/UEFI stacks leave xHCI under legacy ownership until
         // the OS-owned semaphore is asserted.
@@ -490,36 +503,42 @@ impl<H: Dma> XhciCtrl<H> {
         }
 
         // Stop controller if running
-        usbcmd = self.read_op::<u32>(reg::USBCMD) & !(reg::USBCMD_INTE | reg::USBCMD_HSEE);
-        emit_xhci_diag(
-            0x0220,
-            usbcmd as u64,
-            self.read_op::<u32>(reg::USBSTS) as u64,
-            0,
-        );
-        if !SKIP_STOP_DURING_INIT && (usbcmd & reg::USBCMD_RUN) != 0 {
-            emit_xhci_diag(0x0221, usbcmd as u64, 0, 0);
-            self.write_op(reg::USBCMD, usbcmd & !reg::USBCMD_RUN);
-            let mut waited = 0usize;
-            while (self.read_op::<u32>(reg::USBSTS) & reg::USBSTS_HCH) == 0 {
-                waited = waited.saturating_add(1);
-                if waited >= STOP_WAIT_SPINS {
-                    emit_xhci_diag(
-                        0x0222,
-                        waited as u64,
-                        self.read_op::<u32>(reg::USBSTS) as u64,
-                        0,
-                    );
-                    return Err(UsbError::Timeout);
-                }
-                spin_loop();
-            }
-            emit_xhci_diag(0x0223, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0224, 1, 0, 0);
         } else {
-            emit_xhci_diag(0x0224, 0, 0, 0);
+            let usbcmd = self.read_op::<u32>(reg::USBCMD) & !(reg::USBCMD_INTE | reg::USBCMD_HSEE);
+            emit_xhci_diag(
+                0x0220,
+                usbcmd as u64,
+                self.read_op::<u32>(reg::USBSTS) as u64,
+                0,
+            );
+            if !SKIP_STOP_DURING_INIT && (usbcmd & reg::USBCMD_RUN) != 0 {
+                emit_xhci_diag(0x0221, usbcmd as u64, 0, 0);
+                self.write_op(reg::USBCMD, usbcmd & !reg::USBCMD_RUN);
+                let mut waited = 0usize;
+                while (self.read_op::<u32>(reg::USBSTS) & reg::USBSTS_HCH) == 0 {
+                    waited = waited.saturating_add(1);
+                    if waited >= STOP_WAIT_SPINS {
+                        emit_xhci_diag(
+                            0x0222,
+                            waited as u64,
+                            self.read_op::<u32>(reg::USBSTS) as u64,
+                            0,
+                        );
+                        return Err(UsbError::Timeout);
+                    }
+                    spin_loop();
+                }
+                emit_xhci_diag(0x0223, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
+            } else {
+                emit_xhci_diag(0x0224, 0, 0, 0);
+            }
         }
 
-        if !SKIP_HCRST_DURING_INIT {
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0234, 1, 0, 0);
+        } else if !SKIP_HCRST_DURING_INIT {
             // Reset controller
             emit_xhci_diag(0x0230, 0, 0, 0);
             self.write_op(reg::USBCMD, reg::USBCMD_HCRST);
@@ -558,17 +577,32 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Configure controller
         emit_xhci_diag(0x0240, self.max_slots as u64, 0, 0);
+        emit_xhci_diag(0x0243, reg::CONFIG as u64, self.max_slots as u64, 0);
         self.write_op(reg::CONFIG, self.max_slots as u32);
-        emit_xhci_diag(0x0241, self.read_op::<u32>(reg::CONFIG) as u64, 0, 0);
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0241, self.max_slots as u64, 1, 0);
+        } else {
+            emit_xhci_diag(0x0241, self.read_op::<u32>(reg::CONFIG) as u64, 0, 0);
+        }
+        emit_xhci_diag(0x0244, reg::DCBAAP as u64, self.dcbaa.phys(&*self.host), 0);
         self.write_op_u64(reg::DCBAAP, self.dcbaa.phys(&*self.host));
-        emit_xhci_diag(0x0242, self.read_op_u64(reg::DCBAAP), 0, 0);
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0242, self.dcbaa.phys(&*self.host), 1, 0);
+        } else {
+            emit_xhci_diag(0x0242, self.read_op_u64(reg::DCBAAP), 0, 0);
+        }
 
         // Setup command ring
         let cmd_ring = self.cmd_ring.lock();
         let crcr = cmd_ring.phys(&*self.host) | 1; // RCS = 1
         emit_xhci_diag(0x0250, crcr, 0, 0);
+        emit_xhci_diag(0x0252, reg::CRCR as u64, crcr, 0);
         self.write_op_u64(reg::CRCR, crcr);
-        emit_xhci_diag(0x0251, self.read_op_u64(reg::CRCR), 0, 0);
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0251, crcr, 1, 0);
+        } else {
+            emit_xhci_diag(0x0251, self.read_op_u64(reg::CRCR), 0, 0);
+        }
         drop(cmd_ring);
 
         // Setup event ring
@@ -581,34 +615,85 @@ impl<H: Dma> XhciCtrl<H> {
             self.db_offset as u64,
         );
 
+        emit_xhci_diag(0x0264, (int_base + reg::ERSTSZ) as u64, 1, 0);
         self.write_reg(int_base + reg::ERSTSZ, 1u32);
+        emit_xhci_diag(
+            0x0265,
+            (int_base + reg::ERSTBA) as u64,
+            event_ring.erst_phys(&*self.host),
+            0,
+        );
         self.write_reg_u64(int_base + reg::ERSTBA, event_ring.erst_phys(&*self.host));
         // Prime ERDP and clear Event Handler Busy before running the controller.
+        emit_xhci_diag(
+            0x0266,
+            (int_base + reg::ERDP) as u64,
+            event_ring.ring_phys(&*self.host) | 0x8,
+            0,
+        );
         self.write_reg_u64(
             int_base + reg::ERDP,
             event_ring.ring_phys(&*self.host) | 0x8,
         );
         // Keep moderation disabled; Cohesix local-seat uses polling and does
         // not install xHCI IRQ handlers during early boot.
+        emit_xhci_diag(0x0267, (int_base + reg::IMOD) as u64, 0, 0);
         self.write_reg(int_base + reg::IMOD, 0u32);
         // Cohesix uses pure polling during Pi4 local-seat bring-up. Acknowledge
         // any stale pending bit but keep the interrupter disabled so VL805 does
         // not surface an unhandled IRQ before userspace installs handlers.
-        self.write_reg(int_base + reg::IMAN, polling_iman_value());
-        emit_xhci_diag(
-            0x0261,
-            self.read_reg::<u32>(int_base + reg::ERSTSZ) as u64,
-            self.read_reg_u64(int_base + reg::ERSTBA),
-            self.read_reg_u64(int_base + reg::ERDP),
-        );
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0262, int_base as u64, 1, 0);
+            emit_xhci_diag(
+                0x0261,
+                1,
+                event_ring.erst_phys(&*self.host),
+                event_ring.ring_phys(&*self.host) | 0x8,
+            );
+        } else {
+            emit_xhci_diag(
+                0x0268,
+                (int_base + reg::IMAN) as u64,
+                polling_iman_value() as u64,
+                0,
+            );
+            self.write_reg(int_base + reg::IMAN, polling_iman_value());
+            emit_xhci_diag(
+                0x0262,
+                int_base as u64,
+                polling_iman_value() as u64,
+                0,
+            );
+            emit_xhci_diag(
+                0x0261,
+                self.read_reg::<u32>(int_base + reg::ERSTSZ) as u64,
+                self.read_reg_u64(int_base + reg::ERSTBA),
+                self.read_reg_u64(int_base + reg::ERDP),
+            );
+        }
         drop(event_ring);
 
         // Clear stale status before run so command completions are observable.
-        self.write_op(reg::USBSTS, USBSTS_CLEAR_MASK);
+        emit_xhci_diag(0x0269, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 0);
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0263, USBSTS_CLEAR_MASK as u64, 1, 0);
+        } else {
+            self.write_op(reg::USBSTS, USBSTS_CLEAR_MASK);
+            emit_xhci_diag(0x0263, USBSTS_CLEAR_MASK as u64, 0, 0);
+        }
         // Start controller in polling mode (interrupt delivery remains masked).
-        emit_xhci_diag(0x0270, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0270, 0, 1, 0);
+        } else {
+            emit_xhci_diag(0x0270, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
+        }
+        emit_xhci_diag(0x026a, reg::USBCMD as u64, reg::USBCMD_RUN as u64, 0);
         self.write_op(reg::USBCMD, reg::USBCMD_RUN);
-        emit_xhci_diag(0x0271, self.read_op::<u32>(reg::USBCMD) as u64, 0, 0);
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x0271, reg::USBCMD_RUN as u64, 1, 0);
+        } else {
+            emit_xhci_diag(0x0271, self.read_op::<u32>(reg::USBCMD) as u64, 0, 0);
+        }
 
         // Wait for controller to be ready
         let mut waited = 0usize;
@@ -1193,6 +1278,7 @@ mod tests {
             hccparams1: 1 << 2,
             db_offset: 0x1000,
             rts_offset: 0x2000,
+            firmware_handoff_quiesced: false,
         };
         let validated = params.validated().expect("validated controller params");
         assert_eq!(validated.4, 64);

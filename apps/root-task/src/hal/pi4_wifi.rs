@@ -1445,6 +1445,15 @@ struct SdioHost {
     current_clock_hz: u32,
     desired_bus_width: SdioBusWidth,
     card: Option<CardInfo>,
+    last_backplane_window: Option<u32>,
+    last_backplane_function_addr: Option<u32>,
+    last_backplane_window_low: u8,
+    last_backplane_window_mid: u8,
+    last_backplane_window_high: u8,
+    last_chipclkcsr: Option<u8>,
+    last_wakeupctrl: Option<u8>,
+    last_sleepcsr: Option<u8>,
+    last_cardcap: Option<u8>,
     transfer_mode_shadow: u32,
 }
 
@@ -1488,6 +1497,15 @@ impl SdioHost {
             current_clock_hz: 0,
             desired_bus_width: SdioBusWidth::OneBit,
             card: None,
+            last_backplane_window: None,
+            last_backplane_function_addr: None,
+            last_backplane_window_low: 0,
+            last_backplane_window_mid: 0,
+            last_backplane_window_high: 0,
+            last_chipclkcsr: None,
+            last_wakeupctrl: None,
+            last_sleepcsr: None,
+            last_cardcap: None,
             transfer_mode_shadow: 0,
         })
     }
@@ -1495,6 +1513,63 @@ impl SdioHost {
     fn mark_power_cycled(&mut self) {
         self.card = None;
         self.current_clock_hz = 0;
+    }
+
+    fn remember_backplane_window(
+        &mut self,
+        window_addr: u32,
+        function_addr: u32,
+        low: u8,
+        mid: u8,
+        high: u8,
+    ) {
+        self.last_backplane_window = Some(window_addr);
+        self.last_backplane_function_addr = Some(function_addr);
+        self.last_backplane_window_low = low;
+        self.last_backplane_window_mid = mid;
+        self.last_backplane_window_high = high;
+    }
+
+    fn remember_chipclkcsr(&mut self, value: u8) {
+        self.last_chipclkcsr = Some(value);
+    }
+
+    fn remember_wakeupctrl(&mut self, value: u8) {
+        self.last_wakeupctrl = Some(value);
+    }
+
+    fn remember_sleepcsr(&mut self, value: u8) {
+        self.last_sleepcsr = Some(value);
+    }
+
+    fn remember_cardcap(&mut self, value: u8) {
+        self.last_cardcap = Some(value);
+    }
+
+    fn log_transport_shadow(&self, stage: &'static str) {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio shadow {stage} regs=0x{regs:08x} window=0x{window:08x} fn=0x{function:05x} bytes={low:02x}:{mid:02x}:{high:02x} cached={cached}",
+            regs = self.regs_paddr,
+            window = self.last_backplane_window.unwrap_or(0),
+            function = self.last_backplane_function_addr.unwrap_or(0),
+            low = self.last_backplane_window_low,
+            mid = self.last_backplane_window_mid,
+            high = self.last_backplane_window_high,
+            cached = yn(self.last_backplane_window.is_some()),
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio shadow {stage} chipclk=0x{chipclk:02x}/{} wake=0x{wake:02x}/{} sleep=0x{sleep:02x}/{} cardcap=0x{cardcap:02x}/{} hz={} width={}",
+            yn(self.last_chipclkcsr.is_some()),
+            yn(self.last_wakeupctrl.is_some()),
+            yn(self.last_sleepcsr.is_some()),
+            yn(self.last_cardcap.is_some()),
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            chipclk = self.last_chipclkcsr.unwrap_or(0),
+            wake = self.last_wakeupctrl.unwrap_or(0),
+            sleep = self.last_sleepcsr.unwrap_or(0),
+            cardcap = self.last_cardcap.unwrap_or(0),
+        ));
     }
 
     fn reset_controller(&mut self) -> Result<(), HalError> {
@@ -1818,9 +1893,11 @@ impl SdioHost {
             SBSDIO_FUNC1_CHIPCLKCSR,
             SBSDIO_ALP_AVAIL_REQ,
         )?;
+        self.remember_chipclkcsr(SBSDIO_ALP_AVAIL_REQ);
         let mut alp_ready = false;
         for _ in 0..SDIO_INIT_WAIT_LOOPS {
             let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+            self.remember_chipclkcsr(chipclk);
             if (chipclk & SBSDIO_ALP_AVAIL) != 0 {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] cyw43 backplane stage=alp-ready csr=0x{chipclk:02x}"
@@ -1835,6 +1912,7 @@ impl SdioHost {
         }
         emit_breadcrumb(format_args!("[pi4-wifi] cyw43 backplane stage=alp-clear"));
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, 0)?;
+        self.remember_chipclkcsr(0);
         emit_breadcrumb(format_args!(
             "[pi4-wifi] cyw43 backplane stage=misc-config deferred reason=minimal-sdio-bringup"
         ));
@@ -2070,6 +2148,13 @@ impl SdioHost {
                 "[pi4-wifi] backplane window program window=0x{window_addr:08x} fn_addr=0x{function_addr:05x} low=0x{window_low:02x} mid=0x{window_mid:02x} high=0x{window_high:02x}"
             ));
         }
+        self.remember_backplane_window(
+            window_addr,
+            function_addr,
+            window_low,
+            window_mid,
+            window_high,
+        );
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SBADDRLOW, window_low)?;
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SBADDRMID, window_mid)?;
         self.io_direct_write(
@@ -2266,12 +2351,14 @@ impl SdioHost {
             "[pi4-wifi] firmware stage=wait-ht-clock request=0x{request:02x}"
         ));
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, request)?;
+        self.remember_chipclkcsr(request);
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=wait-ht-clock request-issued"
         ));
         let mut last_chipclk = 0u8;
         for _ in 0..CYW43_HT_CLOCK_INITIAL_WAIT_LOOPS {
             let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+            self.remember_chipclkcsr(chipclk);
             last_chipclk = chipclk;
             if (chipclk & SBSDIO_HT_AVAIL) != 0 {
                 emit_breadcrumb(format_args!(
@@ -2293,8 +2380,10 @@ impl SdioHost {
             SBSDIO_FUNC1_CHIPCLKCSR,
             SBSDIO_ALP_AVAIL_REQ,
         )?;
+        self.remember_chipclkcsr(SBSDIO_ALP_AVAIL_REQ);
         for _ in 0..SDIO_INIT_WAIT_LOOPS {
             let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+            self.remember_chipclkcsr(chipclk);
             last_chipclk = chipclk;
             if (chipclk & SBSDIO_ALP_AVAIL) != 0 {
                 emit_breadcrumb(format_args!(
@@ -2308,8 +2397,10 @@ impl SdioHost {
             "[pi4-wifi] firmware stage=wait-ht-clock ht-rerequest request=0x{request:02x}"
         ));
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, request)?;
+        self.remember_chipclkcsr(request);
         for _ in 0..SDIO_INIT_WAIT_LOOPS {
             let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+            self.remember_chipclkcsr(chipclk);
             last_chipclk = chipclk;
             if (chipclk & SBSDIO_HT_AVAIL) != 0 {
                 emit_breadcrumb(format_args!(
@@ -2322,6 +2413,7 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=wait-ht-clock timeout csr=0x{last_chipclk:02x}"
         ));
+        self.log_transport_shadow("wait-ht-clock-timeout");
         Err(HalError::Unsupported("cyw43-ht-clock-timeout"))
     }
 
@@ -2480,6 +2572,7 @@ impl SdioHost {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware core-ctrl access stage={stage} op=read8 err={err} base=0x{base:08x} off=0x{offset:03x}"
                 ));
+                self.log_transport_shadow(stage);
                 return Err(err);
             }
         }
@@ -2497,6 +2590,7 @@ impl SdioHost {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
             ));
+            self.log_transport_shadow(stage);
             return Err(err);
         }
         Ok(())
@@ -2507,20 +2601,24 @@ impl SdioHost {
             self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL)?;
         wake_ctrl |= SBSDIO_WAKE_TILL_HT_AVAIL;
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL, wake_ctrl)?;
+        self.remember_wakeupctrl(wake_ctrl);
 
         let mut cardcap = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP)?;
         cardcap |= SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC;
         self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP, cardcap)?;
+        self.remember_cardcap(cardcap);
 
         self.io_direct_write(
             SdioFunction::Function1,
             SBSDIO_FUNC1_CHIPCLKCSR,
             SBSDIO_FORCE_HT,
         )?;
+        self.remember_chipclkcsr(SBSDIO_FORCE_HT);
 
         let mut sleep_csr = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_SLEEPCSR)?;
         sleep_csr |= SBSDIO_FUNC1_SLEEPCSR_KSO_EN;
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SLEEPCSR, sleep_csr)?;
+        self.remember_sleepcsr(sleep_csr);
 
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=wait-ht-clock assist wake=0x{wake_ctrl:02x} cardcap=0x{cardcap:02x} sleep=0x{sleep_csr:02x}"
@@ -2561,28 +2659,10 @@ impl SdioHost {
                 "assert-reset",
             )?;
             bounded_spin_settle("cyw43-core-reset-assert", CYW43_CORE_CONTROL_SETTLE_LOOPS);
-            let mut attempts = 0usize;
-            let mut last_resetctrl = 0u8;
-            let mut asserted = false;
-            for attempt in 0..CYW43_CORE_RESET_RETRY_LIMIT {
-                attempts = attempt.saturating_add(1);
-                last_resetctrl =
-                    self.core_ctrl_read8_logged(base, AI_RESETCTRL_OFFSET, "assert-reset")?;
-                if (last_resetctrl & AI_RESETCTRL_BIT_RESET) != 0 {
-                    asserted = true;
-                    break;
-                }
-                spin_settle(CYW43_CORE_CONTROL_SETTLE_LOOPS);
-            }
-            if !asserted {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset-timeout reset=0x{last_resetctrl:02x} attempts={attempts}"
-                ));
-                return Err(HalError::Unsupported("cyw43-core-disable-reset-timeout"));
-            }
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset-ready reset=0x{last_resetctrl:02x} attempts={attempts}"
+                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset-settled detail=readback-deferred"
             ));
+            self.log_transport_shadow("core-disable-assert-reset");
         } else {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=already-reset io=0x{ioctrl:02x} reset=0x{resetctrl:02x} prereset=0x{prereset:02x} hold=0x{reset:02x} reason={}",
@@ -2609,6 +2689,7 @@ impl SdioHost {
             "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=in-reset-ready io=0x{reset_hold_ioctrl:02x} reset=0x{resetctrl:02x} reason={}",
             ai_core_state_reason(reset_hold_ioctrl, resetctrl),
         ));
+        self.log_transport_shadow("core-disable-in-reset");
         Ok(())
     }
 
@@ -2650,6 +2731,7 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-ready reset=0x{last_reset:02x} attempts={attempts}"
         ));
+        self.log_transport_shadow("core-reset-clear");
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-clock-en value=0x{postreset_ioctrl:02x}"
         ));
@@ -2670,6 +2752,7 @@ impl SdioHost {
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=verify io=0x{ioctrl:02x} reset=0x{resetctrl:02x} reason={}",
             ai_core_state_reason(ioctrl, resetctrl),
         ));
+        self.log_transport_shadow("core-reset-verify");
         Ok(())
     }
 
@@ -2729,6 +2812,7 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] sdhci recover stage={stage} mask=cmd+data"
         ));
+        self.log_transport_shadow(stage);
     }
 
     fn wait_inhibit_clear(&mut self, wait_data: bool) -> Result<(), HalError> {

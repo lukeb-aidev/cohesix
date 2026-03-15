@@ -95,28 +95,6 @@ static u16 xhci_pci_configure_command(struct udevice *dev)
 	return cmd;
 }
 
-static int xhci_pci_quiesce_controller_handoff(struct udevice *dev)
-{
-	struct xhci_ctrl *ctrl = dev_get_priv(dev);
-	u32 iman;
-	u32 usbcmd;
-
-	if (!ctrl || !ctrl->hcor || !ctrl->ir_set)
-		return -ENODEV;
-
-	usbcmd = xhci_readl(&ctrl->hcor->or_usbcmd);
-	usbcmd &= ~(XHCI_IRQS | CMD_RUN);
-	xhci_writel(&ctrl->hcor->or_usbcmd, usbcmd);
-	xhci_writel(&ctrl->hcor->or_usbsts,
-		    STS_FATAL | STS_EINT | STS_PORT | STS_SAVE |
-		    STS_RESTORE | STS_SRE | STS_HCE);
-	xhci_writel(&ctrl->ir_set->irq_control, 0);
-	iman = xhci_readl(&ctrl->ir_set->irq_pending);
-	xhci_writel(&ctrl->ir_set->irq_pending, (iman & ~0x2) | 0x1);
-
-	return 0;
-}
-
 static int xhci_pci_quiesce_interrupt_modes(struct udevice *dev)
 {
 	int cap;
@@ -298,10 +276,9 @@ static int xhci_pci_remove(struct udevice *dev)
 	int ret;
 
 	xhci_pci_emit_breadcrumb(dev, "remove-entry", 0);
-	xhci_deregister(dev);
-	ret = xhci_pci_quiesce_controller_handoff(dev);
+	ret = xhci_deregister(dev);
 	if (ret) {
-		xhci_pci_emit_breadcrumb(dev, "remove-ctrl-quiesce", ret);
+		xhci_pci_emit_breadcrumb(dev, "remove-deregister", ret);
 		if (reset_valid(&plat->reset))
 			reset_free(&plat->reset);
 		return ret;

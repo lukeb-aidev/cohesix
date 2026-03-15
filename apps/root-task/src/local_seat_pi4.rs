@@ -1514,14 +1514,39 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
         }
         return;
     }
-    let mut line = heapless::String::<176>::new();
+    let mut line = heapless::String::<224>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
-        format_args!(
-            "[local-seat] xhci.diag stage=0x{stage:04x} a=0x{a:016x} b=0x{b:016x} c=0x{c:016x}"
-        ),
+        format_args!("[local-seat] xhci.diag stage=0x{stage:04x}"),
+    );
+    if let Some(tag) = xhci_diag_stage_label(stage) {
+        let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" tag={tag}"));
+    }
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(" a=0x{a:016x} b=0x{b:016x} c=0x{c:016x}"),
     );
     boot_log::force_uart_line(line.as_str());
+}
+
+#[inline]
+fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
+    match stage {
+        0x0204 => Some("fw-handoff-skip-pre-quiesce"),
+        0x0224 => Some("fw-handoff-skip-stop"),
+        0x0234 => Some("fw-handoff-skip-reset"),
+        0x0243 => Some("config-write"),
+        0x0244 => Some("dcbaap-write"),
+        0x0252 => Some("crcr-write"),
+        0x0264 => Some("erstsz-write"),
+        0x0265 => Some("erstba-write"),
+        0x0266 => Some("erdp-write"),
+        0x0267 => Some("imod-write"),
+        0x0268 => Some("iman-write"),
+        0x0269 => Some("usbsts-clear-write"),
+        0x026a => Some("usbcmd-run-write"),
+        _ => None,
+    }
 }
 
 #[inline]
@@ -1704,7 +1729,10 @@ fn validate_xhci_capability_window(probe: &XhciCapProbe) -> Result<(), &'static 
 }
 
 #[inline]
-fn xhci_controller_params_from_probe(probe: XhciCapProbe) -> XhciControllerParams {
+fn xhci_controller_params_from_probe(
+    probe: XhciCapProbe,
+    firmware_handoff_quiesced: bool,
+) -> XhciControllerParams {
     XhciControllerParams {
         cap_length: probe.cap_length,
         hcs1: probe.hcs1,
@@ -1712,6 +1740,7 @@ fn xhci_controller_params_from_probe(probe: XhciCapProbe) -> XhciControllerParam
         hccparams1: probe.hccparams1,
         db_offset: probe.db_offset,
         rts_offset: probe.rts_offset,
+        firmware_handoff_quiesced,
     }
 }
 
@@ -4005,7 +4034,7 @@ impl UsbKeyboard {
         let mut saw_controller = false;
         let mut saw_keyboard_init_error = false;
         for &mmio_base in &candidates[..candidate_count] {
-            let (effective_mmio, cap_probe) = {
+            let (effective_mmio, cap_probe, firmware_handoff_quiesced) = {
                 let trusted_handoff_snapshot = xhci_capability_snapshot.filter(|_| {
                     xhci_handoff_ready && xhci_irq_quiesced && xhci_mmio_hint == Some(mmio_base)
                 });
@@ -4085,7 +4114,7 @@ impl UsbKeyboard {
                 boot_log::force_uart_line(cap_line.as_str());
 
                 match validate_xhci_capability_window(&raw_probe) {
-                    Ok(()) => (mmio_base, raw_probe),
+                    Ok(()) => (mmio_base, raw_probe, trusted_handoff_snapshot.is_some()),
                     Err(reason) => {
                         if !xhci_runtime_allows_alias_scan(
                             mmio_base,
@@ -4115,7 +4144,7 @@ impl UsbKeyboard {
                                     ),
                                 );
                                 boot_log::force_uart_line(line.as_str());
-                                (candidate, scanned_probe)
+                                (candidate, scanned_probe, false)
                             }
                             Err(_) => {
                                 let mut line = heapless::String::<208>::new();
@@ -4133,7 +4162,8 @@ impl UsbKeyboard {
                     }
                 }
             };
-            let controller_params = xhci_controller_params_from_probe(cap_probe);
+            let controller_params =
+                xhci_controller_params_from_probe(cap_probe, firmware_handoff_quiesced);
 
             // Keep probe order deterministic so field logs are directly
             // comparable across boots.
@@ -8442,22 +8472,26 @@ mod tests {
 
     #[test]
     fn xhci_controller_params_preserve_hccparams1_for_runtime_init() {
-        let params = xhci_controller_params_from_probe(XhciCapProbe {
-            cap_length: 0x40,
-            hci_version: 0x0100,
-            hcs1: 32u32 | (8u32 << 24),
-            hcs2: 0,
-            hccparams1: 1 << 2,
-            db_offset: 0x1000,
-            rts_offset: 0x2000,
-            max_slots: 32,
-            max_ports: 8,
-            max_scratchpad: 0,
-            mmio_size: 0x10000,
-        });
+        let params = xhci_controller_params_from_probe(
+            XhciCapProbe {
+                cap_length: 0x40,
+                hci_version: 0x0100,
+                hcs1: 32u32 | (8u32 << 24),
+                hcs2: 0,
+                hccparams1: 1 << 2,
+                db_offset: 0x1000,
+                rts_offset: 0x2000,
+                max_slots: 32,
+                max_ports: 8,
+                max_scratchpad: 0,
+                mmio_size: 0x10000,
+            },
+            true,
+        );
         assert_eq!(params.hccparams1, 1 << 2);
         assert_eq!(params.cap_length, 0x40);
         assert_eq!(params.db_offset, 0x1000);
+        assert!(params.firmware_handoff_quiesced);
     }
 
     #[test]
@@ -8477,6 +8511,14 @@ mod tests {
         assert_eq!(probe.max_slots, 32);
         assert_eq!(probe.max_ports, 8);
         assert_eq!(probe.mmio_size, 0x10000);
+    }
+
+    #[test]
+    fn xhci_diag_stage_labels_cover_runtime_write_fault_markers() {
+        assert_eq!(xhci_diag_stage_label(0x0243), Some("config-write"));
+        assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-write"));
+        assert_eq!(xhci_diag_stage_label(0x026a), Some("usbcmd-run-write"));
+        assert_eq!(xhci_diag_stage_label(0x9999), None);
     }
 
     #[test]
