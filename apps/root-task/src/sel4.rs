@@ -1697,6 +1697,128 @@ pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error
     unsafe { seL4_CNode_Delete(root, index, depth_word) }
 }
 
+/// Creates an IRQ handler capability in the supplied init-root slot.
+///
+/// On Pi 4 the kernel does not expose `HAVE_SET_TRIGGER`, so the plain
+/// `IRQControl Get` path is the stable option for runtime IRQ sinks.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn irq_control_get_level_handler(
+    irq: seL4_Word,
+    dest_root: seL4_CNode,
+    dest_index: seL4_CPtr,
+    dest_depth: u8,
+) -> seL4_Error {
+    #[cfg(target_os = "none")]
+    unsafe {
+        let mut mr0 = irq;
+        let mut mr1 = dest_index;
+        let mut mr2 = seL4_Word::from(dest_depth);
+        let mut mr3 = 0;
+
+        sel4_sys::seL4_SetCap(0, dest_root);
+        let tag = sel4_sys::seL4_MessageInfo::new(
+            sel4_sys::invocation_label_IRQIssueIRQHandler as seL4_Word,
+            0,
+            1,
+            3,
+        );
+        let output = sel4_sys::seL4_CallWithMRs(
+            sel4_sys::seL4_CapIRQControl,
+            tag,
+            &mut mr0,
+            &mut mr1,
+            &mut mr2,
+            &mut mr3,
+        );
+        let result = sel4_sys::seL4_MessageInfo_get_label(output) as seL4_Error;
+        if result != seL4_NoError {
+            sel4_sys::seL4_SetMR(0, mr0);
+            sel4_sys::seL4_SetMR(1, mr1);
+            sel4_sys::seL4_SetMR(2, mr2);
+            sel4_sys::seL4_SetMR(3, mr3);
+        }
+        result
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (irq, dest_root, dest_index, dest_depth);
+        seL4_NoError
+    }
+}
+
+/// Binds an IRQ handler capability to a notification object.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn irq_handler_set_notification(handler: seL4_CPtr, notification: seL4_CPtr) -> seL4_Error {
+    #[cfg(target_os = "none")]
+    unsafe {
+        let mut mr0 = 0;
+        let mut mr1 = 0;
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+        sel4_sys::seL4_SetCap(0, notification);
+        let tag = sel4_sys::seL4_MessageInfo::new(
+            sel4_sys::invocation_label_IRQSetIRQHandler as seL4_Word,
+            0,
+            1,
+            0,
+        );
+        let output =
+            sel4_sys::seL4_CallWithMRs(handler, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = sel4_sys::seL4_MessageInfo_get_label(output) as seL4_Error;
+        if result != seL4_NoError {
+            sel4_sys::seL4_SetMR(0, mr0);
+            sel4_sys::seL4_SetMR(1, mr1);
+            sel4_sys::seL4_SetMR(2, mr2);
+            sel4_sys::seL4_SetMR(3, mr3);
+        }
+        result
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (handler, notification);
+        seL4_NoError
+    }
+}
+
+/// Clears the notification binding from an IRQ handler capability.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn irq_handler_clear(handler: seL4_CPtr) -> seL4_Error {
+    #[cfg(target_os = "none")]
+    unsafe {
+        let mut mr0 = 0;
+        let mut mr1 = 0;
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+        let tag = sel4_sys::seL4_MessageInfo::new(
+            sel4_sys::invocation_label_IRQClearIRQHandler as seL4_Word,
+            0,
+            0,
+            0,
+        );
+        let output =
+            sel4_sys::seL4_CallWithMRs(handler, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = sel4_sys::seL4_MessageInfo_get_label(output) as seL4_Error;
+        if result != seL4_NoError {
+            sel4_sys::seL4_SetMR(0, mr0);
+            sel4_sys::seL4_SetMR(1, mr1);
+            sel4_sys::seL4_SetMR(2, mr2);
+            sel4_sys::seL4_SetMR(3, mr3);
+        }
+        result
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = handler;
+        seL4_NoError
+    }
+}
+
 /// Safe projection of `seL4_CNode_Mint` for bootstrap modules.
 #[cfg(feature = "kernel")]
 #[deprecated(note = "use cspace_sys::*_invoc")]
@@ -3701,6 +3823,27 @@ impl<'a> KernelEnv<'a> {
             end = empty_end,
         );
         slot
+    }
+
+    /// Retypes and returns a notification object in the init CSpace.
+    pub fn alloc_notification(&mut self) -> Result<seL4_CPtr, seL4_Error> {
+        let reserved = self
+            .untyped
+            .reserve_ram(sel4_sys::seL4_NotificationBits as u8)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let slot = self.allocate_slot();
+        match cspace_sys::untyped_retype_into_init_root(
+            reserved.cap() as seL4_CPtr,
+            sel4_sys::seL4_NotificationObject as seL4_Word,
+            sel4_sys::seL4_NotificationBits as seL4_Word,
+            slot,
+        ) {
+            Ok(()) => Ok(slot),
+            Err(err) => {
+                self.untyped.release(&reserved);
+                Err(err.into_sel4_error())
+            }
+        }
     }
 
     /// Maps a physical device frame into the root task's device window.

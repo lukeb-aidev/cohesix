@@ -247,13 +247,36 @@ const fn core_ctrl_function_addr(addr: u32) -> u32 {
 }
 
 #[inline]
+const fn core_ctrl_current_window_addr(addr: u32) -> u32 {
+    addr & BACKPLANE_ADDRESS_MASK
+}
+
+#[inline]
+const fn core_ctrl_trace_function_addr(addr: u32) -> u32 {
+    core_ctrl_function_addr(addr)
+}
+
+#[inline]
 const fn backplane_word_byte_shift(addr: u32) -> u32 {
     (addr & 0x3) * 8
 }
 
 #[inline]
+const fn backplane_window_base(addr: u32) -> u32 {
+    addr & BACKPLANE_WINDOW_MASK
+}
+
+#[inline]
+fn backplane_window_reprogram_needed(programmed_window: Option<u32>, addr: u32) -> bool {
+    match programmed_window {
+        Some(window) => window != backplane_window_base(addr),
+        None => true,
+    }
+}
+
+#[inline]
 const fn backplane_window_register_bytes(addr: u32) -> (u8, u8, u8) {
-    let window = addr & BACKPLANE_WINDOW_MASK;
+    let window = backplane_window_base(addr);
     (
         ((window >> 8) & 0xFF) as u8,
         ((window >> 16) & 0xFF) as u8,
@@ -263,27 +286,65 @@ const fn backplane_window_register_bytes(addr: u32) -> (u8, u8, u8) {
 
 #[inline]
 const fn core_ctrl_access_mode_label() -> &'static str {
-    "cmd53-word-windowed fallback=cmd52-byte-current-window"
+    "cmd53-windowed-read32-cmd52-current-window-write8 fallback=cmd52-byte-rewindow"
+}
+
+#[inline]
+const fn core_ctrl_in_reset_access_mode_label() -> &'static str {
+    "cmd53-word-windowed-in-reset fallback=cmd52-current-window-rewindow"
 }
 
 fn log_core_ctrl_access(op: &'static str, base: u32, offset: u32, value: Option<u8>) {
     let addr = base.saturating_add(offset);
-    let bus = core_ctrl_function_addr(addr);
+    let trace_bus = core_ctrl_trace_function_addr(addr);
+    let bus = if op == "write8" {
+        core_ctrl_current_window_addr(addr)
+    } else {
+        trace_bus
+    };
     let shift = backplane_word_byte_shift(addr);
     match value {
         Some(value) => emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware core-ctrl access op={op} mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} shift={shift} inc={} value=0x{value:02x}",
+            "[pi4-wifi] firmware core-ctrl access op={op} mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={} value=0x{value:02x}",
             core_ctrl_access_mode_label(),
             backplane_word_increment_addr() as u8,
             window = addr & BACKPLANE_WINDOW_MASK,
         )),
         None => emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware core-ctrl access op={op} mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} shift={shift} inc={}",
+            "[pi4-wifi] firmware core-ctrl access op={op} mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={}",
             core_ctrl_access_mode_label(),
             backplane_word_increment_addr() as u8,
             window = addr & BACKPLANE_WINDOW_MASK,
         )),
     }
+}
+
+fn log_core_ctrl_reset_write(base: u32, offset: u32, value: u8) {
+    let addr = base.saturating_add(offset);
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] firmware core-ctrl reset-write mode=cmd53-word-windowed base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} bus=0x{bus:05x} value=0x{value:02x}",
+        bus = core_ctrl_trace_function_addr(addr),
+    ));
+}
+
+fn log_core_ctrl_in_reset_write(base: u32, offset: u32, value: u8) {
+    let addr = base.saturating_add(offset);
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] firmware core-ctrl in-reset-write mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} value=0x{value:02x}",
+        core_ctrl_in_reset_access_mode_label(),
+        bus = core_ctrl_trace_function_addr(addr),
+        trace_bus = core_ctrl_trace_function_addr(addr),
+    ));
+}
+
+#[inline]
+const fn core_ctrl_write_uses_word_path(offset: u32) -> bool {
+    offset == AI_RESETCTRL_OFFSET
+}
+
+#[inline]
+const fn core_ctrl_in_reset_write_uses_word_path(offset: u32) -> bool {
+    offset == AI_IOCTRL_OFFSET
 }
 
 fn log_sdio_cmd53_shape(
@@ -431,6 +492,14 @@ fn bounded_spin_settle(stage: &'static str, loops: usize) {
 #[inline]
 const fn ht_clock_request_value() -> u8 {
     SBSDIO_HT_AVAIL_REQ
+}
+
+#[inline]
+const fn should_prime_ht_clock_assist_before_reset(last_chipclkcsr: Option<u8>) -> bool {
+    match last_chipclkcsr {
+        Some(value) => (value & (SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL)) == 0,
+        None => true,
+    }
 }
 
 #[inline]
@@ -1445,6 +1514,7 @@ struct SdioHost {
     current_clock_hz: u32,
     desired_bus_width: SdioBusWidth,
     card: Option<CardInfo>,
+    programmed_backplane_window: Option<u32>,
     last_backplane_window: Option<u32>,
     last_backplane_function_addr: Option<u32>,
     last_backplane_window_low: u8,
@@ -1497,6 +1567,7 @@ impl SdioHost {
             current_clock_hz: 0,
             desired_bus_width: SdioBusWidth::OneBit,
             card: None,
+            programmed_backplane_window: None,
             last_backplane_window: None,
             last_backplane_function_addr: None,
             last_backplane_window_low: 0,
@@ -1513,6 +1584,16 @@ impl SdioHost {
     fn mark_power_cycled(&mut self) {
         self.card = None;
         self.current_clock_hz = 0;
+        self.clear_backplane_window_cache();
+    }
+
+    fn clear_backplane_window_cache(&mut self) {
+        self.programmed_backplane_window = None;
+        self.last_backplane_window = None;
+        self.last_backplane_function_addr = None;
+        self.last_backplane_window_low = 0;
+        self.last_backplane_window_mid = 0;
+        self.last_backplane_window_high = 0;
     }
 
     fn remember_backplane_window(
@@ -1591,6 +1672,7 @@ impl SdioHost {
         }
         self.apply_host_bus_width(self.desired_bus_width);
         self.card = None;
+        self.clear_backplane_window_cache();
         self.log_host_state("after-reset");
         Ok(())
     }
@@ -2141,6 +2223,7 @@ impl SdioHost {
         function_addr: u32,
         f: impl FnOnce(&mut Self, u32) -> Result<T, HalError>,
     ) -> Result<T, HalError> {
+        let window_base = backplane_window_base(window_addr);
         let (window_low, window_mid, window_high) = backplane_window_register_bytes(window_addr);
         let trace_window = (function_addr & BACKPLANE_32BIT_FLAG) != 0;
         if trace_window {
@@ -2155,13 +2238,20 @@ impl SdioHost {
             window_mid,
             window_high,
         );
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SBADDRLOW, window_low)?;
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SBADDRMID, window_mid)?;
-        self.io_direct_write(
-            SdioFunction::Function1,
-            SBSDIO_FUNC1_SBADDRHIGH,
-            window_high,
-        )?;
+        if backplane_window_reprogram_needed(self.programmed_backplane_window, window_addr) {
+            self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SBADDRLOW, window_low)?;
+            self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SBADDRMID, window_mid)?;
+            self.io_direct_write(
+                SdioFunction::Function1,
+                SBSDIO_FUNC1_SBADDRHIGH,
+                window_high,
+            )?;
+            self.programmed_backplane_window = Some(window_base);
+        } else if trace_window {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] backplane window reuse window=0x{window_base:08x} fn_addr=0x{function_addr:05x}"
+            ));
+        }
         if trace_window {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] backplane window ready window=0x{window_addr:08x} fn_addr=0x{function_addr:05x}"
@@ -2285,6 +2375,18 @@ impl SdioHost {
             "[pi4-wifi] firmware core-ctrl mode={} split-window",
             core_ctrl_access_mode_label()
         ));
+        if should_prime_ht_clock_assist_before_reset(self.last_chipclkcsr) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=pre-reset-ht-assist"
+            ));
+            self.enable_ht_clock_assist_for("pre-reset-ht-assist")?;
+            self.log_transport_shadow("pre-reset-ht-assist");
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=pre-reset-ht-assist skipped csr=0x{:02x}",
+                self.last_chipclkcsr.unwrap_or(0)
+            ));
+        }
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-disable"));
         self.core_disable(
             CYW43_ARMCR4_CORE_BASE,
@@ -2371,7 +2473,7 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=wait-ht-clock retry=assist csr=0x{last_chipclk:02x}"
         ));
-        self.enable_ht_clock_assist()?;
+        self.enable_ht_clock_assist_for("wait-ht-clock assist")?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=wait-ht-clock retry=alp-prime csr=0x{last_chipclk:02x}"
         ));
@@ -2454,9 +2556,14 @@ impl SdioHost {
         value: u8,
     ) -> Result<(), HalError> {
         let addr = base.saturating_add(offset);
-        let word = self.backplane_word_read32(addr)?;
-        let merged = merge_u8_word(word, addr as usize, value);
-        self.backplane_word_write32(addr, merged)
+        self.with_backplane_window_addr(addr, core_ctrl_function_addr(addr), |this, bus_addr| {
+            let _ = bus_addr;
+            this.io_direct_write(
+                SdioFunction::Function1,
+                core_ctrl_current_window_addr(addr),
+                value,
+            )
+        })
     }
 
     fn core_ctrl_fallback_read8_current_window(
@@ -2466,20 +2573,6 @@ impl SdioHost {
     ) -> Result<u8, HalError> {
         let addr = base.saturating_add(offset);
         self.io_direct_read(SdioFunction::Function1, addr & BACKPLANE_ADDRESS_MASK)
-    }
-
-    fn core_ctrl_fallback_write8_current_window(
-        &mut self,
-        base: u32,
-        offset: u32,
-        value: u8,
-    ) -> Result<(), HalError> {
-        let addr = base.saturating_add(offset);
-        self.io_direct_write(
-            SdioFunction::Function1,
-            addr & BACKPLANE_ADDRESS_MASK,
-            value,
-        )
     }
 
     fn core_ctrl_fallback_read8_cmd52_rewindow(
@@ -2497,6 +2590,19 @@ impl SdioHost {
         value: u8,
     ) -> Result<(), HalError> {
         self.backplane_write8(base.saturating_add(offset), value)
+    }
+
+    fn core_ctrl_resetctrl_write32(&mut self, base: u32, value: u8) -> Result<(), HalError> {
+        self.backplane_word_write32(base.saturating_add(AI_RESETCTRL_OFFSET), u32::from(value))
+    }
+
+    fn core_ctrl_in_reset_write32(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+    ) -> Result<(), HalError> {
+        self.backplane_word_write32(base.saturating_add(offset), u32::from(value))
     }
 
     fn core_ctrl_read8(&mut self, base: u32, offset: u32) -> Result<u8, HalError> {
@@ -2530,33 +2636,93 @@ impl SdioHost {
     }
 
     fn core_ctrl_write8(&mut self, base: u32, offset: u32, value: u8) -> Result<(), HalError> {
-        match self.core_ctrl_windowed_write8(base, offset, value) {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd52-byte-current-window err={err}"
-                ));
-                self.recover_command_path("core-ctrl-cmd52-current-window");
-                match self.core_ctrl_fallback_write8_current_window(base, offset, value) {
-                    Ok(()) => Ok(()),
-                    Err(current_window_err) => {
-                        emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={current_window_err}"
-                        ));
-                        self.recover_command_path("core-ctrl-cmd52-rewindow");
-                        match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value) {
-                            Ok(()) => Ok(()),
-                            Err(fallback_err) => {
-                                emit_breadcrumb(format_args!(
-                                    "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
-                                ));
-                                Err(fallback_err)
+        if core_ctrl_write_uses_word_path(offset) {
+            match self.core_ctrl_resetctrl_write32(base, value) {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware core-ctrl fallback op=write32-resetctrl base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd52-byte-current-window err={err}"
+                    ));
+                    self.recover_command_path("core-ctrl-resetctrl-cmd52-current-window");
+                    match self.core_ctrl_windowed_write8(base, offset, value) {
+                        Ok(()) => return Ok(()),
+                        Err(current_window_err) => {
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware core-ctrl fallback op=write32-resetctrl base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={current_window_err}"
+                            ));
+                            self.recover_command_path("core-ctrl-resetctrl-cmd52-rewindow");
+                            match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value)
+                            {
+                                Ok(()) => return Ok(()),
+                                Err(fallback_err) => {
+                                    emit_breadcrumb(format_args!(
+                                        "[pi4-wifi] firmware core-ctrl fallback op=write32-resetctrl base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                                    ));
+                                    return Err(fallback_err);
+                                }
                             }
                         }
                     }
                 }
             }
         }
+        match self.core_ctrl_windowed_write8(base, offset, value) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} from=cmd52-byte-current-window to=cmd52-byte-rewindow err={err}"
+                ));
+                self.recover_command_path("core-ctrl-cmd52-rewindow");
+                match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value) {
+                    Ok(()) => Ok(()),
+                    Err(fallback_err) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                        ));
+                        Err(fallback_err)
+                    }
+                }
+            }
+        }
+    }
+
+    fn core_ctrl_write8_in_reset(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+    ) -> Result<(), HalError> {
+        if core_ctrl_in_reset_write_uses_word_path(offset) {
+            match self.core_ctrl_in_reset_write32(base, offset, value) {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd52-byte-current-window err={err}"
+                    ));
+                    self.recover_command_path("core-ctrl-in-reset-cmd52-current-window");
+                    match self.core_ctrl_windowed_write8(base, offset, value) {
+                        Ok(()) => return Ok(()),
+                        Err(current_window_err) => {
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={current_window_err}"
+                            ));
+                            self.recover_command_path("core-ctrl-in-reset-cmd52-rewindow");
+                            match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value)
+                            {
+                                Ok(()) => return Ok(()),
+                                Err(fallback_err) => {
+                                    emit_breadcrumb(format_args!(
+                                        "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                                    ));
+                                    return Err(fallback_err);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.core_ctrl_write8(base, offset, value)
     }
 
     fn core_ctrl_read8_logged(
@@ -2585,7 +2751,11 @@ impl SdioHost {
         value: u8,
         stage: &'static str,
     ) -> Result<(), HalError> {
-        log_core_ctrl_access("write8", base, offset, Some(value));
+        if core_ctrl_write_uses_word_path(offset) {
+            log_core_ctrl_reset_write(base, offset, value);
+        } else {
+            log_core_ctrl_access("write8", base, offset, Some(value));
+        }
         if let Err(err) = self.core_ctrl_write8(base, offset, value) {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
@@ -2596,7 +2766,29 @@ impl SdioHost {
         Ok(())
     }
 
-    fn enable_ht_clock_assist(&mut self) -> Result<(), HalError> {
+    fn core_ctrl_write8_in_reset_logged(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        if core_ctrl_in_reset_write_uses_word_path(offset) {
+            log_core_ctrl_in_reset_write(base, offset, value);
+        } else {
+            log_core_ctrl_access("write8", base, offset, Some(value));
+        }
+        if let Err(err) = self.core_ctrl_write8_in_reset(base, offset, value) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
+            ));
+            self.log_transport_shadow(stage);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn enable_ht_clock_assist_for(&mut self, stage: &'static str) -> Result<(), HalError> {
         let mut wake_ctrl =
             self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL)?;
         wake_ctrl |= SBSDIO_WAKE_TILL_HT_AVAIL;
@@ -2621,7 +2813,7 @@ impl SdioHost {
         self.remember_sleepcsr(sleep_csr);
 
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=wait-ht-clock assist wake=0x{wake_ctrl:02x} cardcap=0x{cardcap:02x} sleep=0x{sleep_csr:02x}"
+            "[pi4-wifi] firmware stage={stage} wake=0x{wake_ctrl:02x} cardcap=0x{cardcap:02x} sleep=0x{sleep_csr:02x}"
         ));
         Ok(())
     }
@@ -2673,7 +2865,7 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=in-reset-configure value=0x{reset_hold_ioctrl:02x}"
         ));
-        self.core_ctrl_write8_logged(
+        self.core_ctrl_write8_in_reset_logged(
             base,
             AI_IOCTRL_OFFSET,
             reset_hold_ioctrl,
@@ -2809,6 +3001,7 @@ impl SdioHost {
     fn recover_command_path(&mut self, stage: &'static str) {
         self.software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA).ok();
         self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
+        self.programmed_backplane_window = None;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] sdhci recover stage={stage} mask=cmd+data"
         ));
@@ -3335,24 +3528,27 @@ pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        backplane_small_access_addr, backplane_window_register_bytes, backplane_word_function_addr,
-        bcm2711_gpfsel_offset, bcm2711_puppdn_offset, cmd52_argument, core_ctrl_access_mode_label,
-        ht_clock_request_value, is_mailbox_protocol_error, mailbox_tag_name, make_command,
-        merge_u16_word, normalize_nvram, phys_to_bus, r5_status, sdhci_interrupt_buffer_ready_mask,
-        sdhci_present_buffer_ready_mask, sdhci_status_reason, sdio_transfer_addr,
-        sdio_transfer_plan, should_log_sdio_transfer_chunk, update_bcm2711_gpio_function,
-        update_bcm2711_gpio_pull, HalError, ResponseType, SdioFunction, AI_CORE_POSTRESET_IOCTRL,
-        AI_CORE_PRERESET_IOCTRL, AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET,
-        AI_RESETCTRL_BIT_RESET, ARMCR4_BCMA_IOCTL_CPUHALT, ARMCR4_CAP, BACKPLANE_32BIT_FLAG,
-        BACKPLANE_ADDRESS_MASK, BACKPLANE_WINDOW_MASK, BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE,
-        CYW43_CHIPCOMMON_BASE, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SBSDIO_ALP_AVAIL_REQ,
-        SBSDIO_FORCE_HT, SBSDIO_HT_AVAIL_REQ, SBSDIO_WAKE_TILL_HT_AVAIL, SDHCI_COMMAND,
-        SDHCI_DATA_AVAILABLE, SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL, SDHCI_INT_DATA_CRC,
-        SDHCI_INT_SPACE_AVAIL, SDHCI_INT_TIMEOUT, SDHCI_SPACE_AVAILABLE, SDHCI_TRANSFER_MODE,
-        SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_MULTI, SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS,
-        SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,
-        SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1, SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1,
-        SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+        backplane_small_access_addr, backplane_window_base, backplane_window_register_bytes,
+        backplane_window_reprogram_needed, backplane_word_function_addr, bcm2711_gpfsel_offset,
+        bcm2711_puppdn_offset, cmd52_argument, core_ctrl_access_mode_label,
+        core_ctrl_current_window_addr, core_ctrl_trace_function_addr,
+        core_ctrl_write_uses_word_path, ht_clock_request_value, is_mailbox_protocol_error,
+        mailbox_tag_name, make_command, merge_u16_word, normalize_nvram, phys_to_bus, r5_status,
+        sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
+        sdio_transfer_addr, sdio_transfer_plan, should_log_sdio_transfer_chunk,
+        update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
+        SdioFunction, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL, AI_IOCTRL_BIT_CLOCK_EN,
+        AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET, AI_RESETCTRL_BIT_RESET, ARMCR4_BCMA_IOCTL_CPUHALT,
+        ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BACKPLANE_ADDRESS_MASK, BACKPLANE_WINDOW_MASK,
+        BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE, CYW43_SOCRAM_CORE_BASE,
+        PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SBSDIO_ALP_AVAIL_REQ, SBSDIO_FORCE_HT,
+        SBSDIO_HT_AVAIL_REQ, SBSDIO_WAKE_TILL_HT_AVAIL, SDHCI_COMMAND, SDHCI_DATA_AVAILABLE,
+        SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL, SDHCI_INT_DATA_CRC, SDHCI_INT_SPACE_AVAIL,
+        SDHCI_INT_TIMEOUT, SDHCI_SPACE_AVAILABLE, SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN,
+        SDHCI_TRNS_MULTI, SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS,
+        SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1,
+        SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1, SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE,
+        TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -3482,9 +3678,27 @@ mod tests {
             0x0c408
         );
         assert_eq!(
-            core_ctrl_access_mode_label(),
-            "cmd53-word-windowed fallback=cmd52-byte-current-window"
+            core_ctrl_current_window_addr(CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET),
+            0x04408
         );
+        assert_eq!(
+            core_ctrl_trace_function_addr(CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET),
+            0x0c408
+        );
+        assert_eq!(
+            core_ctrl_access_mode_label(),
+            "cmd53-windowed-read32-cmd52-current-window-write8 fallback=cmd52-byte-rewindow"
+        );
+        assert_eq!(
+            core_ctrl_in_reset_access_mode_label(),
+            "cmd53-word-windowed-in-reset fallback=cmd52-current-window-rewindow"
+        );
+        assert!(!core_ctrl_write_uses_word_path(AI_IOCTRL_OFFSET));
+        assert!(core_ctrl_write_uses_word_path(AI_RESETCTRL_OFFSET));
+        assert!(core_ctrl_in_reset_write_uses_word_path(AI_IOCTRL_OFFSET));
+        assert!(!core_ctrl_in_reset_write_uses_word_path(
+            AI_RESETCTRL_OFFSET
+        ));
     }
 
     #[test]
@@ -3493,6 +3707,25 @@ mod tests {
             backplane_window_register_bytes(CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET),
             (0x00, 0x10, 0x18)
         );
+    }
+
+    #[test]
+    fn backplane_window_cache_skips_same_window_reprogramming() {
+        let socram_reset = CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET;
+        let socram_ioctrl = CYW43_SOCRAM_CORE_BASE + AI_IOCTRL_OFFSET;
+        let armcr4_ioctrl = CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET;
+        let socram_window = backplane_window_base(socram_reset);
+
+        assert_eq!(socram_window, backplane_window_base(socram_ioctrl));
+        assert!(!backplane_window_reprogram_needed(
+            Some(socram_window),
+            socram_ioctrl
+        ));
+        assert!(backplane_window_reprogram_needed(
+            Some(socram_window),
+            armcr4_ioctrl
+        ));
+        assert!(backplane_window_reprogram_needed(None, socram_ioctrl));
     }
 
     #[test]
@@ -3527,6 +3760,21 @@ mod tests {
         assert_eq!(SBSDIO_FORCE_HT, 0x02);
         assert_eq!(SBSDIO_WAKE_TILL_HT_AVAIL, 0x02);
         assert_eq!(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, 0x08);
+    }
+
+    #[test]
+    fn pre_reset_ht_assist_prime_follows_cached_chipclk_state() {
+        assert!(should_prime_ht_clock_assist_before_reset(None));
+        assert!(should_prime_ht_clock_assist_before_reset(Some(0)));
+        assert!(!should_prime_ht_clock_assist_before_reset(Some(
+            SBSDIO_FORCE_HT
+        )));
+        assert!(!should_prime_ht_clock_assist_before_reset(Some(
+            SBSDIO_HT_AVAIL_REQ
+        )));
+        assert!(!should_prime_ht_clock_assist_before_reset(Some(
+            SBSDIO_HT_AVAIL
+        )));
     }
 
     #[test]

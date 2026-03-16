@@ -300,11 +300,6 @@ impl<H: Dma> ScratchpadSet<H> {
 
 impl<H: Dma> XhciCtrl<H> {
     #[inline(always)]
-    fn read_reg_at<T: Copy>(mmio: usize, offset: usize) -> T {
-        unsafe { ((mmio + offset) as *const T).read_volatile() }
-    }
-
-    #[inline(always)]
     fn write_reg_at<T: Copy>(mmio: usize, offset: usize, val: T) {
         unsafe {
             ((mmio + offset) as *mut T).write_volatile(val);
@@ -321,6 +316,34 @@ impl<H: Dma> XhciCtrl<H> {
         Self::write_reg_at::<u32>(mmio, offset, val as u32);
         Self::write_reg_at::<u32>(mmio, offset + 4, (val >> 32) as u32);
         Self::write_reg_at::<u32>(mmio, offset, val as u32);
+    }
+
+    #[inline(always)]
+    fn write_only_polling_scrub(mmio: usize, op_offset: usize, int_base: usize, tag_stage: bool) {
+        if tag_stage {
+            emit_xhci_diag(0x0209, reg::USBCMD as u64, 0, 1);
+        } else {
+            emit_xhci_diag(0x0205, reg::USBCMD as u64, 0, 1);
+            Self::write_reg_at(mmio, op_offset + reg::USBCMD, 0u32);
+        }
+        if tag_stage {
+            emit_xhci_diag(0x020a, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 1);
+        } else {
+            Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
+        }
+        if tag_stage {
+            emit_xhci_diag(0x0207, (int_base + reg::IMOD) as u64, 0, 1);
+        }
+        Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
+        if tag_stage {
+            emit_xhci_diag(
+                0x0208,
+                (int_base + reg::IMAN) as u64,
+                polling_iman_value() as u64,
+                1,
+            );
+        }
+        Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
     }
 
     /// Create and initialize a new xHCI controller
@@ -402,16 +425,16 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Generic xHCI probing still needs to quiesce interrupt delivery
         // immediately after mapping, before any runtime register reads. On the
-        // Pi4 trusted-handoff path, firmware already exported a halted,
-        // interrupt-quiesced controller so runtime can skip these first
-        // write-only touches.
+        // Pi4 trusted-handoff path, firmware already exported a halted
+        // controller, but runtime still needs a write-only interrupt scrub so
+        // the first operational register write does not surface a stale IRQ.
         emit_xhci_diag(0x0106, op_offset as u64, rt_base as u64, int_base as u64);
-        if !params.firmware_handoff_quiesced {
-            Self::write_reg_at(mmio, op_offset + reg::USBCMD, 0u32);
-            Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
-            Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
-            Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
-        }
+        Self::write_only_polling_scrub(
+            mmio,
+            op_offset,
+            int_base,
+            params.firmware_handoff_quiesced,
+        );
         emit_xhci_diag(
             0x0107,
             USBSTS_CLEAR_MASK as u64,
@@ -642,8 +665,15 @@ impl<H: Dma> XhciCtrl<H> {
         // Cohesix uses pure polling during Pi4 local-seat bring-up. Acknowledge
         // any stale pending bit but keep the interrupter disabled so VL805 does
         // not surface an unhandled IRQ before userspace installs handlers.
+        emit_xhci_diag(
+            0x0268,
+            (int_base + reg::IMAN) as u64,
+            polling_iman_value() as u64,
+            self.firmware_handoff_quiesced as u64,
+        );
+        self.write_reg(int_base + reg::IMAN, polling_iman_value());
         if self.firmware_handoff_quiesced {
-            emit_xhci_diag(0x0262, int_base as u64, 1, 0);
+            emit_xhci_diag(0x0262, int_base as u64, polling_iman_value() as u64, 1);
             emit_xhci_diag(
                 0x0261,
                 1,
@@ -651,13 +681,6 @@ impl<H: Dma> XhciCtrl<H> {
                 event_ring.ring_phys(&*self.host) | 0x8,
             );
         } else {
-            emit_xhci_diag(
-                0x0268,
-                (int_base + reg::IMAN) as u64,
-                polling_iman_value() as u64,
-                0,
-            );
-            self.write_reg(int_base + reg::IMAN, polling_iman_value());
             emit_xhci_diag(
                 0x0262,
                 int_base as u64,
@@ -675,12 +698,13 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Clear stale status before run so command completions are observable.
         emit_xhci_diag(0x0269, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 0);
-        if self.firmware_handoff_quiesced {
-            emit_xhci_diag(0x0263, USBSTS_CLEAR_MASK as u64, 1, 0);
-        } else {
-            self.write_op(reg::USBSTS, USBSTS_CLEAR_MASK);
-            emit_xhci_diag(0x0263, USBSTS_CLEAR_MASK as u64, 0, 0);
-        }
+        self.write_op(reg::USBSTS, USBSTS_CLEAR_MASK);
+        emit_xhci_diag(
+            0x0263,
+            USBSTS_CLEAR_MASK as u64,
+            self.firmware_handoff_quiesced as u64,
+            0,
+        );
         // Start controller in polling mode (interrupt delivery remains masked).
         if self.firmware_handoff_quiesced {
             emit_xhci_diag(0x0270, 0, 1, 0);

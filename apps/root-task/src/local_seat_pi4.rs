@@ -163,6 +163,7 @@ const WAIT_MS_MIN_SPINS: usize = 10_000;
 const WAIT_MS_MAX_SPINS: usize = 25_000_000;
 const USB_PROGRESS_TICK_MS: usize = 1_000;
 const USB_PROGRESS_MAX_DOTS: usize = 64;
+const PI4_VL805_XHCI_IRQ: u32 = 143;
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
@@ -1533,6 +1534,12 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
 fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
     match stage {
         0x0204 => Some("fw-handoff-skip-pre-quiesce"),
+        0x0205 => Some("fw-handoff-usbcmd-mask-write"),
+        0x0206 => Some("fw-handoff-usbsts-clear-write"),
+        0x0207 => Some("fw-handoff-imod-write"),
+        0x0208 => Some("fw-handoff-iman-write"),
+        0x0209 => Some("fw-handoff-skip-usbcmd-mask-write"),
+        0x020a => Some("fw-handoff-skip-usbsts-clear-write"),
         0x0224 => Some("fw-handoff-skip-stop"),
         0x0234 => Some("fw-handoff-skip-reset"),
         0x0243 => Some("config-write"),
@@ -1914,7 +1921,7 @@ fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>, mode: Vl805CfgPreseedM
             boot_log::force_uart_line("[local-seat] vl805 cfg preseed stage=cfg-read-begin");
             let snapshot_before = read_vl805_pci_cfg_snapshot(config_virt);
             let command_before = snapshot_before.command;
-            // Keep VL805 INTx masked during bring-up to avoid fatal IRQ 27 storms
+            // Keep VL805 INTx masked during bring-up to avoid fatal interrupt storms
             // while still enabling memory decode + DMA for xHCI rings.
             let command_required = command_before
                 | PCI_COMMAND_MEMORY_SPACE
@@ -3423,7 +3430,7 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
 
         let command_before =
             (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
-        // Keep VL805 INTx masked during bring-up to avoid fatal IRQ 27 storms
+        // Keep VL805 INTx masked during bring-up to avoid fatal interrupt storms
         // while still enabling memory decode + DMA for xHCI rings.
         let command_required = command_before
             | PCI_COMMAND_MEMORY_SPACE
@@ -3473,12 +3480,252 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
 
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
+    _xhci_irq_guard: Option<XhciIrqGuard>,
     last_keys: [u8; 6],
     caps_lock_on: bool,
     poll_error_logged: bool,
     led_error_logged: bool,
     first_report_logged: bool,
     pending_display_scroll_rows: i8,
+}
+
+struct XhciIrqGuard {
+    root_cnode: sel4_sys::seL4_CPtr,
+    handler_slot: sel4_sys::seL4_CPtr,
+    notification_slot: sel4_sys::seL4_CPtr,
+    irq: u32,
+    owns_handler: bool,
+}
+
+enum XhciIrqHandlerAcquisition {
+    AllocateFresh,
+    ReuseExisting(sel4_sys::seL4_CPtr),
+}
+
+impl XhciIrqGuard {
+    fn install(
+        hal: &mut KernelHal<'_>,
+        mmio: usize,
+        firmware_handoff_quiesced: bool,
+    ) -> Result<Option<Self>, &'static str> {
+        if !xhci_irq_sink_needed(mmio, firmware_handoff_quiesced) {
+            return Ok(None);
+        }
+
+        let env = hal.as_env_mut();
+        let depth = crate::sel4::word_bits() as u8;
+        let root_cnode = env.init_cnode_cap();
+        let requested_handler_slot = env.allocate_slot();
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci irq sink request irq={} mmio=0x{mmio:016x} slot=0x{slot:04x} depth={depth}",
+                PI4_VL805_XHCI_IRQ,
+                slot = requested_handler_slot,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        let get_err = crate::sel4::irq_control_get_level_handler(
+            PI4_VL805_XHCI_IRQ as sel4_sys::seL4_Word,
+            root_cnode,
+            requested_handler_slot,
+            depth,
+        );
+        let existing_handler = unique_existing_irq_handler_slot(env);
+        let (handler_slot, owns_handler) = match resolve_xhci_irq_handler_acquisition(
+            get_err,
+            existing_handler,
+        ) {
+            Ok(XhciIrqHandlerAcquisition::AllocateFresh) => (requested_handler_slot, true),
+            Ok(XhciIrqHandlerAcquisition::ReuseExisting(slot)) => {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci irq sink reusing existing handler irq={} mmio=0x{mmio:016x} slot=0x{slot:04x} after=get-revoke-first",
+                        PI4_VL805_XHCI_IRQ,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                (slot, false)
+            }
+            Err("irq-handler-ambiguous") => {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci irq sink ambiguous existing handlers irq={} mmio=0x{mmio:016x} matches={count} after=get-revoke-first",
+                        PI4_VL805_XHCI_IRQ,
+                        count = match unique_existing_irq_handler_slot(env) {
+                            Err(count) => count,
+                            _ => 0,
+                        },
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return Err("irq-handler-ambiguous");
+            }
+            Err("irq-get-revoke-first-no-handler") => {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci irq sink get saw existing owner irq={} mmio=0x{mmio:016x} err={} ({}) but no reusable handler cap was found",
+                        PI4_VL805_XHCI_IRQ,
+                        get_err,
+                        crate::sel4::error_name(get_err),
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return Err("irq-get-revoke-first-no-handler");
+            }
+            Err(reason) => {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci irq sink get failed irq={} mmio=0x{mmio:016x} err={} ({}) reason={reason}",
+                        PI4_VL805_XHCI_IRQ,
+                        get_err,
+                        crate::sel4::error_name(get_err),
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return Err(reason);
+            }
+        };
+        let notification_slot = match env.alloc_notification() {
+            Ok(slot) => slot,
+            Err(_) => {
+                if owns_handler {
+                    let _ = crate::sel4::cnode_delete(root_cnode, handler_slot, depth);
+                }
+                return Err("notification-retype");
+            }
+        };
+        let bind_err = crate::sel4::irq_handler_set_notification(handler_slot, notification_slot);
+        if bind_err != sel4_sys::seL4_NoError {
+            let _ = crate::sel4::irq_handler_clear(handler_slot);
+            let _ = crate::sel4::cnode_delete(root_cnode, notification_slot, depth);
+            if owns_handler {
+                let _ = crate::sel4::cnode_delete(root_cnode, handler_slot, depth);
+            }
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci irq sink bind failed irq={} mmio=0x{mmio:016x} err={} ({})",
+                    PI4_VL805_XHCI_IRQ,
+                    bind_err,
+                    crate::sel4::error_name(bind_err),
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return Err("irq-set-notification");
+        }
+
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci irq sink armed irq={} mmio=0x{mmio:016x} handler=0x{handler:04x} notif=0x{notif:04x} owned={owned}",
+                PI4_VL805_XHCI_IRQ,
+                handler = handler_slot,
+                notif = notification_slot,
+                owned = if owns_handler { 1 } else { 0 },
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+
+        Ok(Some(Self {
+            root_cnode,
+            handler_slot,
+            notification_slot,
+            irq: PI4_VL805_XHCI_IRQ,
+            owns_handler,
+        }))
+    }
+}
+
+impl Drop for XhciIrqGuard {
+    fn drop(&mut self) {
+        let depth = crate::sel4::word_bits() as u8;
+        let clear_result = crate::sel4::irq_handler_clear(self.handler_slot);
+        let delete_notification_result =
+            crate::sel4::cnode_delete(self.root_cnode, self.notification_slot, depth);
+        let delete_handler_result = if self.owns_handler {
+            crate::sel4::cnode_delete(self.root_cnode, self.handler_slot, depth)
+        } else {
+            sel4_sys::seL4_NoError
+        };
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci irq sink drop irq={} handler=0x{:04x} notif=0x{:04x} clear={} ({}) delete_handler={} ({}) delete_notif={} ({}) owned={}",
+                self.irq,
+                self.handler_slot,
+                self.notification_slot,
+                clear_result,
+                crate::sel4::error_name(clear_result),
+                delete_handler_result,
+                crate::sel4::error_name(delete_handler_result),
+                delete_notification_result,
+                crate::sel4::error_name(delete_notification_result),
+                if self.owns_handler { 1 } else { 0 },
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+    }
+}
+
+#[inline]
+fn unique_existing_irq_handler_slot(
+    env: &crate::sel4::KernelEnv<'_>,
+) -> Result<Option<sel4_sys::seL4_CPtr>, usize> {
+    let mut first = None;
+    let mut count = 0usize;
+    let scan_end = env.bootinfo().empty.end;
+    let mut slot = 0;
+    while slot < scan_end {
+        let tag = crate::sel4::CapTag::from_raw(crate::sel4::debug_cap_identify(slot));
+        if matches!(tag, Some(crate::sel4::CapTag::IrqHandler)) {
+            count = count.saturating_add(1);
+            if first.is_none() {
+                first = Some(slot);
+            }
+        }
+        slot = slot.saturating_add(1);
+    }
+    if count > 1 {
+        Err(count)
+    } else {
+        Ok(first)
+    }
+}
+
+#[inline]
+fn resolve_xhci_irq_handler_acquisition(
+    get_err: sel4_sys::seL4_Error,
+    existing: Result<Option<sel4_sys::seL4_CPtr>, usize>,
+) -> Result<XhciIrqHandlerAcquisition, &'static str> {
+    if get_err == sel4_sys::seL4_NoError {
+        return Ok(XhciIrqHandlerAcquisition::AllocateFresh);
+    }
+    if get_err != sel4_sys::seL4_RevokeFirst {
+        return Err("irq-get-handler");
+    }
+    match existing {
+        Ok(Some(slot)) => Ok(XhciIrqHandlerAcquisition::ReuseExisting(slot)),
+        Ok(None) => Err("irq-get-revoke-first-no-handler"),
+        Err(_) => Err("irq-handler-ambiguous"),
+    }
+}
+
+#[inline]
+const fn xhci_irq_sink_needed(mmio: usize, firmware_handoff_quiesced: bool) -> bool {
+    firmware_handoff_quiesced && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
 }
 
 #[derive(Clone, Copy)]
@@ -4164,6 +4411,25 @@ impl UsbKeyboard {
             };
             let controller_params =
                 xhci_controller_params_from_probe(cap_probe, firmware_handoff_quiesced);
+            let xhci_irq_guard = match XhciIrqGuard::install(
+                hal,
+                effective_mmio,
+                firmware_handoff_quiesced,
+            ) {
+                Ok(guard) => guard,
+                Err(reason) => {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} detail={reason}",
+                                mmio = effective_mmio
+                            ),
+                        );
+                    boot_log::force_uart_line(line.as_str());
+                    continue;
+                }
+            };
 
             // Keep probe order deterministic so field logs are directly
             // comparable across boots.
@@ -4491,6 +4757,7 @@ impl UsbKeyboard {
                             hid.device().ctrl().host().seal_runtime();
                             return Ok(Self {
                                 hid,
+                                _xhci_irq_guard: xhci_irq_guard,
                                 last_keys: [0; 6],
                                 caps_lock_on: false,
                                 poll_error_logged: false,
@@ -8376,12 +8643,12 @@ mod tests {
         translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode, vl805_cfg_preseed_needed,
         vl805_runtime_cfg_touch_allowed, xhci_controller_params_from_probe,
         xhci_firmware_handoff_hint_reason, xhci_handoff_command_restore_target,
-        xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
-        xhci_runtime_command_replay_allowed, xhci_runtime_mmio_candidate_allowed,
-        xhci_runtime_mmio_has_accessible_window, xhci_safe_mode_skip_command, ConfigDesc,
-        Pi4SeatError, UsbKeyboard, Vl805CfgPreseedMode, XhciCapProbe, HUB_PORT_IFACE_FALLBACK_MAX,
-        RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-        XHCI_MMIO_ALIAS_SCAN_STEPS,
+        xhci_irq_sink_needed, xhci_preseed_allows_static_legacy_fallbacks,
+        xhci_preseed_pin_only_reason, xhci_runtime_command_replay_allowed,
+        xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
+        xhci_safe_mode_skip_command, ConfigDesc, Pi4SeatError, UsbKeyboard, Vl805CfgPreseedMode,
+        XhciCapProbe, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, XHCI_MMIO_ALIAS_SCAN_STEPS,
     };
     use super::{
         hid_protocol, hid_subclass, scancode, CHAR_HEIGHT, HUB_CLASS_CONTROL_WAIT_SPINS,
@@ -8515,10 +8782,103 @@ mod tests {
 
     #[test]
     fn xhci_diag_stage_labels_cover_runtime_write_fault_markers() {
+        assert_eq!(
+            xhci_diag_stage_label(0x0205),
+            Some("fw-handoff-usbcmd-mask-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0209),
+            Some("fw-handoff-skip-usbcmd-mask-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x020a),
+            Some("fw-handoff-skip-usbsts-clear-write")
+        );
+        assert_eq!(xhci_diag_stage_label(0x0208), Some("fw-handoff-iman-write"));
         assert_eq!(xhci_diag_stage_label(0x0243), Some("config-write"));
         assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-write"));
         assert_eq!(xhci_diag_stage_label(0x026a), Some("usbcmd-run-write"));
         assert_eq!(xhci_diag_stage_label(0x9999), None);
+    }
+
+    #[test]
+    fn xhci_irq_sink_only_arms_for_trusted_high_bar_handoff() {
+        assert!(xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true));
+        assert!(!xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, false));
+        assert!(!xhci_irq_sink_needed(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            true
+        ));
+    }
+
+    #[test]
+    fn unique_existing_irq_handler_slot_requires_single_match() {
+        fn scan(tags: &[crate::sel4::CapTag]) -> Result<Option<sel4_sys::seL4_CPtr>, usize> {
+            let mut first = None;
+            let mut count = 0usize;
+            for (slot, tag) in tags.iter().copied().enumerate() {
+                if matches!(tag, crate::sel4::CapTag::IrqHandler) {
+                    count = count.saturating_add(1);
+                    if first.is_none() {
+                        first = Some(slot as sel4_sys::seL4_CPtr);
+                    }
+                }
+            }
+            if count > 1 {
+                Err(count)
+            } else {
+                Ok(first)
+            }
+        }
+
+        assert_eq!(
+            scan(&[
+                crate::sel4::CapTag::Null,
+                crate::sel4::CapTag::IrqHandler,
+                crate::sel4::CapTag::Frame,
+            ]),
+            Ok(Some(1))
+        );
+        assert_eq!(
+            scan(&[
+                crate::sel4::CapTag::Null,
+                crate::sel4::CapTag::Frame,
+                crate::sel4::CapTag::Notification,
+            ]),
+            Ok(None)
+        );
+        assert_eq!(
+            scan(&[
+                crate::sel4::CapTag::IrqHandler,
+                crate::sel4::CapTag::Frame,
+                crate::sel4::CapTag::IrqHandler,
+            ]),
+            Err(2)
+        );
+    }
+
+    #[test]
+    fn xhci_irq_handler_acquisition_only_reuses_after_revoke_first() {
+        assert!(matches!(
+            resolve_xhci_irq_handler_acquisition(sel4_sys::seL4_NoError, Ok(Some(0x42)),),
+            Ok(XhciIrqHandlerAcquisition::AllocateFresh)
+        ));
+        assert!(matches!(
+            resolve_xhci_irq_handler_acquisition(sel4_sys::seL4_RevokeFirst, Ok(Some(0x42)),),
+            Ok(XhciIrqHandlerAcquisition::ReuseExisting(0x42))
+        ));
+        assert_eq!(
+            resolve_xhci_irq_handler_acquisition(sel4_sys::seL4_RevokeFirst, Ok(None)),
+            Err("irq-get-revoke-first-no-handler")
+        );
+        assert_eq!(
+            resolve_xhci_irq_handler_acquisition(sel4_sys::seL4_RevokeFirst, Err(2)),
+            Err("irq-handler-ambiguous")
+        );
+        assert_eq!(
+            resolve_xhci_irq_handler_acquisition(sel4_sys::seL4_DeleteFirst, Ok(Some(0x42))),
+            Err("irq-get-handler")
+        );
     }
 
     #[test]
