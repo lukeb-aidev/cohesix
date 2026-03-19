@@ -50,13 +50,18 @@ static void xhci_pci_emit_breadcrumb(struct udevice *dev, const char *stage,
 {
 	pci_dev_t bdf = dm_pci_get_bdf(dev);
 
-	printf("[cohesix:xhci-pci] stage=%s bdf=%02x:%02x.%x mmio_raw=%s mmio=%s cmd=%s ready=%s irq=%s ret=%d\n",
+	printf("[cohesix:xhci-pci] stage=%s bdf=%02x:%02x.%x mmio_raw=%s mmio=%s cmd=%s usbcmd=%s usbsts=%s iman0=%s ready=%s irq=%s halted=%s safe=%s ret=%d\n",
 	       stage, PCI_BUS(bdf), PCI_DEV(bdf), PCI_FUNC(bdf),
 	       xhci_pci_env_or_absent("coh_xhci_mmio_raw"),
 	       xhci_pci_env_or_absent("coh_xhci_mmio"),
 	       xhci_pci_env_or_absent("coh_xhci_pci_cmd"),
+	       xhci_pci_env_or_absent("coh_xhci_usbcmd"),
+	       xhci_pci_env_or_absent("coh_xhci_usbsts"),
+	       xhci_pci_env_or_absent("coh_xhci_iman0"),
 	       xhci_pci_env_or_absent("coh_xhci_handoff_ready"),
-	       xhci_pci_env_or_absent("coh_xhci_irq_quiesced"), ret);
+	       xhci_pci_env_or_absent("coh_xhci_irq_quiesced"),
+	       xhci_pci_env_or_absent("coh_xhci_halted"),
+	       xhci_pci_env_or_absent("coh_xhci_handoff_safe"), ret);
 }
 
 static void xhci_pci_export_handoff_ready(int ready)
@@ -67,6 +72,16 @@ static void xhci_pci_export_handoff_ready(int ready)
 static void xhci_pci_export_irq_quiesced(int ready)
 {
 	env_set("coh_xhci_irq_quiesced", ready ? "1" : NULL);
+}
+
+static void xhci_pci_export_halted(int halted)
+{
+	env_set("coh_xhci_halted", halted ? "1" : NULL);
+}
+
+static void xhci_pci_export_handoff_safe(int safe)
+{
+	env_set("coh_xhci_handoff_safe", safe ? "1" : NULL);
 }
 
 static void xhci_pci_export_capability_snapshot(struct xhci_hccr *hccr)
@@ -80,6 +95,80 @@ static void xhci_pci_export_capability_snapshot(struct xhci_hccr *hccr)
 	env_set_hex("coh_xhci_hccparams1", xhci_readl(&hccr->cr_hccparams));
 	env_set_hex("coh_xhci_dboff", xhci_readl(&hccr->cr_dboff));
 	env_set_hex("coh_xhci_rtsoff", xhci_readl(&hccr->cr_rtsoff));
+}
+
+static int xhci_pci_map_runtime_regs(struct udevice *dev, struct xhci_hccr **ret_hccr,
+				     struct xhci_hcor **ret_hcor)
+{
+	struct xhci_hccr *hccr;
+	struct xhci_hcor *hcor;
+
+	hccr = (struct xhci_hccr *)dm_pci_map_bar(dev, PCI_BASE_ADDRESS_0, 0, 0,
+						  PCI_REGION_TYPE, PCI_REGION_MEM);
+	if (!hccr)
+		return -EIO;
+
+	hcor = (struct xhci_hcor *)((uintptr_t)hccr +
+			HC_LENGTH(xhci_readl(&hccr->cr_capbase)));
+	*ret_hccr = hccr;
+	*ret_hcor = hcor;
+	return 0;
+}
+
+static int xhci_pci_capture_handoff_state(struct udevice *dev, int scrub_irqs,
+					  int *ret_safe)
+{
+	struct xhci_hccr *hccr;
+	struct xhci_hcor *hcor;
+	struct xhci_run_regs *run_regs;
+	struct xhci_intr_reg *ir_set;
+	u32 usbcmd;
+	u32 usbsts;
+	u32 iman0;
+	int halted;
+	int command_irqs_quiesced;
+	int interrupter_quiesced;
+	int safe;
+	int ret;
+
+	ret = xhci_pci_map_runtime_regs(dev, &hccr, &hcor);
+	if (ret)
+		return ret;
+
+	run_regs = (struct xhci_run_regs *)((uintptr_t)hccr +
+		   (xhci_readl(&hccr->cr_rtsoff) & RTSOFF_MASK));
+	ir_set = &run_regs->ir_set[0];
+
+	usbcmd = xhci_readl(&hcor->or_usbcmd);
+	if (scrub_irqs) {
+		usbcmd &= ~XHCI_IRQS;
+		xhci_writel(&hcor->or_usbcmd, usbcmd);
+		usbcmd = xhci_readl(&hcor->or_usbcmd);
+	}
+	env_set_hex("coh_xhci_usbcmd", usbcmd);
+
+	iman0 = xhci_readl(&ir_set->irq_pending);
+	if (scrub_irqs) {
+		iman0 = ER_IRQ_DISABLE(iman0);
+		xhci_writel(&ir_set->irq_pending, iman0);
+		iman0 = xhci_readl(&ir_set->irq_pending);
+	}
+	env_set_hex("coh_xhci_iman0", iman0);
+
+	usbsts = xhci_readl(&hcor->or_usbsts);
+	env_set_hex("coh_xhci_usbsts", usbsts);
+
+	halted = !!(usbsts & STS_HALT);
+	command_irqs_quiesced = !(usbcmd & XHCI_IRQS);
+	interrupter_quiesced = !(iman0 & 0x2);
+	safe = halted && command_irqs_quiesced && interrupter_quiesced;
+
+	xhci_pci_export_halted(halted);
+	xhci_pci_export_handoff_safe(safe);
+	if (ret_safe)
+		*ret_safe = safe;
+
+	return 0;
 }
 
 static u16 xhci_pci_configure_command(struct udevice *dev)
@@ -170,17 +259,12 @@ static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 	ulong bar0_addr;
 	ulong bar0_phys;
 	u16 cmd;
+	int state_safe;
 
-	hccr = (struct xhci_hccr *)dm_pci_map_bar(dev,
-			PCI_BASE_ADDRESS_0, 0, 0, PCI_REGION_TYPE,
-			PCI_REGION_MEM);
-	if (!hccr) {
+	if (xhci_pci_map_runtime_regs(dev, &hccr, &hcor)) {
 		printf("xhci-pci init cannot map PCI mem bar\n");
 		return -EIO;
 	}
-
-	hcor = (struct xhci_hcor *)((uintptr_t) hccr +
-			HC_LENGTH(xhci_readl(&hccr->cr_capbase)));
 
 	debug("XHCI-PCI init hccr %p and hcor %p hc_length %d\n",
 	      hccr, hcor, (u32)HC_LENGTH(xhci_readl(&hccr->cr_capbase)));
@@ -206,6 +290,8 @@ static int xhci_pci_init(struct udevice *dev, struct xhci_hccr **ret_hccr,
 	 */
 	cmd = xhci_pci_configure_command(dev);
 	debug("XHCI-PCI command configured for Cohesix handoff: %x\n", cmd);
+	if (!xhci_pci_capture_handoff_state(dev, 0, &state_safe))
+		xhci_pci_export_handoff_safe(state_safe);
 	xhci_pci_emit_breadcrumb(dev, "init", 0);
 	return 0;
 }
@@ -220,6 +306,8 @@ static int xhci_pci_probe(struct udevice *dev)
 
 	xhci_pci_export_handoff_ready(0);
 	xhci_pci_export_irq_quiesced(0);
+	xhci_pci_export_halted(0);
+	xhci_pci_export_handoff_safe(0);
 	xhci_pci_emit_breadcrumb(dev, "probe-entry", 0);
 
 	fail_stage = "reset-get";
@@ -273,6 +361,7 @@ static int xhci_pci_remove(struct udevice *dev)
 {
 	struct xhci_pci_plat *plat = dev_get_plat(dev);
 	u16 cmd;
+	int safe;
 	int ret;
 
 	xhci_pci_emit_breadcrumb(dev, "remove-entry", 0);
@@ -292,6 +381,19 @@ static int xhci_pci_remove(struct udevice *dev)
 		if (reset_valid(&plat->reset))
 			reset_free(&plat->reset);
 		return ret;
+	}
+	ret = xhci_pci_capture_handoff_state(dev, 1, &safe);
+	if (ret) {
+		xhci_pci_emit_breadcrumb(dev, "remove-state-snapshot", ret);
+		if (reset_valid(&plat->reset))
+			reset_free(&plat->reset);
+		return ret;
+	}
+	if (!safe) {
+		xhci_pci_emit_breadcrumb(dev, "remove-handoff-unsafe", -EIO);
+		if (reset_valid(&plat->reset))
+			reset_free(&plat->reset);
+		return -EIO;
 	}
 	xhci_pci_export_handoff_ready(1);
 	xhci_pci_emit_breadcrumb(dev, "remove-ready", 0);

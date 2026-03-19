@@ -74,6 +74,11 @@ const fn polling_iman_value() -> u32 {
     reg::IMAN_IP
 }
 
+#[inline(always)]
+const fn preserve_firmware_handoff_config(firmware_handoff_quiesced: bool) -> bool {
+    firmware_handoff_quiesced
+}
+
 #[inline]
 const fn port_ready_for_enumeration(portsc: u32) -> bool {
     if (portsc & reg::PORTSC_CCS) == 0 {
@@ -332,18 +337,20 @@ impl<H: Dma> XhciCtrl<H> {
             Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
         }
         if tag_stage {
-            emit_xhci_diag(0x0207, (int_base + reg::IMOD) as u64, 0, 1);
+            emit_xhci_diag(0x020b, (int_base + reg::IMOD) as u64, 0, 1);
+        } else {
+            Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
         }
-        Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
         if tag_stage {
             emit_xhci_diag(
-                0x0208,
+                0x020c,
                 (int_base + reg::IMAN) as u64,
                 polling_iman_value() as u64,
                 1,
             );
+        } else {
+            Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
         }
-        Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
     }
 
     /// Create and initialize a new xHCI controller
@@ -600,11 +607,13 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Configure controller
         emit_xhci_diag(0x0240, self.max_slots as u64, 0, 0);
-        emit_xhci_diag(0x0243, reg::CONFIG as u64, self.max_slots as u64, 0);
-        self.write_op(reg::CONFIG, self.max_slots as u32);
-        if self.firmware_handoff_quiesced {
+        if preserve_firmware_handoff_config(self.firmware_handoff_quiesced) {
+            emit_xhci_diag(0x0245, reg::CONFIG as u64, self.max_slots as u64, 1);
             emit_xhci_diag(0x0241, self.max_slots as u64, 1, 0);
         } else {
+            emit_xhci_diag(0x0243, reg::CONFIG as u64, self.max_slots as u64, 0);
+            self.write_op(reg::CONFIG, self.max_slots as u32);
+            emit_xhci_diag(0x0246, reg::CONFIG as u64, 0, 0);
             emit_xhci_diag(0x0241, self.read_op::<u32>(reg::CONFIG) as u64, 0, 0);
         }
         emit_xhci_diag(0x0244, reg::DCBAAP as u64, self.dcbaa.phys(&*self.host), 0);
@@ -612,6 +621,7 @@ impl<H: Dma> XhciCtrl<H> {
         if self.firmware_handoff_quiesced {
             emit_xhci_diag(0x0242, self.dcbaa.phys(&*self.host), 1, 0);
         } else {
+            emit_xhci_diag(0x0247, reg::DCBAAP as u64, 0, 0);
             emit_xhci_diag(0x0242, self.read_op_u64(reg::DCBAAP), 0, 0);
         }
 
@@ -624,6 +634,7 @@ impl<H: Dma> XhciCtrl<H> {
         if self.firmware_handoff_quiesced {
             emit_xhci_diag(0x0251, crcr, 1, 0);
         } else {
+            emit_xhci_diag(0x0253, reg::CRCR as u64, 0, 0);
             emit_xhci_diag(0x0251, self.read_op_u64(reg::CRCR), 0, 0);
         }
         drop(cmd_ring);
@@ -660,18 +671,31 @@ impl<H: Dma> XhciCtrl<H> {
         );
         // Keep moderation disabled; Cohesix local-seat uses polling and does
         // not install xHCI IRQ handlers during early boot.
-        emit_xhci_diag(0x0267, (int_base + reg::IMOD) as u64, 0, 0);
-        self.write_reg(int_base + reg::IMOD, 0u32);
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(0x026b, (int_base + reg::IMOD) as u64, 0, 1);
+        } else {
+            emit_xhci_diag(0x0267, (int_base + reg::IMOD) as u64, 0, 0);
+            self.write_reg(int_base + reg::IMOD, 0u32);
+        }
         // Cohesix uses pure polling during Pi4 local-seat bring-up. Acknowledge
         // any stale pending bit but keep the interrupter disabled so VL805 does
         // not surface an unhandled IRQ before userspace installs handlers.
-        emit_xhci_diag(
-            0x0268,
-            (int_base + reg::IMAN) as u64,
-            polling_iman_value() as u64,
-            self.firmware_handoff_quiesced as u64,
-        );
-        self.write_reg(int_base + reg::IMAN, polling_iman_value());
+        if self.firmware_handoff_quiesced {
+            emit_xhci_diag(
+                0x026c,
+                (int_base + reg::IMAN) as u64,
+                polling_iman_value() as u64,
+                1,
+            );
+        } else {
+            emit_xhci_diag(
+                0x0268,
+                (int_base + reg::IMAN) as u64,
+                polling_iman_value() as u64,
+                0,
+            );
+            self.write_reg(int_base + reg::IMAN, polling_iman_value());
+        }
         if self.firmware_handoff_quiesced {
             emit_xhci_diag(0x0262, int_base as u64, polling_iman_value() as u64, 1);
             emit_xhci_diag(
@@ -687,6 +711,7 @@ impl<H: Dma> XhciCtrl<H> {
                 polling_iman_value() as u64,
                 0,
             );
+            emit_xhci_diag(0x026d, int_base as u64, 0, 0);
             emit_xhci_diag(
                 0x0261,
                 self.read_reg::<u32>(int_base + reg::ERSTSZ) as u64,
@@ -709,6 +734,7 @@ impl<H: Dma> XhciCtrl<H> {
         if self.firmware_handoff_quiesced {
             emit_xhci_diag(0x0270, 0, 1, 0);
         } else {
+            emit_xhci_diag(0x0274, reg::USBSTS as u64, 0, 0);
             emit_xhci_diag(0x0270, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
         }
         emit_xhci_diag(0x026a, reg::USBCMD as u64, reg::USBCMD_RUN as u64, 0);
@@ -716,10 +742,12 @@ impl<H: Dma> XhciCtrl<H> {
         if self.firmware_handoff_quiesced {
             emit_xhci_diag(0x0271, reg::USBCMD_RUN as u64, 1, 0);
         } else {
+            emit_xhci_diag(0x0275, reg::USBCMD as u64, 0, 0);
             emit_xhci_diag(0x0271, self.read_op::<u32>(reg::USBCMD) as u64, 0, 0);
         }
 
         // Wait for controller to be ready
+        emit_xhci_diag(0x0276, reg::USBSTS as u64, reg::USBSTS_HCH as u64, 0);
         let mut waited = 0usize;
         while (self.read_op::<u32>(reg::USBSTS) & reg::USBSTS_HCH) != 0 {
             waited = waited.saturating_add(1);
@@ -1274,6 +1302,7 @@ impl<H: Dma> XhciCtrl<H> {
 mod tests {
     use super::{
         XhciControllerParams, parse_controller_params, polling_iman_value,
+        preserve_firmware_handoff_config,
         port_ready_for_enumeration,
     };
     use crate::reg;
@@ -1335,6 +1364,12 @@ mod tests {
     fn polling_mode_keeps_interrupter_disabled() {
         assert_eq!(polling_iman_value(), reg::IMAN_IP);
         assert_eq!(polling_iman_value() & reg::IMAN_IE, 0);
+    }
+
+    #[test]
+    fn firmware_handoff_preserves_config_register_programming() {
+        assert!(preserve_firmware_handoff_config(true));
+        assert!(!preserve_firmware_handoff_config(false));
     }
 }
 

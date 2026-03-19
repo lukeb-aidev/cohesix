@@ -290,6 +290,16 @@ const fn core_ctrl_access_mode_label() -> &'static str {
 }
 
 #[inline]
+const fn core_ctrl_reset_assert_access_mode_label() -> &'static str {
+    "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
+}
+
+#[inline]
+const fn core_ctrl_reset_clear_access_mode_label() -> &'static str {
+    "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
+}
+
+#[inline]
 const fn core_ctrl_in_reset_access_mode_label() -> &'static str {
     "cmd53-word-windowed-in-reset fallback=cmd52-current-window-rewindow"
 }
@@ -319,11 +329,16 @@ fn log_core_ctrl_access(op: &'static str, base: u32, offset: u32, value: Option<
     }
 }
 
-fn log_core_ctrl_reset_write(base: u32, offset: u32, value: u8) {
+fn log_core_ctrl_reset_write(base: u32, offset: u32, value: u8, mode: &'static str) {
     let addr = base.saturating_add(offset);
     emit_breadcrumb(format_args!(
-        "[pi4-wifi] firmware core-ctrl reset-write mode=cmd53-word-windowed base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} bus=0x{bus:05x} value=0x{value:02x}",
-        bus = core_ctrl_trace_function_addr(addr),
+        "[pi4-wifi] firmware core-ctrl reset-write mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={inc} value=0x{value:02x}",
+        mode,
+        bus = core_ctrl_current_window_addr(addr),
+        trace_bus = core_ctrl_trace_function_addr(addr),
+        shift = backplane_word_byte_shift(addr),
+        inc = backplane_word_increment_addr() as u8,
+        window = addr & BACKPLANE_WINDOW_MASK,
     ));
 }
 
@@ -338,13 +353,47 @@ fn log_core_ctrl_in_reset_write(base: u32, offset: u32, value: u8) {
 }
 
 #[inline]
-const fn core_ctrl_write_uses_word_path(offset: u32) -> bool {
-    offset == AI_RESETCTRL_OFFSET
+const fn core_ctrl_in_reset_write_uses_word_path(offset: u32) -> bool {
+    offset == AI_IOCTRL_OFFSET
 }
 
 #[inline]
-const fn core_ctrl_in_reset_write_uses_word_path(offset: u32) -> bool {
-    offset == AI_IOCTRL_OFFSET
+const fn core_ctrl_can_skip_redundant_in_reset_write(
+    base: u32,
+    asserted_reset: bool,
+    prior_value: u8,
+    next_value: u8,
+) -> bool {
+    asserted_reset && base == CYW43_SOCRAM_CORE_BASE && prior_value == next_value
+}
+
+#[inline]
+const fn core_ctrl_can_defer_in_reset_readback(
+    base: u32,
+    asserted_reset: bool,
+    skipped_write: bool,
+) -> bool {
+    asserted_reset && skipped_write && base == CYW43_SOCRAM_CORE_BASE
+}
+
+#[inline]
+const fn core_ctrl_can_defer_clear_reset_readback(base: u32, attempt: usize) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE && attempt == 0
+}
+
+#[inline]
+const fn core_reset_can_skip_disable(base: u32, prereset: u8, reset: u8, postreset: u8) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE && prereset == 0 && reset == 0 && postreset == 0
+}
+
+#[inline]
+const fn core_reset_needs_clear_reset_prewrite_settle(base: u32, attempt: usize) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE && attempt == 0
+}
+
+#[inline]
+const fn core_reset_can_retry_clear_reset_write(base: u32, attempt: usize) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE && attempt == 0
 }
 
 fn log_sdio_cmd53_shape(
@@ -926,6 +975,7 @@ const WIFI_RESET_SETTLE_LOOPS: usize = 20_000_000;
 const WIFI_POWER_SETTLE_LOOPS: usize = 500_000;
 const WIFI_POWER_DROP_SETTLE_LOOPS: usize = 20_000_000;
 const CYW43_CORE_CONTROL_SETTLE_LOOPS: usize = 500_000;
+const CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS: usize = 20_000_000;
 const CYW43_CORE_RESET_RETRY_LIMIT: usize = 50;
 const SDHCI_WRITE_DELAY_LOOPS: usize = 256;
 const SDHCI_WRITE_GAP_SPIN_LOOPS: usize = SDHCI_WRITE_DELAY_LOOPS * 32;
@@ -2572,7 +2622,10 @@ impl SdioHost {
         offset: u32,
     ) -> Result<u8, HalError> {
         let addr = base.saturating_add(offset);
-        self.io_direct_read(SdioFunction::Function1, addr & BACKPLANE_ADDRESS_MASK)
+        self.with_backplane_window_addr(addr, core_ctrl_function_addr(addr), |this, bus_addr| {
+            let _ = bus_addr;
+            this.io_direct_read(SdioFunction::Function1, core_ctrl_current_window_addr(addr))
+        })
     }
 
     fn core_ctrl_fallback_read8_cmd52_rewindow(
@@ -2590,10 +2643,6 @@ impl SdioHost {
         value: u8,
     ) -> Result<(), HalError> {
         self.backplane_write8(base.saturating_add(offset), value)
-    }
-
-    fn core_ctrl_resetctrl_write32(&mut self, base: u32, value: u8) -> Result<(), HalError> {
-        self.backplane_word_write32(base.saturating_add(AI_RESETCTRL_OFFSET), u32::from(value))
     }
 
     fn core_ctrl_in_reset_write32(
@@ -2636,36 +2685,6 @@ impl SdioHost {
     }
 
     fn core_ctrl_write8(&mut self, base: u32, offset: u32, value: u8) -> Result<(), HalError> {
-        if core_ctrl_write_uses_word_path(offset) {
-            match self.core_ctrl_resetctrl_write32(base, value) {
-                Ok(()) => return Ok(()),
-                Err(err) => {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware core-ctrl fallback op=write32-resetctrl base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd52-byte-current-window err={err}"
-                    ));
-                    self.recover_command_path("core-ctrl-resetctrl-cmd52-current-window");
-                    match self.core_ctrl_windowed_write8(base, offset, value) {
-                        Ok(()) => return Ok(()),
-                        Err(current_window_err) => {
-                            emit_breadcrumb(format_args!(
-                                "[pi4-wifi] firmware core-ctrl fallback op=write32-resetctrl base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={current_window_err}"
-                            ));
-                            self.recover_command_path("core-ctrl-resetctrl-cmd52-rewindow");
-                            match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value)
-                            {
-                                Ok(()) => return Ok(()),
-                                Err(fallback_err) => {
-                                    emit_breadcrumb(format_args!(
-                                        "[pi4-wifi] firmware core-ctrl fallback op=write32-resetctrl base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
-                                    ));
-                                    return Err(fallback_err);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
         match self.core_ctrl_windowed_write8(base, offset, value) {
             Ok(()) => Ok(()),
             Err(err) => {
@@ -2680,6 +2699,41 @@ impl SdioHost {
                             "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
                         ));
                         Err(fallback_err)
+                    }
+                }
+            }
+        }
+    }
+
+    fn core_ctrl_reset_assert_write8(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+    ) -> Result<(), HalError> {
+        match self.backplane_word_write32(base.saturating_add(offset), u32::from(value)) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-assert base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd52-byte-current-window err={err}"
+                ));
+                self.recover_command_path("core-ctrl-reset-assert-cmd52-current-window");
+                match self.core_ctrl_windowed_write8(base, offset, value) {
+                    Ok(()) => Ok(()),
+                    Err(current_window_err) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-assert base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={current_window_err}"
+                        ));
+                        self.recover_command_path("core-ctrl-reset-assert-cmd52-rewindow");
+                        match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value) {
+                            Ok(()) => Ok(()),
+                            Err(fallback_err) => {
+                                emit_breadcrumb(format_args!(
+                                    "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-assert base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                                ));
+                                Err(fallback_err)
+                            }
+                        }
                     }
                 }
             }
@@ -2751,11 +2805,53 @@ impl SdioHost {
         value: u8,
         stage: &'static str,
     ) -> Result<(), HalError> {
-        if core_ctrl_write_uses_word_path(offset) {
-            log_core_ctrl_reset_write(base, offset, value);
-        } else {
-            log_core_ctrl_access("write8", base, offset, Some(value));
+        log_core_ctrl_access("write8", base, offset, Some(value));
+        if let Err(err) = self.core_ctrl_write8(base, offset, value) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
+            ));
+            self.log_transport_shadow(stage);
+            return Err(err);
         }
+        Ok(())
+    }
+
+    fn core_ctrl_reset_assert_write8_logged(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        log_core_ctrl_reset_write(
+            base,
+            offset,
+            value,
+            core_ctrl_reset_assert_access_mode_label(),
+        );
+        if let Err(err) = self.core_ctrl_reset_assert_write8(base, offset, value) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
+            ));
+            self.log_transport_shadow(stage);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn core_ctrl_reset_clear_write8_logged(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        log_core_ctrl_reset_write(
+            base,
+            offset,
+            value,
+            core_ctrl_reset_clear_access_mode_label(),
+        );
         if let Err(err) = self.core_ctrl_write8(base, offset, value) {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
@@ -2821,12 +2917,13 @@ impl SdioHost {
     fn core_disable(&mut self, base: u32, prereset: u8, reset: u8) -> Result<(), HalError> {
         let ioctrl = self.core_ctrl_read8(base, AI_IOCTRL_OFFSET)?;
         let resetctrl = self.core_ctrl_read8(base, AI_RESETCTRL_OFFSET)?;
+        let prereset_ioctrl = prereset | AI_CORE_PRERESET_IOCTRL;
+        let mut asserted_reset = false;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=entry io=0x{ioctrl:02x} reset=0x{resetctrl:02x} prereset=0x{prereset:02x} hold=0x{reset:02x} reason={}",
             ai_core_state_reason(ioctrl, resetctrl),
         ));
         if (resetctrl & AI_RESETCTRL_BIT_RESET) == 0 {
-            let prereset_ioctrl = prereset | AI_CORE_PRERESET_IOCTRL;
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=prereset-fgc-clock value=0x{prereset_ioctrl:02x}"
             ));
@@ -2844,12 +2941,13 @@ impl SdioHost {
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset value=0x{value:02x}",
                 value = AI_RESETCTRL_BIT_RESET,
             ));
-            self.core_ctrl_write8_logged(
+            self.core_ctrl_reset_assert_write8_logged(
                 base,
                 AI_RESETCTRL_OFFSET,
                 AI_RESETCTRL_BIT_RESET,
                 "assert-reset",
             )?;
+            asserted_reset = true;
             bounded_spin_settle("cyw43-core-reset-assert", CYW43_CORE_CONTROL_SETTLE_LOOPS);
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset-settled detail=readback-deferred"
@@ -2862,19 +2960,39 @@ impl SdioHost {
             ));
         }
         let reset_hold_ioctrl = reset | AI_CORE_PRERESET_IOCTRL;
+        let skipped_in_reset_write = core_ctrl_can_skip_redundant_in_reset_write(
+            base,
+            asserted_reset,
+            prereset_ioctrl,
+            reset_hold_ioctrl,
+        );
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=in-reset-configure value=0x{reset_hold_ioctrl:02x}"
         ));
-        self.core_ctrl_write8_in_reset_logged(
-            base,
-            AI_IOCTRL_OFFSET,
-            reset_hold_ioctrl,
-            "in-reset-configure",
-        )?;
+        if skipped_in_reset_write {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=in-reset-configure-skip value=0x{reset_hold_ioctrl:02x} prior=0x{prereset_ioctrl:02x} reason=redundant-after-assert"
+            ));
+        } else {
+            self.core_ctrl_write8_in_reset_logged(
+                base,
+                AI_IOCTRL_OFFSET,
+                reset_hold_ioctrl,
+                "in-reset-configure",
+            )?;
+        }
         bounded_spin_settle(
             "cyw43-core-in-reset-configure",
             CYW43_CORE_CONTROL_SETTLE_LOOPS,
         );
+        if core_ctrl_can_defer_in_reset_readback(base, asserted_reset, skipped_in_reset_write) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=in-reset-ready-read-deferred io=0x{reset_hold_ioctrl:02x} reset=0x{assumed_reset:02x} reason=redundant-after-assert",
+                assumed_reset = AI_RESETCTRL_BIT_RESET,
+            ));
+            self.log_transport_shadow("core-disable-in-reset-read-deferred");
+            return Ok(());
+        }
         let resetctrl =
             self.core_ctrl_read8_logged(base, AI_RESETCTRL_OFFSET, "in-reset-configure")?;
         emit_breadcrumb(format_args!(
@@ -2892,7 +3010,14 @@ impl SdioHost {
         reset: u8,
         postreset: u8,
     ) -> Result<(), HalError> {
-        self.core_disable(base, prereset, reset)?;
+        if core_reset_can_skip_disable(base, prereset, reset, postreset) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=skip-disable reason=held-reset-from-prior-disable"
+            ));
+            self.log_transport_shadow("core-reset-skip-disable");
+        } else {
+            self.core_disable(base, prereset, reset)?;
+        }
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset prereset=0x{prereset:02x} hold=0x{reset:02x} postreset=0x{postreset:02x}"
         ));
@@ -2901,11 +3026,55 @@ impl SdioHost {
         let mut attempts = 0usize;
         for attempt in 0..CYW43_CORE_RESET_RETRY_LIMIT {
             attempts = attempt.saturating_add(1);
-            self.core_ctrl_write8_logged(base, AI_RESETCTRL_OFFSET, 0, "clear-reset")?;
+            if core_reset_needs_clear_reset_prewrite_settle(base, attempt) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-prewrite-delay loops={loops} reason=socram-fragile-first-write",
+                    loops = CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS,
+                ));
+                bounded_spin_settle(
+                    "cyw43-core-reset-pre-clear",
+                    CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS,
+                );
+            }
+            if let Err(err) = self.core_ctrl_reset_clear_write8_logged(
+                base,
+                AI_RESETCTRL_OFFSET,
+                0,
+                "clear-reset",
+            ) {
+                if !core_reset_can_retry_clear_reset_write(base, attempt) {
+                    return Err(err);
+                }
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-write-retry attempt={} err={} reason=socram-fragile-first-write",
+                    attempt.saturating_add(1),
+                    err,
+                ));
+                self.recover_command_path("core-reset-clear-retry");
+                bounded_spin_settle(
+                    "cyw43-core-reset-clear-retry",
+                    CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS,
+                );
+                self.core_ctrl_reset_clear_write8_logged(
+                    base,
+                    AI_RESETCTRL_OFFSET,
+                    0,
+                    "clear-reset",
+                )?;
+            }
             if attempt == 0 {
                 bounded_spin_settle("cyw43-core-reset-clear", CYW43_CORE_CONTROL_SETTLE_LOOPS);
             } else {
                 spin_settle(CYW43_CORE_CONTROL_SETTLE_LOOPS);
+            }
+            if core_ctrl_can_defer_clear_reset_readback(base, attempt) {
+                last_reset = 0;
+                cleared = true;
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-read-deferred reset=0x{last_reset:02x} attempts={attempts} reason=socram-fragile-first-read"
+                ));
+                self.log_transport_shadow("core-reset-clear-read-deferred");
+                break;
             }
             last_reset = self.core_ctrl_read8_logged(base, AI_RESETCTRL_OFFSET, "clear-reset")?;
             if (last_reset & AI_RESETCTRL_BIT_RESET) == 0 {
@@ -3531,24 +3700,24 @@ mod tests {
         backplane_small_access_addr, backplane_window_base, backplane_window_register_bytes,
         backplane_window_reprogram_needed, backplane_word_function_addr, bcm2711_gpfsel_offset,
         bcm2711_puppdn_offset, cmd52_argument, core_ctrl_access_mode_label,
-        core_ctrl_current_window_addr, core_ctrl_trace_function_addr,
-        core_ctrl_write_uses_word_path, ht_clock_request_value, is_mailbox_protocol_error,
-        mailbox_tag_name, make_command, merge_u16_word, normalize_nvram, phys_to_bus, r5_status,
-        sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
-        sdio_transfer_addr, sdio_transfer_plan, should_log_sdio_transfer_chunk,
-        update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
-        SdioFunction, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL, AI_IOCTRL_BIT_CLOCK_EN,
-        AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET, AI_RESETCTRL_BIT_RESET, ARMCR4_BCMA_IOCTL_CPUHALT,
-        ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BACKPLANE_ADDRESS_MASK, BACKPLANE_WINDOW_MASK,
-        BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE, CYW43_SOCRAM_CORE_BASE,
-        PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SBSDIO_ALP_AVAIL_REQ, SBSDIO_FORCE_HT,
-        SBSDIO_HT_AVAIL_REQ, SBSDIO_WAKE_TILL_HT_AVAIL, SDHCI_COMMAND, SDHCI_DATA_AVAILABLE,
-        SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL, SDHCI_INT_DATA_CRC, SDHCI_INT_SPACE_AVAIL,
-        SDHCI_INT_TIMEOUT, SDHCI_SPACE_AVAILABLE, SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN,
-        SDHCI_TRNS_MULTI, SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS,
-        SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1,
-        SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1, SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE,
-        TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+        core_ctrl_current_window_addr, core_ctrl_reset_assert_access_mode_label,
+        core_ctrl_reset_clear_access_mode_label, core_ctrl_trace_function_addr,
+        ht_clock_request_value, is_mailbox_protocol_error, mailbox_tag_name, make_command,
+        merge_u16_word, normalize_nvram, phys_to_bus, r5_status, sdhci_interrupt_buffer_ready_mask,
+        sdhci_present_buffer_ready_mask, sdhci_status_reason, sdio_transfer_addr,
+        sdio_transfer_plan, should_log_sdio_transfer_chunk, update_bcm2711_gpio_function,
+        update_bcm2711_gpio_pull, HalError, ResponseType, SdioFunction, AI_CORE_POSTRESET_IOCTRL,
+        AI_CORE_PRERESET_IOCTRL, AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET,
+        AI_RESETCTRL_BIT_RESET, ARMCR4_BCMA_IOCTL_CPUHALT, ARMCR4_CAP, BACKPLANE_32BIT_FLAG,
+        BACKPLANE_ADDRESS_MASK, BACKPLANE_WINDOW_MASK, BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE,
+        CYW43_CHIPCOMMON_BASE, CYW43_SOCRAM_CORE_BASE, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS,
+        SBSDIO_ALP_AVAIL_REQ, SBSDIO_FORCE_HT, SBSDIO_HT_AVAIL_REQ, SBSDIO_WAKE_TILL_HT_AVAIL,
+        SDHCI_COMMAND, SDHCI_DATA_AVAILABLE, SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL,
+        SDHCI_INT_DATA_CRC, SDHCI_INT_SPACE_AVAIL, SDHCI_INT_TIMEOUT, SDHCI_SPACE_AVAILABLE,
+        SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_MULTI, SDHCI_TRNS_READ,
+        SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,
+        SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1, SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1,
+        SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -3690,14 +3859,82 @@ mod tests {
             "cmd53-windowed-read32-cmd52-current-window-write8 fallback=cmd52-byte-rewindow"
         );
         assert_eq!(
+            core_ctrl_reset_assert_access_mode_label(),
+            "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
+        );
+        assert_eq!(
+            core_ctrl_reset_clear_access_mode_label(),
+            "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
+        );
+        assert_eq!(
             core_ctrl_in_reset_access_mode_label(),
             "cmd53-word-windowed-in-reset fallback=cmd52-current-window-rewindow"
         );
-        assert!(!core_ctrl_write_uses_word_path(AI_IOCTRL_OFFSET));
-        assert!(core_ctrl_write_uses_word_path(AI_RESETCTRL_OFFSET));
         assert!(core_ctrl_in_reset_write_uses_word_path(AI_IOCTRL_OFFSET));
         assert!(!core_ctrl_in_reset_write_uses_word_path(
             AI_RESETCTRL_OFFSET
+        ));
+        assert!(core_ctrl_can_skip_redundant_in_reset_write(
+            CYW43_SOCRAM_CORE_BASE,
+            true,
+            AI_CORE_PRERESET_IOCTRL,
+            AI_CORE_PRERESET_IOCTRL,
+        ));
+        assert!(!core_ctrl_can_skip_redundant_in_reset_write(
+            CYW43_ARMCR4_CORE_BASE,
+            true,
+            ARMCR4_BCMA_IOCTL_CPUHALT | AI_CORE_PRERESET_IOCTRL,
+            ARMCR4_BCMA_IOCTL_CPUHALT | AI_CORE_PRERESET_IOCTRL,
+        ));
+        assert!(core_ctrl_can_defer_in_reset_readback(
+            CYW43_SOCRAM_CORE_BASE,
+            true,
+            true,
+        ));
+        assert!(!core_ctrl_can_defer_in_reset_readback(
+            CYW43_SOCRAM_CORE_BASE,
+            true,
+            false,
+        ));
+        assert!(!core_ctrl_can_defer_in_reset_readback(
+            CYW43_ARMCR4_CORE_BASE,
+            true,
+            true,
+        ));
+        assert!(core_ctrl_can_defer_clear_reset_readback(
+            CYW43_SOCRAM_CORE_BASE,
+            0,
+        ));
+        assert!(!core_ctrl_can_defer_clear_reset_readback(
+            CYW43_SOCRAM_CORE_BASE,
+            1,
+        ));
+        assert!(!core_ctrl_can_defer_clear_reset_readback(
+            CYW43_ARMCR4_CORE_BASE,
+            0,
+        ));
+        assert!(core_reset_can_skip_disable(CYW43_SOCRAM_CORE_BASE, 0, 0, 0,));
+        assert!(core_reset_needs_clear_reset_prewrite_settle(
+            CYW43_SOCRAM_CORE_BASE,
+            0,
+        ));
+        assert!(!core_reset_needs_clear_reset_prewrite_settle(
+            CYW43_SOCRAM_CORE_BASE,
+            1,
+        ));
+        assert!(core_reset_can_retry_clear_reset_write(
+            CYW43_SOCRAM_CORE_BASE,
+            0,
+        ));
+        assert!(!core_reset_can_retry_clear_reset_write(
+            CYW43_ARMCR4_CORE_BASE,
+            0,
+        ));
+        assert!(!core_reset_can_skip_disable(
+            CYW43_ARMCR4_CORE_BASE,
+            ARMCR4_BCMA_IOCTL_CPUHALT,
+            0,
+            0,
         ));
     }
 

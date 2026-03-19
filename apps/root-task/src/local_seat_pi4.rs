@@ -164,6 +164,7 @@ const WAIT_MS_MAX_SPINS: usize = 25_000_000;
 const USB_PROGRESS_TICK_MS: usize = 1_000;
 const USB_PROGRESS_MAX_DOTS: usize = 64;
 const PI4_VL805_XHCI_IRQ: u32 = 143;
+const PI4_VL805_XHCI_LEGACY_IRQ: u32 = 27;
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
@@ -1184,44 +1185,31 @@ fn log_xhci_firmware_handoff_summary(
 
 #[inline]
 fn xhci_firmware_handoff_allows_legacy_probe(
-    firmware_hint: Option<usize>,
-    xhci_pci_cmd: Option<u16>,
-    xhci_handoff_ready: bool,
-    xhci_irq_quiesced: bool,
+    _firmware_hint: Option<usize>,
+    _xhci_pci_cmd: Option<u16>,
+    _xhci_handoff_ready: bool,
+    _xhci_irq_quiesced: bool,
 ) -> bool {
-    let _ = firmware_hint;
-    let _ = xhci_pci_cmd;
-    let _ = xhci_handoff_ready;
-    let _ = xhci_irq_quiesced;
     false
 }
 
 #[inline]
 const fn xhci_runtime_allows_alias_scan(
     mmio: usize,
-    verified_vl805_hint: Option<usize>,
-    legacy_mirror_allowed: bool,
+    _verified_vl805_hint: Option<usize>,
+    _legacy_mirror_allowed: bool,
 ) -> bool {
-    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
-        return true;
-    }
-    if xhci_mmio_is_legacy_alias(mmio) {
-        return verified_vl805_hint.is_some() || legacy_mirror_allowed;
-    }
-    false
+    mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
 }
 
 #[inline]
 fn xhci_runtime_allows_pinned_legacy_fallback(
-    mmio: usize,
-    pinned_xhci_state: Option<(usize, bool)>,
-    firmware_hint: Option<usize>,
-    verified_vl805_hint: Option<usize>,
+    _mmio: usize,
+    _pinned_xhci_state: Option<(usize, bool)>,
+    _firmware_hint: Option<usize>,
+    _verified_vl805_hint: Option<usize>,
 ) -> bool {
-    xhci_mmio_is_legacy_alias(mmio)
-        && pinned_xhci_state == Some((mmio, false))
-        && verified_vl805_hint.is_none()
-        && matches!(firmware_hint, None | Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE))
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -1297,36 +1285,25 @@ fn preferred_xhci_runtime_mmio(
     firmware_hint: Option<usize>,
     vl805_pci_mmio: Option<usize>,
     verified_vl805_hint: Option<usize>,
-    legacy_mirror_allowed: bool,
+    _legacy_mirror_allowed: bool,
 ) -> Option<usize> {
     let preferred_verified = match verified_vl805_hint {
-        Some(mmio)
-            if xhci_mmio_is_legacy_alias(mmio)
-                && firmware_hint.is_some()
-                && firmware_hint != Some(mmio) =>
-        {
-            None
-        }
+        Some(mmio) if xhci_mmio_is_legacy_alias(mmio) => None,
+        other => other,
+    };
+    let preferred_firmware_hint = match firmware_hint {
+        Some(mmio) if xhci_mmio_is_legacy_alias(mmio) => None,
+        other => other,
+    };
+    let preferred_trusted_pin = match trusted_pinned_mmio {
+        Some(mmio) if xhci_mmio_is_legacy_alias(mmio) => None,
         other => other,
     };
 
     vl805_pci_mmio
         .or(preferred_verified)
-        .or_else(|| {
-            if firmware_hint == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
-                && trusted_pinned_mmio.is_some_and(xhci_mmio_is_legacy_alias)
-            {
-                trusted_pinned_mmio
-            } else {
-                None
-            }
-        })
-        .or_else(|| {
-            let _ = legacy_mirror_allowed;
-            None
-        })
-        .or(firmware_hint)
-        .or(trusted_pinned_mmio)
+        .or(preferred_firmware_hint)
+        .or(preferred_trusted_pin)
 }
 
 #[inline]
@@ -1354,31 +1331,18 @@ const fn xhci_safe_mode_skip_command(xhci_pci_cmd: Option<u16>) -> u16 {
 fn xhci_runtime_mmio_candidate_allowed(
     mmio: usize,
     has_safe_cfg_window: bool,
-    pinned_xhci_state: Option<(usize, bool)>,
+    _pinned_xhci_state: Option<(usize, bool)>,
     trusted_pinned_mmio: Option<usize>,
-    firmware_hint: Option<usize>,
+    _firmware_hint: Option<usize>,
     verified_vl805_hint: Option<usize>,
-    legacy_mirror_allowed: bool,
-    defer_high_bar_probe: bool,
+    _legacy_mirror_allowed: bool,
 ) -> bool {
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
-        if defer_high_bar_probe {
-            return false;
-        }
         has_safe_cfg_window
             || trusted_pinned_mmio == Some(mmio)
             || verified_vl805_hint == Some(mmio)
     } else if xhci_mmio_is_legacy_alias(mmio) {
-        trusted_pinned_mmio == Some(mmio)
-            || firmware_hint == Some(mmio)
-            || verified_vl805_hint == Some(mmio)
-            || legacy_mirror_allowed
-            || xhci_runtime_allows_pinned_legacy_fallback(
-                mmio,
-                pinned_xhci_state,
-                firmware_hint,
-                verified_vl805_hint,
-            )
+        false
     } else {
         true
     }
@@ -1414,13 +1378,10 @@ fn xhci_runtime_candidate_skip_reason(
     firmware_hint: Option<usize>,
     verified_vl805_hint: Option<usize>,
     firmware_hint_safe: bool,
-    legacy_mirror_allowed: bool,
-    defer_high_bar_probe: bool,
+    _legacy_mirror_allowed: bool,
 ) -> &'static str {
-    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE && defer_high_bar_probe {
-        "probe-deferred-to-legacy-mirror"
-    } else if xhci_mmio_is_legacy_alias(mmio) {
-        "bcm2835-usb-not-xhci"
+    if xhci_mmio_is_legacy_alias(mmio) {
+        "legacy-runtime-disabled"
     } else if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
         && firmware_hint == Some(mmio)
         && !has_safe_cfg_window
@@ -1432,8 +1393,6 @@ fn xhci_runtime_candidate_skip_reason(
         } else {
             "fw-handoff-unsafe"
         }
-    } else if xhci_mmio_is_legacy_alias(mmio) && legacy_mirror_allowed {
-        "legacy-mirror-probe-allowed"
     } else {
         "no-trusted-source"
     }
@@ -1540,11 +1499,22 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0208 => Some("fw-handoff-iman-write"),
         0x0209 => Some("fw-handoff-skip-usbcmd-mask-write"),
         0x020a => Some("fw-handoff-skip-usbsts-clear-write"),
+        0x020b => Some("fw-handoff-skip-imod-write"),
+        0x020c => Some("fw-handoff-skip-iman-write"),
         0x0224 => Some("fw-handoff-skip-stop"),
         0x0234 => Some("fw-handoff-skip-reset"),
+        0x0241 => Some("config-readback"),
         0x0243 => Some("config-write"),
+        0x0242 => Some("dcbaap-readback"),
+        0x0245 => Some("fw-handoff-skip-config-write"),
+        0x0246 => Some("config-readback-begin"),
+        0x0247 => Some("dcbaap-readback-begin"),
         0x0244 => Some("dcbaap-write"),
+        0x0251 => Some("crcr-readback"),
         0x0252 => Some("crcr-write"),
+        0x0253 => Some("crcr-readback-begin"),
+        0x0261 => Some("runtime-ring-readback"),
+        0x0263 => Some("usbsts-clear-ack"),
         0x0264 => Some("erstsz-write"),
         0x0265 => Some("erstba-write"),
         0x0266 => Some("erdp-write"),
@@ -1552,6 +1522,16 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0268 => Some("iman-write"),
         0x0269 => Some("usbsts-clear-write"),
         0x026a => Some("usbcmd-run-write"),
+        0x026b => Some("skip-imod-write"),
+        0x026c => Some("skip-iman-write"),
+        0x026d => Some("runtime-ring-readback-begin"),
+        0x0270 => Some("usbsts-run-readback"),
+        0x0271 => Some("usbcmd-run-readback"),
+        0x0272 => Some("controller-ready-timeout"),
+        0x0273 => Some("controller-ready"),
+        0x0274 => Some("usbsts-run-readback-begin"),
+        0x0275 => Some("usbcmd-run-readback-begin"),
+        0x0276 => Some("controller-ready-poll-begin"),
         _ => None,
     }
 }
@@ -3491,10 +3471,16 @@ struct UsbKeyboard {
 
 struct XhciIrqGuard {
     root_cnode: sel4_sys::seL4_CPtr,
+    bindings: [Option<XhciIrqBinding>; 2],
+}
+
+#[derive(Clone, Copy)]
+struct XhciIrqBinding {
     handler_slot: sel4_sys::seL4_CPtr,
     notification_slot: sel4_sys::seL4_CPtr,
     irq: u32,
     owns_handler: bool,
+    shadow: bool,
 }
 
 enum XhciIrqHandlerAcquisition {
@@ -3502,91 +3488,62 @@ enum XhciIrqHandlerAcquisition {
     ReuseExisting(sel4_sys::seL4_CPtr),
 }
 
-impl XhciIrqGuard {
-    fn install(
-        hal: &mut KernelHal<'_>,
-        mmio: usize,
-        firmware_handoff_quiesced: bool,
-    ) -> Result<Option<Self>, &'static str> {
-        if !xhci_irq_sink_needed(mmio, firmware_handoff_quiesced) {
-            return Ok(None);
-        }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct XhciIrqHandlerScanSummary {
+    first: Option<sel4_sys::seL4_CPtr>,
+    second: Option<sel4_sys::seL4_CPtr>,
+    count: usize,
+    scan_end: sel4_sys::seL4_CPtr,
+}
 
-        let env = hal.as_env_mut();
-        let depth = crate::sel4::word_bits() as u8;
-        let root_cnode = env.init_cnode_cap();
+impl XhciIrqHandlerScanSummary {
+    #[inline]
+    const fn unique_slot(self) -> Result<Option<sel4_sys::seL4_CPtr>, usize> {
+        if self.count > 1 {
+            Err(self.count)
+        } else {
+            Ok(self.first)
+        }
+    }
+}
+
+impl XhciIrqGuard {
+    fn install_binding(
+        env: &mut crate::sel4::KernelEnv<'_>,
+        root_cnode: sel4_sys::seL4_CPtr,
+        depth: u8,
+        mmio: usize,
+        irq: u32,
+        shadow: bool,
+    ) -> Result<Option<XhciIrqBinding>, &'static str> {
         let requested_handler_slot = env.allocate_slot();
-        let mut line = heapless::String::<224>::new();
+        let mut line = heapless::String::<240>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci irq sink request irq={} mmio=0x{mmio:016x} slot=0x{slot:04x} depth={depth}",
-                PI4_VL805_XHCI_IRQ,
+                "[local-seat] xhci irq {}request irq={} mmio=0x{mmio:016x} slot=0x{slot:04x} depth={depth}",
+                if shadow { "shadow " } else { "sink " },
+                irq,
                 slot = requested_handler_slot,
             ),
         );
         boot_log::force_uart_line(line.as_str());
+
         let get_err = crate::sel4::irq_control_get_level_handler(
-            PI4_VL805_XHCI_IRQ as sel4_sys::seL4_Word,
+            irq as sel4_sys::seL4_Word,
             root_cnode,
             requested_handler_slot,
             depth,
         );
-        let existing_handler = unique_existing_irq_handler_slot(env);
-        let (handler_slot, owns_handler) = match resolve_xhci_irq_handler_acquisition(
-            get_err,
-            existing_handler,
-        ) {
-            Ok(XhciIrqHandlerAcquisition::AllocateFresh) => (requested_handler_slot, true),
-            Ok(XhciIrqHandlerAcquisition::ReuseExisting(slot)) => {
+        let (handler_slot, owns_handler) = if shadow {
+            if let Some(reason) = xhci_shadow_irq_handoff_contract_reason(get_err) {
+                let _ = crate::sel4::cnode_delete(root_cnode, requested_handler_slot, depth);
                 let mut line = heapless::String::<256>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci irq sink reusing existing handler irq={} mmio=0x{mmio:016x} slot=0x{slot:04x} after=get-revoke-first",
-                        PI4_VL805_XHCI_IRQ,
-                    ),
-                );
-                boot_log::force_uart_line(line.as_str());
-                (slot, false)
-            }
-            Err("irq-handler-ambiguous") => {
-                let mut line = heapless::String::<224>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] xhci irq sink ambiguous existing handlers irq={} mmio=0x{mmio:016x} matches={count} after=get-revoke-first",
-                        PI4_VL805_XHCI_IRQ,
-                        count = match unique_existing_irq_handler_slot(env) {
-                            Err(count) => count,
-                            _ => 0,
-                        },
-                    ),
-                );
-                boot_log::force_uart_line(line.as_str());
-                return Err("irq-handler-ambiguous");
-            }
-            Err("irq-get-revoke-first-no-handler") => {
-                let mut line = heapless::String::<256>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] xhci irq sink get saw existing owner irq={} mmio=0x{mmio:016x} err={} ({}) but no reusable handler cap was found",
-                        PI4_VL805_XHCI_IRQ,
-                        get_err,
-                        crate::sel4::error_name(get_err),
-                    ),
-                );
-                boot_log::force_uart_line(line.as_str());
-                return Err("irq-get-revoke-first-no-handler");
-            }
-            Err(reason) => {
-                let mut line = heapless::String::<256>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] xhci irq sink get failed irq={} mmio=0x{mmio:016x} err={} ({}) reason={reason}",
-                        PI4_VL805_XHCI_IRQ,
+                        "[local-seat] xhci irq shadow unavailable irq={} mmio=0x{mmio:016x} err={} ({}) reason={reason}",
+                        irq,
                         get_err,
                         crate::sel4::error_name(get_err),
                     ),
@@ -3594,14 +3551,106 @@ impl XhciIrqGuard {
                 boot_log::force_uart_line(line.as_str());
                 return Err(reason);
             }
+            (requested_handler_slot, true)
+        } else {
+            let handler_scan = if get_err == sel4_sys::seL4_RevokeFirst {
+                let summary = xhci_irq_handler_scan_summary(env);
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci irq sink scan irq={} mmio=0x{mmio:016x} matches={} first=0x{:04x} second=0x{:04x} end=0x{:04x} after=get-revoke-first",
+                        irq,
+                        summary.count,
+                        summary.first.unwrap_or(0),
+                        summary.second.unwrap_or(0),
+                        summary.scan_end,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                Some(summary)
+            } else {
+                None
+            };
+            let existing_handler = handler_scan
+                .map(XhciIrqHandlerScanSummary::unique_slot)
+                .unwrap_or_else(|| unique_existing_irq_handler_slot(env));
+            match resolve_xhci_irq_handler_acquisition(get_err, existing_handler) {
+                Ok(XhciIrqHandlerAcquisition::AllocateFresh) => (requested_handler_slot, true),
+                Ok(XhciIrqHandlerAcquisition::ReuseExisting(slot)) => {
+                    let _ = crate::sel4::cnode_delete(root_cnode, requested_handler_slot, depth);
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci irq sink reusing existing handler irq={} mmio=0x{mmio:016x} slot=0x{slot:04x} after=get-revoke-first",
+                            irq,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    (slot, false)
+                }
+                Err("irq-handler-ambiguous") => {
+                    let _ = crate::sel4::cnode_delete(root_cnode, requested_handler_slot, depth);
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci irq sink ambiguous existing handlers irq={} mmio=0x{mmio:016x} matches={count} after=get-revoke-first",
+                            irq,
+                            count = match unique_existing_irq_handler_slot(env) {
+                                Err(count) => count,
+                                _ => 0,
+                            },
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    return Err("irq-handler-ambiguous");
+                }
+                Err("irq-get-revoke-first-no-handler") => {
+                    let _ = crate::sel4::cnode_delete(root_cnode, requested_handler_slot, depth);
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci irq sink get saw existing owner irq={} mmio=0x{mmio:016x} err={} ({}) but no reusable handler cap was found",
+                            irq,
+                            get_err,
+                            crate::sel4::error_name(get_err),
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    return Err("irq-get-revoke-first-no-handler");
+                }
+                Err(reason) => {
+                    let _ = crate::sel4::cnode_delete(root_cnode, requested_handler_slot, depth);
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci irq sink get failed irq={} mmio=0x{mmio:016x} err={} ({}) reason={reason}",
+                            irq,
+                            get_err,
+                            crate::sel4::error_name(get_err),
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    return Err(reason);
+                }
+            }
         };
+
         let notification_slot = match env.alloc_notification() {
             Ok(slot) => slot,
             Err(_) => {
                 if owns_handler {
                     let _ = crate::sel4::cnode_delete(root_cnode, handler_slot, depth);
                 }
-                return Err("notification-retype");
+                return if shadow {
+                    Err("irq-shadow-notification")
+                } else {
+                    Err("notification-retype")
+                };
             }
         };
         let bind_err = crate::sel4::irq_handler_set_notification(handler_slot, notification_slot);
@@ -3615,22 +3664,28 @@ impl XhciIrqGuard {
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci irq sink bind failed irq={} mmio=0x{mmio:016x} err={} ({})",
-                    PI4_VL805_XHCI_IRQ,
+                    "[local-seat] xhci irq {}bind failed irq={} mmio=0x{mmio:016x} err={} ({})",
+                    if shadow { "shadow " } else { "sink " },
+                    irq,
                     bind_err,
                     crate::sel4::error_name(bind_err),
                 ),
             );
             boot_log::force_uart_line(line.as_str());
-            return Err("irq-set-notification");
+            return if shadow {
+                Err("irq-shadow-set-notification")
+            } else {
+                Err("irq-set-notification")
+            };
         }
 
         let mut line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci irq sink armed irq={} mmio=0x{mmio:016x} handler=0x{handler:04x} notif=0x{notif:04x} owned={owned}",
-                PI4_VL805_XHCI_IRQ,
+                "[local-seat] xhci irq {}armed irq={} mmio=0x{mmio:016x} handler=0x{handler:04x} notif=0x{notif:04x} owned={owned}",
+                if shadow { "shadow " } else { "sink " },
+                irq,
                 handler = handler_slot,
                 notif = notification_slot,
                 owned = if owns_handler { 1 } else { 0 },
@@ -3638,12 +3693,42 @@ impl XhciIrqGuard {
         );
         boot_log::force_uart_line(line.as_str());
 
-        Ok(Some(Self {
-            root_cnode,
+        Ok(Some(XhciIrqBinding {
             handler_slot,
             notification_slot,
-            irq: PI4_VL805_XHCI_IRQ,
+            irq,
             owns_handler,
+            shadow,
+        }))
+    }
+
+    fn install(
+        hal: &mut KernelHal<'_>,
+        mmio: usize,
+        firmware_handoff_quiesced: bool,
+    ) -> Result<Option<Self>, &'static str> {
+        if !xhci_irq_sink_needed(mmio, firmware_handoff_quiesced) {
+            return Ok(None);
+        }
+
+        let env = hal.as_env_mut();
+        let depth = crate::sel4::word_bits() as u8;
+        let root_cnode = env.init_cnode_cap();
+        let legacy_shadow = Self::install_binding(
+            env,
+            root_cnode,
+            depth,
+            mmio,
+            PI4_VL805_XHCI_LEGACY_IRQ,
+            true,
+        )?;
+        let primary =
+            Self::install_binding(env, root_cnode, depth, mmio, PI4_VL805_XHCI_IRQ, false)?
+                .ok_or("irq-set-notification")?;
+
+        Ok(Some(Self {
+            root_cnode,
+            bindings: [Some(primary), legacy_shadow],
         }))
     }
 }
@@ -3651,32 +3736,35 @@ impl XhciIrqGuard {
 impl Drop for XhciIrqGuard {
     fn drop(&mut self) {
         let depth = crate::sel4::word_bits() as u8;
-        let clear_result = crate::sel4::irq_handler_clear(self.handler_slot);
-        let delete_notification_result =
-            crate::sel4::cnode_delete(self.root_cnode, self.notification_slot, depth);
-        let delete_handler_result = if self.owns_handler {
-            crate::sel4::cnode_delete(self.root_cnode, self.handler_slot, depth)
-        } else {
-            sel4_sys::seL4_NoError
-        };
-        let mut line = heapless::String::<224>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] xhci irq sink drop irq={} handler=0x{:04x} notif=0x{:04x} clear={} ({}) delete_handler={} ({}) delete_notif={} ({}) owned={}",
-                self.irq,
-                self.handler_slot,
-                self.notification_slot,
-                clear_result,
-                crate::sel4::error_name(clear_result),
-                delete_handler_result,
-                crate::sel4::error_name(delete_handler_result),
-                delete_notification_result,
-                crate::sel4::error_name(delete_notification_result),
-                if self.owns_handler { 1 } else { 0 },
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
+        for binding in self.bindings.iter().flatten() {
+            let clear_result = crate::sel4::irq_handler_clear(binding.handler_slot);
+            let delete_notification_result =
+                crate::sel4::cnode_delete(self.root_cnode, binding.notification_slot, depth);
+            let delete_handler_result = if binding.owns_handler {
+                crate::sel4::cnode_delete(self.root_cnode, binding.handler_slot, depth)
+            } else {
+                sel4_sys::seL4_NoError
+            };
+            let mut line = heapless::String::<240>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci irq {}drop irq={} handler=0x{:04x} notif=0x{:04x} clear={} ({}) delete_handler={} ({}) delete_notif={} ({}) owned={}",
+                    if binding.shadow { "shadow " } else { "sink " },
+                    binding.irq,
+                    binding.handler_slot,
+                    binding.notification_slot,
+                    clear_result,
+                    crate::sel4::error_name(clear_result),
+                    delete_handler_result,
+                    crate::sel4::error_name(delete_handler_result),
+                    delete_notification_result,
+                    crate::sel4::error_name(delete_notification_result),
+                    if binding.owns_handler { 1 } else { 0 },
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
     }
 }
 
@@ -3684,7 +3772,13 @@ impl Drop for XhciIrqGuard {
 fn unique_existing_irq_handler_slot(
     env: &crate::sel4::KernelEnv<'_>,
 ) -> Result<Option<sel4_sys::seL4_CPtr>, usize> {
+    xhci_irq_handler_scan_summary(env).unique_slot()
+}
+
+#[inline]
+fn xhci_irq_handler_scan_summary(env: &crate::sel4::KernelEnv<'_>) -> XhciIrqHandlerScanSummary {
     let mut first = None;
+    let mut second = None;
     let mut count = 0usize;
     let scan_end = env.bootinfo().empty.end;
     let mut slot = 0;
@@ -3694,14 +3788,17 @@ fn unique_existing_irq_handler_slot(
             count = count.saturating_add(1);
             if first.is_none() {
                 first = Some(slot);
+            } else if second.is_none() {
+                second = Some(slot);
             }
         }
         slot = slot.saturating_add(1);
     }
-    if count > 1 {
-        Err(count)
-    } else {
-        Ok(first)
+    XhciIrqHandlerScanSummary {
+        first,
+        second,
+        count,
+        scan_end,
     }
 }
 
@@ -3720,6 +3817,19 @@ fn resolve_xhci_irq_handler_acquisition(
         Ok(Some(slot)) => Ok(XhciIrqHandlerAcquisition::ReuseExisting(slot)),
         Ok(None) => Err("irq-get-revoke-first-no-handler"),
         Err(_) => Err("irq-handler-ambiguous"),
+    }
+}
+
+#[inline]
+const fn xhci_shadow_irq_handoff_contract_reason(
+    get_err: sel4_sys::seL4_Error,
+) -> Option<&'static str> {
+    if get_err == sel4_sys::seL4_NoError {
+        None
+    } else if get_err == sel4_sys::seL4_RevokeFirst {
+        Some("irq-shadow-owned")
+    } else {
+        Some("irq-shadow-get-handler")
     }
 }
 
@@ -3982,9 +4092,8 @@ impl UsbKeyboard {
             xhci_handoff_ready,
             xhci_irq_quiesced,
         ) && verified_vl805_hint.is_none()
-            && vl805_pci_mmio.is_none();
-        let defer_high_bar_probe = legacy_mirror_allowed
-            && effective_trusted_pinned_xhci_mmio == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE);
+            && vl805_pci_mmio.is_none()
+            && effective_trusted_pinned_xhci_mmio != Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE);
         log_xhci_firmware_handoff_summary(
             "runtime",
             xhci_mmio_hint,
@@ -4024,29 +4133,6 @@ impl UsbKeyboard {
             );
             boot_log::force_uart_line(line.as_str());
         }
-        if legacy_mirror_allowed {
-            boot_log::force_uart_line(
-                "[local-seat] xhci legacy mirror gate source=fw-handoff-high token=1 safe=1 action=prefer-fe980000",
-            );
-        }
-        if let Some((mmio, false)) = pinned_xhci_state {
-            if xhci_runtime_allows_pinned_legacy_fallback(
-                mmio,
-                pinned_xhci_state,
-                xhci_mmio_hint,
-                verified_vl805_hint,
-            ) {
-                let mut line = heapless::String::<224>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] xhci legacy blind probe enabled mmio=0x{mmio:016x} mode=pinned-no-alias-scan"
-                    ),
-                );
-                boot_log::force_uart_line(line.as_str());
-            }
-        }
-
         let mut candidates = [0usize; XHCI_MMIO_CANDIDATE_LIMIT];
         let mut candidate_count = 0usize;
         let mut consider_candidate = |mmio: usize| -> bool {
@@ -4063,7 +4149,6 @@ impl UsbKeyboard {
                 xhci_mmio_hint,
                 verified_vl805_hint,
                 legacy_mirror_allowed,
-                defer_high_bar_probe,
             ) {
                 log_xhci_runtime_candidate_diag(
                     mmio,
@@ -4084,7 +4169,6 @@ impl UsbKeyboard {
                     verified_vl805_hint,
                     firmware_hint_safe,
                     legacy_mirror_allowed,
-                    defer_high_bar_probe,
                 );
                 let mut line = heapless::String::<208>::new();
                 let _ = core::fmt::Write::write_fmt(
@@ -4176,11 +4260,6 @@ impl UsbKeyboard {
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
-                }
-                if preferred_mmio == RPI4_XHCI_MMIO_PRIMARY_CANDIDATE && legacy_mirror_allowed {
-                    boot_log::force_uart_line(
-                        "[local-seat] xhci runtime preferred source=fw-handoff-legacy-mirror mmio=0x00000000fe980000 upstream=0x0000000600000000",
-                    );
                 }
                 consider_candidate(preferred_mmio);
                 if let Some(hint) = xhci_mmio_hint {
@@ -4427,6 +4506,15 @@ impl UsbKeyboard {
                             ),
                         );
                     boot_log::force_uart_line(line.as_str());
+                    if firmware_handoff_quiesced
+                        && effective_mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+                        && reason.starts_with("irq-shadow")
+                    {
+                        boot_log::force_uart_line(
+                            "[local-seat] xhci handoff rejected reason=irq-shadow-contract action=stop-runtime-probe",
+                        );
+                        break;
+                    }
                     continue;
                 }
             };
@@ -8794,10 +8882,55 @@ mod tests {
             xhci_diag_stage_label(0x020a),
             Some("fw-handoff-skip-usbsts-clear-write")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x020b),
+            Some("fw-handoff-skip-imod-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x020c),
+            Some("fw-handoff-skip-iman-write")
+        );
         assert_eq!(xhci_diag_stage_label(0x0208), Some("fw-handoff-iman-write"));
+        assert_eq!(xhci_diag_stage_label(0x0241), Some("config-readback"));
+        assert_eq!(xhci_diag_stage_label(0x0242), Some("dcbaap-readback"));
         assert_eq!(xhci_diag_stage_label(0x0243), Some("config-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0245),
+            Some("fw-handoff-skip-config-write")
+        );
+        assert_eq!(xhci_diag_stage_label(0x0246), Some("config-readback-begin"));
+        assert_eq!(xhci_diag_stage_label(0x0247), Some("dcbaap-readback-begin"));
+        assert_eq!(xhci_diag_stage_label(0x0251), Some("crcr-readback"));
+        assert_eq!(xhci_diag_stage_label(0x0253), Some("crcr-readback-begin"));
+        assert_eq!(xhci_diag_stage_label(0x0261), Some("runtime-ring-readback"));
+        assert_eq!(xhci_diag_stage_label(0x0263), Some("usbsts-clear-ack"));
+        assert_eq!(xhci_diag_stage_label(0x026b), Some("skip-imod-write"));
+        assert_eq!(xhci_diag_stage_label(0x026c), Some("skip-iman-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x026d),
+            Some("runtime-ring-readback-begin")
+        );
         assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-write"));
         assert_eq!(xhci_diag_stage_label(0x026a), Some("usbcmd-run-write"));
+        assert_eq!(xhci_diag_stage_label(0x0270), Some("usbsts-run-readback"));
+        assert_eq!(xhci_diag_stage_label(0x0271), Some("usbcmd-run-readback"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0272),
+            Some("controller-ready-timeout")
+        );
+        assert_eq!(xhci_diag_stage_label(0x0273), Some("controller-ready"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0274),
+            Some("usbsts-run-readback-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0275),
+            Some("usbcmd-run-readback-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0276),
+            Some("controller-ready-poll-begin")
+        );
         assert_eq!(xhci_diag_stage_label(0x9999), None);
     }
 
@@ -8813,21 +8946,25 @@ mod tests {
 
     #[test]
     fn unique_existing_irq_handler_slot_requires_single_match() {
-        fn scan(tags: &[crate::sel4::CapTag]) -> Result<Option<sel4_sys::seL4_CPtr>, usize> {
+        fn scan(tags: &[crate::sel4::CapTag]) -> XhciIrqHandlerScanSummary {
             let mut first = None;
+            let mut second = None;
             let mut count = 0usize;
             for (slot, tag) in tags.iter().copied().enumerate() {
                 if matches!(tag, crate::sel4::CapTag::IrqHandler) {
                     count = count.saturating_add(1);
                     if first.is_none() {
                         first = Some(slot as sel4_sys::seL4_CPtr);
+                    } else if second.is_none() {
+                        second = Some(slot as sel4_sys::seL4_CPtr);
                     }
                 }
             }
-            if count > 1 {
-                Err(count)
-            } else {
-                Ok(first)
+            XhciIrqHandlerScanSummary {
+                first,
+                second,
+                count,
+                scan_end: tags.len() as sel4_sys::seL4_CPtr,
             }
         }
 
@@ -8836,7 +8973,8 @@ mod tests {
                 crate::sel4::CapTag::Null,
                 crate::sel4::CapTag::IrqHandler,
                 crate::sel4::CapTag::Frame,
-            ]),
+            ])
+            .unique_slot(),
             Ok(Some(1))
         );
         assert_eq!(
@@ -8844,17 +8982,20 @@ mod tests {
                 crate::sel4::CapTag::Null,
                 crate::sel4::CapTag::Frame,
                 crate::sel4::CapTag::Notification,
-            ]),
+            ])
+            .unique_slot(),
             Ok(None)
         );
-        assert_eq!(
-            scan(&[
-                crate::sel4::CapTag::IrqHandler,
-                crate::sel4::CapTag::Frame,
-                crate::sel4::CapTag::IrqHandler,
-            ]),
-            Err(2)
-        );
+        let summary = scan(&[
+            crate::sel4::CapTag::IrqHandler,
+            crate::sel4::CapTag::Frame,
+            crate::sel4::CapTag::IrqHandler,
+            crate::sel4::CapTag::Null,
+        ]);
+        assert_eq!(summary.first, Some(0));
+        assert_eq!(summary.second, Some(2));
+        assert_eq!(summary.count, 2);
+        assert_eq!(summary.unique_slot(), Err(2));
     }
 
     #[test]
@@ -8949,7 +9090,6 @@ mod tests {
                 None,
                 true,
                 false,
-                false,
             ),
             "fw-handoff-unverified"
         );
@@ -8960,7 +9100,6 @@ mod tests {
                 None,
                 Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
                 None,
-                false,
                 false,
                 false,
             ),
@@ -8975,22 +9114,8 @@ mod tests {
                 None,
                 false,
                 false,
-                false,
             ),
-            "no-trusted-source"
-        );
-        assert_eq!(
-            super::xhci_runtime_candidate_skip_reason(
-                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-                false,
-                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
-                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
-                None,
-                true,
-                true,
-                true,
-            ),
-            "probe-deferred-to-legacy-mirror"
+            "legacy-runtime-disabled"
         );
     }
 
@@ -9004,7 +9129,6 @@ mod tests {
             None,
             None,
             false,
-            false,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -9014,7 +9138,6 @@ mod tests {
             None,
             None,
             false,
-            false,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -9023,7 +9146,6 @@ mod tests {
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             None,
             None,
-            false,
             false,
         ));
         assert!(!xhci_runtime_mmio_candidate_allowed(
@@ -9034,7 +9156,6 @@ mod tests {
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             None,
             false,
-            false,
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -9043,7 +9164,6 @@ mod tests {
             None,
             None,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
-            false,
             false,
         ));
         assert!(!xhci_runtime_mmio_candidate_allowed(
@@ -9054,56 +9174,14 @@ mod tests {
             None,
             None,
             false,
-            false,
-        ));
-        assert!(xhci_runtime_mmio_candidate_allowed(
-            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            false,
-            None,
-            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
-            None,
-            None,
-            false,
-            false,
-        ));
-        assert!(xhci_runtime_mmio_candidate_allowed(
-            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            false,
-            None,
-            None,
-            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
-            None,
-            false,
-            false,
-        ));
-        assert!(xhci_runtime_mmio_candidate_allowed(
-            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            false,
-            Some((RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, false)),
-            None,
-            None,
-            None,
-            false,
-            false,
         ));
         assert!(!xhci_runtime_mmio_candidate_allowed(
-            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            false,
-            None,
-            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
-            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
-            None,
-            true,
-            true,
-        ));
-        assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             false,
             None,
-            None,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             None,
-            true,
             false,
         ));
     }
@@ -9152,7 +9230,7 @@ mod tests {
     }
 
     #[test]
-    fn preferred_xhci_runtime_mmio_demotes_unverified_high_firmware_hint() {
+    fn preferred_xhci_runtime_mmio_keeps_high_handoff_preferred_over_legacy_pin() {
         assert_eq!(
             super::preferred_xhci_runtime_mmio(
                 Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
@@ -9161,12 +9239,12 @@ mod tests {
                 None,
                 false,
             ),
-            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE)
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
         );
     }
 
     #[test]
-    fn preferred_xhci_runtime_mmio_prefers_firmware_hint_over_stale_legacy_alias() {
+    fn preferred_xhci_runtime_mmio_filters_stale_legacy_aliases() {
         assert_eq!(
             super::preferred_xhci_runtime_mmio(
                 Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
@@ -9175,7 +9253,7 @@ mod tests {
                 Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
                 false,
             ),
-            Some(0x0000_0000_7E9C_0000)
+            None
         );
         assert_eq!(
             super::preferred_xhci_runtime_mmio(
@@ -9190,7 +9268,7 @@ mod tests {
     }
 
     #[test]
-    fn preferred_xhci_runtime_mmio_prefers_legacy_mirror_for_trusted_high_handoff() {
+    fn preferred_xhci_runtime_mmio_does_not_prefer_legacy_mirror_for_trusted_high_handoff() {
         assert_eq!(
             super::preferred_xhci_runtime_mmio(
                 Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
@@ -9199,7 +9277,32 @@ mod tests {
                 None,
                 true,
             ),
-            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE)
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+        );
+    }
+
+    #[test]
+    fn xhci_runtime_blocks_legacy_candidates_when_high_bar_handoff_exists() {
+        assert!(!super::xhci_runtime_mmio_candidate_allowed(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            false,
+            Some((RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, false)),
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            None,
+            true,
+        ));
+        assert_eq!(
+            super::xhci_runtime_candidate_skip_reason(
+                RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+                false,
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                None,
+                true,
+                false,
+            ),
+            "legacy-runtime-disabled"
         );
     }
 
@@ -9387,7 +9490,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_firmware_handoff_legacy_probe_remains_disabled() {
+    fn xhci_firmware_handoff_legacy_probe_stays_disabled() {
         let safe_cmd = Some(
             super::PCI_COMMAND_MEMORY_SPACE
                 | super::PCI_COMMAND_BUS_MASTER
@@ -9400,10 +9503,7 @@ mod tests {
             true,
         ));
         assert!(!xhci_firmware_handoff_allows_legacy_probe(
-            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
-            safe_cmd,
-            false,
-            true,
+            None, safe_cmd, false, false,
         ));
         assert!(!xhci_firmware_handoff_allows_legacy_probe(
             Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
@@ -9411,6 +9511,28 @@ mod tests {
             true,
             true,
         ));
+        assert!(!xhci_firmware_handoff_allows_legacy_probe(
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            false,
+            true,
+        ));
+    }
+
+    #[test]
+    fn xhci_shadow_irq_handoff_contract_rejects_revoke_first_recovery() {
+        assert_eq!(
+            super::xhci_shadow_irq_handoff_contract_reason(sel4_sys::seL4_NoError),
+            None
+        );
+        assert_eq!(
+            super::xhci_shadow_irq_handoff_contract_reason(sel4_sys::seL4_RevokeFirst),
+            Some("irq-shadow-owned")
+        );
+        assert_eq!(
+            super::xhci_shadow_irq_handoff_contract_reason(sel4_sys::seL4_DeleteFirst),
+            Some("irq-shadow-get-handler")
+        );
     }
 
     #[test]
@@ -9484,19 +9606,14 @@ mod tests {
             false,
         ));
         assert!(xhci_runtime_allows_alias_scan(
-            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
-            false,
-        ));
-        assert!(xhci_runtime_allows_alias_scan(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             None,
             false,
         ));
-        assert!(xhci_runtime_allows_alias_scan(
+        assert!(!xhci_runtime_allows_alias_scan(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            None,
-            true,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            false,
         ));
     }
 
@@ -9541,15 +9658,14 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_allows_pinned_legacy_fallback_with_high_firmware_breadcrumb() {
-        assert!(xhci_runtime_mmio_candidate_allowed(
+    fn xhci_runtime_rejects_pinned_legacy_fallback_with_high_firmware_breadcrumb() {
+        assert!(!xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             false,
             Some((RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, false)),
             None,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             None,
-            false,
             false,
         ));
     }
