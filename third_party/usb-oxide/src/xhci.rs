@@ -76,8 +76,18 @@ const fn polling_iman_value() -> u32 {
 }
 
 #[inline(always)]
+const fn masked_usbcmd(usbcmd: u32) -> u32 {
+    usbcmd & !(reg::USBCMD_INTE | reg::USBCMD_HSEE)
+}
+
+#[inline(always)]
+const fn halt_revalidation_needed(usbsts: u32) -> bool {
+    (usbsts & reg::USBSTS_HCH) == 0
+}
+
+#[inline(always)]
 const fn preserve_firmware_handoff_config(firmware_handoff_quiesced: bool) -> bool {
-    firmware_handoff_quiesced
+    firmware_handoff_quiesced && SKIP_HCRST_DURING_INIT
 }
 
 #[inline]
@@ -304,6 +314,33 @@ impl<H: Dma> ScratchpadSet<H> {
     }
 }
 
+#[inline(always)]
+fn split_u64_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
+    [(offset, val as u32), (offset + 4, (val >> 32) as u32)]
+}
+
+#[inline(always)]
+fn compose_crcr(current: u64, ring_ptr: u64, cycle_state: bool) -> u64 {
+    (current & reg::CMD_RING_RSVD_BITS)
+        | (ring_ptr & !reg::CMD_RING_RSVD_BITS)
+        | u64::from(cycle_state)
+}
+
+#[inline(always)]
+fn compose_erst_size(current: u32, entries: u32) -> u32 {
+    (current & reg::ERST_SIZE_MASK) | entries
+}
+
+#[inline(always)]
+fn compose_erst_base(current: u64, base: u64) -> u64 {
+    (current & reg::ERST_PTR_MASK) | (base & !reg::ERST_PTR_MASK)
+}
+
+#[inline(always)]
+fn compose_initial_erdp(event_ring_ptr: u64) -> u64 {
+    event_ring_ptr & !reg::ERST_PTR_MASK
+}
+
 impl<H: Dma> XhciCtrl<H> {
     #[inline(always)]
     fn write_reg_at<T: Copy>(mmio: usize, offset: usize, val: T) {
@@ -314,14 +351,28 @@ impl<H: Dma> XhciCtrl<H> {
 
     #[inline(always)]
     fn write_reg_u64_at(mmio: usize, offset: usize, val: u64) {
-        // Program xHCI 64-bit register pairs using a compatibility sequence:
-        // low, high, then low again.
-        // - Some controllers latch on high-word writes.
-        // - Others require low-word control bits (CRCR.RCS / ERDP.EHB) to be
-        //   observed on a final low-word commit.
-        Self::write_reg_at::<u32>(mmio, offset, val as u32);
-        Self::write_reg_at::<u32>(mmio, offset + 4, (val >> 32) as u32);
-        Self::write_reg_at::<u32>(mmio, offset, val as u32);
+        // xHCI 64-bit register pairs must be programmed low dword first, then
+        // high dword. Replaying the low dword after the high dword is not part
+        // of the xHCI-defined sequence and has proven unsafe on Pi 4 VL805
+        // during the first post-handoff ownership transfer.
+        let [low, high] = split_u64_reg_write_ops(offset, val);
+        Self::write_reg_at::<u32>(mmio, low.0, low.1);
+        Self::write_reg_at::<u32>(mmio, high.0, high.1);
+    }
+
+    #[inline(always)]
+    fn write_reg_u64_diag_at(
+        mmio: usize,
+        offset: usize,
+        val: u64,
+        low_stage: u16,
+        high_stage: u16,
+    ) {
+        let [low, high] = split_u64_reg_write_ops(offset, val);
+        emit_xhci_diag(low_stage, low.0 as u64, low.1 as u64, val);
+        Self::write_reg_at::<u32>(mmio, low.0, low.1);
+        emit_xhci_diag(high_stage, high.0 as u64, high.1 as u64, val);
+        Self::write_reg_at::<u32>(mmio, high.0, high.1);
     }
 
     #[inline(always)]
@@ -433,16 +484,11 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Generic xHCI probing still needs to quiesce interrupt delivery
         // immediately after mapping, before any runtime register reads. On the
-        // Pi4 trusted-handoff path, firmware already exported a halted
-        // controller, but runtime still needs a write-only interrupt scrub so
-        // the first operational register write does not surface a stale IRQ.
+        // Pi4 trusted-handoff path, firmware may already have halted the
+        // controller, but runtime still applies the same write-only interrupt
+        // scrub so the first ownership write does not surface a stale IRQ.
         emit_xhci_diag(0x0106, op_offset as u64, rt_base as u64, int_base as u64);
-        Self::write_only_polling_scrub(
-            mmio,
-            op_offset,
-            int_base,
-            params.firmware_handoff_quiesced,
-        );
+        Self::write_only_polling_scrub(mmio, op_offset, int_base, false);
         emit_xhci_diag(
             0x0107,
             USBSTS_CLEAR_MASK as u64,
@@ -506,6 +552,8 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     fn init(&mut self) -> Result<()> {
+        let preserve_firmware_state = preserve_firmware_handoff_config(self.firmware_handoff_quiesced);
+
         // Keep host-system and event interrupts masked during bring-up. Pi4
         // local-seat uses polling and does not install xHCI IRQ handlers in
         // this phase.
@@ -515,7 +563,7 @@ impl<H: Dma> XhciCtrl<H> {
             let mut usbcmd = self.read_op::<u32>(reg::USBCMD);
             let usbsts_start = self.read_op::<u32>(reg::USBSTS);
             emit_xhci_diag(0x0200, usbcmd as u64, usbsts_start as u64, self.mmio as u64);
-            usbcmd &= !(reg::USBCMD_INTE | reg::USBCMD_HSEE);
+            usbcmd = masked_usbcmd(usbcmd);
             emit_xhci_diag(0x0201, usbcmd as u64, 0, 0);
             self.write_op(reg::USBCMD, usbcmd);
             emit_xhci_diag(0x0202, self.read_op::<u32>(reg::USBCMD) as u64, 0, 0);
@@ -533,41 +581,47 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0212, 0, 0, 0);
         }
 
-        // Stop controller if running
-        if self.firmware_handoff_quiesced {
-            emit_xhci_diag(0x0224, 1, 0, 0);
-        } else {
-            let usbcmd = self.read_op::<u32>(reg::USBCMD) & !(reg::USBCMD_INTE | reg::USBCMD_HSEE);
+        // Trusted firmware handoff still needs a live halt revalidation before
+        // HCRST. U-Boot always rechecks STS_HALT, clears RUN if needed, and
+        // then waits for the controller to report halted.
+        let usbcmd = masked_usbcmd(self.read_op::<u32>(reg::USBCMD));
+        let usbsts = self.read_op::<u32>(reg::USBSTS);
+        emit_xhci_diag(
+            0x0220,
+            usbcmd as u64,
+            usbsts as u64,
+            self.firmware_handoff_quiesced as u64,
+        );
+        if !SKIP_STOP_DURING_INIT && halt_revalidation_needed(usbsts) {
+            if (usbcmd & reg::USBCMD_RUN) != 0 {
+                emit_xhci_diag(0x0221, usbcmd as u64, self.firmware_handoff_quiesced as u64, 0);
+                self.write_op(reg::USBCMD, usbcmd & !reg::USBCMD_RUN);
+            }
+            let mut waited = 0usize;
+            while halt_revalidation_needed(self.read_op::<u32>(reg::USBSTS)) {
+                waited = waited.saturating_add(1);
+                if waited >= STOP_WAIT_SPINS {
+                    emit_xhci_diag(
+                        0x0222,
+                        waited as u64,
+                        self.read_op::<u32>(reg::USBSTS) as u64,
+                        self.firmware_handoff_quiesced as u64,
+                    );
+                    return Err(UsbError::Timeout);
+                }
+                spin_loop();
+            }
             emit_xhci_diag(
-                0x0220,
-                usbcmd as u64,
+                0x0223,
                 self.read_op::<u32>(reg::USBSTS) as u64,
+                self.firmware_handoff_quiesced as u64,
                 0,
             );
-            if !SKIP_STOP_DURING_INIT && (usbcmd & reg::USBCMD_RUN) != 0 {
-                emit_xhci_diag(0x0221, usbcmd as u64, 0, 0);
-                self.write_op(reg::USBCMD, usbcmd & !reg::USBCMD_RUN);
-                let mut waited = 0usize;
-                while (self.read_op::<u32>(reg::USBSTS) & reg::USBSTS_HCH) == 0 {
-                    waited = waited.saturating_add(1);
-                    if waited >= STOP_WAIT_SPINS {
-                        emit_xhci_diag(
-                            0x0222,
-                            waited as u64,
-                            self.read_op::<u32>(reg::USBSTS) as u64,
-                            0,
-                        );
-                        return Err(UsbError::Timeout);
-                    }
-                    spin_loop();
-                }
-                emit_xhci_diag(0x0223, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
-            } else {
-                emit_xhci_diag(0x0224, 0, 0, 0);
-            }
+        } else {
+            emit_xhci_diag(0x0224, usbcmd as u64, usbsts as u64, self.firmware_handoff_quiesced as u64);
         }
 
-        if self.firmware_handoff_quiesced {
+        if preserve_firmware_state {
             emit_xhci_diag(0x0234, 1, 0, 0);
         } else if !SKIP_HCRST_DURING_INIT {
             // Reset controller
@@ -608,7 +662,7 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Configure controller
         emit_xhci_diag(0x0240, self.max_slots as u64, 0, 0);
-        if preserve_firmware_handoff_config(self.firmware_handoff_quiesced) {
+        if preserve_firmware_state {
             emit_xhci_diag(0x0245, reg::CONFIG as u64, self.max_slots as u64, 1);
             emit_xhci_diag(0x0241, self.max_slots as u64, 1, 0);
         } else {
@@ -618,8 +672,13 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0241, self.read_op::<u32>(reg::CONFIG) as u64, 0, 0);
         }
         emit_xhci_diag(0x0244, reg::DCBAAP as u64, self.dcbaa.phys(&*self.host), 0);
-        self.write_op_u64(reg::DCBAAP, self.dcbaa.phys(&*self.host));
-        if self.firmware_handoff_quiesced {
+        self.write_op_u64_diag(
+            reg::DCBAAP,
+            self.dcbaa.phys(&*self.host),
+            0x0248,
+            0x0249,
+        );
+        if preserve_firmware_state {
             emit_xhci_diag(0x0242, self.dcbaa.phys(&*self.host), 1, 0);
         } else {
             emit_xhci_diag(0x0247, reg::DCBAAP as u64, 0, 0);
@@ -628,11 +687,12 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Setup command ring
         let cmd_ring = self.cmd_ring.lock();
-        let crcr = cmd_ring.phys(&*self.host) | 1; // RCS = 1
+        let current_crcr = self.read_op_u64(reg::CRCR);
+        let crcr = compose_crcr(current_crcr, cmd_ring.phys(&*self.host), true);
         emit_xhci_diag(0x0250, crcr, 0, 0);
         emit_xhci_diag(0x0252, reg::CRCR as u64, crcr, 0);
-        self.write_op_u64(reg::CRCR, crcr);
-        if self.firmware_handoff_quiesced {
+        self.write_op_u64_diag(reg::CRCR, crcr, 0x0254, 0x0255);
+        if preserve_firmware_state {
             emit_xhci_diag(0x0251, crcr, 1, 0);
         } else {
             emit_xhci_diag(0x0253, reg::CRCR as u64, 0, 0);
@@ -650,29 +710,32 @@ impl<H: Dma> XhciCtrl<H> {
             self.db_offset as u64,
         );
 
-        emit_xhci_diag(0x0264, (int_base + reg::ERSTSZ) as u64, 1, 0);
-        self.write_reg(int_base + reg::ERSTSZ, 1u32);
-        emit_xhci_diag(
-            0x0265,
-            (int_base + reg::ERSTBA) as u64,
-            event_ring.erst_phys(&*self.host),
-            0,
-        );
-        self.write_reg_u64(int_base + reg::ERSTBA, event_ring.erst_phys(&*self.host));
-        // Prime ERDP and clear Event Handler Busy before running the controller.
+        // Prime ERDP to the first event TRB without setting EHB during init.
+        let erdp = compose_initial_erdp(event_ring.ring_phys(&*self.host));
         emit_xhci_diag(
             0x0266,
             (int_base + reg::ERDP) as u64,
-            event_ring.ring_phys(&*self.host) | 0x8,
+            erdp,
             0,
         );
-        self.write_reg_u64(
+        self.write_reg_u64_diag(
             int_base + reg::ERDP,
-            event_ring.ring_phys(&*self.host) | 0x8,
+            erdp,
+            0x0277,
+            0x0278,
         );
+        let erst_size = compose_erst_size(self.read_reg::<u32>(int_base + reg::ERSTSZ), 1);
+        emit_xhci_diag(0x0264, (int_base + reg::ERSTSZ) as u64, erst_size as u64, 0);
+        self.write_reg(int_base + reg::ERSTSZ, erst_size);
+        let erstba = compose_erst_base(
+            self.read_reg_u64(int_base + reg::ERSTBA),
+            event_ring.erst_phys(&*self.host),
+        );
+        emit_xhci_diag(0x0265, (int_base + reg::ERSTBA) as u64, erstba, 0);
+        self.write_reg_u64_diag(int_base + reg::ERSTBA, erstba, 0x026e, 0x026f);
         // Keep moderation disabled; Cohesix local-seat uses polling and does
         // not install xHCI IRQ handlers during early boot.
-        if self.firmware_handoff_quiesced {
+        if preserve_firmware_state {
             emit_xhci_diag(0x026b, (int_base + reg::IMOD) as u64, 0, 1);
         } else {
             emit_xhci_diag(0x0267, (int_base + reg::IMOD) as u64, 0, 0);
@@ -681,7 +744,7 @@ impl<H: Dma> XhciCtrl<H> {
         // Cohesix uses pure polling during Pi4 local-seat bring-up. Acknowledge
         // any stale pending bit but keep the interrupter disabled so VL805 does
         // not surface an unhandled IRQ before userspace installs handlers.
-        if self.firmware_handoff_quiesced {
+        if preserve_firmware_state {
             emit_xhci_diag(
                 0x026c,
                 (int_base + reg::IMAN) as u64,
@@ -697,7 +760,7 @@ impl<H: Dma> XhciCtrl<H> {
             );
             self.write_reg(int_base + reg::IMAN, polling_iman_value());
         }
-        if self.firmware_handoff_quiesced {
+        if preserve_firmware_state {
             emit_xhci_diag(0x0262, int_base as u64, polling_iman_value() as u64, 1);
             emit_xhci_diag(
                 0x0261,
@@ -722,6 +785,11 @@ impl<H: Dma> XhciCtrl<H> {
         }
         drop(event_ring);
 
+        // Disable device notifications before the first command can observe
+        // any stale firmware-originated notification state.
+        emit_xhci_diag(0x0256, reg::DNCTRL as u64, 0, 0);
+        self.write_op(reg::DNCTRL, 0u32);
+
         // Clear stale status before run so command completions are observable.
         emit_xhci_diag(0x0269, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 0);
         self.write_op(reg::USBSTS, USBSTS_CLEAR_MASK);
@@ -732,7 +800,7 @@ impl<H: Dma> XhciCtrl<H> {
             0,
         );
         // Start controller in polling mode (interrupt delivery remains masked).
-        if self.firmware_handoff_quiesced {
+        if preserve_firmware_state {
             emit_xhci_diag(0x0270, 0, 1, 0);
         } else {
             emit_xhci_diag(0x0274, reg::USBSTS as u64, 0, 0);
@@ -740,7 +808,7 @@ impl<H: Dma> XhciCtrl<H> {
         }
         emit_xhci_diag(0x026a, reg::USBCMD as u64, reg::USBCMD_RUN as u64, 0);
         self.write_op(reg::USBCMD, reg::USBCMD_RUN);
-        if self.firmware_handoff_quiesced {
+        if preserve_firmware_state {
             emit_xhci_diag(0x0271, reg::USBCMD_RUN as u64, 1, 0);
         } else {
             emit_xhci_diag(0x0275, reg::USBCMD as u64, 0, 0);
@@ -826,6 +894,11 @@ impl<H: Dma> XhciCtrl<H> {
         Self::write_reg_u64_at(self.mmio, offset, val);
     }
 
+    #[inline(always)]
+    fn write_reg_u64_diag(&self, offset: usize, val: u64, low_stage: u16, high_stage: u16) {
+        Self::write_reg_u64_diag_at(self.mmio, offset, val, low_stage, high_stage);
+    }
+
     fn read_op<T: Copy>(&self, offset: usize) -> T {
         self.read_reg(self.op_base - self.mmio + offset)
     }
@@ -835,8 +908,14 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     #[inline(always)]
-    fn write_op_u64(&self, offset: usize, val: u64) {
-        Self::write_reg_u64_at(self.mmio, self.op_base - self.mmio + offset, val);
+    fn write_op_u64_diag(&self, offset: usize, val: u64, low_stage: u16, high_stage: u16) {
+        Self::write_reg_u64_diag_at(
+            self.mmio,
+            self.op_base - self.mmio + offset,
+            val,
+            low_stage,
+            high_stage,
+        );
     }
 
     #[inline(always)]
@@ -1338,8 +1417,9 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        XhciControllerParams, parse_controller_params, polling_iman_value,
-        preserve_firmware_handoff_config,
+        XhciControllerParams, halt_revalidation_needed, masked_usbcmd,
+        parse_controller_params, polling_iman_value,
+        preserve_firmware_handoff_config, split_u64_reg_write_ops,
         port_ready_for_enumeration,
     };
     use crate::reg;
@@ -1404,9 +1484,52 @@ mod tests {
     }
 
     #[test]
+    fn masked_usbcmd_clears_interrupt_enables_only() {
+        let raw = reg::USBCMD_RUN | reg::USBCMD_INTE | reg::USBCMD_HSEE;
+        assert_eq!(masked_usbcmd(raw), reg::USBCMD_RUN);
+    }
+
+    #[test]
+    fn halt_revalidation_depends_on_live_halt_bit() {
+        assert!(halt_revalidation_needed(0));
+        assert!(halt_revalidation_needed(reg::USBSTS_CNR));
+        assert!(!halt_revalidation_needed(reg::USBSTS_HCH));
+    }
+
+    #[test]
     fn firmware_handoff_preserves_config_register_programming() {
-        assert!(preserve_firmware_handoff_config(true));
+        assert_eq!(
+            preserve_firmware_handoff_config(true),
+            SKIP_HCRST_DURING_INIT
+        );
         assert!(!preserve_firmware_handoff_config(false));
+    }
+
+    #[test]
+    fn split_u64_register_writes_use_low_then_high_order() {
+        let writes = split_u64_reg_write_ops(0x30, 0x1122_3344_5566_7788);
+        assert_eq!(writes, [(0x30, 0x5566_7788), (0x34, 0x1122_3344)]);
+    }
+
+    #[test]
+    fn crcr_updates_preserve_reserved_bits() {
+        let composed = compose_crcr(0x3e, 0x0404_0020_00, true);
+        assert_eq!(composed & reg::CMD_RING_RSVD_BITS, 0x3f);
+        assert_eq!(composed & !reg::CMD_RING_RSVD_BITS, 0x0404_0020_00);
+    }
+
+    #[test]
+    fn erst_base_preserves_low_reserved_bits() {
+        let composed = compose_erst_base(0xf, 0x0404_0030_00);
+        assert_eq!(composed & reg::ERST_PTR_MASK, reg::ERST_PTR_MASK);
+        assert_eq!(composed & !reg::ERST_PTR_MASK, 0x0404_0030_00);
+    }
+
+    #[test]
+    fn initial_erdp_clears_ehb() {
+        let erdp = compose_initial_erdp(0x0404_0040_08);
+        assert_eq!(erdp & reg::ERST_EHB, 0);
+        assert_eq!(erdp & !reg::ERST_PTR_MASK, 0x0404_0040_00);
     }
 }
 

@@ -46,6 +46,9 @@ pub const DCBAAP: usize = 0x30;
 /// Configure Register
 pub const CONFIG: usize = 0x38;
 
+/// Reserved CRCR bits that must be preserved across updates.
+pub const CMD_RING_RSVD_BITS: u64 = 0x3f;
+
 // ============================================================================
 // USBCMD Register Bits
 // ============================================================================
@@ -222,6 +225,13 @@ pub const ERSTSZ: usize = 0x08;
 pub const ERSTBA: usize = 0x10;
 /// Event Ring Dequeue Pointer Register
 pub const ERDP: usize = 0x18;
+
+/// Preserve bits 16:31 when updating ERSTSZ.
+pub const ERST_SIZE_MASK: u32 = 0xffff_0000;
+/// Event Handler Busy (write 1 to clear when advancing ERDP).
+pub const ERST_EHB: u64 = 1 << 3;
+/// Low ERST pointer bits reserved by the controller.
+pub const ERST_PTR_MASK: u64 = 0xf;
 
 // ============================================================================
 // IMAN Register Bits

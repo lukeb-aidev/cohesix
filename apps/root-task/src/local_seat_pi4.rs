@@ -108,6 +108,7 @@ const VL805_PCI_CFG_ATTEMPT_CAP: usize = 512;
 const XHCI_MAX_PROBE_PORTS: usize = 16;
 const XHCI_PORT_DETECT_PASSES: usize = 4;
 const XHCI_PORT_DETECT_SETTLE_SPINS: usize = 200_000;
+const XHCI_PORT_DETECT_FINAL_WAIT_MS: u64 = 100;
 const HUB_ENUM_MAX_DEPTH: usize = 2;
 const HUB_MAX_DOWNSTREAM_PORTS: usize = 15;
 const HUB_DESC_MAX_BYTES: usize = 12;
@@ -1499,6 +1500,10 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x020b => Some("fw-handoff-skip-imod-write"),
         0x020c => Some("fw-handoff-skip-iman-write"),
         0x0224 => Some("fw-handoff-skip-stop"),
+        0x0230 => Some("reset-write"),
+        0x0231 => Some("reset-hcrst-timeout"),
+        0x0232 => Some("reset-cnr-timeout"),
+        0x0233 => Some("reset-complete"),
         0x0234 => Some("fw-handoff-skip-reset"),
         0x0241 => Some("config-readback"),
         0x0243 => Some("config-write"),
@@ -1507,9 +1512,14 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0246 => Some("config-readback-begin"),
         0x0247 => Some("dcbaap-readback-begin"),
         0x0244 => Some("dcbaap-write"),
+        0x0248 => Some("dcbaap-write-low"),
+        0x0249 => Some("dcbaap-write-high"),
         0x0251 => Some("crcr-readback"),
         0x0252 => Some("crcr-write"),
         0x0253 => Some("crcr-readback-begin"),
+        0x0254 => Some("crcr-write-low"),
+        0x0255 => Some("crcr-write-high"),
+        0x0256 => Some("dnctrl-write"),
         0x0261 => Some("runtime-ring-readback"),
         0x0263 => Some("usbsts-clear-ack"),
         0x0264 => Some("erstsz-write"),
@@ -1522,6 +1532,8 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x026b => Some("skip-imod-write"),
         0x026c => Some("skip-iman-write"),
         0x026d => Some("runtime-ring-readback-begin"),
+        0x026e => Some("erstba-write-low"),
+        0x026f => Some("erstba-write-high"),
         0x0270 => Some("usbsts-run-readback"),
         0x0271 => Some("usbcmd-run-readback"),
         0x0272 => Some("controller-ready-timeout"),
@@ -1529,6 +1541,8 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0274 => Some("usbsts-run-readback-begin"),
         0x0275 => Some("usbcmd-run-readback-begin"),
         0x0276 => Some("controller-ready-poll-begin"),
+        0x0277 => Some("erdp-write-low"),
+        0x0278 => Some("erdp-write-high"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -1541,6 +1555,61 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0309 => Some("cmd-timeout-state"),
         0x030a => Some("cmd-timeout-last-event"),
         _ => None,
+    }
+}
+
+#[inline]
+const fn xhci_root_port_connected(portsc: u32) -> bool {
+    (portsc & usb_oxide::regs::PORTSC_CCS) != 0
+}
+
+#[inline]
+fn xhci_connected_mask_from_portsc(port_statuses: &[u32]) -> u32 {
+    let mut mask = 0u32;
+    for (port, portsc) in port_statuses.iter().copied().enumerate() {
+        if port < u32::BITS as usize && xhci_root_port_connected(portsc) {
+            mask |= 1u32 << port;
+        }
+    }
+    mask
+}
+
+#[inline]
+fn xhci_sample_root_ports(
+    ctrl: &XhciCtrl<SeatDma>,
+    max_ports: usize,
+    port_statuses: &mut [u32; XHCI_MAX_PROBE_PORTS],
+) -> u32 {
+    for status in port_statuses.iter_mut() {
+        *status = 0;
+    }
+    let sample_ports = cmp::min(max_ports, port_statuses.len());
+    for (port, status) in port_statuses.iter_mut().take(sample_ports).enumerate() {
+        *status = ctrl.port_status(port as u8);
+    }
+    xhci_connected_mask_from_portsc(&port_statuses[..sample_ports])
+}
+
+fn log_xhci_root_port_statuses(port_statuses: &[u32], stage: &str) {
+    for (index, portsc) in port_statuses.iter().copied().enumerate() {
+        let speed = usb_oxide::regs::portsc_speed(portsc);
+        let pls = usb_oxide::regs::portsc_pls(portsc);
+        let connected = xhci_root_port_connected(portsc) as u8;
+        let enabled = ((portsc & usb_oxide::regs::PORTSC_PED) != 0) as u8;
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci root-port stage={} port={} portsc=0x{portsc:08x} ccs={} ped={} speed={} pls={}",
+                stage,
+                index + 1,
+                connected,
+                enabled,
+                speed,
+                pls,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
     }
 }
 
@@ -4642,15 +4711,12 @@ impl UsbKeyboard {
 
                     let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
                     let mut connected_mask = 0u32;
+                    let mut port_statuses = [0u32; XHCI_MAX_PROBE_PORTS];
                     let mut detect_passes_used = 1usize;
                     for pass in 0..XHCI_PORT_DETECT_PASSES {
                         detect_passes_used = pass.saturating_add(1);
-                        connected_mask = 0;
-                        for port in 0..max_ports {
-                            if ctrl.port_connected(port as u8) {
-                                connected_mask |= 1u32 << port;
-                            }
-                        }
+                        connected_mask =
+                            xhci_sample_root_ports(ctrl.as_ref(), max_ports, &mut port_statuses);
                         if connected_mask != 0 || pass + 1 >= XHCI_PORT_DETECT_PASSES {
                             break;
                         }
@@ -4658,12 +4724,29 @@ impl UsbKeyboard {
                             spin_loop();
                         }
                     }
+                    let mut slow_recheck_used = false;
+                    if connected_mask == 0 && max_ports != 0 {
+                        log_xhci_root_port_statuses(&port_statuses[..max_ports], "detect-zero");
+                        wait_ms(XHCI_PORT_DETECT_FINAL_WAIT_MS);
+                        slow_recheck_used = true;
+                        detect_passes_used = detect_passes_used.saturating_add(1);
+                        connected_mask =
+                            xhci_sample_root_ports(ctrl.as_ref(), max_ports, &mut port_statuses);
+                        log_xhci_root_port_statuses(
+                            &port_statuses[..max_ports],
+                            if connected_mask == 0 {
+                                "detect-slow-zero"
+                            } else {
+                                "detect-slow-hit"
+                            },
+                        );
+                    }
 
                     let mut line = heapless::String::<224>::new();
                     let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci online mmio=0x{mmio:016x} dma={} bus={} ports={} ctx={} connected_mask=0x{mask:04x} detect_passes={}",
+                        "[local-seat] xhci online mmio=0x{mmio:016x} dma={} bus={} ports={} ctx={} connected_mask=0x{mask:04x} detect_passes={} slow_recheck={}",
                         if prefer_high { "high" } else { "low" },
                         if pcie_dma_bus_alias {
                             "pcie-alias"
@@ -4673,6 +4756,7 @@ impl UsbKeyboard {
                         max_ports,
                         ctrl.context_size_bytes(),
                         detect_passes_used,
+                        slow_recheck_used as u8,
                         mmio = effective_mmio,
                         mask = connected_mask,
                     ),
@@ -8764,10 +8848,11 @@ mod tests {
         mailbox_visible_dimension, normalize_hub_tt_profile, normalize_pi4_xhci_mmio_hint,
         parse_xhci_capbase, text_backspace_target, text_row_count, text_viewport_height,
         translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode, vl805_cfg_preseed_needed,
-        vl805_runtime_cfg_touch_allowed, xhci_controller_params_from_probe,
-        xhci_firmware_handoff_hint_reason, xhci_handoff_command_restore_target,
-        xhci_irq_sink_needed, xhci_preseed_allows_static_legacy_fallbacks,
-        xhci_preseed_pin_only_reason, xhci_runtime_command_replay_allowed,
+        vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
+        xhci_controller_params_from_probe, xhci_firmware_handoff_hint_reason,
+        xhci_handoff_command_restore_target, xhci_irq_sink_needed,
+        xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
+        xhci_root_port_connected, xhci_runtime_command_replay_allowed,
         xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
         xhci_safe_mode_skip_command, ConfigDesc, Pi4SeatError, UsbKeyboard, Vl805CfgPreseedMode,
         XhciCapProbe, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -8798,6 +8883,25 @@ mod tests {
     #[test]
     fn parse_xhci_capbase_extracts_caplen_and_version() {
         assert_eq!(parse_xhci_capbase(0x0010_0040), (0x40, 0x0010));
+    }
+
+    #[test]
+    fn xhci_root_port_connected_uses_ccs_bit() {
+        assert!(!xhci_root_port_connected(0));
+        assert!(xhci_root_port_connected(usb_oxide::regs::PORTSC_CCS));
+        assert!(xhci_root_port_connected(
+            usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PED
+        ));
+    }
+
+    #[test]
+    fn xhci_connected_mask_from_portsc_sets_bits_for_connected_ports_only() {
+        let statuses = [
+            usb_oxide::regs::PORTSC_CCS,
+            0,
+            usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PED,
+        ];
+        assert_eq!(xhci_connected_mask_from_portsc(&statuses), 0b0101);
     }
 
     #[test]
@@ -8926,6 +9030,10 @@ mod tests {
             Some("fw-handoff-skip-iman-write")
         );
         assert_eq!(xhci_diag_stage_label(0x0208), Some("fw-handoff-iman-write"));
+        assert_eq!(xhci_diag_stage_label(0x0230), Some("reset-write"));
+        assert_eq!(xhci_diag_stage_label(0x0231), Some("reset-hcrst-timeout"));
+        assert_eq!(xhci_diag_stage_label(0x0232), Some("reset-cnr-timeout"));
+        assert_eq!(xhci_diag_stage_label(0x0233), Some("reset-complete"));
         assert_eq!(xhci_diag_stage_label(0x0241), Some("config-readback"));
         assert_eq!(xhci_diag_stage_label(0x0242), Some("dcbaap-readback"));
         assert_eq!(xhci_diag_stage_label(0x0243), Some("config-write"));
@@ -8935,8 +9043,15 @@ mod tests {
         );
         assert_eq!(xhci_diag_stage_label(0x0246), Some("config-readback-begin"));
         assert_eq!(xhci_diag_stage_label(0x0247), Some("dcbaap-readback-begin"));
+        assert_eq!(xhci_diag_stage_label(0x0248), Some("dcbaap-write-low"));
+        assert_eq!(xhci_diag_stage_label(0x0249), Some("dcbaap-write-high"));
+        assert_eq!(xhci_diag_stage_label(0x0244), Some("dcbaap-write"));
         assert_eq!(xhci_diag_stage_label(0x0251), Some("crcr-readback"));
+        assert_eq!(xhci_diag_stage_label(0x0252), Some("crcr-write"));
         assert_eq!(xhci_diag_stage_label(0x0253), Some("crcr-readback-begin"));
+        assert_eq!(xhci_diag_stage_label(0x0254), Some("crcr-write-low"));
+        assert_eq!(xhci_diag_stage_label(0x0255), Some("crcr-write-high"));
+        assert_eq!(xhci_diag_stage_label(0x0256), Some("dnctrl-write"));
         assert_eq!(xhci_diag_stage_label(0x0261), Some("runtime-ring-readback"));
         assert_eq!(xhci_diag_stage_label(0x0263), Some("usbsts-clear-ack"));
         assert_eq!(xhci_diag_stage_label(0x026b), Some("skip-imod-write"));
@@ -8945,6 +9060,8 @@ mod tests {
             xhci_diag_stage_label(0x026d),
             Some("runtime-ring-readback-begin")
         );
+        assert_eq!(xhci_diag_stage_label(0x026e), Some("erstba-write-low"));
+        assert_eq!(xhci_diag_stage_label(0x026f), Some("erstba-write-high"));
         assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-write"));
         assert_eq!(xhci_diag_stage_label(0x026a), Some("usbcmd-run-write"));
         assert_eq!(xhci_diag_stage_label(0x0270), Some("usbsts-run-readback"));
@@ -8966,6 +9083,8 @@ mod tests {
             xhci_diag_stage_label(0x0276),
             Some("controller-ready-poll-begin")
         );
+        assert_eq!(xhci_diag_stage_label(0x0277), Some("erdp-write-low"));
+        assert_eq!(xhci_diag_stage_label(0x0278), Some("erdp-write-high"));
         assert_eq!(xhci_diag_stage_label(0x0300), Some("cmd-submit"));
         assert_eq!(xhci_diag_stage_label(0x0301), Some("cmd-completion"));
         assert_eq!(xhci_diag_stage_label(0x0302), Some("cmd-fail"));
