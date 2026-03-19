@@ -365,6 +365,10 @@ static int xhci_pci_remove(struct udevice *dev)
 	int ret;
 
 	xhci_pci_emit_breadcrumb(dev, "remove-entry", 0);
+	xhci_pci_export_handoff_ready(0);
+	xhci_pci_export_irq_quiesced(0);
+	xhci_pci_export_halted(0);
+	xhci_pci_export_handoff_safe(0);
 	ret = xhci_deregister(dev);
 	if (ret) {
 		xhci_pci_emit_breadcrumb(dev, "remove-deregister", ret);

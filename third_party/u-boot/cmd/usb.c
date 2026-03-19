@@ -616,17 +616,23 @@ static int do_usb(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
 	}
 
 	if (strncmp(argv[1], "reset", 5) == 0) {
+		int ret;
+
 		printf("resetting USB...\n");
-		usb_stop();
+		ret = usb_stop();
+		if (ret)
+			return CMD_RET_FAILURE;
 		do_usb_start();
 		return 0;
 	}
 	if (strncmp(argv[1], "stop", 4) == 0) {
+		int ret;
+
 		if (argc != 2)
 			console_assign(stdin, "serial");
 		printf("stopping USB..\n");
-		usb_stop();
-		return 0;
+		ret = usb_stop();
+		return ret ? CMD_RET_FAILURE : 0;
 	}
 	if (!usb_started) {
 		printf("USB is stopped. Please issue 'usb start' first.\n");

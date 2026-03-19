@@ -566,7 +566,7 @@ impl Pi4LocalSeat {
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci handoff gate mmio=0x0000000600000000 token={} irq={} safe=1 action=reject-high-bar",
+                    "[local-seat] xhci handoff gate mmio=0x0000000600000000 token={} irq={} cmd_safe=1 action=reject-high-bar",
                     self.xhci_handoff_ready as u8,
                     self.xhci_irq_quiesced as u8,
                 ),
@@ -1330,7 +1330,7 @@ const fn xhci_safe_mode_skip_command(xhci_pci_cmd: Option<u16>) -> u16 {
 #[inline]
 fn xhci_runtime_mmio_candidate_allowed(
     mmio: usize,
-    has_safe_cfg_window: bool,
+    _has_safe_cfg_window: bool,
     _pinned_xhci_state: Option<(usize, bool)>,
     trusted_pinned_mmio: Option<usize>,
     _firmware_hint: Option<usize>,
@@ -1338,9 +1338,7 @@ fn xhci_runtime_mmio_candidate_allowed(
     _legacy_mirror_allowed: bool,
 ) -> bool {
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
-        has_safe_cfg_window
-            || trusted_pinned_mmio == Some(mmio)
-            || verified_vl805_hint == Some(mmio)
+        trusted_pinned_mmio == Some(mmio) || verified_vl805_hint == Some(mmio)
     } else if xhci_mmio_is_legacy_alias(mmio) {
         false
     } else {
@@ -1373,7 +1371,7 @@ fn xhci_runtime_mmio_has_accessible_window(
 #[inline]
 fn xhci_runtime_candidate_skip_reason(
     mmio: usize,
-    has_safe_cfg_window: bool,
+    _has_safe_cfg_window: bool,
     trusted_pinned_mmio: Option<usize>,
     firmware_hint: Option<usize>,
     verified_vl805_hint: Option<usize>,
@@ -1384,7 +1382,6 @@ fn xhci_runtime_candidate_skip_reason(
         "legacy-runtime-disabled"
     } else if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
         && firmware_hint == Some(mmio)
-        && !has_safe_cfg_window
         && trusted_pinned_mmio != Some(mmio)
         && verified_vl805_hint != Some(mmio)
     {
@@ -1532,6 +1529,17 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0274 => Some("usbsts-run-readback-begin"),
         0x0275 => Some("usbcmd-run-readback-begin"),
         0x0276 => Some("controller-ready-poll-begin"),
+        0x0300 => Some("cmd-submit"),
+        0x0301 => Some("cmd-completion"),
+        0x0302 => Some("cmd-fail"),
+        0x0303 => Some("cmd-ring-enqueue"),
+        0x0304 => Some("cmd-ccs-expected-ptr"),
+        0x0305 => Some("cmd-ccs-mismatch"),
+        0x0306 => Some("cmd-fail-state"),
+        0x0307 => Some("cmd-timeout"),
+        0x0308 => Some("cmd-wait-other-event"),
+        0x0309 => Some("cmd-timeout-state"),
+        0x030a => Some("cmd-timeout-last-event"),
         _ => None,
     }
 }
@@ -3707,6 +3715,16 @@ impl XhciIrqGuard {
         mmio: usize,
         firmware_handoff_quiesced: bool,
     ) -> Result<Option<Self>, &'static str> {
+        if xhci_polling_only_runtime(mmio, firmware_handoff_quiesced) {
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci irq policy mmio=0x{mmio:016x} mode=poll-only reason=fw-handoff-cold-start"
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         if !xhci_irq_sink_needed(mmio, firmware_handoff_quiesced) {
             return Ok(None);
         }
@@ -3834,8 +3852,17 @@ const fn xhci_shadow_irq_handoff_contract_reason(
 }
 
 #[inline]
-const fn xhci_irq_sink_needed(mmio: usize, firmware_handoff_quiesced: bool) -> bool {
+const fn xhci_polling_only_runtime(mmio: usize, firmware_handoff_quiesced: bool) -> bool {
     firmware_handoff_quiesced && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+}
+
+#[inline]
+const fn xhci_irq_sink_needed(_mmio: usize, _firmware_handoff_quiesced: bool) -> bool {
+    // Pi4 local-seat keeps xHCI in polling mode for the trusted firmware
+    // handoff path. Milestone 26/26b no longer reconstructs IRQ ownership
+    // inside root-task; if the bootloader contract says interrupts are not
+    // quiesced, the handoff is rejected before runtime reaches this point.
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -4108,7 +4135,7 @@ impl UsbKeyboard {
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci handoff gate mmio=0x{mmio:016x} token={} irq={} safe={} trusted-pin={}",
+                    "[local-seat] xhci handoff gate mmio=0x{mmio:016x} token={} irq={} cmd_safe={} trusted-pin={}",
                     xhci_handoff_ready as u8,
                     xhci_irq_quiesced as u8,
                     firmware_hint_safe as u8,
@@ -4333,6 +4360,23 @@ impl UsbKeyboard {
         }
         if candidate_count == 0 {
             boot_log::force_uart_line("[local-seat] xhci runtime candidate set empty");
+            if xhci_mmio_hint == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+                && xhci_firmware_handoff_safe(xhci_pci_cmd)
+                && (!xhci_handoff_ready || !xhci_irq_quiesced)
+            {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci runtime blocked action=reject-untrusted-high-bar reason={}",
+                        xhci_firmware_handoff_revoked_reason(
+                            xhci_handoff_ready,
+                            xhci_irq_quiesced,
+                        )
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
         }
         if !XHCI_DMA_POLICY_LOGGED.swap(true, Ordering::AcqRel) {
             let mut line = heapless::String::<224>::new();
@@ -4506,15 +4550,6 @@ impl UsbKeyboard {
                             ),
                         );
                     boot_log::force_uart_line(line.as_str());
-                    if firmware_handoff_quiesced
-                        && effective_mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
-                        && reason.starts_with("irq-shadow")
-                    {
-                        boot_log::force_uart_line(
-                            "[local-seat] xhci handoff rejected reason=irq-shadow-contract action=stop-runtime-probe",
-                        );
-                        break;
-                    }
                     continue;
                 }
             };
@@ -8931,12 +8966,26 @@ mod tests {
             xhci_diag_stage_label(0x0276),
             Some("controller-ready-poll-begin")
         );
+        assert_eq!(xhci_diag_stage_label(0x0300), Some("cmd-submit"));
+        assert_eq!(xhci_diag_stage_label(0x0301), Some("cmd-completion"));
+        assert_eq!(xhci_diag_stage_label(0x0302), Some("cmd-fail"));
+        assert_eq!(xhci_diag_stage_label(0x0303), Some("cmd-ring-enqueue"));
+        assert_eq!(xhci_diag_stage_label(0x0304), Some("cmd-ccs-expected-ptr"));
+        assert_eq!(xhci_diag_stage_label(0x0305), Some("cmd-ccs-mismatch"));
+        assert_eq!(xhci_diag_stage_label(0x0306), Some("cmd-fail-state"));
+        assert_eq!(xhci_diag_stage_label(0x0307), Some("cmd-timeout"));
+        assert_eq!(xhci_diag_stage_label(0x0308), Some("cmd-wait-other-event"));
+        assert_eq!(xhci_diag_stage_label(0x0309), Some("cmd-timeout-state"));
+        assert_eq!(
+            xhci_diag_stage_label(0x030a),
+            Some("cmd-timeout-last-event")
+        );
         assert_eq!(xhci_diag_stage_label(0x9999), None);
     }
 
     #[test]
-    fn xhci_irq_sink_only_arms_for_trusted_high_bar_handoff() {
-        assert!(xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true));
+    fn xhci_irq_sink_is_disabled_for_all_current_runtime_paths() {
+        assert!(!xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true));
         assert!(!xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, false));
         assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
@@ -9132,18 +9181,18 @@ mod tests {
         ));
         assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            true,
+            false,
             None,
-            None,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             None,
             None,
             false,
         ));
-        assert!(xhci_runtime_mmio_candidate_allowed(
+        assert!(!xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            false,
+            true,
             None,
-            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            None,
             None,
             None,
             false,
@@ -9166,6 +9215,18 @@ mod tests {
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             false,
         ));
+        assert_eq!(
+            xhci_runtime_candidate_skip_reason(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                true,
+                None,
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                None,
+                true,
+                false,
+            ),
+            "fw-handoff-unverified"
+        );
         assert!(!xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             false,
@@ -9520,19 +9581,31 @@ mod tests {
     }
 
     #[test]
-    fn xhci_shadow_irq_handoff_contract_rejects_revoke_first_recovery() {
-        assert_eq!(
-            super::xhci_shadow_irq_handoff_contract_reason(sel4_sys::seL4_NoError),
-            None
-        );
-        assert_eq!(
-            super::xhci_shadow_irq_handoff_contract_reason(sel4_sys::seL4_RevokeFirst),
-            Some("irq-shadow-owned")
-        );
-        assert_eq!(
-            super::xhci_shadow_irq_handoff_contract_reason(sel4_sys::seL4_DeleteFirst),
-            Some("irq-shadow-get-handler")
-        );
+    fn xhci_trusted_handoff_runs_polling_only() {
+        assert!(super::xhci_polling_only_runtime(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            true,
+        ));
+        assert!(!super::xhci_polling_only_runtime(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            true,
+        ));
+        assert!(!super::xhci_polling_only_runtime(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+        ));
+    }
+
+    #[test]
+    fn xhci_irq_sink_stays_disabled_for_polling_local_seat() {
+        assert!(!super::xhci_irq_sink_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            true,
+        ));
+        assert!(!super::xhci_irq_sink_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+        ));
     }
 
     #[test]

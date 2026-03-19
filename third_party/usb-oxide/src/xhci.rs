@@ -22,6 +22,7 @@ const STOP_WAIT_SPINS: usize = 10_000_000;
 const RESET_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_SPINS: usize = 10_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
+const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
 const PORT_ENABLE_WAIT_SPINS: usize = 10_000_000;
 const PORT_SETTLE_SPINS: usize = 100_000;
@@ -889,6 +890,8 @@ impl<H: Dma> XhciCtrl<H> {
     /// expected command completes.
     pub fn wait_command(&self, expected_cmd_trb: Option<u64>) -> Result<Trb> {
         let mut waited = 0usize;
+        let mut other_event_logs = 0usize;
+        let mut last_non_command_event = None;
         loop {
             let trb = {
                 let mut event_ring = self.event_ring.lock();
@@ -945,10 +948,44 @@ impl<H: Dma> XhciCtrl<H> {
                     }
                     return Ok(trb);
                 }
+
+                last_non_command_event = Some(trb);
+                if other_event_logs < COMMAND_WAIT_OTHER_EVENT_LOGS {
+                    emit_xhci_diag(
+                        0x0308,
+                        trb.param,
+                        ((trb.status as u64) << 32) | trb.control as u64,
+                        trb.trb_type() as u64,
+                    );
+                    other_event_logs = other_event_logs.saturating_add(1);
+                }
             }
 
             waited = waited.saturating_add(1);
             if waited >= COMMAND_WAIT_SPINS {
+                let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+                emit_xhci_diag(
+                    0x0307,
+                    waited as u64,
+                    expected_cmd_trb.unwrap_or(0) & !0x0f,
+                    self.read_op_u64(reg::CRCR),
+                );
+                emit_xhci_diag(
+                    0x0309,
+                    ((self.read_op::<u32>(reg::USBCMD) as u64) << 32)
+                        | self.read_op::<u32>(reg::USBSTS) as u64,
+                    ((self.read_reg::<u32>(int_base + reg::IMAN) as u64) << 32)
+                        | self.read_reg::<u32>(int_base + reg::ERSTSZ) as u64,
+                    self.read_op_u64(reg::DCBAAP),
+                );
+                if let Some(trb) = last_non_command_event {
+                    emit_xhci_diag(
+                        0x030a,
+                        trb.param,
+                        ((trb.status as u64) << 32) | trb.control as u64,
+                        trb.trb_type() as u64,
+                    );
+                }
                 return Err(UsbError::Timeout);
             }
             spin_loop();
