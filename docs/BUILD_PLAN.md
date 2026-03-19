@@ -6482,20 +6482,23 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (reviewer trust):**
-Milestones 25-26b establish technical capability, transport breadth, and Pi 4 bring-up evidence, but external reviewers still judge code quality from the visible authoring surface first. Milestone 26c removes template-heavy presentation, tightens comment/header policy, inventories every Markdown file, and widens the regression gate so cleanup is only complete when the full staged Test Plan passes on both QEMU and Pi 4.
+Milestones 25-26b establish technical capability, transport breadth, and Pi 4 bring-up evidence, but external reviewers still judge code quality from the visible authoring surface first. Milestone 26c removes template-heavy presentation, inventories tracked Markdown authoring surfaces, records docs-as-built truth before any tone cleanup, and widens the regression gate so cleanup is only complete when the target-qualified staged Test Plan passes on both QEMU and Pi 4.
 
 **Non-negotiable constraints:**
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a "humanizing" label.
 - Comment/header/doc rewrites must not hide semantic changes. Behavior-changing refactors require their own tests and doc updates in the same change.
+- Humanization is subtractive by default: delete generic restatement comments and repetitive prose before rewriting; retained comments must explain invariants, authority boundaries, limits, operator-visible behavior, or rationale.
 - Humanized documentation must remain auditable against the as-built system: generated snippets, manifest fingerprints, fixture outputs, release artifacts, and staged test evidence take precedence over prose.
 - Generic restatement comments ("Defines the X module", "Provides the Y library surface", "CLI entry point") are prohibited once 26c lands; comments must explain invariants, authority boundaries, limits, operator-visible behavior, or rationale.
 - Required file headers may be narrowed, reformatted, or reduced only by updating `AGENTS.md`, `CONTRIBUTING.md`, and `docs/CODING_GUIDELINES.md` in the same change.
+- Milestone 26c inventories tracked Markdown only via `git ls-files '*.md' | sort`; ignored or untracked build outputs, caches, local virtualenvs, nested dependency trees, and local evidence directories are excluded unless committed as canonical sources.
 - Large `root-task` and driver monoliths are not first-wave cleanup targets; extraction is allowed only when characterization tests already pin behavior.
 - Milestone 26c must not collapse host-side `std` capability into the seL4 build. VM-side Cohesix remains `no_std`; any "convergence" under 26c is limited to contracts, fixtures, generated artifacts, and explicitly `no_std`-safe semantic helpers.
-- `apps/root-task/src/ninedoor.rs` and `apps/nine-door/src/host/*` are runtime-boundary-sensitive surfaces. 26c may add documentation, characterization tests, parity evidence, and comment cleanup around them, but structural runtime extraction or host/VM adapter collapse is out of scope.
-- `docs/snippets/*.md`, release snapshot docs under `releases/**/*.md`, and other generated/derived documentation remain update-by-source artifacts; they are not to be hand-edited as a shortcut.
-- Vendored/reference Markdown under `third_party/**/*.md` is inventory-only unless provenance, licensing, or linkage is wrong.
-- Milestone closure is blocked until the full Test Plan succeeds on QEMU and Pi 4 with no `INCOMPLETE` markers.
+- Runtime-boundary-sensitive surfaces include `apps/root-task/src/ninedoor.rs`, `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, and `apps/nine-door/src/host/*`. 26c may add documentation, characterization tests, parity evidence, and targeted comment cleanup around them, but structural runtime extraction or host/VM adapter collapse is out of scope.
+- `docs/snippets/*.md`, `docs/nist/REPORT.md`, tracked release-cut docs, and other generated or derived documentation remain update-by-source artifacts; they are not to be hand-edited as a shortcut.
+- Tracked vendored/reference Markdown under `third_party/**/*.md` and tracked in-repo seL4/reference Markdown under `seL4/**/*.md` are inventory-only unless provenance, licensing, or linkage is wrong. If a nested external checkout exists, 26c inventories only the files tracked by the main Cohesix repository.
+- Multi-agent execution is mandatory for 26c scope: evidence generation, CI/test-plan plumbing, parity auditing, and cleanup work must have disjoint ownership so boundary-sensitive edits are not mixed with prose-only cleanup.
+- Milestone closure is blocked until the full target-qualified Test Plan succeeds on QEMU and Pi 4 with no `INCOMPLETE` markers, and Stage 05 verifies that required target artifacts exist in the active state dir before writing `stage_05.done`.
 
 ### Prerequisite
 - Milestone **26b** completed (Pi 4 DHCP baseline + QEMU compatibility guardrails).
@@ -6503,28 +6506,37 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 ### Goal
 Humanize the authored Cohesix code and documentation surfaces without protocol or behavioral regression by:
 1. replacing template-heavy comments and test naming with invariant-focused prose,
-2. classifying and reviewing every `*.md` file in the repository,
-3. auditing canonical documentation against generated artifacts, manifest outputs, and observed staged-run evidence before prose cleanup lands,
-4. recording the intentional host-`std` / VM-`no_std` runtime boundary and proving parity for overlapping NineDoor semantics without implying runtime merger,
-5. adding characterization/CI gates before touching riskier host-side cleanup targets or runtime-boundary-sensitive adapter code, and
-6. requiring the full staged Test Plan to pass on both QEMU and Pi 4 before closure.
+2. classifying and reviewing every tracked `*.md` file in the main Cohesix repository,
+3. auditing canonical documentation against generated artifacts, manifest outputs, scripts, and observed staged-run evidence before prose cleanup lands,
+4. recording the intentional host-`std` / VM-`no_std` runtime boundary and proving parity for overlapping NineDoor semantics across the actual operator-visible path without implying runtime merger,
+5. adding characterization, CI, and staged-run gates before touching riskier host-side cleanup targets or runtime-boundary-sensitive adapter code,
+6. humanizing low-risk docs and code only after the evidence and gate-expansion work is green, and
+7. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
 
-### Markdown review scope (all `*.md` files)
-Milestone 26c must inventory every Markdown file returned by:
-`rg --files -g '*.md' | sort`
+### Markdown review scope (tracked `*.md` only)
+Milestone 26c must inventory every tracked Markdown file returned by:
+`git ls-files '*.md' | sort`
+
+Ignored or untracked build outputs, caches, local virtualenvs, nested dependency trees, and local evidence directories are excluded unless they are committed canonical sources.
 
 The inventory MUST include and disposition these path classes:
 - root/project Markdown: `AGENTS.md`, `CONTRIBUTING.md`, `README.md`
 - app and crate READMEs: `apps/**/README.md`, `crates/**/README.md`, `tools/cohesix-py/README.md`, `tests/integration/README.md`
 - canonical product docs: `docs/*.md`
-- audit docs: `docs/audit/*.md`, `docs/audit/checklists/*.md`, `docs/nist/*.md`
+- live audit registers: `docs/audit/BLOCKERS.md`, `docs/audit/CONTROL_TRACEABILITY.md`, `docs/audit/DUE_DILIGENCE_PLAN.md`, `docs/audit/EXCEPTIONS.md`
+- dated audit evidence snapshots: `docs/audit/AUDIT_REPORT_*.md`
+- audit checklists: `docs/audit/checklists/**/*.md`
+- generated compliance reports: `docs/nist/REPORT.md`
 - generated or derived doc fragments: `docs/snippets/*.md`
-- release snapshot docs: `releases/**/*.md`
-- seL4/reference docs carried in-repo: `seL4/*.md`
-- vendored/reference Markdown: `third_party/**/*.md`
+- tracked release-cut docs: `releases/RELEASE_NOTES-*.md`, `releases/*/{README.md,QUICKSTART.md,RELEASE_NOTES.md}`, `releases/*/docs/**/*.md`, `releases/*/python/**/README.md`
+- tracked seL4/reference docs carried in-repo: `seL4/**/*.md`
+- tracked vendored/reference Markdown committed in-repo: `third_party/**/*.md`
 
 For each inventory entry, 26c must record one of:
 - human-edited canonical source,
+- live audit register / canonical,
+- audit evidence snapshot / append-only,
+- generated report / regenerate from source,
 - generated snippet / do not hand-edit,
 - release snapshot / update only during release cut,
 - vendored reference / review-only,
@@ -6534,31 +6546,36 @@ For each inventory entry, 26c must record one of:
 - **Style charter and authoring rules**
   - Update repository guidance so comments explain invariants, limits, threat boundaries, operator-visible behavior, or rationale rather than file names or obvious syntax.
   - Replace blanket "library surface/module for/CLI entry point" phrasing with file-specific documentation or remove it when it adds no information.
+  - Make subtractive cleanup the default: delete generic comments and repetitive prose instead of replacing them with different generic prose.
   - Define which boilerplate is still mandatory, which is derived, and which is prohibited.
 
-- **All-Markdown inventory and disposition**
-  - Produce a checked-in Markdown inventory/disposition table covering every `*.md` file under the repository root.
-  - Record which docs are canonical, generated, release-derived, reference-only, or vendored.
+- **Tracked Markdown inventory and disposition**
+  - Produce a checked-in machine-readable inventory/disposition source covering every tracked Markdown file in the main Cohesix repository.
+  - Render a human-readable report from that authoritative inventory source.
+  - Record which docs are canonical, generated, release-derived, append-only audit evidence, reference-only, or vendored.
   - Ensure release and snippet docs are traced back to their source artifacts instead of receiving ad-hoc prose edits.
 
-- **Docs-as-built audit before prose cleanup**
-  - Audit canonical docs against current generated snippets, resolved manifests, committed fixtures, release artifacts, and staged test evidence before rewriting for tone or readability.
+- **Docs-as-built audit and drift ledger before prose cleanup**
+  - Audit canonical docs against current generated snippets, resolved manifests, committed fixtures, release artifacts, script behavior, and staged test evidence before rewriting for tone or readability.
   - Record where documentation is sourced from compiler outputs, where it is manually maintained, and what exact commands prove alignment.
+  - Record every docs/script mismatch found during 26c in a checked-in drift ledger and close or explicitly defer it before cleanup lands.
   - Reject any humanizing change that makes prose nicer but less faithful to the observed system.
 
 - **Runtime boundary + semantic parity audit**
   - Record the intentional split between the host `std` NineDoor server and the VM `no_std` NineDoor bridge, including what may be shared, what must remain separate, and which crates/capabilities are forbidden inside the VM TCB.
-  - Produce a checked-in parity matrix for overlapping operator-visible semantics (`attach`, path validation, append-only behavior, selected `/proc`, `/log`, `/queen`, `/gpu/bridge`, and permission-denial surfaces) covering host and VM adapters.
+  - Produce a checked-in parity matrix for overlapping operator-visible semantics (`attach`, parser/ACK/ERR/END behavior, path validation, append-only behavior, selected `/proc`, `/log`, `/queen`, `/gpu/bridge`, and permission-denial surfaces) covering host and VM adapters.
+  - Treat `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, and `apps/root-task/src/lib.rs` as first-class VM parity inputs rather than treating `ninedoor.rs` as the entire VM-side boundary.
   - Treat undocumented divergence as a defect unless the surface is explicitly classified as host-only, VM-only, generated-only, or release-derived.
 
 - **Low-risk surface cleanup**
   - Clean up public crate surfaces, tiny modules, tests, READMEs, and operator docs first.
   - Prefer renaming tests, tightening doc comments, and deleting generic noise before any control-flow refactor.
+  - Keep runtime-boundary-sensitive files out of this wave unless the parity audit and characterization tests already cover the touched surface.
   - Keep changes behavior-preserving and small enough to review mechanically.
 
 - **Characterization and gate expansion**
-  - Add or expand tests around crates currently most exposed to cleanup risk and currently weaker in CI coverage, especially `coh`, `host-ticket-agent`, selected `root-task` helper modules, and the overlapping semantics exercised by `apps/nine-door` and `apps/root-task/src/ninedoor.rs`.
-  - Extend CI/test-plan execution so cleanup work in these areas is exercised automatically before merge, including a VM-target `no_std` boundary check and parity evidence capture for overlapping host/VM semantics.
+  - Add or expand tests around crates currently most exposed to cleanup risk and currently weaker in CI coverage, especially `coh`, `host-ticket-agent`, selected `root-task` helper modules, and the overlapping semantics exercised by `apps/nine-door` plus the root-task event/console path.
+  - Extend CI/test-plan execution so cleanup work in these areas is exercised automatically before merge, including root-task integration tests, a VM-target `no_std` boundary check, and parity evidence capture for overlapping host/VM semantics.
   - Fail the gate on protocol drift, fixture drift, or undocumented output changes.
 
 - **Selected structural cleanup**
@@ -6566,12 +6583,20 @@ For each inventory entry, 26c must record one of:
   - Focus on readability wins that reduce duplication or make invariants explicit, not aesthetic churn.
   - Defer monolithic kernel/driver rewrites until dedicated milestone work justifies the risk; 26c must not use readability as cover for merging host `std` runtime logic into the VM.
 
+- **Multi-agent execution plan**
+  - Run 26c in waves with disjoint ownership: one Planner lane for scope freeze and file ownership, one Auditor lane for inventory/provenance, one Auditor lane for docs-as-built and runtime-boundary evidence, one Builder lane for CI/test-plan plumbing, and cleanup Builder lanes only after the evidence lanes are green.
+  - Keep evidence generation, target-aware staged-run plumbing, and prose/code cleanup in separate changesets whenever possible so reviewer trust does not depend on reading mixed-purpose diffs.
+  - Do not allow concurrent cleanup edits on runtime-boundary-sensitive files while parity or gate-plumbing work is still in flight.
+
 - **QEMU + Pi 4 full regression evidence**
-  - Extend the staged Test Plan runner and docs so "PASS" can be asserted separately for QEMU and Pi 4 hardware runs using the same stage contract and evidence layout.
+  - Extend the staged Test Plan runner and docs so `PASS` can be asserted separately for QEMU and Pi 4 hardware runs using the same target-aware stage contract and evidence layout.
+  - Add an explicit `--target qemu|pi4` runner contract and reject unsupported target/stage combinations.
   - Require full successful completion of the Test Plan on QEMU and Pi 4 for milestone closure.
 
 ### Commands
-- `rg --files -g '*.md' | sort > out/audit/m26c_markdown_inventory.txt`
+- `git ls-files '*.md' | sort > out/audit/m26c_markdown_inventory.txt`
+- `cut -d, -f1 docs/audit/M26C_MARKDOWN_INVENTORY.csv | sed '1d' | sort > out/audit/m26c_markdown_inventory_checked_in.txt`
+- `diff -u out/audit/m26c_markdown_inventory.txt out/audit/m26c_markdown_inventory_checked_in.txt`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `scripts/check-generated.sh`
 - `cargo fmt --all -- --check`
@@ -6580,32 +6605,40 @@ For each inventory entry, 26c must record one of:
 - `cargo test -p nine-door --test integration`
 - `cargo test -p coh --features mock`
 - `cargo test -p host-ticket-agent`
+- `cargo test -p root-task --tests`
 - `cargo test -p root-task --lib`
-- `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel serial-console"`
-- `cargo tree -p root-task --target aarch64-unknown-none -e normal > out/audit/m26c_root_task_tree.txt`
+- `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"`
+- `cargo tree -p root-task --target aarch64-unknown-none -e normal --no-default-features --features "cohesix-dev" > out/audit/m26c_root_task_tree_qemu.txt`
+- `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"`
+- `cargo tree -p root-task --target aarch64-unknown-none -e normal --no-default-features --features "kernel bootstrap-trace serial-console net-console" > out/audit/m26c_root_task_tree_pi4.txt`
 - `scripts/ci/check_test_plan.sh`
-- `scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-qemu`
-- `COHESIX_TEST_TARGET=pi4 scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-pi4`
+- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26c-qemu`
+- `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26c-pi4`
 
 ### Checks (DoD)
-- Every Markdown file returned by `rg --files -g '*.md'` is present in the checked-in 26c inventory with an explicit disposition.
+- Every tracked Markdown file returned by `git ls-files '*.md'` is present exactly once in the checked-in 26c inventory with an explicit disposition and update rule.
+- The rendered Markdown inventory report is mechanically derived from the checked-in machine-readable inventory source.
 - Cohesix-authored canonical docs are audited against generated snippets, manifest fingerprints, fixture outputs, release artifacts, and staged-run evidence before and after prose cleanup.
+- Docs/script drift discovered during the audit is corrected or explicitly deferred with scope-safe rationale before humanizing edits are accepted.
 - Cohesix-authored canonical docs are rewritten to remove generic template prose and to describe the as-built system, invariants, or operator contract.
 - The checked-in 26c audit artifacts explicitly document the intentional host `std` / VM `no_std` boundary and do not imply runtime convergence where the design requires separate adapters.
-- Overlapping NineDoor semantics exercised by host and VM adapters are recorded in a parity matrix and backed by tests or staged-run evidence; undocumented differences are rejected.
-- Release snapshots, generated snippets, seL4 mirrors, and vendored docs are handled according to their disposition rules; no ad-hoc edits hide provenance.
+- Overlapping NineDoor semantics exercised by host and VM adapters are recorded in a parity matrix and backed by `apps/nine-door` tests plus `root-task` integration and library tests covering the actual event/console path; undocumented differences are rejected.
+- Release snapshots, generated snippets, generated compliance reports, seL4 mirrors, and vendored docs are handled according to their disposition rules; no ad-hoc edits hide provenance.
 - Low-risk code/comment cleanup lands with no console grammar, Secure9P semantics, manifest output, telemetry format, or release workflow drift.
 - Cleanup candidates previously excluded or weakly covered in CI have characterization tests and staged-run coverage before structural refactors are accepted.
-- VM-target boundary evidence demonstrates that the kernel/root-task build remains `no_std` and does not absorb host-only operator/tooling crates.
-- QEMU full Test Plan run is `PASS` via the staged runner with `stage_01.done` through `stage_05.done` and no `*.incomplete` markers.
-- Pi 4 full Test Plan run is `PASS` via the staged runner with the same stage completeness requirements and archived evidence/logs.
-- Milestone closure evidence includes before/after reviewer-facing artifacts: representative code diffs, Markdown inventory/disposition, QEMU test-plan state dir, Pi 4 test-plan state dir, and due-diligence outputs.
+- VM-target boundary evidence demonstrates that the kernel/root-task build remains `no_std` and does not absorb host-only operator/tooling crates across each closure profile, at minimum QEMU `cohesix-dev` and Pi 4 U-Boot.
+- QEMU full Test Plan run is `PASS` via the target-aware staged runner with `stage_01.done` through `stage_05.done`, required QEMU artifacts archived in the state dir, and no `*.incomplete` markers.
+- Pi 4 full Test Plan run is `PASS` via the target-aware staged runner with the same stage completeness requirements, required Pi 4 artifacts archived in the state dir, and no `*.incomplete` markers.
+- Stage 05 validates required target-qualified artifacts before writing `stage_05.done`.
+- Milestone closure evidence includes before/after reviewer-facing artifacts: representative code diffs, machine-readable Markdown inventory/disposition, rendered inventory report, QEMU test-plan state dir, Pi 4 test-plan state dir, parity audit artifacts, and due-diligence outputs.
 
 ### Compiler / docsystem touchpoints
 - `coh-rtc` generated snippets referenced by `docs/snippets/*.md` remain authoritative; 26c may only change their source schemas or generators, never hand-edit the derived snippet text.
-- Release snapshot documentation under `releases/**/*.md` remains derived from canonical docs and release packaging; if snapshot wording changes, the corresponding release-cut flow and notes must change in the same work.
-- `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
-- Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe and must not import host-side capabilities, transports, or provider crates into the VM build.
+- `docs/nist/REPORT.md` remains generated from its source registry; 26c may only update it through the proper generator flow.
+- Tracked release-cut documentation under `releases/RELEASE_NOTES-*.md`, `releases/*/{README.md,QUICKSTART.md,RELEASE_NOTES.md}`, `releases/*/docs/**/*.md`, and `releases/*/python/**/README.md` remains derived from canonical docs and release packaging; if snapshot wording changes, the corresponding release-cut flow and notes must change in the same work. Release-local validation outputs under `releases/**/out/**`, embedded virtualenv content under `releases/**/.venv*/**`, and other untracked byproducts are provenance inputs only and are not part of the 26c inventory.
+- `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, `scripts/ci/check_test_plan.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
+- Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe, must not import host-side capabilities, transports, or provider crates into the VM build, and must be reviewed against the archived per-profile dependency trees.
 
 ### Task Breakdown
 ```
@@ -6614,9 +6647,9 @@ Goal: Replace generic repository-wide authoring templates with explicit human-au
 Inputs: AGENTS.md, CONTRIBUTING.md, README.md, docs/CODING_GUIDELINES.md, docs/API_GUIDELINES.md, docs/BUILD_PLAN.md
 Changes:
   - AGENTS.md — narrow file-header requirements to legal/provenance metadata plus rules for when comments are required.
-  - CONTRIBUTING.md — codify review expectations for comment quality, diff shape, and no-regression cleanup sequencing.
+  - CONTRIBUTING.md — codify review expectations for comment quality, diff shape, subtractive cleanup, and no-regression sequencing.
   - README.md — align contributor-facing quality language with the new authoring policy.
-  - docs/CODING_GUIDELINES.md — define acceptable doc-comment content, prohibited template phrasing, and behavior-preserving cleanup rules.
+  - docs/CODING_GUIDELINES.md — define acceptable doc-comment content, prohibited template phrasing, when generic comments should be deleted rather than rewritten, and behavior-preserving cleanup rules.
   - docs/API_GUIDELINES.md — require interface docs to describe contracts, invariants, and failure modes instead of file/module summaries.
 Commands:
   - rg -n "Purpose:|Defines the|Provide(s)? the|CLI entry point|library and public module surface|module for" AGENTS.md CONTRIBUTING.md README.md docs/CODING_GUIDELINES.md docs/API_GUIDELINES.md
@@ -6628,54 +6661,60 @@ Deliverables:
   - Canonical authoring policy for human-readable code and docs without hidden behavior changes.
 
 Title/ID: m26c-markdown-inventory-and-disposition
-Goal: Inventory and disposition every Markdown file in the repository so canonical, generated, release-derived, and vendored docs are handled correctly.
-Inputs: `rg --files -g '*.md' | sort`, root/project docs, apps/**/README.md, crates/**/README.md, docs/**/*.md, releases/**/*.md, seL4/*.md, tests/integration/README.md, tools/**/*.md, third_party/**/*.md
+Goal: Inventory and disposition every tracked Markdown file in the main Cohesix repository so canonical, generated, release-derived, append-only, and vendored docs are handled correctly.
+Inputs: `git ls-files '*.md' | sort`, root/project docs, apps/**/README.md, crates/**/README.md, docs/**/*.md, tracked release-cut docs, seL4/**/*.md, tests/integration/README.md, tools/**/*.md, third_party/**/*.md
 Changes:
-  - docs/audit/M26C_MARKDOWN_INVENTORY.md — checked-in inventory/disposition table for every Markdown file returned by `rg --files -g '*.md'`.
+  - docs/audit/M26C_MARKDOWN_INVENTORY.csv — authoritative checked-in inventory/disposition source for every tracked Markdown file returned by `git ls-files '*.md'`.
+  - docs/audit/M26C_MARKDOWN_INVENTORY.md — rendered human-readable report derived from the checked-in inventory source.
   - docs/BUILD_PLAN.md — record milestone scope, disposition rules, and inventory obligations.
   - docs/REPO_LAYOUT.md — document Markdown path classes and which ones are canonical, derived, or vendored.
   - docs/SECURITY.md — capture documentation provenance rules for generated, release, and vendored Markdown when they influence audit evidence.
 Commands:
-  - rg --files -g '*.md' | sort > out/audit/m26c_markdown_inventory.txt
-  - diff -u out/audit/m26c_markdown_inventory.txt <(awk 'NR>2 {print $1}' docs/audit/M26C_MARKDOWN_INVENTORY.md)
+  - git ls-files '*.md' | sort > out/audit/m26c_markdown_inventory.txt
+  - cut -d, -f1 docs/audit/M26C_MARKDOWN_INVENTORY.csv | sed '1d' | sort > out/audit/m26c_markdown_inventory_checked_in.txt
+  - diff -u out/audit/m26c_markdown_inventory.txt out/audit/m26c_markdown_inventory_checked_in.txt
 Checks:
-  - Every repository Markdown file is accounted for exactly once in the checked-in inventory.
+  - Every tracked repository Markdown file is accounted for exactly once in the checked-in inventory.
   - Each entry has an explicit disposition and an update rule.
+  - The rendered report is mechanically derived from the machine-readable source.
 Deliverables:
-  - Auditable all-Markdown inventory and disposition table covering canonical docs, release snapshots, reference mirrors, and vendored material.
+  - Auditable Markdown inventory and disposition source/report pair covering canonical docs, release snapshots, audit evidence, reference mirrors, and vendored material.
 
 Title/ID: m26c-docs-as-built-audit
 Goal: Audit canonical documentation against the actual generated and observed system before any humanizing prose cleanup lands.
-Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md, docs/SECURE9P.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, docs/USERLAND_AND_CLI.md, docs/BOOT_REFERENCE.md, docs/FAILURE_MODES.md, docs/OPERATOR_WALKTHROUGH.md, README.md, docs/snippets/*.md, apps/root-task/src/generated/*, out/manifests/root_task_resolved.json, release bundles under releases/**, staged test evidence
+Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md, docs/SECURE9P.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, docs/USERLAND_AND_CLI.md, docs/BOOT_REFERENCE.md, docs/FAILURE_MODES.md, docs/OPERATOR_WALKTHROUGH.md, README.md, docs/snippets/*.md, apps/root-task/src/generated/*, out/manifests/root_task_resolved.json, tracked release-cut docs under releases/**, staged test evidence, scripts/ci/check_test_plan.sh
 Changes:
   - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md — trace each canonical doc surface to generated snippets, manifests, fixtures, release artifacts, or staged-run evidence.
+  - docs/audit/M26C_DOC_DRIFT_LEDGER.md — record docs/script drift discovered during the audit and the closure evidence for each item.
   - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/HOST_TOOLS.md + docs/SECURE9P.md + docs/SECURITY.md + docs/TEST_PLAN.md + docs/HARDWARE_BRINGUP.md + docs/USERLAND_AND_CLI.md + docs/BOOT_REFERENCE.md + docs/FAILURE_MODES.md + docs/OPERATOR_WALKTHROUGH.md + README.md — correct any prose that does not match the current as-built system before tone cleanup begins.
-  - docs/snippets/*.md + releases/**/*.md — verify provenance and regeneration paths; update only through the proper source or release-cut flow.
+  - docs/snippets/*.md + tracked release-cut docs under releases/** — verify provenance and regeneration paths; update only through the proper source or release-cut flow.
+  - scripts/ci/check_test_plan.sh — update whenever 26c changes authoritative test-plan commands, stage semantics, or target-qualified PASS requirements.
 Commands:
   - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
   - scripts/check-generated.sh
   - scripts/ci/check_test_plan.sh
 Checks:
-  - Canonical docs can be traced to current manifests, generated snippets, fixtures, release snapshots, or staged-run evidence.
-  - Any docs drift is corrected before humanizing edits are accepted.
+  - Canonical docs can be traced to current manifests, generated snippets, fixtures, release snapshots, script behavior, or staged-run evidence.
+  - Any docs/script drift is corrected or explicitly deferred with scope-safe rationale before humanizing edits are accepted.
 Deliverables:
-  - Auditable docs-as-built report proving documentation truth before presentation cleanup.
+  - Auditable docs-as-built report and drift ledger proving documentation truth before presentation cleanup.
 
 Title/ID: m26c-runtime-boundary-and-semantic-parity-audit
 Goal: Document the intentional host `std` / VM `no_std` runtime split and prove overlapping NineDoor semantics remain aligned without runtime convergence.
-Inputs: apps/root-task/src/ninedoor.rs, apps/root-task/tests/**, apps/nine-door/src/host/*.rs, apps/nine-door/tests/*.rs, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURE9P.md, docs/SECURITY.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
+Inputs: apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/root-task/src/log_buffer.rs, apps/root-task/src/lib.rs, apps/root-task/tests/**, apps/nine-door/src/host/*.rs, apps/nine-door/tests/*.rs, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURE9P.md, docs/SECURITY.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
 Changes:
   - docs/audit/M26C_RUNTIME_BOUNDARY_AUDIT.md — record VM TCB boundaries, forbidden host-side capabilities in the VM, and adapter ownership of host/VM surfaces.
   - docs/audit/M26C_NINEDOOR_PARITY_MATRIX.md — enumerate overlapping host/VM semantics, expected outputs, and evidence paths for each parity claim.
   - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURE9P.md + docs/SECURITY.md — replace any ambiguous "eventual merge" language with explicit boundary language: separate adapters, shared contracts only.
-  - apps/nine-door/tests/*.rs + apps/root-task/tests/** or existing root-task bridge tests — add/extend parity coverage for overlapping operator-visible surfaces without changing protocol grammar.
+  - apps/nine-door/tests/*.rs + apps/root-task/tests/** and host-mode root-task bridge tests — add or extend parity coverage for overlapping operator-visible surfaces without changing protocol grammar.
 Commands:
   - cargo test -p nine-door --test integration
+  - cargo test -p root-task --tests
   - cargo test -p root-task --lib
   - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
 Checks:
   - Checked-in audit artifacts state clearly that VM-side Cohesix remains `no_std` and that host `std` capability is not a valid convergence target.
-  - Every overlapping host/VM semantic surface in the parity matrix has either passing test evidence or an explicit host-only/VM-only disposition.
+  - Every overlapping host/VM semantic surface in the parity matrix has either passing test evidence from the relevant `apps/nine-door` and `root-task` test suites or an explicit host-only/VM-only disposition.
   - Canonical docs describe the runtime split as intentional architecture rather than an accidental temporary inconsistency.
 Deliverables:
   - Auditable runtime-boundary report and semantic-parity matrix that reduce drift risk without introducing runtime refactors.
@@ -6685,7 +6724,7 @@ Goal: Humanize the highest-visibility low-risk code and doc surfaces after docs-
 Inputs: apps/*/README.md, crates/**/README.md, tools/cohesix-py/README.md, tests/integration/README.md, public crate roots under apps/*/src/lib.rs, tests/**/*.rs, docs/OPERATOR_WALKTHROUGH.md, docs/QUICKSTART.md, docs/QUICKSTART_ALPHA.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
 Changes:
   - apps/*/README.md + crates/**/README.md + tools/cohesix-py/README.md + tests/integration/README.md — replace template summaries with role-specific descriptions, assumptions, and operator-facing boundaries.
-  - apps/*/src/lib.rs + apps/*/src/main.rs + crates/**/src/lib.rs — remove generic module-surface comments and rewrite doc comments around invariants or usage.
+  - apps/*/src/lib.rs + apps/*/src/main.rs + crates/**/src/lib.rs — remove generic module-surface comments and rewrite surviving doc comments around invariants or usage.
   - tests/**/*.rs — rename template-like test names/descriptions to scenario-driven names and tighten helper naming.
   - docs/OPERATOR_WALKTHROUGH.md + docs/QUICKSTART.md + docs/QUICKSTART_ALPHA.md — remove repetitive prose and keep operator sequences concrete.
 Commands:
@@ -6701,43 +6740,46 @@ Deliverables:
 
 Title/ID: m26c-characterization-gates-before-refactor
 Goal: Add characterization tests and merge gates around cleanup-sensitive crates before accepting structural refactors.
-Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, apps/coh/src/mount.rs, apps/host-ticket-agent/src/*.rs, apps/root-task/src/net/stack.rs, apps/root-task/src/ninedoor.rs, apps/nine-door/tests/*.rs, docs/TEST_PLAN.md
+Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/ci/check_test_plan.sh, apps/coh/src/mount.rs, apps/host-ticket-agent/src/*.rs, apps/root-task/src/net/stack.rs, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/nine-door/tests/*.rs, docs/TEST_PLAN.md
 Changes:
-  - .github/workflows/ci.yml — stop excluding cleanup-sensitive crates without compensating gate coverage, or add explicit targeted jobs for them.
-  - scripts/ci/test_plan_stage_02_host_fast.sh — exercise `coh`, `host-ticket-agent`, `nine-door` integration coverage, and VM-target boundary checks as first-class checks.
-  - docs/TEST_PLAN.md — document the expanded cleanup-target coverage, VM boundary evidence, and required artifact retention.
-  - apps/coh/src/mount.rs + apps/host-ticket-agent/src/*.rs + selected apps/root-task/src/* helpers + selected `apps/nine-door` / root-task bridge parity surfaces — add characterization tests for current outputs, errors, and state transitions before refactor.
+  - .github/workflows/ci.yml — stop excluding cleanup-sensitive crates without compensating gate coverage, or add explicit targeted jobs for `coh`, `host-ticket-agent`, `root-task`, and `nine-door` parity surfaces.
+  - scripts/ci/test_plan_stage_02_host_fast.sh — exercise `coh`, `host-ticket-agent`, `nine-door` integration coverage, `root-task --tests`, `root-task --lib`, and VM-target boundary checks as first-class checks.
+  - scripts/ci/check_test_plan.sh — enforce the updated target-aware staged-run contract and authoritative command matrix.
+  - docs/TEST_PLAN.md — document the expanded cleanup-target coverage, VM boundary evidence, target-qualified artifacts, and required artifact retention.
+  - apps/coh/src/mount.rs + apps/host-ticket-agent/src/*.rs + selected apps/root-task/src/* helpers + selected `apps/nine-door` and root-task parity surfaces — add characterization tests for current outputs, errors, and state transitions before refactor.
 Commands:
   - cargo test -p coh --features mock
   - cargo test -p host-ticket-agent
   - cargo test -p nine-door --test integration
+  - cargo test -p root-task --tests
   - cargo test -p root-task --lib
-  - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel serial-console"
   - scripts/ci/check_test_plan.sh
 Checks:
   - Cleanup-sensitive crates have deterministic tests that pin current operator-visible behavior.
-  - CI and staged test-plan coverage run those tests automatically and retain root-task VM-boundary evidence as an artifact.
+  - CI and staged test-plan coverage run those tests automatically and retain root-task VM-boundary evidence and target-qualified staged-run artifacts.
 Deliverables:
   - Regression safety net expanded ahead of structural cleanup.
 
 Title/ID: m26c-no-std-boundary-gates
-Goal: Add explicit CI and audit gates that fail if host-side capability leaks into the VM build.
-Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_stage_02_host_fast.sh, apps/root-task/Cargo.toml, apps/nine-door/Cargo.toml, docs/TEST_PLAN.md, docs/ARCHITECTURE.md
+Goal: Add explicit CI and audit gates that fail if host-side capability leaks into the VM build across the closure profiles used by 26c.
+Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_stage_02_host_fast.sh, apps/root-task/Cargo.toml, apps/nine-door/Cargo.toml, configs/root_task.toml, configs/root_task_pi4_uboot_aarch64.toml, docs/TEST_PLAN.md, docs/ARCHITECTURE.md
 Changes:
-  - .github/workflows/ci.yml — add a root-task kernel-target `no_std` check and archive the dependency tree artifact for audit review.
-  - scripts/ci/test_plan_stage_02_host_fast.sh — emit `out/audit/m26c_root_task_tree.txt` (or equivalent state-dir artifact) from the VM-target dependency tree as part of cleanup gating.
-  - docs/TEST_PLAN.md + docs/ARCHITECTURE.md — document the VM boundary gate, expected artifact, and interpretation rules.
+  - .github/workflows/ci.yml — add root-task VM-profile `no_std` checks and archive dependency-tree artifacts for the QEMU `cohesix-dev` and Pi 4 U-Boot closure profiles at minimum.
+  - scripts/ci/test_plan_stage_02_host_fast.sh — emit `out/audit/m26c_root_task_tree_qemu.txt` and `out/audit/m26c_root_task_tree_pi4.txt` (or equivalent state-dir artifacts) from the VM-target dependency tree as part of cleanup gating.
+  - docs/TEST_PLAN.md + docs/ARCHITECTURE.md — document the VM boundary gate, expected artifacts, and interpretation rules per closure profile.
   - docs/BUILD_PLAN.md — record that shared semantic helpers are allowed only when they remain `no_std`-safe and do not drag host-side crates into the VM build.
 Commands:
-  - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel serial-console"
-  - cargo tree -p root-task --target aarch64-unknown-none -e normal > out/audit/m26c_root_task_tree.txt
+  - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"
+  - cargo tree -p root-task --target aarch64-unknown-none -e normal --no-default-features --features "cohesix-dev" > out/audit/m26c_root_task_tree_qemu.txt
+  - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"
+  - cargo tree -p root-task --target aarch64-unknown-none -e normal --no-default-features --features "kernel bootstrap-trace serial-console net-console" > out/audit/m26c_root_task_tree_pi4.txt
   - scripts/ci/check_test_plan.sh
 Checks:
-  - The VM-target root-task build remains `no_std` and succeeds without host-side operator/tooling dependencies.
-  - The dependency-tree artifact is reviewed as part of 26c evidence and shows no accidental pull-in of host-only surfaces.
+  - The VM-target root-task build remains `no_std` and succeeds without host-side operator/tooling dependencies across the closure profiles.
+  - The dependency-tree artifacts are reviewed as part of 26c evidence and show no accidental pull-in of host-only surfaces.
   - Cleanup work cannot merge if boundary evidence is missing or contradicts the documented VM/host split.
 Deliverables:
-  - Explicit `no_std` boundary gate for cleanup-era work, reducing drift risk without touching runtime behavior.
+  - Explicit per-profile `no_std` boundary gate for cleanup-era work, reducing drift risk without touching runtime behavior.
 
 Title/ID: m26c-selected-host-structural-cleanup
 Goal: Refactor repetitive host-side validation and processing flows once characterization tests are in place.
@@ -6759,20 +6801,22 @@ Deliverables:
 
 Title/ID: m26c-full-test-plan-qemu-and-pi4
 Goal: Make full staged Test Plan PASS on both QEMU and Pi 4 the explicit closure gate for 26c.
-Inputs: docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/pi4-image-build.sh, scripts/uboot/qemu-uboot-smoke.sh
+Inputs: docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/ci/check_test_plan.sh, scripts/pi4-image-build.sh, scripts/uboot/qemu-uboot-smoke.sh
 Changes:
-  - docs/TEST_PLAN.md — define QEMU and Pi 4 execution matrices, evidence paths, and PASS criteria using the same staged contract.
+  - docs/TEST_PLAN.md — define QEMU and Pi 4 execution matrices, evidence paths, PASS criteria, and target-qualified artifact requirements using the same staged contract.
   - docs/HARDWARE_BRINGUP.md — document Pi 4 hardware setup, log capture, and operator prerequisites needed to run the full Test Plan.
-  - scripts/ci/test_plan_run.sh + scripts/ci/test_plan_stage_*.sh — add target selection and evidence handling so the same runner can execute and archive QEMU and Pi 4 runs.
+  - scripts/ci/test_plan_run.sh + scripts/ci/test_plan_stage_*.sh — add explicit `--target qemu|pi4` selection, reject unsupported target/stage combinations, and archive target-qualified evidence so the same runner can execute QEMU and Pi 4 runs without pretending the evidence is identical.
+  - scripts/ci/check_test_plan.sh — enforce alignment between target-aware docs, stage scripts, and authoritative commands.
   - scripts/pi4-image-build.sh — produce deterministic artifacts consumed by Pi 4 staged test-plan runs.
 Commands:
-  - scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-qemu
-  - COHESIX_TEST_TARGET=pi4 scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
-  - COHESIX_TEST_TARGET=pi4 scripts/ci/test_plan_run.sh --state-dir out/test-plan/m26c-pi4
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26c-qemu
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26c-pi4
 Checks:
   - The staged runner produces `stage_01.done` through `stage_05.done` for both QEMU and Pi 4 state dirs.
   - Neither state dir contains `*.incomplete` markers.
-  - Pi 4 evidence includes serial logs, network/console validation, and due-diligence outputs matching the documented PASS contract.
+  - Stage 05 verifies the required target-qualified artifacts exist before writing `stage_05.done`.
+  - Pi 4 evidence includes serial logs, network or console validation, and due-diligence outputs matching the documented PASS contract.
 Deliverables:
   - Full Test Plan PASS on QEMU and Pi 4 as the hard milestone exit criterion, with archived evidence for both targets.
 ```
