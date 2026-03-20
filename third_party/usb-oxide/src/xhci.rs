@@ -35,7 +35,8 @@ const USBLEGACY_BIOS_OWNED: u32 = 1 << 16;
 const USBLEGACY_OS_OWNED: u32 = 1 << 24;
 const EXT_CAP_SCAN_LIMIT: usize = 64;
 // Perform an explicit host controller reset after stop so ring/DCBAA
-// programming starts from a deterministic post-firmware baseline.
+// programming starts from a deterministic post-firmware baseline on generic
+// xHCI bring-up paths.
 const SKIP_HCRST_DURING_INIT: bool = false;
 // The Pi4 UEFI chain may already own xHCI; forcing BIOS/OS ownership handover
 // can fault on some firmware paths.
@@ -87,7 +88,17 @@ const fn halt_revalidation_needed(usbsts: u32) -> bool {
 
 #[inline(always)]
 const fn preserve_firmware_handoff_config(firmware_handoff_quiesced: bool) -> bool {
-    firmware_handoff_quiesced && SKIP_HCRST_DURING_INIT
+    skip_reset_during_init(firmware_handoff_quiesced)
+}
+
+#[inline(always)]
+const fn skip_reset_during_init(firmware_handoff_quiesced: bool) -> bool {
+    // On the trusted Pi4 firmware-handoff path, the controller is already
+    // halted and interrupt-quiesced by the bootloader contract. The first
+    // live HCRST write still provokes a fatal platform edge there, so adopt
+    // the handed-off controller state and reprogram ownership registers
+    // without forcing another reset.
+    firmware_handoff_quiesced || SKIP_HCRST_DURING_INIT
 }
 
 #[inline(always)]
@@ -594,7 +605,8 @@ impl<H: Dma> XhciCtrl<H> {
         // On the trusted Pi4 firmware-handoff path, the bootloader already
         // proved the controller was halted and safe. A fresh live op-register
         // read can still trigger irq 27 there, so skip revalidation entirely
-        // and make the first controller touch the HCRST write below.
+        // and keep the reset/ownership transition on the resetless adoption
+        // path below.
         if skip_live_halt_revalidation(self.firmware_handoff_quiesced) {
             emit_xhci_diag(0x0224, 0, reg::USBSTS_HCH as u64, 1);
         } else {
@@ -626,9 +638,9 @@ impl<H: Dma> XhciCtrl<H> {
             }
         }
 
-        if preserve_firmware_state {
+        if skip_reset_during_init(self.firmware_handoff_quiesced) {
             emit_xhci_diag(0x0234, 1, 0, 0);
-        } else if !SKIP_HCRST_DURING_INIT {
+        } else {
             // Reset controller
             emit_xhci_diag(0x0230, 0, 0, 0);
             self.write_op(reg::USBCMD, reg::USBCMD_HCRST);
@@ -661,8 +673,6 @@ impl<H: Dma> XhciCtrl<H> {
                 spin_loop();
             }
             emit_xhci_diag(0x0233, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
-        } else {
-            emit_xhci_diag(0x0234, 0, 0, 0);
         }
 
         // Configure controller
@@ -1510,11 +1520,14 @@ mod tests {
 
     #[test]
     fn firmware_handoff_preserves_config_register_programming() {
-        assert_eq!(
-            preserve_firmware_handoff_config(true),
-            SKIP_HCRST_DURING_INIT
-        );
+        assert!(preserve_firmware_handoff_config(true));
         assert!(!preserve_firmware_handoff_config(false));
+    }
+
+    #[test]
+    fn trusted_firmware_handoff_skips_reset_during_init() {
+        assert!(skip_reset_during_init(true));
+        assert_eq!(skip_reset_during_init(false), SKIP_HCRST_DURING_INIT);
     }
 
     #[test]

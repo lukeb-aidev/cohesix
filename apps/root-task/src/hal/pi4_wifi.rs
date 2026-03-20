@@ -3338,6 +3338,9 @@ impl SdioHost {
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-retry-assumed-committed attempt=2 err={retry_err} reason=socram-release-edge-timeout"
                     ));
+                    self.restore_window_cache_from_shadow(
+                        "core-reset-clear-retry-assumed-committed",
+                    );
                 }
             }
             if attempt == 0 {
@@ -3469,6 +3472,18 @@ impl SdioHost {
         let function = self.last_backplane_function_addr.unwrap_or(0);
         emit_breadcrumb(format_args!(
             "[pi4-wifi] sdhci recover stage={stage} mask=cmd+data cache=preserved restored_window=0x{restored_window:08x} shadow_window=0x{shadow_window:08x} fn=0x{function:05x}"
+        ));
+        self.log_transport_shadow(stage);
+    }
+
+    fn restore_window_cache_from_shadow(&mut self, stage: &'static str) {
+        self.programmed_backplane_window =
+            restore_programmed_backplane_window(self.last_backplane_window);
+        let restored_window = self.programmed_backplane_window.unwrap_or(0);
+        let shadow_window = self.last_backplane_window.unwrap_or(0);
+        let function = self.last_backplane_function_addr.unwrap_or(0);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdhci recover stage={stage} cache=restored restored_window=0x{restored_window:08x} shadow_window=0x{shadow_window:08x} fn=0x{function:05x}"
         ));
         self.log_transport_shadow(stage);
     }
@@ -4289,6 +4304,12 @@ mod tests {
             restore_programmed_backplane_window(Some(CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET)),
             Some(backplane_window_base(
                 CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET
+            )),
+        );
+        assert_eq!(
+            restore_programmed_backplane_window(Some(CYW43_SOCRAM_CORE_BASE + AI_IOCTRL_OFFSET)),
+            Some(backplane_window_base(
+                CYW43_SOCRAM_CORE_BASE + AI_IOCTRL_OFFSET
             )),
         );
         assert_eq!(restore_programmed_backplane_window(None), None);

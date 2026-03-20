@@ -3938,10 +3938,11 @@ enum XhciIrqSinkMode {
 #[inline]
 const fn xhci_irq_sink_mode(mmio: usize, firmware_handoff_quiesced: bool) -> XhciIrqSinkMode {
     if xhci_polling_only_runtime(mmio, firmware_handoff_quiesced) {
-        // The trusted Pi4 handoff stays polling-driven, but the first HCRST
-        // write can still surface the PCIe INTx line mapped by the bcm2711
-        // interrupt-map. Install only that bounded sink (GIC SPI 143 on Pi 4)
-        // and leave primary xHCI IRQ-driven ownership out of the runtime path.
+        // The trusted Pi4 handoff stays polling-driven, but the first live
+        // ownership transition can still surface the PCIe INTx line mapped by
+        // the bcm2711 interrupt-map. Install only that bounded sink (GIC SPI
+        // 143 on Pi 4) and leave primary xHCI IRQ-driven ownership out of the
+        // runtime path.
         XhciIrqSinkMode::IntxOnly
     } else {
         XhciIrqSinkMode::Disabled
