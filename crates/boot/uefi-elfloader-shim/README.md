@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Documents the uefi-elfloader-shim crate scope and usage. -->
 <!-- Author: Lukas Bower -->
@@ -20,7 +20,8 @@ ESP/
   startup.nsh             # shell script invoking BOOTAA64.EFI
 ```
 
-The repository does not currently ship a UEFI build/packaging helper; the
-authoritative plan for UEFI bring-up lives in `docs/BUILD_PLAN.md` (Milestone
-25a) and the current QEMU reference boot is documented in
-`docs/BOOT_REFERENCE.md`.
+The repository now ships a deterministic UEFI ESP packaging helper in
+`scripts/uefi/esp-build.sh`. This shim remains documentation-only; the
+authoritative plan for future platform-specific UEFI work lives in
+`docs/BUILD_PLAN.md`, while the current reference boot flows are documented in
+`docs/BOOT_REFERENCE.md` and `docs/AWS_AMI.md`.

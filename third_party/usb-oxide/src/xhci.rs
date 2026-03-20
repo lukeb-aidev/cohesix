@@ -90,6 +90,11 @@ const fn preserve_firmware_handoff_config(firmware_handoff_quiesced: bool) -> bo
     firmware_handoff_quiesced && SKIP_HCRST_DURING_INIT
 }
 
+#[inline(always)]
+const fn skip_live_halt_revalidation(firmware_handoff_quiesced: bool) -> bool {
+    firmware_handoff_quiesced
+}
+
 #[inline]
 const fn port_ready_for_enumeration(portsc: u32) -> bool {
     if (portsc & reg::PORTSC_CCS) == 0 {
@@ -484,11 +489,16 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Generic xHCI probing still needs to quiesce interrupt delivery
         // immediately after mapping, before any runtime register reads. On the
-        // Pi4 trusted-handoff path, firmware may already have halted the
-        // controller, but runtime still applies the same write-only interrupt
-        // scrub so the first ownership write does not surface a stale IRQ.
+        // Pi4 trusted-handoff path, the first pre-reset operational write has
+        // proven unsafe, so runtime stays read-only until live halt
+        // revalidation/HCRST and only emits the skip breadcrumbs here.
         emit_xhci_diag(0x0106, op_offset as u64, rt_base as u64, int_base as u64);
-        Self::write_only_polling_scrub(mmio, op_offset, int_base, false);
+        Self::write_only_polling_scrub(
+            mmio,
+            op_offset,
+            int_base,
+            params.firmware_handoff_quiesced,
+        );
         emit_xhci_diag(
             0x0107,
             USBSTS_CLEAR_MASK as u64,
@@ -581,44 +591,39 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0212, 0, 0, 0);
         }
 
-        // Trusted firmware handoff still needs a live halt revalidation before
-        // HCRST. U-Boot always rechecks STS_HALT, clears RUN if needed, and
-        // then waits for the controller to report halted.
-        let usbcmd = masked_usbcmd(self.read_op::<u32>(reg::USBCMD));
-        let usbsts = self.read_op::<u32>(reg::USBSTS);
-        emit_xhci_diag(
-            0x0220,
-            usbcmd as u64,
-            usbsts as u64,
-            self.firmware_handoff_quiesced as u64,
-        );
-        if !SKIP_STOP_DURING_INIT && halt_revalidation_needed(usbsts) {
-            if (usbcmd & reg::USBCMD_RUN) != 0 {
-                emit_xhci_diag(0x0221, usbcmd as u64, self.firmware_handoff_quiesced as u64, 0);
-                self.write_op(reg::USBCMD, usbcmd & !reg::USBCMD_RUN);
-            }
-            let mut waited = 0usize;
-            while halt_revalidation_needed(self.read_op::<u32>(reg::USBSTS)) {
-                waited = waited.saturating_add(1);
-                if waited >= STOP_WAIT_SPINS {
-                    emit_xhci_diag(
-                        0x0222,
-                        waited as u64,
-                        self.read_op::<u32>(reg::USBSTS) as u64,
-                        self.firmware_handoff_quiesced as u64,
-                    );
-                    return Err(UsbError::Timeout);
-                }
-                spin_loop();
-            }
-            emit_xhci_diag(
-                0x0223,
-                self.read_op::<u32>(reg::USBSTS) as u64,
-                self.firmware_handoff_quiesced as u64,
-                0,
-            );
+        // On the trusted Pi4 firmware-handoff path, the bootloader already
+        // proved the controller was halted and safe. A fresh live op-register
+        // read can still trigger irq 27 there, so skip revalidation entirely
+        // and make the first controller touch the HCRST write below.
+        if skip_live_halt_revalidation(self.firmware_handoff_quiesced) {
+            emit_xhci_diag(0x0224, 0, reg::USBSTS_HCH as u64, 1);
         } else {
-            emit_xhci_diag(0x0224, usbcmd as u64, usbsts as u64, self.firmware_handoff_quiesced as u64);
+            let usbcmd = masked_usbcmd(self.read_op::<u32>(reg::USBCMD));
+            let usbsts = self.read_op::<u32>(reg::USBSTS);
+            emit_xhci_diag(0x0220, usbcmd as u64, usbsts as u64, 0);
+            if !SKIP_STOP_DURING_INIT && halt_revalidation_needed(usbsts) {
+                if (usbcmd & reg::USBCMD_RUN) != 0 {
+                    emit_xhci_diag(0x0221, usbcmd as u64, 0, 0);
+                    self.write_op(reg::USBCMD, usbcmd & !reg::USBCMD_RUN);
+                }
+                let mut waited = 0usize;
+                while halt_revalidation_needed(self.read_op::<u32>(reg::USBSTS)) {
+                    waited = waited.saturating_add(1);
+                    if waited >= STOP_WAIT_SPINS {
+                        emit_xhci_diag(
+                            0x0222,
+                            waited as u64,
+                            self.read_op::<u32>(reg::USBSTS) as u64,
+                            0,
+                        );
+                        return Err(UsbError::Timeout);
+                    }
+                    spin_loop();
+                }
+                emit_xhci_diag(0x0223, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
+            } else {
+                emit_xhci_diag(0x0224, usbcmd as u64, usbsts as u64, 0);
+            }
         }
 
         if preserve_firmware_state {
@@ -1418,6 +1423,7 @@ impl<H: Dma> XhciCtrl<H> {
 mod tests {
     use super::{
         XhciControllerParams, halt_revalidation_needed, masked_usbcmd,
+        skip_live_halt_revalidation,
         parse_controller_params, polling_iman_value,
         preserve_firmware_handoff_config, split_u64_reg_write_ops,
         port_ready_for_enumeration,
@@ -1494,6 +1500,12 @@ mod tests {
         assert!(halt_revalidation_needed(0));
         assert!(halt_revalidation_needed(reg::USBSTS_CNR));
         assert!(!halt_revalidation_needed(reg::USBSTS_HCH));
+    }
+
+    #[test]
+    fn trusted_firmware_handoff_skips_live_halt_revalidation() {
+        assert!(skip_live_halt_revalidation(true));
+        assert!(!skip_live_halt_revalidation(false));
     }
 
     #[test]

@@ -164,8 +164,7 @@ const WAIT_MS_MIN_SPINS: usize = 10_000;
 const WAIT_MS_MAX_SPINS: usize = 25_000_000;
 const USB_PROGRESS_TICK_MS: usize = 1_000;
 const USB_PROGRESS_MAX_DOTS: usize = 64;
-const PI4_VL805_XHCI_IRQ: u32 = 143;
-const PI4_VL805_XHCI_LEGACY_IRQ: u32 = 27;
+const PI4_VL805_XHCI_INTX_IRQ: u32 = 143;
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
@@ -1499,7 +1498,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x020a => Some("fw-handoff-skip-usbsts-clear-write"),
         0x020b => Some("fw-handoff-skip-imod-write"),
         0x020c => Some("fw-handoff-skip-iman-write"),
-        0x0224 => Some("fw-handoff-skip-stop"),
+        0x0224 => Some("fw-handoff-skip-stop-revalidation"),
         0x0230 => Some("reset-write"),
         0x0231 => Some("reset-hcrst-timeout"),
         0x0232 => Some("reset-cnr-timeout"),
@@ -3784,38 +3783,43 @@ impl XhciIrqGuard {
         mmio: usize,
         firmware_handoff_quiesced: bool,
     ) -> Result<Option<Self>, &'static str> {
-        if xhci_polling_only_runtime(mmio, firmware_handoff_quiesced) {
-            let mut line = heapless::String::<192>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] xhci irq policy mmio=0x{mmio:016x} mode=poll-only reason=fw-handoff-cold-start"
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-        }
-        if !xhci_irq_sink_needed(mmio, firmware_handoff_quiesced) {
+        let sink_mode = xhci_irq_sink_mode(mmio, firmware_handoff_quiesced);
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci irq policy mmio=0x{mmio:016x} mode={} reason={}",
+                match sink_mode {
+                    XhciIrqSinkMode::Disabled => "poll-only",
+                    XhciIrqSinkMode::IntxOnly => "poll-only+pcie-intx-sink",
+                },
+                if firmware_handoff_quiesced {
+                    "fw-handoff-cold-start"
+                } else {
+                    "runtime-default"
+                }
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+
+        if matches!(sink_mode, XhciIrqSinkMode::Disabled) {
             return Ok(None);
         }
 
         let env = hal.as_env_mut();
         let depth = crate::sel4::word_bits() as u8;
         let root_cnode = env.init_cnode_cap();
-        let legacy_shadow = Self::install_binding(
-            env,
-            root_cnode,
-            depth,
-            mmio,
-            PI4_VL805_XHCI_LEGACY_IRQ,
-            true,
-        )?;
-        let primary =
-            Self::install_binding(env, root_cnode, depth, mmio, PI4_VL805_XHCI_IRQ, false)?
-                .ok_or("irq-set-notification")?;
+
+        let intx_binding = match sink_mode {
+            XhciIrqSinkMode::IntxOnly => {
+                Self::install_binding(env, root_cnode, depth, mmio, PI4_VL805_XHCI_INTX_IRQ, false)?
+            }
+            XhciIrqSinkMode::Disabled => None,
+        };
 
         Ok(Some(Self {
             root_cnode,
-            bindings: [Some(primary), legacy_shadow],
+            bindings: [None, intx_binding],
         }))
     }
 }
@@ -3925,13 +3929,31 @@ const fn xhci_polling_only_runtime(mmio: usize, firmware_handoff_quiesced: bool)
     firmware_handoff_quiesced && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XhciIrqSinkMode {
+    Disabled,
+    IntxOnly,
+}
+
 #[inline]
-const fn xhci_irq_sink_needed(_mmio: usize, _firmware_handoff_quiesced: bool) -> bool {
-    // Pi4 local-seat keeps xHCI in polling mode for the trusted firmware
-    // handoff path. Milestone 26/26b no longer reconstructs IRQ ownership
-    // inside root-task; if the bootloader contract says interrupts are not
-    // quiesced, the handoff is rejected before runtime reaches this point.
-    false
+const fn xhci_irq_sink_mode(mmio: usize, firmware_handoff_quiesced: bool) -> XhciIrqSinkMode {
+    if xhci_polling_only_runtime(mmio, firmware_handoff_quiesced) {
+        // The trusted Pi4 handoff stays polling-driven, but the first HCRST
+        // write can still surface the PCIe INTx line mapped by the bcm2711
+        // interrupt-map. Install only that bounded sink (GIC SPI 143 on Pi 4)
+        // and leave primary xHCI IRQ-driven ownership out of the runtime path.
+        XhciIrqSinkMode::IntxOnly
+    } else {
+        XhciIrqSinkMode::Disabled
+    }
+}
+
+#[inline]
+const fn xhci_irq_sink_needed(mmio: usize, firmware_handoff_quiesced: bool) -> bool {
+    !matches!(
+        xhci_irq_sink_mode(mmio, firmware_handoff_quiesced),
+        XhciIrqSinkMode::Disabled
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -4612,14 +4634,14 @@ impl UsbKeyboard {
                 Err(reason) => {
                     let mut line = heapless::String::<224>::new();
                     let _ = core::fmt::Write::write_fmt(
-                            &mut line,
-                            format_args!(
-                                "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} detail={reason}",
-                                mmio = effective_mmio
-                            ),
-                        );
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} detail={reason} action=fallback-poll-only",
+                            mmio = effective_mmio
+                        ),
+                    );
                     boot_log::force_uart_line(line.as_str());
-                    continue;
+                    None
                 }
             };
 
@@ -9030,6 +9052,10 @@ mod tests {
             Some("fw-handoff-skip-iman-write")
         );
         assert_eq!(xhci_diag_stage_label(0x0208), Some("fw-handoff-iman-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0224),
+            Some("fw-handoff-skip-stop-revalidation")
+        );
         assert_eq!(xhci_diag_stage_label(0x0230), Some("reset-write"));
         assert_eq!(xhci_diag_stage_label(0x0231), Some("reset-hcrst-timeout"));
         assert_eq!(xhci_diag_stage_label(0x0232), Some("reset-cnr-timeout"));
@@ -9103,8 +9129,12 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_sink_is_disabled_for_all_current_runtime_paths() {
-        assert!(!xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true));
+    fn xhci_irq_sink_mode_only_enables_pcie_intx_sink_for_trusted_high_handoff() {
+        assert_eq!(
+            xhci_irq_sink_mode(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true),
+            XhciIrqSinkMode::IntxOnly
+        );
+        assert!(xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true));
         assert!(!xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, false));
         assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
@@ -9716,14 +9746,18 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_sink_stays_disabled_for_polling_local_seat() {
-        assert!(!super::xhci_irq_sink_needed(
+    fn xhci_irq_sink_keeps_untrusted_paths_disabled() {
+        assert!(super::xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             true,
         ));
         assert!(!super::xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             false,
+        ));
+        assert!(!super::xhci_irq_sink_needed(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            true,
         ));
     }
 

@@ -300,6 +300,11 @@ const fn core_ctrl_reset_clear_access_mode_label() -> &'static str {
 }
 
 #[inline]
+const fn core_ctrl_reset_clear_retry_access_mode_label() -> &'static str {
+    "cmd52-byte-current-window retry=preserved-cache"
+}
+
+#[inline]
 const fn core_ctrl_postreset_access_mode_label() -> &'static str {
     "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
 }
@@ -426,6 +431,24 @@ const fn core_reset_needs_clear_reset_prewrite_settle(base: u32, attempt: usize)
 #[inline]
 const fn core_reset_can_retry_clear_reset_write(base: u32, attempt: usize) -> bool {
     base == CYW43_SOCRAM_CORE_BASE && attempt == 0
+}
+
+#[inline]
+fn is_sdhci_command_error(err: &HalError) -> bool {
+    matches!(err, HalError::Unsupported("sdhci-command-error"))
+}
+
+#[inline]
+fn core_reset_can_assume_clear_reset_retry_commit(
+    base: u32,
+    offset: u32,
+    attempt: usize,
+    err: &HalError,
+) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE
+        && offset == AI_RESETCTRL_OFFSET
+        && attempt == 0
+        && is_sdhci_command_error(err)
 }
 
 #[inline]
@@ -2858,6 +2881,28 @@ impl SdioHost {
         }
     }
 
+    fn core_ctrl_reset_clear_retry_current_window_write8(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+    ) -> Result<(), HalError> {
+        match self.core_ctrl_windowed_write8(base, offset, value) {
+            Ok(()) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl reset-clear stage=cmd52-current-window-ok base=0x{base:08x} off=0x{offset:03x} cache=preserved value=0x{value:02x}"
+                ));
+                Ok(())
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-clear-retry base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-current-window err={err}"
+                ));
+                Err(err)
+            }
+        }
+    }
+
     fn core_ctrl_postreset_write8(
         &mut self,
         base: u32,
@@ -2997,6 +3042,31 @@ impl SdioHost {
             core_ctrl_reset_clear_access_mode_label(),
         );
         if let Err(err) = self.core_ctrl_reset_clear_write8(base, offset, value) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
+            ));
+            self.log_transport_shadow(stage);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn core_ctrl_reset_clear_retry_current_window_write8_logged(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        log_core_ctrl_reset_write(
+            base,
+            offset,
+            value,
+            core_ctrl_reset_clear_retry_access_mode_label(),
+        );
+        if let Err(err) =
+            self.core_ctrl_reset_clear_retry_current_window_write8(base, offset, value)
+        {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
             ));
@@ -3247,14 +3317,28 @@ impl SdioHost {
                     CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS,
                 );
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-retry attempt=2 path=cmd53-word-windowed value=0x00"
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-retry attempt=2 path=cmd52-byte-current-window value=0x00 cache=preserved"
                 ));
-                self.core_ctrl_reset_clear_write8_logged(
-                    base,
-                    AI_RESETCTRL_OFFSET,
-                    0,
-                    "clear-reset-retry",
-                )?;
+                if let Err(retry_err) = self
+                    .core_ctrl_reset_clear_retry_current_window_write8_logged(
+                        base,
+                        AI_RESETCTRL_OFFSET,
+                        0,
+                        "clear-reset-retry",
+                    )
+                {
+                    if !core_reset_can_assume_clear_reset_retry_commit(
+                        base,
+                        AI_RESETCTRL_OFFSET,
+                        attempt,
+                        &retry_err,
+                    ) {
+                        return Err(retry_err);
+                    }
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-retry-assumed-committed attempt=2 err={retry_err} reason=socram-release-edge-timeout"
+                    ));
+                }
             }
             if attempt == 0 {
                 bounded_spin_settle("cyw43-core-reset-clear", CYW43_CORE_CONTROL_SETTLE_LOOPS);
@@ -4080,6 +4164,10 @@ mod tests {
             "cmd53-word-windowed fallback=cmd52-byte-current-window"
         );
         assert_eq!(
+            core_ctrl_reset_clear_retry_access_mode_label(),
+            "cmd52-byte-current-window retry=preserved-cache"
+        );
+        assert_eq!(
             core_ctrl_postreset_access_mode_label(),
             "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
         );
@@ -4158,6 +4246,42 @@ mod tests {
         assert!(!core_reset_can_retry_clear_reset_write(
             CYW43_ARMCR4_CORE_BASE,
             0,
+        ));
+        assert!(is_sdhci_command_error(&HalError::Unsupported(
+            "sdhci-command-error"
+        )));
+        assert!(!is_sdhci_command_error(&HalError::Unsupported(
+            "sdhci-int-timeout"
+        )));
+        assert!(core_reset_can_assume_clear_reset_retry_commit(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            0,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_assume_clear_reset_retry_commit(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            0,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_assume_clear_reset_retry_commit(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            0,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_assume_clear_reset_retry_commit(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            1,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_assume_clear_reset_retry_commit(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            0,
+            &HalError::Unsupported("sdhci-int-timeout"),
         ));
         assert!(core_reset_clear_preserves_window_cache());
         assert!(!core_reset_clear_allows_immediate_rewindow_fallback());

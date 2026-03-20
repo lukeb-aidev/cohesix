@@ -6843,14 +6843,25 @@ Provide **bounded, crash‑resilient on‑device persistence** for:
 2) minimal settings (A/B committed pages),
 exposed through NineDoor without expanding the TCB.
 
+This milestone is **not** an extension of the existing host-side sidecar spool mounted at `/bus/<adapter>/spool`. That spool remains an in-memory, nonpersistent sidecar facility. Milestone 27 introduces a distinct **VM-local persistent spool** under `/proc/spool/*`.
+
 ### Deliverables
 
-#### A) Storage plumbing (hardware + QEMU parity)
-- Block‑device abstraction in HAL (role‑selected devices, not model‑selected).
-- QEMU reference uses `virtio-blk`; hardware path is profile‑gated and documented.
-- Manifest gates for persistence features; no `std` dependencies.
+#### A) Compiler + manifest admission
+- New `persistence.*` IR fields in `coh-rtc` for:
+  - spool bounds (`max_bytes`, `max_record_bytes`, `mode`)
+  - settings bounds and page sizing
+  - storage device/region declaration for profiles that enable persistence
+- Persistence config is **separate** from existing `sidecars.*.adapters[].spool`; the names must not be reused or overloaded.
+- Generated docs snippets and manifest validation reject persistence when the selected boot profile does not declare a compatible storage region.
 
-#### B) Telemetry spool store (append‑only ring log)
+#### B) Storage plumbing (hardware + QEMU parity)
+- Block-device abstraction in HAL (role-selected devices, not model-selected).
+- Root-task storage binding is authoritative for the Pi 4 / seL4 path; host `nine-door` may mirror the same semantics for tests, but does not define them.
+- QEMU reference uses `virtio-blk`; hardware path is profile-gated and documented.
+- No `std` dependencies, no POSIX VFS, no general filesystem.
+
+#### C) Telemetry spool store (append‑only ring log)
 - Backing: fixed‑size block region/partition.
 - Record format (versioned, bounded): `magic | version | kind | seq | ts | len | crc | payload`.
 - Crash rule: a record is valid only if header + checksum validate; partial tail records are ignored.
@@ -6862,16 +6873,20 @@ exposed through NineDoor without expanding the TCB.
   - `/proc/spool/append` (write‑only, one record per write)
   - `/proc/spool/read` (bounded read stream)
   - `/proc/spool/ack` (write‑only cursor advance)
+- Existing `/bus/<adapter>/spool` semantics remain unchanged and continue to describe host-side sidecar buffering only.
 
-#### C) Settings store (A/B committed pages)
+#### D) Settings store (A/B committed pages)
 - Two fixed pages/blocks with `generation + checksum`.
 - Update semantics: write inactive page fully, validate checksum, then commit by generation.
 - Bounded settings size; strict UTF‑8 validation and max key/value lengths (if KV).
+- Settings are limited to **runtime-owned local settings**. They explicitly exclude:
+  - network mode/interface/static IP/Wi-Fi credentials already persisted by the Pi 4 U-Boot flow in `cohesix.env`
+  - manifest-authored defaults or other boot-authoritative policy values already mirrored via `/chosen/cohesix,*`
 
-#### D) Identity binding
+#### E) Identity binding
 - Spool/settings metadata binds to the **manifest fingerprint** from 26 (e.g., recorded in `/proc/boot`), without introducing new trust roots.
 
-#### E) Testing + regression hardening
+#### F) Testing + regression hardening
 - Crash‑fault simulation tests for both stores (power loss at every write boundary).
 - Fuzz record decoder with strict size limits; reject malformed frames.
 - Golden fixture: known block image → expected `status/read/ack` behavior.
@@ -6889,55 +6904,85 @@ exposed through NineDoor without expanding the TCB.
 - Spool append/read/ack semantics are deterministic and bounded; invalid tail records after crash are ignored.
 - Store/forward works offline and resumes correctly after reboot.
 - Settings updates are atomic across power loss (A/B semantics).
+- Runtime settings do not duplicate or override the Pi 4 U-Boot-owned network/Wi-Fi persistence contract.
 - No general filesystem or POSIX surface introduced.
 - VM vs Pi 4 boot profile semantics remain byte‑stable unless explicitly profile‑gated.
 - Regression pack passes unchanged; new tests are additive.
 
 ### Compiler touchpoints
-- `coh-rtc` emits persistence limits (record size, max bytes, policy mode) into manifest IR; docs import the generated snippets.
-- Manifest validation rejects persistence when storage devices are missing or mis‑declared for the Pi 4 boot profile.
+- `coh-rtc` emits persistence limits (record size, max bytes, policy mode), settings bounds, and profile storage declarations into manifest IR; docs import the generated snippets.
+- Manifest validation rejects persistence when storage devices are missing or mis-declared for the selected boot profile.
+- Persistence IR is distinct from existing sidecar spool IR; docs and generated clients must keep those surfaces disambiguated.
 
 ### Task Breakdown
 ```
-Title/ID: m27-spool-core
-Goal: Implement append‑only spool store over bounded block device.
-Inputs: HAL block traits, docs/ARCHITECTURE.md, docs/INTERFACES.md.
+Title/ID: m27-persistence-ir
+Goal: Admit persistent spool/settings in compiler IR without overloading existing sidecar spool semantics.
+Inputs: tools/coh-rtc, docs/ARCHITECTURE.md, docs/INTERFACES.md.
 Changes:
-  - apps/root-task/src/storage/spool.rs — ring log + checksum validation.
-  - apps/root-task/src/hal/block.rs — block traits + role‑selected device binding.
+  - tools/coh-rtc/src/ir.rs — `persistence.*` schema, validation, and profile gating.
+  - tools/coh-rtc/src/codegen/{docs,rust,cohsh}.rs — generated limits and snippet updates.
+Commands:
+  - cargo test -p coh-rtc
+Checks:
+  - Persistence and sidecar spool configs are distinct; invalid storage declarations are rejected.
+Deliverables:
+  - Compiler-enforced persistence admission with docs snippets refreshed.
+
+Title/ID: m27-block-hal
+Goal: Add bounded block-device plumbing for persistent regions.
+Inputs: apps/root-task/src/hal/, docs/ARCHITECTURE.md.
+Changes:
+  - apps/root-task/src/hal/block.rs — block traits + role-selected device binding.
+  - apps/root-task/src/storage/layout.rs — persistent region selection and bounds.
 Commands:
   - cargo test -p root-task --test spool
 Checks:
-  - Partial tail records are ignored; bounded scan time enforced.
+  - QEMU `virtio-blk` path and profile-gated hardware path resolve the same bounded block contract.
 Deliverables:
-  - Spool store core with deterministic semantics.
+  - HAL storage plumbing for the persistent spool/settings layers.
 
-Title/ID: m27-spool-namespace
-Goal: Expose spool nodes via NineDoor.
-Inputs: apps/nine-door, docs/INTERFACES.md.
+Title/ID: m27-root-spool-namespace
+Goal: Implement persistent spool semantics in root-task and expose `/proc/spool/*` via the in-VM NineDoor bridge.
+Inputs: apps/root-task/src/ninedoor.rs, docs/ARCHITECTURE.md, docs/INTERFACES.md.
 Changes:
-  - apps/nine-door/src/host/spool.rs — /proc/spool nodes.
-  - apps/nine-door/src/host/namespace.rs — mount spool provider.
+  - apps/root-task/src/storage/spool.rs — ring log + checksum validation.
+  - apps/root-task/src/ninedoor.rs — `/proc/spool/{status,append,read,ack}` provider and policy enforcement.
+Commands:
+  - cargo test -p root-task --test spool
+Checks:
+  - Partial tail records are ignored; bounded scan time and ack semantics are enforced in the VM path.
+Deliverables:
+  - Authoritative seL4/root-task persistent spool namespace.
+
+Title/ID: m27-host-spool-mirror
+Goal: Mirror persistent spool semantics in host `nine-door` for host-mode tests without changing the VM contract owner.
+Inputs: apps/nine-door, root-task spool semantics, docs/INTERFACES.md.
+Changes:
+  - apps/nine-door/src/host/spool.rs — host-mode spool provider.
+  - apps/nine-door/src/host/namespace.rs — mount persistent spool provider for tests.
 Commands:
   - cargo test -p nine-door --test spool
 Checks:
-  - Append/read/ack paths enforce quotas and policy mode.
+  - Host-mode provider matches root-task spool semantics byte-for-byte for canonical fixtures.
 Deliverables:
-  - Spool namespace documented and wired.
+  - Test mirror of the persistent spool namespace.
 
 Title/ID: m27-settings-store
-Goal: Implement A/B settings persistence with atomic commit.
+Goal: Implement A/B settings persistence for runtime-owned local settings only.
 Inputs: HAL block traits, docs/ARCHITECTURE.md.
 Changes:
   - apps/root-task/src/storage/settings.rs — A/B pages + checksum.
+  - docs/ARCHITECTURE.md / docs/INTERFACES.md — explicit exclusion of U-Boot-owned network/Wi-Fi settings.
 Commands:
   - cargo test -p root-task --test settings
 Checks:
   - Power‑loss simulations yield either old or new state, never corruption.
+  - Settings keys exclude U-Boot-owned network/Wi-Fi fields and manifest-authored boot policy.
 Deliverables:
-  - Settings store with atomic semantics.
+  - Settings store with atomic semantics and a single-source-of-truth boundary.
 
-Title/ID: m27-spool-regressions
+Title/ID: m27-persistence-regressions
 Goal: Add deterministic regression scripts and fixtures.
 Inputs: scripts/cohsh/, tests/fixtures/.
 Changes:
@@ -6961,13 +7006,18 @@ By this stage Cohesix is architecturally complete, SMP-aware, and Pi 4 bare-meta
 
 This milestone delivers a small, opinionated set of host-side utilities that read existing file-shaped state and artifacts. They do not mutate system state, do not self-heal, and do not bypass policy.
 
+Milestone 28 is a **convergence milestone**. It does not create a second trace format or a second reproducibility artifact. Instead:
+- the existing `cohsh-core` / `cohsh` trace format remains the canonical trace substrate;
+- the existing `coh evidence pack` / `coh evidence timeline` surface remains the canonical reproducibility pack;
+- this milestone fills the missing operator-facing commands and makes those existing foundations compose cleanly.
+
 ---
 
 ## Goal
 Provide a coherent operator toolkit that:
 1. Explains current system state (`inspect`)
-2. Records and replays control-plane behavior (`trace`)
-3. Produces self-contained reproducibility artifacts (`bundle`)
+2. Reuses canonical trace artifacts for deterministic diagnostics (`trace`)
+3. Produces self-contained reproducibility artifacts without inventing a second pack format (`bundle`)
 4. Compares system state and policy deterministically (`diff`)
 5. Verifies device identity and attestation evidence (`attest`)
 
@@ -6985,6 +7035,8 @@ All tools must be:
 - No new protocols or transports
 - No mutation of authority, policy, or state
 - No dependency on POSIX filesystem semantics inside the VM
+- No second trace recorder/replayer distinct from the existing `cohsh-core` trace stack
+- No second bundle/evidence artifact format distinct from `coh evidence pack`
 
 ---
 
@@ -7016,29 +7068,30 @@ Exit codes:
 
 ---
 
-### 2) `coh trace` — Deterministic Record & Replay
+### 2) `trace` — Canonical Trace Consumption
 
 **Purpose:**  
-Capture and replay control-plane behavior for debugging, testing, and UI validation.
+Consume the existing deterministic trace format for debugging, testing, and operator diagnostics without defining a parallel recorder.
 
 Capabilities:
-- Record Secure9P frames + ACK/ERR
-- Snapshot relevant `/proc/*` state at trace boundaries
-- Emit `.trace` artifacts with bounded size
+- Reuse `.trace` artifacts emitted by the existing `cohsh` / `cohsh-core` stack
+- Correlate traces with relevant `/proc/*` and evidence-pack state when available
 - Replay traces against:
   - `cohsh`
   - SwarmUI Live Hive
+  - read-only field diagnostics surfaces that consume the same shared core
 
 Constraints:
 - No live mutation during replay
 - Byte-identical ACK/ERR ordering required
+- No second trace grammar, schema, or recorder is introduced by this milestone
 
 ---
 
-### 3) `coh bundle` — Reproducibility Pack
+### 3) `bundle` — Canonical Reproducibility Pack
 
 **Purpose:**  
-Produce a single, self-contained artifact for bug reports, audits, and incident review.
+Produce a single, self-contained artifact for bug reports, audits, and incident review by extending the existing `coh evidence pack` / `coh evidence timeline` workflow rather than creating a new pack format.
 
 Bundle contents (bounded):
 - Manifest + resolved manifest hash
@@ -7052,6 +7105,10 @@ Output:
 - Deterministic directory or archive layout
 - No secrets unless explicitly authorized
 - Hash recorded and printed
+
+Canonical surface:
+- `coh evidence pack` remains the primary CLI
+- If a `coh bundle` alias is later added, it must be a thin alias over the exact same artifact layout and tests
 
 ---
 
@@ -7095,7 +7152,7 @@ This command is binary by design and suitable for CI and compliance workflows.
 ---
 
 ## Implementation Scope
-- Host tools under `apps/coh/` (or equivalent)
+- Host tools centered on `apps/coh/` with shared read-only internals reusable by `coh-status` and SwarmUI where appropriate
 - Reuse existing parsing and transport crates
 - No changes to VM-side authority logic
 - Minimal, additive code only
@@ -7115,8 +7172,8 @@ This command is binary by design and suitable for CI and compliance workflows.
 
 ## Testing & Validation
 - Golden output fixtures for each command
-- Bundle → diff → inspect roundtrip tests
-- Trace capture + replay regression
+- Evidence-pack/bundle → diff → inspect roundtrip tests
+- Trace replay regression using the existing canonical trace fixtures
 - Attestation positive and negative cases
 - Tools must operate correctly against:
   - QEMU single-core
@@ -7129,8 +7186,8 @@ This command is binary by design and suitable for CI and compliance workflows.
 - All tools produce deterministic output
 - No tool mutates system state
 - No new protocols introduced
-- Trace replay yields byte-identical ACK/ERR
-- Bundles are sufficient for offline diagnosis
+- Trace replay yields byte-identical ACK/ERR using the existing canonical trace format
+- Canonical evidence packs/bundles are sufficient for offline diagnosis
 - Documentation reflects as-built behavior
 
 ---
@@ -7142,6 +7199,13 @@ After Milestone 28:
 - Operators can reason about state without guesswork
 - Support and integration costs drop sharply
 - The control plane remains small, auditable, and boring
+
+## Sharpened Implementation Sequence
+1. Add `coh inspect` as a read-only synthesis over existing `/proc/*`, fleet, and evidence-pack state.
+2. Keep `coh evidence pack` / `coh evidence timeline` as the canonical reproducibility artifact; if `bundle` is exposed, make it a thin alias only.
+3. Add `coh diff` against live targets and canonical evidence packs.
+4. Add `coh attest` over `/proc/boot` + `/proc/attest/*` with trust-anchor validation.
+5. Reuse the existing trace substrate for pack correlation and diagnostics; do not add a second trace recorder.
 
 ## Milestone 28b — Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents <a id="28b"></a>
 [Milestones](#Milestones)
@@ -7370,25 +7434,32 @@ After Milestone 28b:
 **Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect Pi 4 boot profile semantics and attestation outputs.
 
 **Goal**
-Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection of boot/attest data using the existing TCP console transport (or offline trace replay), without adding any in-VM 9P/TCP listener.
+Provide `coh-status` as a **small read-only CLI** for local field inspection of boot/attest data using the existing TCP console transport and offline artifacts, without adding any in-VM 9P/TCP listener and without introducing a second UI stack.
 
 **Non-Goals**
 - Repo-wide SPDX/NOTICE header sweeps (track separately; not required for the status tool).
+- A separate Tauri/UI variant; SwarmUI already occupies the UI role.
+- Generic shell verbs (`echo`, `spawn`, arbitrary writes) or any write-capable façade over `/queen/ctl`.
 
 **Deliverables**
-- `coh-status` binary reading `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via the existing TCP console transport; offline-friendly.
-- TPM attestation check displaying manifest fingerprint and verifying against cached reference.
-- Shared CBOR parsing code with SwarmUI to preserve grammar.
+- `coh-status` binary with:
+  - default read-only status summary
+  - `attest` subcommand for manifest/evidence verification
+  - offline replay/snapshot mode for field diagnostics
+- Shared read-only status/snapshot core reused by `coh inspect`, `coh attest`, SwarmUI, and `coh-status`.
+- Shared offline snapshot/CBOR parsing code extracted from existing SwarmUI logic so grammar stays aligned.
+- Status-specific fixtures proving read-only behavior; no `/queen/ctl` writes in the canonical `coh-status` test flows.
 
 **Commands**
 - `cargo build -p coh-status`
-- `cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh`
-- `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
+- `cargo run -p coh-status -- --help`
+- `cargo run -p coh-status -- offline --trace tests/fixtures/traces/trace_v0.trace`
+- `cargo run -p coh-status -- attest --help`
 
 **Checks (DoD)**
 - Works offline; wrong/expired ticket → deterministic `ERR reason=Permission` surfaced to user.
-- CBOR parsing identical to SwarmUI; transcript diff zero for shared flows.
-- Abuse case: attempt to write via coh-status returns ERR and does not mutate state.
+- Shared snapshot/CBOR parsing identical to SwarmUI for overlapping flows.
+- Abuse case: attempt to write via `coh-status` returns deterministic denial and does not mutate state.
 - UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 **Compiler touchpoints**
@@ -7397,32 +7468,58 @@ Provide `coh-status` tool (CLI or minimal Tauri) for local read-only inspection 
 **Task Breakdown**
 ```
 Title/ID: m29-status-tool
-Goal: Build coh-status for offline/local status reads over 9P/TCP.
-Inputs: apps/coh-status/, Pi 4 boot profile manifest outputs, attestation nodes.
+Goal: Build a real read-only `coh-status` CLI on top of shared inspect/attest internals.
+Inputs: apps/coh-status/, shared host-tool status core, Pi 4 boot profile manifest outputs, attestation nodes.
 Changes:
-  - apps/coh-status/src/main.rs — read-only client using cohsh-core; offline cache for attest data.
+  - apps/coh-status/src/main.rs — status CLI entrypoint with read-only subcommands only.
   - apps/coh-status/tests/offline.rs — simulate offline read and expired ticket.
 Commands:
   - cargo build -p coh-status
-  - cargo run -p coh-status -- --script scripts/cohsh/boot_v0.coh
+  - cargo run -p coh-status -- --help
 Checks:
   - Expired ticket returns ERR; offline cache used when transport unavailable.
 Deliverables:
   - Tool usage documented in docs/HARDWARE_BRINGUP.md and docs/USERLAND_AND_CLI.md.
 
+Title/ID: m29-shared-snapshot-core
+Goal: Extract shared read-only snapshot/CBOR parsing for SwarmUI and `coh-status`.
+Inputs: apps/swarmui snapshot/cache code, apps/coh-status, shared host-tool internals.
+Changes:
+  - shared status/snapshot module — read-only offline artifact decoding.
+  - apps/coh-status/src/lib.rs — consume shared snapshot/trace helpers.
+Commands:
+  - cargo test -p coh-status --test offline
+  - cargo test -p swarmui --test trace
+Checks:
+  - Shared offline parsing stays byte-stable across SwarmUI and `coh-status`.
+Deliverables:
+  - Shared read-only snapshot core with no duplicate parsers.
+
 Title/ID: m29-attest-verify
-Goal: Verify TPM attestation parsing parity with SwarmUI.
-Inputs: /proc/attest outputs, SwarmUI CBOR parsers.
+Goal: Verify TPM attestation parsing parity with the shared host-tool stack.
+Inputs: /proc/attest outputs, shared attestation helpers.
 Changes:
   - apps/coh-status/src/attest.rs — verify manifest fingerprint against cached reference.
-  - shared CBOR decoder module reused from SwarmUI/cohsh-core.
+  - shared attestation verifier reused by `coh inspect` / `coh attest` where applicable.
 Commands:
   - cargo test -p coh-status --test attest
-  - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
 Checks:
-  - Malformed attestation rejected with ERR; valid attestation matches manifest hash identically to SwarmUI.
+  - Malformed attestation rejected with ERR; valid attestation matches manifest hash identically to the shared verifier.
 Deliverables:
   - Verified attestation workflow documented; regression outputs stored.
+
+Title/ID: m29-readonly-regressions
+Goal: Replace generic convergence fixtures with `coh-status`-specific read-only flows.
+Inputs: apps/coh-status/tests/, tests/fixtures/transcripts/, docs/TEST_PLAN.md.
+Changes:
+  - apps/coh-status/tests/transcript.rs — read-only status transcript only.
+  - tests/fixtures/transcripts/ — `coh-status` fixtures with no `/queen/ctl` writes.
+Commands:
+  - cargo test -p coh-status --test transcript
+Checks:
+  - Canonical `coh-status` flows read `/proc/boot`, `/proc/attest/*`, and selected telemetry without mutating state.
+Deliverables:
+  - Field-tech read-only transcript fixtures and explicit docs.
 
 ```
 
@@ -7433,22 +7530,46 @@ Deliverables:
 Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is the read-only ESP image (UEFI loader + kernel + rootserver + manifest).
 
 **Goal**  
-Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**. The root-task acts as a 9P client over the existing TCP stack; no new in-VM listeners are introduced beyond the console.
+Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
+
+Milestone 30 builds on the **existing generic UEFI ESP/QEMU baseline** already present in the repo. Its job is to add the **AWS-specific delta**: AWS profile admission, ENA, outbound bootstrap, optional IMDSv2, and AMI registration.
 
 **Deliverables**
-- EFI System Partition containing:
+#### A) AWS compiler + profile admission
+- Dedicated AWS Arm64 profile and manifest vocabulary for:
+  - `ena` as a network backend
+  - ENA queue bounds
+  - bootstrap retry limits
+  - signed fabric bootstrap manifest requirements
+  - optional IMDSv2 allowlist and bounded response sizes
+
+#### B) EFI System Partition integration for AWS
+- Reuse the existing deterministic ESP builder as the canonical packager and produce an AWS-consumable ESP image containing:
   - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
   - `kernel.elf`
   - `rootserver` (root task ELF)
   - optional `initrd.cpio`
   - `manifest.json` and `manifest.sha256`
   - embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors)
-- ENA driver (adminq + single TX/RX queue) in root-task.
-- Reuse the Milestone 26b `no_std` DHCP core and add ENA binding + TCP/TLS client integration in root-task (post-seL4), with no firmware networking.
-- Diskless bootstrap path **after seL4**: ENA → DHCP (26b core) → TCP → TLS → 9door mount.
-- Optional IMDSv2 bootstrap (instance identity + config) using a bounded, allowlisted HTTP client over the existing TCP stack. No listeners; no background refresh loop.
-- AMI registration tooling for Arm64 (`uefi` / `uefi-preferred`).
-- Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery.
+
+#### C) ENA driver (adminq + single TX/RX queue) in root-task
+- ENA adminq + completion path
+- Minimal polling dataplane with single TX/RX queue pair
+
+#### D) Outbound bootstrap core after seL4
+- Reuse the Milestone 26b `no_std` DHCP core and add ENA binding
+- Add bounded **outbound** TCP connection management
+- Add bounded TLS client support
+- Add a minimal outbound Secure9P/9door mount client
+- Diskless bootstrap path **after seL4**: ENA → DHCP (26b core) → outbound TCP → TLS → 9door mount
+
+#### E) Optional IMDSv2 bootstrap
+- Optional IMDSv2 bootstrap (instance identity + config) using a bounded, allowlisted HTTP client over the outbound TCP stack
+- No listeners; no background refresh loop
+
+#### F) AMI registration tooling
+- AWS scripts for ESP image registration and smoke tests for Arm64 (`uefi` / `uefi-preferred`)
+- Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery
 
 **Commands**
 - `cmake --build seL4/build --target elfloader.efi`
@@ -7467,6 +7588,7 @@ Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-t
 
 **Compiler touchpoints**
 - `coh-rtc` emits:
+  - AWS profile / backend admission for `ena`
   - ENA queue bounds and bootstrap retry limits.
   - Fabric bootstrap manifest schema and signature requirements.
   - IMDSv2 allowlist, max response bytes, and retry bounds (optional gate).
@@ -7474,12 +7596,25 @@ Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-t
 
 **Task Breakdown**
 ```
+Title/ID: m30-aws-profile
+Goal: Admit AWS/ENA/IMDS bootstrap in compiler IR and profile selection before runtime implementation.
+Inputs: tools/coh-rtc, configs/, docs/AWS_AMI.md.
+Changes:
+- tools/coh-rtc/src/ir.rs — AWS profile, `ena` backend, bounded bootstrap schema.
+- tools/coh-rtc/src/codegen/{docs,rust}.rs — generated AWS/profile snippets.
+Commands:
+- cargo test -p coh-rtc
+Checks:
+- Runtime code can consume authoritative AWS/ENA/IMDS limits from generated outputs.
+Deliverables:
+- Compiler-defined AWS admission with docs snippets updated.
+
 Title/ID: m30-uefi-esp
-Goal: Build an EFI System Partition for AWS Arm64 using elfloader + seL4 artifacts.
+Goal: Reuse the existing deterministic ESP builder for AWS Arm64 packaging.
 Inputs: upstream elfloader EFI build, `scripts/uefi/esp-build.sh`, manifest outputs.
 Changes:
-- `scripts/uefi/esp-build.sh` — build ESP with BOOTAA64.EFI, kernel, rootserver, optional initrd, manifest + hash.
-- `scripts/aws/build-esp.sh` — produce AMI-ready ESP image.
+- `scripts/uefi/esp-build.sh` — remain the canonical ESP builder for Cohesix.
+- `scripts/aws/build-esp.sh` — thin AWS wrapper producing an AMI-ready ESP image from the canonical builder output.
 Commands:
 - cmake --build seL4/build --target elfloader.efi
 - scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json
@@ -7516,12 +7651,12 @@ Checks:
 Deliverables:
 - Deterministic dataplane invariants documented.
 
-Title/ID: m30-net-bootstrap
-Goal: Network bootstrap to fabric (post-seL4, in root-task).
+Title/ID: m30-outbound-bootstrap-core
+Goal: Add bounded outbound TCP/TLS/session primitives required before fabric mount.
 Inputs: apps/root-task net stack, TLS helpers, docs/AWS_AMI.md.
 Changes:
 - apps/root-task/src/net/dhcp.rs — adapt/reuse Milestone 26b DHCP core for ENA link and AWS-specific bounds.
-- apps/root-task/src/net/tcp.rs — TCP bring-up for long-lived sessions.
+- apps/root-task/src/net/tcp.rs — outbound TCP session support for long-lived sessions.
 - apps/root-task/src/net/tls.rs — fabric-auth TLS handshake.
 - apps/root-task/src/net/bootstrap.rs — deterministic sequencing and retries.
 Commands:

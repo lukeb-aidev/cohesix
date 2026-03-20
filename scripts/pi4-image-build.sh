@@ -25,9 +25,11 @@ FLASH_DISK=""
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net-console"
 SKIP_BUILD=0
+CLEAN_BUILD=0
 PI4_TOTAL_MEM_MB=2048
 RESTORE_CANONICAL_CODEGEN=0
 PI4_DTB_PADDED_SIZE=$((128 * 1024))
+U_BOOT_CROSS_COMPILE="aarch64-linux-gnu-"
 
 usage() {
     cat <<'USAGE'
@@ -56,6 +58,8 @@ Options:
                             (default: cohesix-image-arm-bcm2711)
   --root-task-features <f>  Comma-separated root-task feature list
                             (default: kernel,bootstrap-trace,serial-console,net-console)
+  --clean                   Clean and rebuild root-task, Pi4 seL4/U-Boot outputs,
+                            and the Pi 4 U-Boot binary before staging/flashing
   --skip-build              Skip rebuild and reuse existing seL4 image in sel4 build dir
   --flash-disk <device>     Erase + flash SD card (example: /dev/disk16)
   --disk-label <name>       FAT32 label when flashing (default: COHESIX)
@@ -342,6 +346,155 @@ configure_cpio_path() {
     log "Using cpio: ${cpio_bin}"
 }
 
+prepend_path_var() {
+    local var_name="$1"
+    local path="$2"
+    local current="${!var_name:-}"
+
+    case ":${current}:" in
+        *":${path}:"*) ;;
+        *)
+            if [[ -n "${current}" ]]; then
+                printf -v "${var_name}" '%s:%s' "${path}" "${current}"
+            else
+                printf -v "${var_name}" '%s' "${path}"
+            fi
+            export "${var_name}"
+            ;;
+    esac
+}
+
+append_env_flag() {
+    local var_name="$1"
+    local flag="$2"
+    local current="${!var_name:-}"
+
+    case " ${current} " in
+        *" ${flag} "*) ;;
+        *)
+            if [[ -n "${current}" ]]; then
+                printf -v "${var_name}" '%s %s' "${current}" "${flag}"
+            else
+                printf -v "${var_name}" '%s' "${flag}"
+            fi
+            export "${var_name}"
+            ;;
+    esac
+}
+
+resolve_gnu_make() {
+    if command -v gmake >/dev/null 2>&1; then
+        command -v gmake
+        return 0
+    fi
+
+    if command -v make >/dev/null 2>&1 && make --version 2>/dev/null | grep -q 'GNU Make'; then
+        command -v make
+        return 0
+    fi
+
+    fail "GNU make is required to rebuild Pi 4 U-Boot (install gmake or provide GNU make as 'make')"
+}
+
+configure_u_boot_openssl_env() {
+    local prefix=""
+    local -a candidates=()
+    local pkg_config_libs=""
+    local pkg_config_cflags=""
+
+    if command -v brew >/dev/null 2>&1; then
+        prefix="$(brew --prefix openssl@3 2>/dev/null || true)"
+        [[ -n "${prefix}" ]] && candidates+=("${prefix}")
+        prefix="$(brew --prefix openssl 2>/dev/null || true)"
+        [[ -n "${prefix}" ]] && candidates+=("${prefix}")
+    fi
+
+    candidates+=(
+        "/opt/homebrew/opt/openssl@3"
+        "/usr/local/opt/openssl@3"
+        "/opt/homebrew/opt/openssl"
+        "/usr/local/opt/openssl"
+    )
+
+    for prefix in "${candidates[@]}"; do
+        [[ -d "${prefix}" ]] || continue
+        append_env_flag HOSTCFLAGS "-I${prefix}/include"
+        append_env_flag HOSTLDFLAGS "-L${prefix}/lib"
+        [[ -d "${prefix}/lib/pkgconfig" ]] && prepend_path_var PKG_CONFIG_PATH "${prefix}/lib/pkgconfig"
+        [[ -d "${prefix}/lib64/pkgconfig" ]] && prepend_path_var PKG_CONFIG_PATH "${prefix}/lib64/pkgconfig"
+        pkg_config_cflags="$(PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}" pkg-config --cflags libssl libcrypto 2>/dev/null || true)"
+        pkg_config_libs="$(PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}" pkg-config --libs libssl libcrypto 2>/dev/null || true)"
+        [[ -n "${pkg_config_cflags}" ]] && append_env_flag HOSTCFLAGS "${pkg_config_cflags}"
+        [[ -n "${pkg_config_libs}" ]] && append_env_flag HOSTLDLIBS "${pkg_config_libs}"
+        log "Using OpenSSL from ${prefix} for Pi4 U-Boot host tools"
+        return 0
+    done
+
+    fail "could not resolve a Homebrew OpenSSL prefix for Pi4 U-Boot; install openssl@3 or use a prebuilt default u-boot.bin without --clean"
+}
+
+clean_root_task_build() {
+    log "Cleaning root-task cargo artifacts"
+    cargo clean -p root-task
+}
+
+rebuild_u_boot_pi4() {
+    local u_boot_source_dir="${ROOT_DIR}/third_party/u-boot"
+    local default_u_boot_bin="${u_boot_source_dir}/u-boot.bin"
+    local gnu_make=""
+    local jobs=""
+    local rc=0
+
+    [[ "${U_BOOT_BIN}" == "${default_u_boot_bin}" ]] || \
+      fail "--clean currently requires the default Pi4 U-Boot output (${default_u_boot_bin})"
+
+    gnu_make="$(resolve_gnu_make)"
+    jobs="$(sysctl -n hw.ncpu)"
+
+    configure_u_boot_openssl_env
+
+    log "Cleaning Pi4 U-Boot build in ${u_boot_source_dir}"
+    "${gnu_make}" -C "${u_boot_source_dir}" distclean
+    log "Configuring Pi4 U-Boot (rpi_4_defconfig)"
+    "${gnu_make}" -C "${u_boot_source_dir}" ARCH=arm CROSS_COMPILE="${U_BOOT_CROSS_COMPILE}" rpi_4_defconfig
+    log "Accepting default answers for any new Pi4 U-Boot Kconfig symbols"
+    set +o pipefail
+    yes "" | "${gnu_make}" -C "${u_boot_source_dir}" ARCH=arm CROSS_COMPILE="${U_BOOT_CROSS_COMPILE}" oldconfig
+    rc=$?
+    set -o pipefail
+    [[ "${rc}" -eq 0 ]] || fail "failed to refresh Pi4 U-Boot defaults with oldconfig"
+    log "Building Pi4 U-Boot"
+    "${gnu_make}" -C "${u_boot_source_dir}" ARCH=arm CROSS_COMPILE="${U_BOOT_CROSS_COMPILE}" -j"${jobs}"
+
+    require_file "${default_u_boot_bin}"
+    prepend_path_var PATH "${u_boot_source_dir}/tools"
+}
+
+rebuild_sel4_pi4_uboot_tree() {
+    local sel4_source_dir=""
+    local jobs=""
+
+    sel4_source_dir="$(resolve_sel4_source_dir)"
+    ensure_pi4_sel4_xhci_overlay "${sel4_source_dir}"
+    configure_pi4_sel4_build "${sel4_source_dir}"
+
+    jobs="$(sysctl -n hw.ncpu)"
+
+    log "Cleaning Pi4 seL4 U-Boot build tree in ${SEL4_BUILD_DIR}"
+    cmake --build "${SEL4_BUILD_DIR}" --target clean
+    log "Rebuilding Pi4 seL4 U-Boot build tree"
+    cmake --build "${SEL4_BUILD_DIR}" -j"${jobs}"
+
+    require_file "${SEL4_BUILD_DIR}/libsel4/libsel4.a"
+    require_file "${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+}
+
+clean_pi4_build() {
+    clean_root_task_build
+    rebuild_u_boot_pi4
+    rebuild_sel4_pi4_uboot_tree
+}
+
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -384,6 +537,10 @@ parse_args() {
                 [[ $# -ge 2 ]] || fail "--root-task-features requires a list"
                 ROOT_TASK_FEATURES="$2"
                 shift 2
+                ;;
+            --clean)
+                CLEAN_BUILD=1
+                shift
                 ;;
             --skip-build)
                 SKIP_BUILD=1
@@ -828,6 +985,10 @@ main() {
     cd "$ROOT_DIR"
     trap cleanup EXIT
 
+    if [[ "${CLEAN_BUILD}" -eq 1 && "${SKIP_BUILD}" -eq 1 ]]; then
+        fail "--clean cannot be combined with --skip-build"
+    fi
+
     local manifest_real
     manifest_real="$(realpath_py "${MANIFEST_PATH}")"
     if [[ "${manifest_real}" != "$(realpath_py "${CANONICAL_MANIFEST_PATH}")" ]]; then
@@ -835,18 +996,23 @@ main() {
     fi
 
     require_file "$MANIFEST_PATH"
-    require_file "$U_BOOT_BIN"
-    verify_u_boot_pi4_target
     require_dir "$FIRMWARE_DIR"
     require_dir "$SEL4_BUILD_DIR"
+
+    activate_venv
+
+    if [[ "${CLEAN_BUILD}" -eq 1 ]]; then
+        clean_pi4_build
+    fi
+
+    require_file "$U_BOOT_BIN"
+    verify_u_boot_pi4_target
 
     local mkimage_bin
     local cpio_bin
     mkimage_bin="$(resolve_mkimage)"
-    export PATH="$(dirname "${mkimage_bin}"):${PATH}"
+    prepend_path_var PATH "$(dirname "${mkimage_bin}")"
     log "Using mkimage: ${mkimage_bin}"
-
-    activate_venv
 
     cpio_bin="$(resolve_cpio)"
     configure_cpio_path "$cpio_bin"
