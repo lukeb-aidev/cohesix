@@ -245,15 +245,16 @@ const XHCI_HCI_VERSION_MAX: u16 = 0x0200;
 // fully resolved.
 const XHCI_FORCE_LOW_DMA_PROBE: bool = true;
 // VL805 on Pi4 expects xHCI DMA pointers in the PCIe outbound DMA window
-// address space, not raw CPU physical addresses.
-const XHCI_PCIE_DMA_BUS_ALIAS_ENABLED: bool = true;
+// address space. On bcm2711 that window is identity-mapped for the first 3 GiB
+// described by `pcie0 dma-ranges`, so device-visible DMA pointers must stay in
+// that low range instead of synthesizing a high `0x4_...` bus alias.
+const XHCI_PCIE_DMA_WINDOW_ENABLED: bool = true;
 // Per-allocation DMA tracing is useful for bring-up debugging but can add
 // heavy UART latency during normal keyboard enumeration.
 const XHCI_DMA_VERBOSE_LOGS: bool = false;
 // Raw-phys DMA fallback is disabled on Pi4 because it consistently times out
 // controller start (stage 0x0272) and adds long startup stalls.
 const XHCI_TRY_RAW_PHYS_DMA_FALLBACK: bool = false;
-const RPI4_PCIE_DMA_BUS_OFFSET: usize = 0x4_0000_0000;
 const XHCI_DMA_MAX_BYTES: usize = 8 * 1024 * 1024;
 // BCM2711 PCIe cannot DMA above the first 3 GiB (see upstream bcm2711.dtsi
 // pcie0 dma-ranges). Keep VL805/xHCI buffers under this ceiling.
@@ -1673,7 +1674,7 @@ fn probe_xhci_capability_window(
     );
     boot_log::force_uart_line(map_line.as_str());
 
-    let dma = SeatDma::new(hal, false, XHCI_PCIE_DMA_BUS_ALIAS_ENABLED);
+    let dma = SeatDma::new(hal, false, XHCI_PCIE_DMA_WINDOW_ENABLED);
     // SAFETY: Read-only capability probe over candidate xHCI MMIO.
     let init_mmio = unsafe { dma.map_mmio(mmio_base, XHCI_MMIO_INIT_BYTES) }.ok_or("map-init")?;
     let mut mapped_line = heapless::String::<208>::new();
@@ -4481,10 +4482,10 @@ impl UsbKeyboard {
                     } else {
                         "low-then-high"
                     },
-                    if XHCI_PCIE_DMA_BUS_ALIAS_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
-                        "pcie-alias-then-phys"
-                    } else if XHCI_PCIE_DMA_BUS_ALIAS_ENABLED {
-                        "pcie-alias-only"
+                    if XHCI_PCIE_DMA_WINDOW_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
+                        "pcie-window-then-phys"
+                    } else if XHCI_PCIE_DMA_WINDOW_ENABLED {
+                        "pcie-window-only"
                     } else {
                         "phys-only"
                     }
@@ -4655,22 +4656,22 @@ impl UsbKeyboard {
             };
             for &prefer_high in dma_probe_order {
                 let dma_bus_modes: &[bool] =
-                    if XHCI_PCIE_DMA_BUS_ALIAS_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
+                    if XHCI_PCIE_DMA_WINDOW_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
                         &[true, false]
-                    } else if XHCI_PCIE_DMA_BUS_ALIAS_ENABLED {
+                    } else if XHCI_PCIE_DMA_WINDOW_ENABLED {
                         &[true]
                     } else {
                         &[false]
                     };
-                for (bus_mode_idx, &pcie_dma_bus_alias) in dma_bus_modes.iter().enumerate() {
+                for (bus_mode_idx, &pcie_dma_window) in dma_bus_modes.iter().enumerate() {
                     let mut probe_line = heapless::String::<224>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut probe_line,
                         format_args!(
                             "[local-seat] xhci probe begin mmio=0x{mmio:016x} dma={} bus={}",
                             if prefer_high { "high" } else { "low" },
-                            if pcie_dma_bus_alias {
-                                "pcie-alias"
+                            if pcie_dma_window {
+                                "pcie-window"
                             } else {
                                 "phys"
                             },
@@ -4679,7 +4680,7 @@ impl UsbKeyboard {
                     );
                     boot_log::force_uart_line(probe_line.as_str());
 
-                    let dma = SeatDma::new(hal, prefer_high, pcie_dma_bus_alias);
+                    let dma = SeatDma::new(hal, prefer_high, pcie_dma_window);
                     let ctrl = match XhciCtrl::new_with_params(
                         effective_mmio,
                         dma,
@@ -4696,8 +4697,8 @@ impl UsbKeyboard {
                                 format_args!(
                                     "[local-seat] xhci probe failed mmio=0x{mmio:016x} dma={} bus={} detail={err:?}",
                                     if prefer_high { "high" } else { "low" },
-                                    if pcie_dma_bus_alias {
-                                        "pcie-alias"
+                                    if pcie_dma_window {
+                                        "pcie-window"
                                     } else {
                                         "phys"
                                     },
@@ -4707,7 +4708,7 @@ impl UsbKeyboard {
                             boot_log::force_uart_line(line.as_str());
                             if bus_mode_idx + 1 < dma_bus_modes.len() {
                                 let next_bus = if dma_bus_modes[bus_mode_idx + 1] {
-                                    "pcie-alias"
+                                    "pcie-window"
                                 } else {
                                     "phys"
                                 };
@@ -4717,8 +4718,8 @@ impl UsbKeyboard {
                                     format_args!(
                                         "[local-seat] xhci probe fallback mmio=0x{mmio:016x} dma={} from_bus={} to_bus={} reason={err:?}",
                                         if prefer_high { "high" } else { "low" },
-                                        if pcie_dma_bus_alias {
-                                            "pcie-alias"
+                                        if pcie_dma_window {
+                                            "pcie-window"
                                         } else {
                                             "phys"
                                         },
@@ -4771,8 +4772,8 @@ impl UsbKeyboard {
                     format_args!(
                         "[local-seat] xhci online mmio=0x{mmio:016x} dma={} bus={} ports={} ctx={} connected_mask=0x{mask:04x} detect_passes={} slow_recheck={}",
                         if prefer_high { "high" } else { "low" },
-                        if pcie_dma_bus_alias {
-                            "pcie-alias"
+                        if pcie_dma_window {
+                            "pcie-window"
                         } else {
                             "phys"
                         },
@@ -4802,8 +4803,8 @@ impl UsbKeyboard {
                                         port + 1,
                                         usb_address_error_kind(err),
                                         if prefer_high { "high" } else { "low" },
-                                        if pcie_dma_bus_alias {
-                                            "pcie-alias"
+                                        if pcie_dma_window {
+                                            "pcie-window"
                                         } else {
                                             "phys"
                                         },
@@ -4818,8 +4819,8 @@ impl UsbKeyboard {
                                     "[local-seat] usb root-enum failed port={} stage=address dma={} bus={} detail={err:?}",
                                     port + 1,
                                     if prefer_high { "high" } else { "low" },
-                                    if pcie_dma_bus_alias {
-                                        "pcie-alias"
+                                    if pcie_dma_window {
+                                        "pcie-window"
                                     } else {
                                         "phys"
                                     },
@@ -8019,7 +8020,7 @@ unsafe impl Sync for SeatDma {}
 struct SeatDmaState {
     hal_ptr: usize,
     prefer_high: bool,
-    pcie_dma_bus_alias: bool,
+    pcie_dma_window: bool,
     sealed: bool,
     regions: Vec<PhysRegion>,
 }
@@ -8039,12 +8040,12 @@ struct PhysRegion {
 }
 
 impl SeatDma {
-    fn new(hal: &mut KernelHal<'_>, prefer_high: bool, pcie_dma_bus_alias: bool) -> Self {
+    fn new(hal: &mut KernelHal<'_>, prefer_high: bool, pcie_dma_window: bool) -> Self {
         Self {
             state: Mutex::new(SeatDmaState {
                 hal_ptr: hal as *mut _ as usize,
                 prefer_high,
-                pcie_dma_bus_alias,
+                pcie_dma_window,
                 sealed: false,
                 regions: Vec::new(),
             }),
@@ -8455,7 +8456,7 @@ impl SeatDma {
                 if let Some(phys) = region.phys_start.checked_add(offset) {
                     return match &region.backing {
                         RegionBacking::Dma(_) => {
-                            if state.pcie_dma_bus_alias {
+                            if state.pcie_dma_window {
                                 pcie_dma_bus_addr(phys).unwrap_or(phys)
                             } else {
                                 phys
@@ -8585,10 +8586,13 @@ fn phys_to_bus(phys: usize, alias_base: u32) -> Option<u32> {
 
 #[inline]
 fn pcie_dma_bus_addr(phys: usize) -> Option<usize> {
-    if !XHCI_PCIE_DMA_BUS_ALIAS_ENABLED {
+    if !XHCI_PCIE_DMA_WINDOW_ENABLED {
         return Some(phys);
     }
-    phys.checked_add(RPI4_PCIE_DMA_BUS_OFFSET)
+    if phys >= RPI4_PCIE_DMA_LIMIT {
+        return None;
+    }
+    Some(phys)
 }
 
 #[inline]
@@ -10020,6 +10024,16 @@ mod tests {
         assert_eq!(mailbox_visible_dimension(1920, 0), Some(1920));
         assert_eq!(mailbox_visible_dimension(1920, 1080), Some(1080));
         assert_eq!(mailbox_visible_dimension(1080, 1920), Some(1080));
+    }
+
+    #[test]
+    fn pi4_pcie_dma_window_keeps_low_phys_identity_mapped() {
+        assert_eq!(pcie_dma_bus_addr(0x0400_3000), Some(0x0400_3000));
+        assert_eq!(
+            pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT - PAGE_SIZE),
+            Some(RPI4_PCIE_DMA_LIMIT - PAGE_SIZE)
+        );
+        assert_eq!(pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT), None);
     }
 
     #[test]

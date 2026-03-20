@@ -305,8 +305,12 @@ const fn core_ctrl_reset_clear_retry_access_mode_label() -> &'static str {
 }
 
 #[inline]
-const fn core_ctrl_postreset_access_mode_label() -> &'static str {
-    "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
+const fn core_ctrl_postreset_access_mode_label(base: u32, offset: u32) -> &'static str {
+    if core_ctrl_postreset_write_uses_current_window_only(base, offset) {
+        "cmd52-byte-current-window no-rewindow"
+    } else {
+        "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
+    }
 }
 
 #[inline]
@@ -370,7 +374,7 @@ fn log_core_ctrl_postreset_write(base: u32, offset: u32, value: u8) {
     let addr = base.saturating_add(offset);
     emit_breadcrumb(format_args!(
         "[pi4-wifi] firmware core-ctrl postreset-write mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={inc} value=0x{value:02x}",
-        core_ctrl_postreset_access_mode_label(),
+        core_ctrl_postreset_access_mode_label(base, offset),
         bus = core_ctrl_current_window_addr(addr),
         trace_bus = core_ctrl_trace_function_addr(addr),
         shift = backplane_word_byte_shift(addr),
@@ -382,6 +386,11 @@ fn log_core_ctrl_postreset_write(base: u32, offset: u32, value: u8) {
 #[inline]
 const fn core_ctrl_in_reset_write_uses_word_path(base: u32, offset: u32) -> bool {
     base == CYW43_ARMCR4_CORE_BASE && offset == AI_IOCTRL_OFFSET
+}
+
+#[inline]
+const fn core_ctrl_postreset_write_uses_current_window_only(base: u32, offset: u32) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET
 }
 
 #[inline]
@@ -449,6 +458,11 @@ fn core_reset_can_assume_clear_reset_retry_commit(
         && offset == AI_RESETCTRL_OFFSET
         && attempt == 0
         && is_sdhci_command_error(err)
+}
+
+#[inline]
+fn core_reset_can_assume_postreset_clock_en_commit(base: u32, offset: u32, err: &HalError) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET && is_sdhci_command_error(err)
 }
 
 #[inline]
@@ -2909,7 +2923,11 @@ impl SdioHost {
         offset: u32,
         value: u8,
     ) -> Result<(), HalError> {
-        self.core_ctrl_write8(base, offset, value)
+        if core_ctrl_postreset_write_uses_current_window_only(base, offset) {
+            self.core_ctrl_windowed_write8(base, offset, value)
+        } else {
+            self.core_ctrl_write8(base, offset, value)
+        }
     }
 
     fn core_ctrl_write8_in_reset(
@@ -3377,15 +3395,26 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-clock-en-write value=0x{postreset_ioctrl:02x}"
         ));
-        self.core_ctrl_postreset_write8_logged(
+        if let Err(err) = self.core_ctrl_postreset_write8_logged(
             base,
             AI_IOCTRL_OFFSET,
             postreset_ioctrl,
             "postreset-clock-en-write",
-        )?;
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-clock-en-write-ok value=0x{postreset_ioctrl:02x}"
-        ));
+        ) {
+            if !core_reset_can_assume_postreset_clock_en_commit(base, AI_IOCTRL_OFFSET, &err) {
+                return Err(err);
+            }
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-clock-en-assumed-committed err={err} reason=socram-postreset-write-timeout"
+            ));
+            self.restore_window_cache_from_shadow(
+                "core-reset-postreset-clock-en-assumed-committed",
+            );
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-clock-en-write-ok value=0x{postreset_ioctrl:02x}"
+            ));
+        }
         bounded_spin_settle(
             "cyw43-core-postreset-clock-en",
             CYW43_CORE_CONTROL_SETTLE_LOOPS,
@@ -4183,7 +4212,11 @@ mod tests {
             "cmd52-byte-current-window retry=preserved-cache"
         );
         assert_eq!(
-            core_ctrl_postreset_access_mode_label(),
+            core_ctrl_postreset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
+            "cmd52-byte-current-window no-rewindow"
+        );
+        assert_eq!(
+            core_ctrl_postreset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
             "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
         );
         assert_eq!(
@@ -4205,6 +4238,14 @@ mod tests {
         assert!(!core_ctrl_in_reset_write_uses_word_path(
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET
+        ));
+        assert!(core_ctrl_postreset_write_uses_current_window_only(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_postreset_write_uses_current_window_only(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET
         ));
         assert!(core_ctrl_can_skip_redundant_in_reset_write(
             CYW43_SOCRAM_CORE_BASE,
@@ -4296,6 +4337,26 @@ mod tests {
             CYW43_SOCRAM_CORE_BASE,
             AI_RESETCTRL_OFFSET,
             0,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(core_reset_can_assume_postreset_clock_en_commit(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_assume_postreset_clock_en_commit(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_assume_postreset_clock_en_commit(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_assume_postreset_clock_en_commit(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
         assert!(core_reset_clear_preserves_window_cache());
