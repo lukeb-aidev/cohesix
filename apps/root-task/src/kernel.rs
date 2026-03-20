@@ -657,6 +657,11 @@ const COHESIX_DTB_XHCI_POSTSTOP_SAFE_PROP: &str = "cohesix,xhci-handoff-poststop
 const COHESIX_DTB_XHCI_USBCMD_PROP: &str = "cohesix,xhci-usbcmd";
 const COHESIX_DTB_XHCI_USBSTS_PROP: &str = "cohesix,xhci-usbsts";
 const COHESIX_DTB_XHCI_IMAN0_PROP: &str = "cohesix,xhci-iman0";
+const COHESIX_DTB_XHCI_DCBAAP_PROP: &str = "cohesix,xhci-dcbaap";
+const COHESIX_DTB_XHCI_CRCR_PROP: &str = "cohesix,xhci-crcr";
+const COHESIX_DTB_XHCI_ERSTBA0_PROP: &str = "cohesix,xhci-erstba0";
+const COHESIX_DTB_XHCI_ERDP0_PROP: &str = "cohesix,xhci-erdp0";
+const COHESIX_DTB_XHCI_ERSTSZ0_PROP: &str = "cohesix,xhci-erstsz0";
 const COHESIX_DTB_XHCI_CAP_LENGTH_PROP: &str = "cohesix,xhci-cap-length";
 const COHESIX_DTB_XHCI_HCI_VERSION_PROP: &str = "cohesix,xhci-hci-version";
 const COHESIX_DTB_XHCI_HCS1_PROP: &str = "cohesix,xhci-hcs1";
@@ -1238,6 +1243,14 @@ fn parse_pi4_uefi_xhci_u32_prop(value: &[u8]) -> Option<u32> {
     dtb_prop_u32_be(value, 0)
 }
 
+fn parse_pi4_uefi_xhci_u64_prop(value: &[u8]) -> Option<u64> {
+    if let Some(text) = dtb_prop_cstr(value) {
+        let trimmed = text.trim_start_matches("0x");
+        return u64::from_str_radix(trimmed, 16).ok();
+    }
+    dtb_prop_u64_be(value, 0)
+}
+
 fn parse_pi4_uefi_xhci_u16_prop(value: &[u8]) -> Option<u16> {
     let raw = parse_pi4_uefi_xhci_u32_prop(value)?;
     u16::try_from(raw).ok()
@@ -1626,6 +1639,33 @@ fn infer_pi4_uefi_xhci_chosen_u32_prop(
             bi_extra::StructureItem::Property { name, value } => {
                 if path.iter().any(|segment| *segment == "chosen") && name == prop_name {
                     return parse_pi4_uefi_xhci_u32_prop(value);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn infer_pi4_uefi_xhci_chosen_u64_prop(
+    extra_bytes: &[u8],
+    extra_range: Range<usize>,
+    prop_name: &'static str,
+) -> Option<u64> {
+    let dtb_blob = bi_extra::locate_dtb(extra_bytes, extra_range).ok()?;
+    let dtb = bi_extra::parse_dtb(dtb_blob).ok()?;
+    let mut path = HeaplessVec::<&str, 16>::new();
+    let mut cursor = dtb.structure_cursor();
+    while let Some(item) = cursor.next().ok().flatten() {
+        match item {
+            bi_extra::StructureItem::BeginNode(name) => {
+                let _ = path.push(name);
+            }
+            bi_extra::StructureItem::EndNode => {
+                let _ = path.pop();
+            }
+            bi_extra::StructureItem::Property { name, value } => {
+                if path.iter().any(|segment| *segment == "chosen") && name == prop_name {
+                    return parse_pi4_uefi_xhci_u64_prop(value);
                 }
             }
         }
@@ -2185,6 +2225,51 @@ fn init_local_seat_runtime<P: Platform>(
     } else {
         None
     };
+    let xhci_dcbaap = if local_seat_enabled {
+        infer_pi4_uefi_xhci_chosen_u64_prop(
+            extra_bytes,
+            extra_range.clone(),
+            COHESIX_DTB_XHCI_DCBAAP_PROP,
+        )
+    } else {
+        None
+    };
+    let xhci_crcr = if local_seat_enabled {
+        infer_pi4_uefi_xhci_chosen_u64_prop(
+            extra_bytes,
+            extra_range.clone(),
+            COHESIX_DTB_XHCI_CRCR_PROP,
+        )
+    } else {
+        None
+    };
+    let xhci_erstba0 = if local_seat_enabled {
+        infer_pi4_uefi_xhci_chosen_u64_prop(
+            extra_bytes,
+            extra_range.clone(),
+            COHESIX_DTB_XHCI_ERSTBA0_PROP,
+        )
+    } else {
+        None
+    };
+    let xhci_erdp0 = if local_seat_enabled {
+        infer_pi4_uefi_xhci_chosen_u64_prop(
+            extra_bytes,
+            extra_range.clone(),
+            COHESIX_DTB_XHCI_ERDP0_PROP,
+        )
+    } else {
+        None
+    };
+    let xhci_erstsz0 = if local_seat_enabled {
+        infer_pi4_uefi_xhci_chosen_u32_prop(
+            extra_bytes,
+            extra_range.clone(),
+            COHESIX_DTB_XHCI_ERSTSZ0_PROP,
+        )
+    } else {
+        None
+    };
     let xhci_capability_snapshot = if local_seat_enabled {
         infer_pi4_uefi_xhci_capability_snapshot(extra_bytes, extra_range.clone())
     } else {
@@ -2408,6 +2493,62 @@ fn init_local_seat_runtime<P: Platform>(
             }
             let _ = write!(line, " iman0=");
             match xhci_iman0 {
+                Some(value) => {
+                    let _ = write!(line, "0x{value:08x}");
+                }
+                None => {
+                    let _ = write!(line, "absent");
+                }
+            }
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
+        }
+        if xhci_dcbaap.is_some()
+            || xhci_crcr.is_some()
+            || xhci_erstba0.is_some()
+            || xhci_erdp0.is_some()
+            || xhci_erstsz0.is_some()
+        {
+            let mut line = heapless::String::<320>::new();
+            let _ = write!(line, "[local-seat] xhci-handoff-rings");
+            let _ = write!(line, " dcbaap=");
+            match xhci_dcbaap {
+                Some(value) => {
+                    let _ = write!(line, "0x{value:016x}");
+                }
+                None => {
+                    let _ = write!(line, "absent");
+                }
+            }
+            let _ = write!(line, " crcr=");
+            match xhci_crcr {
+                Some(value) => {
+                    let _ = write!(line, "0x{value:016x}");
+                }
+                None => {
+                    let _ = write!(line, "absent");
+                }
+            }
+            let _ = write!(line, " erstba0=");
+            match xhci_erstba0 {
+                Some(value) => {
+                    let _ = write!(line, "0x{value:016x}");
+                }
+                None => {
+                    let _ = write!(line, "absent");
+                }
+            }
+            let _ = write!(line, " erdp0=");
+            match xhci_erdp0 {
+                Some(value) => {
+                    let _ = write!(line, "0x{value:016x}");
+                }
+                None => {
+                    let _ = write!(line, "absent");
+                }
+            }
+            let _ = write!(line, " erstsz0=");
+            match xhci_erstsz0 {
                 Some(value) => {
                     let _ = write!(line, "0x{value:08x}");
                 }
@@ -6859,6 +7000,14 @@ mod tests {
             Some(0x1800_0010)
         );
         assert_eq!(super::parse_pi4_uefi_xhci_u32_prop(b"bogus\0"), None);
+        assert_eq!(
+            super::parse_pi4_uefi_xhci_u64_prop(b"0000000004003000\0"),
+            Some(0x0000_0000_0400_3000)
+        );
+        assert_eq!(
+            super::parse_pi4_uefi_xhci_u64_prop(&0x0000_0000_0402_5000u64.to_be_bytes()),
+            Some(0x0000_0000_0402_5000)
+        );
     }
 
     #[test]

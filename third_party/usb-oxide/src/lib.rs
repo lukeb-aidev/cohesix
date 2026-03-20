@@ -34,6 +34,8 @@
 #![deny(missing_docs)]
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 mod desc;
 mod dev;
@@ -49,7 +51,7 @@ mod xhci;
 pub use crate::{
     dev::UsbDevice,
     err::{Result, UsbError},
-    ram::Dma,
+    ram::{Dma, DmaShareError},
     ring::{PhysMem, Trb},
     xhci::{XhciControllerParams, XhciCtrl, XhciDiagHook, set_xhci_diag_hook},
 };

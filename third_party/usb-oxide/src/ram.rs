@@ -3,6 +3,10 @@
 // Copyright 2026 Lukas Bower
 //! Dma trait for DMA and MMIO operations.
 
+/// Error returned when a DMA range could not be prepared for device access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DmaShareError;
+
 /// Allocates physically contiguous memory and manages MMIO mappings.
 ///
 /// Used for DMA operations requiring contiguous physical memory
@@ -54,6 +58,20 @@ pub trait Dma: Send + Sync {
 
     /// Translates a virtual address to a physical address.
     fn virt_to_phys(&self, va: usize) -> usize;
+
+    /// Prepares a DMA-backed memory range for device access after CPU writes.
+    ///
+    /// Implementations may clean caches, emit share diagnostics, or perform
+    /// other platform-specific DMA visibility transitions before the bus
+    /// address is handed to the controller.
+    fn share_for_device(
+        &self,
+        _vaddr: usize,
+        _len: usize,
+        _label: &'static str,
+    ) -> core::result::Result<(), DmaShareError> {
+        Ok(())
+    }
 
     /// Returns the system page size in bytes.
     fn page_size(&self) -> usize {

@@ -314,6 +314,15 @@ const fn core_ctrl_postreset_access_mode_label(base: u32, offset: u32) -> &'stat
 }
 
 #[inline]
+const fn core_ctrl_postreset_read_access_mode_label(base: u32, offset: u32) -> &'static str {
+    if core_ctrl_postreset_read_preserves_window_cache(base, offset) {
+        "cmd53-windowed-read32-cmd52-current-window no-rewindow"
+    } else {
+        "cmd53-windowed-read32-cmd52-current-window fallback=cmd52-byte-rewindow"
+    }
+}
+
+#[inline]
 const fn core_ctrl_in_reset_access_mode_label(base: u32, offset: u32) -> &'static str {
     if core_ctrl_in_reset_write_uses_word_path(base, offset) {
         "cmd53-word-windowed-in-reset fallback=cmd52-current-window-rewindow"
@@ -383,6 +392,19 @@ fn log_core_ctrl_postreset_write(base: u32, offset: u32, value: u8) {
     ));
 }
 
+fn log_core_ctrl_postreset_read(base: u32, offset: u32) {
+    let addr = base.saturating_add(offset);
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] firmware core-ctrl access op=read8 mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={inc}",
+        core_ctrl_postreset_read_access_mode_label(base, offset),
+        bus = core_ctrl_trace_function_addr(addr),
+        trace_bus = core_ctrl_trace_function_addr(addr),
+        shift = backplane_word_byte_shift(addr),
+        inc = backplane_word_increment_addr() as u8,
+        window = addr & BACKPLANE_WINDOW_MASK,
+    ));
+}
+
 #[inline]
 const fn core_ctrl_in_reset_write_uses_word_path(base: u32, offset: u32) -> bool {
     base == CYW43_ARMCR4_CORE_BASE && offset == AI_IOCTRL_OFFSET
@@ -390,6 +412,11 @@ const fn core_ctrl_in_reset_write_uses_word_path(base: u32, offset: u32) -> bool
 
 #[inline]
 const fn core_ctrl_postreset_write_uses_current_window_only(base: u32, offset: u32) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET
+}
+
+#[inline]
+const fn core_ctrl_postreset_read_preserves_window_cache(base: u32, offset: u32) -> bool {
     base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET
 }
 
@@ -462,6 +489,15 @@ fn core_reset_can_assume_clear_reset_retry_commit(
 
 #[inline]
 fn core_reset_can_assume_postreset_clock_en_commit(base: u32, offset: u32, err: &HalError) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET && is_sdhci_command_error(err)
+}
+
+#[inline]
+fn core_reset_can_defer_postreset_clock_en_readback(
+    base: u32,
+    offset: u32,
+    err: &HalError,
+) -> bool {
     base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET && is_sdhci_command_error(err)
 }
 
@@ -2771,6 +2807,32 @@ impl SdioHost {
         }
     }
 
+    fn core_ctrl_postreset_read8(&mut self, base: u32, offset: u32) -> Result<u8, HalError> {
+        if !core_ctrl_postreset_read_preserves_window_cache(base, offset) {
+            return self.core_ctrl_read8(base, offset);
+        }
+        match self.core_ctrl_windowed_read8(base, offset) {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl fallback op=read8-postreset base=0x{base:08x} off=0x{offset:03x} from=cmd53-windowed-read32 to=cmd52-byte-current-window err={err}"
+                ));
+                self.recover_command_path_preserve_window(
+                    "core-ctrl-postreset-cmd52-current-window",
+                );
+                match self.core_ctrl_fallback_read8_current_window(base, offset) {
+                    Ok(value) => Ok(value),
+                    Err(current_window_err) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware core-ctrl fallback op=read8-postreset base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-current-window err={current_window_err}"
+                        ));
+                        Err(current_window_err)
+                    }
+                }
+            }
+        }
+    }
+
     fn core_ctrl_write8(&mut self, base: u32, offset: u32, value: u8) -> Result<(), HalError> {
         match self.core_ctrl_windowed_write8(base, offset, value) {
             Ok(()) => Ok(()),
@@ -3001,6 +3063,25 @@ impl SdioHost {
                 ));
                 self.log_transport_shadow(stage);
                 return Err(err);
+            }
+        }
+    }
+
+    fn core_ctrl_postreset_read8_logged(
+        &mut self,
+        base: u32,
+        offset: u32,
+        stage: &'static str,
+    ) -> Result<u8, HalError> {
+        log_core_ctrl_postreset_read(base, offset);
+        match self.core_ctrl_postreset_read8(base, offset) {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl access stage={stage} op=read8 err={err} base=0x{base:08x} off=0x{offset:03x}"
+                ));
+                self.log_transport_shadow(stage);
+                Err(err)
             }
         }
     }
@@ -3419,8 +3500,25 @@ impl SdioHost {
             "cyw43-core-postreset-clock-en",
             CYW43_CORE_CONTROL_SETTLE_LOOPS,
         );
-        let ioctrl =
-            self.core_ctrl_read8_logged(base, AI_IOCTRL_OFFSET, "postreset-clock-en-readback")?;
+        let ioctrl = match self.core_ctrl_postreset_read8_logged(
+            base,
+            AI_IOCTRL_OFFSET,
+            "postreset-clock-en-readback",
+        ) {
+            Ok(value) => value,
+            Err(err) => {
+                if !core_reset_can_defer_postreset_clock_en_readback(base, AI_IOCTRL_OFFSET, &err) {
+                    return Err(err);
+                }
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-clock-en-read-deferred io=0x{postreset_ioctrl:02x} err={err} reason=socram-fragile-postreset-read"
+                ));
+                self.restore_window_cache_from_shadow(
+                    "core-reset-postreset-clock-en-read-deferred",
+                );
+                postreset_ioctrl
+            }
+        };
         let resetctrl =
             self.core_ctrl_read8_logged(base, AI_RESETCTRL_OFFSET, "postreset-clock-en-readback")?;
         emit_breadcrumb(format_args!(
@@ -4220,6 +4318,14 @@ mod tests {
             "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
         );
         assert_eq!(
+            core_ctrl_postreset_read_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
+            "cmd53-windowed-read32-cmd52-current-window no-rewindow"
+        );
+        assert_eq!(
+            core_ctrl_postreset_read_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
+            "cmd53-windowed-read32-cmd52-current-window fallback=cmd52-byte-rewindow"
+        );
+        assert_eq!(
             core_ctrl_in_reset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
             "cmd53-word-windowed-in-reset fallback=cmd52-current-window-rewindow"
         );
@@ -4246,6 +4352,18 @@ mod tests {
         assert!(!core_ctrl_postreset_write_uses_current_window_only(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET
+        ));
+        assert!(core_ctrl_postreset_read_preserves_window_cache(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_postreset_read_preserves_window_cache(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_postreset_read_preserves_window_cache(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET
         ));
         assert!(core_ctrl_can_skip_redundant_in_reset_write(
             CYW43_SOCRAM_CORE_BASE,
@@ -4355,6 +4473,26 @@ mod tests {
             &HalError::Unsupported("sdhci-command-error"),
         ));
         assert!(!core_reset_can_assume_postreset_clock_en_commit(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(core_reset_can_defer_postreset_clock_en_readback(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_defer_postreset_clock_en_readback(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_defer_postreset_clock_en_readback(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_defer_postreset_clock_en_readback(
             CYW43_SOCRAM_CORE_BASE,
             AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-int-timeout"),

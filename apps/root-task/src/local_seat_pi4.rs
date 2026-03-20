@@ -22,12 +22,12 @@ use spin::Mutex;
 use usb_oxide::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
     hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook, ConfigDesc,
-    DeviceDesc, Dma, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice, UsbError,
-    XhciControllerParams, XhciCtrl,
+    DeviceDesc, Dma, DmaShareError, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice,
+    UsbError, XhciControllerParams, XhciCtrl,
 };
 
 use crate::bootstrap::log as boot_log;
-use crate::hal::{Hardware, KernelHal};
+use crate::hal::{dma, Hardware, KernelHal};
 use crate::local_seat::LocalSeatXhciCapabilitySnapshot;
 
 const PAGE_SIZE: usize = 4096;
@@ -8469,6 +8469,32 @@ impl SeatDma {
         }
         va
     }
+
+    fn share_for_device_locked(
+        state: &SeatDmaState,
+        vaddr: usize,
+        len: usize,
+        label: &'static str,
+    ) -> Result<(), DmaShareError> {
+        let end = vaddr.checked_add(len).ok_or(DmaShareError)?;
+        for region in &state.regions {
+            let RegionBacking::Dma(_) = &region.backing else {
+                continue;
+            };
+            let start = region.virt_start;
+            let Some(region_end) = start.checked_add(region.length) else {
+                continue;
+            };
+            if vaddr < start || end > region_end {
+                continue;
+            }
+            let offset = vaddr.checked_sub(start).ok_or(DmaShareError)?;
+            let phys = region.phys_start.checked_add(offset).ok_or(DmaShareError)?;
+            dma::pin(vaddr, phys, len, label).map_err(|_| DmaShareError)?;
+            return Ok(());
+        }
+        Err(DmaShareError)
+    }
 }
 
 impl Dma for SeatDma {
@@ -8510,6 +8536,16 @@ impl Dma for SeatDma {
     fn virt_to_phys(&self, va: usize) -> usize {
         let state = self.state.lock();
         Self::virt_to_phys_locked(&state, va)
+    }
+
+    fn share_for_device(
+        &self,
+        vaddr: usize,
+        len: usize,
+        label: &'static str,
+    ) -> Result<(), DmaShareError> {
+        let state = self.state.lock();
+        Self::share_for_device_locked(&state, vaddr, len, label)
     }
 
     fn page_size(&self) -> usize {

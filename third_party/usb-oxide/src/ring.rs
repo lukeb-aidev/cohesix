@@ -327,6 +327,13 @@ impl<H: Dma> PhysMem<H> {
         host.virt_to_phys(self.addr) as u64
     }
 
+    /// Prepares the region for device access and returns its bus address.
+    pub fn share_for_device(&self, host: &H, label: &'static str) -> Result<u64> {
+        host.share_for_device(self.addr, self.size, label)
+            .map_err(|_| UsbError::DmaSync)?;
+        Ok(host.virt_to_phys(self.addr) as u64)
+    }
+
     /// Returns a pointer to the memory.
     pub fn as_ptr<T>(&self) -> *mut T {
         self.addr as *mut T
@@ -380,6 +387,10 @@ impl<H: Dma> Ring<H> {
 
     pub fn phys(&self, host: &H) -> u64 {
         self.mem.phys(host)
+    }
+
+    pub fn share_for_device(&self, host: &H, label: &'static str) -> Result<u64> {
+        self.mem.share_for_device(host, label)
     }
 
     fn trbs(&self) -> &mut [Trb] {
@@ -472,6 +483,12 @@ impl<H: Dma> EventRing<H> {
         self.erst.phys(host)
     }
 
+    pub fn share_for_device(&self, host: &H) -> Result<(u64, u64)> {
+        let ring = self.ring.share_for_device(host, "xhci-event-ring")?;
+        let erst = self.erst.share_for_device(host, "xhci-erst")?;
+        Ok((ring, erst))
+    }
+
     pub fn try_dequeue(&mut self) -> Option<Trb> {
         // Read the candidate TRB twice before consuming it. On some firmware /
         // controller combinations, software can observe an event entry while
@@ -521,5 +538,94 @@ impl<H: Dma> EventRing<H> {
 
     pub fn dequeue_ptr(&self, host: &H) -> u64 {
         self.ring.phys(host) + (self.dequeue * 16) as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PhysMem;
+    use crate::{Dma, DmaShareError};
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::alloc::{alloc_zeroed, dealloc, Layout};
+    use std::sync::Mutex;
+    use std::vec::Vec;
+
+    #[derive(Default)]
+    struct MockDma {
+        allocations: Mutex<Vec<(usize, usize, usize)>>,
+        share_calls: AtomicUsize,
+        last_share_vaddr: AtomicUsize,
+        last_share_len: AtomicUsize,
+    }
+
+    impl Dma for MockDma {
+        unsafe fn alloc(&self, size: usize, align: usize) -> Option<usize> {
+            let layout = Layout::from_size_align(size, align).ok()?;
+            let ptr = unsafe { alloc_zeroed(layout) };
+            if ptr.is_null() {
+                return None;
+            }
+            self.allocations
+                .lock()
+                .expect("allocations mutex")
+                .push((ptr as usize, size, align));
+            Some(ptr as usize)
+        }
+
+        unsafe fn free(&self, addr: usize, size: usize, align: usize) {
+            let mut allocations = self.allocations.lock().expect("allocations mutex");
+            if let Some(index) = allocations
+                .iter()
+                .position(|&(base, stored_size, stored_align)| {
+                    base == addr && stored_size == size && stored_align == align
+                })
+            {
+                let (base, stored_size, stored_align) = allocations.swap_remove(index);
+                let layout =
+                    Layout::from_size_align(stored_size, stored_align).expect("valid layout");
+                unsafe {
+                    dealloc(base as *mut u8, layout);
+                }
+            }
+        }
+
+        unsafe fn map_mmio(&self, _phys: usize, _size: usize) -> Option<usize> {
+            None
+        }
+
+        unsafe fn unmap_mmio(&self, _virt: usize, _size: usize) {}
+
+        fn virt_to_phys(&self, va: usize) -> usize {
+            va + 0x1000
+        }
+
+        fn share_for_device(
+            &self,
+            vaddr: usize,
+            len: usize,
+            _label: &'static str,
+        ) -> core::result::Result<(), DmaShareError> {
+            self.share_calls.fetch_add(1, Ordering::Relaxed);
+            self.last_share_vaddr.store(vaddr, Ordering::Relaxed);
+            self.last_share_len.store(len, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn physmem_share_for_device_calls_host_hook_before_returning_bus_address() {
+        let host = MockDma::default();
+        let mem = PhysMem::alloc(&host, 128, 64).expect("allocate physmem");
+
+        let bus = mem
+            .share_for_device(&host, "test-share")
+            .expect("share for device");
+
+        assert_eq!(host.share_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(host.last_share_vaddr.load(Ordering::Relaxed), mem.virt());
+        assert_eq!(host.last_share_len.load(Ordering::Relaxed), 128);
+        assert_eq!(bus, (mem.virt() + 0x1000) as u64);
+
+        mem.free(&host);
     }
 }

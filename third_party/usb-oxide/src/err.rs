@@ -40,6 +40,8 @@ pub enum UsbError {
     InvalidDescriptor,
     /// Endpoint stalled
     Stall,
+    /// Failed to prepare DMA-backed memory for device access
+    DmaSync,
 }
 
 /// Result type for USB operations.

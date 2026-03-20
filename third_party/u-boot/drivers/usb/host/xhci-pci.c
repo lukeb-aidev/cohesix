@@ -50,7 +50,7 @@ static void xhci_pci_emit_breadcrumb(struct udevice *dev, const char *stage,
 {
 	pci_dev_t bdf = dm_pci_get_bdf(dev);
 
-	printf("[cohesix:xhci-pci] stage=%s bdf=%02x:%02x.%x mmio_raw=%s mmio=%s cmd=%s usbcmd=%s usbsts=%s iman0=%s ready=%s irq=%s halted=%s safe=%s ret=%d\n",
+	printf("[cohesix:xhci-pci] stage=%s bdf=%02x:%02x.%x mmio_raw=%s mmio=%s cmd=%s usbcmd=%s usbsts=%s iman0=%s dcbaap=%s crcr=%s erstba0=%s erdp0=%s erstsz0=%s ready=%s irq=%s halted=%s safe=%s ret=%d\n",
 	       stage, PCI_BUS(bdf), PCI_DEV(bdf), PCI_FUNC(bdf),
 	       xhci_pci_env_or_absent("coh_xhci_mmio_raw"),
 	       xhci_pci_env_or_absent("coh_xhci_mmio"),
@@ -58,6 +58,11 @@ static void xhci_pci_emit_breadcrumb(struct udevice *dev, const char *stage,
 	       xhci_pci_env_or_absent("coh_xhci_usbcmd"),
 	       xhci_pci_env_or_absent("coh_xhci_usbsts"),
 	       xhci_pci_env_or_absent("coh_xhci_iman0"),
+	       xhci_pci_env_or_absent("coh_xhci_dcbaap"),
+	       xhci_pci_env_or_absent("coh_xhci_crcr"),
+	       xhci_pci_env_or_absent("coh_xhci_erstba0"),
+	       xhci_pci_env_or_absent("coh_xhci_erdp0"),
+	       xhci_pci_env_or_absent("coh_xhci_erstsz0"),
 	       xhci_pci_env_or_absent("coh_xhci_handoff_ready"),
 	       xhci_pci_env_or_absent("coh_xhci_irq_quiesced"),
 	       xhci_pci_env_or_absent("coh_xhci_halted"),
@@ -95,6 +100,15 @@ static void xhci_pci_export_capability_snapshot(struct xhci_hccr *hccr)
 	env_set_hex("coh_xhci_hccparams1", xhci_readl(&hccr->cr_hccparams));
 	env_set_hex("coh_xhci_dboff", xhci_readl(&hccr->cr_dboff));
 	env_set_hex("coh_xhci_rtsoff", xhci_readl(&hccr->cr_rtsoff));
+}
+
+static void xhci_pci_clear_runtime_snapshot(void)
+{
+	env_set("coh_xhci_dcbaap", NULL);
+	env_set("coh_xhci_crcr", NULL);
+	env_set("coh_xhci_erstba0", NULL);
+	env_set("coh_xhci_erdp0", NULL);
+	env_set("coh_xhci_erstsz0", NULL);
 }
 
 static int xhci_pci_map_runtime_regs(struct udevice *dev, struct xhci_hccr **ret_hccr,
@@ -157,6 +171,11 @@ static int xhci_pci_capture_handoff_state(struct udevice *dev, int scrub_irqs,
 
 	usbsts = xhci_readl(&hcor->or_usbsts);
 	env_set_hex("coh_xhci_usbsts", usbsts);
+	env_set_hex("coh_xhci_dcbaap", xhci_readq(&hcor->or_dcbaap));
+	env_set_hex("coh_xhci_crcr", xhci_readq(&hcor->or_crcr));
+	env_set_hex("coh_xhci_erstba0", xhci_readq(&ir_set->erst_base));
+	env_set_hex("coh_xhci_erdp0", xhci_readq(&ir_set->erst_dequeue));
+	env_set_hex("coh_xhci_erstsz0", xhci_readl(&ir_set->erst_size));
 
 	halted = !!(usbsts & STS_HALT);
 	command_irqs_quiesced = !(usbcmd & XHCI_IRQS);
@@ -308,6 +327,7 @@ static int xhci_pci_probe(struct udevice *dev)
 	xhci_pci_export_irq_quiesced(0);
 	xhci_pci_export_halted(0);
 	xhci_pci_export_handoff_safe(0);
+	xhci_pci_clear_runtime_snapshot();
 	xhci_pci_emit_breadcrumb(dev, "probe-entry", 0);
 
 	fail_stage = "reset-get";
@@ -369,6 +389,7 @@ static int xhci_pci_remove(struct udevice *dev)
 	xhci_pci_export_irq_quiesced(0);
 	xhci_pci_export_halted(0);
 	xhci_pci_export_handoff_safe(0);
+	xhci_pci_clear_runtime_snapshot();
 	ret = xhci_deregister(dev);
 	if (ret) {
 		xhci_pci_emit_breadcrumb(dev, "remove-deregister", ret);

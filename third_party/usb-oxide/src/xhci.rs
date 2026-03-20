@@ -161,6 +161,28 @@ fn ring_write_barrier() {
     core::sync::atomic::fence(Ordering::Release);
 }
 
+#[inline(always)]
+fn mmio_write_barrier() {
+    compiler_fence(Ordering::Release);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("dmb osh", options(nostack, preserves_flags));
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    core::sync::atomic::fence(Ordering::Release);
+}
+
+#[inline(always)]
+fn mmio_read_barrier() {
+    compiler_fence(Ordering::Acquire);
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("dmb osh", options(nostack, preserves_flags));
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    core::sync::atomic::fence(Ordering::Acquire);
+}
+
 #[inline]
 const fn port_state_neutral(portsc: u32) -> u32 {
     portsc & PORTSC_NEUTRAL_MASK
@@ -328,6 +350,16 @@ impl<H: Dma> ScratchpadSet<H> {
 
         Ok(Self { array, buffers })
     }
+
+    fn share_for_device(&self, host: &H) -> Result<()> {
+        for page in &self.buffers {
+            let _ = page.share_for_device(host, "xhci-scratchpad-page")?;
+        }
+        let _ = self
+            .array
+            .share_for_device(host, "xhci-scratchpad-array")?;
+        Ok(())
+    }
 }
 
 #[inline(always)]
@@ -359,7 +391,17 @@ fn compose_initial_erdp(event_ring_ptr: u64) -> u64 {
 
 impl<H: Dma> XhciCtrl<H> {
     #[inline(always)]
+    fn read_reg_at<T: Copy>(mmio: usize, offset: usize) -> T {
+        let val = unsafe { ((mmio + offset) as *const T).read_volatile() };
+        mmio_read_barrier();
+        val
+    }
+
+    #[inline(always)]
     fn write_reg_at<T: Copy>(mmio: usize, offset: usize, val: T) {
+        // Match U-Boot's `readl`/`writel` ordering discipline on ARM before
+        // touching live controller registers after firmware handoff.
+        mmio_write_barrier();
         unsafe {
             ((mmio + offset) as *mut T).write_volatile(val);
         }
@@ -686,15 +728,19 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0246, reg::CONFIG as u64, 0, 0);
             emit_xhci_diag(0x0241, self.read_op::<u32>(reg::CONFIG) as u64, 0, 0);
         }
-        emit_xhci_diag(0x0244, reg::DCBAAP as u64, self.dcbaa.phys(&*self.host), 0);
+        if let Some(scratchpad) = &self.scratchpad {
+            scratchpad.share_for_device(&*self.host)?;
+        }
+        let dcbaa_phys = self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa")?;
+        emit_xhci_diag(0x0244, reg::DCBAAP as u64, dcbaa_phys, 0);
         self.write_op_u64_diag(
             reg::DCBAAP,
-            self.dcbaa.phys(&*self.host),
+            dcbaa_phys,
             0x0248,
             0x0249,
         );
         if preserve_firmware_state {
-            emit_xhci_diag(0x0242, self.dcbaa.phys(&*self.host), 1, 0);
+            emit_xhci_diag(0x0242, dcbaa_phys, 1, 0);
         } else {
             emit_xhci_diag(0x0247, reg::DCBAAP as u64, 0, 0);
             emit_xhci_diag(0x0242, self.read_op_u64(reg::DCBAAP), 0, 0);
@@ -703,7 +749,8 @@ impl<H: Dma> XhciCtrl<H> {
         // Setup command ring
         let cmd_ring = self.cmd_ring.lock();
         let current_crcr = self.read_op_u64(reg::CRCR);
-        let crcr = compose_crcr(current_crcr, cmd_ring.phys(&*self.host), true);
+        let cmd_ring_phys = cmd_ring.share_for_device(&*self.host, "xhci-cmd-ring")?;
+        let crcr = compose_crcr(current_crcr, cmd_ring_phys, true);
         emit_xhci_diag(0x0250, crcr, 0, 0);
         emit_xhci_diag(0x0252, reg::CRCR as u64, crcr, 0);
         self.write_op_u64_diag(reg::CRCR, crcr, 0x0254, 0x0255);
@@ -718,6 +765,7 @@ impl<H: Dma> XhciCtrl<H> {
         // Setup event ring
         let event_ring = self.event_ring.lock();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        let (event_ring_phys, erst_phys) = event_ring.share_for_device(&*self.host)?;
         emit_xhci_diag(
             0x0260,
             int_base as u64,
@@ -726,7 +774,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
 
         // Prime ERDP to the first event TRB without setting EHB during init.
-        let erdp = compose_initial_erdp(event_ring.ring_phys(&*self.host));
+        let erdp = compose_initial_erdp(event_ring_phys);
         emit_xhci_diag(
             0x0266,
             (int_base + reg::ERDP) as u64,
@@ -744,7 +792,7 @@ impl<H: Dma> XhciCtrl<H> {
         self.write_reg(int_base + reg::ERSTSZ, erst_size);
         let erstba = compose_erst_base(
             self.read_reg_u64(int_base + reg::ERSTBA),
-            event_ring.erst_phys(&*self.host),
+            erst_phys,
         );
         emit_xhci_diag(0x0265, (int_base + reg::ERSTBA) as u64, erstba, 0);
         self.write_reg_u64_diag(int_base + reg::ERSTBA, erstba, 0x026e, 0x026f);
@@ -895,7 +943,7 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     fn read_reg<T: Copy>(&self, offset: usize) -> T {
-        unsafe { ((self.mmio + offset) as *const T).read_volatile() }
+        Self::read_reg_at(self.mmio, offset)
     }
 
     fn write_reg<T: Copy>(&self, offset: usize, val: T) {
