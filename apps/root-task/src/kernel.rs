@@ -710,7 +710,7 @@ struct Pi4BootNetPolicyProperties {
 enum Pi4BootNetPolicySource {
     Manifest,
     DtbApplied,
-    DtbIgnored(&'static str),
+    DtbRejected(&'static str),
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -729,6 +729,14 @@ impl Default for Pi4BootNetPolicyResolution {
             source: Pi4BootNetPolicySource::Manifest,
             wifi_credentials_present: false,
         }
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn dtb_rejected_net_policy_reason(source: Pi4BootNetPolicySource) -> Option<&'static str> {
+    match source {
+        Pi4BootNetPolicySource::DtbRejected(reason) => Some(reason),
+        Pi4BootNetPolicySource::Manifest | Pi4BootNetPolicySource::DtbApplied => None,
     }
 }
 
@@ -972,20 +980,20 @@ fn resolve_pi4_boot_net_policy(
     };
     resolution.wifi_credentials_present = raw.wifi_credentials_present;
     if let Some(reason) = raw.static_policy_error {
-        resolution.source = Pi4BootNetPolicySource::DtbIgnored(reason);
+        resolution.source = Pi4BootNetPolicySource::DtbRejected(reason);
         return resolution;
     }
     if let Some(reason) = raw.wifi_credentials_error {
-        resolution.source = Pi4BootNetPolicySource::DtbIgnored(reason);
+        resolution.source = Pi4BootNetPolicySource::DtbRejected(reason);
         return resolution;
     }
 
     if raw.mode_seen && raw.mode.is_none() {
-        resolution.source = Pi4BootNetPolicySource::DtbIgnored("invalid-net-mode");
+        resolution.source = Pi4BootNetPolicySource::DtbRejected("invalid-net-mode");
         return resolution;
     }
     if raw.interface_seen && raw.interface.is_none() {
-        resolution.source = Pi4BootNetPolicySource::DtbIgnored("invalid-net-interface");
+        resolution.source = Pi4BootNetPolicySource::DtbRejected("invalid-net-interface");
         return resolution;
     }
     if raw.mode.is_none()
@@ -1008,12 +1016,12 @@ fn resolve_pi4_boot_net_policy(
         ) {
             Ok(credentials) => Some(credentials),
             Err(reason) => {
-                resolution.source = Pi4BootNetPolicySource::DtbIgnored(reason);
+                resolution.source = Pi4BootNetPolicySource::DtbRejected(reason);
                 return resolution;
             }
         },
         (None, Some(_)) => {
-            resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-ssid-missing");
+            resolution.source = Pi4BootNetPolicySource::DtbRejected("wifi-ssid-missing");
             return resolution;
         }
         (None, None) => None,
@@ -1026,11 +1034,12 @@ fn resolve_pi4_boot_net_policy(
             None
         } else {
             let Some(ip) = raw.static_ip else {
-                resolution.source = Pi4BootNetPolicySource::DtbIgnored("static-ip-missing");
+                resolution.source = Pi4BootNetPolicySource::DtbRejected("static-ip-missing");
                 return resolution;
             };
             let Some(prefix_len) = raw.static_prefix_len else {
-                resolution.source = Pi4BootNetPolicySource::DtbIgnored("static-prefix-len-missing");
+                resolution.source =
+                    Pi4BootNetPolicySource::DtbRejected("static-prefix-len-missing");
                 return resolution;
             };
             Some(crate::net::NetAddressConfig {
@@ -1050,21 +1059,21 @@ fn resolve_pi4_boot_net_policy(
         )
         && !has_wifi
     {
-        resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-device-missing");
+        resolution.source = Pi4BootNetPolicySource::DtbRejected("wifi-device-missing");
         return resolution;
     }
     if effective_mode != generated::NetworkMode::Off
         && matches!(effective_interface, generated::NetworkInterfacePolicy::Auto)
         && effective_mode != generated::NetworkMode::Dhcp
     {
-        resolution.source = Pi4BootNetPolicySource::DtbIgnored("auto-requires-dhcp");
+        resolution.source = Pi4BootNetPolicySource::DtbRejected("auto-requires-dhcp");
         return resolution;
     }
     if effective_mode != generated::NetworkMode::Off
         && matches!(effective_interface, generated::NetworkInterfacePolicy::Wifi)
         && wifi_credentials.is_none()
     {
-        resolution.source = Pi4BootNetPolicySource::DtbIgnored("wifi-credentials-missing");
+        resolution.source = Pi4BootNetPolicySource::DtbRejected("wifi-credentials-missing");
         return resolution;
     }
 
@@ -4598,6 +4607,7 @@ fn bootstrap<P: Platform>(
                 resolve_pi4_boot_net_policy(extra_bytes, extra_range.clone(), hardware);
             let config = console_net_config_with_runtime_policy(boot_policy.policy);
             let net_backend_label = config.backend.label();
+            let rejected_policy_reason = dtb_rejected_net_policy_reason(boot_policy.source);
             if hardware.network.enabled && !config.backend.uses_dev_virt_defaults() {
                 let mut policy_line = heapless::String::<192>::new();
                 match boot_policy.source {
@@ -4627,13 +4637,11 @@ fn bootstrap<P: Platform>(
                             }
                         );
                     }
-                    Pi4BootNetPolicySource::DtbIgnored(reason) => {
+                    Pi4BootNetPolicySource::DtbRejected(reason) => {
                         let _ = write!(
                             policy_line,
-                            "[net-policy] source=dtb ignored reason={} mode={} interface={} wifi_creds={}",
+                            "[net-policy] source=dtb rejected reason={} wifi_creds={}",
                             reason,
-                            config.policy.mode.as_str(),
-                            config.policy.interface.as_str(),
                             if boot_policy.wifi_credentials_present {
                                 "yes"
                             } else {
@@ -4657,6 +4665,25 @@ fn bootstrap<P: Platform>(
                 log::info!("[net-console] disabled by runtime policy mode=off");
                 let mut detail = heapless::String::<192>::new();
                 let _ = write!(detail, "disabled by runtime policy mode=off");
+                (None, false, Some(detail), net_backend_label)
+            } else if let Some(reason) = rejected_policy_reason {
+                boot_log::force_uart_line(
+                    "[net-console] disabled reason=invalid-config err=InvalidConfig",
+                );
+                let mut detail_line = heapless::String::<192>::new();
+                let _ = write!(
+                    detail_line,
+                    "[net-console] init detail=invalid net config: dtb override rejected ({reason})"
+                );
+                boot_log::force_uart_line(detail_line.as_str());
+                log::warn!(
+                    "[net-console] disabled reason=invalid-config err=InvalidConfig detail=invalid net config: dtb override rejected ({reason})"
+                );
+                let mut detail = heapless::String::<192>::new();
+                let _ = write!(
+                    detail,
+                    "invalid net config: dtb override rejected ({reason})"
+                );
                 (None, false, Some(detail), net_backend_label)
             } else if !sel4::ep_ready() || !sel4::ep_validated() {
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
@@ -6750,12 +6777,176 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_message_words, copy_message_words, preview_payload, ControlEndpoint, FaultEndpoint,
-        KernelIpc, PayloadPreview, StagedMessage, HEX_CHUNK_BYTES, MAX_HEX_LINES,
-        MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
+        bounded_message_words, copy_message_words, dtb_rejected_net_policy_reason, preview_payload,
+        ControlEndpoint, FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource,
+        StagedMessage, HEX_CHUNK_BYTES, MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
     };
+    use crate::rust_alloc::vec::Vec;
     use core::fmt::Write as _;
     use heapless::{String as HeaplessString, Vec as HeaplessVec};
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn test_extra_range(extra: &[u8]) -> core::ops::Range<usize> {
+        let start = extra.as_ptr() as usize;
+        start..start + extra.len()
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn push_test_be32(target: &mut Vec<u8>, word: u32) {
+        target.extend_from_slice(&word.to_be_bytes());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn push_test_aligned_name(target: &mut Vec<u8>, name: &str) {
+        target.extend_from_slice(name.as_bytes());
+        target.push(0);
+        while target.len() % 4 != 0 {
+            target.push(0);
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn push_test_string(strings: &mut Vec<u8>, name: &str) -> usize {
+        let offset = strings.len();
+        strings.extend_from_slice(name.as_bytes());
+        strings.push(0);
+        offset
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn push_test_property(structure: &mut Vec<u8>, nameoff: usize, value: &[u8]) {
+        const FDT_PROP: u32 = 0x0000_0003;
+
+        push_test_be32(structure, FDT_PROP);
+        push_test_be32(
+            structure,
+            u32::try_from(value.len()).expect("test DTB property length fits in u32"),
+        );
+        push_test_be32(
+            structure,
+            u32::try_from(nameoff).expect("test DTB string offset fits in u32"),
+        );
+        structure.extend_from_slice(value);
+        while structure.len() % 4 != 0 {
+            structure.push(0);
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn build_test_pi4_net_policy_dtb(properties: &[(&str, &[u8])]) -> Vec<u8> {
+        const FDT_MAGIC: u32 = 0xd00d_feed;
+        const FDT_BEGIN_NODE: u32 = 0x0000_0001;
+        const FDT_END_NODE: u32 = 0x0000_0002;
+        const FDT_END: u32 = 0x0000_0009;
+        const HEADER_LEN: usize = 40;
+        const RSVMAP_LEN: usize = 16;
+
+        let mut structure = Vec::new();
+        let mut strings = Vec::new();
+        let mut property_offsets = HeaplessVec::<usize, 8>::new();
+
+        for (name, _) in properties.iter() {
+            property_offsets
+                .push(push_test_string(&mut strings, name))
+                .expect("test DTB property count stays within fixed capacity");
+        }
+
+        push_test_be32(&mut structure, FDT_BEGIN_NODE);
+        push_test_aligned_name(&mut structure, "");
+        push_test_be32(&mut structure, FDT_BEGIN_NODE);
+        push_test_aligned_name(&mut structure, "chosen");
+        for ((_, value), nameoff) in properties.iter().zip(property_offsets.iter()) {
+            push_test_property(&mut structure, *nameoff, value);
+        }
+        push_test_be32(&mut structure, FDT_END_NODE);
+        push_test_be32(&mut structure, FDT_END_NODE);
+        push_test_be32(&mut structure, FDT_END);
+
+        let structure_len = structure.len();
+        let strings_len = strings.len();
+        let off_dt_struct = HEADER_LEN + RSVMAP_LEN;
+        let off_dt_strings = off_dt_struct + structure_len;
+        let totalsize = off_dt_strings + strings_len;
+
+        let mut blob = Vec::with_capacity(totalsize);
+        push_test_be32(&mut blob, FDT_MAGIC);
+        push_test_be32(
+            &mut blob,
+            u32::try_from(totalsize).expect("test DTB total size fits in u32"),
+        );
+        push_test_be32(
+            &mut blob,
+            u32::try_from(off_dt_struct).expect("test DTB structure offset fits in u32"),
+        );
+        push_test_be32(
+            &mut blob,
+            u32::try_from(off_dt_strings).expect("test DTB strings offset fits in u32"),
+        );
+        push_test_be32(
+            &mut blob,
+            u32::try_from(HEADER_LEN).expect("test DTB header size fits in u32"),
+        );
+        push_test_be32(&mut blob, 17);
+        push_test_be32(&mut blob, 16);
+        push_test_be32(&mut blob, 0);
+        push_test_be32(
+            &mut blob,
+            u32::try_from(strings_len).expect("test DTB strings size fits in u32"),
+        );
+        push_test_be32(
+            &mut blob,
+            u32::try_from(structure_len).expect("test DTB structure size fits in u32"),
+        );
+        blob.resize(blob.len() + RSVMAP_LEN, 0);
+        blob.extend_from_slice(&structure);
+        blob.extend_from_slice(&strings);
+        blob
+    }
+
+    #[test]
+    fn dtb_rejected_net_policy_reason_only_flags_rejected_overrides() {
+        assert_eq!(
+            dtb_rejected_net_policy_reason(Pi4BootNetPolicySource::Manifest),
+            None
+        );
+        assert_eq!(
+            dtb_rejected_net_policy_reason(Pi4BootNetPolicySource::DtbApplied),
+            None
+        );
+        assert_eq!(
+            dtb_rejected_net_policy_reason(Pi4BootNetPolicySource::DtbRejected(
+                "wifi-psk-too-short",
+            )),
+            Some("wifi-psk-too-short")
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn resolve_pi4_boot_net_policy_rejects_short_wifi_psk_override() {
+        let dtb = build_test_pi4_net_policy_dtb(&[
+            (super::COHESIX_DTB_WIFI_SSID_PROP, b"test-ssid\0"),
+            (super::COHESIX_DTB_WIFI_PSK_PROP, b"short\0"),
+        ]);
+        let mut hardware = crate::generated::hardware_config();
+        hardware.network.enabled = true;
+        hardware.network.backend = crate::generated::NetworkBackendKind::BcmGenetV5;
+        hardware.network.mode = crate::generated::NetworkMode::Dhcp;
+        hardware.network.interface = crate::generated::NetworkInterfacePolicy::Wifi;
+
+        let resolution =
+            super::resolve_pi4_boot_net_policy(dtb.as_slice(), test_extra_range(&dtb), hardware);
+
+        assert_eq!(
+            resolution.source,
+            super::Pi4BootNetPolicySource::DtbRejected("wifi-psk-too-short")
+        );
+        assert!(resolution.wifi_credentials_present);
+        assert_eq!(
+            resolution.policy,
+            crate::net::RuntimeNetPolicyOverride::default()
+        );
+    }
 
     #[test]
     fn staged_message_reports_empty() {

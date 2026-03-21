@@ -15,7 +15,7 @@ use core::cmp;
 use core::hint::spin_loop;
 use core::mem;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 use font8x8::legacy::BASIC_LEGACY;
 use spin::Mutex;
@@ -27,7 +27,7 @@ use usb_oxide::{
 };
 
 use crate::bootstrap::log as boot_log;
-use crate::hal::{dma, Hardware, KernelHal};
+use crate::hal::{dma, pi4_wifi, HalError, Hardware, KernelHal};
 use crate::local_seat::LocalSeatXhciCapabilitySnapshot;
 
 const PAGE_SIZE: usize = 4096;
@@ -56,6 +56,7 @@ const TAG_SET_DEPTH: u32 = 0x0004_8005;
 const TAG_SET_PIXEL_ORDER: u32 = 0x0004_8006;
 const TAG_ALLOCATE_BUFFER: u32 = 0x0004_0001;
 const TAG_GET_PITCH: u32 = 0x0004_0008;
+const VL805_MAILBOX_RESET_SETTLE_MS: u64 = 1;
 
 const DEFAULT_FB_WIDTH: u32 = 1024;
 const DEFAULT_FB_HEIGHT: u32 = 768;
@@ -165,6 +166,9 @@ const WAIT_MS_MAX_SPINS: usize = 25_000_000;
 const USB_PROGRESS_TICK_MS: usize = 1_000;
 const USB_PROGRESS_MAX_DOTS: usize = 64;
 const PI4_VL805_XHCI_INTX_IRQ: u32 = 143;
+// Narrow the next Pi 4 bring-up run to pure polling so the first DCBAAP
+// ownership publication can be evaluated without any concurrent INTx sink.
+const TRUSTED_XHCI_INTX_SINK_ENABLED: bool = false;
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
@@ -276,6 +280,7 @@ static XHCI_PRESEED_ALREADY_PINNED_LOGGED: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_PRESEED_LOGGED: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_RUNTIME_INIT_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DIAG_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+static VL805_RUNTIME_RESET_STATE: AtomicU8 = AtomicU8::new(VL805_RUNTIME_RESET_STATE_UNATTEMPTED);
 static XHCI_MMIO_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_MMIO_PIN_REUSE_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DMA_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -290,6 +295,11 @@ static USB_PROGRESS_ELAPSED_MS: AtomicUsize = AtomicUsize::new(0);
 static USB_PROGRESS_DOTS: AtomicUsize = AtomicUsize::new(0);
 
 const XHCI_DIAG_MAX_LINES: u32 = 64;
+const VL805_RUNTIME_RESET_STATE_UNATTEMPTED: u8 = 0;
+const VL805_RUNTIME_RESET_STATE_NOTIFIED: u8 = 1;
+const VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE: u8 = 2;
+const VL805_RUNTIME_RESET_STATE_HARD_MAP: u8 = 3;
+const VL805_RUNTIME_RESET_STATE_HARD_DMA: u8 = 4;
 
 fn usb_progress_emit(dots: usize) {
     let ptr = USB_PROGRESS_DISPLAY_PTR.load(Ordering::Acquire);
@@ -430,6 +440,26 @@ const fn keyboard_attach_retry_allowed(
     attempt < max_attempts && !matches!(err, Pi4SeatError::XhciInit)
 }
 
+#[inline]
+const fn runtime_vl805_mailbox_reset_error_allows_cold_init(err: Pi4SeatError) -> bool {
+    matches!(
+        err,
+        Pi4SeatError::MailboxProtocol | Pi4SeatError::MailboxTimeout
+    )
+}
+
+#[inline]
+const fn runtime_vl805_mailbox_reset_failure_state(err: Pi4SeatError) -> u8 {
+    match err {
+        Pi4SeatError::MailboxMap => VL805_RUNTIME_RESET_STATE_HARD_MAP,
+        Pi4SeatError::MailboxDma => VL805_RUNTIME_RESET_STATE_HARD_DMA,
+        Pi4SeatError::MailboxProtocol | Pi4SeatError::MailboxTimeout => {
+            VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
+        }
+        _ => VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
+    }
+}
+
 /// Concrete local-seat backend for Pi 4 (HDMI text + USB keyboard).
 pub struct Pi4LocalSeat {
     display: HdmiTextSink,
@@ -440,6 +470,7 @@ pub struct Pi4LocalSeat {
     xhci_handoff_ready: bool,
     xhci_irq_quiesced: bool,
     xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
+    xhci_capability_probe: Option<XhciCapProbe>,
     hal_ptr: usize,
 }
 
@@ -453,6 +484,9 @@ impl Pi4LocalSeat {
     /// Initialize the Pi4 local-seat backend.
     pub fn new(hal: &mut KernelHal<'_>, hints: Pi4LocalSeatHints) -> Result<Self, Pi4SeatError> {
         let xhci_mmio_hint = normalize_pi4_xhci_mmio_hint(hints.xhci_mmio_hint);
+        let xhci_capability_probe = hints
+            .xhci_capability_snapshot
+            .and_then(cache_xhci_capability_probe_from_snapshot);
         if let (Some(raw_hint), Some(normalized_hint)) = (hints.xhci_mmio_hint, xhci_mmio_hint) {
             if raw_hint != normalized_hint {
                 let mut line = heapless::String::<144>::new();
@@ -493,6 +527,7 @@ impl Pi4LocalSeat {
             xhci_handoff_ready: hints.xhci_handoff_ready,
             xhci_irq_quiesced: hints.xhci_irq_quiesced,
             xhci_capability_snapshot: hints.xhci_capability_snapshot,
+            xhci_capability_probe,
             hal_ptr: hal as *mut _ as usize,
         })
     }
@@ -632,7 +667,7 @@ impl Pi4LocalSeat {
                         self.xhci_pci_cmd,
                         self.xhci_handoff_ready,
                         self.xhci_irq_quiesced,
-                        self.xhci_capability_snapshot,
+                        self.xhci_capability_probe,
                     ) {
                         Ok(found) => {
                             self.keyboard = Some(found);
@@ -1104,6 +1139,59 @@ fn xhci_firmware_handoff_cold_start_trusted(
 }
 
 #[inline]
+fn xhci_runtime_vl805_mailbox_reset_required(
+    mmio: usize,
+    firmware_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    xhci_handoff_ready: bool,
+    xhci_irq_quiesced: bool,
+) -> bool {
+    xhci_firmware_handoff_cold_start_trusted(
+        mmio,
+        firmware_hint,
+        xhci_pci_cmd,
+        xhci_handoff_ready,
+        xhci_irq_quiesced,
+    )
+}
+
+#[inline]
+fn xhci_trusted_handoff_snapshot_allowed(
+    mmio: usize,
+    firmware_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    xhci_handoff_ready: bool,
+    xhci_irq_quiesced: bool,
+    _runtime_vl805_reset: bool,
+) -> bool {
+    // The runtime VL805 reset-notify is a best-effort firmware hint. It does
+    // not change the xHCI capability block layout, so the bootloader-exported
+    // capability snapshot remains the only trusted source when the first live
+    // CAP read still wedges the board.
+    xhci_firmware_handoff_cold_start_trusted(
+        mmio,
+        firmware_hint,
+        xhci_pci_cmd,
+        xhci_handoff_ready,
+        xhci_irq_quiesced,
+    )
+}
+
+#[inline]
+const fn xhci_runtime_handoff_source_label(
+    runtime_vl805_reset: bool,
+    using_handoff_snapshot: bool,
+) -> &'static str {
+    if runtime_vl805_reset && using_handoff_snapshot {
+        "fw-handoff-mailbox-reset-snapshot"
+    } else if runtime_vl805_reset {
+        "fw-handoff-mailbox-reset-cold-init"
+    } else {
+        "fw-handoff-cold-start"
+    }
+}
+
+#[inline]
 const fn xhci_firmware_handoff_revoked_reason(
     xhci_handoff_ready: bool,
     xhci_irq_quiesced: bool,
@@ -1513,13 +1601,21 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0247 => Some("dcbaap-readback-begin"),
         0x0244 => Some("dcbaap-write"),
         0x0248 => Some("dcbaap-write-low"),
+        0x024a => Some("dcbaap-write-low-done"),
         0x0249 => Some("dcbaap-write-high"),
+        0x024b => Some("dcbaap-write-high-done"),
+        0x024c => Some("dcbaap-zero-write64"),
+        0x024d => Some("dcbaap-zero-write64-done"),
+        0x024e => Some("dcbaap-prewrite-read-begin"),
+        0x024f => Some("dcbaap-prewrite-read"),
         0x0251 => Some("crcr-readback"),
         0x0252 => Some("crcr-write"),
         0x0253 => Some("crcr-readback-begin"),
         0x0254 => Some("crcr-write-low"),
         0x0255 => Some("crcr-write-high"),
         0x0256 => Some("dnctrl-write"),
+        0x0257 => Some("dcbaap-write64"),
+        0x0258 => Some("dcbaap-write64-done"),
         0x0261 => Some("runtime-ring-readback"),
         0x0263 => Some("usbsts-clear-ack"),
         0x0264 => Some("erstsz-write"),
@@ -1830,6 +1926,35 @@ fn xhci_cap_probe_from_snapshot(snapshot: LocalSeatXhciCapabilitySnapshot) -> Xh
         max_scratchpad,
         mmio_size,
     }
+}
+
+fn cache_xhci_capability_probe_from_snapshot(
+    snapshot: LocalSeatXhciCapabilitySnapshot,
+) -> Option<XhciCapProbe> {
+    let probe = xhci_cap_probe_from_snapshot(snapshot);
+    if let Err(reason) = validate_xhci_capability_window(&probe) {
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci cap snapshot cache=reject detail={reason} action=drop-runtime-probe"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return None;
+    }
+    let mut line = heapless::String::<224>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] xhci cap snapshot cache=ready caplen=0x{caplen:02x} hciver=0x{hciver:04x} span=0x{span:05x}",
+            caplen = probe.cap_length,
+            hciver = probe.hci_version,
+            span = probe.mmio_size,
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    Some(probe)
 }
 
 fn xhci_alias_scan_candidate(mmio_base: usize, step: usize) -> Option<usize> {
@@ -2629,6 +2754,78 @@ impl Mailbox {
         // SAFETY: Register block was mapped as device memory by HAL.
         unsafe {
             ptr::write_volatile(addr as *mut u32, value);
+        }
+    }
+}
+
+fn map_pi4_wifi_mailbox_reset_error(err: HalError) -> Pi4SeatError {
+    match err {
+        HalError::Unsupported("mailbox-dma") => Pi4SeatError::MailboxDma,
+        HalError::Unsupported("mailbox-timeout") => Pi4SeatError::MailboxTimeout,
+        HalError::Unsupported("device-coverage")
+        | HalError::Unsupported("device-map-order")
+        | HalError::Unsupported("device-map-exact")
+        | HalError::Sel4(_) => Pi4SeatError::MailboxMap,
+        _ => Pi4SeatError::MailboxProtocol,
+    }
+}
+
+fn ensure_runtime_vl805_mailbox_reset(hal: &mut KernelHal<'_>) -> Result<(), Pi4SeatError> {
+    match VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire) {
+        VL805_RUNTIME_RESET_STATE_NOTIFIED => {
+            boot_log::force_uart_line(
+                "[local-seat] vl805 reset handoff=runtime-owned stage=runtime detail=skip-already-notified",
+            );
+            return Ok(());
+        }
+        VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE => {
+            boot_log::force_uart_line(
+                "[local-seat] vl805 reset handoff=runtime-owned stage=runtime detail=skip-soft-failure action=continue-cold-init",
+            );
+            return Ok(());
+        }
+        VL805_RUNTIME_RESET_STATE_HARD_MAP => {
+            return Err(Pi4SeatError::MailboxMap);
+        }
+        VL805_RUNTIME_RESET_STATE_HARD_DMA => {
+            return Err(Pi4SeatError::MailboxDma);
+        }
+        _ => {}
+    }
+
+    boot_log::force_uart_line(
+        "[local-seat] vl805 reset handoff=runtime-owned stage=runtime action=mailbox-notify",
+    );
+    match pi4_wifi::notify_vl805_reset(hal).map_err(map_pi4_wifi_mailbox_reset_error) {
+        Ok(()) => {
+            wait_ms(VL805_MAILBOX_RESET_SETTLE_MS);
+            VL805_RUNTIME_RESET_STATE.store(VL805_RUNTIME_RESET_STATE_NOTIFIED, Ordering::Release);
+            boot_log::force_uart_line(
+                "[local-seat] vl805 reset handoff=runtime-owned stage=runtime detail=mailbox-notify+settle",
+            );
+            Ok(())
+        }
+        Err(err) if runtime_vl805_mailbox_reset_error_allows_cold_init(err) => {
+            wait_ms(VL805_MAILBOX_RESET_SETTLE_MS);
+            VL805_RUNTIME_RESET_STATE
+                .store(VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE, Ordering::Release);
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 reset handoff=runtime-owned stage=runtime detail={} action=continue-cold-init",
+                    err.as_str()
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            Ok(())
+        }
+        Err(err) => {
+            VL805_RUNTIME_RESET_STATE.store(
+                runtime_vl805_mailbox_reset_failure_state(err),
+                Ordering::Release,
+            );
+            Err(err)
         }
     }
 }
@@ -3939,12 +4136,16 @@ enum XhciIrqSinkMode {
 #[inline]
 const fn xhci_irq_sink_mode(mmio: usize, firmware_handoff_quiesced: bool) -> XhciIrqSinkMode {
     if xhci_polling_only_runtime(mmio, firmware_handoff_quiesced) {
-        // The trusted Pi4 handoff stays polling-driven, but the first live
-        // ownership transition can still surface the PCIe INTx line mapped by
-        // the bcm2711 interrupt-map. Install only that bounded sink (GIC SPI
-        // 143 on Pi 4) and leave primary xHCI IRQ-driven ownership out of the
-        // runtime path.
-        XhciIrqSinkMode::IntxOnly
+        if TRUSTED_XHCI_INTX_SINK_ENABLED {
+            // The trusted Pi4 handoff stays polling-driven, but the first live
+            // ownership transition can still surface the PCIe INTx line mapped by
+            // the bcm2711 interrupt-map. Install only that bounded sink (GIC SPI
+            // 143 on Pi 4) and leave primary xHCI IRQ-driven ownership out of the
+            // runtime path.
+            XhciIrqSinkMode::IntxOnly
+        } else {
+            XhciIrqSinkMode::Disabled
+        }
     } else {
         XhciIrqSinkMode::Disabled
     }
@@ -4035,7 +4236,7 @@ impl UsbKeyboard {
         xhci_pci_cmd: Option<u16>,
         xhci_handoff_ready: bool,
         xhci_irq_quiesced: bool,
-        xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
+        xhci_capability_probe: Option<XhciCapProbe>,
     ) -> Result<Self, Pi4SeatError> {
         if !KEYBOARD_RUNTIME_INIT_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] usb keyboard init path entered");
@@ -4162,6 +4363,22 @@ impl UsbKeyboard {
             xhci_handoff_ready,
             xhci_irq_quiesced,
         );
+        let runtime_vl805_reset_strategy = xhci_runtime_vl805_mailbox_reset_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            xhci_mmio_hint,
+            xhci_pci_cmd,
+            xhci_handoff_ready,
+            xhci_irq_quiesced,
+        );
+        let runtime_handoff_snapshot_available = xhci_capability_probe.is_some()
+            && xhci_trusted_handoff_snapshot_allowed(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                xhci_mmio_hint,
+                xhci_pci_cmd,
+                xhci_handoff_ready,
+                xhci_irq_quiesced,
+                runtime_vl805_reset_strategy,
+            );
         let mut handoff_restore_fail_reason = None;
         if trusted_fw_handoff_high_bar {
             if allow_runtime_command_replay {
@@ -4246,7 +4463,11 @@ impl UsbKeyboard {
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci runtime trust source=fw-handoff-cold-start mmio=0x{mmio:016x} cmd=0x{cmd:04x} token=1 irq=1",
+                    "[local-seat] xhci runtime trust source={} mmio=0x{mmio:016x} cmd=0x{cmd:04x} token=1 irq=1",
+                    xhci_runtime_handoff_source_label(
+                        runtime_vl805_reset_strategy,
+                        runtime_handoff_snapshot_available,
+                    ),
                     mmio = RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                     cmd = xhci_pci_cmd.unwrap_or(0),
                 ),
@@ -4375,7 +4596,11 @@ impl UsbKeyboard {
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] xhci runtime preferred source=fw-handoff-cold-start mmio=0x{mmio:016x}",
+                            "[local-seat] xhci runtime preferred source={} mmio=0x{mmio:016x}",
+                            xhci_runtime_handoff_source_label(
+                                runtime_vl805_reset_strategy,
+                                runtime_handoff_snapshot_available,
+                            ),
                             mmio = preferred_mmio
                         ),
                     );
@@ -4498,12 +4723,41 @@ impl UsbKeyboard {
         let mut saw_keyboard_init_error = false;
         for &mmio_base in &candidates[..candidate_count] {
             let (effective_mmio, cap_probe, firmware_handoff_quiesced) = {
-                let trusted_handoff_snapshot = xhci_capability_snapshot.filter(|_| {
-                    xhci_handoff_ready && xhci_irq_quiesced && xhci_mmio_hint == Some(mmio_base)
+                let runtime_vl805_reset = xhci_runtime_vl805_mailbox_reset_required(
+                    mmio_base,
+                    xhci_mmio_hint,
+                    xhci_pci_cmd,
+                    xhci_handoff_ready,
+                    xhci_irq_quiesced,
+                );
+                if runtime_vl805_reset {
+                    if let Err(err) = ensure_runtime_vl805_mailbox_reset(hal) {
+                        let mut line = heapless::String::<224>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] vl805 reset handoff=runtime-owned stage=runtime detail={} action=skip-candidate mmio=0x{mmio:016x}",
+                                err.as_str(),
+                                mmio = mmio_base,
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        continue;
+                    }
+                }
+
+                let trusted_handoff_probe = xhci_capability_probe.filter(|_| {
+                    xhci_trusted_handoff_snapshot_allowed(
+                        mmio_base,
+                        xhci_mmio_hint,
+                        xhci_pci_cmd,
+                        xhci_handoff_ready,
+                        xhci_irq_quiesced,
+                        runtime_vl805_reset,
+                    )
                 });
 
-                let raw_probe = if let Some(snapshot) = trusted_handoff_snapshot {
-                    let raw_probe = xhci_cap_probe_from_snapshot(snapshot);
+                let raw_probe = if let Some(raw_probe) = trusted_handoff_probe {
                     let mut line = heapless::String::<352>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
@@ -4577,7 +4831,7 @@ impl UsbKeyboard {
                 boot_log::force_uart_line(cap_line.as_str());
 
                 match validate_xhci_capability_window(&raw_probe) {
-                    Ok(()) => (mmio_base, raw_probe, trusted_handoff_snapshot.is_some()),
+                    Ok(()) => (mmio_base, raw_probe, trusted_handoff_probe.is_some()),
                     Err(reason) => {
                         if !xhci_runtime_allows_alias_scan(
                             mmio_base,
@@ -8909,7 +9163,8 @@ mod tests {
         hub_retry_wait_spins, hub_should_eager_port_power, keyboard_attach_retry_allowed,
         keyboard_display_scroll_delta_for_key, keyboard_scancode_to_char,
         mailbox_visible_dimension, normalize_hub_tt_profile, normalize_pi4_xhci_mmio_hint,
-        parse_xhci_capbase, text_backspace_target, text_row_count, text_viewport_height,
+        parse_xhci_capbase, runtime_vl805_mailbox_reset_error_allows_cold_init,
+        text_backspace_target, text_row_count, text_viewport_height,
         translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode, vl805_cfg_preseed_needed,
         vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
         xhci_controller_params_from_probe, xhci_firmware_handoff_hint_reason,
@@ -8979,6 +9234,22 @@ mod tests {
             Pi4SeatError::UsbKeyboardInit,
             2,
             2
+        ));
+    }
+
+    #[test]
+    fn runtime_vl805_mailbox_reset_soft_errors_continue_cold_init() {
+        assert!(runtime_vl805_mailbox_reset_error_allows_cold_init(
+            Pi4SeatError::MailboxTimeout
+        ));
+        assert!(runtime_vl805_mailbox_reset_error_allows_cold_init(
+            Pi4SeatError::MailboxProtocol
+        ));
+        assert!(!runtime_vl805_mailbox_reset_error_allows_cold_init(
+            Pi4SeatError::MailboxMap
+        ));
+        assert!(!runtime_vl805_mailbox_reset_error_allows_cold_init(
+            Pi4SeatError::MailboxDma
         ));
     }
 
@@ -9071,6 +9342,40 @@ mod tests {
     }
 
     #[test]
+    fn cache_xhci_capability_probe_from_snapshot_accepts_valid_snapshot() {
+        let probe = cache_xhci_capability_probe_from_snapshot(LocalSeatXhciCapabilitySnapshot {
+            cap_length: 0x40,
+            hci_version: 0x0100,
+            hcs1: 32u32 | (8u32 << 24),
+            hcs2: 0,
+            hccparams1: 1 << 2,
+            db_offset: 0x1000,
+            rts_offset: 0x2000,
+        })
+        .expect("valid snapshot should cache into a runtime probe");
+        assert_eq!(probe.cap_length, 0x40);
+        assert_eq!(probe.hci_version, 0x0100);
+        assert_eq!(probe.max_slots, 32);
+        assert_eq!(probe.max_ports, 8);
+    }
+
+    #[test]
+    fn cache_xhci_capability_probe_from_snapshot_rejects_invalid_snapshot() {
+        assert!(
+            cache_xhci_capability_probe_from_snapshot(LocalSeatXhciCapabilitySnapshot {
+                cap_length: 0x10,
+                hci_version: 0x0100,
+                hcs1: 32u32 | (8u32 << 24),
+                hcs2: 0,
+                hccparams1: 1 << 2,
+                db_offset: 0x1000,
+                rts_offset: 0x2000,
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
     fn xhci_diag_stage_labels_cover_runtime_write_fault_markers() {
         assert_eq!(
             xhci_diag_stage_label(0x0205),
@@ -9111,7 +9416,22 @@ mod tests {
         assert_eq!(xhci_diag_stage_label(0x0246), Some("config-readback-begin"));
         assert_eq!(xhci_diag_stage_label(0x0247), Some("dcbaap-readback-begin"));
         assert_eq!(xhci_diag_stage_label(0x0248), Some("dcbaap-write-low"));
+        assert_eq!(xhci_diag_stage_label(0x024a), Some("dcbaap-write-low-done"));
         assert_eq!(xhci_diag_stage_label(0x0249), Some("dcbaap-write-high"));
+        assert_eq!(
+            xhci_diag_stage_label(0x024b),
+            Some("dcbaap-write-high-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x024c), Some("dcbaap-zero-write64"));
+        assert_eq!(
+            xhci_diag_stage_label(0x024d),
+            Some("dcbaap-zero-write64-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x024e),
+            Some("dcbaap-prewrite-read-begin")
+        );
+        assert_eq!(xhci_diag_stage_label(0x024f), Some("dcbaap-prewrite-read"));
         assert_eq!(xhci_diag_stage_label(0x0244), Some("dcbaap-write"));
         assert_eq!(xhci_diag_stage_label(0x0251), Some("crcr-readback"));
         assert_eq!(xhci_diag_stage_label(0x0252), Some("crcr-write"));
@@ -9119,6 +9439,8 @@ mod tests {
         assert_eq!(xhci_diag_stage_label(0x0254), Some("crcr-write-low"));
         assert_eq!(xhci_diag_stage_label(0x0255), Some("crcr-write-high"));
         assert_eq!(xhci_diag_stage_label(0x0256), Some("dnctrl-write"));
+        assert_eq!(xhci_diag_stage_label(0x0257), Some("dcbaap-write64"));
+        assert_eq!(xhci_diag_stage_label(0x0258), Some("dcbaap-write64-done"));
         assert_eq!(xhci_diag_stage_label(0x0261), Some("runtime-ring-readback"));
         assert_eq!(xhci_diag_stage_label(0x0263), Some("usbsts-clear-ack"));
         assert_eq!(xhci_diag_stage_label(0x026b), Some("skip-imod-write"));
@@ -9170,12 +9492,12 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_sink_mode_only_enables_pcie_intx_sink_for_trusted_high_handoff() {
+    fn xhci_irq_sink_mode_stays_disabled_for_current_trusted_high_handoff_probe() {
         assert_eq!(
             xhci_irq_sink_mode(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true),
-            XhciIrqSinkMode::IntxOnly
+            XhciIrqSinkMode::Disabled
         );
-        assert!(xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true));
+        assert!(!xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true));
         assert!(!xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, false));
         assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
@@ -9738,6 +10060,92 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    #[test]
+    fn xhci_runtime_vl805_mailbox_reset_requires_trusted_high_bar() {
+        let safe_cmd = Some(
+            super::PCI_COMMAND_MEMORY_SPACE
+                | super::PCI_COMMAND_BUS_MASTER
+                | super::PCI_COMMAND_INTERRUPT_DISABLE,
+        );
+        assert!(super::xhci_runtime_vl805_mailbox_reset_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            true,
+            true,
+        ));
+        assert!(!super::xhci_runtime_vl805_mailbox_reset_required(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
+            safe_cmd,
+            true,
+            true,
+        ));
+        assert!(!super::xhci_runtime_vl805_mailbox_reset_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            false,
+            true,
+        ));
+        assert!(!super::xhci_runtime_vl805_mailbox_reset_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn xhci_trusted_handoff_snapshot_survives_runtime_mailbox_reset_policy() {
+        let safe_cmd = Some(
+            super::PCI_COMMAND_MEMORY_SPACE
+                | super::PCI_COMMAND_BUS_MASTER
+                | super::PCI_COMMAND_INTERRUPT_DISABLE,
+        );
+        assert!(super::xhci_trusted_handoff_snapshot_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            true,
+            true,
+            false,
+        ));
+        assert!(super::xhci_trusted_handoff_snapshot_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            true,
+            true,
+            true,
+        ));
+        assert!(!super::xhci_trusted_handoff_snapshot_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            safe_cmd,
+            false,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn xhci_runtime_handoff_source_label_reflects_snapshot_path() {
+        assert_eq!(
+            super::xhci_runtime_handoff_source_label(true, true),
+            "fw-handoff-mailbox-reset-snapshot"
+        );
+        assert_eq!(
+            super::xhci_runtime_handoff_source_label(true, false),
+            "fw-handoff-mailbox-reset-cold-init"
+        );
+        assert_eq!(
+            super::xhci_runtime_handoff_source_label(false, true),
+            "fw-handoff-cold-start"
+        );
     }
 
     #[test]

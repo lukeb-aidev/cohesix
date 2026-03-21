@@ -500,7 +500,7 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
   - Capture boot evidence showing:
     - `manifest.hw.network.mode=<static|dhcp>`
     - `manifest.hw.network.interface=<wired|wifi|auto>`
-    - `[net-policy] source=<manifest|dtb> ...`
+    - `[net-policy] source=<manifest|dtb> ...` or `[net-policy] source=dtb rejected reason=<reason> ...`
     - when saved Cohesix policy exists, the U-Boot wizard defaults to `Continue with existing config`; otherwise it defaults to `Boot with manifest defaults`
     - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`

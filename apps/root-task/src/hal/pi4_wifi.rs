@@ -45,6 +45,7 @@ const MAP_EXACT_ATTEMPT_CAP: usize = 2048;
 const TAG_SET_POWER_STATE: u32 = 0x0002_8001;
 const TAG_GET_CLOCK_RATE: u32 = 0x0003_0002;
 const TAG_GET_MAX_CLOCK_RATE: u32 = 0x0003_0004;
+const TAG_NOTIFY_XHCI_RESET: u32 = 0x0003_0058;
 const TAG_GET_GPIO_STATE: u32 = 0x0003_0041;
 const TAG_SET_GPIO_STATE: u32 = 0x0003_8041;
 const TAG_GET_GPIO_CONFIG: u32 = 0x0003_0043;
@@ -55,6 +56,7 @@ const POWER_STATE_REQ_WAIT: u32 = 1 << 1;
 const POWER_DEVID_SDHCI: u32 = 0;
 const CLOCK_ID_EMMC: u32 = 1;
 const CLOCK_ID_EMMC2: u32 = 12;
+const VL805_MAILBOX_RESET_DEV_ADDR: u32 = 0x0010_0000;
 
 const EXPGPIO_BASE: u32 = 128;
 const PI4_WIFI_GPIO: u32 = EXPGPIO_BASE + 1;
@@ -71,6 +73,7 @@ static PINNED_MAILBOX_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_GPIO_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_SDHCI_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_MAILBOX_REQUEST: Mutex<Option<MappedRegs>> = Mutex::new(None);
+static PINNED_MAILBOX_POSTED_REQUEST: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static MAILBOX_CALL_LOCK: Mutex<()> = Mutex::new(());
 static MAILBOX_TRANSPORT_READY: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
@@ -102,6 +105,40 @@ impl MappedRegs {
 
 fn cloned_pinned_regs(pinned: &Mutex<Option<MappedRegs>>) -> Option<MappedRegs> {
     pinned.lock().as_ref().copied()
+}
+
+fn pinned_mailbox_request_page<H>(
+    hal: &mut H,
+    slot: &Mutex<Option<MappedRegs>>,
+    reuse_action: &str,
+    alloc_action: &str,
+) -> Result<MappedRegs, HalError>
+where
+    H: Hardware<Error = HalError>,
+{
+    let mut shared_request = slot.lock();
+    if let Some(frame) = shared_request.as_ref() {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox request page paddr=0x{:08x} action={reuse_action}",
+            frame.paddr()
+        ));
+        return Ok(*frame);
+    }
+
+    let frame = hal
+        .alloc_dma_frame_low_attr(sel4_sys::seL4_ARM_Page_Uncached)
+        .map_err(|_| HalError::Unsupported("mailbox-dma"))?;
+    let mapped = MappedRegs {
+        paddr: frame.paddr(),
+        vaddr: frame.ptr().as_ptr() as usize,
+    };
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] mailbox request page paddr=0x{:08x} action={alloc_action}",
+        mapped.paddr()
+    ));
+    core::mem::forget(frame);
+    *shared_request = Some(mapped);
+    Ok(mapped)
 }
 
 struct GpioBank {
@@ -417,7 +454,7 @@ const fn core_ctrl_postreset_write_uses_current_window_only(base: u32, offset: u
 
 #[inline]
 const fn core_ctrl_postreset_read_preserves_window_cache(base: u32, offset: u32) -> bool {
-    base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET
+    base == CYW43_SOCRAM_CORE_BASE && (offset == AI_IOCTRL_OFFSET || offset == AI_RESETCTRL_OFFSET)
 }
 
 #[inline]
@@ -450,6 +487,17 @@ const fn core_reset_can_skip_pre_clear_in_reset_write(base: u32, skipped_disable
 }
 
 #[inline]
+const fn backplane_window_differs_by_mid_byte_only(
+    current_window_base: u32,
+    target_window_addr: u32,
+) -> bool {
+    let (current_low, current_mid, current_high) =
+        backplane_window_register_bytes(current_window_base);
+    let (target_low, target_mid, target_high) = backplane_window_register_bytes(target_window_addr);
+    current_low == target_low && current_mid != target_mid && current_high == target_high
+}
+
+#[inline]
 const fn core_ctrl_can_defer_clear_reset_readback(base: u32, attempt: usize) -> bool {
     base == CYW43_SOCRAM_CORE_BASE && attempt == 0
 }
@@ -472,6 +520,22 @@ const fn core_reset_can_retry_clear_reset_write(base: u32, attempt: usize) -> bo
 #[inline]
 fn is_sdhci_command_error(err: &HalError) -> bool {
     matches!(err, HalError::Unsupported("sdhci-command-error"))
+}
+
+#[inline]
+fn is_sdhci_io_path_error(err: &HalError) -> bool {
+    matches!(
+        err,
+        HalError::Unsupported("sdhci-command-error")
+            | HalError::Unsupported("sdhci-transfer-command")
+            | HalError::Unsupported("sdhci-transfer-data")
+            | HalError::Unsupported("sdhci-transfer-finish")
+    )
+}
+
+#[inline]
+fn chipcommon_config_can_assume_write_commit(addr: u32, err: &HalError) -> bool {
+    chipcommon_config_is_phase_addr(addr) && is_sdhci_io_path_error(err)
 }
 
 #[inline]
@@ -499,6 +563,55 @@ fn core_reset_can_defer_postreset_clock_en_readback(
     err: &HalError,
 ) -> bool {
     base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET && is_sdhci_command_error(err)
+}
+
+#[inline]
+fn core_reset_can_defer_postreset_reset_readback(base: u32, offset: u32, err: &HalError) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE && offset == AI_RESETCTRL_OFFSET && is_sdhci_command_error(err)
+}
+
+#[inline]
+const fn chipcommon_config_retry_source_window(addr: u32) -> Option<u32> {
+    if addr == CYW43_CHIPCOMMON_BASE + 0x10 {
+        Some(backplane_window_base(
+            CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET,
+        ))
+    } else {
+        None
+    }
+}
+
+#[inline]
+const fn chipcommon_config_source_window(
+    programmed_window: Option<u32>,
+    shadow_window_addr: Option<u32>,
+    addr: u32,
+) -> Option<u32> {
+    match programmed_window {
+        Some(window) => Some(window),
+        None => match shadow_window_addr {
+            Some(window_addr) => Some(backplane_window_base(window_addr)),
+            None => chipcommon_config_retry_source_window(addr),
+        },
+    }
+}
+
+#[inline]
+fn chipcommon_config_can_use_mid_only_window_switch(
+    programmed_window: Option<u32>,
+    shadow_window_addr: Option<u32>,
+    addr: u32,
+) -> bool {
+    let Some(source_window) =
+        chipcommon_config_source_window(programmed_window, shadow_window_addr, addr)
+    else {
+        return false;
+    };
+    backplane_window_differs_by_mid_byte_only(source_window, addr)
+}
+
+const fn chipcommon_config_is_phase_addr(addr: u32) -> bool {
+    addr == CYW43_CHIPCOMMON_BASE + 0x10 || addr == CYW43_CHIPCOMMON_BASE + 0x44
 }
 
 #[inline]
@@ -748,11 +861,19 @@ fn mailbox_tag_name(tag: u32) -> &'static str {
         TAG_SET_POWER_STATE => "set-power-state",
         TAG_GET_CLOCK_RATE => "get-clock-rate",
         TAG_GET_MAX_CLOCK_RATE => "get-max-clock-rate",
+        TAG_NOTIFY_XHCI_RESET => "notify-xhci-reset",
         TAG_GET_GPIO_STATE => "get-gpio-state",
         TAG_SET_GPIO_STATE => "set-gpio-state",
         TAG_GET_GPIO_CONFIG => "get-gpio-config",
         TAG_SET_GPIO_CONFIG => "set-gpio-config",
         _ => "unknown",
+    }
+}
+
+fn mailbox_posted_alias(tag: u32) -> Option<u32> {
+    match tag {
+        TAG_NOTIFY_XHCI_RESET => Some(VC_BUS_ALIAS_BASES[0]),
+        _ => None,
     }
 }
 
@@ -1364,35 +1485,15 @@ impl Mailbox {
             let regs = map_exact(hal, &MAILBOX_PAGE_PADDR_CANDIDATES, &mut prefix_maps)?;
             MappedRegs::from_frame(&regs)
         };
-        let request = {
-            let mut shared_request = PINNED_MAILBOX_REQUEST.lock();
-            if let Some(frame) = shared_request.as_ref() {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] mailbox request page paddr=0x{:08x} action=reuse-shared",
-                    frame.paddr()
-                ));
-                *frame
-            } else {
-                let frame = hal
-                    .alloc_dma_frame_low_attr(sel4_sys::seL4_ARM_Page_Uncached)
-                    .map_err(|_| HalError::Unsupported("mailbox-dma"))?;
-                // Keep one uncached mailbox request page alive for the full boot so
-                // USB reset-notify and Wi-Fi property traffic reuse the same VC
-                // mailbox buffer address instead of racing stale replies from
-                // short-lived per-call pages.
-                let mapped = MappedRegs {
-                    paddr: frame.paddr(),
-                    vaddr: frame.ptr().as_ptr() as usize,
-                };
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] mailbox request page paddr=0x{:08x} action=alloc-shared",
-                    mapped.paddr()
-                ));
-                core::mem::forget(frame);
-                *shared_request = Some(mapped);
-                mapped
-            }
-        };
+        // Keep one uncached mailbox request page alive for acknowledged property
+        // calls so Wi-Fi bring-up reuses a stable VC mailbox buffer address
+        // instead of racing stale replies from short-lived per-call pages.
+        let request = pinned_mailbox_request_page(
+            hal,
+            &PINNED_MAILBOX_REQUEST,
+            "reuse-shared",
+            "alloc-shared",
+        )?;
         Ok(Self { regs, request })
     }
 
@@ -1565,6 +1666,36 @@ impl Mailbox {
         Err(last_err)
     }
 
+    fn post_tag(&self, tag: u32, request_len_bytes: u32, payload: &[u32]) -> Result<(), HalError> {
+        let _mailbox_call_lock = MAILBOX_CALL_LOCK.lock();
+        let request = unsafe {
+            // SAFETY: `PINNED_MAILBOX_POSTED_REQUEST` holds a permanently pinned
+            // uncached DMA page dedicated to fire-and-forget property traffic.
+            core::slice::from_raw_parts_mut(
+                self.request.vaddr() as *mut u32,
+                PAGE_SIZE / core::mem::size_of::<u32>(),
+            )
+        };
+        self.encode_request(request, tag, request_len_bytes, payload)?;
+        let alias_base =
+            mailbox_posted_alias(tag).ok_or(HalError::Unsupported("mailbox-posted-tag"))?;
+        let request_bus = phys_to_bus(self.request.paddr(), alias_base)
+            .ok_or(HalError::Unsupported("mailbox-bus-alias"))?;
+        self.send_posted(request_bus)?;
+        MAILBOX_TRANSPORT_READY.store(true, Ordering::Release);
+        if !MAILBOX_TRANSPORT_READY_LOGGED.swap(true, Ordering::AcqRel) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] mailbox transport ready tag={}",
+                mailbox_tag_name(tag)
+            ));
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] mailbox posted tag={} alias=0x{alias_base:08x}",
+            mailbox_tag_name(tag)
+        ));
+        Ok(())
+    }
+
     fn encode_request(
         &self,
         words: &mut [u32],
@@ -1594,8 +1725,7 @@ impl Mailbox {
         Ok(())
     }
 
-    fn send(&self, data: u32) -> Result<(), HalError> {
-        let expected = data & !0xF;
+    fn prepare_send(&self) -> Result<(), HalError> {
         for _ in 0..MAILBOX_DRAIN_LIMIT {
             if self.read_reg(MAILBOX_STATUS0_OFFSET) & MAILBOX_EMPTY != 0 {
                 break;
@@ -1612,14 +1742,24 @@ impl Mailbox {
             }
             spin_loop();
         }
+        Ok(())
+    }
 
+    fn send_posted(&self, data: u32) -> Result<(), HalError> {
+        self.prepare_send()?;
         self.write_reg(
             MAILBOX_WRITE_OFFSET,
             (data & !0xF) | (MAILBOX_CHANNEL_PROPERTY & 0xF),
         );
         fence(Ordering::SeqCst);
+        Ok(())
+    }
 
-        wait = 0;
+    fn send(&self, data: u32) -> Result<(), HalError> {
+        let expected = data & !0xF;
+        self.send_posted(data)?;
+
+        let mut wait = 0usize;
         loop {
             while self.read_reg(MAILBOX_STATUS0_OFFSET) & MAILBOX_EMPTY != 0 {
                 wait = wait.saturating_add(1);
@@ -1678,6 +1818,38 @@ impl Mailbox {
         let base = self.regs.vaddr();
         unsafe { ptr::write_volatile((base + offset) as *mut u32, value) };
     }
+}
+
+pub fn notify_vl805_reset<H>(hal: &mut H) -> Result<(), HalError>
+where
+    H: Hardware<Error = HalError>,
+{
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] mailbox xhci-reset-notify device=0x{VL805_MAILBOX_RESET_DEV_ADDR:08x}"
+    ));
+    let mailbox_regs = if let Some(regs) = cloned_pinned_regs(&PINNED_MAILBOX_REGS) {
+        regs
+    } else {
+        let mailbox = Mailbox::new(hal)?;
+        mailbox.regs
+    };
+    // Keep a dedicated uncached DMA page alive for posted xHCI reset traffic so
+    // later acknowledged mailbox calls cannot overwrite the request before
+    // VideoCore consumes it.
+    let request = pinned_mailbox_request_page(
+        hal,
+        &PINNED_MAILBOX_POSTED_REQUEST,
+        "reuse-posted",
+        "alloc-posted",
+    )?;
+    let mailbox = Mailbox {
+        regs: mailbox_regs,
+        request,
+    };
+    let payload = [VL805_MAILBOX_RESET_DEV_ADDR];
+    mailbox.post_tag(TAG_NOTIFY_XHCI_RESET, 4, &payload)?;
+    emit_breadcrumb(format_args!("[pi4-wifi] mailbox xhci-reset-notify posted"));
+    Ok(())
 }
 
 struct SdioHost {
@@ -2390,6 +2562,174 @@ impl SdioHost {
         })
     }
 
+    fn configure_chipcommon(&mut self) -> Result<(), HalError> {
+        let writes = [
+            (CYW43_CHIPCOMMON_BASE + 0x10, 3u32),
+            (CYW43_CHIPCOMMON_BASE + 0x44, 0u32),
+        ];
+        let prior_programmed_window = self.programmed_backplane_window;
+        let prior_shadow_window = self.last_backplane_window;
+        if chipcommon_config_can_use_mid_only_window_switch(
+            prior_programmed_window,
+            prior_shadow_window,
+            writes[0].0,
+        ) {
+            let current_window = chipcommon_config_source_window(
+                prior_programmed_window,
+                prior_shadow_window,
+                writes[0].0,
+            )
+            .unwrap_or(0);
+            match self
+                .chipcommon_config_enter_window_direct_phase(current_window, writes[0].0)
+                .and_then(|()| {
+                    for (addr, value) in writes {
+                        self.chipcommon_config_write32_direct_phase(addr, value)?;
+                    }
+                    Ok(())
+                }) {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=chipcommon-config-direct-fallback addr=0x{addr:08x} current_window=0x{current_window:08x} err={err}",
+                        addr = writes[0].0,
+                    ));
+                    self.recover_command_path("chipcommon-config-direct-fallback");
+                }
+            }
+        }
+        for (addr, value) in writes {
+            if chipcommon_config_is_phase_addr(addr) {
+                if self.programmed_backplane_window != Some(backplane_window_base(addr)) {
+                    let current_window = chipcommon_config_source_window(
+                        prior_programmed_window,
+                        prior_shadow_window,
+                        addr,
+                    )
+                    .unwrap_or(0);
+                    self.recover_command_path("chipcommon-config-retry");
+                    self.chipcommon_config_enter_window_direct_phase(current_window, addr)?;
+                }
+                self.chipcommon_config_write32_direct_phase(addr, value)?;
+            } else if chipcommon_config_can_use_mid_only_window_switch(
+                prior_programmed_window,
+                prior_shadow_window,
+                addr,
+            ) {
+                let current_window = chipcommon_config_source_window(
+                    prior_programmed_window,
+                    prior_shadow_window,
+                    addr,
+                )
+                .unwrap_or(0);
+                self.recover_command_path("chipcommon-config-retry");
+                self.chipcommon_config_enter_window_direct_phase(current_window, addr)?;
+                self.chipcommon_config_write32_direct_phase(addr, value)?;
+            } else {
+                self.backplane_write32(addr, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn chipcommon_config_enter_window_direct_phase(
+        &mut self,
+        current_window: u32,
+        addr: u32,
+    ) -> Result<(), HalError> {
+        let target_window = backplane_window_base(addr);
+        let function_addr = addr & BACKPLANE_ADDRESS_MASK;
+        let (target_low, target_mid, target_high) = backplane_window_register_bytes(addr);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=chipcommon-config-retry addr=0x{addr:08x} current_window=0x{current_window:08x} target_window=0x{target_window:08x} reason=mid-byte-only-window-switch-direct"
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] backplane window retarget current=0x{current_window:08x} target=0x{target_window:08x} low=0x{target_low:02x} mid=0x{target_mid:02x} high=0x{target_high:02x} path=cmd52-mid-only"
+        ));
+        if let Err(err) =
+            self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SBADDRMID, target_mid)
+        {
+            if !is_sdhci_command_error(&err) {
+                return Err(err);
+            }
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=chipcommon-config-window-assumed-committed addr=0x{addr:08x} current_window=0x{current_window:08x} target_window=0x{target_window:08x} err={err} reason=chipcommon-mid-window-timeout"
+            ));
+            self.remember_backplane_window(
+                addr,
+                function_addr,
+                target_low,
+                target_mid,
+                target_high,
+            );
+            self.programmed_backplane_window = Some(target_window);
+            self.log_transport_shadow("chipcommon-config-window-assumed-committed");
+            return Ok(());
+        }
+        self.programmed_backplane_window = Some(target_window);
+        self.remember_backplane_window(addr, function_addr, target_low, target_mid, target_high);
+        Ok(())
+    }
+
+    fn chipcommon_config_write32_direct_phase(
+        &mut self,
+        addr: u32,
+        value: u32,
+    ) -> Result<(), HalError> {
+        let bytes = value.to_le_bytes();
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=chipcommon-config-write addr=0x{addr:08x} value=0x{value:08x} path=cmd53-byte-windowed"
+        ));
+        match self.backplane_write(addr, &bytes) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if !chipcommon_config_can_assume_write_commit(addr, &err) {
+                    return Err(err);
+                }
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=chipcommon-config-write-retry addr=0x{addr:08x} value=0x{value:08x} err={err} reason=current-window-payload-timeout path=cmd53-byte-windowed"
+                ));
+                self.restore_window_cache_from_shadow("chipcommon-config-write-retry");
+                let retry_bytes = value.to_le_bytes();
+                match self.backplane_write(addr, &retry_bytes) {
+                    Ok(()) => Ok(()),
+                    Err(retry_err) => {
+                        if !chipcommon_config_can_assume_write_commit(addr, &retry_err) {
+                            return Err(retry_err);
+                        }
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage=chipcommon-config-write-fixed addr=0x{addr:08x} value=0x{value:08x} err={retry_err} reason=current-window-payload-timeout path=cmd53-fixed-window"
+                        ));
+                        self.recover_command_path_preserve_window("chipcommon-config-write-fixed");
+                        let mut fixed_bytes = value.to_le_bytes();
+                        let fixed_addr = addr & BACKPLANE_ADDRESS_MASK;
+                        match self.io_extended(
+                            SdioFunction::Function1,
+                            fixed_addr,
+                            false,
+                            true,
+                            &mut fixed_bytes,
+                        ) {
+                            Ok(()) => Ok(()),
+                            Err(fixed_err) => {
+                                if !chipcommon_config_can_assume_write_commit(addr, &fixed_err) {
+                                    return Err(fixed_err);
+                                }
+                                emit_breadcrumb(format_args!(
+                                    "[pi4-wifi] firmware stage=chipcommon-config-write-assumed-committed addr=0x{addr:08x} value=0x{value:08x} err={fixed_err} reason=chipcommon-phase-write-timeout path=cmd53-fixed-window"
+                                ));
+                                self.log_transport_shadow(
+                                    "chipcommon-config-write-assumed-committed",
+                                );
+                                Ok(())
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn with_backplane_window_addr<T>(
         &mut self,
         window_addr: u32,
@@ -2571,8 +2911,7 @@ impl SdioHost {
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=socram-reset"));
         self.core_reset(CYW43_SOCRAM_CORE_BASE, 0, 0, 0)?;
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=chipcommon-config"));
-        self.backplane_write32(0x1800_4000 + 0x10, 3)?;
-        self.backplane_write32(0x1800_4000 + 0x44, 0)?;
+        self.configure_chipcommon()?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=write-firmware bytes={}",
             bundle.firmware.len()
@@ -3519,8 +3858,23 @@ impl SdioHost {
                 postreset_ioctrl
             }
         };
-        let resetctrl =
-            self.core_ctrl_read8_logged(base, AI_RESETCTRL_OFFSET, "postreset-clock-en-readback")?;
+        let resetctrl = match self.core_ctrl_postreset_read8_logged(
+            base,
+            AI_RESETCTRL_OFFSET,
+            "postreset-clock-en-readback",
+        ) {
+            Ok(value) => value,
+            Err(err) => {
+                if !core_reset_can_defer_postreset_reset_readback(base, AI_RESETCTRL_OFFSET, &err) {
+                    return Err(err);
+                }
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-reset-read-deferred reset=0x{last_reset:02x} err={err} reason=socram-fragile-postreset-reset-read"
+                ));
+                self.restore_window_cache_from_shadow("core-reset-postreset-reset-read-deferred");
+                last_reset
+            }
+        };
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=verify io=0x{ioctrl:02x} reset=0x{resetctrl:02x} reason={}",
             ai_core_state_reason(ioctrl, resetctrl),
@@ -4156,7 +4510,8 @@ mod tests {
         SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_MULTI, SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS,
         SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,
         SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1, SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1,
-        SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+        SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE, TAG_NOTIFY_XHCI_RESET, TAG_SET_GPIO_CONFIG,
+        TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -4322,6 +4677,10 @@ mod tests {
             "cmd53-windowed-read32-cmd52-current-window no-rewindow"
         );
         assert_eq!(
+            core_ctrl_postreset_read_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_RESETCTRL_OFFSET),
+            "cmd53-windowed-read32-cmd52-current-window no-rewindow"
+        );
+        assert_eq!(
             core_ctrl_postreset_read_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
             "cmd53-windowed-read32-cmd52-current-window fallback=cmd52-byte-rewindow"
         );
@@ -4357,13 +4716,13 @@ mod tests {
             CYW43_SOCRAM_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
+        assert!(core_ctrl_postreset_read_preserves_window_cache(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET
+        ));
         assert!(!core_ctrl_postreset_read_preserves_window_cache(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET
-        ));
-        assert!(!core_ctrl_postreset_read_preserves_window_cache(
-            CYW43_SOCRAM_CORE_BASE,
-            AI_RESETCTRL_OFFSET
         ));
         assert!(core_ctrl_can_skip_redundant_in_reset_write(
             CYW43_SOCRAM_CORE_BASE,
@@ -4497,6 +4856,113 @@ mod tests {
             AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
+        assert!(core_reset_can_defer_postreset_reset_readback(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_defer_postreset_reset_readback(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_defer_postreset_reset_readback(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!core_reset_can_defer_postreset_reset_readback(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(backplane_window_differs_by_mid_byte_only(
+            backplane_window_base(CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET),
+            CYW43_CHIPCOMMON_BASE + 0x10,
+        ));
+        assert!(chipcommon_config_is_phase_addr(
+            CYW43_CHIPCOMMON_BASE + 0x10
+        ));
+        assert!(chipcommon_config_is_phase_addr(
+            CYW43_CHIPCOMMON_BASE + 0x44
+        ));
+        assert!(!chipcommon_config_is_phase_addr(
+            CYW43_CHIPCOMMON_BASE + 0x48
+        ));
+        assert!(!backplane_window_differs_by_mid_byte_only(
+            backplane_window_base(CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET),
+            CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET,
+        ));
+        assert_eq!(
+            chipcommon_config_source_window(
+                None,
+                Some(CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET),
+                CYW43_CHIPCOMMON_BASE + 0x10,
+            ),
+            Some(backplane_window_base(
+                CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET
+            )),
+        );
+        assert!(chipcommon_config_can_use_mid_only_window_switch(
+            Some(backplane_window_base(
+                CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET
+            )),
+            None,
+            CYW43_CHIPCOMMON_BASE + 0x10,
+        ));
+        assert!(chipcommon_config_can_use_mid_only_window_switch(
+            None,
+            Some(CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET),
+            CYW43_CHIPCOMMON_BASE + 0x10,
+        ));
+        assert!(chipcommon_config_can_use_mid_only_window_switch(
+            None,
+            None,
+            CYW43_CHIPCOMMON_BASE + 0x10,
+        ));
+        assert!(!chipcommon_config_can_use_mid_only_window_switch(
+            Some(backplane_window_base(
+                CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET
+            )),
+            None,
+            CYW43_CHIPCOMMON_BASE + 0x44,
+        ));
+        assert!(!chipcommon_config_can_use_mid_only_window_switch(
+            Some(backplane_window_base(CYW43_CHIPCOMMON_BASE + 0x10)),
+            None,
+            CYW43_CHIPCOMMON_BASE + 0x10,
+        ));
+        assert!(is_sdhci_io_path_error(&HalError::Unsupported(
+            "sdhci-command-error"
+        )));
+        assert!(is_sdhci_io_path_error(&HalError::Unsupported(
+            "sdhci-transfer-command"
+        )));
+        assert!(is_sdhci_io_path_error(&HalError::Unsupported(
+            "sdhci-transfer-data"
+        )));
+        assert!(is_sdhci_io_path_error(&HalError::Unsupported(
+            "sdhci-transfer-finish"
+        )));
+        assert!(!is_sdhci_io_path_error(&HalError::Unsupported(
+            "sdhci-int-timeout"
+        )));
+        assert!(chipcommon_config_can_assume_write_commit(
+            CYW43_CHIPCOMMON_BASE + 0x10,
+            &HalError::Unsupported("sdhci-transfer-command"),
+        ));
+        assert!(chipcommon_config_can_assume_write_commit(
+            CYW43_CHIPCOMMON_BASE + 0x44,
+            &HalError::Unsupported("sdhci-command-error"),
+        ));
+        assert!(!chipcommon_config_can_assume_write_commit(
+            CYW43_CHIPCOMMON_BASE + 0x48,
+            &HalError::Unsupported("sdhci-transfer-command"),
+        ));
+        assert!(!chipcommon_config_can_assume_write_commit(
+            CYW43_CHIPCOMMON_BASE + 0x10,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
         assert!(core_reset_clear_preserves_window_cache());
         assert!(!core_reset_clear_allows_immediate_rewindow_fallback());
         assert_eq!(
@@ -4568,8 +5034,19 @@ mod tests {
     fn mailbox_tag_names_cover_bringup_tags() {
         assert_eq!(mailbox_tag_name(TAG_SET_POWER_STATE), "set-power-state");
         assert_eq!(mailbox_tag_name(TAG_GET_CLOCK_RATE), "get-clock-rate");
+        assert_eq!(mailbox_tag_name(TAG_NOTIFY_XHCI_RESET), "notify-xhci-reset");
         assert_eq!(mailbox_tag_name(TAG_SET_GPIO_CONFIG), "set-gpio-config");
         assert_eq!(mailbox_tag_name(0xffff_ffff), "unknown");
+    }
+
+    #[test]
+    fn mailbox_posted_alias_is_reserved_for_xhci_reset_notify() {
+        assert_eq!(
+            mailbox_posted_alias(TAG_NOTIFY_XHCI_RESET),
+            Some(VC_BUS_ALIAS_BASES[0])
+        );
+        assert_eq!(mailbox_posted_alias(TAG_SET_POWER_STATE), None);
+        assert_eq!(mailbox_posted_alias(TAG_GET_GPIO_STATE), None);
     }
 
     #[test]

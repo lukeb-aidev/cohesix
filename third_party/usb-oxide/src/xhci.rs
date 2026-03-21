@@ -29,6 +29,12 @@ const PORT_SETTLE_SPINS: usize = 100_000;
 const PORT_POST_ACK_WAIT_SPINS: usize = 1_000_000;
 const PORT_POST_ACK_TRANSITION_LOGS: usize = 8;
 const DROP_HALT_WAIT_SPINS: usize = 1_000_000;
+// Narrow Pi 4 bring-up experiment: first prove whether a no-op zero rewrite to
+// DCBAAP is itself fatal, then publish the real pointer with one 64-bit store
+// so the low half does not become visible before the high half.
+const TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE: bool = true;
+const TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE: bool = true;
+const TRUSTED_HANDOFF_DCBAAP_WIDE_WRITE_PROBE: bool = true;
 const USBSTS_CLEAR_MASK: u32 =
     reg::USBSTS_EINT | reg::USBSTS_PCD | reg::USBSTS_HSE | reg::USBSTS_HCE;
 const USBLEGACY_BIOS_OWNED: u32 = 1 << 16;
@@ -166,7 +172,9 @@ fn mmio_write_barrier() {
     compiler_fence(Ordering::Release);
     #[cfg(target_arch = "aarch64")]
     unsafe {
-        core::arch::asm!("dmb osh", options(nostack, preserves_flags));
+        // Match U-Boot's ARM `writel()` ordering exactly on the trusted Pi 4
+        // handoff path. Its `__iowmb()` expands to `dmb sy`, not `dmb osh`.
+        core::arch::asm!("dmb sy", options(nostack, preserves_flags));
     }
     #[cfg(not(target_arch = "aarch64"))]
     core::sync::atomic::fence(Ordering::Release);
@@ -177,7 +185,9 @@ fn mmio_read_barrier() {
     compiler_fence(Ordering::Acquire);
     #[cfg(target_arch = "aarch64")]
     unsafe {
-        core::arch::asm!("dmb osh", options(nostack, preserves_flags));
+        // Match U-Boot's ARM `readl()` ordering exactly on the trusted Pi 4
+        // handoff path. Its `__iormb()` expands to `dmb sy`, not `dmb osh`.
+        core::arch::asm!("dmb sy", options(nostack, preserves_flags));
     }
     #[cfg(not(target_arch = "aarch64"))]
     core::sync::atomic::fence(Ordering::Acquire);
@@ -431,6 +441,38 @@ impl<H: Dma> XhciCtrl<H> {
         Self::write_reg_at::<u32>(mmio, low.0, low.1);
         emit_xhci_diag(high_stage, high.0 as u64, high.1 as u64, val);
         Self::write_reg_at::<u32>(mmio, high.0, high.1);
+    }
+
+    #[inline(always)]
+    fn write_reg_u64_done_diag_at(
+        mmio: usize,
+        offset: usize,
+        val: u64,
+        low_stage: u16,
+        low_done_stage: u16,
+        high_stage: u16,
+        high_done_stage: u16,
+    ) {
+        let [low, high] = split_u64_reg_write_ops(offset, val);
+        emit_xhci_diag(low_stage, low.0 as u64, low.1 as u64, val);
+        Self::write_reg_at::<u32>(mmio, low.0, low.1);
+        emit_xhci_diag(low_done_stage, low.0 as u64, low.1 as u64, val);
+        emit_xhci_diag(high_stage, high.0 as u64, high.1 as u64, val);
+        Self::write_reg_at::<u32>(mmio, high.0, high.1);
+        emit_xhci_diag(high_done_stage, high.0 as u64, high.1 as u64, val);
+    }
+
+    #[inline(always)]
+    fn write_reg_u64_atomic_diag_at(
+        mmio: usize,
+        offset: usize,
+        val: u64,
+        write_stage: u16,
+        done_stage: u16,
+    ) {
+        emit_xhci_diag(write_stage, offset as u64, val, 0);
+        Self::write_reg_at::<u64>(mmio, offset, val);
+        emit_xhci_diag(done_stage, offset as u64, val, 0);
     }
 
     #[inline(always)]
@@ -733,12 +775,33 @@ impl<H: Dma> XhciCtrl<H> {
         }
         let dcbaa_phys = self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa")?;
         emit_xhci_diag(0x0244, reg::DCBAAP as u64, dcbaa_phys, 0);
-        self.write_op_u64_diag(
-            reg::DCBAAP,
-            dcbaa_phys,
-            0x0248,
-            0x0249,
-        );
+        let dcbaap_offset = self.op_base - self.mmio + reg::DCBAAP;
+        if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE {
+            emit_xhci_diag(0x024e, reg::DCBAAP as u64, dcbaap_offset as u64, 1);
+            emit_xhci_diag(0x024f, self.read_reg_u64(dcbaap_offset), dcbaap_offset as u64, 1);
+        }
+        if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE {
+            Self::write_reg_u64_atomic_diag_at(self.mmio, dcbaap_offset, 0, 0x024c, 0x024d);
+        }
+        if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_WIDE_WRITE_PROBE {
+            Self::write_reg_u64_atomic_diag_at(
+                self.mmio,
+                dcbaap_offset,
+                dcbaa_phys,
+                0x0257,
+                0x0258,
+            );
+        } else {
+            Self::write_reg_u64_done_diag_at(
+                self.mmio,
+                dcbaap_offset,
+                dcbaa_phys,
+                0x0248,
+                0x024a,
+                0x0249,
+                0x024b,
+            );
+        }
         if preserve_firmware_state {
             emit_xhci_diag(0x0242, dcbaa_phys, 1, 0);
         } else {
