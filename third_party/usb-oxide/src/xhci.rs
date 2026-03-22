@@ -29,12 +29,13 @@ const PORT_SETTLE_SPINS: usize = 100_000;
 const PORT_POST_ACK_WAIT_SPINS: usize = 1_000_000;
 const PORT_POST_ACK_TRANSITION_LOGS: usize = 8;
 const DROP_HALT_WAIT_SPINS: usize = 1_000_000;
-// Narrow Pi 4 bring-up experiment: first prove whether a no-op zero rewrite to
-// DCBAAP is itself fatal, then publish the real pointer with one 64-bit store
-// so the low half does not become visible before the high half.
-const TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE: bool = true;
-const TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE: bool = true;
-const TRUSTED_HANDOFF_DCBAAP_WIDE_WRITE_PROBE: bool = true;
+// Pi 4 now reliably reaches trusted-handoff ring programming. At that point the
+// DCBAAP prewrite read and zero rewrite are just ownership probes, and the
+// board-freezing edge was the experimental atomic write64 publish. Keep the
+// trusted-handoff path on the standard low / high dword sequence only and use
+// later xHCI breadcrumbs to judge success/failure.
+const TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE: bool = false;
+const TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE: bool = false;
 const USBSTS_CLEAR_MASK: u32 =
     reg::USBSTS_EINT | reg::USBSTS_PCD | reg::USBSTS_HSE | reg::USBSTS_HCE;
 const USBLEGACY_BIOS_OWNED: u32 = 1 << 16;
@@ -783,25 +784,18 @@ impl<H: Dma> XhciCtrl<H> {
         if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE {
             Self::write_reg_u64_atomic_diag_at(self.mmio, dcbaap_offset, 0, 0x024c, 0x024d);
         }
-        if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_WIDE_WRITE_PROBE {
-            Self::write_reg_u64_atomic_diag_at(
-                self.mmio,
-                dcbaap_offset,
-                dcbaa_phys,
-                0x0257,
-                0x0258,
-            );
-        } else {
-            Self::write_reg_u64_done_diag_at(
-                self.mmio,
-                dcbaap_offset,
-                dcbaa_phys,
-                0x0248,
-                0x024a,
-                0x0249,
-                0x024b,
-            );
+        if preserve_firmware_state {
+            emit_xhci_diag(0x0259, reg::DCBAAP as u64, dcbaa_phys, 1);
         }
+        Self::write_reg_u64_done_diag_at(
+            self.mmio,
+            dcbaap_offset,
+            dcbaa_phys,
+            0x0248,
+            0x024a,
+            0x0249,
+            0x024b,
+        );
         if preserve_firmware_state {
             emit_xhci_diag(0x0242, dcbaa_phys, 1, 0);
         } else {
@@ -811,7 +805,14 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Setup command ring
         let cmd_ring = self.cmd_ring.lock();
-        let current_crcr = self.read_op_u64(reg::CRCR);
+        // Trusted handoff already established a stopped/quiesced controller. Do
+        // not live-read CRCR before we republish our own command ring; the
+        // current Pi 4 wedge pattern is on early ownership MMIO reads.
+        let current_crcr = if preserve_firmware_state {
+            0
+        } else {
+            self.read_op_u64(reg::CRCR)
+        };
         let cmd_ring_phys = cmd_ring.share_for_device(&*self.host, "xhci-cmd-ring")?;
         let crcr = compose_crcr(current_crcr, cmd_ring_phys, true);
         emit_xhci_diag(0x0250, crcr, 0, 0);
@@ -850,11 +851,22 @@ impl<H: Dma> XhciCtrl<H> {
             0x0277,
             0x0278,
         );
-        let erst_size = compose_erst_size(self.read_reg::<u32>(int_base + reg::ERSTSZ), 1);
+        let erst_size = compose_erst_size(
+            if preserve_firmware_state {
+                0
+            } else {
+                self.read_reg::<u32>(int_base + reg::ERSTSZ)
+            },
+            1,
+        );
         emit_xhci_diag(0x0264, (int_base + reg::ERSTSZ) as u64, erst_size as u64, 0);
         self.write_reg(int_base + reg::ERSTSZ, erst_size);
         let erstba = compose_erst_base(
-            self.read_reg_u64(int_base + reg::ERSTBA),
+            if preserve_firmware_state {
+                0
+            } else {
+                self.read_reg_u64(int_base + reg::ERSTBA)
+            },
             erst_phys,
         );
         emit_xhci_diag(0x0265, (int_base + reg::ERSTBA) as u64, erstba, 0);
@@ -1543,11 +1555,14 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        XhciControllerParams, halt_revalidation_needed, masked_usbcmd,
-        skip_live_halt_revalidation,
-        parse_controller_params, polling_iman_value,
-        preserve_firmware_handoff_config, split_u64_reg_write_ops,
-        port_ready_for_enumeration,
+        XhciControllerParams, compose_crcr, compose_erst_base,
+        compose_erst_size, compose_initial_erdp, halt_revalidation_needed,
+        masked_usbcmd, parse_controller_params, polling_iman_value,
+        port_ready_for_enumeration, preserve_firmware_handoff_config,
+        skip_live_halt_revalidation, skip_reset_during_init,
+        split_u64_reg_write_ops, SKIP_HCRST_DURING_INIT,
+        TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
+        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
     };
     use crate::reg;
 
@@ -1648,6 +1663,19 @@ mod tests {
     }
 
     #[test]
+    fn trusted_handoff_dcbaap_path_skips_experimental_probes() {
+        assert!(!TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE);
+        assert!(!TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE);
+    }
+
+    #[test]
+    fn trusted_handoff_crcr_publish_uses_write_only_seed() {
+        let composed = compose_crcr(0, 0x0404_0020_00, true);
+        assert_eq!(composed & reg::CMD_RING_RSVD_BITS, 1);
+        assert_eq!(composed & !reg::CMD_RING_RSVD_BITS, 0x0404_0020_00);
+    }
+
+    #[test]
     fn crcr_updates_preserve_reserved_bits() {
         let composed = compose_crcr(0x3e, 0x0404_0020_00, true);
         assert_eq!(composed & reg::CMD_RING_RSVD_BITS, 0x3f);
@@ -1666,6 +1694,14 @@ mod tests {
         let erdp = compose_initial_erdp(0x0404_0040_08);
         assert_eq!(erdp & reg::ERST_EHB, 0);
         assert_eq!(erdp & !reg::ERST_PTR_MASK, 0x0404_0040_00);
+    }
+
+    #[test]
+    fn trusted_handoff_event_ring_publish_uses_write_only_seeds() {
+        assert_eq!(compose_erst_size(0, 1), 1);
+        let composed = compose_erst_base(0, 0x0404_0030_00);
+        assert_eq!(composed & reg::ERST_PTR_MASK, 0);
+        assert_eq!(composed & !reg::ERST_PTR_MASK, 0x0404_0030_00);
     }
 }
 

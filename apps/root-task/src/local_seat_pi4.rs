@@ -1140,19 +1140,20 @@ fn xhci_firmware_handoff_cold_start_trusted(
 
 #[inline]
 fn xhci_runtime_vl805_mailbox_reset_required(
-    mmio: usize,
-    firmware_hint: Option<usize>,
-    xhci_pci_cmd: Option<u16>,
-    xhci_handoff_ready: bool,
-    xhci_irq_quiesced: bool,
+    _mmio: usize,
+    _firmware_hint: Option<usize>,
+    _xhci_pci_cmd: Option<u16>,
+    _xhci_handoff_ready: bool,
+    _xhci_irq_quiesced: bool,
 ) -> bool {
-    xhci_firmware_handoff_cold_start_trusted(
-        mmio,
-        firmware_hint,
-        xhci_pci_cmd,
-        xhci_handoff_ready,
-        xhci_irq_quiesced,
-    )
+    // The trusted high-BAR handoff path already comes from a bootloader-owned
+    // stopped/quiesced controller snapshot. Replaying the VL805 mailbox reset
+    // at runtime perturbs that preserved state immediately before the first
+    // controller ownership write, which now wedges at the split DCBAAP low
+    // dword publish. Keep the trusted handoff path on the preserved snapshot
+    // and leave the runtime mailbox reset disabled until a cold-init-only use
+    // case is proven safe again.
+    false
 }
 
 #[inline]
@@ -1184,6 +1185,8 @@ const fn xhci_runtime_handoff_source_label(
 ) -> &'static str {
     if runtime_vl805_reset && using_handoff_snapshot {
         "fw-handoff-mailbox-reset-snapshot"
+    } else if using_handoff_snapshot {
+        "fw-handoff-preserved-snapshot"
     } else if runtime_vl805_reset {
         "fw-handoff-mailbox-reset-cold-init"
     } else {
@@ -1616,6 +1619,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0256 => Some("dnctrl-write"),
         0x0257 => Some("dcbaap-write64"),
         0x0258 => Some("dcbaap-write64-done"),
+        0x0259 => Some("dcbaap-write-split-selected"),
         0x0261 => Some("runtime-ring-readback"),
         0x0263 => Some("usbsts-clear-ack"),
         0x0264 => Some("erstsz-write"),
@@ -4756,6 +4760,11 @@ impl UsbKeyboard {
                         runtime_vl805_reset,
                     )
                 });
+                if !runtime_vl805_reset && trusted_handoff_probe.is_some() {
+                    boot_log::force_uart_line(
+                        "[local-seat] vl805 reset handoff=runtime-owned stage=runtime detail=skip-preserve-trusted-snapshot action=retain-bootloader-state",
+                    );
+                }
 
                 let raw_probe = if let Some(raw_probe) = trusted_handoff_probe {
                     let mut line = heapless::String::<352>::new();
@@ -9441,6 +9450,10 @@ mod tests {
         assert_eq!(xhci_diag_stage_label(0x0256), Some("dnctrl-write"));
         assert_eq!(xhci_diag_stage_label(0x0257), Some("dcbaap-write64"));
         assert_eq!(xhci_diag_stage_label(0x0258), Some("dcbaap-write64-done"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0259),
+            Some("dcbaap-write-split-selected")
+        );
         assert_eq!(xhci_diag_stage_label(0x0261), Some("runtime-ring-readback"));
         assert_eq!(xhci_diag_stage_label(0x0263), Some("usbsts-clear-ack"));
         assert_eq!(xhci_diag_stage_label(0x026b), Some("skip-imod-write"));
@@ -10063,13 +10076,13 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_vl805_mailbox_reset_requires_trusted_high_bar() {
+    fn xhci_runtime_vl805_mailbox_reset_stays_disabled_on_trusted_handoff() {
         let safe_cmd = Some(
             super::PCI_COMMAND_MEMORY_SPACE
                 | super::PCI_COMMAND_BUS_MASTER
                 | super::PCI_COMMAND_INTERRUPT_DISABLE,
         );
-        assert!(super::xhci_runtime_vl805_mailbox_reset_required(
+        assert!(!super::xhci_runtime_vl805_mailbox_reset_required(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             safe_cmd,
@@ -10144,7 +10157,7 @@ mod tests {
         );
         assert_eq!(
             super::xhci_runtime_handoff_source_label(false, true),
-            "fw-handoff-cold-start"
+            "fw-handoff-preserved-snapshot"
         );
     }
 

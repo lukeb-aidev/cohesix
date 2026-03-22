@@ -109,6 +109,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
 | [29](#29) | Edge Local Status (Pi 4 Host Tool) | Pending |
+| [29b](#29b) | AI-Native Namespace Surfaces (Control-Plane Only) | Pending |
 | [30](#30) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
 
 ---
@@ -7521,6 +7522,109 @@ Checks:
 Deliverables:
   - Field-tech read-only transcript fixtures and explicit docs.
 
+```
+
+## Milestone 29b — AI-Native Namespace Surfaces (Control-Plane Only)  <a id="29b"></a> 
+[Milestones](#Milestones)
+
+**Why now (positioning):**  
+Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. The next strategic step is to make AI fleet operations legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS.
+
+**Goal**  
+Add a manifest-defined, role-scoped AI control namespace that lets operators and automation inspect and drive AI lifecycle state through existing Secure9P semantics. This milestone is limited to **control-plane surfaces only**: no in-VM application runtime, no general UI stack, no mutable POSIX-like filesystem, and no new transport or RPC model.
+
+**Non-Goals**
+- No app runtime, package manager, bundle loader, or process model beyond the existing Queen/worker control model.
+- No in-VM GUI, mutable `/ui` runtime surface, or second operator protocol.
+- No generic `/net` service API, sockets-by-file, or hidden request/response RPC behind file names.
+- No mutable general-purpose `/store`; existing CAS, models, telemetry, and spool semantics remain authoritative and distinct.
+- No new 9P verbs, no console grammar changes, and no deviation from `ERR = no side effects`.
+
+**Deliverables**
+- Manifest-gated AI control roots under the Secure9P namespace, with paths aligned to current authority rules:
+  - `/jobs/*` for bounded job submission, queue state, and completion records
+  - `/datasets/*` for dataset metadata, lineage pointers, and policy-visible readiness state
+  - `/experiments/*` for append-only run metadata and result summaries
+  - `/infer/*` for bounded inference request/receipt control surfaces where explicitly enabled
+  - `/metrics/*` for read-only fleet and model metrics summaries
+- Queen-only control files remain append-only; worker and observer views remain role-filtered and read-only where appropriate.
+- Host tools (`cohsh`, `coh`, REST projection, SwarmUI read models where relevant) discover and render the new paths without introducing new verbs.
+- Canonical schemas for all new paths documented in `docs/INTERFACES.md` and emitted from `coh-rtc`.
+
+**Commands**
+- `cargo test -p coh-rtc`
+- `cargo test -p nine-door`
+- `cargo test -p root-task`
+- `cargo test -p cohsh`
+- `cohsh --script scripts/cohsh/ai_namespace_roundtrip.coh`
+
+**Checks (DoD)**
+- All new AI namespace paths are manifest-gated, bounded, and role-scoped.
+- Writes remain append-only and auditable; reads stay within declared `msize` and path bounds.
+- Existing ACK/ERR/END grammar, Secure9P transport behavior, and host-tool semantics remain byte-stable unless intentionally versioned in the same change.
+- Missing AI paths are treated as gate state, not client bugs.
+- No new in-VM listener, runtime, or hidden RPC behavior is introduced.
+
+**Compiler touchpoints**
+- `coh-rtc` admits `ecosystem.ai.*` IR fields for path gating, quotas, and per-surface limits.
+- Generated snippets refresh `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, and `docs/USERLAND_AND_CLI.md` so host tools consume authoritative bounds and namespace roots.
+- Validation rejects configurations that overload existing `/updates`, `/models`, telemetry, or spool semantics.
+
+**Task Breakdown**
+```
+Title/ID: m29b-ai-ir
+Goal: Admit AI namespace surfaces in compiler IR without changing Cohesix transport or runtime boundaries.
+Inputs: tools/coh-rtc, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/USERLAND_AND_CLI.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — `ecosystem.ai.*` schema, gating, and bounds validation.
+  - tools/coh-rtc/src/codegen/{docs,rust,cohsh}.rs — generated AI namespace snippets and client defaults.
+Commands:
+  - cargo test -p coh-rtc
+Checks:
+  - AI namespace admission is compiler-defined and rejects overlap with existing CAS/model/spool surfaces.
+Deliverables:
+  - Authoritative manifest + docs snippets for AI namespace roots.
+
+Title/ID: m29b-ninedoor-ai-providers
+Goal: Add bounded NineDoor providers for AI control-plane paths.
+Inputs: apps/nine-door, apps/root-task/src/ninedoor.rs, generated manifest outputs.
+Changes:
+  - apps/nine-door/src/host/namespace.rs — host-mode AI namespace providers for tests.
+  - apps/root-task/src/ninedoor.rs — in-VM AI namespace provider wiring and policy enforcement.
+Commands:
+  - cargo test -p nine-door
+  - cargo test -p root-task
+Checks:
+  - Paths enforce append-only/read-only semantics, role filters, and deterministic refusals.
+Deliverables:
+  - AI control-plane namespace available in host and VM implementations with matching semantics.
+
+Title/ID: m29b-host-tool-discovery
+Goal: Extend host-tool discovery and read models for AI namespace paths without adding verbs.
+Inputs: apps/cohsh, apps/coh, apps/swarmui, generated client defaults.
+Changes:
+  - apps/cohsh — list/cat/tail/echo flows for `/jobs`, `/datasets`, `/experiments`, `/infer`, `/metrics`.
+  - apps/coh — host-side helpers remain projections of existing file semantics only.
+  - apps/swarmui — optional read-only views backed by existing `/proc` and AI namespace tails.
+Commands:
+  - cargo test -p cohsh
+Checks:
+  - Host tools discover AI paths using existing grammar and deterministic error handling.
+Deliverables:
+  - Operator-facing tooling parity for AI namespace surfaces.
+
+Title/ID: m29b-ai-regressions
+Goal: Add deterministic regression coverage for AI namespace semantics.
+Inputs: scripts/cohsh/, tests/fixtures/, docs/TEST_PLAN.md.
+Changes:
+  - scripts/cohsh/ai_namespace_roundtrip.coh — canonical AI namespace script using existing verbs only.
+  - tests/fixtures/transcripts/ — stable transcript fixtures for gated/missing/enabled AI paths.
+Commands:
+  - cohsh --script scripts/cohsh/ai_namespace_roundtrip.coh
+Checks:
+  - Missing paths, denied writes, and successful reads/writes all preserve existing grammar and refusal semantics.
+Deliverables:
+  - Canonical AI namespace regression pack and test-plan coverage.
 ```
 
 ## Milestone 30 — AWS AMI (UEFI → Cohesix, ENA, Diskless 9door)  <a id="30"></a> 
