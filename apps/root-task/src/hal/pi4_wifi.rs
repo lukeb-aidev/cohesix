@@ -269,6 +269,11 @@ const fn backplane_byte_function_addr(addr: u32) -> u32 {
 }
 
 #[inline]
+const fn backplane_transfer_function_addr(addr: u32) -> u32 {
+    (addr & BACKPLANE_ADDRESS_MASK) | BACKPLANE_32BIT_FLAG
+}
+
+#[inline]
 const fn backplane_word_aligned_addr(addr: u32) -> u32 {
     addr & !0x3
 }
@@ -280,7 +285,7 @@ const fn backplane_word_increment_addr() -> bool {
 
 #[inline]
 const fn backplane_word_function_addr(addr: u32) -> u32 {
-    (addr & BACKPLANE_ADDRESS_MASK) | BACKPLANE_32BIT_FLAG
+    backplane_transfer_function_addr(addr)
 }
 
 #[inline]
@@ -536,6 +541,34 @@ const fn core_reset_can_retry_clear_reset_write(base: u32, attempt: usize) -> bo
 }
 
 #[inline]
+const fn core_reset_needs_clear_reset_ht_assist(base: u32) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE
+}
+
+#[inline]
+const fn core_reset_needs_post_assert_transport_reinit(base: u32) -> bool {
+    base == CYW43_SOCRAM_CORE_BASE
+}
+
+#[inline]
+const fn clear_reset_keepalive_chunk_loops(remaining_loops: usize) -> usize {
+    if remaining_loops > CYW43_CORE_CONTROL_SETTLE_LOOPS {
+        CYW43_CORE_CONTROL_SETTLE_LOOPS
+    } else {
+        remaining_loops
+    }
+}
+
+#[inline]
+const fn ht_clock_assist_shadow_is_complete(
+    last_wakeupctrl: Option<u8>,
+    last_sleepcsr: Option<u8>,
+    last_cardcap: Option<u8>,
+) -> bool {
+    last_wakeupctrl.is_some() && last_sleepcsr.is_some() && last_cardcap.is_some()
+}
+
+#[inline]
 fn is_sdhci_command_error(err: &HalError) -> bool {
     matches!(err, HalError::Unsupported("sdhci-command-error"))
 }
@@ -569,6 +602,13 @@ fn firmware_backplane_write_can_retry(err: &HalError, attempt: usize) -> bool {
 #[inline]
 fn firmware_window_write_can_retry(err: &HalError, attempt: usize) -> bool {
     attempt == 0 && chipcommon_config_can_assume_window_commit(err)
+}
+
+#[inline]
+fn firmware_phase_can_retry(err: &HalError, attempt: usize) -> bool {
+    attempt == 0
+        && (is_sdhci_io_path_error(err)
+            || matches!(err, HalError::Unsupported("sdhci-int-timeout")))
 }
 
 #[inline]
@@ -1253,6 +1293,7 @@ const WIFI_POWER_SETTLE_LOOPS: usize = 500_000;
 const WIFI_POWER_DROP_SETTLE_LOOPS: usize = 20_000_000;
 const CYW43_CORE_CONTROL_SETTLE_LOOPS: usize = 500_000;
 const CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS: usize = 20_000_000;
+const CYW43_SOCRAM_CLEAR_RESET_KEEPALIVE_CHUNK_LOOPS: usize = CYW43_CORE_CONTROL_SETTLE_LOOPS;
 const CYW43_CORE_RESET_RETRY_LIMIT: usize = 50;
 const SDHCI_WRITE_DELAY_LOOPS: usize = 256;
 const SDHCI_WRITE_GAP_SPIN_LOOPS: usize = SDHCI_WRITE_DELAY_LOOPS * 32;
@@ -1903,6 +1944,7 @@ struct SdioHost {
     last_wakeupctrl: Option<u8>,
     last_sleepcsr: Option<u8>,
     last_cardcap: Option<u8>,
+    block_size_count_shadow: u32,
     transfer_mode_shadow: u32,
 }
 
@@ -1956,6 +1998,7 @@ impl SdioHost {
             last_wakeupctrl: None,
             last_sleepcsr: None,
             last_cardcap: None,
+            block_size_count_shadow: 0,
             transfer_mode_shadow: 0,
         })
     }
@@ -1963,6 +2006,8 @@ impl SdioHost {
     fn mark_power_cycled(&mut self) {
         self.card = None;
         self.current_clock_hz = 0;
+        self.block_size_count_shadow = 0;
+        self.transfer_mode_shadow = 0;
         self.clear_backplane_window_cache();
     }
 
@@ -2410,6 +2455,28 @@ impl SdioHost {
 
     fn setup_firmware_channel(&mut self) -> Result<(), HalError> {
         emit_breadcrumb(format_args!("[pi4-wifi] firmware channel begin"));
+        self.refresh_transport_phase_for("setup-firmware-channel")?;
+        let mut attempt = 0usize;
+        loop {
+            match self.setup_firmware_channel_once() {
+                Ok(()) => {
+                    emit_breadcrumb(format_args!("[pi4-wifi] firmware channel ready"));
+                    return Ok(());
+                }
+                Err(err) if firmware_phase_can_retry(&err, attempt) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=setup-firmware-channel attempt={} err={err} action=recover-retry",
+                        attempt + 1
+                    ));
+                    self.recover_command_path_and_refresh_transport("setup-firmware-channel")?;
+                    attempt += 1;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    fn setup_firmware_channel_once(&mut self) -> Result<(), HalError> {
         self.write_f1_u32(
             SDPCMD_REG_TOSBMAILBOXDATA,
             SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT,
@@ -2432,13 +2499,26 @@ impl SdioHost {
             SBSDIO_FUNC1_MESBUSYCTRL,
             CY_43455_MESBUSYCTRL,
         )?;
-        emit_breadcrumb(format_args!("[pi4-wifi] firmware channel ready"));
         Ok(())
     }
 
     fn wait_for_firmware_ready(&mut self) -> Result<(), HalError> {
+        self.refresh_transport_phase_for("wait-firmware-ready")?;
+        let mut recovery_attempt = 0usize;
         for _ in 0..CYW43_READY_LOOPS {
-            let value = self.read_f1_u32(SDPCMD_REG_TOHOSTMAILBOXDATA)?;
+            let value = match self.read_f1_u32(SDPCMD_REG_TOHOSTMAILBOXDATA) {
+                Ok(value) => value,
+                Err(err) if firmware_phase_can_retry(&err, recovery_attempt) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=wait-firmware-ready attempt={} err={err} action=recover-retry",
+                        recovery_attempt + 1
+                    ));
+                    self.recover_command_path_and_refresh_transport("wait-firmware-ready")?;
+                    recovery_attempt += 1;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             if value & (HMB_DATA_DEVREADY | HMB_DATA_FWREADY) != 0 {
                 let version = (value & HMB_DATA_VERSION_MASK) >> HMB_DATA_VERSION_SHIFT;
                 if version != 0 && version != SDPCM_PROT_VERSION {
@@ -2455,13 +2535,13 @@ impl SdioHost {
     }
 
     fn backplane_read8(&mut self, addr: u32) -> Result<u8, HalError> {
-        self.with_backplane_window(addr, |this, function_addr| {
+        self.with_backplane_small_window(addr, |this, function_addr| {
             this.io_direct_read(SdioFunction::Function1, function_addr)
         })
     }
 
     fn backplane_write8(&mut self, addr: u32, value: u8) -> Result<(), HalError> {
-        self.with_backplane_window(addr, |this, function_addr| {
+        self.with_backplane_small_window(addr, |this, function_addr| {
             this.io_direct_write(SdioFunction::Function1, function_addr, value)
         })
     }
@@ -2525,7 +2605,7 @@ impl SdioHost {
     fn backplane_read(&mut self, addr: u32, len: usize) -> Result<[u8; 4], HalError> {
         let mut result = [0u8; 4];
         let read_len = len.min(result.len());
-        self.with_backplane_window(addr, |this, function_addr| {
+        self.with_backplane_transfer_window(addr, |this, function_addr| {
             this.io_extended(
                 SdioFunction::Function1,
                 function_addr,
@@ -2553,7 +2633,7 @@ impl SdioHost {
                         .map_err(|_| HalError::Unsupported("backplane-read-overflow"))?,
                 )
                 .ok_or(HalError::Unsupported("backplane-read-overflow"))?;
-            self.with_backplane_window(chunk_addr, |this, function_addr| {
+            self.with_backplane_transfer_window(chunk_addr, |this, function_addr| {
                 this.io_extended(
                     SdioFunction::Function1,
                     function_addr,
@@ -2585,7 +2665,7 @@ impl SdioHost {
                 .ok_or(HalError::Unsupported("backplane-write-overflow"))?;
             let mut staging = [0u8; CYW43_TRANSFER_CHUNK];
             staging[..chunk_len].copy_from_slice(&data[offset..offset + chunk_len]);
-            self.with_backplane_window(chunk_addr, |this, function_addr| {
+            self.with_backplane_transfer_window(chunk_addr, |this, function_addr| {
                 this.io_extended(
                     SdioFunction::Function1,
                     function_addr,
@@ -2633,7 +2713,7 @@ impl SdioHost {
                 }
                 let mut staging = [0u8; CYW43_FIRMWARE_TRANSFER_CHUNK];
                 staging[..chunk_len].copy_from_slice(&data[offset..offset + chunk_len]);
-                match self.with_backplane_window(chunk_addr, |this, function_addr| {
+                match self.with_backplane_transfer_window(chunk_addr, |this, function_addr| {
                     this.io_extended_byte_mode(
                         SdioFunction::Function1,
                         function_addr,
@@ -2647,7 +2727,7 @@ impl SdioHost {
                         emit_breadcrumb(format_args!(
                             "[pi4-wifi] firmware stage={retry_stage} addr=0x{chunk_addr:08x} off={offset} len={chunk_len} err={err} action=recover-retry"
                         ));
-                        self.recover_command_path(retry_stage);
+                        self.recover_command_path_and_refresh_transport(retry_stage)?;
                         attempt += 1;
                     }
                     Err(err) => return Err(err),
@@ -2659,7 +2739,7 @@ impl SdioHost {
     }
 
     fn backplane_read_small(&mut self, addr: u32, out: &mut [u8]) -> Result<(), HalError> {
-        self.with_backplane_window(addr, |this, function_addr| {
+        self.with_backplane_small_window(addr, |this, function_addr| {
             for (index, slot) in out.iter_mut().enumerate() {
                 let byte_addr = function_addr
                     .checked_add(index as u32)
@@ -2671,7 +2751,7 @@ impl SdioHost {
     }
 
     fn backplane_write_small(&mut self, addr: u32, data: &[u8]) -> Result<(), HalError> {
-        self.with_backplane_window(addr, |this, function_addr| {
+        self.with_backplane_small_window(addr, |this, function_addr| {
             for (index, value) in data.iter().copied().enumerate() {
                 let byte_addr = function_addr
                     .checked_add(index as u32)
@@ -2683,6 +2763,7 @@ impl SdioHost {
     }
 
     fn configure_chipcommon(&mut self) -> Result<(), HalError> {
+        self.refresh_transport_phase_for("chipcommon-config")?;
         let writes = [
             (CYW43_CHIPCOMMON_BASE + 0x10, 3u32),
             (CYW43_CHIPCOMMON_BASE + 0x44, 0u32),
@@ -2714,7 +2795,9 @@ impl SdioHost {
                         "[pi4-wifi] firmware stage=chipcommon-config-direct-fallback addr=0x{addr:08x} current_window=0x{current_window:08x} err={err}",
                         addr = writes[0].0,
                     ));
-                    self.recover_command_path("chipcommon-config-direct-fallback");
+                    self.recover_command_path_and_refresh_transport(
+                        "chipcommon-config-direct-fallback",
+                    )?;
                 }
             }
         }
@@ -2727,7 +2810,7 @@ impl SdioHost {
                         addr,
                     )
                     .unwrap_or(0);
-                    self.recover_command_path("chipcommon-config-retry");
+                    self.recover_command_path_and_refresh_transport("chipcommon-config-retry")?;
                     self.chipcommon_config_enter_window_direct_phase(current_window, addr)?;
                 }
                 self.chipcommon_config_write32_direct_phase(addr, value)?;
@@ -2742,7 +2825,7 @@ impl SdioHost {
                     addr,
                 )
                 .unwrap_or(0);
-                self.recover_command_path("chipcommon-config-retry");
+                self.recover_command_path_and_refresh_transport("chipcommon-config-retry")?;
                 self.chipcommon_config_enter_window_direct_phase(current_window, addr)?;
                 self.chipcommon_config_write32_direct_phase(addr, value)?;
             } else {
@@ -2783,7 +2866,9 @@ impl SdioHost {
                 target_high,
             );
             self.programmed_backplane_window = Some(target_window);
-            self.recover_command_path_preserve_window("chipcommon-config-window-assumed-committed");
+            self.recover_command_path_preserve_window_and_refresh_transport(
+                "chipcommon-config-window-assumed-committed",
+            )?;
             return Ok(());
         }
         self.programmed_backplane_window = Some(target_window);
@@ -2809,7 +2894,9 @@ impl SdioHost {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=chipcommon-config-write-retry addr=0x{addr:08x} value=0x{value:08x} err={err} reason=current-window-payload-timeout path=cmd53-byte-windowed"
                 ));
-                self.restore_window_cache_from_shadow("chipcommon-config-write-retry");
+                self.restore_window_cache_from_shadow_and_refresh_transport(
+                    "chipcommon-config-write-retry",
+                )?;
                 let retry_bytes = value.to_le_bytes();
                 match self.backplane_write(addr, &retry_bytes) {
                     Ok(()) => Ok(()),
@@ -2820,7 +2907,9 @@ impl SdioHost {
                         emit_breadcrumb(format_args!(
                             "[pi4-wifi] firmware stage=chipcommon-config-write-fixed addr=0x{addr:08x} value=0x{value:08x} err={retry_err} reason=current-window-payload-timeout path=cmd53-fixed-window"
                         ));
-                        self.recover_command_path_preserve_window("chipcommon-config-write-fixed");
+                        self.recover_command_path_preserve_window_and_refresh_transport(
+                            "chipcommon-config-write-fixed",
+                        )?;
                         let mut fixed_bytes = value.to_le_bytes();
                         let fixed_addr = addr & BACKPLANE_ADDRESS_MASK;
                         match self.io_extended(
@@ -2838,9 +2927,9 @@ impl SdioHost {
                                 emit_breadcrumb(format_args!(
                                     "[pi4-wifi] firmware stage=chipcommon-config-write-assumed-committed addr=0x{addr:08x} value=0x{value:08x} err={fixed_err} reason=chipcommon-phase-write-timeout path=cmd53-fixed-window"
                                 ));
-                                self.recover_command_path_preserve_window(
+                                self.recover_command_path_preserve_window_and_refresh_transport(
                                     "chipcommon-config-write-assumed-committed",
-                                );
+                                )?;
                                 Ok(())
                             }
                         }
@@ -2891,12 +2980,20 @@ impl SdioHost {
         f(self, function_addr)
     }
 
-    fn with_backplane_window<T>(
+    fn with_backplane_small_window<T>(
         &mut self,
         addr: u32,
         f: impl FnOnce(&mut Self, u32) -> Result<T, HalError>,
     ) -> Result<T, HalError> {
         self.with_backplane_window_addr(addr, backplane_byte_function_addr(addr), f)
+    }
+
+    fn with_backplane_transfer_window<T>(
+        &mut self,
+        addr: u32,
+        f: impl FnOnce(&mut Self, u32) -> Result<T, HalError>,
+    ) -> Result<T, HalError> {
+        self.with_backplane_window_addr(addr, backplane_transfer_function_addr(addr), f)
     }
 
     fn prepare_firmware_upload_window(
@@ -2905,8 +3002,9 @@ impl SdioHost {
         assumed_stage: &'static str,
         addr: u32,
     ) -> Result<(), HalError> {
+        self.refresh_transport_phase_for(stage)?;
         let window_base = backplane_window_base(addr);
-        let function_addr = backplane_byte_function_addr(addr);
+        let function_addr = backplane_transfer_function_addr(addr);
         let (window_low, window_mid, window_high) = backplane_window_register_bytes(addr);
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} addr=0x{addr:08x} target_window=0x{window_base:08x} low=0x{window_low:02x} mid=0x{window_mid:02x} high=0x{window_high:02x}"
@@ -2930,7 +3028,7 @@ impl SdioHost {
                             "[pi4-wifi] firmware stage={stage} addr=0x{addr:08x} reg={register_name} value=0x{value:02x} err={err} action=recover-retry attempt={}",
                             attempt + 1
                         ));
-                        self.recover_command_path(stage);
+                        self.recover_command_path_and_refresh_transport(stage)?;
                         attempt += 1;
                     }
                     Err(err) => {
@@ -2942,7 +3040,9 @@ impl SdioHost {
                             attempt + 1
                         ));
                         self.programmed_backplane_window = Some(window_base);
-                        self.recover_command_path_preserve_window(assumed_stage);
+                        self.recover_command_path_preserve_window_and_refresh_transport(
+                            assumed_stage,
+                        )?;
                         break;
                     }
                 }
@@ -3045,6 +3145,22 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] cyw43 transport ready chip=0x{chip_id:08x}"
         ));
+        Ok(())
+    }
+
+    fn reinitialize_transport_after_core_reset(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=transport-reinit"
+        ));
+        self.card = None;
+        self.clear_backplane_window_cache();
+        self.ensure_card_ready()?;
+        self.enable_function1()?;
+        self.bring_up_backplane()?;
+        self.log_transport_shadow(stage);
         Ok(())
     }
 
@@ -3775,6 +3891,85 @@ impl SdioHost {
         Ok(())
     }
 
+    fn refresh_ht_clock_assist_from_shadow_for(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        if !ht_clock_assist_shadow_is_complete(
+            self.last_wakeupctrl,
+            self.last_sleepcsr,
+            self.last_cardcap,
+        ) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} refresh=full reason=shadow-miss"
+            ));
+            return self.enable_ht_clock_assist_for(stage);
+        }
+
+        let wake_ctrl = self.last_wakeupctrl.unwrap_or(0) | SBSDIO_WAKE_TILL_HT_AVAIL;
+        let cardcap = self.last_cardcap.unwrap_or(0) | SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC;
+        let sleep_csr = self.last_sleepcsr.unwrap_or(0) | SBSDIO_FUNC1_SLEEPCSR_KSO_EN;
+
+        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL, wake_ctrl)?;
+        self.remember_wakeupctrl(wake_ctrl);
+        self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP, cardcap)?;
+        self.remember_cardcap(cardcap);
+        self.io_direct_write(
+            SdioFunction::Function1,
+            SBSDIO_FUNC1_CHIPCLKCSR,
+            SBSDIO_FORCE_HT,
+        )?;
+        self.remember_chipclkcsr(SBSDIO_FORCE_HT);
+        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SLEEPCSR, sleep_csr)?;
+        self.remember_sleepcsr(sleep_csr);
+
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} refresh=shadow wake=0x{wake_ctrl:02x} cardcap=0x{cardcap:02x} sleep=0x{sleep_csr:02x}"
+        ));
+        Ok(())
+    }
+
+    fn refresh_transport_phase_for(&mut self, stage: &'static str) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=phase-ht-assist"
+        ));
+        self.refresh_ht_clock_assist_from_shadow_for(stage)
+    }
+
+    fn settle_with_ht_clock_assist(
+        &mut self,
+        stage: &'static str,
+        total_loops: usize,
+    ) -> Result<(), HalError> {
+        if total_loops == 0 {
+            return Ok(());
+        }
+
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} loops={total_loops} chunk_loops={chunk_loops} mode=ht-keepalive",
+            chunk_loops = CYW43_SOCRAM_CLEAR_RESET_KEEPALIVE_CHUNK_LOOPS,
+        ));
+        self.refresh_ht_clock_assist_from_shadow_for(stage)?;
+
+        let mut remaining_loops = total_loops;
+        let mut refresh_index = 0usize;
+        while remaining_loops > 0 {
+            let chunk_loops = clear_reset_keepalive_chunk_loops(remaining_loops);
+            spin_settle(chunk_loops);
+            remaining_loops -= chunk_loops;
+            if remaining_loops == 0 {
+                break;
+            }
+
+            refresh_index = refresh_index.saturating_add(1);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} refresh-index={refresh_index} remaining_loops={remaining_loops}"
+            ));
+            self.refresh_ht_clock_assist_from_shadow_for(stage)?;
+        }
+        Ok(())
+    }
+
     fn core_disable(&mut self, base: u32, prereset: u8, reset: u8) -> Result<(), HalError> {
         let ioctrl = self.core_ctrl_read8(base, AI_IOCTRL_OFFSET)?;
         let resetctrl = self.core_ctrl_read8(base, AI_RESETCTRL_OFFSET)?;
@@ -3809,7 +4004,15 @@ impl SdioHost {
                 "assert-reset",
             )?;
             asserted_reset = true;
-            bounded_spin_settle("cyw43-core-reset-assert", CYW43_CORE_CONTROL_SETTLE_LOOPS);
+            if core_reset_needs_post_assert_transport_reinit(base) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset-recover reason=socram-post-assert-transport-loss"
+                ));
+                self.reinitialize_transport_after_core_reset("assert-reset-recover")?;
+                bounded_spin_settle("cyw43-core-reset-assert", CYW43_CORE_CONTROL_SETTLE_LOOPS);
+            } else {
+                bounded_spin_settle("cyw43-core-reset-assert", CYW43_CORE_CONTROL_SETTLE_LOOPS);
+            }
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=assert-reset-settled detail=readback-deferred"
             ));
@@ -3896,10 +4099,17 @@ impl SdioHost {
                 "pre-clear-in-reset-configure",
             )?;
         }
-        bounded_spin_settle(
-            "cyw43-core-pre-clear-in-reset-configure",
-            CYW43_CORE_CONTROL_SETTLE_LOOPS,
-        );
+        if core_reset_needs_clear_reset_ht_assist(base) {
+            self.settle_with_ht_clock_assist(
+                "pre-clear-in-reset-keepalive",
+                CYW43_CORE_CONTROL_SETTLE_LOOPS,
+            )?;
+        } else {
+            bounded_spin_settle(
+                "cyw43-core-pre-clear-in-reset-configure",
+                CYW43_CORE_CONTROL_SETTLE_LOOPS,
+            );
+        }
         if core_reset_can_skip_pre_clear_in_reset_write(base, skipped_disable) {
             self.log_transport_shadow("core-reset-pre-clear-in-reset-skip");
         } else {
@@ -3915,13 +4125,20 @@ impl SdioHost {
             attempts = attempt.saturating_add(1);
             if core_reset_needs_clear_reset_prewrite_settle(base, attempt) {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-prewrite-delay loops={loops} reason=socram-fragile-first-write",
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-prewrite-delay loops={loops} reason=socram-fragile-first-write mode=ht-keepalive",
                     loops = CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS,
                 ));
-                bounded_spin_settle(
-                    "cyw43-core-reset-pre-clear",
+                self.settle_with_ht_clock_assist(
+                    "clear-reset-prewrite-keepalive",
                     CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS,
-                );
+                )?;
+            }
+            if core_reset_needs_clear_reset_ht_assist(base) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-ht-assist attempt={} reason=socram-fragile-prewrite",
+                    attempt.saturating_add(1),
+                ));
+                self.refresh_ht_clock_assist_from_shadow_for("clear-reset-ht-assist")?;
             }
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-primary attempt=1 path=cmd53-word-windowed value=0x00"
@@ -3945,10 +4162,21 @@ impl SdioHost {
                 } else {
                     self.recover_command_path("core-reset-clear-retry");
                 }
-                bounded_spin_settle(
-                    "cyw43-core-reset-clear-retry",
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-write-retry-delay loops={loops} reason=socram-release-edge-timeout mode=ht-keepalive",
+                    loops = CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS,
+                ));
+                self.settle_with_ht_clock_assist(
+                    "clear-reset-retry-keepalive",
                     CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS,
-                );
+                )?;
+                if core_reset_needs_clear_reset_ht_assist(base) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-retry-ht-assist attempt={} reason=socram-release-edge-prewrite",
+                        attempt.saturating_add(2),
+                    ));
+                    self.refresh_ht_clock_assist_from_shadow_for("clear-reset-retry-ht-assist")?;
+                }
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-retry attempt=2 path=cmd52-byte-current-window value=0x00 cache=preserved"
                 ));
@@ -4118,6 +4346,8 @@ impl SdioHost {
     }
 
     fn software_reset(&mut self, mask: u8) -> Result<(), HalError> {
+        self.block_size_count_shadow = 0;
+        self.transfer_mode_shadow = 0;
         self.write8(SDHCI_SOFTWARE_RESET, mask);
         for _ in 0..SDIO_HOST_RESET_LOOPS {
             if (self.read8(SDHCI_SOFTWARE_RESET) & mask) == 0 {
@@ -4138,6 +4368,14 @@ impl SdioHost {
         self.log_transport_shadow(stage);
     }
 
+    fn recover_command_path_and_refresh_transport(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        self.recover_command_path(stage);
+        self.refresh_transport_phase_for(stage)
+    }
+
     fn recover_command_path_preserve_window(&mut self, stage: &'static str) {
         self.software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA).ok();
         self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
@@ -4152,6 +4390,14 @@ impl SdioHost {
         self.log_transport_shadow(stage);
     }
 
+    fn recover_command_path_preserve_window_and_refresh_transport(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        self.recover_command_path_preserve_window(stage);
+        self.refresh_transport_phase_for(stage)
+    }
+
     fn restore_window_cache_from_shadow(&mut self, stage: &'static str) {
         self.programmed_backplane_window =
             restore_programmed_backplane_window(self.last_backplane_window);
@@ -4162,6 +4408,14 @@ impl SdioHost {
             "[pi4-wifi] sdhci recover stage={stage} cache=restored restored_window=0x{restored_window:08x} shadow_window=0x{shadow_window:08x} fn=0x{function:05x}"
         ));
         self.log_transport_shadow(stage);
+    }
+
+    fn restore_window_cache_from_shadow_and_refresh_transport(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        self.restore_window_cache_from_shadow(stage);
+        self.refresh_transport_phase_for(stage)
     }
 
     fn wait_inhibit_clear(&mut self, wait_data: bool) -> Result<(), HalError> {
@@ -4480,6 +4734,8 @@ impl SdioHost {
         let aligned = offset & !0x3;
         let word = if offset == SDHCI_COMMAND {
             self.transfer_mode_shadow
+        } else if offset == SDHCI_BLOCK_SIZE || offset == SDHCI_BLOCK_COUNT {
+            self.block_size_count_shadow
         } else {
             self.raw_read32(aligned)
         };
@@ -4487,6 +4743,9 @@ impl SdioHost {
         if offset == SDHCI_TRANSFER_MODE {
             self.transfer_mode_shadow = new_word;
             return;
+        }
+        if offset == SDHCI_BLOCK_SIZE || offset == SDHCI_BLOCK_COUNT {
+            self.block_size_count_shadow = new_word;
         }
         self.raw_write32(aligned, new_word);
     }
@@ -4641,10 +4900,9 @@ fn sdio_transfer_plan(
         }
     }
     let block_size = u16::try_from(len).map_err(|_| HalError::Unsupported("sdhci-block-size"))?;
-    transfer_mode |= SDHCI_TRNS_BLK_CNT_EN;
     Ok(SdioTransferPlan {
         block_size,
-        block_count: 1,
+        block_count: 0,
         cmd53_count: block_size,
         block_mode: false,
         transfer_mode,
@@ -4657,10 +4915,9 @@ fn sdio_byte_mode_transfer_plan(len: usize, write: bool) -> Result<SdioTransferP
         transfer_mode |= SDHCI_TRNS_READ;
     }
     let block_size = u16::try_from(len).map_err(|_| HalError::Unsupported("sdhci-block-size"))?;
-    transfer_mode |= SDHCI_TRNS_BLK_CNT_EN;
     Ok(SdioTransferPlan {
         block_size,
-        block_count: 1,
+        block_count: 0,
         cmd53_count: block_size,
         block_mode: false,
         transfer_mode,
@@ -4700,27 +4957,30 @@ pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        backplane_byte_function_addr, backplane_small_access_addr, backplane_window_base,
-        backplane_window_register_bytes, backplane_window_reprogram_needed,
-        backplane_word_function_addr, bcm2711_gpfsel_offset, bcm2711_puppdn_offset, cmd52_argument,
+        backplane_byte_function_addr, backplane_small_access_addr,
+        backplane_transfer_function_addr, backplane_window_base, backplane_window_register_bytes,
+        backplane_window_reprogram_needed, backplane_word_function_addr, bcm2711_gpfsel_offset,
+        bcm2711_puppdn_offset, clear_reset_keepalive_chunk_loops, cmd52_argument,
         core_ctrl_access_mode_label, core_ctrl_current_window_addr,
         core_ctrl_postreset_access_mode_label, core_ctrl_reset_assert_access_mode_label,
         core_ctrl_reset_clear_access_mode_label, core_ctrl_trace_function_addr,
-        core_reset_prepare_hold_value, ht_clock_request_value, is_mailbox_protocol_error,
-        mailbox_tag_name, make_command, merge_u16_word, normalize_nvram, phys_to_bus, r5_status,
-        sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
-        sdio_byte_mode_transfer_plan, sdio_transfer_addr, sdio_transfer_plan,
+        core_reset_needs_post_assert_transport_reinit, core_reset_prepare_hold_value,
+        firmware_phase_can_retry, ht_clock_assist_shadow_is_complete, ht_clock_request_value,
+        is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word, normalize_nvram,
+        phys_to_bus, r5_status, sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask,
+        sdhci_status_reason, sdio_byte_mode_transfer_plan, sdio_transfer_addr, sdio_transfer_plan,
         should_log_sdio_transfer_chunk, update_bcm2711_gpio_function, update_bcm2711_gpio_pull,
         HalError, ResponseType, SdioFunction, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL,
         AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET, AI_RESETCTRL_BIT_RESET,
         ARMCR4_BCMA_IOCTL_CPUHALT, ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BACKPLANE_ADDRESS_MASK,
         BACKPLANE_WINDOW_MASK, BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE,
-        CYW43_RAM_BASE_4345, CYW43_SOCRAM_CORE_BASE, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS,
-        SBSDIO_ALP_AVAIL_REQ, SBSDIO_FORCE_HT, SBSDIO_HT_AVAIL_REQ, SBSDIO_WAKE_TILL_HT_AVAIL,
-        SDHCI_COMMAND, SDHCI_DATA_AVAILABLE, SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL,
-        SDHCI_INT_DATA_CRC, SDHCI_INT_SPACE_AVAIL, SDHCI_INT_TIMEOUT, SDHCI_SPACE_AVAILABLE,
-        SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_MULTI, SDHCI_TRNS_READ,
-        SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,
+        CYW43_RAM_BASE_4345, CYW43_SOCRAM_CLEAR_RESET_KEEPALIVE_CHUNK_LOOPS,
+        CYW43_SOCRAM_CORE_BASE, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SBSDIO_ALP_AVAIL_REQ,
+        SBSDIO_FORCE_HT, SBSDIO_HT_AVAIL_REQ, SBSDIO_WAKE_TILL_HT_AVAIL, SDHCI_COMMAND,
+        SDHCI_DATA_AVAILABLE, SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL, SDHCI_INT_DATA_CRC,
+        SDHCI_INT_SPACE_AVAIL, SDHCI_INT_TIMEOUT, SDHCI_SPACE_AVAILABLE, SDHCI_TRANSFER_MODE,
+        SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_MULTI, SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS,
+        SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,
         SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1, SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1,
         SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE, TAG_NOTIFY_XHCI_RESET, TAG_SET_GPIO_CONFIG,
         TAG_SET_POWER_STATE,
@@ -4748,19 +5008,19 @@ mod tests {
         let read =
             sdio_transfer_plan(SdioFunction::Function1, 4, false).expect("read transfer plan");
         assert_eq!(read.block_size, 4);
-        assert_eq!(read.block_count, 1);
+        assert_eq!(read.block_count, 0);
         assert_eq!(read.cmd53_count, 4);
         assert!(!read.block_mode);
-        assert_ne!(read.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
+        assert_eq!(read.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
         assert_ne!(read.transfer_mode & SDHCI_TRNS_READ, 0);
 
         let write =
             sdio_transfer_plan(SdioFunction::Function0, 64, true).expect("write transfer plan");
         assert_eq!(write.block_size, 64);
-        assert_eq!(write.block_count, 1);
+        assert_eq!(write.block_count, 0);
         assert_eq!(write.cmd53_count, 64);
         assert!(!write.block_mode);
-        assert_ne!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
+        assert_eq!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
         assert_eq!(write.transfer_mode & SDHCI_TRNS_READ, 0);
     }
 
@@ -4838,16 +5098,16 @@ mod tests {
         let write = sdio_byte_mode_transfer_plan(256, true)
             .expect("function1 bulk write byte-mode transfer plan");
         assert_eq!(write.block_size, 256);
-        assert_eq!(write.block_count, 1);
+        assert_eq!(write.block_count, 0);
         assert_eq!(write.cmd53_count, 256);
         assert!(!write.block_mode);
-        assert_ne!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
+        assert_eq!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
         assert_eq!(write.transfer_mode & SDHCI_TRNS_MULTI, 0);
         assert_eq!(write.transfer_mode & SDHCI_TRNS_READ, 0);
     }
 
     #[test]
-    fn backplane_access_modes_split_small_and_word_paths() {
+    fn backplane_access_modes_split_small_and_transfer_paths() {
         assert_eq!(
             backplane_small_access_addr(CYW43_CHIPCOMMON_BASE),
             CYW43_CHIPCOMMON_BASE
@@ -4857,6 +5117,18 @@ mod tests {
             0x0010
         );
         assert_eq!(backplane_byte_function_addr(CYW43_RAM_BASE_4345), 0x0000);
+        assert_eq!(
+            backplane_transfer_function_addr(CYW43_CHIPCOMMON_BASE + 0x10),
+            0x8010
+        );
+        assert_eq!(
+            backplane_transfer_function_addr(CYW43_RAM_BASE_4345),
+            BACKPLANE_32BIT_FLAG
+        );
+        assert_eq!(
+            backplane_transfer_function_addr(CYW43_RAM_BASE_4345 + 0x40),
+            BACKPLANE_32BIT_FLAG | 0x0040
+        );
         assert_eq!(
             backplane_word_function_addr(CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP),
             ((CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP) & BACKPLANE_ADDRESS_MASK) | BACKPLANE_32BIT_FLAG
@@ -5009,6 +5281,18 @@ mod tests {
         assert!(!core_reset_can_retry_clear_reset_write(
             CYW43_ARMCR4_CORE_BASE,
             0,
+        ));
+        assert!(core_reset_needs_clear_reset_ht_assist(
+            CYW43_SOCRAM_CORE_BASE
+        ));
+        assert!(!core_reset_needs_clear_reset_ht_assist(
+            CYW43_ARMCR4_CORE_BASE
+        ));
+        assert!(core_reset_needs_post_assert_transport_reinit(
+            CYW43_SOCRAM_CORE_BASE
+        ));
+        assert!(!core_reset_needs_post_assert_transport_reinit(
+            CYW43_ARMCR4_CORE_BASE
         ));
         assert!(is_sdhci_command_error(&HalError::Unsupported(
             "sdhci-command-error"
@@ -5308,6 +5592,26 @@ mod tests {
     }
 
     #[test]
+    fn firmware_phase_retry_is_single_shot_on_command_path_errors() {
+        assert!(firmware_phase_can_retry(
+            &HalError::Unsupported("sdhci-command-error"),
+            0,
+        ));
+        assert!(firmware_phase_can_retry(
+            &HalError::Unsupported("sdhci-int-timeout"),
+            0,
+        ));
+        assert!(!firmware_phase_can_retry(
+            &HalError::Unsupported("sdhci-command-error"),
+            1,
+        ));
+        assert!(!firmware_phase_can_retry(
+            &HalError::Unsupported("cyw43-firmware-ready-timeout"),
+            0,
+        ));
+    }
+
+    #[test]
     fn backplane_window_cache_skips_same_window_reprogramming() {
         let socram_reset = CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET;
         let socram_ioctrl = CYW43_SOCRAM_CORE_BASE + AI_IOCTRL_OFFSET;
@@ -5369,6 +5673,40 @@ mod tests {
         assert_eq!(SBSDIO_FORCE_HT, 0x02);
         assert_eq!(SBSDIO_WAKE_TILL_HT_AVAIL, 0x02);
         assert_eq!(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, 0x08);
+    }
+
+    #[test]
+    fn ht_clock_assist_shadow_refresh_requires_cached_registers() {
+        assert!(ht_clock_assist_shadow_is_complete(
+            Some(0x02),
+            Some(0x01),
+            Some(0x08),
+        ));
+        assert!(!ht_clock_assist_shadow_is_complete(
+            None,
+            Some(0x01),
+            Some(0x08)
+        ));
+        assert!(!ht_clock_assist_shadow_is_complete(
+            Some(0x02),
+            None,
+            Some(0x08)
+        ));
+        assert!(!ht_clock_assist_shadow_is_complete(
+            Some(0x02),
+            Some(0x01),
+            None,
+        ));
+    }
+
+    #[test]
+    fn clear_reset_keepalive_chunks_match_control_settle_window() {
+        assert_eq!(
+            clear_reset_keepalive_chunk_loops(CYW43_SOCRAM_CLEAR_RESET_KEEPALIVE_CHUNK_LOOPS * 4),
+            CYW43_SOCRAM_CLEAR_RESET_KEEPALIVE_CHUNK_LOOPS,
+        );
+        assert_eq!(clear_reset_keepalive_chunk_loops(1234), 1234);
+        assert_eq!(clear_reset_keepalive_chunk_loops(0), 0);
     }
 
     #[test]
@@ -5525,6 +5863,13 @@ mod tests {
         let shadow = merge_u16_word(0, SDHCI_TRANSFER_MODE, 0x1234);
         let combined = merge_u16_word(shadow, SDHCI_COMMAND, 0xabcd);
         assert_eq!(combined, 0xabcd_1234);
+    }
+
+    #[test]
+    fn sdhci_block_size_count_word_uses_shadow() {
+        let shadow = merge_u16_word(0, SDHCI_BLOCK_SIZE, 0x0040);
+        let combined = merge_u16_word(shadow, SDHCI_BLOCK_COUNT, 0x0001);
+        assert_eq!(combined, 0x0001_0040);
     }
 
     #[test]

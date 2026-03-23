@@ -23,7 +23,7 @@ use usb_oxide::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
     hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook, ConfigDesc,
     DeviceDesc, Dma, DmaShareError, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice,
-    UsbError, XhciControllerParams, XhciCtrl,
+    UsbError, XhciControllerParams, XhciCtrl, XhciFirmwareHandoff,
 };
 
 use crate::bootstrap::log as boot_log;
@@ -166,9 +166,12 @@ const WAIT_MS_MAX_SPINS: usize = 25_000_000;
 const USB_PROGRESS_TICK_MS: usize = 1_000;
 const USB_PROGRESS_MAX_DOTS: usize = 64;
 const PI4_VL805_XHCI_INTX_IRQ: u32 = 143;
-// Narrow the next Pi 4 bring-up run to pure polling so the first DCBAAP
-// ownership publication can be evaluated without any concurrent INTx sink.
-const TRUSTED_XHCI_INTX_SINK_ENABLED: bool = false;
+// The trusted Pi 4 cold-start path is still polling-driven, but the first live
+// reset write can surface the PCIe INTx line even after U-Boot exported an
+// interrupt-quiesced handoff contract. Keep the runtime xHCI ownership path
+// poll-based while binding only the bounded bcm2711 interrupt-map sink so that
+// a posted reset-time INTx does not halt the kernel before bring-up continues.
+const TRUSTED_XHCI_INTX_SINK_ENABLED: bool = true;
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
@@ -971,43 +974,6 @@ fn vl805_cfg_bus_master_ready() -> bool {
         == (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
 }
 
-fn replay_vl805_handoff_command_bits(xhci_pci_cmd: Option<u16>) -> Result<u16, &'static str> {
-    let config_virt = current_vl805_cfg_virt().ok_or("cfg-window-absent")?;
-    let command_before = pci_cfg_read_u16(config_virt, PCI_CFG_COMMAND_STATUS);
-    let command_target = xhci_handoff_command_restore_target(command_before, xhci_pci_cmd)
-        .ok_or("unsafe-exported-cmd")?;
-    if command_target != command_before {
-        pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_target);
-    }
-    let command_after = pci_cfg_read_u16(config_virt, PCI_CFG_COMMAND_STATUS);
-    let mut line = heapless::String::<256>::new();
-    let _ = core::fmt::Write::write_fmt(
-        &mut line,
-        format_args!(
-            "[local-seat] vl805 handoff pci-cmd restore before=0x{before:04x} target=0x{target:04x} after=0x{after:04x} ready={ready}",
-            before = command_before,
-            target = command_target,
-            after = command_after,
-            ready = ((command_after
-                & (PCI_COMMAND_MEMORY_SPACE
-                    | PCI_COMMAND_BUS_MASTER
-                    | PCI_COMMAND_INTERRUPT_DISABLE))
-                == (PCI_COMMAND_MEMORY_SPACE
-                    | PCI_COMMAND_BUS_MASTER
-                    | PCI_COMMAND_INTERRUPT_DISABLE)) as u8,
-        ),
-    );
-    boot_log::force_uart_line(line.as_str());
-    if (command_after
-        & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE))
-        == (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE)
-    {
-        Ok(command_after)
-    } else {
-        Err("command-bits-missing")
-    }
-}
-
 fn remember_vl805_xhci_mmio_hint(mmio: usize) {
     if mmio != 0 {
         VL805_XHCI_MMIO_HINT.store(mmio, Ordering::Release);
@@ -1107,23 +1073,6 @@ const fn xhci_firmware_handoff_safe(xhci_pci_cmd: Option<u16>) -> bool {
 }
 
 #[inline]
-const fn xhci_handoff_command_restore_target(
-    current: u16,
-    xhci_pci_cmd: Option<u16>,
-) -> Option<u16> {
-    match xhci_pci_cmd {
-        Some(cmd) if xhci_firmware_handoff_safe(Some(cmd)) => Some(
-            current
-                | cmd
-                | PCI_COMMAND_MEMORY_SPACE
-                | PCI_COMMAND_BUS_MASTER
-                | PCI_COMMAND_INTERRUPT_DISABLE,
-        ),
-        _ => None,
-    }
-}
-
-#[inline]
 fn xhci_firmware_handoff_cold_start_trusted(
     mmio: usize,
     firmware_hint: Option<usize>,
@@ -1140,19 +1089,26 @@ fn xhci_firmware_handoff_cold_start_trusted(
 
 #[inline]
 fn xhci_runtime_vl805_mailbox_reset_required(
-    _mmio: usize,
-    _firmware_hint: Option<usize>,
-    _xhci_pci_cmd: Option<u16>,
-    _xhci_handoff_ready: bool,
-    _xhci_irq_quiesced: bool,
+    mmio: usize,
+    firmware_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    xhci_handoff_ready: bool,
+    xhci_irq_quiesced: bool,
 ) -> bool {
-    // The trusted high-BAR handoff path already comes from a bootloader-owned
-    // stopped/quiesced controller snapshot. Replaying the VL805 mailbox reset
-    // at runtime perturbs that preserved state immediately before the first
-    // controller ownership write, which now wedges at the split DCBAAP low
-    // dword publish. Keep the trusted handoff path on the preserved snapshot
-    // and leave the runtime mailbox reset disabled until a cold-init-only use
-    // case is proven safe again.
+    let _ = (
+        mmio,
+        firmware_hint,
+        xhci_pci_cmd,
+        xhci_handoff_ready,
+        xhci_irq_quiesced,
+    );
+    // The trusted U-Boot handoff already exported a stopped/quiesced high-BAR
+    // controller plus a safe PCI command word. Runtime VL805 mailbox reset now
+    // requires a follow-up config-space replay, and the latest Pi 4 logs show
+    // that replay faults before xHCI init ever resumes. Keep the trusted path
+    // off runtime VL805 reset/config writes until an ECAM-free recovery path is
+    // proven safe again; runtime still uses the bootloader capability snapshot
+    // to drive the normal xHCI cold-start sequence directly.
     false
 }
 
@@ -1186,7 +1142,7 @@ const fn xhci_runtime_handoff_source_label(
     if runtime_vl805_reset && using_handoff_snapshot {
         "fw-handoff-mailbox-reset-snapshot"
     } else if using_handoff_snapshot {
-        "fw-handoff-preserved-snapshot"
+        "fw-handoff-direct-snapshot"
     } else if runtime_vl805_reset {
         "fw-handoff-mailbox-reset-cold-init"
     } else {
@@ -1404,14 +1360,6 @@ const fn vl805_runtime_cfg_touch_allowed(runtime_enabled: bool, has_cfg_window: 
 }
 
 #[inline]
-const fn xhci_runtime_command_replay_allowed(
-    runtime_cfg_touch_enabled: bool,
-    has_cfg_window: bool,
-) -> bool {
-    runtime_cfg_touch_enabled && has_cfg_window
-}
-
-#[inline]
 const fn xhci_safe_mode_skip_command(xhci_pci_cmd: Option<u16>) -> u16 {
     match xhci_pci_cmd {
         Some(cmd) => cmd,
@@ -1590,17 +1538,21 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x020a => Some("fw-handoff-skip-usbsts-clear-write"),
         0x020b => Some("fw-handoff-skip-imod-write"),
         0x020c => Some("fw-handoff-skip-iman-write"),
+        0x0210 => Some("legacy-ownership-claim-begin"),
+        0x0211 => Some("legacy-ownership-claim-done"),
+        0x0212 => Some("fw-handoff-skip-legacy-ownership"),
         0x0224 => Some("fw-handoff-skip-stop-revalidation"),
         0x0230 => Some("reset-write"),
+        0x0235 => Some("reset-write-issued"),
         0x0231 => Some("reset-hcrst-timeout"),
         0x0232 => Some("reset-cnr-timeout"),
         0x0233 => Some("reset-complete"),
         0x0234 => Some("fw-handoff-skip-reset"),
-        0x0241 => Some("config-readback"),
+        0x0241 => Some("config-read"),
         0x0243 => Some("config-write"),
         0x0242 => Some("dcbaap-readback"),
         0x0245 => Some("fw-handoff-skip-config-write"),
-        0x0246 => Some("config-readback-begin"),
+        0x0246 => Some("config-read-begin"),
         0x0247 => Some("dcbaap-readback-begin"),
         0x0244 => Some("dcbaap-write"),
         0x0248 => Some("dcbaap-write-low"),
@@ -1611,16 +1563,16 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x024d => Some("dcbaap-zero-write64-done"),
         0x024e => Some("dcbaap-prewrite-read-begin"),
         0x024f => Some("dcbaap-prewrite-read"),
-        0x0251 => Some("crcr-readback"),
+        0x0251 => Some("crcr-read"),
         0x0252 => Some("crcr-write"),
-        0x0253 => Some("crcr-readback-begin"),
+        0x0253 => Some("crcr-read-begin"),
         0x0254 => Some("crcr-write-low"),
         0x0255 => Some("crcr-write-high"),
         0x0256 => Some("dnctrl-write"),
         0x0257 => Some("dcbaap-write64"),
         0x0258 => Some("dcbaap-write64-done"),
         0x0259 => Some("dcbaap-write-split-selected"),
-        0x0261 => Some("runtime-ring-readback"),
+        0x0261 => Some("runtime-ring-read"),
         0x0263 => Some("usbsts-clear-ack"),
         0x0264 => Some("erstsz-write"),
         0x0265 => Some("erstba-write"),
@@ -1631,15 +1583,15 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x026a => Some("usbcmd-run-write"),
         0x026b => Some("skip-imod-write"),
         0x026c => Some("skip-iman-write"),
-        0x026d => Some("runtime-ring-readback-begin"),
+        0x026d => Some("runtime-ring-read-begin"),
         0x026e => Some("erstba-write-low"),
         0x026f => Some("erstba-write-high"),
-        0x0270 => Some("usbsts-run-readback"),
-        0x0271 => Some("usbcmd-run-readback"),
+        0x0270 => Some("usbsts-run-read"),
+        0x0271 => Some("usbcmd-run-read"),
         0x0272 => Some("controller-ready-timeout"),
         0x0273 => Some("controller-ready"),
-        0x0274 => Some("usbsts-run-readback-begin"),
-        0x0275 => Some("usbcmd-run-readback-begin"),
+        0x0274 => Some("usbsts-run-read-begin"),
+        0x0275 => Some("usbcmd-run-read-begin"),
         0x0276 => Some("controller-ready-poll-begin"),
         0x0277 => Some("erdp-write-low"),
         0x0278 => Some("erdp-write-high"),
@@ -1895,7 +1847,7 @@ fn validate_xhci_capability_window(probe: &XhciCapProbe) -> Result<(), &'static 
 #[inline]
 fn xhci_controller_params_from_probe(
     probe: XhciCapProbe,
-    firmware_handoff_quiesced: bool,
+    firmware_handoff: XhciFirmwareHandoff,
 ) -> XhciControllerParams {
     XhciControllerParams {
         cap_length: probe.cap_length,
@@ -1904,7 +1856,7 @@ fn xhci_controller_params_from_probe(
         hccparams1: probe.hccparams1,
         db_offset: probe.db_offset,
         rts_offset: probe.rts_offset,
-        firmware_handoff_quiesced,
+        firmware_handoff,
     }
 }
 
@@ -3983,9 +3935,9 @@ impl XhciIrqGuard {
     fn install(
         hal: &mut KernelHal<'_>,
         mmio: usize,
-        firmware_handoff_quiesced: bool,
+        firmware_handoff: XhciFirmwareHandoff,
     ) -> Result<Option<Self>, &'static str> {
-        let sink_mode = xhci_irq_sink_mode(mmio, firmware_handoff_quiesced);
+        let sink_mode = xhci_irq_sink_mode(mmio, firmware_handoff);
         let mut line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -3995,11 +3947,7 @@ impl XhciIrqGuard {
                     XhciIrqSinkMode::Disabled => "poll-only",
                     XhciIrqSinkMode::IntxOnly => "poll-only+pcie-intx-sink",
                 },
-                if firmware_handoff_quiesced {
-                    "fw-handoff-cold-start"
-                } else {
-                    "runtime-default"
-                }
+                xhci_irq_policy_reason(firmware_handoff)
             ),
         );
         boot_log::force_uart_line(line.as_str());
@@ -4127,8 +4075,23 @@ const fn xhci_shadow_irq_handoff_contract_reason(
 }
 
 #[inline]
-const fn xhci_polling_only_runtime(mmio: usize, firmware_handoff_quiesced: bool) -> bool {
-    firmware_handoff_quiesced && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+const fn xhci_runtime_uses_trusted_handoff(firmware_handoff: XhciFirmwareHandoff) -> bool {
+    !matches!(firmware_handoff, XhciFirmwareHandoff::None)
+}
+
+#[inline]
+const fn xhci_irq_policy_reason(firmware_handoff: XhciFirmwareHandoff) -> &'static str {
+    match firmware_handoff {
+        XhciFirmwareHandoff::None => "runtime-default",
+        XhciFirmwareHandoff::ColdStartFromSnapshot => "fw-handoff-cold-start-from-snapshot",
+        XhciFirmwareHandoff::ResetlessReinit => "fw-handoff-resetless-reinit",
+        XhciFirmwareHandoff::PreserveControllerState => "fw-handoff-preserve",
+    }
+}
+
+#[inline]
+const fn xhci_polling_only_runtime(mmio: usize, firmware_handoff: XhciFirmwareHandoff) -> bool {
+    xhci_runtime_uses_trusted_handoff(firmware_handoff) && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4138,8 +4101,8 @@ enum XhciIrqSinkMode {
 }
 
 #[inline]
-const fn xhci_irq_sink_mode(mmio: usize, firmware_handoff_quiesced: bool) -> XhciIrqSinkMode {
-    if xhci_polling_only_runtime(mmio, firmware_handoff_quiesced) {
+const fn xhci_irq_sink_mode(mmio: usize, firmware_handoff: XhciFirmwareHandoff) -> XhciIrqSinkMode {
+    if xhci_polling_only_runtime(mmio, firmware_handoff) {
         if TRUSTED_XHCI_INTX_SINK_ENABLED {
             // The trusted Pi4 handoff stays polling-driven, but the first live
             // ownership transition can still surface the PCIe INTx line mapped by
@@ -4156,9 +4119,9 @@ const fn xhci_irq_sink_mode(mmio: usize, firmware_handoff_quiesced: bool) -> Xhc
 }
 
 #[inline]
-const fn xhci_irq_sink_needed(mmio: usize, firmware_handoff_quiesced: bool) -> bool {
+const fn xhci_irq_sink_needed(mmio: usize, firmware_handoff: XhciFirmwareHandoff) -> bool {
     !matches!(
-        xhci_irq_sink_mode(mmio, firmware_handoff_quiesced),
+        xhci_irq_sink_mode(mmio, firmware_handoff),
         XhciIrqSinkMode::Disabled
     )
 }
@@ -4294,8 +4257,6 @@ impl UsbKeyboard {
         let pinned_xhci_state = pinned_xhci_phys_state();
         let verified_vl805_hint = current_vl805_xhci_mmio_hint();
         let has_safe_cfg_window = current_vl805_cfg_virt().is_some();
-        let allow_runtime_command_replay =
-            xhci_runtime_command_replay_allowed(runtime_cfg_touch_enabled, has_safe_cfg_window);
         let firmware_hint_safe = xhci_firmware_handoff_safe(xhci_pci_cmd);
         let mut source_line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_str(&mut source_line, "[local-seat] xhci source fw=");
@@ -4360,7 +4321,7 @@ impl UsbKeyboard {
             ),
         );
         boot_log::force_uart_line(source_line.as_str());
-        let mut trusted_fw_handoff_high_bar = xhci_firmware_handoff_cold_start_trusted(
+        let trusted_fw_handoff_high_bar = xhci_firmware_handoff_cold_start_trusted(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             xhci_mmio_hint,
             xhci_pci_cmd,
@@ -4383,23 +4344,14 @@ impl UsbKeyboard {
                 xhci_irq_quiesced,
                 runtime_vl805_reset_strategy,
             );
-        let mut handoff_restore_fail_reason = None;
         if trusted_fw_handoff_high_bar {
-            if allow_runtime_command_replay {
-                match replay_vl805_handoff_command_bits(xhci_pci_cmd) {
-                    Ok(_) => {}
-                    Err(reason) => {
-                        handoff_restore_fail_reason = Some(reason);
-                        trusted_fw_handoff_high_bar = false;
-                    }
-                }
-            } else if has_safe_cfg_window {
+            if has_safe_cfg_window {
                 let command = xhci_safe_mode_skip_command(xhci_pci_cmd);
                 let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] vl805 handoff pci-cmd replay skipped reason=safe-mode-preseed-verified exported=0x{command:04x}"
+                        "[local-seat] vl805 handoff pci-cmd replay skipped reason=runtime-ecam-unsafe exported=0x{command:04x}"
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -4416,14 +4368,12 @@ impl UsbKeyboard {
             && effective_trusted_pinned_xhci_mmio.is_none()
         {
             let mut line = heapless::String::<224>::new();
-            let reason = if let Some(reason) = handoff_restore_fail_reason {
-                reason
-            } else {
-                xhci_firmware_handoff_revoked_reason(xhci_handoff_ready, xhci_irq_quiesced)
-            };
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
-                format_args!("[local-seat] xhci runtime trust revoked reason={reason}"),
+                format_args!(
+                    "[local-seat] xhci runtime trust revoked reason={}",
+                    xhci_firmware_handoff_revoked_reason(xhci_handoff_ready, xhci_irq_quiesced)
+                ),
             );
             boot_log::force_uart_line(line.as_str());
         }
@@ -4726,7 +4676,7 @@ impl UsbKeyboard {
         let mut saw_controller = false;
         let mut saw_keyboard_init_error = false;
         for &mmio_base in &candidates[..candidate_count] {
-            let (effective_mmio, cap_probe, firmware_handoff_quiesced) = {
+            let (effective_mmio, cap_probe, firmware_handoff) = {
                 let runtime_vl805_reset = xhci_runtime_vl805_mailbox_reset_required(
                     mmio_base,
                     xhci_mmio_hint,
@@ -4760,11 +4710,24 @@ impl UsbKeyboard {
                         runtime_vl805_reset,
                     )
                 });
-                if !runtime_vl805_reset && trusted_handoff_probe.is_some() {
+                if runtime_vl805_reset && trusted_handoff_probe.is_some() {
                     boot_log::force_uart_line(
-                        "[local-seat] vl805 reset handoff=runtime-owned stage=runtime detail=skip-preserve-trusted-snapshot action=retain-bootloader-state",
+                        "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset+trusted-cap-snapshot action=cold-start-from-snapshot",
+                    );
+                } else if trusted_handoff_probe.is_some() {
+                    boot_log::force_uart_line(
+                        "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=skip-runtime-mailbox-reset action=cold-start-from-snapshot",
+                    );
+                    boot_log::force_uart_line(
+                        "[local-seat] xhci handoff=bootloader-owned stage=runtime detail=skip-mailbox-reset+trusted-cap-snapshot action=cold-start-from-snapshot",
                     );
                 }
+
+                let firmware_handoff = if trusted_handoff_probe.is_some() {
+                    XhciFirmwareHandoff::ColdStartFromSnapshot
+                } else {
+                    XhciFirmwareHandoff::None
+                };
 
                 let raw_probe = if let Some(raw_probe) = trusted_handoff_probe {
                     let mut line = heapless::String::<352>::new();
@@ -4840,7 +4803,7 @@ impl UsbKeyboard {
                 boot_log::force_uart_line(cap_line.as_str());
 
                 match validate_xhci_capability_window(&raw_probe) {
-                    Ok(()) => (mmio_base, raw_probe, trusted_handoff_probe.is_some()),
+                    Ok(()) => (mmio_base, raw_probe, firmware_handoff),
                     Err(reason) => {
                         if !xhci_runtime_allows_alias_scan(
                             mmio_base,
@@ -4870,7 +4833,7 @@ impl UsbKeyboard {
                                     ),
                                 );
                                 boot_log::force_uart_line(line.as_str());
-                                (candidate, scanned_probe, false)
+                                (candidate, scanned_probe, XhciFirmwareHandoff::None)
                             }
                             Err(_) => {
                                 let mut line = heapless::String::<208>::new();
@@ -4888,13 +4851,9 @@ impl UsbKeyboard {
                     }
                 }
             };
-            let controller_params =
-                xhci_controller_params_from_probe(cap_probe, firmware_handoff_quiesced);
-            let xhci_irq_guard = match XhciIrqGuard::install(
-                hal,
-                effective_mmio,
-                firmware_handoff_quiesced,
-            ) {
+            let controller_params = xhci_controller_params_from_probe(cap_probe, firmware_handoff);
+            let xhci_irq_guard = match XhciIrqGuard::install(hal, effective_mmio, firmware_handoff)
+            {
                 Ok(guard) => guard,
                 Err(reason) => {
                     let mut line = heapless::String::<224>::new();
@@ -9176,13 +9135,12 @@ mod tests {
         text_backspace_target, text_row_count, text_viewport_height,
         translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode, vl805_cfg_preseed_needed,
         vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
-        xhci_controller_params_from_probe, xhci_firmware_handoff_hint_reason,
-        xhci_handoff_command_restore_target, xhci_irq_sink_needed,
+        xhci_controller_params_from_probe, xhci_firmware_handoff_hint_reason, xhci_irq_sink_needed,
         xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
-        xhci_root_port_connected, xhci_runtime_command_replay_allowed,
-        xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
-        xhci_safe_mode_skip_command, ConfigDesc, Pi4SeatError, UsbKeyboard, Vl805CfgPreseedMode,
-        XhciCapProbe, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        xhci_root_port_connected, xhci_runtime_mmio_candidate_allowed,
+        xhci_runtime_mmio_has_accessible_window, xhci_safe_mode_skip_command, ConfigDesc,
+        Pi4SeatError, UsbKeyboard, Vl805CfgPreseedMode, XhciCapProbe, XhciFirmwareHandoff,
+        HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
         RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, XHCI_MMIO_ALIAS_SCAN_STEPS,
     };
     use super::{
@@ -9294,14 +9252,6 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_command_replay_requires_live_runtime_cfg_touch() {
-        assert!(!xhci_runtime_command_replay_allowed(false, false));
-        assert!(!xhci_runtime_command_replay_allowed(false, true));
-        assert!(!xhci_runtime_command_replay_allowed(true, false));
-        assert!(xhci_runtime_command_replay_allowed(true, true));
-    }
-
-    #[test]
     fn xhci_safe_mode_skip_command_prefers_bootloader_export() {
         assert_eq!(xhci_safe_mode_skip_command(None), 0);
         assert_eq!(xhci_safe_mode_skip_command(Some(0x0546)), 0x0546);
@@ -9323,12 +9273,15 @@ mod tests {
                 max_scratchpad: 0,
                 mmio_size: 0x10000,
             },
-            true,
+            XhciFirmwareHandoff::PreserveControllerState,
         );
         assert_eq!(params.hccparams1, 1 << 2);
         assert_eq!(params.cap_length, 0x40);
         assert_eq!(params.db_offset, 0x1000);
-        assert!(params.firmware_handoff_quiesced);
+        assert_eq!(
+            params.firmware_handoff,
+            XhciFirmwareHandoff::PreserveControllerState
+        );
     }
 
     #[test]
@@ -9406,23 +9359,36 @@ mod tests {
             xhci_diag_stage_label(0x020c),
             Some("fw-handoff-skip-iman-write")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x0210),
+            Some("legacy-ownership-claim-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0211),
+            Some("legacy-ownership-claim-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0212),
+            Some("fw-handoff-skip-legacy-ownership")
+        );
         assert_eq!(xhci_diag_stage_label(0x0208), Some("fw-handoff-iman-write"));
         assert_eq!(
             xhci_diag_stage_label(0x0224),
             Some("fw-handoff-skip-stop-revalidation")
         );
         assert_eq!(xhci_diag_stage_label(0x0230), Some("reset-write"));
+        assert_eq!(xhci_diag_stage_label(0x0235), Some("reset-write-issued"));
         assert_eq!(xhci_diag_stage_label(0x0231), Some("reset-hcrst-timeout"));
         assert_eq!(xhci_diag_stage_label(0x0232), Some("reset-cnr-timeout"));
         assert_eq!(xhci_diag_stage_label(0x0233), Some("reset-complete"));
-        assert_eq!(xhci_diag_stage_label(0x0241), Some("config-readback"));
+        assert_eq!(xhci_diag_stage_label(0x0241), Some("config-read"));
         assert_eq!(xhci_diag_stage_label(0x0242), Some("dcbaap-readback"));
         assert_eq!(xhci_diag_stage_label(0x0243), Some("config-write"));
         assert_eq!(
             xhci_diag_stage_label(0x0245),
             Some("fw-handoff-skip-config-write")
         );
-        assert_eq!(xhci_diag_stage_label(0x0246), Some("config-readback-begin"));
+        assert_eq!(xhci_diag_stage_label(0x0246), Some("config-read-begin"));
         assert_eq!(xhci_diag_stage_label(0x0247), Some("dcbaap-readback-begin"));
         assert_eq!(xhci_diag_stage_label(0x0248), Some("dcbaap-write-low"));
         assert_eq!(xhci_diag_stage_label(0x024a), Some("dcbaap-write-low-done"));
@@ -9442,9 +9408,9 @@ mod tests {
         );
         assert_eq!(xhci_diag_stage_label(0x024f), Some("dcbaap-prewrite-read"));
         assert_eq!(xhci_diag_stage_label(0x0244), Some("dcbaap-write"));
-        assert_eq!(xhci_diag_stage_label(0x0251), Some("crcr-readback"));
+        assert_eq!(xhci_diag_stage_label(0x0251), Some("crcr-read"));
         assert_eq!(xhci_diag_stage_label(0x0252), Some("crcr-write"));
-        assert_eq!(xhci_diag_stage_label(0x0253), Some("crcr-readback-begin"));
+        assert_eq!(xhci_diag_stage_label(0x0253), Some("crcr-read-begin"));
         assert_eq!(xhci_diag_stage_label(0x0254), Some("crcr-write-low"));
         assert_eq!(xhci_diag_stage_label(0x0255), Some("crcr-write-high"));
         assert_eq!(xhci_diag_stage_label(0x0256), Some("dnctrl-write"));
@@ -9454,33 +9420,27 @@ mod tests {
             xhci_diag_stage_label(0x0259),
             Some("dcbaap-write-split-selected")
         );
-        assert_eq!(xhci_diag_stage_label(0x0261), Some("runtime-ring-readback"));
+        assert_eq!(xhci_diag_stage_label(0x0261), Some("runtime-ring-read"));
         assert_eq!(xhci_diag_stage_label(0x0263), Some("usbsts-clear-ack"));
         assert_eq!(xhci_diag_stage_label(0x026b), Some("skip-imod-write"));
         assert_eq!(xhci_diag_stage_label(0x026c), Some("skip-iman-write"));
         assert_eq!(
             xhci_diag_stage_label(0x026d),
-            Some("runtime-ring-readback-begin")
+            Some("runtime-ring-read-begin")
         );
         assert_eq!(xhci_diag_stage_label(0x026e), Some("erstba-write-low"));
         assert_eq!(xhci_diag_stage_label(0x026f), Some("erstba-write-high"));
         assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-write"));
         assert_eq!(xhci_diag_stage_label(0x026a), Some("usbcmd-run-write"));
-        assert_eq!(xhci_diag_stage_label(0x0270), Some("usbsts-run-readback"));
-        assert_eq!(xhci_diag_stage_label(0x0271), Some("usbcmd-run-readback"));
+        assert_eq!(xhci_diag_stage_label(0x0270), Some("usbsts-run-read"));
+        assert_eq!(xhci_diag_stage_label(0x0271), Some("usbcmd-run-read"));
         assert_eq!(
             xhci_diag_stage_label(0x0272),
             Some("controller-ready-timeout")
         );
         assert_eq!(xhci_diag_stage_label(0x0273), Some("controller-ready"));
-        assert_eq!(
-            xhci_diag_stage_label(0x0274),
-            Some("usbsts-run-readback-begin")
-        );
-        assert_eq!(
-            xhci_diag_stage_label(0x0275),
-            Some("usbcmd-run-readback-begin")
-        );
+        assert_eq!(xhci_diag_stage_label(0x0274), Some("usbsts-run-read-begin"));
+        assert_eq!(xhci_diag_stage_label(0x0275), Some("usbcmd-run-read-begin"));
         assert_eq!(
             xhci_diag_stage_label(0x0276),
             Some("controller-ready-poll-begin")
@@ -9505,16 +9465,25 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_sink_mode_stays_disabled_for_current_trusted_high_handoff_probe() {
+    fn xhci_irq_sink_mode_uses_bounded_intx_sink_for_trusted_high_handoff_probe() {
         assert_eq!(
-            xhci_irq_sink_mode(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true),
-            XhciIrqSinkMode::Disabled
+            xhci_irq_sink_mode(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+            ),
+            XhciIrqSinkMode::IntxOnly
         );
-        assert!(!xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, true));
-        assert!(!xhci_irq_sink_needed(RPI4_XHCI_MMIO_HIGH_CANDIDATE, false));
+        assert!(xhci_irq_sink_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+        ));
+        assert!(!xhci_irq_sink_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::None,
+        ));
         assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            true
+            XhciFirmwareHandoff::PreserveControllerState
         ));
     }
 
@@ -9610,27 +9579,6 @@ mod tests {
         assert!(vl805_cfg_preseed_needed(false, false));
         assert!(vl805_cfg_preseed_needed(true, false));
         assert!(vl805_cfg_preseed_needed(false, true));
-    }
-
-    #[test]
-    fn xhci_handoff_command_restore_target_preserves_required_bits() {
-        let safe_cmd = Some(
-            super::PCI_COMMAND_MEMORY_SPACE
-                | super::PCI_COMMAND_BUS_MASTER
-                | super::PCI_COMMAND_INTERRUPT_DISABLE,
-        );
-        assert_eq!(
-            xhci_handoff_command_restore_target(0x0000, safe_cmd),
-            Some(0x0406)
-        );
-        assert_eq!(
-            xhci_handoff_command_restore_target(0x0040, safe_cmd),
-            Some(0x0446)
-        );
-        assert_eq!(
-            xhci_handoff_command_restore_target(0x0000, Some(super::PCI_COMMAND_MEMORY_SPACE)),
-            None
-        );
     }
 
     #[test]
@@ -10157,7 +10105,7 @@ mod tests {
         );
         assert_eq!(
             super::xhci_runtime_handoff_source_label(false, true),
-            "fw-handoff-preserved-snapshot"
+            "fw-handoff-direct-snapshot"
         );
     }
 
@@ -10195,31 +10143,31 @@ mod tests {
     fn xhci_trusted_handoff_runs_polling_only() {
         assert!(super::xhci_polling_only_runtime(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            true,
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
         ));
         assert!(!super::xhci_polling_only_runtime(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            true,
+            XhciFirmwareHandoff::PreserveControllerState,
         ));
         assert!(!super::xhci_polling_only_runtime(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            false,
+            XhciFirmwareHandoff::None,
         ));
     }
 
     #[test]
     fn xhci_irq_sink_keeps_untrusted_paths_disabled() {
-        assert!(super::xhci_irq_sink_needed(
+        assert!(!super::xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            true,
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
         ));
         assert!(!super::xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            false,
+            XhciFirmwareHandoff::None,
         ));
         assert!(!super::xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-            true,
+            XhciFirmwareHandoff::PreserveControllerState,
         ));
     }
 
