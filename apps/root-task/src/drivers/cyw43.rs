@@ -23,7 +23,9 @@ use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError,
 use crate::net_consts::MAX_FRAME_LEN;
 
 const SDIO_STARTUP_CLOCK_HZ: u32 = 400_000;
-const SDIO_DATA_CLOCK_HZ: u32 = 25_000_000;
+// Pi 4 bring-up is currently stable at 12.5 MHz; 25 MHz consistently trips
+// the first high-speed SDIO block transfer with data CRC/end-bit faults.
+const SDIO_DATA_CLOCK_HZ: u32 = 12_500_000;
 const SDIO_CCCR_IOEX: u32 = 0x02;
 const DEFAULT_WIFI_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x55];
 
@@ -200,17 +202,6 @@ fn is_transport_retryable(err: &HalError) -> bool {
     )
 }
 
-fn is_firmware_load_retryable(err: &HalError) -> bool {
-    matches!(
-        err,
-        HalError::Unsupported("sdhci-command-error")
-            | HalError::Unsupported("sdhci-transfer-command")
-            | HalError::Unsupported("sdhci-transfer-data")
-            | HalError::Unsupported("sdhci-transfer-finish")
-            | HalError::Unsupported("sdhci-int-timeout")
-    )
-}
-
 fn recover_startup_transport(
     state: &mut Pi4WifiState,
     init_transport_label: &'static str,
@@ -317,18 +308,13 @@ impl Cyw43NetDevice {
             warn!("[cyw43] init_transport retryable failure: {err}");
             recover_startup_transport(&mut state, "init_transport(retry)")?;
         }
-        info!("[cyw43] step: load_firmware(startup-link)");
-        if let Err(err) = state.load_cyw43_firmware() {
-            if !is_firmware_load_retryable(&err) {
-                return Err(err.into());
-            }
-            warn!("[cyw43] load_firmware retryable failure: {err}");
-            recover_startup_transport(&mut state, "load_firmware(init_transport-retry)")?;
-            info!("[cyw43] step: load_firmware(retry)");
-            state.load_cyw43_firmware()?;
-        }
         info!("[cyw43] step: set_bus_width(4bit)");
         state.set_bus_width(SdioBusWidth::FourBit)?;
+        info!("[cyw43] step: load_firmware(startup-link)");
+        // Keep the control path at startup clock, but switch to the final bus
+        // width before bulk upload so the first high-speed CMD53 uses the
+        // stable 4-bit transport configuration.
+        state.load_cyw43_firmware()?;
         info!("[cyw43] step: set_clock(data)");
         let data_clock_hz = state.set_clock_hz(SDIO_DATA_CLOCK_HZ)?;
         info!("[cyw43] step: read_ioex");
@@ -1148,8 +1134,7 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        align4, bdc_payload, is_firmware_load_retryable, is_transport_retryable, put_u16_le,
-        EVENT_AUTH, EVENT_SET_SSID,
+        align4, bdc_payload, is_transport_retryable, put_u16_le, EVENT_AUTH, EVENT_SET_SSID,
     };
     use crate::hal::HalError;
 
@@ -1190,25 +1175,6 @@ mod tests {
             "sdio-ocr-timeout"
         )));
         assert!(!is_transport_retryable(&HalError::Unsupported(
-            "mailbox-protocol"
-        )));
-    }
-
-    #[test]
-    fn firmware_load_retry_matches_sdhci_upload_failures() {
-        assert!(is_firmware_load_retryable(&HalError::Unsupported(
-            "sdhci-command-error"
-        )));
-        assert!(is_firmware_load_retryable(&HalError::Unsupported(
-            "sdhci-transfer-command"
-        )));
-        assert!(is_firmware_load_retryable(&HalError::Unsupported(
-            "sdhci-transfer-data"
-        )));
-        assert!(is_firmware_load_retryable(&HalError::Unsupported(
-            "sdhci-transfer-finish"
-        )));
-        assert!(!is_firmware_load_retryable(&HalError::Unsupported(
             "mailbox-protocol"
         )));
     }

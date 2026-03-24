@@ -2,15 +2,14 @@
 // Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
 // Copyright 2026 Lukas Bower
 use crate::{
-    reg,
-    ring::{completion, trb_type, EventRing, PhysMem, Ring, Trb},
-    Dma, Result, UsbError,
+    Dma, Result, UsbError, reg,
+    ring::{EventRing, PhysMem, Ring, Trb, completion, trb_type},
 };
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
-    sync::atomic::{compiler_fence, AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering, compiler_fence},
 };
 use spin::Mutex;
 
@@ -127,10 +126,13 @@ const fn skip_init_pre_reset_scrub_writes(firmware_handoff: XhciFirmwareHandoff)
 }
 
 #[inline(always)]
-const fn skip_legacy_ownership_claim_for_handoff(
-    firmware_handoff: XhciFirmwareHandoff,
-) -> bool {
-    matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
+const fn skip_legacy_ownership_claim_for_handoff(firmware_handoff: XhciFirmwareHandoff) -> bool {
+    matches!(
+        firmware_handoff,
+        XhciFirmwareHandoff::ColdStartFromSnapshot
+            | XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PreserveControllerState
+    )
 }
 
 #[inline(always)]
@@ -142,10 +144,39 @@ const fn use_live_post_reset_seed_reads(firmware_handoff: XhciFirmwareHandoff) -
 }
 
 #[inline(always)]
+const fn use_live_config_seed_reads(firmware_handoff: XhciFirmwareHandoff) -> bool {
+    matches!(
+        firmware_handoff,
+        XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::None
+    )
+}
+
+#[inline(always)]
+const fn use_live_post_reset_seed_reads_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || use_live_post_reset_seed_reads(firmware_handoff) && runtime_seed_snapshot.is_none()
+}
+
+#[inline(always)]
+const fn use_live_config_seed_reads_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || use_live_config_seed_reads(firmware_handoff) && runtime_seed_snapshot.is_none()
+}
+
+#[inline(always)]
 const fn skip_live_post_reset_verification_readbacks(
     firmware_handoff: XhciFirmwareHandoff,
 ) -> bool {
-    matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
+    matches!(
+        firmware_handoff,
+        XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::ResetlessReinit
+    )
 }
 
 #[inline(always)]
@@ -157,7 +188,7 @@ const fn skip_doorbell_readback_after_ring(firmware_handoff: XhciFirmwareHandoff
 const fn skip_config_write_during_init(firmware_handoff: XhciFirmwareHandoff) -> bool {
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::PreserveControllerState
     )
 }
 
@@ -172,9 +203,40 @@ const fn skip_reset_during_init(firmware_handoff: XhciFirmwareHandoff) -> bool {
 }
 
 #[inline(always)]
-const fn skip_live_halt_revalidation(firmware_handoff: XhciFirmwareHandoff) -> bool {
+const fn skip_reset_during_init_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    // On the Pi 4 trusted mailbox-reset path, VideoCore has already driven the
+    // heavy controller reset boundary before seL4 touches xHCI again. A second
+    // live HCRST store on that path is the remaining board-killing edge, so
+    // reuse the bootloader-exported stop/ring snapshot and continue directly to
+    // config/ring ownership programming.
+    skip_reset_during_init(firmware_handoff)
+        || matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
+            && runtime_seed_snapshot.is_some()
+}
+
+#[inline(always)]
+const fn runtime_mailbox_reset_handoff(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
     matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
-        || skip_preinit_polling_scrub(firmware_handoff)
+        && runtime_seed_snapshot.is_some()
+}
+
+#[inline(always)]
+const fn skip_live_halt_revalidation(firmware_handoff: XhciFirmwareHandoff) -> bool {
+    skip_preinit_polling_scrub(firmware_handoff)
+}
+
+#[inline(always)]
+const fn skip_live_halt_revalidation_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    skip_live_halt_revalidation(firmware_handoff) || runtime_seed_snapshot.is_some()
 }
 
 #[inline]
@@ -332,6 +394,27 @@ pub enum XhciFirmwareHandoff {
     PreserveControllerState = 3,
 }
 
+/// Bootloader-exported xHCI stop/ring seed snapshot for trusted handoff.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct XhciRuntimeSeedSnapshot {
+    /// Operational `USBCMD` captured before handoff.
+    pub usbcmd: Option<u32>,
+    /// Operational `USBSTS` captured before handoff.
+    pub usbsts: Option<u32>,
+    /// Interrupter 0 `IMAN` captured before handoff.
+    pub iman0: Option<u32>,
+    /// Operational `DCBAAP` captured before handoff.
+    pub dcbaap: Option<u64>,
+    /// Operational `CRCR` captured before handoff.
+    pub crcr: Option<u64>,
+    /// Runtime interrupter 0 `ERSTBA` captured before handoff.
+    pub erstba0: Option<u64>,
+    /// Runtime interrupter 0 `ERDP` captured before handoff.
+    pub erdp0: Option<u64>,
+    /// Runtime interrupter 0 `ERSTSZ` captured before handoff.
+    pub erstsz0: Option<u32>,
+}
+
 /// Pre-validated xHCI capability register snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct XhciControllerParams {
@@ -349,6 +432,8 @@ pub struct XhciControllerParams {
     pub rts_offset: u32,
     /// Firmware ownership contract selected by platform bring-up.
     pub firmware_handoff: XhciFirmwareHandoff,
+    /// Optional bootloader stop/ring seed snapshot for trusted handoff.
+    pub runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 }
 
 impl XhciControllerParams {
@@ -388,6 +473,7 @@ pub struct XhciCtrl<H: Dma> {
     max_slots: u8,
     max_ports: u8,
     firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
     dcbaa: PhysMem<H>,
     scratchpad: Option<ScratchpadSet<H>>,
     cmd_ring: Mutex<Box<Ring<H>>>,
@@ -448,9 +534,7 @@ impl<H: Dma> ScratchpadSet<H> {
         for page in &self.buffers {
             let _ = page.share_for_device(host, "xhci-scratchpad-page")?;
         }
-        let _ = self
-            .array
-            .share_for_device(host, "xhci-scratchpad-array")?;
+        let _ = self.array.share_for_device(host, "xhci-scratchpad-array")?;
         Ok(())
     }
 }
@@ -503,6 +587,20 @@ impl<H: Dma> XhciCtrl<H> {
         unsafe {
             ((mmio + offset) as *mut T).write_volatile(val);
         }
+    }
+
+    #[inline(always)]
+    fn write_reg_u32_store_diag_at(
+        mmio: usize,
+        offset: usize,
+        val: u32,
+        pre_stage: u16,
+        done_stage: u16,
+        diag_ctx: u64,
+    ) {
+        emit_xhci_diag(pre_stage, offset as u64, val as u64, diag_ctx);
+        Self::write_reg_at::<u32>(mmio, offset, val);
+        emit_xhci_diag(done_stage, offset as u64, val as u64, diag_ctx);
     }
 
     #[inline(always)]
@@ -624,6 +722,7 @@ impl<H: Dma> XhciCtrl<H> {
             db_offset,
             rts_offset,
             firmware_handoff: XhciFirmwareHandoff::None,
+            runtime_seed_snapshot: None,
         };
 
         unsafe {
@@ -731,6 +830,7 @@ impl<H: Dma> XhciCtrl<H> {
             max_slots,
             max_ports,
             firmware_handoff: params.firmware_handoff,
+            runtime_seed_snapshot: params.runtime_seed_snapshot,
             dcbaa,
             scratchpad,
             cmd_ring: Mutex::new(cmd_ring),
@@ -746,7 +846,15 @@ impl<H: Dma> XhciCtrl<H> {
 
     fn init(&mut self) -> Result<()> {
         let preserve_firmware_state = preserve_firmware_handoff_config(self.firmware_handoff);
-        let live_post_reset_seed_reads = use_live_post_reset_seed_reads(self.firmware_handoff);
+        let trusted_runtime_seed_snapshot = self.runtime_seed_snapshot;
+        let live_post_reset_seed_reads = use_live_post_reset_seed_reads_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        );
+        let live_config_seed_reads = use_live_config_seed_reads_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        );
         let skip_post_reset_verification_readbacks =
             skip_live_post_reset_verification_readbacks(self.firmware_handoff);
 
@@ -779,20 +887,24 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0212, self.firmware_handoff as u64, 0, 0);
         }
 
-        // The trusted Pi 4 handoff path now skips the live halt revalidation
-        // read for every firmware-owned takeover mode because that op-register
-        // touch can still trigger irq 27 before runtime has fully claimed the
-        // controller. Cold-start-from-snapshot still follows the normal reset
-        // flow below once this read hazard is skipped.
-        if skip_live_halt_revalidation(self.firmware_handoff) {
+        // Resetless/preserve-state firmware modes already proved the
+        // controller safe for takeover and can skip this halt check. The
+        // trusted snapshot cold-start path instead mirrors U-Boot's
+        // xhci_reset() entry more closely: live halt-state reads first,
+        // then HCRST from the current USBCMD value.
+        if skip_live_halt_revalidation_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        ) {
             emit_xhci_diag(0x0224, 0, reg::USBSTS_HCH as u64, 1);
         } else {
-            let usbcmd = masked_usbcmd(self.read_op::<u32>(reg::USBCMD));
             let usbsts = self.read_op::<u32>(reg::USBSTS);
-            emit_xhci_diag(0x0220, usbcmd as u64, usbsts as u64, 0);
+            let usbcmd_raw = self.read_op::<u32>(reg::USBCMD);
+            let usbcmd = masked_usbcmd(usbcmd_raw);
+            emit_xhci_diag(0x0220, usbcmd as u64, usbsts as u64, usbcmd_raw as u64);
             if !SKIP_STOP_DURING_INIT && halt_revalidation_needed(usbsts) {
                 if (usbcmd & reg::USBCMD_RUN) != 0 {
-                    emit_xhci_diag(0x0221, usbcmd as u64, 0, 0);
+                    emit_xhci_diag(0x0221, usbcmd as u64, usbcmd_raw as u64, 0);
                     self.write_op(reg::USBCMD, usbcmd & !reg::USBCMD_RUN);
                 }
                 let mut waited = 0usize;
@@ -811,40 +923,79 @@ impl<H: Dma> XhciCtrl<H> {
                 }
                 emit_xhci_diag(0x0223, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
             } else {
-                emit_xhci_diag(0x0224, usbcmd as u64, usbsts as u64, 0);
+                emit_xhci_diag(0x0225, usbcmd as u64, usbsts as u64, usbcmd_raw as u64);
             }
         }
 
-        if skip_reset_during_init(self.firmware_handoff) {
-            emit_xhci_diag(0x0234, 1, 0, 0);
+        if skip_reset_during_init_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        ) {
+            emit_xhci_diag(
+                0x0234,
+                self.firmware_handoff as u64,
+                trusted_runtime_seed_snapshot.is_some() as u64,
+                0,
+            );
+            if runtime_mailbox_reset_handoff(self.firmware_handoff, trusted_runtime_seed_snapshot) {
+                // U-Boot does not touch CONFIG or other operational registers
+                // until the reset boundary has cleared USBSTS.CNR. The Pi 4
+                // mailbox-reset handoff now treats that firmware reset as the
+                // active reset source, so wait for the controller to become
+                // ready before the first live operational write.
+                let mut waited = 0usize;
+                while (self.read_op::<u32>(reg::USBSTS) & reg::USBSTS_CNR) != 0 {
+                    waited = waited.saturating_add(1);
+                    if waited >= RESET_WAIT_SPINS {
+                        emit_xhci_diag(
+                            0x0232,
+                            waited as u64,
+                            self.read_op::<u32>(reg::USBSTS) as u64,
+                            1,
+                        );
+                        return Err(UsbError::Timeout);
+                    }
+                    spin_loop();
+                }
+                emit_xhci_diag(0x0233, self.read_op::<u32>(reg::USBSTS) as u64, 1, 0);
+            }
         } else {
+            let usbcmd_before_reset = trusted_runtime_seed_snapshot
+                .and_then(|snapshot| snapshot.usbcmd)
+                .map(masked_usbcmd)
+                .unwrap_or_else(|| self.read_op::<u32>(reg::USBCMD));
+            emit_xhci_diag(
+                0x0226,
+                usbcmd_before_reset as u64,
+                trusted_runtime_seed_snapshot.is_some() as u64,
+                0,
+            );
+            let reset_cmd = usbcmd_before_reset | reg::USBCMD_HCRST;
             // Reset controller
             emit_xhci_diag(
                 0x0230,
                 reg::USBCMD as u64,
-                reg::USBCMD_HCRST as u64,
+                reset_cmd as u64,
                 self.firmware_handoff as u64,
             );
-            self.write_op(reg::USBCMD, reg::USBCMD_HCRST);
-            emit_xhci_diag(
+            self.write_op_u32_store_diag(
+                reg::USBCMD,
+                reset_cmd,
+                0x0237,
                 0x0235,
-                reg::USBCMD as u64,
-                reg::USBCMD_HCRST as u64,
                 self.firmware_handoff as u64,
             );
+            let mut reset_state = self.read_op::<u32>(reg::USBCMD);
+            emit_xhci_diag(0x0236, reset_state as u64, reg::USBCMD_HCRST as u64, 0);
             let mut waited = 0usize;
-            while (self.read_op::<u32>(reg::USBCMD) & reg::USBCMD_HCRST) != 0 {
+            while (reset_state & reg::USBCMD_HCRST) != 0 {
                 waited = waited.saturating_add(1);
                 if waited >= RESET_WAIT_SPINS {
-                    emit_xhci_diag(
-                        0x0231,
-                        waited as u64,
-                        self.read_op::<u32>(reg::USBCMD) as u64,
-                        0,
-                    );
+                    emit_xhci_diag(0x0231, waited as u64, reset_state as u64, 0);
                     return Err(UsbError::Timeout);
                 }
                 spin_loop();
+                reset_state = self.read_op::<u32>(reg::USBCMD);
             }
             waited = 0;
             while (self.read_op::<u32>(reg::USBSTS) & reg::USBSTS_CNR) != 0 {
@@ -869,19 +1020,37 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0245, reg::CONFIG as u64, self.max_slots as u64, 1);
             emit_xhci_diag(0x0241, self.max_slots as u64, 1, 0);
         } else {
-            let config = if live_post_reset_seed_reads {
+            let current_config = if live_config_seed_reads {
                 emit_xhci_diag(0x0246, reg::CONFIG as u64, 0, 0);
                 let current = self.read_op::<u32>(reg::CONFIG);
                 emit_xhci_diag(0x0241, current as u64, 0, 0);
-                compose_config(current, self.max_slots)
+                Some(current)
             } else {
-                self.max_slots as u32
+                None
             };
-            emit_xhci_diag(0x0243, reg::CONFIG as u64, config as u64, 0);
-            self.write_op(reg::CONFIG, config);
-            if !skip_post_reset_verification_readbacks {
-                emit_xhci_diag(0x0246, reg::CONFIG as u64, 0, 1);
-                emit_xhci_diag(0x0241, self.read_op::<u32>(reg::CONFIG) as u64, 0, 1);
+            let config = current_config
+                .map(|current| compose_config(current, self.max_slots))
+                .unwrap_or(self.max_slots as u32);
+            if current_config == Some(config) {
+                // U-Boot preserves CONFIG's non-slot bits and can end up with
+                // MaxSlotsEn already programmed before the final runtime
+                // ownership pass. Avoid an unnecessary first live op write on
+                // the trusted resetless path when the register is already
+                // equivalent to the value we would publish.
+                emit_xhci_diag(0x0245, reg::CONFIG as u64, config as u64, 2);
+            } else {
+                emit_xhci_diag(0x0243, reg::CONFIG as u64, config as u64, 0);
+                self.write_op_u32_store_diag(
+                    reg::CONFIG,
+                    config,
+                    0x0238,
+                    0x0239,
+                    self.firmware_handoff as u64,
+                );
+                if !skip_post_reset_verification_readbacks {
+                    emit_xhci_diag(0x0246, reg::CONFIG as u64, 0, 1);
+                    emit_xhci_diag(0x0241, self.read_op::<u32>(reg::CONFIG) as u64, 0, 1);
+                }
             }
         }
         if let Some(scratchpad) = &self.scratchpad {
@@ -892,7 +1061,12 @@ impl<H: Dma> XhciCtrl<H> {
         let dcbaap_offset = self.op_base - self.mmio + reg::DCBAAP;
         if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE {
             emit_xhci_diag(0x024e, reg::DCBAAP as u64, dcbaap_offset as u64, 1);
-            emit_xhci_diag(0x024f, self.read_reg_u64(dcbaap_offset), dcbaap_offset as u64, 1);
+            emit_xhci_diag(
+                0x024f,
+                self.read_reg_u64(dcbaap_offset),
+                dcbaap_offset as u64,
+                1,
+            );
         }
         if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE {
             Self::write_reg_u64_atomic_diag_at(self.mmio, dcbaap_offset, 0, 0x024c, 0x024d);
@@ -922,8 +1096,12 @@ impl<H: Dma> XhciCtrl<H> {
         // the post-reset U-Boot-style path, reuse the live reserved bits as
         // the seed for our CRCR publish while still skipping extra verification
         // reads on the trusted snapshot path.
-        let current_crcr = if preserve_firmware_state || !live_post_reset_seed_reads {
+        let current_crcr = if preserve_firmware_state {
             0
+        } else if !live_post_reset_seed_reads {
+            trusted_runtime_seed_snapshot
+                .and_then(|snapshot| snapshot.crcr)
+                .unwrap_or(0)
         } else {
             emit_xhci_diag(0x0253, reg::CRCR as u64, 0, 0);
             let current = self.read_op_u64(reg::CRCR);
@@ -956,33 +1134,31 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Prime ERDP to the first event TRB without setting EHB during init.
         let erdp = compose_initial_erdp(event_ring_phys);
-        emit_xhci_diag(
-            0x0266,
-            (int_base + reg::ERDP) as u64,
-            erdp,
-            0,
-        );
-        self.write_reg_u64_diag(
-            int_base + reg::ERDP,
-            erdp,
-            0x0277,
-            0x0278,
-        );
-        let (current_erst_size, current_erstba) =
-            if preserve_firmware_state || !live_post_reset_seed_reads {
-                (0, 0)
-            } else {
-                emit_xhci_diag(
-                    0x026d,
-                    (int_base + reg::ERSTSZ) as u64,
-                    (int_base + reg::ERSTBA) as u64,
-                    0,
-                );
-                let current_erst_size = self.read_reg::<u32>(int_base + reg::ERSTSZ);
-                let current_erstba = self.read_reg_u64(int_base + reg::ERSTBA);
-                emit_xhci_diag(0x0261, current_erst_size as u64, current_erstba, 0);
-                (current_erst_size, current_erstba)
-            };
+        emit_xhci_diag(0x0266, (int_base + reg::ERDP) as u64, erdp, 0);
+        self.write_reg_u64_diag(int_base + reg::ERDP, erdp, 0x0277, 0x0278);
+        let (current_erst_size, current_erstba) = if preserve_firmware_state {
+            (0, 0)
+        } else if !live_post_reset_seed_reads {
+            (
+                trusted_runtime_seed_snapshot
+                    .and_then(|snapshot| snapshot.erstsz0)
+                    .unwrap_or(0),
+                trusted_runtime_seed_snapshot
+                    .and_then(|snapshot| snapshot.erstba0)
+                    .unwrap_or(0),
+            )
+        } else {
+            emit_xhci_diag(
+                0x026d,
+                (int_base + reg::ERSTSZ) as u64,
+                (int_base + reg::ERSTBA) as u64,
+                0,
+            );
+            let current_erst_size = self.read_reg::<u32>(int_base + reg::ERSTSZ);
+            let current_erstba = self.read_reg_u64(int_base + reg::ERSTBA);
+            emit_xhci_diag(0x0261, current_erst_size as u64, current_erstba, 0);
+            (current_erst_size, current_erstba)
+        };
         let erst_size = compose_erst_size(
             if preserve_firmware_state || !live_post_reset_seed_reads {
                 0
@@ -1012,12 +1188,7 @@ impl<H: Dma> XhciCtrl<H> {
                 event_ring.ring_phys(&*self.host) | 0x8,
             );
         } else if !skip_post_reset_verification_readbacks {
-            emit_xhci_diag(
-                0x0262,
-                int_base as u64,
-                polling_iman_value() as u64,
-                0,
-            );
+            emit_xhci_diag(0x0262, int_base as u64, polling_iman_value() as u64, 0);
             emit_xhci_diag(0x026d, int_base as u64, 0, 0);
             emit_xhci_diag(
                 0x0261,
@@ -1037,7 +1208,10 @@ impl<H: Dma> XhciCtrl<H> {
         // publish rings, start the controller, then zero IMOD/IMAN. Generic
         // polling bring-up still clears stale USBSTS before RUN so command
         // completions are observable on non-snapshot paths.
-        if matches!(self.firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot) {
+        if matches!(
+            self.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        ) {
             emit_xhci_diag(
                 0x0263,
                 USBSTS_CLEAR_MASK as u64,
@@ -1178,6 +1352,25 @@ impl<H: Dma> XhciCtrl<H> {
 
     fn write_op<T: Copy>(&self, offset: usize, val: T) {
         self.write_reg(self.op_base - self.mmio + offset, val)
+    }
+
+    #[inline(always)]
+    fn write_op_u32_store_diag(
+        &self,
+        offset: usize,
+        val: u32,
+        pre_stage: u16,
+        done_stage: u16,
+        diag_ctx: u64,
+    ) {
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            self.op_base - self.mmio + offset,
+            val,
+            pre_stage,
+            done_stage,
+            diag_ctx,
+        );
     }
 
     #[inline(always)]
@@ -1468,7 +1661,12 @@ impl<H: Dma> XhciCtrl<H> {
         let clear_changes = port_state_neutral(portsc) | PORT_CHANGE_BITS;
         self.write_reg(offset, clear_changes);
         portsc = self.read_reg(offset);
-        emit_xhci_diag(0x0281, port as u64, encode_port_diag(portsc), clear_changes as u64);
+        emit_xhci_diag(
+            0x0281,
+            port as u64,
+            encode_port_diag(portsc),
+            clear_changes as u64,
+        );
 
         // Keep power enabled while requesting reset.
         let reset = port_state_neutral(portsc) | reg::PORTSC_PP | reg::PORTSC_PR;
@@ -1489,22 +1687,12 @@ impl<H: Dma> XhciCtrl<H> {
             }
             waited = waited.saturating_add(1);
             if waited >= PORT_RESET_WAIT_SPINS {
-                emit_xhci_diag(
-                    0x028e,
-                    port as u64,
-                    encode_port_diag(portsc),
-                    waited as u64,
-                );
+                emit_xhci_diag(0x028e, port as u64, encode_port_diag(portsc), waited as u64);
                 return Err(UsbError::PortResetTimeout);
             }
             spin_loop();
         }
-        emit_xhci_diag(
-            0x0283,
-            port as u64,
-            encode_port_diag(portsc),
-            waited as u64,
-        );
+        emit_xhci_diag(0x0283, port as u64, encode_port_diag(portsc), waited as u64);
 
         // Wait for the link to settle and expose either PED or speed bits.
         waited = 0;
@@ -1515,22 +1703,12 @@ impl<H: Dma> XhciCtrl<H> {
             }
             waited = waited.saturating_add(1);
             if waited >= PORT_ENABLE_WAIT_SPINS {
-                emit_xhci_diag(
-                    0x028d,
-                    port as u64,
-                    encode_port_diag(portsc),
-                    waited as u64,
-                );
+                emit_xhci_diag(0x028d, port as u64, encode_port_diag(portsc), waited as u64);
                 return Err(UsbError::PortEnableTimeout);
             }
             spin_loop();
         }
-        emit_xhci_diag(
-            0x0284,
-            port as u64,
-            encode_port_diag(portsc),
-            waited as u64,
-        );
+        emit_xhci_diag(0x0284, port as u64, encode_port_diag(portsc), waited as u64);
 
         // Acknowledge port status change bits after reset using RW1C bits only,
         // then ensure the port remains enumeration-ready.
@@ -1647,7 +1825,12 @@ impl<H: Dma> XhciCtrl<H> {
 
     /// Reads the current DCBAA slot entry for diagnostics.
     pub fn device_context_entry(&self, slot: u8) -> u64 {
-        unsafe { self.dcbaa.as_ptr::<u64>().add(slot as usize).read_volatile() }
+        unsafe {
+            self.dcbaa
+                .as_ptr::<u64>()
+                .add(slot as usize)
+                .read_volatile()
+        }
     }
 
     /// Get host reference
@@ -1694,19 +1877,20 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        XhciControllerParams, compose_config, compose_crcr, compose_erst_base,
-        compose_erst_size, compose_initial_erdp, halt_revalidation_needed,
-        masked_usbcmd, parse_controller_params, polling_iman_value,
-        port_ready_for_enumeration, preserve_firmware_handoff_config,
+        SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
+        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XhciControllerParams, XhciFirmwareHandoff,
+        XhciRuntimeSeedSnapshot, compose_config, compose_crcr, compose_erst_base,
+        compose_erst_size, compose_initial_erdp, halt_revalidation_needed, masked_usbcmd,
+        parse_controller_params, polling_iman_value, port_ready_for_enumeration,
+        preserve_firmware_handoff_config, runtime_mailbox_reset_handoff,
         skip_config_write_during_init, skip_constructor_polling_scrub_writes,
-        skip_doorbell_readback_after_ring,
-        skip_init_pre_reset_scrub_writes, skip_legacy_ownership_claim_for_handoff,
-        skip_live_halt_revalidation, skip_live_post_reset_verification_readbacks,
-        skip_preinit_polling_scrub, skip_reset_during_init,
-        split_u64_reg_write_ops, use_live_post_reset_seed_reads,
-        SKIP_HCRST_DURING_INIT,
-        TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
-        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XhciFirmwareHandoff,
+        skip_doorbell_readback_after_ring, skip_init_pre_reset_scrub_writes,
+        skip_legacy_ownership_claim_for_handoff, skip_live_halt_revalidation,
+        skip_live_halt_revalidation_with_snapshot, skip_live_post_reset_verification_readbacks,
+        skip_preinit_polling_scrub, skip_reset_during_init, skip_reset_during_init_with_snapshot,
+        split_u64_reg_write_ops, use_live_config_seed_reads,
+        use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
+        use_live_post_reset_seed_reads_with_snapshot,
     };
     use crate::reg;
 
@@ -1735,9 +1919,44 @@ mod tests {
             db_offset: 0x1000,
             rts_offset: 0x2000,
             firmware_handoff: XhciFirmwareHandoff::None,
+            runtime_seed_snapshot: None,
         };
         let validated = params.validated().expect("validated controller params");
         assert_eq!(validated.4, 64);
+    }
+
+    #[test]
+    fn trusted_runtime_seed_snapshot_skips_early_reads_but_uses_post_reset_reads() {
+        let snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: Some(0),
+            crcr: Some(0),
+            erstba0: Some(0),
+            erdp0: Some(0),
+            erstsz0: Some(0),
+        });
+        assert!(skip_live_halt_revalidation_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(runtime_mailbox_reset_handoff(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(use_live_post_reset_seed_reads_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(use_live_config_seed_reads_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(skip_reset_during_init_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
     }
 
     #[test]
@@ -1783,8 +2002,8 @@ mod tests {
     }
 
     #[test]
-    fn trusted_firmware_handoff_skips_live_halt_revalidation() {
-        assert!(skip_live_halt_revalidation(
+    fn only_resetless_firmware_handoffs_skip_live_halt_revalidation() {
+        assert!(!skip_live_halt_revalidation(
             XhciFirmwareHandoff::ColdStartFromSnapshot
         ));
         assert!(skip_live_halt_revalidation(
@@ -1821,9 +2040,7 @@ mod tests {
         assert!(skip_reset_during_init(
             XhciFirmwareHandoff::PreserveControllerState
         ));
-        assert!(skip_reset_during_init(
-            XhciFirmwareHandoff::ResetlessReinit
-        ));
+        assert!(skip_reset_during_init(XhciFirmwareHandoff::ResetlessReinit));
         assert_eq!(
             skip_reset_during_init(XhciFirmwareHandoff::None),
             SKIP_HCRST_DURING_INIT
@@ -1871,20 +2088,18 @@ mod tests {
         assert!(skip_init_pre_reset_scrub_writes(
             XhciFirmwareHandoff::ResetlessReinit
         ));
-        assert!(!skip_init_pre_reset_scrub_writes(
-            XhciFirmwareHandoff::None
-        ));
+        assert!(!skip_init_pre_reset_scrub_writes(XhciFirmwareHandoff::None));
     }
 
     #[test]
-    fn cold_start_snapshot_skips_legacy_ownership_claim() {
+    fn trusted_handoffs_skip_legacy_ownership_claim() {
         assert!(skip_legacy_ownership_claim_for_handoff(
             XhciFirmwareHandoff::ColdStartFromSnapshot
         ));
-        assert!(!skip_legacy_ownership_claim_for_handoff(
+        assert!(skip_legacy_ownership_claim_for_handoff(
             XhciFirmwareHandoff::PreserveControllerState
         ));
-        assert!(!skip_legacy_ownership_claim_for_handoff(
+        assert!(skip_legacy_ownership_claim_for_handoff(
             XhciFirmwareHandoff::ResetlessReinit
         ));
         assert!(!skip_legacy_ownership_claim_for_handoff(
@@ -1903,20 +2118,32 @@ mod tests {
         assert!(!use_live_post_reset_seed_reads(
             XhciFirmwareHandoff::ResetlessReinit
         ));
-        assert!(use_live_post_reset_seed_reads(
-            XhciFirmwareHandoff::None
-        ));
+        assert!(use_live_post_reset_seed_reads(XhciFirmwareHandoff::None));
     }
 
     #[test]
-    fn cold_start_snapshot_skips_post_reset_verification_readbacks() {
+    fn only_cold_start_and_runtime_owned_paths_use_live_config_seed_reads() {
+        assert!(use_live_config_seed_reads(
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        ));
+        assert!(!use_live_config_seed_reads(
+            XhciFirmwareHandoff::PreserveControllerState
+        ));
+        assert!(!use_live_config_seed_reads(
+            XhciFirmwareHandoff::ResetlessReinit
+        ));
+        assert!(use_live_config_seed_reads(XhciFirmwareHandoff::None));
+    }
+
+    #[test]
+    fn trusted_resetless_paths_skip_post_reset_verification_readbacks() {
         assert!(skip_live_post_reset_verification_readbacks(
             XhciFirmwareHandoff::ColdStartFromSnapshot
         ));
         assert!(!skip_live_post_reset_verification_readbacks(
             XhciFirmwareHandoff::PreserveControllerState
         ));
-        assert!(!skip_live_post_reset_verification_readbacks(
+        assert!(skip_live_post_reset_verification_readbacks(
             XhciFirmwareHandoff::ResetlessReinit
         ));
         assert!(!skip_live_post_reset_verification_readbacks(
@@ -1941,14 +2168,14 @@ mod tests {
     }
 
     #[test]
-    fn trusted_firmware_handoff_skips_config_write_during_init() {
+    fn only_preserve_state_handoffs_skip_config_write_during_init() {
         assert!(!skip_config_write_during_init(
             XhciFirmwareHandoff::ColdStartFromSnapshot
         ));
         assert!(skip_config_write_during_init(
             XhciFirmwareHandoff::PreserveControllerState
         ));
-        assert!(skip_config_write_during_init(
+        assert!(!skip_config_write_during_init(
             XhciFirmwareHandoff::ResetlessReinit
         ));
         assert!(!skip_config_write_during_init(XhciFirmwareHandoff::None));

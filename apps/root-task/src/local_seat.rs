@@ -103,6 +103,27 @@ pub struct LocalSeatXhciCapabilitySnapshot {
     pub rts_offset: u32,
 }
 
+/// Optional bootloader-provided xHCI stop/ring seed snapshot for local-seat handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalSeatXhciRuntimeSeedSnapshot {
+    /// Operational `USBCMD` captured by the bootloader before handoff.
+    pub usbcmd: Option<u32>,
+    /// Operational `USBSTS` captured by the bootloader before handoff.
+    pub usbsts: Option<u32>,
+    /// Interrupter 0 `IMAN` captured by the bootloader before handoff.
+    pub iman0: Option<u32>,
+    /// Operational `DCBAAP` captured by the bootloader before handoff.
+    pub dcbaap: Option<u64>,
+    /// Operational `CRCR` captured by the bootloader before handoff.
+    pub crcr: Option<u64>,
+    /// Runtime interrupter 0 `ERSTBA` captured by the bootloader before handoff.
+    pub erstba0: Option<u64>,
+    /// Runtime interrupter 0 `ERDP` captured by the bootloader before handoff.
+    pub erdp0: Option<u64>,
+    /// Runtime interrupter 0 `ERSTSZ` captured by the bootloader before handoff.
+    pub erstsz0: Option<u32>,
+}
+
 /// Optional platform-specific hints for local-seat backend attachment.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LocalSeatPlatformHints {
@@ -116,6 +137,8 @@ pub struct LocalSeatPlatformHints {
     pub xhci_irq_quiesced: bool,
     /// Optional validated capability snapshot exported by the bootloader.
     pub xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
+    /// Optional stop/ring seed snapshot exported by the bootloader.
+    pub xhci_runtime_seed_snapshot: Option<LocalSeatXhciRuntimeSeedSnapshot>,
     /// Optional DT/firmware framebuffer hint for HDMI rendering.
     pub display_hint: Option<LocalSeatDisplayHint>,
 }
@@ -315,6 +338,7 @@ pub fn attach_platform_backend(
         xhci_handoff_ready: hints.xhci_handoff_ready,
         xhci_irq_quiesced: hints.xhci_irq_quiesced,
         xhci_capability_snapshot: hints.xhci_capability_snapshot,
+        xhci_runtime_seed_snapshot: hints.xhci_runtime_seed_snapshot,
         framebuffer_hint: hints.display_hint.map(|hint| Pi4FramebufferHint {
             paddr: hint.paddr,
             width: hint.width,

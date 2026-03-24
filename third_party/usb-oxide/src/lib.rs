@@ -54,7 +54,7 @@ pub use crate::{
     ram::{Dma, DmaShareError},
     ring::{PhysMem, Trb},
     xhci::{
-        XhciControllerParams, XhciCtrl, XhciDiagHook, XhciFirmwareHandoff,
+        XhciControllerParams, XhciCtrl, XhciDiagHook, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
         set_xhci_diag_hook,
     },
 };

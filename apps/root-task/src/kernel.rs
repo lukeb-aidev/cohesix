@@ -2284,6 +2284,29 @@ fn init_local_seat_runtime<P: Platform>(
     } else {
         None
     };
+    let xhci_runtime_seed_snapshot = if local_seat_enabled
+        && (xhci_usbcmd.is_some()
+            || xhci_usbsts.is_some()
+            || xhci_iman0.is_some()
+            || xhci_dcbaap.is_some()
+            || xhci_crcr.is_some()
+            || xhci_erstba0.is_some()
+            || xhci_erdp0.is_some()
+            || xhci_erstsz0.is_some())
+    {
+        Some(local_seat::LocalSeatXhciRuntimeSeedSnapshot {
+            usbcmd: xhci_usbcmd,
+            usbsts: xhci_usbsts,
+            iman0: xhci_iman0,
+            dcbaap: xhci_dcbaap,
+            crcr: xhci_crcr,
+            erstba0: xhci_erstba0,
+            erdp0: xhci_erdp0,
+            erstsz0: xhci_erstsz0,
+        })
+    } else {
+        None
+    };
     let xhci_handoff_source = if local_seat_enabled {
         infer_pi4_uefi_xhci_chosen_text_prop(extra_bytes, extra_range.clone())
     } else {
@@ -2666,6 +2689,7 @@ fn init_local_seat_runtime<P: Platform>(
         xhci_handoff_ready,
         xhci_irq_quiesced,
         xhci_capability_snapshot,
+        xhci_runtime_seed_snapshot,
         display_hint,
     };
     match local_seat::evaluate(hardware, local_seat::runtime_backend_available()) {
