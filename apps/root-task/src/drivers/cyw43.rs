@@ -227,6 +227,26 @@ fn recover_startup_transport(
     Ok(())
 }
 
+pub(crate) fn debug_load_firmware_from_transport(
+    state: &mut Pi4WifiState,
+) -> Result<u32, HalError> {
+    info!("[cyw43] debug: set_bus_width(4bit)");
+    state.set_bus_width(SdioBusWidth::FourBit)?;
+    info!("[cyw43] debug: load_firmware(startup-link)");
+    state.load_cyw43_firmware()?;
+    info!("[cyw43] debug: set_clock(data)");
+    let data_clock_target_hz = SDIO_DATA_CLOCK_HZ.min(state.recommended_data_clock_hz());
+    state.set_clock_hz(data_clock_target_hz)
+}
+
+pub(crate) fn debug_retry_transport_and_firmware(
+    state: &mut Pi4WifiState,
+) -> Result<u32, HalError> {
+    info!("[cyw43] debug: recover_transport");
+    recover_startup_transport(state, "debug-retry(init_transport)")?;
+    debug_load_firmware_from_transport(state)
+}
+
 impl NetDriverError for DriverError {
     fn is_absent(&self) -> bool {
         matches!(self, Self::NoDevice)
@@ -316,7 +336,8 @@ impl Cyw43NetDevice {
         // stable 4-bit transport configuration.
         state.load_cyw43_firmware()?;
         info!("[cyw43] step: set_clock(data)");
-        let data_clock_hz = state.set_clock_hz(SDIO_DATA_CLOCK_HZ)?;
+        let data_clock_target_hz = SDIO_DATA_CLOCK_HZ.min(state.recommended_data_clock_hz());
+        let data_clock_hz = state.set_clock_hz(data_clock_target_hz)?;
         info!("[cyw43] step: read_ioex");
         let ioex = state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
 

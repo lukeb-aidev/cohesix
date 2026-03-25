@@ -26,6 +26,10 @@ use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, CapabilityValidator, EventPump,
     IpcDispatcher, TimerSource,
 };
+#[cfg(feature = "kernel")]
+use crate::hal::KernelWifiDebugHandle;
+#[cfg(not(feature = "kernel"))]
+type KernelWifiDebugHandle = ();
 use crate::ipc;
 use crate::kernel::BootContext;
 #[cfg(feature = "kernel")]
@@ -99,6 +103,10 @@ pub fn main(ctx: BootContext) -> ! {
         .take()
         .expect("ticket table missing from BootContext");
     let mut bootstrap_ipc = kernel_bootstrap_handler();
+    #[cfg(feature = "kernel")]
+    let mut wifi_debug = KernelWifiDebugHandle::from_ptr(ctx.wifi_debug_hal_ptr);
+    #[cfg(not(feature = "kernel"))]
+    let mut wifi_debug: Option<KernelWifiDebugHandle> = None;
 
     #[cfg(feature = "net-console")]
     let mut net_stack = take_net_stack(&ctx);
@@ -118,7 +126,7 @@ pub fn main(ctx: BootContext) -> ! {
     debug_uart_str("[dbg] console: spawning root console task\n");
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
     log::info!("[console] spawn: starting root console task on serial");
-    pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());
+    pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut(), wifi_debug.as_mut());
     pump = attach_local_seat(pump, &ctx);
     pump = attach_ninedoor_bridge(pump, &ctx);
 
@@ -359,6 +367,7 @@ fn attach_kernel_console<'a, D, T, I, V, const RX: usize, const TX: usize, const
     mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
     ctx: &BootContext,
     bootstrap_ipc: Option<&'a mut UserlandBootstrapHandler>,
+    wifi_debug: Option<&'a mut KernelWifiDebugHandle>,
 ) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
     D: crate::serial::SerialDriver,
@@ -370,6 +379,9 @@ where
         pump = pump.with_console_context(ctx.bootinfo, ctx.endpoints.control.raw(), ctx.uart_slot);
         pump = pump.with_bootstrap_handler(handler);
     }
+    if let Some(wifi_debug) = wifi_debug {
+        pump = pump.with_wifi_debug(wifi_debug);
+    }
 
     pump
 }
@@ -379,6 +391,7 @@ fn attach_kernel_console<'a, D, T, I, V, const RX: usize, const TX: usize, const
     pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
     _ctx: &BootContext,
     _bootstrap_ipc: Option<&'a mut UserlandBootstrapHandler>,
+    _wifi_debug: Option<&'a mut KernelWifiDebugHandle>,
 ) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
     D: crate::serial::SerialDriver,

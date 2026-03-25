@@ -310,6 +310,8 @@ const VL805_RUNTIME_RESET_STATE_NOTIFIED: u8 = 1;
 const VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE: u8 = 2;
 const VL805_RUNTIME_RESET_STATE_HARD_MAP: u8 = 3;
 const VL805_RUNTIME_RESET_STATE_HARD_DMA: u8 = 4;
+const VL805_RUNTIME_RESET_STATE_HARD_TIMEOUT: u8 = 5;
+const VL805_RUNTIME_RESET_STATE_HARD_PROTOCOL: u8 = 6;
 
 fn usb_progress_emit(dots: usize) {
     let ptr = USB_PROGRESS_DISPLAY_PTR.load(Ordering::Acquire);
@@ -454,10 +456,8 @@ const fn keyboard_attach_retry_allowed(
 
 #[inline]
 const fn runtime_vl805_mailbox_reset_error_allows_cold_init(err: Pi4SeatError) -> bool {
-    matches!(
-        err,
-        Pi4SeatError::MailboxProtocol | Pi4SeatError::MailboxTimeout
-    )
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -465,10 +465,21 @@ const fn runtime_vl805_mailbox_reset_failure_state(err: Pi4SeatError) -> u8 {
     match err {
         Pi4SeatError::MailboxMap => VL805_RUNTIME_RESET_STATE_HARD_MAP,
         Pi4SeatError::MailboxDma => VL805_RUNTIME_RESET_STATE_HARD_DMA,
-        Pi4SeatError::MailboxProtocol | Pi4SeatError::MailboxTimeout => {
-            VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
-        }
+        Pi4SeatError::MailboxTimeout => VL805_RUNTIME_RESET_STATE_HARD_TIMEOUT,
+        Pi4SeatError::MailboxProtocol => VL805_RUNTIME_RESET_STATE_HARD_PROTOCOL,
         _ => VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
+    }
+}
+
+#[inline]
+const fn runtime_vl805_mailbox_reset_success_detail(
+    result: pi4_wifi::Vl805ResetNotifyResult,
+) -> &'static str {
+    match result {
+        pi4_wifi::Vl805ResetNotifyResult::Acked => "mailbox-notify+settle",
+        pi4_wifi::Vl805ResetNotifyResult::PostedFallback => {
+            "mailbox-timeout-posted-fallback+settle"
+        }
     }
 }
 
@@ -2793,6 +2804,12 @@ fn ensure_runtime_vl805_mailbox_reset(hal: &mut KernelHal<'_>) -> Result<(), Pi4
         VL805_RUNTIME_RESET_STATE_HARD_DMA => {
             return Err(Pi4SeatError::MailboxDma);
         }
+        VL805_RUNTIME_RESET_STATE_HARD_TIMEOUT => {
+            return Err(Pi4SeatError::MailboxTimeout);
+        }
+        VL805_RUNTIME_RESET_STATE_HARD_PROTOCOL => {
+            return Err(Pi4SeatError::MailboxProtocol);
+        }
         _ => {}
     }
 
@@ -2800,12 +2817,18 @@ fn ensure_runtime_vl805_mailbox_reset(hal: &mut KernelHal<'_>) -> Result<(), Pi4
         "[local-seat] vl805 reset handoff=runtime-owned stage=runtime action=mailbox-notify",
     );
     match pi4_wifi::notify_vl805_reset(hal).map_err(map_pi4_wifi_mailbox_reset_error) {
-        Ok(()) => {
+        Ok(result) => {
             wait_ms(VL805_MAILBOX_RESET_SETTLE_MS);
             VL805_RUNTIME_RESET_STATE.store(VL805_RUNTIME_RESET_STATE_NOTIFIED, Ordering::Release);
-            boot_log::force_uart_line(
-                "[local-seat] vl805 reset handoff=runtime-owned stage=runtime detail=mailbox-notify+settle",
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 reset handoff=runtime-owned stage=runtime detail={}",
+                    runtime_vl805_mailbox_reset_success_detail(result)
+                ),
             );
+            boot_log::force_uart_line(line.as_str());
             Ok(())
         }
         Err(err) if runtime_vl805_mailbox_reset_error_allows_cold_init(err) => {
@@ -9305,11 +9328,11 @@ mod tests {
     }
 
     #[test]
-    fn runtime_vl805_mailbox_reset_soft_errors_continue_cold_init() {
-        assert!(runtime_vl805_mailbox_reset_error_allows_cold_init(
+    fn runtime_vl805_mailbox_reset_failures_do_not_continue_cold_init() {
+        assert!(!runtime_vl805_mailbox_reset_error_allows_cold_init(
             Pi4SeatError::MailboxTimeout
         ));
-        assert!(runtime_vl805_mailbox_reset_error_allows_cold_init(
+        assert!(!runtime_vl805_mailbox_reset_error_allows_cold_init(
             Pi4SeatError::MailboxProtocol
         ));
         assert!(!runtime_vl805_mailbox_reset_error_allows_cold_init(
@@ -9318,6 +9341,32 @@ mod tests {
         assert!(!runtime_vl805_mailbox_reset_error_allows_cold_init(
             Pi4SeatError::MailboxDma
         ));
+    }
+
+    #[test]
+    fn runtime_vl805_mailbox_reset_failures_are_hard_states() {
+        assert_eq!(
+            runtime_vl805_mailbox_reset_failure_state(Pi4SeatError::MailboxTimeout),
+            VL805_RUNTIME_RESET_STATE_HARD_TIMEOUT
+        );
+        assert_eq!(
+            runtime_vl805_mailbox_reset_failure_state(Pi4SeatError::MailboxProtocol),
+            VL805_RUNTIME_RESET_STATE_HARD_PROTOCOL
+        );
+    }
+
+    #[test]
+    fn runtime_vl805_mailbox_reset_success_details_cover_ack_and_fallback() {
+        assert_eq!(
+            runtime_vl805_mailbox_reset_success_detail(pi4_wifi::Vl805ResetNotifyResult::Acked),
+            "mailbox-notify+settle"
+        );
+        assert_eq!(
+            runtime_vl805_mailbox_reset_success_detail(
+                pi4_wifi::Vl805ResetNotifyResult::PostedFallback
+            ),
+            "mailbox-timeout-posted-fallback+settle"
+        );
     }
 
     #[test]

@@ -49,6 +49,7 @@ Use the root console for low-level validation (bootinfo, capability layout, unty
 - `smp` – dump SMP scheduler/CPU info in debug builds (prints `ERR reason=unsupported` otherwise). The command emits mirrored `[smp] ...` probe lines; raw kernel scheduler/CPU dump bodies are serial/UART only.【F:apps/root-task/src/console/mod.rs†L265-L300】
 - `mem` – untyped cap counts with RAM vs device breakdown.【F:apps/root-task/src/console/mod.rs†L265-L283】
 - `ping` – replies `pong` as a liveness check.【F:apps/root-task/src/console/mod.rs†L285-L293】
+- `wifi <help|dump-state|probe-ht|load-fw|retry>` – Pi 4 WiFi bring-up diagnostics on the serial/local diagnostics console only. These commands do not extend the shared TCP/`cohsh` grammar; TCP clients still reject raw `wifi ...` lines as parse errors.
 - `quit` – currently prints `quit not supported on root console`; the loop continues (no session exit).【F:apps/root-task/src/console/mod.rs†L285-L299】
 
 ### Example boot and probe
@@ -63,6 +64,7 @@ Commands:
   smp   - Show SMP scheduler/CPU info (debug builds only)
   mem   - Show untyped summary
   ping  - Respond with pong
+  wifi <help|dump-state|probe-ht|load-fw|retry> - WiFi bring-up diagnostics (serial/local only)
   quit  - Exit the console session
 cohesix> bi
 [bi] node_bits=12 empty=[0x0010..0x0100) ipc=0x7f000000
@@ -72,6 +74,10 @@ cohesix> mem
 [mem] untyped caps=16 ram_ut=14 device_ut=2
 cohesix> ping
 pong
+cohesix> wifi dump-state
+wifi: power=on reset=deasserted card=yes rca=0x0001 ocr=0xb0ffff00
+wifi: clock=400000Hz preferred=3125000Hz width=4bit ioex=0x02 iordy=0x02
+wifi: chipclk=0x50 wake=0x02 sleep=0x01 cardcap=0x08 programmed=0x00198000 shadow=0x00198000 fn=0x08000
 ```
 Use this surface to confirm boot-time state before bringing up TCP or NineDoor; it is not the operator-facing control plane.
 

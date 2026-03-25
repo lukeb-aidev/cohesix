@@ -3016,6 +3016,8 @@ pub struct BootContext {
     pub(crate) ninedoor: RefCell<Option<&'static mut NineDoorBridge>>,
     #[cfg(feature = "kernel")]
     pub(crate) local_seat: RefCell<Option<&'static mut local_seat::LocalSeatRuntime>>,
+    #[cfg(feature = "kernel")]
+    pub(crate) wifi_debug_hal_ptr: usize,
 }
 
 impl BootStateGuard {
@@ -5022,6 +5024,8 @@ fn bootstrap<P: Platform>(
             ninedoor: RefCell::new(Some(ninedoor)),
             #[cfg(feature = "kernel")]
             local_seat: RefCell::new(local_seat_runtime),
+            #[cfg(feature = "kernel")]
+            wifi_debug_hal_ptr: hal as *mut KernelHal<'static> as usize,
         };
 
         #[cfg(not(feature = "net-console"))]
@@ -5040,6 +5044,8 @@ fn bootstrap<P: Platform>(
             ninedoor: RefCell::new(None),
             #[cfg(feature = "kernel")]
             local_seat: RefCell::new(local_seat_runtime),
+            #[cfg(feature = "kernel")]
+            wifi_debug_hal_ptr: hal as *mut KernelHal<'static> as usize,
         };
         return Ok(ctx);
     }

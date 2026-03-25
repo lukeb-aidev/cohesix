@@ -29,6 +29,8 @@ pub mod pci;
 pub mod pi4_wifi;
 
 #[cfg(feature = "kernel")]
+use crate::drivers::cyw43;
+#[cfg(feature = "kernel")]
 use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame};
 #[cfg(feature = "kernel")]
 use pci::{PciAddress, PciTopology};
@@ -93,6 +95,38 @@ pub enum WifiPowerState {
 pub enum WifiResetState {
     Asserted,
     Deasserted,
+}
+
+/// Compact Wi-Fi transport snapshot exposed to the root console debug path.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WifiDebugSnapshot {
+    pub power_state: WifiPowerState,
+    pub reset_state: WifiResetState,
+    pub current_clock_hz: u32,
+    pub preferred_data_clock_hz: u32,
+    pub bus_width: SdioBusWidth,
+    pub card_ready: bool,
+    pub card_rca: u16,
+    pub card_ocr: u32,
+    pub io_enable: Option<u8>,
+    pub io_ready: Option<u8>,
+    pub chipclkcsr: Option<u8>,
+    pub wakeupctrl: Option<u8>,
+    pub sleepcsr: Option<u8>,
+    pub cardcap: Option<u8>,
+    pub programmed_backplane_window: Option<u32>,
+    pub shadow_backplane_window: Option<u32>,
+    pub shadow_backplane_fn_addr: Option<u32>,
+}
+
+/// Root-console Wi-Fi debug hooks backed by the kernel HAL.
+#[cfg(feature = "kernel")]
+pub trait WifiDebugOps {
+    fn dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError>;
+    fn probe_ht_clock(&mut self) -> Result<bool, HalError>;
+    fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError>;
+    fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError>;
 }
 
 /// HAL-provided firmware payloads for the Pi 4 Wi-Fi path.
@@ -542,6 +576,14 @@ pub struct KernelHal<'a> {
     pi4_wifi: Option<pi4_wifi::Pi4WifiState>,
 }
 
+/// Raw-pointer Wi-Fi debug adapter used by the root console without borrowing
+/// the leaked kernel HAL for the entire runtime.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelWifiDebugHandle {
+    hal_ptr: usize,
+}
+
 #[cfg(feature = "kernel")]
 impl<'a> KernelHal<'a> {
     /// Construct a new HAL instance wrapping the supplied [`KernelEnv`].
@@ -575,6 +617,54 @@ impl<'a> KernelHal<'a> {
         self.pi4_wifi
             .as_mut()
             .ok_or(HalError::Unsupported("pi4-wifi-state"))
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl KernelWifiDebugHandle {
+    #[must_use]
+    pub const fn from_ptr(hal_ptr: usize) -> Option<Self> {
+        if hal_ptr == 0 {
+            None
+        } else {
+            Some(Self { hal_ptr })
+        }
+    }
+
+    #[allow(unsafe_code)]
+    fn hal_mut(&mut self) -> Result<&'static mut KernelHal<'static>, HalError> {
+        if self.hal_ptr == 0 {
+            return Err(HalError::Unsupported("wifi-debug-handle"));
+        }
+
+        // SAFETY: `hal_ptr` is derived from the leaked bootstrap `KernelHal`
+        // and remains valid for the process lifetime. The handle only
+        // materializes a temporary mutable reference while servicing a single
+        // root-console Wi-Fi debug command.
+        Ok(unsafe { &mut *(self.hal_ptr as *mut KernelHal<'static>) })
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl WifiDebugOps for KernelWifiDebugHandle {
+    fn dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
+        self.hal_mut()?.pi4_wifi_state()?.debug_dump_state(stage)
+    }
+
+    fn probe_ht_clock(&mut self) -> Result<bool, HalError> {
+        self.hal_mut()?.pi4_wifi_state()?.debug_probe_ht_clock()
+    }
+
+    fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
+        let state = self.hal_mut()?.pi4_wifi_state()?;
+        cyw43::debug_load_firmware_from_transport(state)?;
+        state.debug_dump_state("console-load-fw")
+    }
+
+    fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
+        let state = self.hal_mut()?.pi4_wifi_state()?;
+        cyw43::debug_retry_transport_and_firmware(state)?;
+        state.debug_dump_state("console-retry")
     }
 }
 

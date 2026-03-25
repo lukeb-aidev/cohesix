@@ -110,6 +110,8 @@ use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
+#[cfg(feature = "kernel")]
+use crate::hal::{SdioBusWidth, WifiDebugOps, WifiDebugSnapshot, WifiPowerState, WifiResetState};
 use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
@@ -175,6 +177,8 @@ const BOOTSTRAP_IDLE_SPINS: usize = 512;
 const CONSOLE_BANNER: &str = "[Cohesix] Root console ready (type 'help' for commands)";
 const CONSOLE_PROMPT: &str = "cohesix> ";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
+#[cfg(feature = "kernel")]
+const WIFI_DEBUG_ACK_LABEL: &str = "WIFI";
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_LIMIT_MS: u64 = 15_000;
 #[cfg(feature = "net-console")]
@@ -959,6 +963,16 @@ enum ConsoleInputSource {
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WifiDebugCommand {
+    Help,
+    DumpState,
+    ProbeHt,
+    LoadFirmware,
+    Retry,
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Debug)]
 struct PendingCursor {
     path_key: String,
@@ -1004,6 +1018,7 @@ where
 {
     serial: SerialPort<D, RX, TX, LINE>,
     parser: CommandParser,
+    local_line: HeaplessString<LINE>,
     timer: T,
     ipc: I,
     validator: V,
@@ -1043,6 +1058,8 @@ where
     bootstrap_handler: Option<&'a mut dyn BootstrapMessageHandler>,
     #[cfg(feature = "kernel")]
     console_context: Option<ConsoleContext>,
+    #[cfg(feature = "kernel")]
+    wifi_debug: Option<&'a mut dyn WifiDebugOps>,
     local_seat: Option<&'a mut LocalSeatRuntime>,
     banner_emitted: bool,
 }
@@ -1077,6 +1094,7 @@ where
         Self {
             serial,
             parser: CommandParser::new(),
+            local_line: HeaplessString::new(),
             timer,
             ipc,
             validator,
@@ -1116,6 +1134,8 @@ where
             bootstrap_handler: None,
             #[cfg(feature = "kernel")]
             console_context: None,
+            #[cfg(feature = "kernel")]
+            wifi_debug: None,
             local_seat: None,
             banner_emitted: false,
         }
@@ -1163,6 +1183,13 @@ where
     pub fn with_bootstrap_handler(mut self, handler: &'a mut dyn BootstrapMessageHandler) -> Self {
         self.bootstrap_handler = Some(handler);
         self.ipc.handlers_ready();
+        self
+    }
+
+    #[cfg(feature = "kernel")]
+    /// Attach a serial/local-seat Wi-Fi bring-up debug surface.
+    pub fn with_wifi_debug(mut self, wifi_debug: &'a mut dyn WifiDebugOps) -> Self {
+        self.wifi_debug = Some(wifi_debug);
         self
     }
 
@@ -1584,6 +1611,8 @@ where
         self.emit_console_line("  test  - Self-test (host-only; use cohsh)");
         self.emit_console_line("  nettest  - Run network self-test");
         self.emit_console_line("  netstats - Show network counters");
+        #[cfg(feature = "kernel")]
+        self.emit_wifi_debug_help(false);
         self.emit_console_line("  quit  - Exit the console session");
     }
 
@@ -1598,7 +1627,22 @@ where
         self.emit_serial_line("  test  - Self-test (host-only; use cohsh)");
         self.emit_serial_line("  nettest  - Run network self-test");
         self.emit_serial_line("  netstats - Show network counters");
+        #[cfg(feature = "kernel")]
+        self.emit_wifi_debug_help(true);
         self.emit_serial_line("  quit  - Exit the console session");
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_debug_help(&mut self, serial_only: bool) {
+        if self.wifi_debug.is_none() || self.last_input_source == ConsoleInputSource::Net {
+            return;
+        }
+        let line = "  wifi <help|dump-state|probe-ht|load-fw|retry> - WiFi bring-up diagnostics (serial/local only)";
+        if serial_only {
+            self.emit_serial_line(line);
+        } else {
+            self.emit_console_line(line);
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -1822,6 +1866,247 @@ where
         self.emit_refusal(verb, RefusalReason::Policy, Some("detail=unauthenticated"));
     }
 
+    #[cfg(feature = "kernel")]
+    fn maybe_handle_wifi_debug_line(&mut self, line: &str) -> bool {
+        if self.last_input_source == ConsoleInputSource::Net {
+            return false;
+        }
+
+        let mut parts = line.split_ascii_whitespace();
+        let Some(head) = parts.next() else {
+            return false;
+        };
+        if !head.eq_ignore_ascii_case("wifi") {
+            return false;
+        }
+
+        let command = match parts.next() {
+            None => WifiDebugCommand::Help,
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("help") => WifiDebugCommand::Help,
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("dump-state") => {
+                WifiDebugCommand::DumpState
+            }
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("probe-ht") => {
+                WifiDebugCommand::ProbeHt
+            }
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("load-fw") => {
+                WifiDebugCommand::LoadFirmware
+            }
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("retry") => WifiDebugCommand::Retry,
+            Some(_) => {
+                self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                self.emit_refusal(
+                    WIFI_DEBUG_ACK_LABEL,
+                    RefusalReason::Policy,
+                    Some("detail=unknown-subcommand"),
+                );
+                return true;
+            }
+        };
+
+        if parts.next().is_some() {
+            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+            self.emit_refusal(
+                WIFI_DEBUG_ACK_LABEL,
+                RefusalReason::Policy,
+                Some("detail=too-many-arguments"),
+            );
+            return true;
+        }
+
+        self.handle_wifi_debug_command(command);
+        true
+    }
+
+    #[cfg(feature = "kernel")]
+    fn handle_wifi_debug_command(&mut self, command: WifiDebugCommand) {
+        let subcommand = match command {
+            WifiDebugCommand::Help => "help",
+            WifiDebugCommand::DumpState => "dump-state",
+            WifiDebugCommand::ProbeHt => "probe-ht",
+            WifiDebugCommand::LoadFirmware => "load-fw",
+            WifiDebugCommand::Retry => "retry",
+        };
+
+        if matches!(command, WifiDebugCommand::Help) {
+            self.emit_console_line("WiFi debug commands:");
+            self.emit_console_line("  wifi dump-state - Show cached SDIO and clock state");
+            self.emit_console_line("  wifi probe-ht   - Probe HT clock readiness without reboot");
+            self.emit_console_line(
+                "  wifi load-fw    - Retry firmware load from current transport",
+            );
+            self.emit_console_line("  wifi retry      - Rebuild transport, then reload firmware");
+            self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
+            self.emit_ack_ok(
+                WIFI_DEBUG_ACK_LABEL,
+                Some("detail=subcommand=help scope=serial-local"),
+            );
+            return;
+        }
+
+        let result = match command {
+            WifiDebugCommand::Help => unreachable!(),
+            WifiDebugCommand::DumpState => match self.wifi_debug.as_mut() {
+                Some(wifi_debug) => wifi_debug.dump_state("console-dump-state").map(Some),
+                None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
+            },
+            WifiDebugCommand::ProbeHt => {
+                let ready = match self.wifi_debug.as_mut() {
+                    Some(wifi_debug) => wifi_debug.probe_ht_clock(),
+                    None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
+                };
+                match ready {
+                    Ok(ready) => {
+                        let detail = format_message(format_args!(
+                            "wifi ht: ready={}",
+                            if ready { "yes" } else { "no" }
+                        ));
+                        self.emit_console_line(detail.as_str());
+                        match self.wifi_debug.as_mut() {
+                            Some(wifi_debug) => wifi_debug.dump_state("console-probe-ht").map(Some),
+                            None => {
+                                Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable"))
+                            }
+                        }
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+            WifiDebugCommand::LoadFirmware => match self.wifi_debug.as_mut() {
+                Some(wifi_debug) => wifi_debug.load_firmware().map(Some),
+                None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
+            },
+            WifiDebugCommand::Retry => match self.wifi_debug.as_mut() {
+                Some(wifi_debug) => wifi_debug.retry_transport_and_firmware().map(Some),
+                None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
+            },
+        };
+
+        match result {
+            Ok(snapshot) => {
+                if let Some(snapshot) = snapshot {
+                    self.emit_wifi_snapshot(&snapshot);
+                }
+                self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
+                let detail = format_message(format_args!(
+                    "detail=subcommand={subcommand} scope=serial-local"
+                ));
+                self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
+            }
+            Err(err) => {
+                self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                let detail =
+                    format_message(format_args!("detail=subcommand={subcommand} error={err}"));
+                self.emit_refusal(
+                    WIFI_DEBUG_ACK_LABEL,
+                    RefusalReason::Policy,
+                    Some(detail.as_str()),
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_snapshot(&mut self, snapshot: &WifiDebugSnapshot) {
+        let headline = format_message(format_args!(
+            "wifi: power={} reset={} card={} rca=0x{:04x} ocr=0x{:08x}",
+            Self::wifi_power_label(snapshot.power_state),
+            Self::wifi_reset_label(snapshot.reset_state),
+            if snapshot.card_ready { "yes" } else { "no" },
+            snapshot.card_rca,
+            snapshot.card_ocr,
+        ));
+        self.emit_console_line(headline.as_str());
+
+        let transport = format_message(format_args!(
+            "wifi: clock={}Hz preferred={}Hz width={} ioex={} iordy={}",
+            snapshot.current_clock_hz,
+            snapshot.preferred_data_clock_hz,
+            Self::wifi_bus_width_label(snapshot.bus_width),
+            Self::format_optional_u8(snapshot.io_enable),
+            Self::format_optional_u8(snapshot.io_ready),
+        ));
+        self.emit_console_line(transport.as_str());
+
+        let shadow = format_message(format_args!(
+            "wifi: chipclk={} wake={} sleep={} cardcap={} programmed={} shadow={} fn={}",
+            Self::format_optional_u8(snapshot.chipclkcsr),
+            Self::format_optional_u8(snapshot.wakeupctrl),
+            Self::format_optional_u8(snapshot.sleepcsr),
+            Self::format_optional_u8(snapshot.cardcap),
+            Self::format_optional_u32(snapshot.programmed_backplane_window),
+            Self::format_optional_u32(snapshot.shadow_backplane_window),
+            Self::format_optional_fn_addr(snapshot.shadow_backplane_fn_addr),
+        ));
+        self.emit_console_line(shadow.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_power_label(state: WifiPowerState) -> &'static str {
+        match state {
+            WifiPowerState::Off => "off",
+            WifiPowerState::On => "on",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_reset_label(state: WifiResetState) -> &'static str {
+        match state {
+            WifiResetState::Asserted => "asserted",
+            WifiResetState::Deasserted => "deasserted",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_bus_width_label(width: SdioBusWidth) -> &'static str {
+        match width {
+            SdioBusWidth::OneBit => "1bit",
+            SdioBusWidth::FourBit => "4bit",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_optional_u8(value: Option<u8>) -> HeaplessString<16> {
+        let mut buf = HeaplessString::new();
+        match value {
+            Some(value) => {
+                let _ = write!(buf, "0x{value:02x}");
+            }
+            None => {
+                let _ = buf.push_str("n/a");
+            }
+        }
+        buf
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_optional_u32(value: Option<u32>) -> HeaplessString<16> {
+        let mut buf = HeaplessString::new();
+        match value {
+            Some(value) => {
+                let _ = write!(buf, "0x{value:08x}");
+            }
+            None => {
+                let _ = buf.push_str("n/a");
+            }
+        }
+        buf
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_optional_fn_addr(value: Option<u32>) -> HeaplessString<16> {
+        let mut buf = HeaplessString::new();
+        match value {
+            Some(value) => {
+                let _ = write!(buf, "0x{value:05x}");
+            }
+            None => {
+                let _ = buf.push_str("n/a");
+            }
+        }
+        buf
+    }
+
     fn handle_console_error(&mut self, err: ConsoleError) {
         let message = format_message(format_args!("console error: {}", err));
         self.audit.info(message.as_str());
@@ -1839,6 +2124,7 @@ where
             self.audit
                 .info("console: cleared partial input after parse error");
         }
+        self.local_line.clear();
     }
 
     fn consume_serial(&mut self) {
@@ -1863,19 +2149,30 @@ where
             }
             self.last_input_source = ConsoleInputSource::Serial;
             for &byte in &chunk[..read] {
-                match self.parser.push_byte(byte) {
-                    Ok(Some(command)) => {
-                        self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
-                        if let Err(err) = self.handle_command(command) {
-                            #[cfg(feature = "kernel")]
-                            self.handle_dispatch_error(err);
-                            #[cfg(not(feature = "kernel"))]
-                            match err {}
+                match byte {
+                    b'\r' => {}
+                    b'\n' => {
+                        if self.local_line.is_empty() {
+                            self.handle_console_error(ConsoleError::EmptyLine);
+                        } else {
+                            let mut line = HeaplessString::new();
+                            core::mem::swap(&mut line, &mut self.local_line);
+                            self.process_console_line(&line);
                         }
-                        self.emit_prompt();
                     }
-                    Ok(None) => {}
-                    Err(err) => self.handle_console_error(err),
+                    0x08 | 0x7f => {
+                        self.local_line.pop();
+                    }
+                    _ => {
+                        let ch = byte as char;
+                        if ch.is_control() {
+                            continue;
+                        }
+                        if self.local_line.push(ch).is_err() {
+                            self.local_line.clear();
+                            self.handle_console_error(ConsoleError::LineTooLong);
+                        }
+                    }
                 }
             }
         }
@@ -1883,6 +2180,13 @@ where
 
     fn process_console_line(&mut self, line: &HeaplessString<LINE>) {
         self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
+        #[cfg(feature = "kernel")]
+        if self.maybe_handle_wifi_debug_line(line.as_str()) {
+            if self.last_input_source == ConsoleInputSource::Serial {
+                self.emit_prompt();
+            }
+            return;
+        }
         if let Err(err) = self.feed_parser(line) {
             self.handle_console_error(err);
         }
@@ -3274,6 +3578,7 @@ where
             ));
             self.audit.info(message.as_str());
         }
+        self.local_line.clear();
         if self.session.is_none() && !self.tail_active {
             return;
         }
@@ -3886,6 +4191,8 @@ extern "C" fn vtable_sentinel() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "kernel")]
+    use crate::hal::HalError;
     #[cfg(feature = "net-console")]
     use crate::net::{NetSelfTestStartResult, NetStatusReport, NetTelemetry};
     #[cfg(feature = "kernel")]
@@ -4209,6 +4516,65 @@ mod tests {
 
         fn status_report(&self) -> NetStatusReport {
             self.status.clone()
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    struct FakeWifiDebug {
+        snapshot: WifiDebugSnapshot,
+        ht_ready: bool,
+        calls: heapless::Vec<&'static str, 8>,
+    }
+
+    #[cfg(feature = "kernel")]
+    impl FakeWifiDebug {
+        fn new() -> Self {
+            Self {
+                snapshot: WifiDebugSnapshot {
+                    power_state: WifiPowerState::On,
+                    reset_state: WifiResetState::Deasserted,
+                    current_clock_hz: 400_000,
+                    preferred_data_clock_hz: 3_125_000,
+                    bus_width: SdioBusWidth::FourBit,
+                    card_ready: true,
+                    card_rca: 1,
+                    card_ocr: 0xb0ff_ff00,
+                    io_enable: Some(0x02),
+                    io_ready: Some(0x02),
+                    chipclkcsr: Some(0x50),
+                    wakeupctrl: Some(0x02),
+                    sleepcsr: Some(0x01),
+                    cardcap: Some(0x08),
+                    programmed_backplane_window: Some(0x0019_8000),
+                    shadow_backplane_window: Some(0x0019_8000),
+                    shadow_backplane_fn_addr: Some(0x08000),
+                },
+                ht_ready: true,
+                calls: heapless::Vec::new(),
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    impl WifiDebugOps for FakeWifiDebug {
+        fn dump_state(&mut self, _stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
+            let _ = self.calls.push("dump-state");
+            Ok(self.snapshot)
+        }
+
+        fn probe_ht_clock(&mut self) -> Result<bool, HalError> {
+            let _ = self.calls.push("probe-ht");
+            Ok(self.ht_ready)
+        }
+
+        fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
+            let _ = self.calls.push("load-fw");
+            Ok(self.snapshot)
+        }
+
+        fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
+            let _ = self.calls.push("retry");
+            Ok(self.snapshot)
         }
     }
 
@@ -4758,6 +5124,106 @@ mod tests {
         let mirrored = local_seat.mirrored_lines_snapshot();
         assert!(mirrored.iter().any(|line| line.contains("PONG")));
         assert!(mirrored.iter().any(|line| line.contains("cohesix>")));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_wifi_debug_command_uses_attached_debug_ops() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_wifi_debug(&mut wifi);
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi dump-state\n");
+        pump.poll();
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(rendered.contains("wifi: power=on"), "{rendered}");
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=dump-state"),
+            "{rendered}"
+        );
+        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn local_seat_wifi_debug_command_mirrors_output() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        let mut wifi = FakeWifiDebug::new();
+        local_seat.enqueue_keyboard_bytes(b"wifi probe-ht\n");
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_local_seat(&mut local_seat);
+        pump.session = Some(SessionRole::Queen);
+        pump.poll();
+        drop(pump);
+
+        let mirrored = local_seat.mirrored_lines_snapshot();
+        assert!(mirrored
+            .iter()
+            .any(|line| line.contains("wifi ht: ready=yes")));
+        assert!(mirrored
+            .iter()
+            .any(|line| line.contains("OK WIFI detail=subcommand=probe-ht")));
+        assert_eq!(wifi.calls.as_slice(), &["probe-ht", "dump-state"]);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn network_wifi_debug_command_stays_outside_shared_console_grammar() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut line = HeaplessString::new();
+        line.push_str("wifi dump-state").unwrap();
+        net.lines.push(ConsoleLine::new(line, 1)).unwrap();
+        let mut wifi = FakeWifiDebug::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_network(&mut net);
+
+        pump.poll();
+
+        let rendered = net
+            .sent
+            .iter()
+            .map(|line| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        drop(pump);
+        assert!(rendered.contains("ERR PARSE"), "{rendered}");
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(feature = "kernel")]
