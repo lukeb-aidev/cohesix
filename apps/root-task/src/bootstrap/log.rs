@@ -206,6 +206,19 @@ static PING_ACK: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "kernel")]
 static SEND_LOCK: Mutex<()> = Mutex::new(());
+#[cfg(feature = "kernel")]
+static UART_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(feature = "kernel")]
+pub(crate) fn with_raw_uart_lock<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = UART_WRITE_LOCK.lock();
+    f()
+}
+
+#[cfg(not(feature = "kernel"))]
+pub(crate) fn with_raw_uart_lock<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
 
 fn latched_ep() -> sel4_sys::seL4_CPtr {
     LOGGER_EP.load(Ordering::Acquire) as sel4_sys::seL4_CPtr
@@ -287,14 +300,13 @@ fn record_drop() {
 }
 
 fn emit_uart(payload: &[u8]) {
-    sel4::debug_put_bytes_raw(payload);
+    with_raw_uart_lock(|| sel4::debug_put_bytes_raw(payload));
 }
 
 /// Emit a UART line regardless of the current logger transport.
 ///
-/// This path deliberately avoids heap allocations, locks, or the `log` crate so
-/// it can always make forward progress even if the primary logging backend is
-/// stalled or unavailable.
+/// This path deliberately avoids heap allocations and the `log` crate so it can
+/// still emit even if the primary logging backend is stalled or unavailable.
 pub fn force_uart_line(line: &str) {
     if line.trim().is_empty() {
         return;
@@ -313,7 +325,7 @@ pub fn force_uart_line(line: &str) {
         return;
     }
 
-    sel4::debug_put_line_raw(line.as_bytes());
+    with_raw_uart_lock(|| sel4::debug_put_line_raw(line.as_bytes()));
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {

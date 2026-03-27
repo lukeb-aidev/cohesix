@@ -15,7 +15,9 @@ pub fn debug_uart_str(s: &str) {
             crate::log_buffer::append_log_bytes(s.as_bytes());
             return;
         }
-        crate::sel4::debug_put_bytes_raw(s.as_bytes());
+        crate::bootstrap::log::with_raw_uart_lock(|| {
+            crate::sel4::debug_put_bytes_raw(s.as_bytes())
+        });
     }
 
     #[cfg(not(feature = "kernel"))]
@@ -28,10 +30,12 @@ pub fn debug_uart_str(s: &str) {
 pub fn debug_uart_line(line: &str) {
     #[cfg(feature = "kernel")]
     {
-        crate::sel4::debug_put_line_raw(line.as_bytes());
-        if line.starts_with("audit ") {
-            crate::sel4::debug_put_bytes_raw(b"cohesix> ");
-        }
+        crate::bootstrap::log::with_raw_uart_lock(|| {
+            crate::sel4::debug_put_line_raw(line.as_bytes());
+            if line.starts_with("audit ") {
+                crate::sel4::debug_put_bytes_raw(b"cohesix> ");
+            }
+        });
     }
 
     #[cfg(not(feature = "kernel"))]

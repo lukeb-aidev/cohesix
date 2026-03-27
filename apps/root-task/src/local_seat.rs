@@ -294,6 +294,15 @@ impl LocalSeatRuntime {
         self.backend = Some(backend);
     }
 
+    /// Publish the attached HDMI sink for boot-progress banners once runtime
+    /// storage is stable.
+    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    pub fn register_boot_progress_backend(&mut self) {
+        if let Some(backend) = self.backend.as_mut() {
+            backend.register_boot_progress_display();
+        }
+    }
+
     /// Preseed platform keyboard MMIO windows after core boot mappings settle.
     pub fn preseed_backend_keyboard_mmio(&mut self) {
         #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]

@@ -19,6 +19,8 @@ use crate::hal::{
     HalError, Hardware, SdioBusWidth, SdioFunction, WifiFirmwareBundle, WifiPowerState,
     WifiResetState,
 };
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+use crate::local_seat_pi4::{wifi_progress_begin, wifi_progress_finish, wifi_progress_tick};
 use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, WifiCredentials};
 use crate::net_consts::MAX_FRAME_LEN;
 
@@ -212,10 +214,12 @@ fn recover_startup_transport(
     state.set_power(WifiPowerState::Off)?;
     info!("[cyw43] step: recover_transport(power-on)");
     state.set_power(WifiPowerState::On)?;
+    wifi_progress_tick();
     info!("[cyw43] step: recover_transport(assert-reset)");
     state.set_reset(WifiResetState::Asserted)?;
     info!("[cyw43] step: recover_transport(reset_host)");
     state.reset_host()?;
+    wifi_progress_tick();
     info!("[cyw43] step: recover_transport(set_clock)");
     state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
     info!("[cyw43] step: recover_transport(set_bus_width)");
@@ -245,6 +249,39 @@ pub(crate) fn debug_retry_transport_and_firmware(
     info!("[cyw43] debug: recover_transport");
     recover_startup_transport(state, "debug-retry(init_transport)")?;
     debug_load_firmware_from_transport(state)
+}
+
+#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[inline]
+fn wifi_progress_begin() {}
+
+#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[inline]
+fn wifi_progress_tick() {}
+
+#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[inline]
+fn wifi_progress_finish() {}
+
+struct WifiBootProgressGuard;
+
+impl WifiBootProgressGuard {
+    #[inline]
+    fn begin() -> Self {
+        wifi_progress_begin();
+        Self
+    }
+
+    #[inline]
+    fn tick(&self) {
+        wifi_progress_tick();
+    }
+}
+
+impl Drop for WifiBootProgressGuard {
+    fn drop(&mut self) {
+        wifi_progress_finish();
+    }
 }
 
 impl NetDriverError for DriverError {
@@ -290,22 +327,27 @@ impl Cyw43NetDevice {
             "[cyw43] init: begin ssid_len={} psk_len={}",
             credentials.ssid_len, credentials.psk_len,
         );
+        let progress = WifiBootProgressGuard::begin();
         let mut state = Pi4WifiState::new(hal)?;
+        progress.tick();
         let firmware = state.firmware_bundle();
         firmware.validate().map_err(DriverError::InvalidFirmware)?;
 
         info!("[cyw43] step: set_power(on)");
         state.set_power(WifiPowerState::On)?;
+        progress.tick();
         info!("[cyw43] step: set_reset(asserted)");
         state.set_reset(WifiResetState::Asserted)?;
         info!("[cyw43] step: reset_host");
         state.reset_host()?;
+        progress.tick();
         info!("[cyw43] step: set_clock(startup)");
         let effective_clock_hz = state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
         info!("[cyw43] step: set_bus_width(1bit)");
         state.set_bus_width(SdioBusWidth::OneBit)?;
         info!("[cyw43] step: set_reset(deasserted)");
         state.set_reset(WifiResetState::Deasserted)?;
+        progress.tick();
         info!(
             "[cyw43] init: power/reset/clock ready startup_clock={}Hz",
             effective_clock_hz
@@ -328,18 +370,23 @@ impl Cyw43NetDevice {
             warn!("[cyw43] init_transport retryable failure: {err}");
             recover_startup_transport(&mut state, "init_transport(retry)")?;
         }
+        progress.tick();
         info!("[cyw43] step: set_bus_width(4bit)");
         state.set_bus_width(SdioBusWidth::FourBit)?;
+        progress.tick();
         info!("[cyw43] step: load_firmware(startup-link)");
         // Keep the control path at startup clock, but switch to the final bus
         // width before bulk upload so the first high-speed CMD53 uses the
         // stable 4-bit transport configuration.
         state.load_cyw43_firmware()?;
+        progress.tick();
         info!("[cyw43] step: set_clock(data)");
         let data_clock_target_hz = SDIO_DATA_CLOCK_HZ.min(state.recommended_data_clock_hz());
         let data_clock_hz = state.set_clock_hz(data_clock_target_hz)?;
+        progress.tick();
         info!("[cyw43] step: read_ioex");
         let ioex = state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
+        progress.tick();
 
         let mut device = Self {
             state,

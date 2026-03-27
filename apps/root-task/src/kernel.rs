@@ -2701,7 +2701,9 @@ fn init_local_seat_runtime<P: Platform>(
             let mut runtime = local_seat::LocalSeatRuntime::new(status);
             match local_seat::attach_platform_backend(&mut runtime, hal, local_seat_hints) {
                 Ok(()) => {
-                    local_seat_runtime = Some(Box::leak(Box::new(runtime)));
+                    let runtime = Box::leak(Box::new(runtime));
+                    runtime.register_boot_progress_backend();
+                    local_seat_runtime = Some(runtime);
                     let mut line = heapless::String::<256>::new();
                     let _ = write!(
                         line,
