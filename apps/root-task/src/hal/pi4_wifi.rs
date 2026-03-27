@@ -644,6 +644,20 @@ const fn firmware_upload_prefers_byte_mode(current_clock_hz: u32, ht_ready: bool
 }
 
 #[inline]
+const fn control_plane_clock_target_hz(current_clock_hz: u32, preferred_data_clock_hz: u32) -> u32 {
+    let floor = if preferred_data_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ {
+        preferred_data_clock_hz
+    } else {
+        CYW43_CONTROL_PLANE_CLOCK_HZ
+    };
+    if current_clock_hz >= floor {
+        current_clock_hz
+    } else {
+        floor
+    }
+}
+
+#[inline]
 fn firmware_phase_can_retry(err: &HalError, attempt: usize) -> bool {
     attempt == 0
         && (is_sdhci_io_path_error(err)
@@ -695,8 +709,27 @@ fn core_wait_can_retry_after_read_error(base: u32, err: &HalError) -> bool {
 }
 
 #[inline]
-fn core_wait_can_defer_after_read_error(base: u32, attempt: usize, err: &HalError) -> bool {
-    base == CYW43_ARMCR4_CORE_BASE && attempt > 0 && is_sdhci_fragile_read_error(err)
+fn core_wait_should_raise_control_plane_clock(
+    base: u32,
+    current_clock_hz: u32,
+    err: &HalError,
+) -> bool {
+    base == CYW43_ARMCR4_CORE_BASE
+        && current_clock_hz < CYW43_CONTROL_PLANE_CLOCK_HZ
+        && is_sdhci_fragile_read_error(err)
+}
+
+#[inline]
+fn core_wait_can_defer_after_read_error(
+    base: u32,
+    attempt: usize,
+    current_clock_hz: u32,
+    err: &HalError,
+) -> bool {
+    base == CYW43_ARMCR4_CORE_BASE
+        && current_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ
+        && attempt > 1
+        && is_sdhci_fragile_read_error(err)
 }
 
 #[inline]
@@ -936,6 +969,11 @@ const fn sdhci_power_ready(power: u8, present: u32) -> bool {
 #[inline]
 const fn ht_clock_request_value() -> u8 {
     SBSDIO_HT_AVAIL_REQ
+}
+
+#[inline]
+const fn required_ht_clock_request_value(last_chipclkcsr: Option<u8>) -> u8 {
+    transport_phase_chipclk_value(last_chipclkcsr) | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL_REQ
 }
 
 #[inline]
@@ -1496,6 +1534,7 @@ const CYW43_FIRMWARE_TRANSFER_CHUNK: usize = CYW43_TRANSFER_CHUNK;
 const CYW43_FIRMWARE_PROGRESS_INTERVAL: usize = 16 * 1024;
 const CYW43_FIRMWARE_BULK_CLOCK_HZ: u32 = 12_500_000;
 const CYW43_STARTUP_CLOCK_HZ: u32 = 400_000;
+const CYW43_CONTROL_PLANE_CLOCK_HZ: u32 = 12_500_000;
 const SDIO_MAX_BYTE_MODE: usize = 511;
 const SDIO_TRANSFER_TRACE_INCREMENT_CHUNKS: usize = 2;
 const CYW43_HT_CLOCK_INITIAL_WAIT_LOOPS: usize = 2_048;
@@ -3857,18 +3896,15 @@ impl SdioHost {
             return Err(HalError::Unsupported("cyw43-firmware-clock-exhausted"));
         }
         self.preferred_data_clock_hz = selected_bulk_clock_hz;
+        self.ensure_control_plane_clock("armcr4-reset-prep-clock")?;
         self.recover_command_path_and_refresh_transport("armcr4-reset-prep")?;
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-reset"));
         self.core_reset(CYW43_ARMCR4_CORE_BASE, ARMCR4_BCMA_IOCTL_CPUHALT, 0, 0)?;
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-core-up"));
         self.wait_for_core_up(CYW43_ARMCR4_CORE_BASE, "armcr4-core-up")?;
-        let final_ht_ready =
-            self.wait_for_ht_clock_with_stage("wait-ht-clock", "wait-ht-clock assist", true)?;
-        if !final_ht_ready {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=wait-ht-clock continue mode=force-ht-refresh"
-            ));
-        }
+        self.ensure_control_plane_clock("wait-ht-clock-prep")?;
+        self.require_ht_clock_ready("wait-ht-clock", "wait-ht-clock assist")?;
+        self.ensure_control_plane_clock("setup-firmware-channel-clock")?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=setup-firmware-channel"
         ));
@@ -3892,7 +3928,11 @@ impl SdioHost {
         } else {
             CYW43_HT_CLOCK_SOFT_WAIT_LOOPS
         };
-        let request = ht_clock_request_value();
+        let request = if required {
+            required_ht_clock_request_value(self.last_chipclkcsr)
+        } else {
+            ht_clock_request_value()
+        };
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} request=0x{request:02x}"
         ));
@@ -3980,6 +4020,56 @@ impl SdioHost {
         }
     }
 
+    fn require_ht_clock_ready(
+        &mut self,
+        stage: &'static str,
+        assist_stage: &'static str,
+    ) -> Result<(), HalError> {
+        for attempt in 0..=1 {
+            match self.wait_for_ht_clock_with_stage(stage, assist_stage, true)? {
+                true => return Ok(()),
+                false if attempt == 0 => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=recover-retry reason=ht-not-ready"
+                    ));
+                    self.recover_command_path_and_refresh_transport(stage)?;
+                }
+                false => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=fail reason=ht-not-ready"
+                    ));
+                    return Err(HalError::Unsupported("cyw43-ht-clock-timeout"));
+                }
+            }
+        }
+        Err(HalError::Unsupported("cyw43-ht-clock-timeout"))
+    }
+
+    fn ensure_control_plane_clock(&mut self, stage: &'static str) -> Result<(), HalError> {
+        let target_clock_hz =
+            control_plane_clock_target_hz(self.current_clock_hz, self.preferred_data_clock_hz);
+        if target_clock_hz <= self.current_clock_hz {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=skip current={}Hz preferred={}Hz",
+                self.current_clock_hz, self.preferred_data_clock_hz
+            ));
+            self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(self.current_clock_hz);
+            return Ok(());
+        }
+
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=raise request={}Hz from={}Hz",
+            target_clock_hz, self.current_clock_hz
+        ));
+        let effective_hz = self.set_clock_hz(target_clock_hz)?;
+        self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(effective_hz);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=raise-ready effective={}Hz",
+            effective_hz
+        ));
+        Ok(())
+    }
+
     fn write_firmware_payloads(
         &mut self,
         firmware: &[u8],
@@ -4059,7 +4149,23 @@ impl SdioHost {
             last_ioctrl = match self.core_ctrl_read8(base, AI_IOCTRL_OFFSET) {
                 Ok(value) => value,
                 Err(err) => {
-                    if core_wait_can_defer_after_read_error(base, attempt, &err) {
+                    if core_wait_should_raise_control_plane_clock(base, self.current_clock_hz, &err)
+                    {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} readback-retry io-err={err} attempt={attempts} action=raise-control-plane-clock from={}Hz",
+                            self.current_clock_hz
+                        ));
+                        self.ensure_control_plane_clock("armcr4-core-up-readback-prep")?;
+                        self.recover_command_path_and_refresh_transport(stage)?;
+                        spin_settle(CYW43_CORE_CONTROL_SETTLE_LOOPS);
+                        continue;
+                    }
+                    if core_wait_can_defer_after_read_error(
+                        base,
+                        attempt,
+                        self.current_clock_hz,
+                        &err,
+                    ) {
                         last_ioctrl = AI_CORE_POSTRESET_IOCTRL;
                         last_resetctrl = 0;
                         emit_breadcrumb(format_args!(
@@ -4082,7 +4188,23 @@ impl SdioHost {
             last_resetctrl = match self.core_ctrl_read8(base, AI_RESETCTRL_OFFSET) {
                 Ok(value) => value,
                 Err(err) => {
-                    if core_wait_can_defer_after_read_error(base, attempt, &err) {
+                    if core_wait_should_raise_control_plane_clock(base, self.current_clock_hz, &err)
+                    {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} readback-retry reset-err={err} attempt={attempts} action=raise-control-plane-clock from={}Hz",
+                            self.current_clock_hz
+                        ));
+                        self.ensure_control_plane_clock("armcr4-core-up-readback-prep")?;
+                        self.recover_command_path_and_refresh_transport(stage)?;
+                        spin_settle(CYW43_CORE_CONTROL_SETTLE_LOOPS);
+                        continue;
+                    }
+                    if core_wait_can_defer_after_read_error(
+                        base,
+                        attempt,
+                        self.current_clock_hz,
+                        &err,
+                    ) {
                         if last_ioctrl == 0 {
                             last_ioctrl = AI_CORE_POSTRESET_IOCTRL;
                         }
@@ -5866,9 +5988,10 @@ mod tests {
         core_ctrl_postreset_access_mode_label, core_ctrl_reset_assert_access_mode_label,
         core_ctrl_reset_clear_access_mode_label, core_ctrl_trace_function_addr,
         core_disable_uses_upstream_socram_disable, core_reset_can_skip_postreset_verify,
-        core_reset_prepare_hold_value, firmware_bulk_clock_candidates, firmware_phase_can_retry,
-        ht_clock_assist_shadow_is_complete, ht_clock_request_value, is_mailbox_protocol_error,
-        mailbox_tag_name, make_command, merge_u16_word,
+        core_reset_prepare_hold_value, core_wait_can_defer_after_read_error,
+        core_wait_should_raise_control_plane_clock, firmware_bulk_clock_candidates,
+        firmware_phase_can_retry, ht_clock_assist_shadow_is_complete, ht_clock_request_value,
+        is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word,
         next_distinct_firmware_bulk_clock_candidate, normalize_nvram, phys_to_bus, r5_status,
         sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
         sdio_byte_mode_transfer_plan, sdio_transfer_addr, sdio_transfer_plan,
@@ -5878,16 +6001,18 @@ mod tests {
         AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET, AI_RESETCTRL_BIT_RESET,
         ARMCR4_BCMA_IOCTL_CPUHALT, ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BACKPLANE_ADDRESS_MASK,
         BACKPLANE_WINDOW_MASK, BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE,
-        CYW43_FIRMWARE_BULK_CLOCK_HZ, CYW43_FIRMWARE_PROGRESS_INTERVAL, CYW43_RAM_BASE_4345,
-        CYW43_SOCRAM_CLEAR_RESET_KEEPALIVE_CHUNK_LOOPS, CYW43_SOCRAM_CORE_BASE, PI4_WIFI_SDIO_PINS,
-        PI4_WIFI_SDIO_PULLS, SBSDIO_ALP_AVAIL_REQ, SBSDIO_FORCE_HT, SBSDIO_HT_AVAIL,
-        SBSDIO_HT_AVAIL_REQ, SBSDIO_WAKE_TILL_HT_AVAIL, SDHCI_COMMAND, SDHCI_DATA_AVAILABLE,
-        SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL, SDHCI_INT_DATA_CRC, SDHCI_INT_SPACE_AVAIL,
-        SDHCI_INT_TIMEOUT, SDHCI_SPACE_AVAILABLE, SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN,
-        SDHCI_TRNS_MULTI, SDHCI_TRNS_READ, SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS,
-        SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1,
-        SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1, SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE,
-        TAG_NOTIFY_XHCI_RESET, TAG_SET_GPIO_CONFIG, TAG_SET_POWER_STATE,
+        CYW43_CONTROL_PLANE_CLOCK_HZ, CYW43_FIRMWARE_BULK_CLOCK_HZ,
+        CYW43_FIRMWARE_PROGRESS_INTERVAL, CYW43_RAM_BASE_4345,
+        CYW43_SOCRAM_CLEAR_RESET_KEEPALIVE_CHUNK_LOOPS, CYW43_SOCRAM_CORE_BASE,
+        CYW43_STARTUP_CLOCK_HZ, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS, SBSDIO_ALP_AVAIL_REQ,
+        SBSDIO_FORCE_HT, SBSDIO_HT_AVAIL, SBSDIO_HT_AVAIL_REQ, SBSDIO_WAKE_TILL_HT_AVAIL,
+        SDHCI_COMMAND, SDHCI_DATA_AVAILABLE, SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL,
+        SDHCI_INT_DATA_CRC, SDHCI_INT_SPACE_AVAIL, SDHCI_INT_TIMEOUT, SDHCI_SPACE_AVAILABLE,
+        SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_MULTI, SDHCI_TRNS_READ,
+        SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,
+        SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNC_ENABLE_1, SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1,
+        SDIO_FUNC_READY_2, TAG_GET_CLOCK_RATE, TAG_NOTIFY_XHCI_RESET, TAG_SET_GPIO_CONFIG,
+        TAG_SET_POWER_STATE,
     };
 
     #[test]
@@ -6361,23 +6486,53 @@ mod tests {
             CYW43_ARMCR4_CORE_BASE,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
+        assert!(core_wait_should_raise_control_plane_clock(
+            CYW43_ARMCR4_CORE_BASE,
+            CYW43_STARTUP_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(!core_wait_should_raise_control_plane_clock(
+            CYW43_ARMCR4_CORE_BASE,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
         assert!(!core_wait_can_defer_after_read_error(
             CYW43_ARMCR4_CORE_BASE,
             0,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(!core_wait_can_defer_after_read_error(
+            CYW43_ARMCR4_CORE_BASE,
+            1,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
         assert!(core_wait_can_defer_after_read_error(
             CYW43_ARMCR4_CORE_BASE,
-            1,
+            2,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(!core_wait_can_defer_after_read_error(
+            CYW43_ARMCR4_CORE_BASE,
+            2,
+            CYW43_STARTUP_CLOCK_HZ,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
         assert!(!core_wait_can_retry_after_read_error(
             CYW43_SOCRAM_CORE_BASE,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
+        assert!(!core_wait_should_raise_control_plane_clock(
+            CYW43_SOCRAM_CORE_BASE,
+            CYW43_STARTUP_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
         assert!(!core_wait_can_defer_after_read_error(
             CYW43_SOCRAM_CORE_BASE,
-            1,
+            2,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
         assert_eq!(
@@ -6824,6 +6979,22 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_clock_target_raises_startup_clock_to_operational_floor() {
+        assert_eq!(
+            control_plane_clock_target_hz(400_000, 400_000),
+            CYW43_CONTROL_PLANE_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_clock_target_hz(400_000, CYW43_FIRMWARE_BULK_CLOCK_HZ),
+            CYW43_FIRMWARE_BULK_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_clock_target_hz(CYW43_CONTROL_PLANE_CLOCK_HZ, 400_000),
+            CYW43_CONTROL_PLANE_CLOCK_HZ
+        );
+    }
+
+    #[test]
     fn ht_clock_timeout_can_continue_when_alp_stays_up() {
         assert!(ht_clock_timeout_can_continue(
             true,
@@ -6840,6 +7011,22 @@ mod tests {
     #[test]
     fn ht_clock_soft_wait_budget_is_shorter_than_required_wait_budget() {
         assert!(super::CYW43_HT_CLOCK_SOFT_WAIT_LOOPS < SDIO_INIT_WAIT_LOOPS);
+    }
+
+    #[test]
+    fn required_ht_clock_request_keeps_force_ht_asserted() {
+        assert_eq!(
+            required_ht_clock_request_value(None),
+            SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+        );
+        assert_eq!(
+            required_ht_clock_request_value(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL)),
+            SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+        );
+        assert_eq!(
+            required_ht_clock_request_value(Some(SBSDIO_FORCE_HT)),
+            SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+        );
     }
 
     #[test]

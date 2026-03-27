@@ -161,7 +161,8 @@ const fn use_live_post_reset_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    use_live_post_reset_seed_reads(firmware_handoff) && runtime_seed_snapshot.is_none()
+    use_live_post_reset_seed_reads(firmware_handoff)
+        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -169,7 +170,8 @@ const fn use_live_config_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    use_live_config_seed_reads(firmware_handoff) && runtime_seed_snapshot.is_none()
+    use_live_config_seed_reads(firmware_handoff)
+        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -201,9 +203,10 @@ const fn skip_config_write_during_init_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     // On the trusted Pi 4 mailbox-reset path the first live CONFIG store has
-    // remained another fatal edge after reset replay was removed. When a
-    // runtime snapshot exists, keep the firmware-seeded CONFIG state and move
-    // directly into the remaining runtime ownership handoff.
+    // remained another fatal edge after reset replay was removed. Only a full
+    // runtime ring-seed snapshot is authoritative enough to keep the
+    // firmware-seeded CONFIG state and move directly into the remaining
+    // runtime ownership handoff.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_config_write_during_init(firmware_handoff)
 }
@@ -225,9 +228,9 @@ const fn skip_reset_during_init_with_snapshot(
 ) -> bool {
     // On the trusted Pi 4 mailbox-reset path the bounded VideoCore reset-notify
     // is now the authoritative reset boundary. Replaying a second live HCRST
-    // store from runtime has remained a fatal edge on hardware, so the
-    // snapshot-backed cold-start path uses the snapshot to avoid unsafe reads
-    // and then proceeds directly into runtime-owned CONFIG/ring publication.
+    // store from runtime has remained a fatal edge on hardware, so only the
+    // full runtime ring-seed snapshot path avoids that second reset and moves
+    // directly into runtime-owned CONFIG/ring publication.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_reset_during_init(firmware_handoff)
 }
@@ -238,7 +241,7 @@ const fn runtime_mailbox_reset_handoff(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
-        && runtime_seed_snapshot.is_some()
+        && runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -278,7 +281,36 @@ const fn skip_live_halt_revalidation_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    skip_live_halt_revalidation(firmware_handoff) || runtime_seed_snapshot.is_some()
+    skip_live_halt_revalidation(firmware_handoff)
+        || runtime_snapshot_has_stop_state(runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn runtime_snapshot_has_stop_state(
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    match runtime_seed_snapshot {
+        Some(snapshot) => {
+            snapshot.usbcmd.is_some() || snapshot.usbsts.is_some() || snapshot.iman0.is_some()
+        }
+        None => false,
+    }
+}
+
+#[inline(always)]
+const fn runtime_snapshot_has_runtime_ring_seed(
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    match runtime_seed_snapshot {
+        Some(snapshot) => {
+            snapshot.dcbaap.is_some()
+                || snapshot.crcr.is_some()
+                || snapshot.erstba0.is_some()
+                || snapshot.erdp0.is_some()
+                || snapshot.erstsz0.is_some()
+        }
+        None => false,
+    }
 }
 
 #[inline]
@@ -2035,6 +2067,52 @@ mod tests {
     }
 
     #[test]
+    fn stop_state_only_snapshot_skips_early_reads_but_keeps_live_runtime_reseed() {
+        let snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+        assert!(skip_live_halt_revalidation_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!runtime_mailbox_reset_handoff(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(use_live_post_reset_seed_reads_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(use_live_config_seed_reads_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!skip_reset_during_init_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!skip_config_write_during_init_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!runtime_mailbox_reset_needs_blind_settle(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!defer_scratchpad_array_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+    }
+
+    #[test]
     fn trusted_runtime_snapshot_defers_scratchpad_array_publish() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
@@ -2128,16 +2206,29 @@ mod tests {
                 usbcmd: None,
                 usbsts: None,
                 iman0: None,
+                dcbaap: Some(0),
+                crcr: Some(0),
+                erstba0: Some(0),
+                erdp0: Some(0),
+                erstsz0: Some(0),
+            }),
+        ));
+        assert!(!runtime_mailbox_reset_needs_blind_settle(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            None,
+        ));
+        assert!(!runtime_mailbox_reset_needs_blind_settle(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            Some(XhciRuntimeSeedSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(reg::USBSTS_HCH),
+                iman0: Some(0),
                 dcbaap: None,
                 crcr: None,
                 erstba0: None,
                 erdp0: None,
                 erstsz0: None,
             }),
-        ));
-        assert!(!runtime_mailbox_reset_needs_blind_settle(
-            XhciFirmwareHandoff::ColdStartFromSnapshot,
-            None,
         ));
         assert!(!runtime_mailbox_reset_needs_blind_settle(
             XhciFirmwareHandoff::PreserveControllerState,
@@ -2355,16 +2446,16 @@ mod tests {
     }
 
     #[test]
-    fn trusted_runtime_snapshot_skips_config_write_during_init() {
+    fn trusted_runtime_ring_snapshot_skips_config_write_during_init() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
-            usbcmd: None,
-            usbsts: None,
-            iman0: None,
-            dcbaap: None,
-            crcr: None,
-            erstba0: None,
-            erdp0: None,
-            erstsz0: None,
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: Some(0),
+            crcr: Some(0),
+            erstba0: Some(0),
+            erdp0: Some(0),
+            erstsz0: Some(0),
         });
         assert!(skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,

@@ -61,6 +61,9 @@ const TAG_GET_PITCH: u32 = 0x0004_0008;
 // microsecond timer. Keep a wider one-shot settle budget here so the first
 // post-reset xHCI status read does not race the still-reloading controller.
 const VL805_MAILBOX_RESET_SETTLE_MS: u64 = 20;
+// A posted reset-notify can complete later than an acknowledged response, so
+// give firmware a wider cold-start window before runtime touches VL805 again.
+const VL805_MAILBOX_RESET_POSTED_SETTLE_MS: u64 = 100;
 
 const DEFAULT_FB_WIDTH: u32 = 1024;
 const DEFAULT_FB_HEIGHT: u32 = 768;
@@ -557,6 +560,16 @@ const fn runtime_vl805_mailbox_reset_success_detail(
 }
 
 #[inline]
+const fn runtime_vl805_mailbox_reset_success_settle_ms(
+    result: pi4_wifi::Vl805ResetNotifyResult,
+) -> u64 {
+    match result {
+        pi4_wifi::Vl805ResetNotifyResult::Acked => VL805_MAILBOX_RESET_SETTLE_MS,
+        pi4_wifi::Vl805ResetNotifyResult::PostedFallback => VL805_MAILBOX_RESET_POSTED_SETTLE_MS,
+    }
+}
+
+#[inline]
 const fn runtime_vl805_mailbox_reset_success_state(result: pi4_wifi::Vl805ResetNotifyResult) -> u8 {
     match result {
         pi4_wifi::Vl805ResetNotifyResult::Acked => VL805_RUNTIME_RESET_STATE_NOTIFIED,
@@ -569,6 +582,15 @@ const fn runtime_vl805_mailbox_reset_success_state(result: pi4_wifi::Vl805ResetN
 #[inline]
 const fn runtime_vl805_mailbox_reset_completed(state: u8) -> bool {
     matches!(state, VL805_RUNTIME_RESET_STATE_NOTIFIED)
+}
+
+#[inline]
+const fn xhci_prefers_static_cap_snapshot_for_cold_init(
+    runtime_vl805_reset_requested: bool,
+    runtime_vl805_reset_completed: bool,
+    snapshot_cached: bool,
+) -> bool {
+    runtime_vl805_reset_requested && !runtime_vl805_reset_completed && snapshot_cached
 }
 
 /// Concrete local-seat backend for Pi 4 (HDMI text + USB keyboard).
@@ -2008,6 +2030,22 @@ fn xhci_controller_params_from_probe(
 }
 
 #[inline]
+const fn xhci_runtime_stop_state_seed_from_handoff(
+    snapshot: LocalSeatXhciRuntimeSeedSnapshot,
+) -> LocalSeatXhciRuntimeSeedSnapshot {
+    LocalSeatXhciRuntimeSeedSnapshot {
+        usbcmd: snapshot.usbcmd,
+        usbsts: snapshot.usbsts,
+        iman0: snapshot.iman0,
+        dcbaap: None,
+        crcr: None,
+        erstba0: None,
+        erdp0: None,
+        erstsz0: None,
+    }
+}
+
+#[inline]
 const fn xhci_runtime_seed_snapshot_from_handoff(
     snapshot: LocalSeatXhciRuntimeSeedSnapshot,
 ) -> XhciRuntimeSeedSnapshot {
@@ -2929,7 +2967,7 @@ fn ensure_runtime_vl805_mailbox_reset(hal: &mut KernelHal<'_>) -> Result<(), Pi4
     );
     match pi4_wifi::notify_vl805_reset(hal).map_err(map_pi4_wifi_mailbox_reset_error) {
         Ok(result) => {
-            wait_ms(VL805_MAILBOX_RESET_SETTLE_MS);
+            wait_ms(runtime_vl805_mailbox_reset_success_settle_ms(result));
             VL805_RUNTIME_RESET_STATE.store(
                 runtime_vl805_mailbox_reset_success_state(result),
                 Ordering::Release,
@@ -4929,7 +4967,7 @@ impl UsbKeyboard {
         let mut saw_controller = false;
         let mut saw_keyboard_init_error = false;
         for &mmio_base in &candidates[..candidate_count] {
-            let (effective_mmio, cap_probe, firmware_handoff) = {
+            let (effective_mmio, cap_probe, firmware_handoff, runtime_seed_snapshot) = {
                 let runtime_vl805_reset_requested = xhci_runtime_vl805_mailbox_reset_required(
                     mmio_base,
                     xhci_mmio_hint,
@@ -4972,7 +5010,20 @@ impl UsbKeyboard {
                         runtime_vl805_reset,
                     )
                 });
-                let firmware_handoff = if trusted_handoff_probe.is_some() {
+                let standalone_snapshot_probe = xhci_capability_probe.filter(|_| {
+                    xhci_prefers_static_cap_snapshot_for_cold_init(
+                        runtime_vl805_reset_requested,
+                        runtime_vl805_reset,
+                        true,
+                    ) && xhci_firmware_handoff_cold_start_trusted(
+                        mmio_base,
+                        xhci_mmio_hint,
+                        xhci_pci_cmd,
+                        xhci_handoff_ready,
+                        xhci_irq_quiesced,
+                    )
+                });
+                let (firmware_handoff, runtime_seed_snapshot) = if trusted_handoff_probe.is_some() {
                     let handoff_mode = xhci_preferred_trusted_handoff_mode(runtime_vl805_reset);
                     match (runtime_vl805_reset, handoff_mode) {
                         (true, XhciFirmwareHandoff::ColdStartFromSnapshot) => {
@@ -4998,9 +5049,14 @@ impl UsbKeyboard {
                         }
                         _ => {}
                     }
-                    handoff_mode
+                    (handoff_mode, xhci_runtime_seed_snapshot)
+                } else if standalone_snapshot_probe.is_some() {
+                    (
+                        XhciFirmwareHandoff::ColdStartFromSnapshot,
+                        xhci_runtime_seed_snapshot.map(xhci_runtime_stop_state_seed_from_handoff),
+                    )
                 } else {
-                    XhciFirmwareHandoff::None
+                    (XhciFirmwareHandoff::None, None)
                 };
 
                 let raw_probe = if let Some(raw_probe) = trusted_handoff_probe {
@@ -5036,6 +5092,31 @@ impl UsbKeyboard {
                         boot_log::force_uart_line(invalid.as_str());
                         continue;
                     }
+                    raw_probe
+                } else if let Some(raw_probe) = standalone_snapshot_probe {
+                    boot_log::force_uart_line(
+                        "[local-seat] xhci handoff=runtime-owned stage=runtime detail=static-cap-snapshot action=standalone-cold-init",
+                    );
+                    let mut line = heapless::String::<352>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci cap snapshot mmio=0x{mmio:016x} caplen=0x{caplen:02x} hciver=0x{hciver:04x} hcs1=0x{hcs1:08x} hcs2=0x{hcs2:08x} hcc1=0x{hccparams1:08x} dboff=0x{dboff:08x} rtsoff=0x{rtsoff:08x} slots={} ports={} scratch={} span=0x{span:05x}",
+                            raw_probe.max_slots,
+                            raw_probe.max_ports,
+                            raw_probe.max_scratchpad,
+                            mmio = mmio_base,
+                            caplen = raw_probe.cap_length,
+                            hciver = raw_probe.hci_version,
+                            hcs1 = raw_probe.hcs1,
+                            hcs2 = raw_probe.hcs2,
+                            hccparams1 = raw_probe.hccparams1,
+                            dboff = raw_probe.db_offset,
+                            rtsoff = raw_probe.rts_offset,
+                            span = raw_probe.mmio_size,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
                     raw_probe
                 } else {
                     match probe_xhci_capability_window(hal, mmio_base) {
@@ -5077,7 +5158,12 @@ impl UsbKeyboard {
                 boot_log::force_uart_line(cap_line.as_str());
 
                 match validate_xhci_capability_window(&raw_probe) {
-                    Ok(()) => (mmio_base, raw_probe, firmware_handoff),
+                    Ok(()) => (
+                        mmio_base,
+                        raw_probe,
+                        firmware_handoff,
+                        runtime_seed_snapshot,
+                    ),
                     Err(reason) => {
                         if !xhci_runtime_allows_alias_scan(
                             mmio_base,
@@ -5107,7 +5193,7 @@ impl UsbKeyboard {
                                     ),
                                 );
                                 boot_log::force_uart_line(line.as_str());
-                                (candidate, scanned_probe, XhciFirmwareHandoff::None)
+                                (candidate, scanned_probe, XhciFirmwareHandoff::None, None)
                             }
                             Err(_) => {
                                 let mut line = heapless::String::<208>::new();
@@ -5128,7 +5214,7 @@ impl UsbKeyboard {
             let controller_params = xhci_controller_params_from_probe(
                 cap_probe,
                 firmware_handoff,
-                xhci_runtime_seed_snapshot,
+                runtime_seed_snapshot,
             );
             XhciIrqGuard::log_policy(
                 effective_mmio,
@@ -9534,6 +9620,21 @@ mod tests {
     }
 
     #[test]
+    fn runtime_vl805_mailbox_reset_posted_fallback_uses_longer_settle_budget() {
+        assert_eq!(
+            runtime_vl805_mailbox_reset_success_settle_ms(pi4_wifi::Vl805ResetNotifyResult::Acked),
+            VL805_MAILBOX_RESET_SETTLE_MS
+        );
+        assert_eq!(
+            runtime_vl805_mailbox_reset_success_settle_ms(
+                pi4_wifi::Vl805ResetNotifyResult::PostedFallback
+            ),
+            VL805_MAILBOX_RESET_POSTED_SETTLE_MS
+        );
+        assert!(VL805_MAILBOX_RESET_POSTED_SETTLE_MS > VL805_MAILBOX_RESET_SETTLE_MS);
+    }
+
+    #[test]
     fn runtime_vl805_mailbox_reset_success_state_only_trusts_acked_reset() {
         assert_eq!(
             runtime_vl805_mailbox_reset_success_state(pi4_wifi::Vl805ResetNotifyResult::Acked),
@@ -9553,6 +9654,22 @@ mod tests {
         ));
         assert!(!runtime_vl805_mailbox_reset_completed(
             VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
+        ));
+    }
+
+    #[test]
+    fn incomplete_runtime_reset_prefers_static_cap_snapshot_for_cold_init() {
+        assert!(xhci_prefers_static_cap_snapshot_for_cold_init(
+            true, false, true
+        ));
+        assert!(!xhci_prefers_static_cap_snapshot_for_cold_init(
+            true, true, true
+        ));
+        assert!(!xhci_prefers_static_cap_snapshot_for_cold_init(
+            false, false, true
+        ));
+        assert!(!xhci_prefers_static_cap_snapshot_for_cold_init(
+            true, false, false
         ));
     }
 
@@ -9665,6 +9782,79 @@ mod tests {
         );
         assert_eq!(params.firmware_handoff, XhciFirmwareHandoff::None);
         assert!(params.runtime_seed_snapshot.is_none());
+    }
+
+    #[test]
+    fn xhci_controller_params_keep_cold_start_mode_without_runtime_seed() {
+        let params = xhci_controller_params_from_probe(
+            XhciCapProbe {
+                cap_length: 0x40,
+                hci_version: 0x0100,
+                hcs1: 32u32 | (8u32 << 24),
+                hcs2: 0,
+                hccparams1: 1 << 2,
+                db_offset: 0x1000,
+                rts_offset: 0x2000,
+                max_slots: 32,
+                max_ports: 8,
+                max_scratchpad: 0,
+                mmio_size: 0x10000,
+            },
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            None,
+        );
+        assert_eq!(
+            params.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        );
+        assert!(params.runtime_seed_snapshot.is_none());
+    }
+
+    #[test]
+    fn xhci_controller_params_keep_cold_start_stop_state_without_runtime_rings() {
+        let params = xhci_controller_params_from_probe(
+            XhciCapProbe {
+                cap_length: 0x40,
+                hci_version: 0x0100,
+                hcs1: 32u32 | (8u32 << 24),
+                hcs2: 0,
+                hccparams1: 1 << 2,
+                db_offset: 0x1000,
+                rts_offset: 0x2000,
+                max_slots: 32,
+                max_ports: 8,
+                max_scratchpad: 0,
+                mmio_size: 0x10000,
+            },
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            Some(xhci_runtime_stop_state_seed_from_handoff(
+                LocalSeatXhciRuntimeSeedSnapshot {
+                    usbcmd: Some(0),
+                    usbsts: Some(1),
+                    iman0: Some(0x20),
+                    dcbaap: Some(0x40),
+                    crcr: Some(0x80),
+                    erstba0: Some(0x100),
+                    erdp0: Some(0x200),
+                    erstsz0: Some(1),
+                },
+            )),
+        );
+        assert_eq!(
+            params.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        );
+        let runtime_seed_snapshot = params
+            .runtime_seed_snapshot
+            .expect("stop-state snapshot forwarded");
+        assert_eq!(runtime_seed_snapshot.usbcmd, Some(0));
+        assert_eq!(runtime_seed_snapshot.usbsts, Some(1));
+        assert_eq!(runtime_seed_snapshot.iman0, Some(0x20));
+        assert_eq!(runtime_seed_snapshot.dcbaap, None);
+        assert_eq!(runtime_seed_snapshot.crcr, None);
+        assert_eq!(runtime_seed_snapshot.erstba0, None);
+        assert_eq!(runtime_seed_snapshot.erdp0, None);
+        assert_eq!(runtime_seed_snapshot.erstsz0, None);
     }
 
     #[test]
