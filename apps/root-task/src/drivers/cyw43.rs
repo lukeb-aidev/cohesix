@@ -393,6 +393,11 @@ impl Cyw43NetDevice {
             (data_clock_hz, SdioBusWidth::FourBit)
         };
         progress.tick();
+        if state.cyw43_experimental_no_ht_transport() {
+            info!("[cyw43] step: rearm_control_plane_channel(startup-link)");
+            state.rearm_cyw43_control_plane_slow_link()?;
+            progress.tick();
+        }
         info!("[cyw43] step: read_ioex");
         let ioex = state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
         progress.tick();

@@ -709,6 +709,14 @@ fn experimental_control_plane_write_can_assume_committed(
 }
 
 #[inline]
+const fn experimental_control_plane_write_needs_post_write_rearm(
+    experimental_no_ht_transport: bool,
+    first_control_plane_write_pending: bool,
+) -> bool {
+    experimental_no_ht_transport && first_control_plane_write_pending
+}
+
+#[inline]
 const fn experimental_no_ht_f2_fifo_chunk_limit() -> usize {
     64
 }
@@ -1902,6 +1910,10 @@ impl Pi4WifiState {
         self.host.finish_experimental_transport_probe();
     }
 
+    pub fn rearm_cyw43_control_plane_slow_link(&mut self) -> Result<(), HalError> {
+        self.host.rearm_firmware_channel_on_startup_link()
+    }
+
     pub fn log_cyw43_control_plane_snapshot(&mut self, stage: &'static str) {
         self.host.log_control_plane_finish_snapshot(stage);
     }
@@ -2586,6 +2598,102 @@ impl SdioHost {
     fn finish_experimental_transport_probe(&mut self) {
         self.experimental_no_ht_transport = false;
         self.experimental_control_plane_write_probe_pending = false;
+    }
+
+    fn rearm_firmware_channel_on_startup_link(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=slow-link-channel-rearm action=begin current={}Hz width={}",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+        ));
+        self.refresh_transport_phase_for("slow-link-channel-rearm")?;
+        let mut attempt = 0usize;
+        loop {
+            match self.rearm_firmware_channel_once(true) {
+                Ok(()) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=ready"
+                    ));
+                    return Ok(());
+                }
+                Err(err) if firmware_phase_can_retry(&err, attempt) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=slow-link-channel-rearm attempt={} err={err} action=recover-retry",
+                        attempt + 1
+                    ));
+                    self.recover_command_path_and_refresh_transport("slow-link-channel-rearm")?;
+                    attempt += 1;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    fn rearm_firmware_channel_after_first_control_write(&mut self) -> Result<(), HalError> {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=begin current={}Hz width={}",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+        ));
+        self.refresh_transport_phase_for("control-plane-post-write-rearm")?;
+        let mut attempt = 0usize;
+        loop {
+            match self.rearm_firmware_channel_once(true) {
+                Ok(()) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=ready"
+                    ));
+                    return Ok(());
+                }
+                Err(err) if firmware_phase_can_retry(&err, attempt) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-post-write-rearm attempt={} err={err} action=recover-retry",
+                        attempt + 1
+                    ));
+                    self.recover_command_path_and_refresh_transport(
+                        "control-plane-post-write-rearm",
+                    )?;
+                    attempt += 1;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    fn rearm_firmware_channel_once(
+        &mut self,
+        allow_ready_timeout_bypass: bool,
+    ) -> Result<(), HalError> {
+        self.enable_function2(allow_ready_timeout_bypass)?;
+        self.write_f1_u32_for_firmware_channel(
+            "slow-link-channel-rearm-mailbox-version",
+            SDPCMD_REG_TOSBMAILBOXDATA,
+            SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT,
+            allow_ready_timeout_bypass,
+        )?;
+        self.write_f1_u32_for_firmware_channel(
+            "slow-link-channel-rearm-hostintmask",
+            SDPCMD_REG_HOSTINTMASK,
+            HOSTINTMASK,
+            allow_ready_timeout_bypass,
+        )?;
+        self.io_direct_write(
+            SdioFunction::Function1,
+            SBSDIO_WATERMARK,
+            CY_43455_F2_WATERMARK,
+        )?;
+        let devctl = self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)?;
+        self.io_direct_write(
+            SdioFunction::Function1,
+            SBSDIO_DEVICE_CTL,
+            devctl | SBSDIO_DEVCTL_F2WM_ENAB,
+        )?;
+        self.io_direct_write(
+            SdioFunction::Function1,
+            SBSDIO_FUNC1_MESBUSYCTRL,
+            CY_43455_MESBUSYCTRL,
+        )?;
+        Ok(())
     }
 
     fn log_control_plane_finish_snapshot(&mut self, stage: &'static str) {
@@ -4112,7 +4220,20 @@ impl SdioHost {
         let first_control_plane_write_pending = self.experimental_control_plane_write_probe_pending;
         self.experimental_control_plane_write_probe_pending = false;
         match self.io_extended(SdioFunction::Function2, 0, false, true, frame) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                if experimental_control_plane_write_needs_post_write_rearm(
+                    self.experimental_no_ht_transport,
+                    first_control_plane_write_pending,
+                ) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-write action=experimental-post-write-rearm len={} chunk_limit={}",
+                        frame.len(),
+                        self.control_plane_chunk_limit(),
+                    ));
+                    self.rearm_firmware_channel_after_first_control_write()?;
+                }
+                Ok(())
+            }
             Err(err)
                 if experimental_control_plane_write_can_assume_committed(
                     self.experimental_no_ht_transport,
@@ -6421,6 +6542,7 @@ mod tests {
         core_reset_prepare_hold_value, core_wait_can_defer_after_read_error,
         core_wait_should_raise_control_plane_clock,
         experimental_control_plane_write_can_assume_committed,
+        experimental_control_plane_write_needs_post_write_rearm,
         experimental_function2_fifo_chunk_limit, firmware_bulk_clock_candidates,
         firmware_phase_can_retry, ht_clock_assist_shadow_is_complete, ht_clock_request_value,
         is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word,
@@ -6622,6 +6744,19 @@ mod tests {
             true,
             true,
             &HalError::Unsupported("sdio-cmd52-read")
+        ));
+    }
+
+    #[test]
+    fn experimental_control_plane_write_post_write_rearm_only_runs_for_first_no_ht_write() {
+        assert!(experimental_control_plane_write_needs_post_write_rearm(
+            true, true
+        ));
+        assert!(!experimental_control_plane_write_needs_post_write_rearm(
+            false, true
+        ));
+        assert!(!experimental_control_plane_write_needs_post_write_rearm(
+            true, false
         ));
     }
 
