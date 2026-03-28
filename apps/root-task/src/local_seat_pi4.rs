@@ -593,6 +593,33 @@ const fn xhci_prefers_static_cap_snapshot_for_cold_init(
     runtime_vl805_reset_requested && !runtime_vl805_reset_completed && snapshot_cached
 }
 
+#[inline]
+const fn xhci_runtime_seed_snapshot_has_ring_seed(
+    runtime_seed_snapshot: Option<LocalSeatXhciRuntimeSeedSnapshot>,
+) -> bool {
+    match runtime_seed_snapshot {
+        Some(snapshot) => {
+            snapshot.dcbaap.is_some()
+                || snapshot.crcr.is_some()
+                || snapshot.erstba0.is_some()
+                || snapshot.erdp0.is_some()
+                || snapshot.erstsz0.is_some()
+        }
+        None => false,
+    }
+}
+
+#[inline]
+const fn xhci_prefers_posted_reset_snapshot_handoff(
+    runtime_vl805_reset_state: u8,
+    runtime_seed_snapshot: Option<LocalSeatXhciRuntimeSeedSnapshot>,
+) -> bool {
+    matches!(
+        runtime_vl805_reset_state,
+        VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
+    ) && xhci_runtime_seed_snapshot_has_ring_seed(runtime_seed_snapshot)
+}
+
 /// Concrete local-seat backend for Pi 4 (HDMI text + USB keyboard).
 pub struct Pi4LocalSeat {
     display: HdmiTextSink,
@@ -4976,6 +5003,8 @@ impl UsbKeyboard {
                     xhci_irq_quiesced,
                 );
                 let mut runtime_vl805_reset = false;
+                let mut runtime_vl805_reset_state =
+                    VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire);
                 if runtime_vl805_reset_requested {
                     if let Err(err) = ensure_runtime_vl805_mailbox_reset(hal) {
                         let mut line = heapless::String::<224>::new();
@@ -4990,15 +5019,19 @@ impl UsbKeyboard {
                         boot_log::force_uart_line(line.as_str());
                         continue;
                     }
-                    runtime_vl805_reset = runtime_vl805_mailbox_reset_completed(
-                        VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire),
-                    );
+                    runtime_vl805_reset_state = VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire);
+                    runtime_vl805_reset =
+                        runtime_vl805_mailbox_reset_completed(runtime_vl805_reset_state);
                     if !runtime_vl805_reset {
                         boot_log::force_uart_line(
                             "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset-soft-continue action=standalone-cold-init",
                         );
                     }
                 }
+                let posted_reset_snapshot_handoff = xhci_prefers_posted_reset_snapshot_handoff(
+                    runtime_vl805_reset_state,
+                    xhci_runtime_seed_snapshot,
+                );
 
                 let trusted_handoff_probe = xhci_capability_probe.filter(|_| {
                     xhci_trusted_handoff_snapshot_allowed(
@@ -5051,10 +5084,21 @@ impl UsbKeyboard {
                     }
                     (handoff_mode, xhci_runtime_seed_snapshot)
                 } else if standalone_snapshot_probe.is_some() {
-                    (
-                        XhciFirmwareHandoff::ColdStartFromSnapshot,
-                        xhci_runtime_seed_snapshot.map(xhci_runtime_stop_state_seed_from_handoff),
-                    )
+                    if posted_reset_snapshot_handoff {
+                        boot_log::force_uart_line(
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-posted-fallback+ring-seed-snapshot action=cold-start-from-snapshot",
+                        );
+                        (
+                            XhciFirmwareHandoff::ColdStartFromSnapshot,
+                            xhci_runtime_seed_snapshot,
+                        )
+                    } else {
+                        (
+                            XhciFirmwareHandoff::ColdStartFromSnapshot,
+                            xhci_runtime_seed_snapshot
+                                .map(xhci_runtime_stop_state_seed_from_handoff),
+                        )
+                    }
                 } else {
                     (XhciFirmwareHandoff::None, None)
                 };
@@ -5094,9 +5138,15 @@ impl UsbKeyboard {
                     }
                     raw_probe
                 } else if let Some(raw_probe) = standalone_snapshot_probe {
-                    boot_log::force_uart_line(
-                        "[local-seat] xhci handoff=runtime-owned stage=runtime detail=static-cap-snapshot action=standalone-cold-init",
-                    );
+                    if posted_reset_snapshot_handoff {
+                        boot_log::force_uart_line(
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-posted-fallback+ring-seed-snapshot action=cold-start-from-snapshot",
+                        );
+                    } else {
+                        boot_log::force_uart_line(
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=static-cap-snapshot action=standalone-cold-init",
+                        );
+                    }
                     let mut line = heapless::String::<352>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
@@ -9670,6 +9720,44 @@ mod tests {
         ));
         assert!(!xhci_prefers_static_cap_snapshot_for_cold_init(
             true, false, false
+        ));
+    }
+
+    #[test]
+    fn posted_fallback_prefers_ring_seed_snapshot_handoff_only_with_ring_seed() {
+        let ring_seed_snapshot = Some(LocalSeatXhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0x20),
+            dcbaap: Some(0),
+            crcr: Some(0),
+            erstba0: Some(0),
+            erdp0: Some(0),
+            erstsz0: Some(0),
+        });
+        let stop_state_only_snapshot = Some(xhci_runtime_stop_state_seed_from_handoff(
+            LocalSeatXhciRuntimeSeedSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0x20),
+                dcbaap: Some(0),
+                crcr: Some(0),
+                erstba0: Some(0),
+                erdp0: Some(0),
+                erstsz0: Some(0),
+            },
+        ));
+        assert!(xhci_prefers_posted_reset_snapshot_handoff(
+            VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
+            ring_seed_snapshot,
+        ));
+        assert!(!xhci_prefers_posted_reset_snapshot_handoff(
+            VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
+            stop_state_only_snapshot,
+        ));
+        assert!(!xhci_prefers_posted_reset_snapshot_handoff(
+            VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE,
+            ring_seed_snapshot,
         ));
     }
 

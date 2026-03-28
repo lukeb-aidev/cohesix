@@ -161,12 +161,11 @@ const fn use_live_post_reset_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // On the trusted Pi 4 stop-state-only handoff path, post-reset seed reads
-    // are not authoritative enough to justify another live MMIO probe. Treat
-    // the stop-state snapshot as permission to continue with blind runtime
-    // ownership writes instead of reading CRCR / ERST state back first.
+    // The weaker Pi 4 stop-state snapshot no longer earns blind resetless ring
+    // publication once the first ownership store has proven toxic. Only the
+    // stronger mailbox-reset handoff may continue without live post-reset seed
+    // reads because it also carries firmware-exported runtime ring pointers.
     use_live_post_reset_seed_reads(firmware_handoff)
-        && !runtime_snapshot_has_stop_state(runtime_seed_snapshot)
         && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
@@ -175,14 +174,11 @@ const fn use_live_config_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // On the trusted Pi 4 stop-state-only handoff path, the first live CONFIG
-    // read remains another fatal edge after reset replay has already been
-    // removed. Only the stronger mailbox-reset runtime snapshot is allowed to
-    // suppress CONFIG publication entirely; the stop-state-only path should
-    // still write CONFIG, but it must do so without first probing the live
-    // register value.
+    // Re-enabling HCRST for the weaker stop-state snapshot means CONFIG should
+    // return to the normal live-seeded publish flow there. Only the stronger
+    // mailbox-reset ring-seed handoff is still allowed to skip the live CONFIG
+    // seed read entirely.
     use_live_config_seed_reads(firmware_handoff)
-        && !runtime_snapshot_has_stop_state(runtime_seed_snapshot)
         && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
@@ -214,13 +210,10 @@ const fn skip_config_write_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // On Pi 4 the first runtime CONFIG touch has remained another fatal edge
-    // after reset replay was removed. Treat any trusted stop-state snapshot as
-    // enough evidence to preserve the firmware-seeded CONFIG value and move
-    // directly into runtime ring publication; the stronger mailbox-reset path
-    // still remains the only branch that also carries runtime ring seeds.
-    (matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
-        && runtime_snapshot_has_stop_state(runtime_seed_snapshot))
+    // The weaker stop-state snapshot now falls back to the normal reset path.
+    // Only the stronger mailbox-reset handoff, which also carries runtime ring
+    // ownership seeds, may preserve firmware's CONFIG publication.
+    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_config_write_during_init(firmware_handoff)
 }
 
@@ -239,13 +232,11 @@ const fn skip_reset_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // On Pi 4 the first live HCRST store remains a fatal edge once firmware
-    // has already exported a halted stop-state snapshot. Treat that stop-state
-    // snapshot as proof that runtime must not replay the reset store, while
-    // reserving the stronger mailbox-reset handoff path for the cases that also
-    // carry runtime ring ownership seeds.
-    (matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
-        && runtime_snapshot_has_stop_state(runtime_seed_snapshot))
+    // Once the first runtime DCBAAP publish proved toxic, the weaker Pi 4
+    // stop-state snapshot stopped being strong enough to justify a resetless
+    // bring-up. Preserve the resetless path only for the stronger mailbox-
+    // reset handoff that also exports runtime ring ownership seeds.
+    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_reset_during_init(firmware_handoff)
 }
 
@@ -275,19 +266,33 @@ const fn defer_scratchpad_array_publish_with_snapshot(
 }
 
 #[inline(always)]
+const fn defer_dcbaap_publish_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn probe_live_dcbaap_before_staged_publish_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    !runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn use_atomic_runtime_ring_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // On the weaker Pi 4 stop-state-only handoff path, the first split low
-    // dword ownership store to DCBAAP is now the next fatal edge. Try the
-    // entire 64-bit ownership publish as a single MMIO store so runtime can
-    // determine whether the split low/high sequence itself is what the VL805
-    // bridge is rejecting. Preserve the mailbox-reset ring-seed path's more
-    // conservative split writes until that stronger branch needs changing.
-    matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
-        && runtime_snapshot_has_stop_state(runtime_seed_snapshot)
-        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+    // The atomic ownership-publish probe answered its question: the first
+    // runtime DCBAAP store is toxic even without the split low/high sequence.
+    // Disable the atomic experiment and move the next diagnostic branch back
+    // to the reset gate instead of repeating the same publish hazard.
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    false
 }
 
 #[cfg(test)]
@@ -649,6 +654,13 @@ fn split_u64_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
 }
 
 #[inline(always)]
+fn dcbaap_change_mask(current: u64, target: u64) -> u64 {
+    let [current_low, current_high] = split_u64_reg_write_ops(0, current);
+    let [target_low, target_high] = split_u64_reg_write_ops(0, target);
+    u64::from(current_low.1 != target_low.1) | (u64::from(current_high.1 != target_high.1) << 1)
+}
+
+#[inline(always)]
 fn compose_crcr(current: u64, ring_ptr: u64, cycle_state: bool) -> u64 {
     (current & reg::CMD_RING_RSVD_BITS)
         | (ring_ptr & !reg::CMD_RING_RSVD_BITS)
@@ -955,6 +967,15 @@ impl<H: Dma> XhciCtrl<H> {
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
         );
+        let defer_dcbaap_publish = defer_dcbaap_publish_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        );
+        let probe_live_dcbaap_before_staged_publish =
+            probe_live_dcbaap_before_staged_publish_with_snapshot(
+                self.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+            );
         let atomic_runtime_ring_publish = use_atomic_runtime_ring_publish_with_snapshot(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -1177,48 +1198,81 @@ impl<H: Dma> XhciCtrl<H> {
             }
         }
         let dcbaa_phys = self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa")?;
-        emit_xhci_diag(0x0244, reg::DCBAAP as u64, dcbaa_phys, 0);
         let dcbaap_offset = self.op_base - self.mmio + reg::DCBAAP;
-        if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE {
-            emit_xhci_diag(0x024e, reg::DCBAAP as u64, dcbaap_offset as u64, 1);
-            emit_xhci_diag(
-                0x024f,
-                self.read_reg_u64(dcbaap_offset),
-                dcbaap_offset as u64,
-                1,
-            );
-        }
-        if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE {
-            Self::write_reg_u64_atomic_diag_at(self.mmio, dcbaap_offset, 0, 0x024c, 0x024d);
-        }
-        if preserve_firmware_state {
-            emit_xhci_diag(0x0259, reg::DCBAAP as u64, dcbaa_phys, 1);
-        }
-        if atomic_runtime_ring_publish {
-            emit_xhci_diag(0x0290, reg::DCBAAP as u64, dcbaa_phys, 1);
-            Self::write_reg_u64_atomic_diag_at(
-                self.mmio,
-                dcbaap_offset,
-                dcbaa_phys,
-                0x0291,
-                0x0292,
-            );
+        let snapshot_dcbaap = trusted_runtime_seed_snapshot
+            .and_then(|snapshot| snapshot.dcbaap)
+            .unwrap_or(0);
+        let live_dcbaap_before = if defer_dcbaap_publish {
+            emit_xhci_diag(0x0257, reg::DCBAAP as u64, dcbaap_offset as u64, snapshot_dcbaap);
+            if probe_live_dcbaap_before_staged_publish {
+                Some(self.read_reg_u64(dcbaap_offset))
+            } else {
+                None
+            }
         } else {
-            Self::write_reg_u64_done_diag_at(
-                self.mmio,
-                dcbaap_offset,
+            None
+        };
+        let staged_current_dcbaap = live_dcbaap_before.unwrap_or(snapshot_dcbaap);
+        if defer_dcbaap_publish {
+            emit_xhci_diag(
+                0x0258,
+                staged_current_dcbaap,
                 dcbaa_phys,
-                0x0248,
-                0x024a,
-                0x0249,
-                0x024b,
+                u64::from(live_dcbaap_before.is_some()),
+            );
+            emit_xhci_diag(
+                0x02a0,
+                dcbaap_change_mask(staged_current_dcbaap, dcbaa_phys),
+                0,
+                0,
             );
         }
-        if preserve_firmware_state {
-            emit_xhci_diag(0x0242, dcbaa_phys, 1, 0);
-        } else if !skip_post_reset_verification_readbacks {
-            emit_xhci_diag(0x0247, reg::DCBAAP as u64, 0, 0);
-            emit_xhci_diag(0x0242, self.read_op_u64(reg::DCBAAP), 0, 0);
+        let publish_dcbaap = |this: &mut Self| {
+            emit_xhci_diag(0x0244, reg::DCBAAP as u64, dcbaa_phys, 0);
+            if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE {
+                emit_xhci_diag(0x024e, reg::DCBAAP as u64, dcbaap_offset as u64, 1);
+                emit_xhci_diag(
+                    0x024f,
+                    this.read_reg_u64(dcbaap_offset),
+                    dcbaap_offset as u64,
+                    1,
+                );
+            }
+            if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE {
+                Self::write_reg_u64_atomic_diag_at(this.mmio, dcbaap_offset, 0, 0x024c, 0x024d);
+            }
+            if preserve_firmware_state {
+                emit_xhci_diag(0x0259, reg::DCBAAP as u64, dcbaa_phys, 1);
+            }
+            if atomic_runtime_ring_publish {
+                emit_xhci_diag(0x0290, reg::DCBAAP as u64, dcbaa_phys, 1);
+                Self::write_reg_u64_atomic_diag_at(
+                    this.mmio,
+                    dcbaap_offset,
+                    dcbaa_phys,
+                    0x0291,
+                    0x0292,
+                );
+            } else {
+                Self::write_reg_u64_done_diag_at(
+                    this.mmio,
+                    dcbaap_offset,
+                    dcbaa_phys,
+                    0x0248,
+                    0x024a,
+                    0x0249,
+                    0x024b,
+                );
+            }
+            if preserve_firmware_state {
+                emit_xhci_diag(0x0242, dcbaa_phys, 1, 0);
+            } else if !skip_post_reset_verification_readbacks {
+                emit_xhci_diag(0x0247, reg::DCBAAP as u64, 0, 0);
+                emit_xhci_diag(0x0242, this.read_op_u64(reg::DCBAAP), 0, 0);
+            }
+        };
+        if !defer_dcbaap_publish {
+            publish_dcbaap(self);
         }
 
         // Setup command ring
@@ -1363,6 +1417,52 @@ impl<H: Dma> XhciCtrl<H> {
             );
         }
         drop(event_ring);
+
+        if defer_dcbaap_publish {
+            // The stronger mailbox-reset snapshot no longer lets DCBAAP be the
+            // first live runtime ring store. Publish CRCR/ERST first, then
+            // hand DCBAAP to the controller once the rest of the runtime ring
+            // state is already visible.
+            emit_xhci_diag(0x025a, reg::DCBAAP as u64, dcbaa_phys, 1);
+            Self::write_reg_u64_done_diag_at(
+                self.mmio,
+                dcbaap_offset,
+                staged_current_dcbaap,
+                0x02a1,
+                0x02a2,
+                0x02a3,
+                0x02a4,
+            );
+            let [target_low, target_high] = split_u64_reg_write_ops(dcbaap_offset, dcbaa_phys);
+            emit_xhci_diag(
+                0x02a5,
+                target_low.0 as u64,
+                target_low.1 as u64,
+                staged_current_dcbaap,
+            );
+            Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
+            emit_xhci_diag(
+                0x02a6,
+                target_low.0 as u64,
+                target_low.1 as u64,
+                staged_current_dcbaap,
+            );
+            emit_xhci_diag(
+                0x02a7,
+                target_high.0 as u64,
+                target_high.1 as u64,
+                staged_current_dcbaap,
+            );
+            Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
+            emit_xhci_diag(
+                0x02a8,
+                target_high.0 as u64,
+                target_high.1 as u64,
+                staged_current_dcbaap,
+            );
+            emit_xhci_diag(0x02a9, reg::DCBAAP as u64, dcbaa_phys, 1);
+            publish_dcbaap(self);
+        }
 
         if let Some(scratchpad_array_phys) = deferred_scratchpad_array_phys {
             // SAFETY: DCBAA entry 0 remains controller-init-owned state. Once
@@ -2054,9 +2154,11 @@ impl<H: Dma> XhciCtrl<H> {
 mod tests {
     use super::{
         compose_config, compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
-        defer_scratchpad_array_publish_with_snapshot,
+        dcbaap_change_mask,
+        defer_dcbaap_publish_with_snapshot, defer_scratchpad_array_publish_with_snapshot,
         halt_revalidation_needed, masked_usbcmd, parse_controller_params, polling_iman_value,
         port_ready_for_enumeration, preserve_firmware_handoff_config,
+        probe_live_dcbaap_before_staged_publish_with_snapshot,
         runtime_mailbox_reset_handoff, runtime_mailbox_reset_needs_blind_settle,
         skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
         skip_constructor_polling_scrub_writes,
@@ -2151,7 +2253,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_skips_live_reset_and_config_ops() {
+    fn stop_state_only_snapshot_reverts_to_full_runtime_reinit() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -2170,23 +2272,23 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!use_live_post_reset_seed_reads_with_snapshot(
+        assert!(use_live_post_reset_seed_reads_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!use_live_config_seed_reads_with_snapshot(
+        assert!(use_live_config_seed_reads_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(use_atomic_runtime_ring_publish_with_snapshot(
+        assert!(!use_atomic_runtime_ring_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(skip_reset_during_init_with_snapshot(
+        assert!(!skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(skip_config_write_during_init_with_snapshot(
+        assert!(!skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -2232,6 +2334,62 @@ mod tests {
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
+    }
+
+    #[test]
+    fn trusted_runtime_snapshot_defers_dcbaap_publish_until_after_other_ring_state() {
+        let snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: Some(0),
+            crcr: Some(0),
+            erstba0: Some(0),
+            erdp0: Some(0),
+            erstsz0: Some(0),
+        });
+        assert!(defer_dcbaap_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!defer_dcbaap_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            None,
+        ));
+        assert!(!defer_dcbaap_publish_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            snapshot,
+        ));
+    }
+
+    #[test]
+    fn trusted_runtime_snapshot_skips_live_dcbaap_read_before_staged_publish() {
+        let snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: Some(0),
+            crcr: Some(0),
+            erstba0: Some(0),
+            erdp0: Some(0),
+            erstsz0: Some(0),
+        });
+        assert!(!probe_live_dcbaap_before_staged_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(probe_live_dcbaap_before_staged_publish_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            snapshot,
+        ));
+    }
+
+    #[test]
+    fn dcbaap_change_mask_reports_low_and_high_dword_changes_independently() {
+        assert_eq!(dcbaap_change_mask(0x0000_0001_0000_0002, 0x0000_0001_0000_0002), 0);
+        assert_eq!(dcbaap_change_mask(0x0000_0001_0000_0002, 0x0000_0001_0000_0003), 1);
+        assert_eq!(dcbaap_change_mask(0x0000_0001_0000_0002, 0x0000_0002_0000_0002), 2);
+        assert_eq!(dcbaap_change_mask(0x0000_0001_0000_0002, 0x0000_0002_0000_0003), 3);
     }
 
     #[test]

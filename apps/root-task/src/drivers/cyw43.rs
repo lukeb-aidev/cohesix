@@ -380,9 +380,18 @@ impl Cyw43NetDevice {
         // stable 4-bit transport configuration.
         state.load_cyw43_firmware()?;
         progress.tick();
-        info!("[cyw43] step: set_clock(data)");
-        let data_clock_target_hz = SDIO_DATA_CLOCK_HZ.min(state.recommended_data_clock_hz());
-        let data_clock_hz = state.set_clock_hz(data_clock_target_hz)?;
+        let (data_clock_hz, bus_width) = if state.cyw43_experimental_no_ht_transport() {
+            info!("[cyw43] step: hold_control_plane_transport(startup-link)");
+            let startup_clock_hz = state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
+            state.set_bus_width(SdioBusWidth::OneBit)?;
+            (startup_clock_hz, SdioBusWidth::OneBit)
+        } else {
+            info!("[cyw43] step: set_clock(data)");
+            let data_clock_target_hz =
+                control_plane_data_clock_target_hz(state.recommended_data_clock_hz());
+            let data_clock_hz = state.set_clock_hz(data_clock_target_hz)?;
+            (data_clock_hz, SdioBusWidth::FourBit)
+        };
         progress.tick();
         info!("[cyw43] step: read_ioex");
         let ioex = state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
@@ -393,7 +402,7 @@ impl Cyw43NetDevice {
             probe: ProbeReport {
                 effective_clock_hz: data_clock_hz,
                 ioex,
-                bus_width: SdioBusWidth::FourBit,
+                bus_width,
                 firmware: FirmwareLayout::from_bundle(firmware),
             },
             mac: EthernetAddress(DEFAULT_WIFI_MAC),
@@ -451,6 +460,29 @@ impl Cyw43NetDevice {
         self.ioctl_set_u32(Ioctl::SetPm, 0, 0)?;
         self.mac = self.read_mac_address();
         self.join(credentials)?;
+        Ok(())
+    }
+
+    fn maybe_promote_control_plane_transport(&mut self) -> Result<(), DriverError> {
+        if !self.state.cyw43_experimental_no_ht_transport() {
+            return Ok(());
+        }
+
+        let target_clock_hz =
+            control_plane_data_clock_target_hz(self.state.recommended_data_clock_hz());
+        info!(
+            "[cyw43] control transport promote target_clock={}Hz target_bus_width=4",
+            target_clock_hz
+        );
+        self.state.set_bus_width(SdioBusWidth::FourBit)?;
+        let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
+        self.state.finish_cyw43_experimental_transport_probe();
+        self.probe.effective_clock_hz = effective_clock_hz;
+        self.probe.bus_width = SdioBusWidth::FourBit;
+        info!(
+            "[cyw43] control transport promote ready clock={}Hz bus_width=4",
+            effective_clock_hz
+        );
         Ok(())
     }
 
@@ -750,6 +782,23 @@ impl Cyw43NetDevice {
             payload_len,
             sdpcm_seq
         );
+        if self.state.cyw43_control_plane_probe_pending()
+            || self.state.cyw43_experimental_no_ht_transport()
+        {
+            info!(
+                "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} aligned_len={} seq={}/{} ioctl_id={} channel={} chunk_limit={} no_ht={}",
+                cmd as u32,
+                iface,
+                payload_len,
+                aligned_len,
+                sdpcm_seq,
+                self.sdpcm_seq_max,
+                self.ioctl_id,
+                CHANNEL_CONTROL,
+                self.state.cyw43_control_plane_chunk_limit(),
+                self.state.cyw43_experimental_no_ht_transport(),
+            );
+        }
         self.state
             .write_cyw43_frame(&mut self.tx_frame[..aligned_len])?;
         self.wait_for_ioctl_response(cmd as u32, self.ioctl_id)
@@ -767,6 +816,7 @@ impl Cyw43NetDevice {
                     status,
                     response_len,
                 } if id == expected_id => {
+                    self.maybe_promote_control_plane_transport()?;
                     if status != STATUS_SUCCESS {
                         return Err(DriverError::IoctlFailed { cmd, status });
                     }
@@ -779,6 +829,15 @@ impl Cyw43NetDevice {
             }
             spin_loop();
         }
+        warn!(
+            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} no_ht={}",
+            cmd,
+            expected_id,
+            self.sdpcm_seq,
+            self.sdpcm_seq_max,
+            self.state.cyw43_experimental_no_ht_transport(),
+        );
+        self.state.log_cyw43_control_plane_snapshot("ioctl-timeout");
         Err(DriverError::Protocol("ioctl-timeout"))
     }
 
@@ -1161,6 +1220,14 @@ fn is_zeroed_mac(mac: &[u8; 6]) -> bool {
     mac.iter().all(|byte| *byte == 0)
 }
 
+const fn control_plane_data_clock_target_hz(recommended_data_clock_hz: u32) -> u32 {
+    if recommended_data_clock_hz < SDIO_DATA_CLOCK_HZ {
+        recommended_data_clock_hz
+    } else {
+        SDIO_DATA_CLOCK_HZ
+    }
+}
+
 fn put_u16_le(buf: &mut [u8], offset: usize, value: u16) {
     if let Some(slot) = buf.get_mut(offset..offset + 2) {
         slot.copy_from_slice(&value.to_le_bytes());
@@ -1202,7 +1269,8 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        align4, bdc_payload, is_transport_retryable, put_u16_le, EVENT_AUTH, EVENT_SET_SSID,
+        align4, bdc_payload, control_plane_data_clock_target_hz, is_transport_retryable,
+        put_u16_le, EVENT_AUTH, EVENT_SET_SSID, SDIO_DATA_CLOCK_HZ,
     };
     use crate::hal::HalError;
 
@@ -1245,5 +1313,18 @@ mod tests {
         assert!(!is_transport_retryable(&HalError::Unsupported(
             "mailbox-protocol"
         )));
+    }
+
+    #[test]
+    fn control_plane_data_clock_target_respects_runtime_cap() {
+        assert_eq!(control_plane_data_clock_target_hz(400_000), 400_000);
+        assert_eq!(
+            control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ),
+            SDIO_DATA_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ * 2),
+            SDIO_DATA_CLOCK_HZ
+        );
     }
 }
