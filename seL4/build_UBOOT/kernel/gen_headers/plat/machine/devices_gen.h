@@ -105,6 +105,11 @@ static const p_region_t BOOT_RODATA avail_p_regs[] = {
         .start = 0x1000,
         .end   = 0x3b400000
     },
+    /* /memory@0 */
+    {
+        .start = 0x40000000,
+        .end   = 0x80000000
+    },
 };
 
 #endif /* !__ASSEMBLER__ */

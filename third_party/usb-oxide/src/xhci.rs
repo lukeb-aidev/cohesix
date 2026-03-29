@@ -235,11 +235,11 @@ const fn skip_reset_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Pi 4 now relies on snapshot-driven ResetlessReinit to avoid a second live
-    // runtime HCRST store on the weaker stop-state handoff. The stronger
-    // mailbox-reset handoff keeps the same skip-reset behavior while also
-    // carrying runtime ring ownership seeds.
-    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+    // The active Pi 4 stop-state snapshot path strips runtime ring seeds
+    // before entering usb-oxide, but it still carries a trusted halted/quiesced
+    // controller snapshot. Skip replaying a second live HCRST store on that
+    // path and keep the next diagnostic boundary beyond the reset write.
+    runtime_stop_state_snapshot_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_reset_during_init(firmware_handoff)
 }
 
@@ -250,6 +250,15 @@ const fn runtime_mailbox_reset_handoff(
 ) -> bool {
     matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
         && runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn runtime_stop_state_snapshot_handoff(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
+        && runtime_snapshot_has_stop_state(runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -2392,6 +2401,7 @@ mod tests {
         port_ready_for_enumeration, preserve_firmware_handoff_config,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
         runtime_mailbox_reset_handoff, runtime_mailbox_reset_needs_blind_settle,
+        runtime_stop_state_snapshot_handoff,
         skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
         skip_constructor_polling_scrub_writes,
         skip_doorbell_readback_after_ring, skip_init_pre_reset_scrub_writes,
@@ -2490,7 +2500,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_reverts_to_full_runtime_reinit() {
+    fn stop_state_only_snapshot_skips_second_runtime_reset() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -2525,7 +2535,11 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!skip_reset_during_init_with_snapshot(
+        assert!(runtime_stop_state_snapshot_handoff(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));

@@ -1,1 +1,1 @@
-LIB_PLAT_SUPPORT_HAVE_TIMER: false
+LIB_PLAT_SUPPORT_HAVE_TIMER: true # LibPlatSupportHaveTimer=ON

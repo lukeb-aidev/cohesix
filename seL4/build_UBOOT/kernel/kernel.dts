@@ -1603,6 +1603,16 @@
 		    &{/timer};
 	};
 
+	device-untypes@600000000 {
+		/*
+		 * Pi 4 U-Boot discovers the VL805 xHCI controller behind PCIe and
+		 * maps BAR0 at 0x600000000. Expose that controller window as a
+		 * device untyped so userspace can rediscover and map xHCI after the
+		 * bootloader quiesces USB for handoff.
+		 */
+		reg = <0x00000006 0x00000000 0x00040000>;
+	};
+
 	/*
 	 * See BCM2711 TRM section 1.2 and
 	 * https://github.com/raspberrypi/firmware/issues/1374 for
@@ -1719,11 +1729,12 @@
 / {
     /delete-node/ memory;
 
-    /* Memory for the 1GB RAM variant of the RPi4B, see overlay-pi4.dts for an
+    /* Memory for the 2GB RAM variant of the RPi4B, see overlay-pi4.dts for an
      * explanation of the memory ranges.
      */
     memory@0 {
         device_type = "memory";
-        reg = < 0x00000000 0x00000000 0x3b400000 >;
+        reg = < 0x00000000 0x00000000 0x3b400000
+            0x00000000 0x40000000 0x40000000 >;
     };
 };

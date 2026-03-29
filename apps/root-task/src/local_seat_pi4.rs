@@ -176,11 +176,6 @@ const WIFI_PROGRESS_LOOP_TICK_LOOPS: usize = 1_000_000;
 const WIFI_PROGRESS_MAX_DOTS: usize = 3;
 const PI4_VL805_XHCI_INTX_IRQ: u32 = 143;
 const PI4_PCIE_BRIDGE_IRQ: u32 = 148;
-// The resetless reinit path remains available for trusted handoff experiments,
-// but the active Pi 4 recovery path first asks firmware to reset VL805 at
-// runtime and then lets usb-oxide follow the same cold-start sequencing U-Boot
-// uses for a live controller bring-up from that refreshed state.
-const TRUSTED_XHCI_POST_STOP_RESETLESS_REINIT_ENABLED: bool = true;
 // The trusted Pi 4 handoff stays polling-driven, but once runtime has a live
 // controller the first ownership transition can still surface either the child
 // INTx line or the parent PCIe bridge interrupt even after U-Boot exported an
@@ -1308,11 +1303,12 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset: bool) -> XhciFirmwareHandoff {
-    if !runtime_vl805_reset && TRUSTED_XHCI_POST_STOP_RESETLESS_REINIT_ENABLED {
-        XhciFirmwareHandoff::ResetlessReinit
-    } else {
-        XhciFirmwareHandoff::ColdStartFromSnapshot
-    }
+    // The resetless deferred-ring publish path proved too fragile on Pi 4.
+    // Keep the trusted CAP/stop-state snapshot, but always rebuild runtime
+    // ownership through the cold-start path instead of inheriting firmware's
+    // runtime ring state.
+    let _ = runtime_vl805_reset;
+    XhciFirmwareHandoff::ColdStartFromSnapshot
 }
 
 #[inline]
@@ -5120,47 +5116,34 @@ impl UsbKeyboard {
                 });
                 let (firmware_handoff, runtime_seed_snapshot) = if trusted_handoff_probe.is_some() {
                     let handoff_mode = xhci_preferred_trusted_handoff_mode(runtime_vl805_reset);
-                    match (runtime_vl805_reset, handoff_mode) {
-                        (true, XhciFirmwareHandoff::ColdStartFromSnapshot) => {
-                            boot_log::force_uart_line(
-                                "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset+trusted-cap-snapshot action=cold-start-from-snapshot",
-                            );
-                        }
-                        (false, XhciFirmwareHandoff::ResetlessReinit) => {
-                            boot_log::force_uart_line(
-                                "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=skip-runtime-mailbox-reset action=resetless-reinit-from-post-stop-snapshot",
-                            );
-                            boot_log::force_uart_line(
-                                "[local-seat] xhci handoff=bootloader-owned stage=runtime detail=skip-mailbox-reset+trusted-post-stop-snapshot action=resetless-reinit",
-                            );
-                        }
-                        (false, XhciFirmwareHandoff::ColdStartFromSnapshot) => {
-                            boot_log::force_uart_line(
-                                "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=skip-runtime-mailbox-reset action=cold-start-from-snapshot",
-                            );
-                            boot_log::force_uart_line(
-                                "[local-seat] xhci handoff=bootloader-owned stage=runtime detail=skip-mailbox-reset+trusted-cap-snapshot action=cold-start-from-snapshot",
-                            );
-                        }
-                        _ => {}
+                    let handoff_snapshot =
+                        xhci_runtime_seed_snapshot.map(xhci_runtime_stop_state_seed_from_handoff);
+                    if runtime_vl805_reset {
+                        boot_log::force_uart_line(
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset+trusted-cap-snapshot action=cold-start-from-stop-state-snapshot",
+                        );
+                    } else {
+                        boot_log::force_uart_line(
+                            "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=skip-runtime-mailbox-reset action=cold-start-from-stop-state-snapshot",
+                        );
+                        boot_log::force_uart_line(
+                            "[local-seat] xhci handoff=bootloader-owned stage=runtime detail=skip-mailbox-reset+trusted-post-stop-snapshot action=cold-start-from-stop-state-snapshot",
+                        );
                     }
-                    (handoff_mode, xhci_runtime_seed_snapshot)
+                    (handoff_mode, handoff_snapshot)
                 } else if standalone_snapshot_probe.is_some() {
+                    let handoff_snapshot =
+                        xhci_runtime_seed_snapshot.map(xhci_runtime_stop_state_seed_from_handoff);
                     if posted_reset_snapshot_handoff {
                         boot_log::force_uart_line(
-                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-posted-fallback+ring-seed-snapshot action=cold-start-from-snapshot",
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-posted-fallback+trusted-stop-state-snapshot action=cold-start-from-stop-state-snapshot",
                         );
-                        (
-                            XhciFirmwareHandoff::ColdStartFromSnapshot,
-                            xhci_runtime_seed_snapshot,
-                        )
                     } else {
-                        (
-                            XhciFirmwareHandoff::ResetlessReinit,
-                            xhci_runtime_seed_snapshot
-                                .map(xhci_runtime_stop_state_seed_from_handoff),
-                        )
+                        boot_log::force_uart_line(
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=static-cap-snapshot action=cold-start-from-stop-state-snapshot",
+                        );
                     }
+                    (XhciFirmwareHandoff::ColdStartFromSnapshot, handoff_snapshot)
                 } else {
                     (XhciFirmwareHandoff::None, None)
                 };
@@ -5202,11 +5185,11 @@ impl UsbKeyboard {
                 } else if let Some(raw_probe) = standalone_snapshot_probe {
                     if posted_reset_snapshot_handoff {
                         boot_log::force_uart_line(
-                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-posted-fallback+ring-seed-snapshot action=cold-start-from-snapshot",
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-posted-fallback+trusted-stop-state-snapshot action=cold-start-from-stop-state-snapshot",
                         );
                     } else {
                         boot_log::force_uart_line(
-                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=static-cap-snapshot action=resetless-reinit-from-stop-state-snapshot",
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=static-cap-snapshot action=cold-start-from-stop-state-snapshot",
                         );
                     }
                     let mut line = heapless::String::<352>::new();
@@ -9961,7 +9944,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_controller_params_keep_resetless_stop_state_without_runtime_rings() {
+    fn xhci_controller_params_keep_cold_start_stop_state_without_runtime_rings() {
         let params = xhci_controller_params_from_probe(
             XhciCapProbe {
                 cap_length: 0x40,
@@ -9976,7 +9959,7 @@ mod tests {
                 max_scratchpad: 0,
                 mmio_size: 0x10000,
             },
-            XhciFirmwareHandoff::ResetlessReinit,
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
             Some(xhci_runtime_stop_state_seed_from_handoff(
                 LocalSeatXhciRuntimeSeedSnapshot {
                     usbcmd: Some(0),
@@ -9992,7 +9975,7 @@ mod tests {
         );
         assert_eq!(
             params.firmware_handoff,
-            XhciFirmwareHandoff::ResetlessReinit
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         let runtime_seed_snapshot = params
             .runtime_seed_snapshot
@@ -10340,10 +10323,10 @@ mod tests {
     }
 
     #[test]
-    fn preferred_trusted_handoff_mode_only_uses_resetless_without_runtime_reset() {
+    fn preferred_trusted_handoff_mode_now_always_cold_starts_from_snapshot() {
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(false),
-            XhciFirmwareHandoff::ResetlessReinit
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(true),

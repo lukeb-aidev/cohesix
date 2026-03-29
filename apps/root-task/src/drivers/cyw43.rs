@@ -40,6 +40,7 @@ const FRAME_BUF_LEN: usize = 2048;
 const CONTROL_RESPONSE_BUF_LEN: usize = 512;
 const CLM_CHUNK_SIZE: usize = 1024;
 const IOCTL_WAIT_LOOPS: usize = 8_000;
+const IOCTL_WAIT_LOOPS_NO_HT_PROBE: usize = 32_000;
 const JOIN_WAIT_LOOPS: usize = 64_000;
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
@@ -148,6 +149,29 @@ enum RxFrameResult {
     },
     Event(Cyw43Event),
     Data(HeaplessVec<u8, MAX_FRAME_LEN>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ControlPlaneTransportPromotionReason {
+    EmptyPoll,
+    MatchedReply,
+}
+
+impl ControlPlaneTransportPromotionReason {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::EmptyPoll => "empty-poll",
+            Self::MatchedReply => "matched-reply",
+        }
+    }
+
+    const fn uses_speculative_rearm(self) -> bool {
+        matches!(self, Self::EmptyPoll)
+    }
+
+    const fn commits_transport(self) -> bool {
+        matches!(self, Self::MatchedReply)
+    }
 }
 
 #[derive(Debug)]
@@ -475,30 +499,53 @@ impl Cyw43NetDevice {
 
     fn maybe_promote_control_plane_transport(
         &mut self,
-        reason: &'static str,
+        reason: ControlPlaneTransportPromotionReason,
     ) -> Result<(), DriverError> {
         let experimental_no_ht_transport = self.state.cyw43_experimental_no_ht_transport();
         if !experimental_no_ht_transport {
             return Ok(());
         }
 
+        let reason_label = reason.label();
+        let speculative_rearm = reason.uses_speculative_rearm();
+        let rearm_mode = if speculative_rearm {
+            "speculative-empty-poll"
+        } else {
+            "strict"
+        };
         let target_clock_hz =
             control_plane_data_clock_target_hz(self.state.recommended_data_clock_hz());
+        if reason.commits_transport()
+            && self.probe.bus_width == SdioBusWidth::FourBit
+            && self.probe.effective_clock_hz == target_clock_hz
+        {
+            self.state.finish_cyw43_experimental_transport_probe();
+            self.control_plane_empty_poll_streak = 0;
+            self.control_plane_empty_poll_promotion_blocked = false;
+            info!(
+                "[cyw43] control transport promote commit reason={} clock={}Hz bus_width=4 mode=already-proven",
+                reason_label, target_clock_hz
+            );
+            return Ok(());
+        }
         info!(
             "[cyw43] control transport promote reason={} target_clock={}Hz target_bus_width=4",
-            reason, target_clock_hz
+            reason_label, target_clock_hz
         );
         self.state.set_bus_width(SdioBusWidth::FourBit)?;
         let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
         if should_rearm_control_plane_transport_after_promotion(experimental_no_ht_transport) {
             info!(
-                "[cyw43] control transport promote rearm reason={} clock={}Hz bus_width=4",
-                reason, effective_clock_hz
+                "[cyw43] control transport promote rearm reason={} clock={}Hz bus_width=4 mode={}",
+                reason_label, effective_clock_hz, rearm_mode
             );
-            if let Err(err) = self.state.rearm_cyw43_control_plane_promoted_link() {
+            if let Err(err) = self
+                .state
+                .rearm_cyw43_control_plane_promoted_link(speculative_rearm)
+            {
                 warn!(
                     "[cyw43] control transport promote fallback reason={} err={}",
-                    reason, err
+                    reason_label, err
                 );
                 let startup_clock_hz = self.state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
                 self.state.set_bus_width(SdioBusWidth::OneBit)?;
@@ -506,25 +553,33 @@ impl Cyw43NetDevice {
                 self.probe.effective_clock_hz = startup_clock_hz;
                 self.probe.bus_width = SdioBusWidth::OneBit;
                 self.control_plane_empty_poll_streak = 0;
-                if reason == "empty-poll" {
+                if matches!(reason, ControlPlaneTransportPromotionReason::EmptyPoll) {
                     self.control_plane_empty_poll_promotion_blocked = true;
                 }
                 info!(
                     "[cyw43] control transport promote fallback ready reason={} clock={}Hz bus_width=1",
-                    reason, startup_clock_hz
+                    reason_label, startup_clock_hz
                 );
                 return Ok(());
             }
         }
-        self.state.finish_cyw43_experimental_transport_probe();
         self.probe.effective_clock_hz = effective_clock_hz;
         self.probe.bus_width = SdioBusWidth::FourBit;
         self.control_plane_empty_poll_streak = 0;
-        self.control_plane_empty_poll_promotion_blocked = false;
-        info!(
-            "[cyw43] control transport promote ready reason={} clock={}Hz bus_width=4",
-            reason, effective_clock_hz
-        );
+        if reason.commits_transport() {
+            self.state.finish_cyw43_experimental_transport_probe();
+            self.control_plane_empty_poll_promotion_blocked = false;
+            info!(
+                "[cyw43] control transport promote ready reason={} clock={}Hz bus_width=4",
+                reason_label, effective_clock_hz
+            );
+        } else {
+            self.control_plane_empty_poll_promotion_blocked = true;
+            info!(
+                "[cyw43] control transport promote probe reason={} clock={}Hz bus_width=4 mode={} commit=deferred",
+                reason_label, effective_clock_hz, rearm_mode
+            );
+        }
         Ok(())
     }
 
@@ -851,7 +906,8 @@ impl Cyw43NetDevice {
         cmd: u32,
         expected_id: u16,
     ) -> Result<usize, DriverError> {
-        for _ in 0..IOCTL_WAIT_LOOPS {
+        let wait_budget = ioctl_wait_loops(self.state.cyw43_experimental_no_ht_transport());
+        for _ in 0..wait_budget {
             match self.process_next_frame(false)? {
                 RxFrameResult::Control {
                     id,
@@ -859,7 +915,9 @@ impl Cyw43NetDevice {
                     response_len,
                 } if id == expected_id => {
                     self.control_plane_empty_poll_streak = 0;
-                    self.maybe_promote_control_plane_transport("matched-reply")?;
+                    self.maybe_promote_control_plane_transport(
+                        ControlPlaneTransportPromotionReason::MatchedReply,
+                    )?;
                     if status != STATUS_SUCCESS {
                         return Err(DriverError::IoctlFailed { cmd, status });
                     }
@@ -873,7 +931,9 @@ impl Cyw43NetDevice {
                         self.control_plane_empty_poll_promotion_blocked,
                         self.control_plane_empty_poll_streak,
                     ) {
-                        self.maybe_promote_control_plane_transport("empty-poll")?;
+                        self.maybe_promote_control_plane_transport(
+                            ControlPlaneTransportPromotionReason::EmptyPoll,
+                        )?;
                     }
                 }
                 RxFrameResult::Control { .. }
@@ -885,12 +945,13 @@ impl Cyw43NetDevice {
             spin_loop();
         }
         warn!(
-            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} no_ht={}",
+            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} no_ht={} wait_budget={}",
             cmd,
             expected_id,
             self.sdpcm_seq,
             self.sdpcm_seq_max,
             self.state.cyw43_experimental_no_ht_transport(),
+            wait_budget,
         );
         self.state.log_cyw43_control_plane_snapshot("ioctl-timeout");
         Err(DriverError::Protocol("ioctl-timeout"))
@@ -1305,6 +1366,15 @@ const fn should_rearm_control_plane_transport_after_promotion(
     experimental_no_ht_transport
 }
 
+#[inline]
+const fn ioctl_wait_loops(experimental_no_ht_transport: bool) -> usize {
+    if experimental_no_ht_transport {
+        IOCTL_WAIT_LOOPS_NO_HT_PROBE
+    } else {
+        IOCTL_WAIT_LOOPS
+    }
+}
+
 fn put_u16_le(buf: &mut [u8], offset: usize, value: u16) {
     if let Some(slot) = buf.get_mut(offset..offset + 2) {
         slot.copy_from_slice(&value.to_le_bytes());
@@ -1346,12 +1416,12 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        align4, bdc_payload, control_plane_data_clock_target_hz, is_transport_retryable,
-        next_control_plane_empty_poll_streak, put_u16_le,
+        align4, bdc_payload, control_plane_data_clock_target_hz, ioctl_wait_loops,
+        is_transport_retryable, next_control_plane_empty_poll_streak, put_u16_le,
         should_promote_control_plane_transport_after_empty_poll,
-        should_rearm_control_plane_transport_after_promotion,
-        CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD, EVENT_AUTH, EVENT_SET_SSID,
-        SDIO_DATA_CLOCK_HZ,
+        should_rearm_control_plane_transport_after_promotion, ControlPlaneTransportPromotionReason,
+        CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD, EVENT_AUTH, EVENT_SET_SSID, IOCTL_WAIT_LOOPS,
+        IOCTL_WAIT_LOOPS_NO_HT_PROBE, SDIO_DATA_CLOCK_HZ,
     };
     use crate::hal::HalError;
 
@@ -1439,5 +1509,27 @@ mod tests {
     fn promoted_transport_only_rearms_while_no_ht_probe_is_active() {
         assert!(should_rearm_control_plane_transport_after_promotion(true));
         assert!(!should_rearm_control_plane_transport_after_promotion(false));
+    }
+
+    #[test]
+    fn empty_poll_transport_promotion_uses_speculative_rearm() {
+        assert_eq!(
+            ControlPlaneTransportPromotionReason::EmptyPoll.label(),
+            "empty-poll"
+        );
+        assert_eq!(
+            ControlPlaneTransportPromotionReason::MatchedReply.label(),
+            "matched-reply"
+        );
+        assert!(ControlPlaneTransportPromotionReason::EmptyPoll.uses_speculative_rearm());
+        assert!(!ControlPlaneTransportPromotionReason::MatchedReply.uses_speculative_rearm());
+        assert!(!ControlPlaneTransportPromotionReason::EmptyPoll.commits_transport());
+        assert!(ControlPlaneTransportPromotionReason::MatchedReply.commits_transport());
+    }
+
+    #[test]
+    fn ioctl_wait_budget_expands_for_no_ht_probe_path() {
+        assert_eq!(ioctl_wait_loops(false), IOCTL_WAIT_LOOPS);
+        assert_eq!(ioctl_wait_loops(true), IOCTL_WAIT_LOOPS_NO_HT_PROBE);
     }
 }

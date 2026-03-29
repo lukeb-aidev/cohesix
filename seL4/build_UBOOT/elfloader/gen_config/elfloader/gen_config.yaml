@@ -1,8 +1,8 @@
 IMAGE_ELF: false
-IMAGE_BINARY: true # ElfloaderImageBinary=ON
+IMAGE_BINARY: false
 IMAGE_EFI: false
-IMAGE_UIMAGE: false
-ELFLOADER_IMAGE: "binary"
+IMAGE_UIMAGE: true # ElfloaderImageUimage=ON
+ELFLOADER_IMAGE: "uimage"
 ARM_MONITOR_HOOK: false
 GPT_PTIMER_NS_PL1_ACCESS: false
 ARM_ERRATA_764369: false
@@ -10,7 +10,7 @@ HASH_NONE: true # ElfloaderHashNone=ON
 HASH_SHA: false
 HASH_MD5: false
 HASH_INSTRUCTIONS: "hash_none"
-ELFLOADER_INCLUDE_DTB: true # ElfloaderIncludeDtb=ON
+ELFLOADER_INCLUDE_DTB: false
 ELFLOADER_ROOTSERVERS_LAST: false
 ELFLOADER_ARMV8_LEAVE_AARCH64: false
 ELFLOADER_PRECOMPILE: false

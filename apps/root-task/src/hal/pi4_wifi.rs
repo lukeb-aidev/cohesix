@@ -791,7 +791,7 @@ const fn control_plane_snapshot_uses_live_sdio_core_reads(
 
 #[inline]
 const fn experimental_no_ht_f2_fifo_chunk_limit() -> usize {
-    64
+    SDIO_FUNCTION_ENABLE_F2.block_size as usize
 }
 
 #[inline]
@@ -1827,19 +1827,23 @@ const fn sdio_function_ready_extended_settle_loops(step: SdioFunctionEnableStep)
 }
 
 #[inline]
-const fn sdio_function_ready_uses_experimental_bypass_budget(
+const fn sdio_function_ready_uses_short_probe_only_budget(
     step: SdioFunctionEnableStep,
-    allow_ready_timeout_bypass: bool,
+    budget: SdioFunctionReadyBudget,
 ) -> bool {
-    matches!(step.function, SdioFunction::Function2) && allow_ready_timeout_bypass
+    matches!(step.function, SdioFunction::Function2)
+        && matches!(
+            budget,
+            SdioFunctionReadyBudget::ExperimentalBypass | SdioFunctionReadyBudget::SpeculativeProbe
+        )
 }
 
 #[inline]
 const fn sdio_function_ready_retry_limit_for(
     step: SdioFunctionEnableStep,
-    allow_ready_timeout_bypass: bool,
+    budget: SdioFunctionReadyBudget,
 ) -> usize {
-    if sdio_function_ready_uses_experimental_bypass_budget(step, allow_ready_timeout_bypass) {
+    if sdio_function_ready_uses_short_probe_only_budget(step, budget) {
         0
     } else {
         sdio_function_ready_retry_limit(step)
@@ -1849,9 +1853,9 @@ const fn sdio_function_ready_retry_limit_for(
 #[inline]
 const fn sdio_function_ready_extended_polls_for(
     step: SdioFunctionEnableStep,
-    allow_ready_timeout_bypass: bool,
+    budget: SdioFunctionReadyBudget,
 ) -> Option<usize> {
-    if sdio_function_ready_uses_experimental_bypass_budget(step, allow_ready_timeout_bypass) {
+    if sdio_function_ready_uses_short_probe_only_budget(step, budget) {
         None
     } else {
         sdio_function_ready_extended_polls(step)
@@ -1861,12 +1865,28 @@ const fn sdio_function_ready_extended_polls_for(
 #[inline]
 const fn sdio_function_ready_extended_settle_loops_for(
     step: SdioFunctionEnableStep,
-    allow_ready_timeout_bypass: bool,
+    budget: SdioFunctionReadyBudget,
 ) -> Option<usize> {
-    if sdio_function_ready_uses_experimental_bypass_budget(step, allow_ready_timeout_bypass) {
+    if sdio_function_ready_uses_short_probe_only_budget(step, budget) {
         None
     } else {
         sdio_function_ready_extended_settle_loops(step)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioFunctionReadyBudget {
+    Strict,
+    ExperimentalBypass,
+    SpeculativeProbe,
+}
+
+#[inline]
+const fn sdio_function_ready_budget_name(budget: SdioFunctionReadyBudget) -> &'static str {
+    match budget {
+        SdioFunctionReadyBudget::Strict => "strict",
+        SdioFunctionReadyBudget::ExperimentalBypass => "experimental-bypass",
+        SdioFunctionReadyBudget::SpeculativeProbe => "speculative-probe",
     }
 }
 
@@ -1875,13 +1895,44 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
     step: SdioFunctionEnableStep,
     desired: u8,
     ready: u8,
-    allow_ready_timeout_bypass: bool,
+    budget: SdioFunctionReadyBudget,
 ) -> bool {
-    allow_ready_timeout_bypass
+    matches!(budget, SdioFunctionReadyBudget::ExperimentalBypass)
         && matches!(step.function, SdioFunction::Function2)
         && (desired & step.enable_bit) == step.enable_bit
         && (ready & SDIO_FUNC_READY_1) == SDIO_FUNC_READY_1
         && (ready & step.ready_bit) == 0
+}
+
+#[inline]
+const fn control_plane_promote_rearm_mode_name(speculative_ready_probe: bool) -> &'static str {
+    if speculative_ready_probe {
+        "speculative-empty-poll"
+    } else {
+        "strict"
+    }
+}
+
+#[inline]
+const fn control_plane_promote_rearm_budget(
+    speculative_ready_probe: bool,
+) -> SdioFunctionReadyBudget {
+    if speculative_ready_probe {
+        SdioFunctionReadyBudget::SpeculativeProbe
+    } else {
+        SdioFunctionReadyBudget::Strict
+    }
+}
+
+#[inline]
+const fn sdio_function_ready_budget_for_bypass(
+    allow_ready_timeout_bypass: bool,
+) -> SdioFunctionReadyBudget {
+    if allow_ready_timeout_bypass {
+        SdioFunctionReadyBudget::ExperimentalBypass
+    } else {
+        SdioFunctionReadyBudget::Strict
+    }
 }
 
 pub struct Pi4WifiState {
@@ -2061,8 +2112,12 @@ impl Pi4WifiState {
         self.host.finish_experimental_transport_probe();
     }
 
-    pub fn rearm_cyw43_control_plane_promoted_link(&mut self) -> Result<(), HalError> {
-        self.host.rearm_firmware_channel_after_transport_promotion()
+    pub fn rearm_cyw43_control_plane_promoted_link(
+        &mut self,
+        speculative_ready_probe: bool,
+    ) -> Result<(), HalError> {
+        self.host
+            .rearm_firmware_channel_after_transport_promotion(speculative_ready_probe)
     }
 
     pub fn rearm_cyw43_control_plane_slow_link(&mut self) -> Result<(), HalError> {
@@ -2770,7 +2825,9 @@ impl SdioHost {
         self.refresh_transport_phase_for("slow-link-channel-rearm")?;
         let mut attempt = 0usize;
         loop {
-            match self.rearm_firmware_channel_once(true) {
+            match self
+                .rearm_firmware_channel_once(SdioFunctionReadyBudget::ExperimentalBypass, true)
+            {
                 Ok(()) => {
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage=slow-link-channel-rearm action=ready"
@@ -2800,7 +2857,9 @@ impl SdioHost {
         self.refresh_transport_phase_for("control-plane-post-write-rearm")?;
         let mut attempt = 0usize;
         loop {
-            match self.rearm_firmware_channel_once(true) {
+            match self
+                .rearm_firmware_channel_once(SdioFunctionReadyBudget::ExperimentalBypass, true)
+            {
                 Ok(()) => {
                     self.experimental_control_plane_reply_rearm_mode =
                         control_plane_reply_rearm_startup_link();
@@ -2826,30 +2885,39 @@ impl SdioHost {
         }
     }
 
-    fn rearm_firmware_channel_after_transport_promotion(&mut self) -> Result<(), HalError> {
+    fn rearm_firmware_channel_after_transport_promotion(
+        &mut self,
+        speculative_ready_probe: bool,
+    ) -> Result<(), HalError> {
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=control-plane-promote-rearm action=begin current={}Hz width={}",
+            "[pi4-wifi] firmware stage=control-plane-promote-rearm action=begin current={}Hz width={} mode={}",
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
+            control_plane_promote_rearm_mode_name(speculative_ready_probe),
         ));
         self.refresh_transport_phase_for("control-plane-promote-rearm")?;
         let mut attempt = 0usize;
         loop {
-            match self.rearm_firmware_channel_once(false) {
+            match self.rearm_firmware_channel_once(
+                control_plane_promote_rearm_budget(speculative_ready_probe),
+                false,
+            ) {
                 Ok(()) => {
                     self.experimental_control_plane_reply_rearm_mode =
                         control_plane_reply_rearm_promoted_link();
                     self.experimental_control_plane_reply_rearm_attempts = 0;
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-promote-rearm action=ready"
+                        "[pi4-wifi] firmware stage=control-plane-promote-rearm action=ready mode={}",
+                        control_plane_promote_rearm_mode_name(speculative_ready_probe),
                     ));
                     self.log_control_plane_finish_snapshot("control-plane-promote-rearm-ready");
                     return Ok(());
                 }
                 Err(err) if firmware_phase_can_retry(&err, attempt) => {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-promote-rearm attempt={} err={err} action=recover-retry",
-                        attempt + 1
+                        "[pi4-wifi] firmware stage=control-plane-promote-rearm attempt={} err={err} action=recover-retry mode={}",
+                        attempt + 1,
+                        control_plane_promote_rearm_mode_name(speculative_ready_probe),
                     ));
                     self.recover_command_path_and_refresh_transport("control-plane-promote-rearm")?;
                     attempt += 1;
@@ -2899,7 +2967,7 @@ impl SdioHost {
             self.experimental_no_ht_transport,
         ));
         if promoted_rearm {
-            self.rearm_firmware_channel_after_transport_promotion()?;
+            self.rearm_firmware_channel_after_transport_promotion(false)?;
         } else {
             self.rearm_firmware_channel_after_first_control_write()?;
         }
@@ -2924,20 +2992,21 @@ impl SdioHost {
 
     fn rearm_firmware_channel_once(
         &mut self,
-        allow_ready_timeout_bypass: bool,
+        function2_ready_budget: SdioFunctionReadyBudget,
+        allow_setup_write_bypass: bool,
     ) -> Result<(), HalError> {
-        self.enable_function2(allow_ready_timeout_bypass)?;
+        self.enable_function2(function2_ready_budget)?;
         self.write_sdio_core_u32_for_firmware_channel(
             "slow-link-channel-rearm-mailbox-version",
             SDPCMD_REG_TOSBMAILBOXDATA,
             SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT,
-            allow_ready_timeout_bypass,
+            allow_setup_write_bypass,
         )?;
         self.write_sdio_core_u32_for_firmware_channel(
             "slow-link-channel-rearm-hostintmask",
             SDPCMD_REG_HOSTINTMASK,
             HOSTINTMASK,
-            allow_ready_timeout_bypass,
+            allow_setup_write_bypass,
         )?;
         self.io_direct_write(
             SdioFunction::Function1,
@@ -3502,7 +3571,7 @@ impl SdioHost {
     fn enable_function1(&mut self) -> Result<(), HalError> {
         emit_breadcrumb(format_args!("[pi4-wifi] sdio enable-function1 begin"));
         self.read_function_enable_state("before-f1")?;
-        self.enable_function_step(SDIO_FUNCTION_ENABLE_F1, false)?;
+        self.enable_function_step(SDIO_FUNCTION_ENABLE_F1, SdioFunctionReadyBudget::Strict)?;
         let (ioex, ready) = self.read_function_enable_state("after-f1")?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] sdio enable-function1 ready ioex=0x{ioex:02x} ready=0x{ready:02x}"
@@ -3510,10 +3579,13 @@ impl SdioHost {
         Ok(())
     }
 
-    fn enable_function2(&mut self, allow_ready_timeout_bypass: bool) -> Result<(), HalError> {
+    fn enable_function2(
+        &mut self,
+        function_ready_budget: SdioFunctionReadyBudget,
+    ) -> Result<(), HalError> {
         emit_breadcrumb(format_args!("[pi4-wifi] sdio enable-function2 begin"));
         self.read_function_enable_state("before-f2")?;
-        self.enable_function_step(SDIO_FUNCTION_ENABLE_F2, allow_ready_timeout_bypass)?;
+        self.enable_function_step(SDIO_FUNCTION_ENABLE_F2, function_ready_budget)?;
         let ien = SDIO_CCCR_IEN_FUNC0 | SDIO_CCCR_IEN_FUNC1 | SDIO_CCCR_IEN_FUNC2;
         self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_IENX, ien)?;
         let (ioex, ready) = self.read_function_enable_state("after-f2")?;
@@ -3526,7 +3598,7 @@ impl SdioHost {
     fn enable_function_step(
         &mut self,
         step: SdioFunctionEnableStep,
-        allow_ready_timeout_bypass: bool,
+        function_ready_budget: SdioFunctionReadyBudget,
     ) -> Result<(), HalError> {
         let function_number = step.function.number();
         let ioex_before = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
@@ -3550,13 +3622,12 @@ impl SdioHost {
 
         let ready_stage = sdio_function_ready_transport_stage(step);
         let mut last_ready = ready_before;
-        let use_experimental_bypass_budget =
-            sdio_function_ready_uses_experimental_bypass_budget(step, allow_ready_timeout_bypass);
-        // On the no-HT experimental path, Function 2 can keep the transport
-        // moving even when IORX never asserts. Keep the short readiness probe,
-        // but skip the long Linux-style dwell/retry before the existing
-        // continue-without-ready path takes over.
-        for attempt in 0..=sdio_function_ready_retry_limit_for(step, allow_ready_timeout_bypass) {
+        let use_short_probe_only_budget =
+            sdio_function_ready_uses_short_probe_only_budget(step, function_ready_budget);
+        // Function 2 uses one of three readiness policies: strict Linux-style
+        // dwell/retry, a short speculative probe that fails fast, or the
+        // existing no-HT experimental bypass that continues without IORX.
+        for attempt in 0..=sdio_function_ready_retry_limit_for(step, function_ready_budget) {
             if let Some(stage) = ready_stage {
                 if attempt == 0 {
                     emit_breadcrumb(format_args!(
@@ -3614,11 +3685,8 @@ impl SdioHost {
                 self.log_function_ready_timeout_state(step, desired, last_ready, attempt);
                 if !used_extended_budget {
                     if let (Some(extended_polls), Some(extended_settle_loops)) = (
-                        sdio_function_ready_extended_polls_for(step, allow_ready_timeout_bypass),
-                        sdio_function_ready_extended_settle_loops_for(
-                            step,
-                            allow_ready_timeout_bypass,
-                        ),
+                        sdio_function_ready_extended_polls_for(step, function_ready_budget),
+                        sdio_function_ready_extended_settle_loops_for(step, function_ready_budget),
                     ) {
                         emit_breadcrumb(format_args!(
                             "[pi4-wifi] sdio function-ready fn={} action=linux-f2-extended-wait polls={} settle_loops={}",
@@ -3629,10 +3697,11 @@ impl SdioHost {
                         used_extended_budget = true;
                         continue;
                     }
-                    if use_experimental_bypass_budget {
+                    if use_short_probe_only_budget {
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] sdio function-ready fn={} action=skip-linux-f2-extended-wait reason=experimental-bypass",
-                            function_number
+                            "[pi4-wifi] sdio function-ready fn={} action=skip-linux-f2-extended-wait reason={}",
+                            function_number,
+                            sdio_function_ready_budget_name(function_ready_budget),
                         ));
                     }
                 }
@@ -3643,7 +3712,7 @@ impl SdioHost {
             step,
             desired,
             last_ready,
-            allow_ready_timeout_bypass,
+            function_ready_budget,
         ) {
             if let Some(stage) = ready_stage {
                 self.refresh_transport_phase_for(stage)?;
@@ -3734,7 +3803,9 @@ impl SdioHost {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=setup-firmware-channel action=experimental-function2-first"
             ));
-            self.enable_function2(allow_function2_ready_bypass)?;
+            self.enable_function2(sdio_function_ready_budget_for_bypass(
+                allow_function2_ready_bypass,
+            ))?;
         }
         self.write_sdio_core_u32_for_firmware_channel(
             "setup-firmware-channel-mailbox-version",
@@ -3743,7 +3814,9 @@ impl SdioHost {
             allow_function2_ready_bypass,
         )?;
         if !experimental_order {
-            self.enable_function2(allow_function2_ready_bypass)?;
+            self.enable_function2(sdio_function_ready_budget_for_bypass(
+                allow_function2_ready_bypass,
+            ))?;
         }
         self.write_sdio_core_u32_for_firmware_channel(
             "setup-firmware-channel-hostintmask",
@@ -4870,7 +4943,7 @@ impl SdioHost {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=repoll"
             ));
-            self.enable_function2(true)?;
+            self.enable_function2(SdioFunctionReadyBudget::ExperimentalBypass)?;
         }
         emit_breadcrumb(format_args!("[pi4-wifi] firmware load ready"));
         Ok(())
@@ -6953,10 +7026,10 @@ mod tests {
         backplane_transfer_function_addr, backplane_window_base, backplane_window_register_bytes,
         backplane_window_reprogram_needed, backplane_word_function_addr, bcm2711_gpfsel_offset,
         bcm2711_puppdn_offset, clear_reset_keepalive_chunk_loops, cmd52_argument,
-        control_plane_reply_rearm_attempts_after_rearm, control_plane_reply_rearm_mode_name,
-        control_plane_reply_rearm_none, control_plane_reply_rearm_pending,
-        control_plane_reply_rearm_promoted_link, control_plane_reply_rearm_startup_link,
-        control_plane_reply_rearm_uses_promoted_link,
+        control_plane_promote_rearm_mode_name, control_plane_reply_rearm_attempts_after_rearm,
+        control_plane_reply_rearm_mode_name, control_plane_reply_rearm_none,
+        control_plane_reply_rearm_pending, control_plane_reply_rearm_promoted_link,
+        control_plane_reply_rearm_startup_link, control_plane_reply_rearm_uses_promoted_link,
         control_plane_snapshot_uses_live_sdio_core_reads,
         control_plane_zero_frame_needs_reply_rearm, core_ctrl_access_mode_label,
         core_ctrl_current_window_addr, core_ctrl_postreset_access_mode_label,
@@ -6975,15 +7048,16 @@ mod tests {
         sdio_core_transfer_increment_addr, sdio_function_ready_extended_polls,
         sdio_function_ready_extended_polls_for, sdio_function_ready_extended_settle_loops,
         sdio_function_ready_extended_settle_loops_for, sdio_function_ready_retry_limit_for,
-        sdio_function_ready_uses_experimental_bypass_budget, sdio_transfer_addr,
-        sdio_transfer_plan, setup_firmware_channel_can_assume_write_committed,
+        sdio_function_ready_timeout_can_continue_experimentally,
+        sdio_function_ready_uses_short_probe_only_budget, sdio_transfer_addr, sdio_transfer_plan,
+        setup_firmware_channel_can_assume_write_committed,
         setup_firmware_channel_uses_experimental_order, should_log_firmware_upload_progress,
         should_log_sdio_transfer_chunk, transport_phase_chipclk_value,
         update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
-        SdioFunction, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL, AI_IOCTRL_BIT_CLOCK_EN,
-        AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET, AI_RESETCTRL_BIT_RESET, ARMCR4_BCMA_IOCTL_CPUHALT,
-        ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BACKPLANE_ADDRESS_MASK, BACKPLANE_WINDOW_MASK,
-        BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE,
+        SdioFunction, SdioFunctionReadyBudget, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL,
+        AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET, AI_RESETCTRL_BIT_RESET,
+        ARMCR4_BCMA_IOCTL_CPUHALT, ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BACKPLANE_ADDRESS_MASK,
+        BACKPLANE_WINDOW_MASK, BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE,
         CYW43_CONTROL_PLANE_CLOCK_HZ, CYW43_FIRMWARE_BULK_CLOCK_HZ,
         CYW43_FIRMWARE_PROGRESS_INTERVAL, CYW43_RAM_BASE_4345,
         CYW43_SOCRAM_CLEAR_RESET_KEEPALIVE_CHUNK_LOOPS, CYW43_SOCRAM_CORE_BASE,
@@ -7165,11 +7239,12 @@ mod tests {
     }
 
     #[test]
-    fn experimental_function2_fifo_chunk_limit_uses_smaller_byte_mode_chunks_on_no_ht_fifo_path() {
+    fn experimental_function2_fifo_chunk_limit_uses_function2_block_chunks_on_no_ht_fifo_path() {
         assert_eq!(
             experimental_function2_fifo_chunk_limit(SdioFunction::Function2, false, true),
             experimental_no_ht_f2_fifo_chunk_limit()
         );
+        assert_eq!(experimental_no_ht_f2_fifo_chunk_limit(), 512);
         assert_eq!(
             experimental_function2_fifo_chunk_limit(SdioFunction::Function2, true, true),
             SDIO_MAX_BYTE_MODE
@@ -7289,6 +7364,15 @@ mod tests {
             "promoted-link"
         );
         assert_eq!(control_plane_reply_rearm_mode_name(99), "none");
+    }
+
+    #[test]
+    fn control_plane_promote_rearm_mode_names_are_stable() {
+        assert_eq!(control_plane_promote_rearm_mode_name(false), "strict");
+        assert_eq!(
+            control_plane_promote_rearm_mode_name(true),
+            "speculative-empty-poll"
+        );
     }
 
     #[test]
@@ -8056,45 +8140,97 @@ mod tests {
     }
 
     #[test]
-    fn function2_ready_budget_skips_extended_wait_on_experimental_bypass_path() {
-        assert!(sdio_function_ready_uses_experimental_bypass_budget(
+    fn function2_ready_budget_short_probe_paths_skip_extended_wait() {
+        assert!(sdio_function_ready_uses_short_probe_only_budget(
             SDIO_FUNCTION_ENABLE_F2,
-            true,
+            SdioFunctionReadyBudget::ExperimentalBypass,
+        ));
+        assert!(sdio_function_ready_uses_short_probe_only_budget(
+            SDIO_FUNCTION_ENABLE_F2,
+            SdioFunctionReadyBudget::SpeculativeProbe,
         ));
         assert_eq!(
-            sdio_function_ready_retry_limit_for(SDIO_FUNCTION_ENABLE_F2, true),
+            sdio_function_ready_retry_limit_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::ExperimentalBypass
+            ),
             0
         );
         assert_eq!(
-            sdio_function_ready_extended_polls_for(SDIO_FUNCTION_ENABLE_F2, true),
+            sdio_function_ready_retry_limit_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::SpeculativeProbe
+            ),
+            0
+        );
+        assert_eq!(
+            sdio_function_ready_extended_polls_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::ExperimentalBypass
+            ),
             None
         );
         assert_eq!(
-            sdio_function_ready_extended_settle_loops_for(SDIO_FUNCTION_ENABLE_F2, true),
+            sdio_function_ready_extended_polls_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::SpeculativeProbe
+            ),
             None
         );
         assert_eq!(
-            sdio_function_ready_retry_limit_for(SDIO_FUNCTION_ENABLE_F2, false),
+            sdio_function_ready_extended_settle_loops_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::ExperimentalBypass
+            ),
+            None
+        );
+        assert_eq!(
+            sdio_function_ready_extended_settle_loops_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::SpeculativeProbe
+            ),
+            None
+        );
+        assert_eq!(
+            sdio_function_ready_retry_limit_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::Strict
+            ),
             SDIO_FUNCTION2_READY_RETRY_LIMIT
         );
         assert_eq!(
-            sdio_function_ready_extended_polls_for(SDIO_FUNCTION_ENABLE_F2, false),
+            sdio_function_ready_extended_polls_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::Strict
+            ),
             Some(SDIO_FUNCTION_READY_POLLS_FUNCTION2_EXTENDED)
         );
         assert_eq!(
-            sdio_function_ready_extended_settle_loops_for(SDIO_FUNCTION_ENABLE_F2, false),
+            sdio_function_ready_extended_settle_loops_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::Strict
+            ),
             Some(SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_EXTENDED)
         );
         assert_eq!(
-            sdio_function_ready_retry_limit_for(SDIO_FUNCTION_ENABLE_F1, true),
+            sdio_function_ready_retry_limit_for(
+                SDIO_FUNCTION_ENABLE_F1,
+                SdioFunctionReadyBudget::ExperimentalBypass
+            ),
             0
         );
         assert_eq!(
-            sdio_function_ready_extended_polls_for(SDIO_FUNCTION_ENABLE_F1, true),
+            sdio_function_ready_extended_polls_for(
+                SDIO_FUNCTION_ENABLE_F1,
+                SdioFunctionReadyBudget::ExperimentalBypass
+            ),
             None
         );
         assert_eq!(
-            sdio_function_ready_extended_settle_loops_for(SDIO_FUNCTION_ENABLE_F1, true),
+            sdio_function_ready_extended_settle_loops_for(
+                SDIO_FUNCTION_ENABLE_F1,
+                SdioFunctionReadyBudget::ExperimentalBypass
+            ),
             None
         );
     }
@@ -8106,31 +8242,37 @@ mod tests {
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,
-            true,
+            SdioFunctionReadyBudget::ExperimentalBypass,
         ));
         assert!(!sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             0,
-            true,
+            SdioFunctionReadyBudget::ExperimentalBypass,
         ));
         assert!(!sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2,
-            true,
+            SdioFunctionReadyBudget::ExperimentalBypass,
         ));
         assert!(!sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F1,
             SDIO_FUNC_ENABLE_1,
             SDIO_FUNC_READY_1,
-            true,
+            SdioFunctionReadyBudget::ExperimentalBypass,
         ));
         assert!(!sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,
-            false,
+            SdioFunctionReadyBudget::Strict,
+        ));
+        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
+            SDIO_FUNCTION_ENABLE_F2,
+            desired,
+            SDIO_FUNC_READY_1,
+            SdioFunctionReadyBudget::SpeculativeProbe,
         ));
     }
 
