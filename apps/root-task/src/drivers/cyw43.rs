@@ -43,6 +43,7 @@ const IOCTL_WAIT_LOOPS: usize = 8_000;
 const JOIN_WAIT_LOOPS: usize = 64_000;
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
+const CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD: u8 = 4;
 
 const CHANNEL_CONTROL: u8 = 0;
 const CHANNEL_EVENT: u8 = 1;
@@ -301,6 +302,8 @@ pub struct Cyw43NetDevice {
     sdpcm_seq_max: u8,
     ioctl_id: u16,
     link_up: bool,
+    control_plane_empty_poll_streak: u8,
+    control_plane_empty_poll_promotion_blocked: bool,
     rx_frame: [u8; FRAME_BUF_LEN],
     tx_frame: [u8; FRAME_BUF_LEN],
     control_response: [u8; CONTROL_RESPONSE_BUF_LEN],
@@ -418,6 +421,8 @@ impl Cyw43NetDevice {
             sdpcm_seq_max: 1,
             ioctl_id: 0,
             link_up: false,
+            control_plane_empty_poll_streak: 0,
+            control_plane_empty_poll_promotion_blocked: false,
             rx_frame: [0; FRAME_BUF_LEN],
             tx_frame: [0; FRAME_BUF_LEN],
             control_response: [0; CONTROL_RESPONSE_BUF_LEN],
@@ -468,25 +473,57 @@ impl Cyw43NetDevice {
         Ok(())
     }
 
-    fn maybe_promote_control_plane_transport(&mut self) -> Result<(), DriverError> {
-        if !self.state.cyw43_experimental_no_ht_transport() {
+    fn maybe_promote_control_plane_transport(
+        &mut self,
+        reason: &'static str,
+    ) -> Result<(), DriverError> {
+        let experimental_no_ht_transport = self.state.cyw43_experimental_no_ht_transport();
+        if !experimental_no_ht_transport {
             return Ok(());
         }
 
         let target_clock_hz =
             control_plane_data_clock_target_hz(self.state.recommended_data_clock_hz());
         info!(
-            "[cyw43] control transport promote target_clock={}Hz target_bus_width=4",
-            target_clock_hz
+            "[cyw43] control transport promote reason={} target_clock={}Hz target_bus_width=4",
+            reason, target_clock_hz
         );
         self.state.set_bus_width(SdioBusWidth::FourBit)?;
         let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
+        if should_rearm_control_plane_transport_after_promotion(experimental_no_ht_transport) {
+            info!(
+                "[cyw43] control transport promote rearm reason={} clock={}Hz bus_width=4",
+                reason, effective_clock_hz
+            );
+            if let Err(err) = self.state.rearm_cyw43_control_plane_promoted_link() {
+                warn!(
+                    "[cyw43] control transport promote fallback reason={} err={}",
+                    reason, err
+                );
+                let startup_clock_hz = self.state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
+                self.state.set_bus_width(SdioBusWidth::OneBit)?;
+                self.state.rearm_cyw43_control_plane_slow_link()?;
+                self.probe.effective_clock_hz = startup_clock_hz;
+                self.probe.bus_width = SdioBusWidth::OneBit;
+                self.control_plane_empty_poll_streak = 0;
+                if reason == "empty-poll" {
+                    self.control_plane_empty_poll_promotion_blocked = true;
+                }
+                info!(
+                    "[cyw43] control transport promote fallback ready reason={} clock={}Hz bus_width=1",
+                    reason, startup_clock_hz
+                );
+                return Ok(());
+            }
+        }
         self.state.finish_cyw43_experimental_transport_probe();
         self.probe.effective_clock_hz = effective_clock_hz;
         self.probe.bus_width = SdioBusWidth::FourBit;
+        self.control_plane_empty_poll_streak = 0;
+        self.control_plane_empty_poll_promotion_blocked = false;
         info!(
-            "[cyw43] control transport promote ready clock={}Hz bus_width=4",
-            effective_clock_hz
+            "[cyw43] control transport promote ready reason={} clock={}Hz bus_width=4",
+            reason, effective_clock_hz
         );
         Ok(())
     }
@@ -821,16 +858,29 @@ impl Cyw43NetDevice {
                     status,
                     response_len,
                 } if id == expected_id => {
-                    self.maybe_promote_control_plane_transport()?;
+                    self.control_plane_empty_poll_streak = 0;
+                    self.maybe_promote_control_plane_transport("matched-reply")?;
                     if status != STATUS_SUCCESS {
                         return Err(DriverError::IoctlFailed { cmd, status });
                     }
                     return Ok(response_len);
                 }
-                RxFrameResult::None
-                | RxFrameResult::Control { .. }
+                RxFrameResult::None => {
+                    self.control_plane_empty_poll_streak =
+                        next_control_plane_empty_poll_streak(self.control_plane_empty_poll_streak);
+                    if should_promote_control_plane_transport_after_empty_poll(
+                        self.state.cyw43_experimental_no_ht_transport(),
+                        self.control_plane_empty_poll_promotion_blocked,
+                        self.control_plane_empty_poll_streak,
+                    ) {
+                        self.maybe_promote_control_plane_transport("empty-poll")?;
+                    }
+                }
+                RxFrameResult::Control { .. }
                 | RxFrameResult::Event(_)
-                | RxFrameResult::Data(_) => {}
+                | RxFrameResult::Data(_) => {
+                    self.control_plane_empty_poll_streak = 0;
+                }
             }
             spin_loop();
         }
@@ -1233,6 +1283,28 @@ const fn control_plane_data_clock_target_hz(recommended_data_clock_hz: u32) -> u
     }
 }
 
+#[inline]
+const fn next_control_plane_empty_poll_streak(empty_poll_streak: u8) -> u8 {
+    empty_poll_streak.saturating_add(1)
+}
+
+const fn should_promote_control_plane_transport_after_empty_poll(
+    experimental_no_ht_transport: bool,
+    empty_poll_promotion_blocked: bool,
+    empty_poll_streak: u8,
+) -> bool {
+    experimental_no_ht_transport
+        && !empty_poll_promotion_blocked
+        && empty_poll_streak >= CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD
+}
+
+#[inline]
+const fn should_rearm_control_plane_transport_after_promotion(
+    experimental_no_ht_transport: bool,
+) -> bool {
+    experimental_no_ht_transport
+}
+
 fn put_u16_le(buf: &mut [u8], offset: usize, value: u16) {
     if let Some(slot) = buf.get_mut(offset..offset + 2) {
         slot.copy_from_slice(&value.to_le_bytes());
@@ -1275,7 +1347,11 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 mod tests {
     use super::{
         align4, bdc_payload, control_plane_data_clock_target_hz, is_transport_retryable,
-        put_u16_le, EVENT_AUTH, EVENT_SET_SSID, SDIO_DATA_CLOCK_HZ,
+        next_control_plane_empty_poll_streak, put_u16_le,
+        should_promote_control_plane_transport_after_empty_poll,
+        should_rearm_control_plane_transport_after_promotion,
+        CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD, EVENT_AUTH, EVENT_SET_SSID,
+        SDIO_DATA_CLOCK_HZ,
     };
     use crate::hal::HalError;
 
@@ -1331,5 +1407,37 @@ mod tests {
             control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ * 2),
             SDIO_DATA_CLOCK_HZ
         );
+    }
+
+    #[test]
+    fn empty_reply_poll_promotion_is_bounded_and_blockable() {
+        let ready_streak =
+            next_control_plane_empty_poll_streak(CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD - 1);
+        assert!(should_promote_control_plane_transport_after_empty_poll(
+            true,
+            false,
+            ready_streak,
+        ));
+        assert!(!should_promote_control_plane_transport_after_empty_poll(
+            true,
+            false,
+            CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD - 1,
+        ));
+        assert!(!should_promote_control_plane_transport_after_empty_poll(
+            true,
+            true,
+            ready_streak,
+        ));
+        assert!(!should_promote_control_plane_transport_after_empty_poll(
+            false,
+            false,
+            ready_streak,
+        ));
+    }
+
+    #[test]
+    fn promoted_transport_only_rearms_while_no_ht_probe_is_active() {
+        assert!(should_rearm_control_plane_transport_after_promotion(true));
+        assert!(!should_rearm_control_plane_transport_after_promotion(false));
     }
 }

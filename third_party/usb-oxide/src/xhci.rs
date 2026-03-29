@@ -290,6 +290,22 @@ const fn defer_erdp_publish_with_snapshot(
 }
 
 #[inline(always)]
+const fn defer_erst_publish_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn use_atomic_erstba_publish_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn probe_live_dcbaap_before_staged_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
@@ -991,6 +1007,14 @@ impl<H: Dma> XhciCtrl<H> {
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
         );
+        let defer_erst_publish = defer_erst_publish_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        );
+        let atomic_erstba_publish = use_atomic_erstba_publish_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        );
         let defer_erdp_publish = defer_erdp_publish_with_snapshot(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -1350,6 +1374,12 @@ impl<H: Dma> XhciCtrl<H> {
         let event_ring = self.event_ring.lock();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         let (event_ring_phys, erst_phys) = event_ring.share_for_device(&*self.host)?;
+        let staged_current_erst_size = trusted_runtime_seed_snapshot
+            .and_then(|snapshot| snapshot.erstsz0)
+            .unwrap_or(0);
+        let staged_current_erstba = trusted_runtime_seed_snapshot
+            .and_then(|snapshot| snapshot.erstba0)
+            .unwrap_or(0);
         let staged_current_erdp = trusted_runtime_seed_snapshot
             .and_then(|snapshot| snapshot.erdp0)
             .unwrap_or(0);
@@ -1386,14 +1416,7 @@ impl<H: Dma> XhciCtrl<H> {
         let (current_erst_size, current_erstba) = if preserve_firmware_state {
             (0, 0)
         } else if !live_post_reset_seed_reads {
-            (
-                trusted_runtime_seed_snapshot
-                    .and_then(|snapshot| snapshot.erstsz0)
-                    .unwrap_or(0),
-                trusted_runtime_seed_snapshot
-                    .and_then(|snapshot| snapshot.erstba0)
-                    .unwrap_or(0),
-            )
+            (staged_current_erst_size, staged_current_erstba)
         } else {
             emit_xhci_diag(
                 0x026d,
@@ -1415,7 +1438,6 @@ impl<H: Dma> XhciCtrl<H> {
             1,
         );
         emit_xhci_diag(0x0264, (int_base + reg::ERSTSZ) as u64, erst_size as u64, 0);
-        self.write_reg(int_base + reg::ERSTSZ, erst_size);
         let erstba = compose_erst_base(
             if preserve_firmware_state || !live_post_reset_seed_reads {
                 0
@@ -1425,23 +1447,89 @@ impl<H: Dma> XhciCtrl<H> {
             erst_phys,
         );
         emit_xhci_diag(0x0265, (int_base + reg::ERSTBA) as u64, erstba, 0);
-        if atomic_runtime_ring_publish {
-            emit_xhci_diag(0x0299, (int_base + reg::ERSTBA) as u64, erstba, 0);
-            Self::write_reg_u64_atomic_diag_at(
-                self.mmio,
-                int_base + reg::ERSTBA,
+        if defer_erst_publish {
+            emit_xhci_diag(
+                0x02c0,
+                (int_base + reg::ERSTSZ) as u64,
+                erst_size as u64,
+                staged_current_erst_size as u64,
+            );
+            emit_xhci_diag(
+                0x02c1,
+                (int_base + reg::ERSTBA) as u64,
                 erstba,
-                0x029a,
-                0x029b,
+                staged_current_erstba,
             );
         } else {
-            self.write_reg_u64_diag(int_base + reg::ERSTBA, erstba, 0x026e, 0x026f);
+            self.write_reg(int_base + reg::ERSTSZ, erst_size);
+            if atomic_runtime_ring_publish {
+                emit_xhci_diag(0x0299, (int_base + reg::ERSTBA) as u64, erstba, 0);
+                Self::write_reg_u64_atomic_diag_at(
+                    self.mmio,
+                    int_base + reg::ERSTBA,
+                    erstba,
+                    0x029a,
+                    0x029b,
+                );
+            } else {
+                self.write_reg_u64_diag(int_base + reg::ERSTBA, erstba, 0x026e, 0x026f);
+            }
+        }
+        if defer_erst_publish {
+            // The trusted mailbox-reset snapshot path no longer lets ERSTSZ /
+            // ERSTBA become the first live runtime event-ring ownership
+            // stores. Publish ERSTBA first so the controller never observes a
+            // non-zero ERSTSZ while the event-ring table base is still staged
+            // at the bootloader snapshot value. The split low/high ERSTBA
+            // replay still wedges VL805 on the first live low-dword publish,
+            // so switch just this edge to a single 64-bit MMIO transaction.
+            emit_xhci_diag(
+                0x02c5,
+                (int_base + reg::ERSTBA) as u64,
+                staged_current_erstba,
+                erstba,
+            );
+            if atomic_erstba_publish {
+                Self::write_reg_u64_atomic_diag_at(
+                    self.mmio,
+                    int_base + reg::ERSTBA,
+                    erstba,
+                    0x02c6,
+                    0x02c7,
+                );
+            } else {
+                Self::write_reg_u64_done_diag_at(
+                    self.mmio,
+                    int_base + reg::ERSTBA,
+                    erstba,
+                    0x02c6,
+                    0x02c7,
+                    0x02c8,
+                    0x02c9,
+                );
+            }
+            emit_xhci_diag(0x02ca, reg::ERSTBA as u64, erstba, 1);
+            emit_xhci_diag(
+                0x02c2,
+                (int_base + reg::ERSTSZ) as u64,
+                staged_current_erst_size as u64,
+                erst_size as u64,
+            );
+            Self::write_reg_u32_store_diag_at(
+                self.mmio,
+                int_base + reg::ERSTSZ,
+                erst_size,
+                0x02c3,
+                0x02c4,
+                staged_current_erst_size as u64,
+            );
         }
         if defer_erdp_publish {
-            // The trusted mailbox-reset snapshot path no longer lets ERDP be
-            // the first live runtime event-ring ownership store. Program ERST
-            // first, then publish ERDP with the same staged low/high breadcrumbs
-            // used for the later runtime ring registers.
+            // The trusted mailbox-reset snapshot path no longer lets ERSTSZ /
+            // ERSTBA / ERDP become the first live runtime event-ring
+            // ownership stores. Publish the table first, then hand ERDP to
+            // the controller with the same staged low/high breadcrumbs used
+            // for the later runtime ring registers.
             Self::write_reg_u64_done_diag_at(
                 self.mmio,
                 int_base + reg::ERDP,
@@ -2273,7 +2361,7 @@ mod tests {
     use super::{
         compose_config, compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
         defer_crcr_publish_with_snapshot, defer_dcbaap_publish_with_snapshot,
-        defer_erdp_publish_with_snapshot,
+        defer_erdp_publish_with_snapshot, defer_erst_publish_with_snapshot,
         defer_scratchpad_array_publish_with_snapshot,
         halt_revalidation_needed, masked_usbcmd, parse_controller_params, polling_iman_value,
         port_ready_for_enumeration, preserve_firmware_handoff_config,
@@ -2286,7 +2374,8 @@ mod tests {
         skip_live_halt_revalidation_with_snapshot, skip_live_post_reset_verification_readbacks,
         skip_post_reset_cnr_poll_with_snapshot, skip_preinit_polling_scrub, skip_reset_during_init,
         skip_reset_during_init_with_snapshot, split_u64_reg_write_ops, u64_register_change_mask,
-        use_atomic_runtime_ring_publish_with_snapshot, use_live_config_seed_reads,
+        use_atomic_erstba_publish_with_snapshot, use_atomic_runtime_ring_publish_with_snapshot,
+        use_live_config_seed_reads,
         use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
         use_live_post_reset_seed_reads_with_snapshot, XhciControllerParams, XhciFirmwareHandoff,
         XhciRuntimeSeedSnapshot, SKIP_HCRST_DURING_INIT,
@@ -2357,6 +2446,10 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
+        assert!(use_atomic_erstba_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
         assert!(skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
@@ -2400,6 +2493,10 @@ mod tests {
             snapshot,
         ));
         assert!(!use_atomic_runtime_ring_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!use_atomic_erstba_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -2528,6 +2625,32 @@ mod tests {
             None,
         ));
         assert!(!defer_erdp_publish_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            snapshot,
+        ));
+    }
+
+    #[test]
+    fn trusted_runtime_snapshot_defers_erst_publish_until_after_late_event_ring_handoff() {
+        let snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: Some(0),
+            crcr: Some(0),
+            erstba0: Some(0),
+            erdp0: Some(0),
+            erstsz0: Some(0),
+        });
+        assert!(defer_erst_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!defer_erst_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            None,
+        ));
+        assert!(!defer_erst_publish_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));

@@ -614,10 +614,14 @@ const fn xhci_prefers_posted_reset_snapshot_handoff(
     runtime_vl805_reset_state: u8,
     runtime_seed_snapshot: Option<LocalSeatXhciRuntimeSeedSnapshot>,
 ) -> bool {
-    matches!(
-        runtime_vl805_reset_state,
-        VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
-    ) && xhci_runtime_seed_snapshot_has_ring_seed(runtime_seed_snapshot)
+    // The posted mailbox-reset fallback is strong enough to justify reusing the
+    // static capability snapshot, but the first live runtime event-ring
+    // ownership stores still wedge VL805 when we also trust the bootloader's
+    // ring seeds on that weaker reset path. Drop back to a standalone cold
+    // init whenever the runtime reset only reached the posted fallback.
+    let _ = runtime_vl805_reset_state;
+    let _ = runtime_seed_snapshot;
+    false
 }
 
 /// Concrete local-seat backend for Pi 4 (HDMI text + USB keyboard).
@@ -9747,7 +9751,7 @@ mod tests {
                 erstsz0: Some(0),
             },
         ));
-        assert!(xhci_prefers_posted_reset_snapshot_handoff(
+        assert!(!xhci_prefers_posted_reset_snapshot_handoff(
             VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
             ring_seed_snapshot,
         ));
