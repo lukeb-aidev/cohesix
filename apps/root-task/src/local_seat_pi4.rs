@@ -1763,10 +1763,13 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0254 => Some("crcr-write-low"),
         0x0255 => Some("crcr-write-high"),
         0x0256 => Some("dnctrl-write"),
-        0x0257 => Some("dcbaap-write64"),
-        0x0258 => Some("dcbaap-write64-done"),
+        0x0257 => Some("dcbaap-defer-begin"),
+        0x0258 => Some("dcbaap-defer-state"),
         0x0259 => Some("dcbaap-write-split-selected"),
+        0x025a => Some("dcbaap-defer-publish"),
+        0x0260 => Some("event-ring-base"),
         0x0261 => Some("runtime-ring-read"),
+        0x0262 => Some("iman-seed"),
         0x0263 => Some("usbsts-clear-ack"),
         0x0264 => Some("erstsz-write"),
         0x0265 => Some("erstba-write"),
@@ -1789,6 +1792,61 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0276 => Some("controller-ready-poll-begin"),
         0x0277 => Some("erdp-write-low"),
         0x0278 => Some("erdp-write-high"),
+        0x0290 => Some("dcbaap-atomic-write"),
+        0x0291 => Some("dcbaap-atomic-write-begin"),
+        0x0292 => Some("dcbaap-atomic-write-done"),
+        0x0293 => Some("crcr-atomic-write"),
+        0x0294 => Some("crcr-atomic-write-begin"),
+        0x0295 => Some("crcr-atomic-write-done"),
+        0x0296 => Some("erdp-atomic-write"),
+        0x0297 => Some("erdp-atomic-write-begin"),
+        0x0298 => Some("erdp-atomic-write-done"),
+        0x0299 => Some("erstba-atomic-write"),
+        0x029a => Some("erstba-atomic-write-begin"),
+        0x029b => Some("erstba-atomic-write-done"),
+        0x02a0 => Some("dcbaap-defer-change-mask"),
+        0x02a1 => Some("dcbaap-staged-low"),
+        0x02a2 => Some("dcbaap-staged-low-done"),
+        0x02a3 => Some("dcbaap-staged-high"),
+        0x02a4 => Some("dcbaap-staged-high-done"),
+        0x02a5 => Some("dcbaap-target-low"),
+        0x02a6 => Some("dcbaap-target-low-done"),
+        0x02a7 => Some("dcbaap-target-high"),
+        0x02a8 => Some("dcbaap-target-high-done"),
+        0x02a9 => Some("dcbaap-defer-handoff"),
+        0x02aa => Some("crcr-defer-begin"),
+        0x02ab => Some("crcr-defer-change-mask"),
+        0x02ac => Some("crcr-staged-low"),
+        0x02ad => Some("crcr-staged-low-done"),
+        0x02ae => Some("crcr-staged-high"),
+        0x02af => Some("crcr-staged-high-done"),
+        0x02b0 => Some("crcr-target-low"),
+        0x02b1 => Some("crcr-target-low-done"),
+        0x02b2 => Some("crcr-target-high"),
+        0x02b3 => Some("crcr-target-high-done"),
+        0x02b4 => Some("crcr-defer-handoff"),
+        0x02b5 => Some("erdp-defer-begin"),
+        0x02b6 => Some("erdp-defer-change-mask"),
+        0x02b7 => Some("erdp-staged-low"),
+        0x02b8 => Some("erdp-staged-low-done"),
+        0x02b9 => Some("erdp-staged-high"),
+        0x02ba => Some("erdp-staged-high-done"),
+        0x02bb => Some("erdp-target-low"),
+        0x02bc => Some("erdp-target-low-done"),
+        0x02bd => Some("erdp-target-high"),
+        0x02be => Some("erdp-target-high-done"),
+        0x02bf => Some("erdp-defer-handoff"),
+        0x02c0 => Some("erst-defer-size"),
+        0x02c1 => Some("erst-defer-base"),
+        0x02c2 => Some("erstsz-defer-begin"),
+        0x02c3 => Some("erstsz-defer-write"),
+        0x02c4 => Some("erstsz-defer-write-done"),
+        0x02c5 => Some("erstba-defer-begin"),
+        0x02c6 => Some("erstba-defer-write"),
+        0x02c7 => Some("erstba-defer-write-done"),
+        0x02c8 => Some("erstba-defer-high"),
+        0x02c9 => Some("erstba-defer-high-done"),
+        0x02ca => Some("erstba-defer-handoff"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -5028,7 +5086,7 @@ impl UsbKeyboard {
                         runtime_vl805_mailbox_reset_completed(runtime_vl805_reset_state);
                     if !runtime_vl805_reset {
                         boot_log::force_uart_line(
-                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset-soft-continue action=standalone-cold-init",
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset-soft-continue action=standalone-snapshot-fallback",
                         );
                     }
                 }
@@ -5098,7 +5156,7 @@ impl UsbKeyboard {
                         )
                     } else {
                         (
-                            XhciFirmwareHandoff::ColdStartFromSnapshot,
+                            XhciFirmwareHandoff::ResetlessReinit,
                             xhci_runtime_seed_snapshot
                                 .map(xhci_runtime_stop_state_seed_from_handoff),
                         )
@@ -5148,7 +5206,7 @@ impl UsbKeyboard {
                         );
                     } else {
                         boot_log::force_uart_line(
-                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=static-cap-snapshot action=standalone-cold-init",
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=static-cap-snapshot action=resetless-reinit-from-stop-state-snapshot",
                         );
                     }
                     let mut line = heapless::String::<352>::new();
@@ -9903,7 +9961,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_controller_params_keep_cold_start_stop_state_without_runtime_rings() {
+    fn xhci_controller_params_keep_resetless_stop_state_without_runtime_rings() {
         let params = xhci_controller_params_from_probe(
             XhciCapProbe {
                 cap_length: 0x40,
@@ -9918,7 +9976,7 @@ mod tests {
                 max_scratchpad: 0,
                 mmio_size: 0x10000,
             },
-            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            XhciFirmwareHandoff::ResetlessReinit,
             Some(xhci_runtime_stop_state_seed_from_handoff(
                 LocalSeatXhciRuntimeSeedSnapshot {
                     usbcmd: Some(0),
@@ -9934,7 +9992,7 @@ mod tests {
         );
         assert_eq!(
             params.firmware_handoff,
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::ResetlessReinit
         );
         let runtime_seed_snapshot = params
             .runtime_seed_snapshot
@@ -10119,13 +10177,16 @@ mod tests {
         assert_eq!(xhci_diag_stage_label(0x0254), Some("crcr-write-low"));
         assert_eq!(xhci_diag_stage_label(0x0255), Some("crcr-write-high"));
         assert_eq!(xhci_diag_stage_label(0x0256), Some("dnctrl-write"));
-        assert_eq!(xhci_diag_stage_label(0x0257), Some("dcbaap-write64"));
-        assert_eq!(xhci_diag_stage_label(0x0258), Some("dcbaap-write64-done"));
+        assert_eq!(xhci_diag_stage_label(0x0257), Some("dcbaap-defer-begin"));
+        assert_eq!(xhci_diag_stage_label(0x0258), Some("dcbaap-defer-state"));
         assert_eq!(
             xhci_diag_stage_label(0x0259),
             Some("dcbaap-write-split-selected")
         );
+        assert_eq!(xhci_diag_stage_label(0x025a), Some("dcbaap-defer-publish"));
+        assert_eq!(xhci_diag_stage_label(0x0260), Some("event-ring-base"));
         assert_eq!(xhci_diag_stage_label(0x0261), Some("runtime-ring-read"));
+        assert_eq!(xhci_diag_stage_label(0x0262), Some("iman-seed"));
         assert_eq!(xhci_diag_stage_label(0x0263), Some("usbsts-clear-ack"));
         assert_eq!(xhci_diag_stage_label(0x026b), Some("skip-imod-write"));
         assert_eq!(xhci_diag_stage_label(0x026c), Some("skip-iman-write"));
@@ -10152,6 +10213,115 @@ mod tests {
         );
         assert_eq!(xhci_diag_stage_label(0x0277), Some("erdp-write-low"));
         assert_eq!(xhci_diag_stage_label(0x0278), Some("erdp-write-high"));
+        assert_eq!(xhci_diag_stage_label(0x0290), Some("dcbaap-atomic-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0291),
+            Some("dcbaap-atomic-write-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0292),
+            Some("dcbaap-atomic-write-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x0293), Some("crcr-atomic-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0294),
+            Some("crcr-atomic-write-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0295),
+            Some("crcr-atomic-write-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x0296), Some("erdp-atomic-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0297),
+            Some("erdp-atomic-write-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0298),
+            Some("erdp-atomic-write-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x0299), Some("erstba-atomic-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x029a),
+            Some("erstba-atomic-write-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x029b),
+            Some("erstba-atomic-write-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x02a0),
+            Some("dcbaap-defer-change-mask")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02a1), Some("dcbaap-staged-low"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02a2),
+            Some("dcbaap-staged-low-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02a3), Some("dcbaap-staged-high"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02a4),
+            Some("dcbaap-staged-high-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02a5), Some("dcbaap-target-low"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02a6),
+            Some("dcbaap-target-low-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02a7), Some("dcbaap-target-high"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02a8),
+            Some("dcbaap-target-high-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02a9), Some("dcbaap-defer-handoff"));
+        assert_eq!(xhci_diag_stage_label(0x02aa), Some("crcr-defer-begin"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02ab),
+            Some("crcr-defer-change-mask")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02ac), Some("crcr-staged-low"));
+        assert_eq!(xhci_diag_stage_label(0x02ad), Some("crcr-staged-low-done"));
+        assert_eq!(xhci_diag_stage_label(0x02ae), Some("crcr-staged-high"));
+        assert_eq!(xhci_diag_stage_label(0x02af), Some("crcr-staged-high-done"));
+        assert_eq!(xhci_diag_stage_label(0x02b0), Some("crcr-target-low"));
+        assert_eq!(xhci_diag_stage_label(0x02b1), Some("crcr-target-low-done"));
+        assert_eq!(xhci_diag_stage_label(0x02b2), Some("crcr-target-high"));
+        assert_eq!(xhci_diag_stage_label(0x02b3), Some("crcr-target-high-done"));
+        assert_eq!(xhci_diag_stage_label(0x02b4), Some("crcr-defer-handoff"));
+        assert_eq!(xhci_diag_stage_label(0x02b5), Some("erdp-defer-begin"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02b6),
+            Some("erdp-defer-change-mask")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02b7), Some("erdp-staged-low"));
+        assert_eq!(xhci_diag_stage_label(0x02b8), Some("erdp-staged-low-done"));
+        assert_eq!(xhci_diag_stage_label(0x02b9), Some("erdp-staged-high"));
+        assert_eq!(xhci_diag_stage_label(0x02ba), Some("erdp-staged-high-done"));
+        assert_eq!(xhci_diag_stage_label(0x02bb), Some("erdp-target-low"));
+        assert_eq!(xhci_diag_stage_label(0x02bc), Some("erdp-target-low-done"));
+        assert_eq!(xhci_diag_stage_label(0x02bd), Some("erdp-target-high"));
+        assert_eq!(xhci_diag_stage_label(0x02be), Some("erdp-target-high-done"));
+        assert_eq!(xhci_diag_stage_label(0x02bf), Some("erdp-defer-handoff"));
+        assert_eq!(xhci_diag_stage_label(0x02c0), Some("erst-defer-size"));
+        assert_eq!(xhci_diag_stage_label(0x02c1), Some("erst-defer-base"));
+        assert_eq!(xhci_diag_stage_label(0x02c2), Some("erstsz-defer-begin"));
+        assert_eq!(xhci_diag_stage_label(0x02c3), Some("erstsz-defer-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02c4),
+            Some("erstsz-defer-write-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02c5), Some("erstba-defer-begin"));
+        assert_eq!(xhci_diag_stage_label(0x02c6), Some("erstba-defer-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02c7),
+            Some("erstba-defer-write-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02c8), Some("erstba-defer-high"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02c9),
+            Some("erstba-defer-high-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02ca), Some("erstba-defer-handoff"));
         assert_eq!(xhci_diag_stage_label(0x0300), Some("cmd-submit"));
         assert_eq!(xhci_diag_stage_label(0x0301), Some("cmd-completion"));
         assert_eq!(xhci_diag_stage_label(0x0302), Some("cmd-fail"));
