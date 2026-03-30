@@ -212,6 +212,7 @@ const fn skip_config_write_during_init_with_snapshot(
 ) -> bool {
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_stop_state_snapshot_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_config_write_during_init(firmware_handoff)
 }
 
@@ -232,8 +233,8 @@ const fn skip_reset_during_init_with_snapshot(
 ) -> bool {
     // Only the stronger seeded snapshot paths remain fully reset-equivalent.
     // The weaker stop-state-only snapshot still skips the toxic live HCRST
-    // store on Pi 4, but now also suppresses the live CONFIG seed read while
-    // continuing with the standard ring bring-up sequence.
+    // store on Pi 4, and the matching CONFIG write now stays suppressed too
+    // while the normal ring bring-up continues with fresh runtime ownership.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_stop_state_snapshot_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -2523,7 +2524,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_skips_reset_and_live_config_seed_reads() {
+    fn stop_state_only_snapshot_skips_reset_and_config_write() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -2566,7 +2567,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!skip_config_write_during_init_with_snapshot(
+        assert!(skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));

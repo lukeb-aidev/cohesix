@@ -678,6 +678,18 @@ const fn setup_firmware_channel_uses_experimental_order(
 }
 
 #[inline]
+const fn firmware_channel_write_restore_clock_hz(
+    experimental_no_ht_transport: bool,
+    current_clock_hz: u32,
+) -> Option<u32> {
+    if experimental_no_ht_transport && current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
+        Some(current_clock_hz)
+    } else {
+        None
+    }
+}
+
+#[inline]
 fn setup_firmware_channel_can_assume_write_committed(
     allow_function2_ready_bypass: bool,
     attempt: usize,
@@ -3160,35 +3172,85 @@ impl SdioHost {
         allow_setup_write_bypass: bool,
     ) -> Result<(), HalError> {
         self.enable_function2(function2_ready_budget)?;
-        self.write_sdio_core_u32_for_firmware_channel(
-            "slow-link-channel-rearm-mailbox-version",
-            SDPCMD_REG_TOSBMAILBOXDATA,
-            SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT,
-            allow_setup_write_bypass,
-        )?;
-        self.write_sdio_core_u32_for_firmware_channel(
-            "slow-link-channel-rearm-hostintmask",
-            SDPCMD_REG_HOSTINTMASK,
-            HOSTINTMASK,
-            allow_setup_write_bypass,
-        )?;
-        self.io_direct_write(
-            SdioFunction::Function1,
-            SBSDIO_WATERMARK,
-            CY_43455_F2_WATERMARK,
-        )?;
-        let devctl = self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)?;
-        self.io_direct_write(
-            SdioFunction::Function1,
-            SBSDIO_DEVICE_CTL,
-            devctl | SBSDIO_DEVCTL_F2WM_ENAB,
-        )?;
-        self.io_direct_write(
-            SdioFunction::Function1,
-            SBSDIO_FUNC1_MESBUSYCTRL,
-            CY_43455_MESBUSYCTRL,
-        )?;
-        Ok(())
+        let restore_clock_hz = firmware_channel_write_restore_clock_hz(
+            self.experimental_no_ht_transport,
+            self.current_clock_hz,
+        );
+        if let Some(clock_hz) = restore_clock_hz {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=firmware-channel-write-clock action=lower current={}Hz target={}Hz width={} budget={} no_ht={}",
+                self.current_clock_hz,
+                CYW43_STARTUP_CLOCK_HZ,
+                sdio_bus_width_name(self.desired_bus_width),
+                sdio_function_ready_budget_name(function2_ready_budget),
+                self.experimental_no_ht_transport,
+            ));
+            self.set_clock_hz(CYW43_STARTUP_CLOCK_HZ)?;
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=firmware-channel-write-clock action=lower-ready previous={}Hz current={}Hz width={} budget={} no_ht={}",
+                clock_hz,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                sdio_function_ready_budget_name(function2_ready_budget),
+                self.experimental_no_ht_transport,
+            ));
+        }
+        let write_result = (|| {
+            self.write_sdio_core_u32_for_firmware_channel(
+                "slow-link-channel-rearm-mailbox-version",
+                SDPCMD_REG_TOSBMAILBOXDATA,
+                SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT,
+                allow_setup_write_bypass,
+            )?;
+            self.write_sdio_core_u32_for_firmware_channel(
+                "slow-link-channel-rearm-hostintmask",
+                SDPCMD_REG_HOSTINTMASK,
+                HOSTINTMASK,
+                allow_setup_write_bypass,
+            )?;
+            self.io_direct_write(
+                SdioFunction::Function1,
+                SBSDIO_WATERMARK,
+                CY_43455_F2_WATERMARK,
+            )?;
+            let devctl = self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)?;
+            self.io_direct_write(
+                SdioFunction::Function1,
+                SBSDIO_DEVICE_CTL,
+                devctl | SBSDIO_DEVCTL_F2WM_ENAB,
+            )?;
+            self.io_direct_write(
+                SdioFunction::Function1,
+                SBSDIO_FUNC1_MESBUSYCTRL,
+                CY_43455_MESBUSYCTRL,
+            )?;
+            Ok(())
+        })();
+        if let Some(clock_hz) = restore_clock_hz {
+            match self.set_clock_hz(clock_hz) {
+                Ok(restored_clock_hz) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=firmware-channel-write-clock action=restore restored={}Hz width={} budget={} no_ht={}",
+                        restored_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        sdio_function_ready_budget_name(function2_ready_budget),
+                        self.experimental_no_ht_transport,
+                    ));
+                }
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=firmware-channel-write-clock action=restore-fail target={}Hz current={}Hz width={} budget={} no_ht={} err={err}",
+                        clock_hz,
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        sdio_function_ready_budget_name(function2_ready_budget),
+                        self.experimental_no_ht_transport,
+                    ));
+                    return Err(err);
+                }
+            }
+        }
+        write_result
     }
 
     fn log_control_plane_finish_snapshot(&mut self, stage: &'static str) {
@@ -8585,6 +8647,22 @@ mod tests {
     fn setup_firmware_channel_keeps_stable_order_even_with_bypass_enabled() {
         assert!(!setup_firmware_channel_uses_experimental_order(true));
         assert!(!setup_firmware_channel_uses_experimental_order(false));
+    }
+
+    #[test]
+    fn no_ht_firmware_channel_writes_only_drop_clock_on_fast_paths() {
+        assert_eq!(
+            firmware_channel_write_restore_clock_hz(true, CYW43_CONTROL_PLANE_CLOCK_HZ),
+            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
+        );
+        assert_eq!(
+            firmware_channel_write_restore_clock_hz(true, CYW43_STARTUP_CLOCK_HZ),
+            None
+        );
+        assert_eq!(
+            firmware_channel_write_restore_clock_hz(false, CYW43_CONTROL_PLANE_CLOCK_HZ),
+            None
+        );
     }
 
     #[test]
