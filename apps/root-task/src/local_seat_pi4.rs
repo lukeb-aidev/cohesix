@@ -173,6 +173,7 @@ const WAIT_MS_MAX_SPINS: usize = 25_000_000;
 const USB_PROGRESS_TICK_MS: usize = 1_000;
 const USB_PROGRESS_MAX_DOTS: usize = 64;
 const WIFI_PROGRESS_LOOP_TICK_LOOPS: usize = 1_000_000;
+const WIFI_PROGRESS_EMIT_INTERVAL_TICKS: usize = 64;
 const WIFI_PROGRESS_MAX_DOTS: usize = 3;
 const PI4_VL805_XHCI_INTX_IRQ: u32 = 143;
 const PI4_PCIE_BRIDGE_IRQ: u32 = 148;
@@ -299,6 +300,10 @@ static XHCI_MMIO_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_MMIO_PIN_REUSE_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DMA_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DIAG_LINE_COUNT: AtomicU32 = AtomicU32::new(0);
+static XHCI_DIAG_LAST_STAGE: AtomicU32 = AtomicU32::new(0);
+static XHCI_DIAG_LAST_A: AtomicUsize = AtomicUsize::new(0);
+static XHCI_DIAG_LAST_B: AtomicUsize = AtomicUsize::new(0);
+static XHCI_DIAG_LAST_C: AtomicUsize = AtomicUsize::new(0);
 static VL805_CFG_VIRT: AtomicUsize = AtomicUsize::new(0);
 static VL805_XHCI_MMIO_HINT: AtomicUsize = AtomicUsize::new(0);
 static PINNED_XHCI_MMIO: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
@@ -310,7 +315,7 @@ static USB_PROGRESS_DOTS: AtomicUsize = AtomicUsize::new(0);
 static WIFI_PROGRESS_ACTIVE: AtomicBool = AtomicBool::new(false);
 static WIFI_PROGRESS_DISPLAY_PTR: AtomicUsize = AtomicUsize::new(0);
 static WIFI_PROGRESS_LOOP_BUDGET: AtomicUsize = AtomicUsize::new(0);
-static WIFI_PROGRESS_DOTS: AtomicUsize = AtomicUsize::new(0);
+static WIFI_PROGRESS_TICKS: AtomicUsize = AtomicUsize::new(0);
 
 const XHCI_DIAG_MAX_LINES: u32 = 64;
 const VL805_RUNTIME_RESET_STATE_UNATTEMPTED: u8 = 0;
@@ -367,14 +372,26 @@ fn usb_progress_finish() {
     USB_PROGRESS_DISPLAY_PTR.store(0, Ordering::Release);
 }
 
+fn wifi_progress_dot_count(emissions: usize) -> usize {
+    if emissions == 0 {
+        0
+    } else {
+        ((emissions - 1) % WIFI_PROGRESS_MAX_DOTS) + 1
+    }
+}
+
+fn wifi_progress_dots_for_ticks(ticks: usize) -> usize {
+    wifi_progress_dot_count(ticks / WIFI_PROGRESS_EMIT_INTERVAL_TICKS)
+}
+
 fn wifi_progress_emit(dots: usize) {
     let ptr = WIFI_PROGRESS_DISPLAY_PTR.load(Ordering::Acquire);
     if ptr == 0 {
         return;
     }
     let mut line = heapless::String::<160>::new();
-    let _ = line.push_str("[cohesix] Initializing WiFi ");
-    for _ in 0..dots.clamp(1, WIFI_PROGRESS_MAX_DOTS) {
+    let _ = line.push_str("[cohesix] Initializing WiFi");
+    for _ in 0..dots.min(WIFI_PROGRESS_MAX_DOTS) {
         let _ = line.push('.');
     }
     // SAFETY: The pointer is published only after the local-seat runtime has
@@ -388,25 +405,26 @@ fn wifi_progress_emit(dots: usize) {
 fn register_wifi_progress_display(display: &mut HdmiTextSink) {
     WIFI_PROGRESS_DISPLAY_PTR.store(display as *mut _ as usize, Ordering::Release);
     if WIFI_PROGRESS_ACTIVE.load(Ordering::Acquire) {
-        wifi_progress_emit(WIFI_PROGRESS_DOTS.load(Ordering::Acquire).max(1));
+        let ticks = WIFI_PROGRESS_TICKS.load(Ordering::Acquire);
+        wifi_progress_emit(wifi_progress_dots_for_ticks(ticks));
     }
 }
 
 pub(crate) fn wifi_progress_begin() {
     WIFI_PROGRESS_LOOP_BUDGET.store(0, Ordering::Release);
-    WIFI_PROGRESS_DOTS.store(1, Ordering::Release);
+    WIFI_PROGRESS_TICKS.store(0, Ordering::Release);
     WIFI_PROGRESS_ACTIVE.store(true, Ordering::Release);
-    wifi_progress_emit(1);
+    wifi_progress_emit(0);
 }
 
 pub(crate) fn wifi_progress_tick() {
     if !WIFI_PROGRESS_ACTIVE.load(Ordering::Acquire) {
         return;
     }
-    let previous = WIFI_PROGRESS_DOTS.load(Ordering::Acquire);
-    let next = (previous % WIFI_PROGRESS_MAX_DOTS) + 1;
-    WIFI_PROGRESS_DOTS.store(next, Ordering::Release);
-    wifi_progress_emit(next);
+    let tick = WIFI_PROGRESS_TICKS.fetch_add(1, Ordering::AcqRel) + 1;
+    if tick % WIFI_PROGRESS_EMIT_INTERVAL_TICKS == 0 {
+        wifi_progress_emit(wifi_progress_dots_for_ticks(tick));
+    }
 }
 
 pub(crate) fn wifi_progress_advance_loops(loops: usize) {
@@ -882,6 +900,9 @@ impl Pi4LocalSeat {
                     .write_line("[cohesix] local-seat USB keyboard online");
                 boot_log::force_uart_line("[local-seat] pi4 keyboard runtime init result=online");
             } else if let Some(err) = keyboard_error {
+                if matches!(err, Pi4SeatError::XhciInit) {
+                    log_latest_xhci_diag_summary("keyboard-init");
+                }
                 let mut line = heapless::String::<240>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
@@ -1679,6 +1700,10 @@ fn log_xhci_runtime_candidate_diag(
 }
 
 fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
+    XHCI_DIAG_LAST_STAGE.store(u32::from(stage), Ordering::Release);
+    XHCI_DIAG_LAST_A.store(a as usize, Ordering::Release);
+    XHCI_DIAG_LAST_B.store(b as usize, Ordering::Release);
+    XHCI_DIAG_LAST_C.store(c as usize, Ordering::Release);
     let line_no = XHCI_DIAG_LINE_COUNT
         .fetch_add(1, Ordering::Relaxed)
         .saturating_add(1);
@@ -1692,6 +1717,31 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!("[local-seat] xhci.diag stage=0x{stage:04x}"),
+    );
+    if let Some(tag) = xhci_diag_stage_label(stage) {
+        let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" tag={tag}"));
+    }
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(" a=0x{a:016x} b=0x{b:016x} c=0x{c:016x}"),
+    );
+    boot_log::force_uart_line(line.as_str());
+}
+
+fn log_latest_xhci_diag_summary(context: &'static str) {
+    if XHCI_DIAG_LINE_COUNT.load(Ordering::Acquire) == 0 {
+        return;
+    }
+
+    let stage = XHCI_DIAG_LAST_STAGE.load(Ordering::Acquire) as u16;
+    let a = XHCI_DIAG_LAST_A.load(Ordering::Acquire) as u64;
+    let b = XHCI_DIAG_LAST_B.load(Ordering::Acquire) as u64;
+    let c = XHCI_DIAG_LAST_C.load(Ordering::Acquire) as u64;
+
+    let mut line = heapless::String::<320>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!("[local-seat] xhci diag summary context={context} stage=0x{stage:04x}"),
     );
     if let Some(tag) = xhci_diag_stage_label(stage) {
         let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" tag={tag}"));
@@ -11432,6 +11482,40 @@ mod tests {
         assert_eq!(
             rows,
             Vec::from([String::new(), String::from("abcd"), String::from("ef")])
+        );
+    }
+
+    #[test]
+    fn wifi_progress_dots_cycle_through_three_states() {
+        assert_eq!(wifi_progress_dot_count(0), 0);
+        assert_eq!(wifi_progress_dot_count(1), 1);
+        assert_eq!(wifi_progress_dot_count(2), 2);
+        assert_eq!(wifi_progress_dot_count(3), 3);
+        assert_eq!(wifi_progress_dot_count(4), 1);
+    }
+
+    #[test]
+    fn wifi_progress_ticks_emit_only_on_slow_boundaries() {
+        assert_eq!(wifi_progress_dots_for_ticks(0), 0);
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS - 1),
+            0
+        );
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS),
+            1
+        );
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS * 2),
+            2
+        );
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS * 3),
+            3
+        );
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS * 4),
+            1
         );
     }
 

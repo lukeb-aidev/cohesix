@@ -669,7 +669,12 @@ fn firmware_phase_can_retry(err: &HalError, attempt: usize) -> bool {
 const fn setup_firmware_channel_uses_experimental_order(
     allow_function2_ready_bypass: bool,
 ) -> bool {
-    allow_function2_ready_bypass
+    let _ = allow_function2_ready_bypass;
+    // Function-2-first sequencing on the no-HT path has proven to hide partial
+    // mailbox/interrupt-mask programming without ever producing a real ready
+    // indication. Keep the firmware-channel setup order stable even when the
+    // bring-up path is still willing to bypass IORX.
+    false
 }
 
 #[inline]
@@ -678,7 +683,10 @@ fn setup_firmware_channel_can_assume_write_committed(
     attempt: usize,
     err: &HalError,
 ) -> bool {
-    allow_function2_ready_bypass && attempt == 0 && is_sdhci_io_path_error(err)
+    let _ = allow_function2_ready_bypass;
+    let _ = attempt;
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -703,9 +711,24 @@ fn wait_for_firmware_ready_can_assume_mailbox_ready(
 fn experimental_control_plane_write_can_assume_committed(
     experimental_no_ht_transport: bool,
     first_control_plane_write_pending: bool,
+    promoted_probe_pending: bool,
     err: &HalError,
 ) -> bool {
-    experimental_no_ht_transport && first_control_plane_write_pending && is_sdhci_io_path_error(err)
+    experimental_no_ht_transport
+        && first_control_plane_write_pending
+        && !promoted_probe_pending
+        && is_sdhci_io_path_error(err)
+}
+
+#[inline]
+fn experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+    experimental_no_ht_transport: bool,
+    first_control_plane_write_pending: bool,
+    err: &HalError,
+) -> bool {
+    experimental_no_ht_transport
+        && first_control_plane_write_pending
+        && matches!(err, HalError::Unsupported("sdio-function2-ready-timeout"))
 }
 
 #[inline]
@@ -815,7 +838,11 @@ const fn control_plane_snapshot_uses_live_sdio_core_reads(
 
 #[inline]
 const fn experimental_no_ht_f2_fifo_chunk_limit() -> usize {
-    SDIO_FUNCTION_ENABLE_F2.block_size as usize
+    // The no-HT recovery path still reaches firmware-ready, but 512-byte
+    // function-2 bursts keep tripping the first control-plane exchanges on Pi
+    // 4. Stay on 64-byte chunks until the transport proves it can survive a
+    // matched control reply.
+    SDIO_FUNCTION_ENABLE_F1.block_size as usize
 }
 
 #[inline]
@@ -2869,7 +2896,7 @@ impl SdioHost {
         let mut attempt = 0usize;
         loop {
             match self
-                .rearm_firmware_channel_once(SdioFunctionReadyBudget::ExperimentalBypass, true)
+                .rearm_firmware_channel_once(SdioFunctionReadyBudget::ExperimentalBypass, false)
             {
                 Ok(()) => {
                     self.experimental_control_plane_promoted_probe_pending = false;
@@ -2928,6 +2955,29 @@ impl SdioHost {
                 Err(err) => return Err(err),
             }
         }
+    }
+
+    fn promote_control_plane_after_post_write_rearm_timeout(
+        &mut self,
+        err: &HalError,
+    ) -> Result<(), HalError> {
+        let target_clock_hz =
+            control_plane_clock_target_hz(self.current_clock_hz, self.preferred_data_clock_hz);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=promote-after-timeout err={err} current={}Hz width={} target_clock={}Hz target_bus_width=4 mode=speculative-first-reply",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            target_clock_hz,
+        ));
+        self.set_bus_width(SdioBusWidth::FourBit)?;
+        self.ensure_control_plane_clock("control-plane-post-write-promote-clock")?;
+        self.rearm_firmware_channel_after_transport_promotion(true)?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=promote-ready current={}Hz width={} mode=speculative-first-reply",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+        ));
+        Ok(())
     }
 
     fn rearm_firmware_channel_after_transport_promotion(
@@ -4761,20 +4811,33 @@ impl SdioHost {
                 ));
                 Ok(())
             }
-            Err(err)
-                if setup_firmware_channel_can_assume_write_committed(
-                    allow_function2_ready_bypass,
-                    0,
-                    &err,
-                ) =>
-            {
+            Err(err) => {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} action=experimental-assume-committed addr=0x{offset:05x} value=0x{value:08x} err={err}"
+                    "[pi4-wifi] firmware stage={stage} action=experimental-direct-byte-fallback addr=0x{offset:05x} value=0x{value:08x} err={err}"
                 ));
-                self.recover_command_path_and_refresh_transport(stage)?;
-                Ok(())
+                match self.write_f1_u32(offset, value) {
+                    Ok(()) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} action=experimental-direct-byte-fallback-ok addr=0x{offset:05x} value=0x{value:08x}"
+                        ));
+                        Ok(())
+                    }
+                    Err(err)
+                        if setup_firmware_channel_can_assume_write_committed(
+                            allow_function2_ready_bypass,
+                            0,
+                            &err,
+                        ) =>
+                    {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} action=experimental-assume-committed addr=0x{offset:05x} value=0x{value:08x} err={err}"
+                        ));
+                        self.recover_command_path_and_refresh_transport(stage)?;
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
             }
-            Err(err) => Err(err),
         }
     }
 
@@ -4823,6 +4886,7 @@ impl SdioHost {
 
     fn write_frame(&mut self, frame: &mut [u8]) -> Result<(), HalError> {
         let first_control_plane_write_pending = self.experimental_control_plane_write_probe_pending;
+        let promoted_probe_pending = self.experimental_control_plane_promoted_probe_pending;
         self.experimental_control_plane_write_probe_pending = false;
         match self.io_extended(SdioFunction::Function2, 0, false, true, frame) {
             Ok(()) => {
@@ -4835,7 +4899,19 @@ impl SdioHost {
                         frame.len(),
                         self.control_plane_chunk_limit(),
                     ));
-                    self.rearm_firmware_channel_after_first_control_write()?;
+                    match self.rearm_firmware_channel_after_first_control_write() {
+                        Ok(()) => {}
+                        Err(err)
+                            if experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+                                self.experimental_no_ht_transport,
+                                first_control_plane_write_pending,
+                                &err,
+                            ) =>
+                        {
+                            self.promote_control_plane_after_post_write_rearm_timeout(&err)?;
+                        }
+                        Err(err) => return Err(err),
+                    }
                 }
                 Ok(())
             }
@@ -4843,6 +4919,7 @@ impl SdioHost {
                 if experimental_control_plane_write_can_assume_committed(
                     self.experimental_no_ht_transport,
                     first_control_plane_write_pending,
+                    promoted_probe_pending,
                     &err,
                 ) =>
             {
@@ -7155,6 +7232,7 @@ mod tests {
         core_reset_can_skip_postreset_verify, core_reset_prepare_hold_value,
         core_wait_can_defer_after_read_error, core_wait_should_raise_control_plane_clock,
         experimental_control_plane_write_can_assume_committed,
+        experimental_control_plane_write_can_promote_after_post_write_rearm_timeout,
         experimental_control_plane_write_needs_post_write_rearm,
         experimental_function2_fifo_chunk_limit, firmware_bulk_clock_candidates,
         firmware_phase_can_retry, ht_clock_assist_shadow_is_complete, ht_clock_request_value,
@@ -7359,12 +7437,15 @@ mod tests {
     }
 
     #[test]
-    fn experimental_function2_fifo_chunk_limit_uses_function2_block_chunks_on_no_ht_fifo_path() {
+    fn experimental_function2_fifo_chunk_limit_uses_smaller_chunks_on_no_ht_fifo_path() {
         assert_eq!(
             experimental_function2_fifo_chunk_limit(SdioFunction::Function2, false, true),
             experimental_no_ht_f2_fifo_chunk_limit()
         );
-        assert_eq!(experimental_no_ht_f2_fifo_chunk_limit(), 512);
+        assert_eq!(
+            experimental_no_ht_f2_fifo_chunk_limit(),
+            SDIO_FUNCTION_ENABLE_F1.block_size as usize
+        );
         assert_eq!(
             experimental_function2_fifo_chunk_limit(SdioFunction::Function2, true, true),
             SDIO_MAX_BYTE_MODE
@@ -7384,21 +7465,31 @@ mod tests {
         assert!(experimental_control_plane_write_can_assume_committed(
             true,
             true,
+            false,
             &HalError::Unsupported("sdhci-transfer-finish")
         ));
         assert!(!experimental_control_plane_write_can_assume_committed(
             false,
-            true,
-            &HalError::Unsupported("sdhci-transfer-finish")
-        ));
-        assert!(!experimental_control_plane_write_can_assume_committed(
             true,
             false,
             &HalError::Unsupported("sdhci-transfer-finish")
         ));
         assert!(!experimental_control_plane_write_can_assume_committed(
             true,
+            false,
+            false,
+            &HalError::Unsupported("sdhci-transfer-finish")
+        ));
+        assert!(!experimental_control_plane_write_can_assume_committed(
             true,
+            true,
+            true,
+            &HalError::Unsupported("sdhci-transfer-finish")
+        ));
+        assert!(!experimental_control_plane_write_can_assume_committed(
+            true,
+            true,
+            false,
             &HalError::Unsupported("sdio-cmd52-read")
         ));
     }
@@ -7414,6 +7505,45 @@ mod tests {
         assert!(!experimental_control_plane_write_needs_post_write_rearm(
             true, false
         ));
+    }
+
+    #[test]
+    fn experimental_control_plane_write_post_write_timeout_promotion_is_precise() {
+        assert!(
+            experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+                true,
+                true,
+                &HalError::Unsupported("sdio-function2-ready-timeout"),
+            )
+        );
+        assert!(
+            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+                false,
+                true,
+                &HalError::Unsupported("sdio-function2-ready-timeout"),
+            )
+        );
+        assert!(
+            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+                true,
+                false,
+                &HalError::Unsupported("sdio-function2-ready-timeout"),
+            )
+        );
+        assert!(
+            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+                true,
+                true,
+                &HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout"),
+            )
+        );
+        assert!(
+            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+                true,
+                true,
+                &HalError::Unsupported("sdhci-transfer-finish"),
+            )
+        );
     }
 
     #[test]
@@ -8452,14 +8582,14 @@ mod tests {
     }
 
     #[test]
-    fn setup_firmware_channel_experimental_order_tracks_bypass_flag() {
-        assert!(setup_firmware_channel_uses_experimental_order(true));
+    fn setup_firmware_channel_keeps_stable_order_even_with_bypass_enabled() {
+        assert!(!setup_firmware_channel_uses_experimental_order(true));
         assert!(!setup_firmware_channel_uses_experimental_order(false));
     }
 
     #[test]
-    fn setup_firmware_channel_assume_committed_is_bounded() {
-        assert!(setup_firmware_channel_can_assume_write_committed(
+    fn setup_firmware_channel_never_assumes_critical_writes_committed() {
+        assert!(!setup_firmware_channel_can_assume_write_committed(
             true,
             0,
             &HalError::Unsupported("sdhci-transfer-finish"),

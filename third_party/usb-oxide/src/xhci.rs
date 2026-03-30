@@ -175,11 +175,11 @@ const fn use_live_config_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The weaker stop-state snapshot now falls back to the same CONFIG read /
-    // write path as the ordinary cold-start flow. Only the stronger mailbox
-    // reset snapshot should still suppress the live CONFIG seed read.
-    use_live_config_seed_reads(firmware_handoff)
-        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+    // Any trusted runtime snapshot has already proven enough controller state
+    // for Pi 4 local-seat takeover. A live CONFIG seed read is still a toxic
+    // MMIO touch on the weaker stop-state path, so suppress it for every
+    // snapshot-backed cold start and only keep it on the fully unseeded path.
+    use_live_config_seed_reads(firmware_handoff) && runtime_seed_snapshot.is_none()
 }
 
 #[inline(always)]
@@ -230,10 +230,12 @@ const fn skip_reset_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Only the stronger seeded snapshot paths remain reset-equivalent. The
-    // weaker stop-state-only snapshot now falls back to the normal cold-start
-    // reset/config/ring sequence after the early halt revalidation is skipped.
+    // Only the stronger seeded snapshot paths remain fully reset-equivalent.
+    // The weaker stop-state-only snapshot still skips the toxic live HCRST
+    // store on Pi 4, but now also suppresses the live CONFIG seed read while
+    // continuing with the standard ring bring-up sequence.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_stop_state_snapshot_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_reset_during_init(firmware_handoff)
 }
@@ -247,7 +249,6 @@ const fn runtime_mailbox_reset_handoff(
         && runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
-#[cfg(test)]
 #[inline(always)]
 const fn runtime_stop_state_snapshot_handoff(
     firmware_handoff: XhciFirmwareHandoff,
@@ -2522,7 +2523,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_falls_back_to_full_cold_init() {
+    fn stop_state_only_snapshot_skips_reset_and_live_config_seed_reads() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -2545,7 +2546,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(use_live_config_seed_reads_with_snapshot(
+        assert!(!use_live_config_seed_reads_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -2561,7 +2562,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!skip_reset_during_init_with_snapshot(
+        assert!(skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
