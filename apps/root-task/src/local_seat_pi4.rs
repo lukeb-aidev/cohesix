@@ -2131,6 +2131,21 @@ const fn xhci_runtime_stop_state_seed_from_handoff(
 }
 
 #[inline]
+const fn xhci_runtime_seed_for_trusted_handoff(
+    runtime_vl805_reset: bool,
+    runtime_seed_snapshot: Option<LocalSeatXhciRuntimeSeedSnapshot>,
+) -> Option<LocalSeatXhciRuntimeSeedSnapshot> {
+    if runtime_vl805_reset {
+        runtime_seed_snapshot
+    } else {
+        match runtime_seed_snapshot {
+            Some(snapshot) => Some(xhci_runtime_stop_state_seed_from_handoff(snapshot)),
+            None => None,
+        }
+    }
+}
+
+#[inline]
 const fn xhci_runtime_seed_snapshot_from_handoff(
     snapshot: LocalSeatXhciRuntimeSeedSnapshot,
 ) -> XhciRuntimeSeedSnapshot {
@@ -5116,11 +5131,13 @@ impl UsbKeyboard {
                 });
                 let (firmware_handoff, runtime_seed_snapshot) = if trusted_handoff_probe.is_some() {
                     let handoff_mode = xhci_preferred_trusted_handoff_mode(runtime_vl805_reset);
-                    let handoff_snapshot =
-                        xhci_runtime_seed_snapshot.map(xhci_runtime_stop_state_seed_from_handoff);
+                    let handoff_snapshot = xhci_runtime_seed_for_trusted_handoff(
+                        runtime_vl805_reset,
+                        xhci_runtime_seed_snapshot,
+                    );
                     if runtime_vl805_reset {
                         boot_log::force_uart_line(
-                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset+trusted-cap-snapshot action=cold-start-from-stop-state-snapshot",
+                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset+trusted-cap-snapshot action=cold-start-from-snapshot",
                         );
                     } else {
                         boot_log::force_uart_line(
@@ -9804,6 +9821,54 @@ mod tests {
             VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE,
             ring_seed_snapshot,
         ));
+    }
+
+    #[test]
+    fn trusted_runtime_mailbox_reset_keeps_runtime_ring_seed_snapshot() {
+        let snapshot = Some(LocalSeatXhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0x20),
+            dcbaap: Some(0x40),
+            crcr: Some(0x80),
+            erstba0: Some(0x100),
+            erdp0: Some(0x200),
+            erstsz0: Some(1),
+        });
+        let runtime_seed_snapshot =
+            xhci_runtime_seed_for_trusted_handoff(true, snapshot).expect("snapshot preserved");
+        assert_eq!(runtime_seed_snapshot.usbcmd, Some(0));
+        assert_eq!(runtime_seed_snapshot.usbsts, Some(1));
+        assert_eq!(runtime_seed_snapshot.iman0, Some(0x20));
+        assert_eq!(runtime_seed_snapshot.dcbaap, Some(0x40));
+        assert_eq!(runtime_seed_snapshot.crcr, Some(0x80));
+        assert_eq!(runtime_seed_snapshot.erstba0, Some(0x100));
+        assert_eq!(runtime_seed_snapshot.erdp0, Some(0x200));
+        assert_eq!(runtime_seed_snapshot.erstsz0, Some(1));
+    }
+
+    #[test]
+    fn bootloader_owned_trusted_handoff_still_drops_runtime_ring_seed_snapshot() {
+        let snapshot = Some(LocalSeatXhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0x20),
+            dcbaap: Some(0x40),
+            crcr: Some(0x80),
+            erstba0: Some(0x100),
+            erdp0: Some(0x200),
+            erstsz0: Some(1),
+        });
+        let runtime_seed_snapshot =
+            xhci_runtime_seed_for_trusted_handoff(false, snapshot).expect("snapshot preserved");
+        assert_eq!(runtime_seed_snapshot.usbcmd, Some(0));
+        assert_eq!(runtime_seed_snapshot.usbsts, Some(1));
+        assert_eq!(runtime_seed_snapshot.iman0, Some(0x20));
+        assert_eq!(runtime_seed_snapshot.dcbaap, None);
+        assert_eq!(runtime_seed_snapshot.crcr, None);
+        assert_eq!(runtime_seed_snapshot.erstba0, None);
+        assert_eq!(runtime_seed_snapshot.erdp0, None);
+        assert_eq!(runtime_seed_snapshot.erstsz0, None);
     }
 
     #[test]
