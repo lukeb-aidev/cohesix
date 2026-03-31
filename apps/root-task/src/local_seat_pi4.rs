@@ -5241,12 +5241,18 @@ impl UsbKeyboard {
                     let _ = core::fmt::Write::write_fmt(
                         &mut probe_line,
                         format_args!(
-                            "[local-seat] xhci probe begin mmio=0x{mmio:016x} dma={} bus={}",
+                            "[local-seat] xhci probe begin mmio=0x{mmio:016x} dma={} bus={} handoff={} poll_only={}",
                             if prefer_high { "high" } else { "low" },
                             if pcie_dma_window {
                                 "pcie-window"
                             } else {
                                 "phys"
+                            },
+                            xhci_irq_policy_reason(firmware_handoff),
+                            if xhci_polling_only_runtime(effective_mmio, firmware_handoff) {
+                                "yes"
+                            } else {
+                                "no"
                             },
                             mmio = effective_mmio
                         ),
@@ -5279,6 +5285,7 @@ impl UsbKeyboard {
                                 ),
                             );
                             boot_log::force_uart_line(line.as_str());
+                            log_latest_xhci_diag_summary("probe-new");
                             if bus_mode_idx + 1 < dma_bus_modes.len() {
                                 let next_bus = if dma_bus_modes[bus_mode_idx + 1] {
                                     "pcie-window"

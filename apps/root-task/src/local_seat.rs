@@ -67,6 +67,8 @@ pub struct LocalSeatRuntime {
     mirrored_lines: VecDeque<String>,
     dropped_keyboard_bytes: u64,
     dropped_mirrored_lines: u64,
+    backend_keyboard_polling_enabled: bool,
+    backend_keyboard_poll_deferred_logged: bool,
     #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
     backend: Option<Pi4LocalSeat>,
 }
@@ -131,6 +133,10 @@ impl LocalSeatRuntime {
             mirrored_lines: VecDeque::new(),
             dropped_keyboard_bytes: 0,
             dropped_mirrored_lines: 0,
+            // Keep boot fail-open: the root shell must stay reachable even if
+            // a platform keyboard backend can still wedge during first probe.
+            backend_keyboard_polling_enabled: false,
+            backend_keyboard_poll_deferred_logged: false,
             #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
             backend: None,
         }
@@ -211,6 +217,18 @@ impl LocalSeatRuntime {
         self.dropped_mirrored_lines
     }
 
+    /// Returns whether backend keyboard polling is currently enabled.
+    #[must_use]
+    pub const fn backend_keyboard_polling_enabled(&self) -> bool {
+        self.backend_keyboard_polling_enabled
+    }
+
+    /// Enable backend keyboard polling after boot has reached a safe manual
+    /// control point.
+    pub fn enable_backend_keyboard_polling(&mut self) {
+        self.backend_keyboard_polling_enabled = true;
+    }
+
     fn echo_input_bytes(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             update_input_echo_preview(
@@ -235,6 +253,15 @@ impl LocalSeatRuntime {
             }
             let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
             if let Some(backend) = self.backend.as_mut() {
+                if !self.backend_keyboard_polling_enabled {
+                    if !self.backend_keyboard_poll_deferred_logged {
+                        self.backend_keyboard_poll_deferred_logged = true;
+                        boot_log::force_uart_line(
+                            "[local-seat] runtime keyboard poll deferred action=serial-shell-first",
+                        );
+                    }
+                    return;
+                }
                 let read = backend.poll_keyboard_bytes(&mut chunk);
                 if read > 0 {
                     if !LOCAL_SEAT_DATA_LOGGED.swap(true, Ordering::AcqRel) {
@@ -653,5 +680,31 @@ mod tests {
 
         runtime.echo_input_bytes(b"\n");
         assert!(runtime.input_echo_preview.is_empty());
+    }
+
+    #[test]
+    fn runtime_backend_keyboard_poll_is_manual_by_default() {
+        let runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        assert!(!runtime.backend_keyboard_polling_enabled());
+    }
+
+    #[test]
+    fn runtime_backend_keyboard_poll_can_be_enabled_explicitly() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        runtime.enable_backend_keyboard_polling();
+
+        assert!(runtime.backend_keyboard_polling_enabled());
     }
 }

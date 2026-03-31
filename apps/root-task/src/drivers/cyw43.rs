@@ -245,6 +245,26 @@ fn prepare_initial_control_plane_transport(
     Ok((data_clock_hz, SdioBusWidth::FourBit))
 }
 
+fn log_cyw43_init_failure(
+    stage: &'static str,
+    state: &mut Pi4WifiState,
+    err: &DriverError,
+    include_control_plane_snapshot: bool,
+) {
+    warn!("[cyw43] init failure stage={stage} err={err}");
+    match state.debug_dump_state(stage) {
+        Ok(snapshot) => {
+            warn!("[cyw43] init snapshot stage={stage} snapshot={snapshot:?}");
+        }
+        Err(snapshot_err) => {
+            warn!("[cyw43] init snapshot unavailable stage={stage} err={snapshot_err}");
+        }
+    }
+    if include_control_plane_snapshot {
+        state.log_cyw43_control_plane_snapshot(stage);
+    }
+}
+
 pub(crate) fn debug_load_firmware_from_transport(
     state: &mut Pi4WifiState,
 ) -> Result<u32, HalError> {
@@ -379,25 +399,67 @@ impl Cyw43NetDevice {
         info!("[cyw43] step: init_transport");
         if let Err(err) = state.init_cyw43_transport() {
             if !is_transport_retryable(&err) {
-                return Err(err.into());
+                let driver_err = DriverError::from(err);
+                log_cyw43_init_failure("cyw43-init-transport-fail", &mut state, &driver_err, false);
+                return Err(driver_err);
             }
             warn!("[cyw43] init_transport retryable failure: {err}");
-            recover_startup_transport(&mut state, "init_transport(retry)")?;
+            if let Err(retry_err) = recover_startup_transport(&mut state, "init_transport(retry)") {
+                let driver_err = DriverError::from(retry_err);
+                log_cyw43_init_failure(
+                    "cyw43-init-transport-retry-fail",
+                    &mut state,
+                    &driver_err,
+                    false,
+                );
+                return Err(driver_err);
+            }
         }
         progress.tick();
         info!("[cyw43] step: set_bus_width(4bit)");
-        state.set_bus_width(SdioBusWidth::FourBit)?;
+        if let Err(err) = state.set_bus_width(SdioBusWidth::FourBit) {
+            let driver_err = DriverError::from(err);
+            log_cyw43_init_failure(
+                "cyw43-set-bus-width-4bit-fail",
+                &mut state,
+                &driver_err,
+                false,
+            );
+            return Err(driver_err);
+        }
         progress.tick();
         info!("[cyw43] step: load_firmware(startup-clock)");
         // Keep the control path at startup clock, but switch to the final bus
         // width before bulk upload so the first high-speed CMD53 uses the
         // stable 4-bit transport configuration.
-        state.load_cyw43_firmware()?;
+        if let Err(err) = state.load_cyw43_firmware() {
+            let driver_err = DriverError::from(err);
+            log_cyw43_init_failure("cyw43-load-firmware-fail", &mut state, &driver_err, false);
+            return Err(driver_err);
+        }
         progress.tick();
-        let (data_clock_hz, bus_width) = prepare_initial_control_plane_transport(&mut state)?;
+        let (data_clock_hz, bus_width) = match prepare_initial_control_plane_transport(&mut state) {
+            Ok(result) => result,
+            Err(err) => {
+                log_cyw43_init_failure(
+                    "cyw43-control-transport-prepare-fail",
+                    &mut state,
+                    &err,
+                    false,
+                );
+                return Err(err);
+            }
+        };
         progress.tick();
         info!("[cyw43] step: read_ioex");
-        let ioex = state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
+        let ioex = match state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX) {
+            Ok(value) => value,
+            Err(err) => {
+                let driver_err = DriverError::from(err);
+                log_cyw43_init_failure("cyw43-read-ioex-fail", &mut state, &driver_err, false);
+                return Err(driver_err);
+            }
+        };
         progress.tick();
 
         let mut device = Self {
@@ -422,7 +484,15 @@ impl Cyw43NetDevice {
         };
 
         info!("[cyw43] step: init_control_plane");
-        device.init_control_plane(firmware, credentials)?;
+        if let Err(err) = device.init_control_plane(firmware, credentials) {
+            log_cyw43_init_failure(
+                "cyw43-init-control-plane-fail",
+                &mut device.state,
+                &err,
+                true,
+            );
+            return Err(err);
+        }
         info!(
             "[cyw43] ready: mac={} clock={}Hz bus_width={} ioex=0x{:02x}",
             device.mac,
