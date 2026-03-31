@@ -212,7 +212,6 @@ const fn skip_config_write_during_init_with_snapshot(
 ) -> bool {
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_stop_state_snapshot_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_config_write_during_init(firmware_handoff)
 }
 
@@ -231,12 +230,10 @@ const fn skip_reset_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Only the stronger seeded snapshot paths remain fully reset-equivalent.
-    // The weaker stop-state-only snapshot still skips the toxic live HCRST
-    // store on Pi 4, and the matching CONFIG write now stays suppressed too
-    // while the normal ring bring-up continues with fresh runtime ownership.
+    // Only the stronger seeded snapshot paths remain reset-equivalent. A
+    // stop-state-only snapshot is not trusted to replace U-Boot's halt/reset/
+    // CNR-clear contract, so it must take the normal reset path.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_stop_state_snapshot_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_reset_during_init(firmware_handoff)
 }
@@ -248,15 +245,6 @@ const fn runtime_mailbox_reset_handoff(
 ) -> bool {
     matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
         && runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
-}
-
-#[inline(always)]
-const fn runtime_stop_state_snapshot_handoff(
-    firmware_handoff: XhciFirmwareHandoff,
-    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
-) -> bool {
-    matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
-        && runtime_snapshot_has_stop_state(runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -371,6 +359,14 @@ const fn probe_live_dcbaap_before_staged_publish_with_snapshot(
 }
 
 #[inline(always)]
+const fn probe_live_crcr_before_staged_publish_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    !defer_crcr_publish_with_snapshot(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn use_atomic_runtime_ring_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
@@ -406,19 +402,7 @@ const fn skip_live_halt_revalidation_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     skip_live_halt_revalidation(firmware_handoff)
-        || runtime_snapshot_has_stop_state(runtime_seed_snapshot)
-}
-
-#[inline(always)]
-const fn runtime_snapshot_has_stop_state(
-    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
-) -> bool {
-    match runtime_seed_snapshot {
-        Some(snapshot) => {
-            snapshot.usbcmd.is_some() || snapshot.usbsts.is_some() || snapshot.iman0.is_some()
-        }
-        None => false,
-    }
+        || runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -1390,7 +1374,11 @@ impl<H: Dma> XhciCtrl<H> {
         // reads on the trusted snapshot path.
         let current_crcr = if preserve_firmware_state {
             0
-        } else if !live_post_reset_seed_reads {
+        } else if !probe_live_crcr_before_staged_publish_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        ) || !live_post_reset_seed_reads
+        {
             trusted_runtime_seed_snapshot
                 .and_then(|snapshot| snapshot.crcr)
                 .unwrap_or(0)
@@ -2421,10 +2409,10 @@ mod tests {
         defer_scratchpad_array_publish_with_snapshot,
         halt_revalidation_needed, masked_usbcmd, parse_controller_params, polling_iman_value,
         port_ready_for_enumeration, preserve_firmware_handoff_config,
+        probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
         runtime_mailbox_reset_handoff, runtime_mailbox_reset_needs_blind_settle,
         runtime_stop_state_needs_post_run_settle,
-        runtime_stop_state_snapshot_handoff,
         skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
         skip_constructor_polling_scrub_writes,
         skip_doorbell_readback_after_ring, skip_init_pre_reset_scrub_writes,
@@ -2524,7 +2512,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_skips_reset_and_config_write() {
+    fn stop_state_only_snapshot_uses_normal_reset_and_live_ring_probes() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -2535,7 +2523,7 @@ mod tests {
             erdp0: None,
             erstsz0: None,
         });
-        assert!(skip_live_halt_revalidation_with_snapshot(
+        assert!(!skip_live_halt_revalidation_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -2559,15 +2547,11 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(runtime_stop_state_snapshot_handoff(
+        assert!(!skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(skip_reset_during_init_with_snapshot(
-            XhciFirmwareHandoff::ColdStartFromSnapshot,
-            snapshot,
-        ));
-        assert!(skip_config_write_during_init_with_snapshot(
+        assert!(!skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -2596,6 +2580,10 @@ mod tests {
             snapshot,
         ));
         assert!(probe_live_dcbaap_before_staged_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(probe_live_crcr_before_staged_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -2734,6 +2722,14 @@ mod tests {
         assert!(defer_crcr_publish_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
+        ));
+        assert!(!probe_live_crcr_before_staged_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(probe_live_crcr_before_staged_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            None,
         ));
     }
 

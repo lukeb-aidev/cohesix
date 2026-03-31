@@ -657,11 +657,6 @@ const COHESIX_DTB_XHCI_POSTSTOP_SAFE_PROP: &str = "cohesix,xhci-handoff-poststop
 const COHESIX_DTB_XHCI_USBCMD_PROP: &str = "cohesix,xhci-usbcmd";
 const COHESIX_DTB_XHCI_USBSTS_PROP: &str = "cohesix,xhci-usbsts";
 const COHESIX_DTB_XHCI_IMAN0_PROP: &str = "cohesix,xhci-iman0";
-const COHESIX_DTB_XHCI_DCBAAP_PROP: &str = "cohesix,xhci-dcbaap";
-const COHESIX_DTB_XHCI_CRCR_PROP: &str = "cohesix,xhci-crcr";
-const COHESIX_DTB_XHCI_ERSTBA0_PROP: &str = "cohesix,xhci-erstba0";
-const COHESIX_DTB_XHCI_ERDP0_PROP: &str = "cohesix,xhci-erdp0";
-const COHESIX_DTB_XHCI_ERSTSZ0_PROP: &str = "cohesix,xhci-erstsz0";
 const COHESIX_DTB_XHCI_CAP_LENGTH_PROP: &str = "cohesix,xhci-cap-length";
 const COHESIX_DTB_XHCI_HCI_VERSION_PROP: &str = "cohesix,xhci-hci-version";
 const COHESIX_DTB_XHCI_HCS1_PROP: &str = "cohesix,xhci-hcs1";
@@ -2234,76 +2229,8 @@ fn init_local_seat_runtime<P: Platform>(
     } else {
         None
     };
-    let xhci_dcbaap = if local_seat_enabled {
-        infer_pi4_uefi_xhci_chosen_u64_prop(
-            extra_bytes,
-            extra_range.clone(),
-            COHESIX_DTB_XHCI_DCBAAP_PROP,
-        )
-    } else {
-        None
-    };
-    let xhci_crcr = if local_seat_enabled {
-        infer_pi4_uefi_xhci_chosen_u64_prop(
-            extra_bytes,
-            extra_range.clone(),
-            COHESIX_DTB_XHCI_CRCR_PROP,
-        )
-    } else {
-        None
-    };
-    let xhci_erstba0 = if local_seat_enabled {
-        infer_pi4_uefi_xhci_chosen_u64_prop(
-            extra_bytes,
-            extra_range.clone(),
-            COHESIX_DTB_XHCI_ERSTBA0_PROP,
-        )
-    } else {
-        None
-    };
-    let xhci_erdp0 = if local_seat_enabled {
-        infer_pi4_uefi_xhci_chosen_u64_prop(
-            extra_bytes,
-            extra_range.clone(),
-            COHESIX_DTB_XHCI_ERDP0_PROP,
-        )
-    } else {
-        None
-    };
-    let xhci_erstsz0 = if local_seat_enabled {
-        infer_pi4_uefi_xhci_chosen_u32_prop(
-            extra_bytes,
-            extra_range.clone(),
-            COHESIX_DTB_XHCI_ERSTSZ0_PROP,
-        )
-    } else {
-        None
-    };
     let xhci_capability_snapshot = if local_seat_enabled {
         infer_pi4_uefi_xhci_capability_snapshot(extra_bytes, extra_range.clone())
-    } else {
-        None
-    };
-    let xhci_runtime_seed_snapshot = if local_seat_enabled
-        && (xhci_usbcmd.is_some()
-            || xhci_usbsts.is_some()
-            || xhci_iman0.is_some()
-            || xhci_dcbaap.is_some()
-            || xhci_crcr.is_some()
-            || xhci_erstba0.is_some()
-            || xhci_erdp0.is_some()
-            || xhci_erstsz0.is_some())
-    {
-        Some(local_seat::LocalSeatXhciRuntimeSeedSnapshot {
-            usbcmd: xhci_usbcmd,
-            usbsts: xhci_usbsts,
-            iman0: xhci_iman0,
-            dcbaap: xhci_dcbaap,
-            crcr: xhci_crcr,
-            erstba0: xhci_erstba0,
-            erdp0: xhci_erdp0,
-            erstsz0: xhci_erstsz0,
-        })
     } else {
         None
     };
@@ -2535,62 +2462,6 @@ fn init_local_seat_runtime<P: Platform>(
             console.writeln_prefixed(line.as_str());
             boot_log::force_uart_line(line.as_str());
         }
-        if xhci_dcbaap.is_some()
-            || xhci_crcr.is_some()
-            || xhci_erstba0.is_some()
-            || xhci_erdp0.is_some()
-            || xhci_erstsz0.is_some()
-        {
-            let mut line = heapless::String::<320>::new();
-            let _ = write!(line, "[local-seat] xhci-handoff-rings");
-            let _ = write!(line, " dcbaap=");
-            match xhci_dcbaap {
-                Some(value) => {
-                    let _ = write!(line, "0x{value:016x}");
-                }
-                None => {
-                    let _ = write!(line, "absent");
-                }
-            }
-            let _ = write!(line, " crcr=");
-            match xhci_crcr {
-                Some(value) => {
-                    let _ = write!(line, "0x{value:016x}");
-                }
-                None => {
-                    let _ = write!(line, "absent");
-                }
-            }
-            let _ = write!(line, " erstba0=");
-            match xhci_erstba0 {
-                Some(value) => {
-                    let _ = write!(line, "0x{value:016x}");
-                }
-                None => {
-                    let _ = write!(line, "absent");
-                }
-            }
-            let _ = write!(line, " erdp0=");
-            match xhci_erdp0 {
-                Some(value) => {
-                    let _ = write!(line, "0x{value:016x}");
-                }
-                None => {
-                    let _ = write!(line, "absent");
-                }
-            }
-            let _ = write!(line, " erstsz0=");
-            match xhci_erstsz0 {
-                Some(value) => {
-                    let _ = write!(line, "0x{value:08x}");
-                }
-                None => {
-                    let _ = write!(line, "absent");
-                }
-            }
-            console.writeln_prefixed(line.as_str());
-            boot_log::force_uart_line(line.as_str());
-        }
         if let Some(snapshot) = xhci_capability_snapshot {
             let mut line = heapless::String::<320>::new();
             let _ = write!(
@@ -2689,7 +2560,6 @@ fn init_local_seat_runtime<P: Platform>(
         xhci_handoff_ready,
         xhci_irq_quiesced,
         xhci_capability_snapshot,
-        xhci_runtime_seed_snapshot,
         display_hint,
     };
     match local_seat::evaluate(hardware, local_seat::runtime_backend_available()) {

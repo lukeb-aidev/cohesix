@@ -498,7 +498,10 @@ const fn core_ctrl_can_defer_in_reset_readback(
     asserted_reset: bool,
     skipped_write: bool,
 ) -> bool {
-    asserted_reset && skipped_write && base == CYW43_SOCRAM_CORE_BASE
+    let _ = base;
+    let _ = asserted_reset;
+    let _ = skipped_write;
+    false
 }
 
 #[inline]
@@ -524,7 +527,9 @@ const fn backplane_window_differs_by_mid_byte_only(
 
 #[inline]
 const fn core_ctrl_can_defer_clear_reset_readback(base: u32, attempt: usize) -> bool {
-    attempt == 0 && matches!(base, CYW43_SOCRAM_CORE_BASE | CYW43_ARMCR4_CORE_BASE)
+    let _ = base;
+    let _ = attempt;
+    false
 }
 
 #[inline]
@@ -615,12 +620,15 @@ const fn io_direct_cmd53_byte_fallback_allowed(function: SdioFunction) -> bool {
 
 #[inline]
 fn chipcommon_config_can_assume_write_commit(addr: u32, err: &HalError) -> bool {
-    chipcommon_config_is_phase_addr(addr) && is_sdhci_io_path_error(err)
+    let _ = addr;
+    let _ = err;
+    false
 }
 
 #[inline]
 fn chipcommon_config_can_assume_window_commit(err: &HalError) -> bool {
-    is_sdhci_command_error(err)
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -682,7 +690,8 @@ const fn firmware_channel_write_restore_clock_hz(
     experimental_no_ht_transport: bool,
     current_clock_hz: u32,
 ) -> Option<u32> {
-    if experimental_no_ht_transport && current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
+    let _ = experimental_no_ht_transport;
+    if current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
         Some(current_clock_hz)
     } else {
         None
@@ -705,7 +714,8 @@ fn setup_firmware_channel_can_assume_write_committed(
 const fn wait_for_firmware_ready_uses_experimental_mailbox_read(
     allow_function2_ready_bypass: bool,
 ) -> bool {
-    allow_function2_ready_bypass
+    let _ = allow_function2_ready_bypass;
+    false
 }
 
 #[inline]
@@ -714,9 +724,10 @@ fn wait_for_firmware_ready_can_assume_mailbox_ready(
     attempt: usize,
     err: &HalError,
 ) -> bool {
-    allow_function2_ready_bypass
-        && attempt == 0
-        && (is_sdhci_io_path_error(err) || is_sdhci_int_timeout(err))
+    let _ = allow_function2_ready_bypass;
+    let _ = attempt;
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -726,10 +737,11 @@ fn experimental_control_plane_write_can_assume_committed(
     promoted_probe_pending: bool,
     err: &HalError,
 ) -> bool {
-    experimental_no_ht_transport
-        && first_control_plane_write_pending
-        && !promoted_probe_pending
-        && is_sdhci_io_path_error(err)
+    let _ = experimental_no_ht_transport;
+    let _ = first_control_plane_write_pending;
+    let _ = promoted_probe_pending;
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -738,9 +750,10 @@ fn experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
     first_control_plane_write_pending: bool,
     err: &HalError,
 ) -> bool {
-    experimental_no_ht_transport
-        && first_control_plane_write_pending
-        && matches!(err, HalError::Unsupported("sdio-function2-ready-timeout"))
+    let _ = experimental_no_ht_transport;
+    let _ = first_control_plane_write_pending;
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -748,7 +761,9 @@ const fn experimental_control_plane_write_needs_post_write_rearm(
     experimental_no_ht_transport: bool,
     first_control_plane_write_pending: bool,
 ) -> bool {
-    experimental_no_ht_transport && first_control_plane_write_pending
+    let _ = experimental_no_ht_transport;
+    let _ = first_control_plane_write_pending;
+    false
 }
 
 #[inline]
@@ -880,15 +895,19 @@ fn core_reset_can_assume_clear_reset_retry_commit(
     attempt: usize,
     err: &HalError,
 ) -> bool {
-    base == CYW43_SOCRAM_CORE_BASE
-        && offset == AI_RESETCTRL_OFFSET
-        && attempt == 0
-        && is_sdhci_command_error(err)
+    let _ = base;
+    let _ = offset;
+    let _ = attempt;
+    let _ = err;
+    false
 }
 
 #[inline]
 fn core_reset_can_assume_postreset_clock_en_commit(base: u32, offset: u32, err: &HalError) -> bool {
-    base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET && is_sdhci_command_error(err)
+    let _ = base;
+    let _ = offset;
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -897,18 +916,18 @@ fn core_reset_can_defer_postreset_clock_en_readback(
     offset: u32,
     err: &HalError,
 ) -> bool {
-    (base == CYW43_SOCRAM_CORE_BASE && offset == AI_IOCTRL_OFFSET && is_sdhci_command_error(err))
-        || (base == CYW43_ARMCR4_CORE_BASE
-            && offset == AI_IOCTRL_OFFSET
-            && is_sdhci_fragile_read_error(err))
+    let _ = base;
+    let _ = offset;
+    let _ = err;
+    false
 }
 
 #[inline]
 fn core_reset_can_defer_postreset_reset_readback(base: u32, offset: u32, err: &HalError) -> bool {
-    (base == CYW43_SOCRAM_CORE_BASE && offset == AI_RESETCTRL_OFFSET && is_sdhci_command_error(err))
-        || (base == CYW43_ARMCR4_CORE_BASE
-            && offset == AI_RESETCTRL_OFFSET
-            && is_sdhci_fragile_read_error(err))
+    let _ = base;
+    let _ = offset;
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -934,10 +953,11 @@ fn core_wait_can_defer_after_read_error(
     current_clock_hz: u32,
     err: &HalError,
 ) -> bool {
-    base == CYW43_ARMCR4_CORE_BASE
-        && current_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ
-        && attempt > 1
-        && is_sdhci_fragile_read_error(err)
+    let _ = base;
+    let _ = attempt;
+    let _ = current_clock_hz;
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -1975,11 +1995,11 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
     ready: u8,
     budget: SdioFunctionReadyBudget,
 ) -> bool {
-    matches!(budget, SdioFunctionReadyBudget::ExperimentalBypass)
-        && matches!(step.function, SdioFunction::Function2)
-        && (desired & step.enable_bit) == step.enable_bit
-        && (ready & SDIO_FUNC_READY_1) == SDIO_FUNC_READY_1
-        && (ready & step.ready_bit) == 0
+    let _ = step;
+    let _ = desired;
+    let _ = ready;
+    let _ = budget;
+    false
 }
 
 #[inline]
@@ -4023,50 +4043,96 @@ impl SdioHost {
         &mut self,
         allow_function2_ready_bypass: bool,
     ) -> Result<(), HalError> {
-        let experimental_order =
-            setup_firmware_channel_uses_experimental_order(allow_function2_ready_bypass);
-        if experimental_order {
+        let restore_clock_hz = firmware_channel_write_restore_clock_hz(
+            self.experimental_no_ht_transport,
+            self.current_clock_hz,
+        );
+        if let Some(clock_hz) = restore_clock_hz {
             emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=firmware-channel-write-clock action=lower context=setup current={}Hz target={}Hz width={} no_ht={}",
+                self.current_clock_hz,
+                CYW43_STARTUP_CLOCK_HZ,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.experimental_no_ht_transport,
+            ));
+            self.set_clock_hz(CYW43_STARTUP_CLOCK_HZ)?;
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=firmware-channel-write-clock action=lower-ready context=setup previous={}Hz current={}Hz width={} no_ht={}",
+                clock_hz,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.experimental_no_ht_transport,
+            ));
+        }
+        let write_result = (|| {
+            let experimental_order =
+                setup_firmware_channel_uses_experimental_order(allow_function2_ready_bypass);
+            if experimental_order {
+                emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=setup-firmware-channel action=experimental-function2-first"
             ));
-            self.enable_function2(sdio_function_ready_budget_for_bypass(
+                self.enable_function2(sdio_function_ready_budget_for_bypass(
+                    allow_function2_ready_bypass,
+                ))?;
+            }
+            self.write_sdio_core_u32_for_firmware_channel(
+                "setup-firmware-channel-mailbox-version",
+                SDPCMD_REG_TOSBMAILBOXDATA,
+                SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT,
                 allow_function2_ready_bypass,
-            ))?;
-        }
-        self.write_sdio_core_u32_for_firmware_channel(
-            "setup-firmware-channel-mailbox-version",
-            SDPCMD_REG_TOSBMAILBOXDATA,
-            SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT,
-            allow_function2_ready_bypass,
-        )?;
-        if !experimental_order {
-            self.enable_function2(sdio_function_ready_budget_for_bypass(
+            )?;
+            if !experimental_order {
+                self.enable_function2(sdio_function_ready_budget_for_bypass(
+                    allow_function2_ready_bypass,
+                ))?;
+            }
+            self.write_sdio_core_u32_for_firmware_channel(
+                "setup-firmware-channel-hostintmask",
+                SDPCMD_REG_HOSTINTMASK,
+                HOSTINTMASK,
                 allow_function2_ready_bypass,
-            ))?;
+            )?;
+            self.io_direct_write(
+                SdioFunction::Function1,
+                SBSDIO_WATERMARK,
+                CY_43455_F2_WATERMARK,
+            )?;
+            let devctl = self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)?;
+            self.io_direct_write(
+                SdioFunction::Function1,
+                SBSDIO_DEVICE_CTL,
+                devctl | SBSDIO_DEVCTL_F2WM_ENAB,
+            )?;
+            self.io_direct_write(
+                SdioFunction::Function1,
+                SBSDIO_FUNC1_MESBUSYCTRL,
+                CY_43455_MESBUSYCTRL,
+            )?;
+            Ok(())
+        })();
+        if let Some(clock_hz) = restore_clock_hz {
+            match self.set_clock_hz(clock_hz) {
+                Ok(restored_clock_hz) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=firmware-channel-write-clock action=restore context=setup restored={}Hz width={} no_ht={}",
+                        restored_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        self.experimental_no_ht_transport,
+                    ));
+                }
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=firmware-channel-write-clock action=restore-fail context=setup target={}Hz current={}Hz width={} no_ht={} err={err}",
+                        clock_hz,
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        self.experimental_no_ht_transport,
+                    ));
+                    return Err(err);
+                }
+            }
         }
-        self.write_sdio_core_u32_for_firmware_channel(
-            "setup-firmware-channel-hostintmask",
-            SDPCMD_REG_HOSTINTMASK,
-            HOSTINTMASK,
-            allow_function2_ready_bypass,
-        )?;
-        self.io_direct_write(
-            SdioFunction::Function1,
-            SBSDIO_WATERMARK,
-            CY_43455_F2_WATERMARK,
-        )?;
-        let devctl = self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)?;
-        self.io_direct_write(
-            SdioFunction::Function1,
-            SBSDIO_DEVICE_CTL,
-            devctl | SBSDIO_DEVCTL_F2WM_ENAB,
-        )?;
-        self.io_direct_write(
-            SdioFunction::Function1,
-            SBSDIO_FUNC1_MESBUSYCTRL,
-            CY_43455_MESBUSYCTRL,
-        )?;
-        Ok(())
+        write_result
     }
 
     fn wait_for_firmware_ready(
@@ -5159,45 +5225,18 @@ impl SdioHost {
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-core-up"));
         self.wait_for_core_up(CYW43_ARMCR4_CORE_BASE, "armcr4-core-up")?;
         self.ensure_control_plane_clock("wait-ht-clock-prep")?;
-        let mut strict_ht_ready = true;
-        match self.require_ht_clock_ready("wait-ht-clock", "wait-ht-clock assist") {
-            Ok(()) => {}
-            Err(err @ HalError::Unsupported("cyw43-ht-clock-timeout")) => {
-                strict_ht_ready = false;
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=wait-ht-clock action=experimental-continue-without-ht reason=ht-timeout err={err}"
-                ));
-                self.log_transport_shadow("wait-ht-clock-experimental-continue");
-            }
-            Err(err) => return Err(err),
-        }
+        self.require_ht_clock_ready("wait-ht-clock", "wait-ht-clock assist")?;
         self.ensure_control_plane_clock("setup-firmware-channel-clock")?;
-        self.experimental_no_ht_transport = !strict_ht_ready;
-        self.experimental_control_plane_write_probe_pending = !strict_ht_ready;
+        self.experimental_no_ht_transport = false;
+        self.experimental_control_plane_write_probe_pending = false;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=setup-firmware-channel"
         ));
-        if !strict_ht_ready {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=setup-firmware-channel action=probe-after-ht-timeout"
-            ));
-        }
-        self.setup_firmware_channel(!strict_ht_ready)?;
+        self.setup_firmware_channel(false)?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=wait-firmware-ready"
         ));
-        if !strict_ht_ready {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=wait-firmware-ready action=probe-after-ht-timeout"
-            ));
-        }
-        self.wait_for_firmware_ready(!strict_ht_ready)?;
-        if !strict_ht_ready {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=repoll"
-            ));
-            self.enable_function2(SdioFunctionReadyBudget::ExperimentalBypass)?;
-        }
+        self.wait_for_firmware_ready(false)?;
         emit_breadcrumb(format_args!("[pi4-wifi] firmware load ready"));
         Ok(())
     }
@@ -7523,8 +7562,8 @@ mod tests {
     }
 
     #[test]
-    fn experimental_control_plane_write_assumption_only_applies_to_first_no_ht_io_path_failure() {
-        assert!(experimental_control_plane_write_can_assume_committed(
+    fn experimental_control_plane_write_never_assumes_committed_state() {
+        assert!(!experimental_control_plane_write_can_assume_committed(
             true,
             true,
             false,
@@ -7557,8 +7596,8 @@ mod tests {
     }
 
     #[test]
-    fn experimental_control_plane_write_post_write_rearm_only_runs_for_first_no_ht_write() {
-        assert!(experimental_control_plane_write_needs_post_write_rearm(
+    fn experimental_control_plane_write_post_write_rearm_is_disabled() {
+        assert!(!experimental_control_plane_write_needs_post_write_rearm(
             true, true
         ));
         assert!(!experimental_control_plane_write_needs_post_write_rearm(
@@ -7570,9 +7609,9 @@ mod tests {
     }
 
     #[test]
-    fn experimental_control_plane_write_post_write_timeout_promotion_is_precise() {
+    fn experimental_control_plane_write_post_write_timeout_promotion_is_disabled() {
         assert!(
-            experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
                 true,
                 true,
                 &HalError::Unsupported("sdio-function2-ready-timeout"),
@@ -7983,7 +8022,7 @@ mod tests {
         assert!(is_sdhci_fragile_read_error(&HalError::Unsupported(
             "sdhci-command-error"
         )));
-        assert!(core_reset_can_assume_clear_reset_retry_commit(
+        assert!(!core_reset_can_assume_clear_reset_retry_commit(
             CYW43_SOCRAM_CORE_BASE,
             AI_RESETCTRL_OFFSET,
             0,
@@ -8013,7 +8052,7 @@ mod tests {
             0,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
-        assert!(core_reset_can_assume_postreset_clock_en_commit(
+        assert!(!core_reset_can_assume_postreset_clock_en_commit(
             CYW43_SOCRAM_CORE_BASE,
             AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-command-error"),
@@ -8033,12 +8072,12 @@ mod tests {
             AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
-        assert!(core_reset_can_defer_postreset_clock_en_readback(
+        assert!(!core_reset_can_defer_postreset_clock_en_readback(
             CYW43_SOCRAM_CORE_BASE,
             AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-command-error"),
         ));
-        assert!(core_reset_can_defer_postreset_clock_en_readback(
+        assert!(!core_reset_can_defer_postreset_clock_en_readback(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-int-timeout"),
@@ -8053,12 +8092,12 @@ mod tests {
             AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
-        assert!(core_reset_can_defer_postreset_reset_readback(
+        assert!(!core_reset_can_defer_postreset_reset_readback(
             CYW43_SOCRAM_CORE_BASE,
             AI_RESETCTRL_OFFSET,
             &HalError::Unsupported("sdhci-command-error"),
         ));
-        assert!(core_reset_can_defer_postreset_reset_readback(
+        assert!(!core_reset_can_defer_postreset_reset_readback(
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET,
             &HalError::Unsupported("sdhci-int-timeout"),
@@ -8099,7 +8138,7 @@ mod tests {
             CYW43_CONTROL_PLANE_CLOCK_HZ,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
-        assert!(core_wait_can_defer_after_read_error(
+        assert!(!core_wait_can_defer_after_read_error(
             CYW43_ARMCR4_CORE_BASE,
             2,
             CYW43_CONTROL_PLANE_CLOCK_HZ,
@@ -8197,17 +8236,17 @@ mod tests {
         assert!(!is_sdhci_io_path_error(&HalError::Unsupported(
             "sdhci-int-timeout"
         )));
-        assert!(chipcommon_config_can_assume_write_commit(
+        assert!(!chipcommon_config_can_assume_write_commit(
             CYW43_SOCRAM_CORE_BASE + 0x10,
             &HalError::Unsupported("sdhci-transfer-command"),
         ));
-        assert!(chipcommon_config_can_assume_window_commit(
+        assert!(!chipcommon_config_can_assume_window_commit(
             &HalError::Unsupported("sdhci-command-error"),
         ));
         assert!(!chipcommon_config_can_assume_window_commit(
             &HalError::Unsupported("sdhci-transfer-command"),
         ));
-        assert!(chipcommon_config_can_assume_write_commit(
+        assert!(!chipcommon_config_can_assume_write_commit(
             CYW43_SOCRAM_CORE_BASE + 0x44,
             &HalError::Unsupported("sdhci-command-error"),
         ));
@@ -8603,9 +8642,9 @@ mod tests {
     }
 
     #[test]
-    fn function2_ready_timeout_experimental_continue_requires_f1_ready() {
+    fn function2_ready_timeout_experimental_continue_is_disabled() {
         let desired = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
-        assert!(sdio_function_ready_timeout_can_continue_experimentally(
+        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,
@@ -8650,7 +8689,7 @@ mod tests {
     }
 
     #[test]
-    fn no_ht_firmware_channel_writes_only_drop_clock_on_fast_paths() {
+    fn firmware_channel_writes_drop_to_startup_clock_on_fast_paths() {
         assert_eq!(
             firmware_channel_write_restore_clock_hz(true, CYW43_CONTROL_PLANE_CLOCK_HZ),
             Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
@@ -8661,7 +8700,7 @@ mod tests {
         );
         assert_eq!(
             firmware_channel_write_restore_clock_hz(false, CYW43_CONTROL_PLANE_CLOCK_HZ),
-            None
+            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
         );
     }
 
@@ -8690,21 +8729,23 @@ mod tests {
     }
 
     #[test]
-    fn wait_for_firmware_ready_experimental_mailbox_read_tracks_bypass_flag() {
-        assert!(wait_for_firmware_ready_uses_experimental_mailbox_read(true));
+    fn wait_for_firmware_ready_experimental_mailbox_read_is_disabled() {
+        assert!(!wait_for_firmware_ready_uses_experimental_mailbox_read(
+            true
+        ));
         assert!(!wait_for_firmware_ready_uses_experimental_mailbox_read(
             false
         ));
     }
 
     #[test]
-    fn wait_for_firmware_ready_assume_ready_is_bounded() {
-        assert!(wait_for_firmware_ready_can_assume_mailbox_ready(
+    fn wait_for_firmware_ready_never_assumes_mailbox_ready() {
+        assert!(!wait_for_firmware_ready_can_assume_mailbox_ready(
             true,
             0,
             &HalError::Unsupported("sdhci-transfer-data"),
         ));
-        assert!(wait_for_firmware_ready_can_assume_mailbox_ready(
+        assert!(!wait_for_firmware_ready_can_assume_mailbox_ready(
             true,
             0,
             &HalError::Unsupported("sdhci-int-timeout"),

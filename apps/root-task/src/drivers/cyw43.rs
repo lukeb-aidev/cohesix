@@ -40,11 +40,9 @@ const FRAME_BUF_LEN: usize = 2048;
 const CONTROL_RESPONSE_BUF_LEN: usize = 512;
 const CLM_CHUNK_SIZE: usize = 1024;
 const IOCTL_WAIT_LOOPS: usize = 8_000;
-const IOCTL_WAIT_LOOPS_NO_HT_PROBE: usize = 32_000;
 const JOIN_WAIT_LOOPS: usize = 64_000;
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
-const CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD: u8 = 4;
 
 const CHANNEL_CONTROL: u8 = 0;
 const CHANNEL_EVENT: u8 = 1;
@@ -206,56 +204,6 @@ fn is_transport_retryable(err: &HalError) -> bool {
     )
 }
 
-fn is_control_plane_promoted_probe_stall(err: &DriverError) -> bool {
-    matches!(
-        err,
-        DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-promoted-rearm-timeout"
-        ))
-    )
-}
-
-fn is_control_plane_promoted_write_io_path_error(err: &HalError) -> bool {
-    matches!(
-        err,
-        HalError::Unsupported("sdhci-command-error")
-            | HalError::Unsupported("sdhci-transfer-command")
-            | HalError::Unsupported("sdhci-transfer-data")
-            | HalError::Unsupported("sdhci-transfer-finish")
-    )
-}
-
-fn should_fallback_control_plane_transport_after_promoted_write_failure(
-    promoted_link_probe_pending: bool,
-    err: &HalError,
-) -> bool {
-    promoted_link_probe_pending && is_control_plane_promoted_write_io_path_error(err)
-}
-
-fn is_control_plane_startup_link_retry(err: &DriverError) -> bool {
-    matches!(
-        err,
-        DriverError::Protocol("cyw43-control-plane-startup-link-retry")
-    )
-}
-
-fn is_control_plane_startup_link_reply_timeout(err: &DriverError) -> bool {
-    matches!(
-        err,
-        DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-startup-link-reply-timeout"
-        ))
-    )
-}
-
-fn control_plane_timeout_retry_reason(err: &DriverError) -> &'static str {
-    if is_control_plane_startup_link_reply_timeout(err) {
-        "startup-link-reply-timeout"
-    } else {
-        "ioctl-timeout"
-    }
-}
-
 fn recover_startup_transport(
     state: &mut Pi4WifiState,
     init_transport_label: &'static str,
@@ -285,25 +233,16 @@ fn recover_startup_transport(
 
 fn prepare_initial_control_plane_transport(
     state: &mut Pi4WifiState,
-) -> Result<(u32, SdioBusWidth, bool), DriverError> {
-    if !state.cyw43_experimental_no_ht_transport() {
-        info!("[cyw43] step: set_clock(data)");
-        let data_clock_target_hz =
-            control_plane_data_clock_target_hz(state.recommended_data_clock_hz());
-        let data_clock_hz = state.set_clock_hz(data_clock_target_hz)?;
-        return Ok((data_clock_hz, SdioBusWidth::FourBit, false));
-    }
-
-    info!("[cyw43] step: hold_control_plane_transport(startup-link)");
-    let startup_clock_hz = state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
-    state.set_bus_width(SdioBusWidth::OneBit)?;
-    info!("[cyw43] step: rearm_control_plane_channel(startup-link)");
-    state.rearm_cyw43_control_plane_slow_link()?;
+) -> Result<(u32, SdioBusWidth), DriverError> {
+    info!("[cyw43] step: set_clock(data)");
+    let data_clock_target_hz =
+        control_plane_data_clock_target_hz(state.recommended_data_clock_hz());
+    let data_clock_hz = state.set_clock_hz(data_clock_target_hz)?;
     info!(
-        "[cyw43] control transport initial probe ready reason=no-ht-bootstrap clock={}Hz bus_width=1 mode=conservative-startup-link",
-        startup_clock_hz
+        "[cyw43] control transport ready clock={}Hz bus_width=4 mode=strict",
+        data_clock_hz
     );
-    Ok((startup_clock_hz, SdioBusWidth::OneBit, false))
+    Ok((data_clock_hz, SdioBusWidth::FourBit))
 }
 
 pub(crate) fn debug_load_firmware_from_transport(
@@ -311,7 +250,7 @@ pub(crate) fn debug_load_firmware_from_transport(
 ) -> Result<u32, HalError> {
     info!("[cyw43] debug: set_bus_width(4bit)");
     state.set_bus_width(SdioBusWidth::FourBit)?;
-    info!("[cyw43] debug: load_firmware(startup-link)");
+    info!("[cyw43] debug: load_firmware(startup-clock)");
     state.load_cyw43_firmware()?;
     info!("[cyw43] debug: set_clock(data)");
     let data_clock_target_hz = SDIO_DATA_CLOCK_HZ.min(state.recommended_data_clock_hz());
@@ -376,8 +315,6 @@ pub struct Cyw43NetDevice {
     sdpcm_seq_max: u8,
     ioctl_id: u16,
     link_up: bool,
-    control_plane_empty_poll_streak: u8,
-    control_plane_empty_poll_recovery_blocked: bool,
     rx_frame: [u8; FRAME_BUF_LEN],
     tx_frame: [u8; FRAME_BUF_LEN],
     control_response: [u8; CONTROL_RESPONSE_BUF_LEN],
@@ -451,14 +388,13 @@ impl Cyw43NetDevice {
         info!("[cyw43] step: set_bus_width(4bit)");
         state.set_bus_width(SdioBusWidth::FourBit)?;
         progress.tick();
-        info!("[cyw43] step: load_firmware(startup-link)");
+        info!("[cyw43] step: load_firmware(startup-clock)");
         // Keep the control path at startup clock, but switch to the final bus
         // width before bulk upload so the first high-speed CMD53 uses the
         // stable 4-bit transport configuration.
         state.load_cyw43_firmware()?;
         progress.tick();
-        let (data_clock_hz, bus_width, block_empty_poll_recovery) =
-            prepare_initial_control_plane_transport(&mut state)?;
+        let (data_clock_hz, bus_width) = prepare_initial_control_plane_transport(&mut state)?;
         progress.tick();
         info!("[cyw43] step: read_ioex");
         let ioex = state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
@@ -480,8 +416,6 @@ impl Cyw43NetDevice {
             sdpcm_seq_max: 1,
             ioctl_id: 0,
             link_up: false,
-            control_plane_empty_poll_streak: 0,
-            control_plane_empty_poll_recovery_blocked: block_empty_poll_recovery,
             rx_frame: [0; FRAME_BUF_LEN],
             tx_frame: [0; FRAME_BUF_LEN],
             control_response: [0; CONTROL_RESPONSE_BUF_LEN],
@@ -530,145 +464,6 @@ impl Cyw43NetDevice {
         self.mac = self.read_mac_address();
         self.join(credentials)?;
         Ok(())
-    }
-
-    fn maybe_promote_control_plane_transport_after_matched_reply(
-        &mut self,
-    ) -> Result<(), DriverError> {
-        let experimental_no_ht_transport = self.state.cyw43_experimental_no_ht_transport();
-        if !experimental_no_ht_transport {
-            return Ok(());
-        }
-
-        let reason_label = "matched-reply";
-        let rearm_mode = "strict";
-        let target_clock_hz =
-            control_plane_data_clock_target_hz(self.state.recommended_data_clock_hz());
-        if self.probe.bus_width == SdioBusWidth::FourBit
-            && self.probe.effective_clock_hz == target_clock_hz
-        {
-            self.state.finish_cyw43_experimental_transport_probe();
-            self.control_plane_empty_poll_streak = 0;
-            self.control_plane_empty_poll_recovery_blocked = false;
-            info!(
-                "[cyw43] control transport promote commit reason={} clock={}Hz bus_width=4 mode=already-proven",
-                reason_label, target_clock_hz
-            );
-            return Ok(());
-        }
-        info!(
-            "[cyw43] control transport promote reason={} target_clock={}Hz target_bus_width=4",
-            reason_label, target_clock_hz
-        );
-        self.state.set_bus_width(SdioBusWidth::FourBit)?;
-        let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
-        if should_rearm_control_plane_transport_after_promotion(experimental_no_ht_transport) {
-            info!(
-                "[cyw43] control transport promote rearm reason={} clock={}Hz bus_width=4 mode={}",
-                reason_label, effective_clock_hz, rearm_mode
-            );
-            if let Err(err) = self.state.rearm_cyw43_control_plane_promoted_link(false) {
-                warn!(
-                    "[cyw43] control transport promote fallback reason={} err={}",
-                    reason_label, err
-                );
-                self.fallback_control_plane_transport_to_startup_link(reason_label, true, false)?;
-                info!(
-                    "[cyw43] control transport promote fallback ready reason={} clock={}Hz bus_width=1",
-                    reason_label, self.probe.effective_clock_hz
-                );
-                return Ok(());
-            }
-        }
-        self.probe.effective_clock_hz = effective_clock_hz;
-        self.probe.bus_width = SdioBusWidth::FourBit;
-        self.control_plane_empty_poll_streak = 0;
-        self.state.finish_cyw43_experimental_transport_probe();
-        self.control_plane_empty_poll_recovery_blocked = false;
-        info!(
-            "[cyw43] control transport promote ready reason={} clock={}Hz bus_width=4",
-            reason_label, effective_clock_hz
-        );
-        Ok(())
-    }
-
-    fn fallback_control_plane_transport_to_startup_link(
-        &mut self,
-        reason_label: &'static str,
-        block_empty_poll_recovery: bool,
-        reseed_bootstrap_credit_window: bool,
-    ) -> Result<(), DriverError> {
-        let startup_clock_hz = self.state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
-        self.state.set_bus_width(SdioBusWidth::OneBit)?;
-        self.state.rearm_cyw43_control_plane_slow_link()?;
-        self.probe.effective_clock_hz = startup_clock_hz;
-        self.probe.bus_width = SdioBusWidth::OneBit;
-        self.control_plane_empty_poll_streak = 0;
-        if block_empty_poll_recovery {
-            self.control_plane_empty_poll_recovery_blocked = true;
-        }
-        if reseed_bootstrap_credit_window {
-            self.reseed_control_plane_bootstrap_credit_window(reason_label);
-        }
-        info!(
-            "[cyw43] control transport fallback reason={} clock={}Hz bus_width=1 block_empty_poll_recovery={} reseed_bootstrap_credit={}",
-            reason_label,
-            startup_clock_hz,
-            block_empty_poll_recovery,
-            reseed_bootstrap_credit_window,
-        );
-        Ok(())
-    }
-
-    fn promote_control_plane_transport_after_startup_link_reply_timeout(
-        &mut self,
-        cmd: u32,
-        expected_id: u16,
-    ) -> Result<(), DriverError> {
-        let reason_label = "startup-link-reply-timeout";
-        let target_clock_hz =
-            control_plane_data_clock_target_hz(self.state.recommended_data_clock_hz());
-        info!(
-            "[cyw43] control transport promote reason={} cmd=0x{:08x} id={} target_clock={}Hz target_bus_width=4 mode=speculative-first-reply",
-            reason_label, cmd, expected_id, target_clock_hz,
-        );
-        let promote_result = (|| {
-            self.state.set_bus_width(SdioBusWidth::FourBit)?;
-            let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
-            self.state.rearm_cyw43_control_plane_promoted_link(true)?;
-            Ok::<u32, DriverError>(effective_clock_hz)
-        })();
-        match promote_result {
-            Ok(effective_clock_hz) => {
-                self.probe.effective_clock_hz = effective_clock_hz;
-                self.probe.bus_width = SdioBusWidth::FourBit;
-                self.control_plane_empty_poll_streak = 0;
-                self.control_plane_empty_poll_recovery_blocked = true;
-                info!(
-                    "[cyw43] control transport promote ready reason={} cmd=0x{:08x} id={} clock={}Hz bus_width=4 mode=speculative-first-reply",
-                    reason_label, cmd, expected_id, effective_clock_hz,
-                );
-                Ok(())
-            }
-            Err(err) => {
-                warn!(
-                    "[cyw43] control transport promote fallback reason={} cmd=0x{:08x} id={} err={}",
-                    reason_label, cmd, expected_id, err,
-                );
-                self.fallback_control_plane_transport_to_startup_link(reason_label, true, true)?;
-                Err(DriverError::Protocol(
-                    "cyw43-control-plane-startup-link-retry",
-                ))
-            }
-        }
-    }
-
-    fn reseed_control_plane_bootstrap_credit_window(&mut self, reason_label: &'static str) {
-        self.sdpcm_seq_max = next_bootstrap_control_credit_limit(self.sdpcm_seq);
-        info!(
-            "[cyw43] control transport credit rearm reason={} seq={}/{}",
-            reason_label, self.sdpcm_seq, self.sdpcm_seq_max,
-        );
     }
 
     fn load_clm(&mut self, clm: &[u8]) -> Result<(), DriverError> {
@@ -910,60 +705,7 @@ impl Cyw43NetDevice {
         iface: u32,
         payload_len: usize,
     ) -> Result<usize, DriverError> {
-        let experimental_no_ht_transport = self.state.cyw43_experimental_no_ht_transport();
-        let mut startup_link_retry_attempt = 0u8;
-        let mut retry_attempt = 0u8;
-        loop {
-            if should_reset_control_plane_recovery_state_for_ioctl_attempt(
-                startup_link_retry_attempt,
-                retry_attempt,
-            ) {
-                self.control_plane_empty_poll_streak = 0;
-                self.control_plane_empty_poll_recovery_blocked = false;
-            }
-            match self.ioctl_encoded_once(kind, cmd, iface, payload_len) {
-                Ok(response_len) => return Ok(response_len),
-                Err(err)
-                    if should_retry_control_plane_ioctl_after_startup_link_rearm(
-                        experimental_no_ht_transport,
-                        startup_link_retry_attempt,
-                        &err,
-                    ) =>
-                {
-                    startup_link_retry_attempt = startup_link_retry_attempt.saturating_add(1);
-                    warn!(
-                        "[cyw43] control transport retry reason=startup-link-rearm cmd=0x{:08x} iface={} retry={}/1",
-                        cmd as u32,
-                        iface,
-                        startup_link_retry_attempt,
-                    );
-                }
-                Err(err)
-                    if should_retry_control_plane_ioctl_after_timeout(
-                        experimental_no_ht_transport,
-                        retry_attempt,
-                        &err,
-                    ) =>
-                {
-                    let retry_reason = control_plane_timeout_retry_reason(&err);
-                    retry_attempt = retry_attempt.saturating_add(1);
-                    startup_link_retry_attempt = 0;
-                    warn!(
-                        "[cyw43] control transport retry reason={} cmd=0x{:08x} iface={} retry={}/1",
-                        retry_reason,
-                        cmd as u32,
-                        iface,
-                        retry_attempt,
-                    );
-                    self.fallback_control_plane_transport_to_startup_link(
-                        "ioctl-timeout-retry",
-                        true,
-                        true,
-                    )?;
-                }
-                Err(err) => return Err(err),
-            }
-        }
+        self.ioctl_encoded_once(kind, cmd, iface, payload_len)
     }
 
     fn ioctl_encoded_once(
@@ -1030,14 +772,9 @@ impl Cyw43NetDevice {
             payload_len,
             sdpcm_seq
         );
-        let first_control_plane_write_pending = self.state.cyw43_control_plane_probe_pending();
-        let experimental_no_ht_transport = self.state.cyw43_experimental_no_ht_transport();
-        let promoted_link_probe_pending = experimental_no_ht_transport
-            && first_control_plane_write_pending
-            && self.probe.bus_width == SdioBusWidth::FourBit;
-        if first_control_plane_write_pending || experimental_no_ht_transport {
+        if self.state.cyw43_control_plane_probe_pending() {
             info!(
-                "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} aligned_len={} seq={}/{} ioctl_id={} channel={} chunk_limit={} no_ht={}",
+                "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} aligned_len={} seq={}/{} ioctl_id={} channel={} chunk_limit={} mode=strict",
                 cmd as u32,
                 iface,
                 payload_len,
@@ -1047,41 +784,10 @@ impl Cyw43NetDevice {
                 self.ioctl_id,
                 CHANNEL_CONTROL,
                 self.state.cyw43_control_plane_chunk_limit(),
-                experimental_no_ht_transport,
             );
         }
-        match self
-            .state
-            .write_cyw43_frame(&mut self.tx_frame[..aligned_len])
-        {
-            Ok(()) => {}
-            Err(err)
-                if should_fallback_control_plane_transport_after_promoted_write_failure(
-                    promoted_link_probe_pending,
-                    &err,
-                ) =>
-            {
-                warn!(
-                    "[cyw43] control transport promote fallback reason=promoted-write-fail cmd=0x{:08x} id={} iface={} len={} seq={}/{} err={}",
-                    cmd as u32,
-                    self.ioctl_id,
-                    iface,
-                    aligned_len,
-                    sdpcm_seq,
-                    self.sdpcm_seq_max,
-                    err,
-                );
-                self.fallback_control_plane_transport_to_startup_link(
-                    "promoted-write-fail",
-                    true,
-                    true,
-                )?;
-                return Err(DriverError::Protocol(
-                    "cyw43-control-plane-startup-link-retry",
-                ));
-            }
-            Err(err) => return Err(err.into()),
-        }
+        self.state
+            .write_cyw43_frame(&mut self.tx_frame[..aligned_len])?;
         self.wait_for_ioctl_response(cmd as u32, self.ioctl_id)
     }
 
@@ -1090,90 +796,30 @@ impl Cyw43NetDevice {
         cmd: u32,
         expected_id: u16,
     ) -> Result<usize, DriverError> {
-        let wait_budget = ioctl_wait_loops(self.state.cyw43_experimental_no_ht_transport());
-        let mut startup_link_promotion_attempted = false;
+        let wait_budget = ioctl_wait_loops();
         for _ in 0..wait_budget {
             match self.process_next_frame(false) {
-                Err(err) if is_control_plane_promoted_probe_stall(&err) => {
-                    warn!(
-                        "[cyw43] control transport promote fallback reason=reply-rearm-stall cmd=0x{:08x} id={}",
-                        cmd, expected_id,
-                    );
-                    self.fallback_control_plane_transport_to_startup_link(
-                        "reply-rearm-stall",
-                        true,
-                        true,
-                    )?;
-                    return Err(DriverError::Protocol(
-                        "cyw43-control-plane-startup-link-retry",
-                    ));
-                }
-                Err(err)
-                    if should_speculatively_promote_control_plane_after_startup_link_reply_timeout(
-                        self.state.cyw43_experimental_no_ht_transport(),
-                        startup_link_promotion_attempted,
-                        &err,
-                    ) =>
-                {
-                    startup_link_promotion_attempted = true;
-                    self.promote_control_plane_transport_after_startup_link_reply_timeout(
-                        cmd,
-                        expected_id,
-                    )?;
-                }
                 Err(err) => return Err(err),
                 Ok(RxFrameResult::Control {
                     id,
                     status,
                     response_len,
                 }) if id == expected_id => {
-                    self.control_plane_empty_poll_streak = 0;
-                    self.maybe_promote_control_plane_transport_after_matched_reply()?;
                     if status != STATUS_SUCCESS {
                         return Err(DriverError::IoctlFailed { cmd, status });
                     }
                     return Ok(response_len);
                 }
-                Ok(RxFrameResult::None) => {
-                    self.control_plane_empty_poll_streak =
-                        next_control_plane_empty_poll_streak(self.control_plane_empty_poll_streak);
-                    if should_recover_control_plane_transport_after_empty_poll(
-                        self.state.cyw43_experimental_no_ht_transport(),
-                        self.control_plane_empty_poll_recovery_blocked,
-                        self.control_plane_empty_poll_streak,
-                    ) {
-                        warn!(
-                            "[cyw43] control transport recover reason=empty-poll-rearm cmd=0x{:08x} id={} streak={}",
-                            cmd,
-                            expected_id,
-                            self.control_plane_empty_poll_streak,
-                        );
-                        self.fallback_control_plane_transport_to_startup_link(
-                            "empty-poll-rearm",
-                            true,
-                            true,
-                        )?;
-                        return Err(DriverError::Protocol(
-                            "cyw43-control-plane-startup-link-retry",
-                        ));
-                    }
-                }
+                Ok(RxFrameResult::None) => {}
                 Ok(RxFrameResult::Control { .. })
                 | Ok(RxFrameResult::Event(_))
-                | Ok(RxFrameResult::Data(_)) => {
-                    self.control_plane_empty_poll_streak = 0;
-                }
+                | Ok(RxFrameResult::Data(_)) => {}
             }
             spin_loop();
         }
         warn!(
-            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} no_ht={} wait_budget={}",
-            cmd,
-            expected_id,
-            self.sdpcm_seq,
-            self.sdpcm_seq_max,
-            self.state.cyw43_experimental_no_ht_transport(),
-            wait_budget,
+            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} wait_budget={}",
+            cmd, expected_id, self.sdpcm_seq, self.sdpcm_seq_max, wait_budget,
         );
         self.state.log_cyw43_control_plane_snapshot("ioctl-timeout");
         Err(DriverError::Protocol("ioctl-timeout"))
@@ -1566,76 +1212,8 @@ const fn control_plane_data_clock_target_hz(recommended_data_clock_hz: u32) -> u
 }
 
 #[inline]
-const fn next_control_plane_empty_poll_streak(empty_poll_streak: u8) -> u8 {
-    empty_poll_streak.saturating_add(1)
-}
-
-#[inline]
-const fn next_bootstrap_control_credit_limit(sdpcm_seq: u8) -> u8 {
-    sdpcm_seq.wrapping_add(1)
-}
-
-const fn should_recover_control_plane_transport_after_empty_poll(
-    experimental_no_ht_transport: bool,
-    empty_poll_recovery_blocked: bool,
-    empty_poll_streak: u8,
-) -> bool {
-    experimental_no_ht_transport
-        && !empty_poll_recovery_blocked
-        && empty_poll_streak >= CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD
-}
-
-#[inline]
-const fn should_reset_control_plane_recovery_state_for_ioctl_attempt(
-    startup_link_retry_attempt: u8,
-    timeout_retry_attempt: u8,
-) -> bool {
-    startup_link_retry_attempt == 0 && timeout_retry_attempt == 0
-}
-
-fn should_retry_control_plane_ioctl_after_startup_link_rearm(
-    experimental_no_ht_transport: bool,
-    retry_attempt: u8,
-    err: &DriverError,
-) -> bool {
-    experimental_no_ht_transport && retry_attempt == 0 && is_control_plane_startup_link_retry(err)
-}
-
-fn should_retry_control_plane_ioctl_after_timeout(
-    experimental_no_ht_transport: bool,
-    retry_attempt: u8,
-    err: &DriverError,
-) -> bool {
-    experimental_no_ht_transport
-        && retry_attempt == 0
-        && (matches!(err, DriverError::Protocol("ioctl-timeout"))
-            || is_control_plane_startup_link_reply_timeout(err))
-}
-
-fn should_speculatively_promote_control_plane_after_startup_link_reply_timeout(
-    experimental_no_ht_transport: bool,
-    promotion_attempted: bool,
-    err: &DriverError,
-) -> bool {
-    experimental_no_ht_transport
-        && !promotion_attempted
-        && is_control_plane_startup_link_reply_timeout(err)
-}
-
-#[inline]
-const fn should_rearm_control_plane_transport_after_promotion(
-    experimental_no_ht_transport: bool,
-) -> bool {
-    experimental_no_ht_transport
-}
-
-#[inline]
-const fn ioctl_wait_loops(experimental_no_ht_transport: bool) -> usize {
-    if experimental_no_ht_transport {
-        IOCTL_WAIT_LOOPS_NO_HT_PROBE
-    } else {
-        IOCTL_WAIT_LOOPS
-    }
+const fn ioctl_wait_loops() -> usize {
+    IOCTL_WAIT_LOOPS
 }
 
 #[inline]
@@ -1684,19 +1262,9 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        align4, bdc_payload, control_plane_data_clock_target_hz,
-        control_plane_timeout_retry_reason, has_sdpcm_credit, ioctl_wait_loops,
-        is_control_plane_promoted_probe_stall, is_control_plane_startup_link_reply_timeout,
-        is_control_plane_startup_link_retry, is_transport_retryable,
-        next_bootstrap_control_credit_limit, next_control_plane_empty_poll_streak, put_u16_le,
-        should_rearm_control_plane_transport_after_promotion,
-        should_recover_control_plane_transport_after_empty_poll,
-        should_reset_control_plane_recovery_state_for_ioctl_attempt,
-        should_retry_control_plane_ioctl_after_startup_link_rearm,
-        should_retry_control_plane_ioctl_after_timeout,
-        should_speculatively_promote_control_plane_after_startup_link_reply_timeout, DriverError,
-        CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD, EVENT_AUTH, EVENT_SET_SSID, IOCTL_WAIT_LOOPS,
-        IOCTL_WAIT_LOOPS_NO_HT_PROBE, SDIO_DATA_CLOCK_HZ,
+        align4, bdc_payload, control_plane_data_clock_target_hz, has_sdpcm_credit,
+        ioctl_wait_loops, is_transport_retryable, put_u16_le, EVENT_AUTH, EVENT_SET_SSID,
+        IOCTL_WAIT_LOOPS, SDIO_DATA_CLOCK_HZ,
     };
     use crate::hal::HalError;
 
@@ -1755,220 +1323,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_reply_poll_recovery_is_bounded_and_blockable() {
-        let ready_streak =
-            next_control_plane_empty_poll_streak(CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD - 1);
-        assert!(should_recover_control_plane_transport_after_empty_poll(
-            true,
-            false,
-            ready_streak,
-        ));
-        assert!(!should_recover_control_plane_transport_after_empty_poll(
-            true,
-            false,
-            CONTROL_PLANE_EMPTY_POLL_PROMOTION_THRESHOLD - 1,
-        ));
-        assert!(!should_recover_control_plane_transport_after_empty_poll(
-            true,
-            true,
-            ready_streak,
-        ));
-        assert!(!should_recover_control_plane_transport_after_empty_poll(
-            false,
-            false,
-            ready_streak,
-        ));
-    }
-
-    #[test]
-    fn promoted_transport_only_rearms_while_no_ht_probe_is_active() {
-        assert!(should_rearm_control_plane_transport_after_promotion(true));
-        assert!(!should_rearm_control_plane_transport_after_promotion(false));
-    }
-
-    #[test]
-    fn promoted_probe_stall_detection_is_precise() {
-        assert!(is_control_plane_promoted_probe_stall(&DriverError::Hal(
-            HalError::Unsupported("cyw43-control-plane-promoted-rearm-timeout")
-        )));
-        assert!(!is_control_plane_promoted_probe_stall(&DriverError::Hal(
-            HalError::Unsupported("sdhci-transfer-finish")
-        )));
-        assert!(!is_control_plane_promoted_probe_stall(
-            &DriverError::Protocol("ioctl-timeout")
-        ));
-    }
-
-    #[test]
-    fn promoted_write_failure_detection_is_precise() {
-        assert!(
-            should_fallback_control_plane_transport_after_promoted_write_failure(
-                true,
-                &HalError::Unsupported("sdhci-transfer-finish"),
-            )
-        );
-        assert!(
-            should_fallback_control_plane_transport_after_promoted_write_failure(
-                true,
-                &HalError::Unsupported("sdhci-command-error"),
-            )
-        );
-        assert!(
-            !should_fallback_control_plane_transport_after_promoted_write_failure(
-                false,
-                &HalError::Unsupported("sdhci-transfer-finish"),
-            )
-        );
-        assert!(
-            !should_fallback_control_plane_transport_after_promoted_write_failure(
-                true,
-                &HalError::Unsupported("sdhci-int-timeout"),
-            )
-        );
-    }
-
-    #[test]
-    fn startup_link_retry_detection_is_precise() {
-        assert!(is_control_plane_startup_link_retry(&DriverError::Protocol(
-            "cyw43-control-plane-startup-link-retry"
-        )));
-        assert!(!is_control_plane_startup_link_retry(
-            &DriverError::Protocol("ioctl-timeout")
-        ));
-        assert!(!is_control_plane_startup_link_retry(&DriverError::Hal(
-            HalError::Unsupported("cyw43-control-plane-promoted-rearm-timeout")
-        )));
-    }
-
-    #[test]
-    fn startup_link_reply_timeout_detection_is_precise() {
-        let startup_reply_timeout = DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-startup-link-reply-timeout",
-        ));
-        assert!(is_control_plane_startup_link_reply_timeout(
-            &startup_reply_timeout
-        ));
-        assert_eq!(
-            control_plane_timeout_retry_reason(&startup_reply_timeout),
-            "startup-link-reply-timeout"
-        );
-        assert_eq!(
-            control_plane_timeout_retry_reason(&DriverError::Protocol("ioctl-timeout")),
-            "ioctl-timeout"
-        );
-    }
-
-    #[test]
-    fn startup_link_rearm_retry_is_single_shot_and_precise() {
-        assert!(should_retry_control_plane_ioctl_after_startup_link_rearm(
-            true,
-            0,
-            &DriverError::Protocol("cyw43-control-plane-startup-link-retry")
-        ));
-        assert!(!should_retry_control_plane_ioctl_after_startup_link_rearm(
-            true,
-            1,
-            &DriverError::Protocol("cyw43-control-plane-startup-link-retry")
-        ));
-        assert!(!should_retry_control_plane_ioctl_after_startup_link_rearm(
-            false,
-            0,
-            &DriverError::Protocol("cyw43-control-plane-startup-link-retry")
-        ));
-        assert!(!should_retry_control_plane_ioctl_after_startup_link_rearm(
-            true,
-            0,
-            &DriverError::Protocol("ioctl-timeout")
-        ));
-    }
-
-    #[test]
-    fn retry_ioctl_attempts_keep_empty_poll_recovery_state_armed() {
-        assert!(should_reset_control_plane_recovery_state_for_ioctl_attempt(
-            0, 0
-        ));
-        assert!(!should_reset_control_plane_recovery_state_for_ioctl_attempt(1, 0));
-        assert!(!should_reset_control_plane_recovery_state_for_ioctl_attempt(0, 1));
-        assert!(!should_reset_control_plane_recovery_state_for_ioctl_attempt(1, 1));
-    }
-
-    #[test]
-    fn experimental_ioctl_timeout_retry_is_single_shot_and_precise() {
-        assert!(should_retry_control_plane_ioctl_after_timeout(
-            true,
-            0,
-            &DriverError::Protocol("ioctl-timeout")
-        ));
-        assert!(should_retry_control_plane_ioctl_after_timeout(
-            true,
-            0,
-            &DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-startup-link-reply-timeout"
-            ))
-        ));
-        assert!(!should_retry_control_plane_ioctl_after_timeout(
-            true,
-            1,
-            &DriverError::Protocol("ioctl-timeout")
-        ));
-        assert!(!should_retry_control_plane_ioctl_after_timeout(
-            false,
-            0,
-            &DriverError::Protocol("ioctl-timeout")
-        ));
-        assert!(!should_retry_control_plane_ioctl_after_timeout(
-            true,
-            0,
-            &DriverError::Protocol("sdpcm-credit-timeout")
-        ));
-    }
-
-    #[test]
-    fn startup_link_reply_timeout_promotes_once_and_only_on_no_ht_path() {
-        let startup_reply_timeout = DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-startup-link-reply-timeout",
-        ));
-        assert!(
-            should_speculatively_promote_control_plane_after_startup_link_reply_timeout(
-                true,
-                false,
-                &startup_reply_timeout,
-            )
-        );
-        assert!(
-            !should_speculatively_promote_control_plane_after_startup_link_reply_timeout(
-                true,
-                true,
-                &startup_reply_timeout,
-            )
-        );
-        assert!(
-            !should_speculatively_promote_control_plane_after_startup_link_reply_timeout(
-                false,
-                false,
-                &startup_reply_timeout,
-            )
-        );
-        assert!(
-            !should_speculatively_promote_control_plane_after_startup_link_reply_timeout(
-                true,
-                false,
-                &DriverError::Protocol("ioctl-timeout"),
-            )
-        );
-    }
-
-    #[test]
-    fn startup_link_rearm_reseeds_one_bootstrap_credit_without_resetting_sequence() {
+    fn sdpcm_credit_window_respects_sequence_bounds() {
         assert!(!has_sdpcm_credit(1, 1));
-        assert!(has_sdpcm_credit(1, next_bootstrap_control_credit_limit(1)));
-        assert_eq!(next_bootstrap_control_credit_limit(0), 1);
-        assert_eq!(next_bootstrap_control_credit_limit(u8::MAX), 0);
+        assert!(has_sdpcm_credit(1, 2));
+        assert!(has_sdpcm_credit(u8::MAX, 0));
+        assert!(!has_sdpcm_credit(2, 1));
     }
 
     #[test]
-    fn ioctl_wait_budget_expands_for_no_ht_probe_path() {
-        assert_eq!(ioctl_wait_loops(false), IOCTL_WAIT_LOOPS);
-        assert_eq!(ioctl_wait_loops(true), IOCTL_WAIT_LOOPS_NO_HT_PROBE);
+    fn ioctl_wait_budget_is_fixed_for_strict_path() {
+        assert_eq!(ioctl_wait_loops(), IOCTL_WAIT_LOOPS);
     }
 }
