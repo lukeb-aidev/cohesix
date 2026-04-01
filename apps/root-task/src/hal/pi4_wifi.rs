@@ -1231,6 +1231,15 @@ const fn required_ht_clock_wait_loops(stronger_retry_request: bool) -> usize {
 }
 
 #[inline]
+const fn ht_clock_progress_chunk_loops(remaining_loops: usize) -> usize {
+    if remaining_loops > CYW43_HT_CLOCK_SOFT_WAIT_LOOPS {
+        CYW43_HT_CLOCK_SOFT_WAIT_LOOPS
+    } else {
+        remaining_loops
+    }
+}
+
+#[inline]
 const fn ht_clock_alp_prime_request_value(last_chipclkcsr: Option<u8>) -> u8 {
     transport_phase_chipclk_value(last_chipclkcsr) | SBSDIO_ALP_AVAIL_REQ
 }
@@ -5351,17 +5360,51 @@ impl SdioHost {
         ));
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, request)?;
         self.remember_chipclkcsr(request);
-        for _ in 0..soft_wait_loops {
-            let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
-            self.remember_chipclkcsr(chipclk);
-            last_chipclk = chipclk;
-            if (chipclk & SBSDIO_HT_AVAIL) != 0 {
+        if required && stronger_retry_request {
+            let mut remaining_loops = soft_wait_loops;
+            let mut completed_loops = 0usize;
+            let mut refresh_index = 0usize;
+            while remaining_loops > 0 {
+                let chunk_loops = ht_clock_progress_chunk_loops(remaining_loops);
+                for _ in 0..chunk_loops {
+                    let chipclk =
+                        self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+                    self.remember_chipclkcsr(chipclk);
+                    last_chipclk = chipclk;
+                    if (chipclk & SBSDIO_HT_AVAIL) != 0 {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} ready csr=0x{chipclk:02x}"
+                        ));
+                        return Ok(true);
+                    }
+                    spin_loop();
+                }
+                completed_loops = completed_loops.saturating_add(chunk_loops);
+                remaining_loops -= chunk_loops;
+                if remaining_loops == 0 {
+                    break;
+                }
+                refresh_index = refresh_index.saturating_add(1);
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} ready csr=0x{chipclk:02x}"
+                    "[pi4-wifi] firmware stage={stage} progress=wait-ht-clock polls={completed_loops}/{soft_wait_loops} csr=0x{last_chipclk:02x} refresh_index={refresh_index}"
                 ));
-                return Ok(true);
+                self.refresh_ht_clock_assist_from_shadow_for(stage)?;
+                wifi_progress_tick();
             }
-            spin_loop();
+        } else {
+            for _ in 0..soft_wait_loops {
+                let chipclk =
+                    self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+                self.remember_chipclkcsr(chipclk);
+                last_chipclk = chipclk;
+                if (chipclk & SBSDIO_HT_AVAIL) != 0 {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} ready csr=0x{chipclk:02x}"
+                    ));
+                    return Ok(true);
+                }
+                spin_loop();
+            }
         }
         if required {
             if ht_clock_timeout_can_continue(required, last_chipclk) {
@@ -8949,6 +8992,16 @@ mod tests {
             required_ht_clock_wait_loops(true),
             super::CYW43_CORE_CONTROL_SETTLE_LOOPS
         );
+    }
+
+    #[test]
+    fn ht_clock_progress_chunk_uses_soft_wait_budget_as_cap() {
+        assert_eq!(
+            ht_clock_progress_chunk_loops(super::CYW43_HT_CLOCK_SOFT_WAIT_LOOPS * 4),
+            super::CYW43_HT_CLOCK_SOFT_WAIT_LOOPS
+        );
+        assert_eq!(ht_clock_progress_chunk_loops(1234), 1234);
+        assert_eq!(ht_clock_progress_chunk_loops(0), 0);
     }
 
     #[test]
