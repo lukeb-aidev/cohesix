@@ -350,6 +350,15 @@ const fn defer_erst_publish_with_snapshot(
 }
 
 #[inline(always)]
+const fn deferred_erst_publish_uses_size_first_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn use_atomic_erstba_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
@@ -1079,6 +1088,11 @@ impl<H: Dma> XhciCtrl<H> {
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
         );
+        let deferred_erst_publish_uses_size_first =
+            deferred_erst_publish_uses_size_first_with_snapshot(
+                self.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+            );
         let atomic_erstba_publish = use_atomic_erstba_publish_with_snapshot(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -1548,13 +1562,28 @@ impl<H: Dma> XhciCtrl<H> {
             }
         }
         if defer_erst_publish {
-            // The deferred ladder still publishes ERSTBA before ERSTSZ so the
-            // controller never observes a non-zero ERSTSZ while the event-ring
-            // table base is staged at the bootloader snapshot value. On Pi 4,
-            // the stronger mailbox-reset path still needs a single 64-bit
-            // ERSTBA store here, while the weaker stop-state snapshot now uses
-            // the ordered low/high xHCI write because it wedges on that atomic
-            // store itself.
+            // The stronger mailbox-reset path still needs ERSTBA-before-ERSTSZ
+            // during the deferred publish ladder. The weaker stop-state-only
+            // snapshot has now shown the opposite edge: its first live ERSTBA
+            // publish wedges while ERSTSZ is still zero. Seed ERSTSZ first on
+            // that halted stop-state branch so the next live edge tests the
+            // fully-described table instead of the zero-sized ERSTBA commit.
+            if deferred_erst_publish_uses_size_first {
+                emit_xhci_diag(
+                    0x02c2,
+                    (int_base + reg::ERSTSZ) as u64,
+                    staged_current_erst_size as u64,
+                    erst_size as u64,
+                );
+                Self::write_reg_u32_store_diag_at(
+                    self.mmio,
+                    int_base + reg::ERSTSZ,
+                    erst_size,
+                    0x02c3,
+                    0x02c4,
+                    staged_current_erst_size as u64,
+                );
+            }
             emit_xhci_diag(
                 0x02c5,
                 (int_base + reg::ERSTBA) as u64,
@@ -1581,20 +1610,22 @@ impl<H: Dma> XhciCtrl<H> {
                 );
             }
             emit_xhci_diag(0x02ca, reg::ERSTBA as u64, erstba, 1);
-            emit_xhci_diag(
-                0x02c2,
-                (int_base + reg::ERSTSZ) as u64,
-                staged_current_erst_size as u64,
-                erst_size as u64,
-            );
-            Self::write_reg_u32_store_diag_at(
-                self.mmio,
-                int_base + reg::ERSTSZ,
-                erst_size,
-                0x02c3,
-                0x02c4,
-                staged_current_erst_size as u64,
-            );
+            if !deferred_erst_publish_uses_size_first {
+                emit_xhci_diag(
+                    0x02c2,
+                    (int_base + reg::ERSTSZ) as u64,
+                    staged_current_erst_size as u64,
+                    erst_size as u64,
+                );
+                Self::write_reg_u32_store_diag_at(
+                    self.mmio,
+                    int_base + reg::ERSTSZ,
+                    erst_size,
+                    0x02c3,
+                    0x02c4,
+                    staged_current_erst_size as u64,
+                );
+            }
         }
         if defer_erdp_publish {
             // The trusted mailbox-reset snapshot path no longer lets ERSTSZ /
@@ -2433,6 +2464,7 @@ mod tests {
         compose_config, compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
         defer_crcr_publish_with_snapshot, defer_dcbaap_publish_with_snapshot,
         defer_erdp_publish_with_snapshot, defer_erst_publish_with_snapshot,
+        deferred_erst_publish_uses_size_first_with_snapshot,
         defer_scratchpad_array_publish_with_snapshot,
         halt_revalidation_needed, masked_usbcmd, parse_controller_params, polling_iman_value,
         port_ready_for_enumeration, preserve_firmware_handoff_config,
@@ -2577,6 +2609,10 @@ mod tests {
             snapshot,
         ));
         assert!(!use_atomic_erstba_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(deferred_erst_publish_uses_size_first_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -2809,6 +2845,10 @@ mod tests {
             erstsz0: Some(0),
         });
         assert!(defer_erst_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!deferred_erst_publish_uses_size_first_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
