@@ -179,6 +179,8 @@ const CONSOLE_PROMPT: &str = "cohesix> ";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
 #[cfg(feature = "kernel")]
 const WIFI_DEBUG_ACK_LABEL: &str = "WIFI";
+#[cfg(feature = "kernel")]
+const USB_DEBUG_ACK_LABEL: &str = "USB";
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_LIMIT_MS: u64 = 15_000;
 #[cfg(feature = "net-console")]
@@ -973,6 +975,15 @@ enum WifiDebugCommand {
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbDebugCommand {
+    Help,
+    Status,
+    EnableKeyboard,
+    ProbeKeyboard,
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Debug)]
 struct PendingCursor {
     path_key: String,
@@ -1612,6 +1623,8 @@ where
         self.emit_console_line("  nettest  - Run network self-test");
         self.emit_console_line("  netstats - Show network counters");
         #[cfg(feature = "kernel")]
+        self.emit_usb_debug_help(false);
+        #[cfg(feature = "kernel")]
         self.emit_wifi_debug_help(false);
         self.emit_console_line("  quit  - Exit the console session");
     }
@@ -1628,8 +1641,23 @@ where
         self.emit_serial_line("  nettest  - Run network self-test");
         self.emit_serial_line("  netstats - Show network counters");
         #[cfg(feature = "kernel")]
+        self.emit_usb_debug_help(true);
+        #[cfg(feature = "kernel")]
         self.emit_wifi_debug_help(true);
         self.emit_serial_line("  quit  - Exit the console session");
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_usb_debug_help(&mut self, serial_only: bool) {
+        if self.local_seat.is_none() || self.last_input_source == ConsoleInputSource::Net {
+            return;
+        }
+        let line = "  usb <help|status|enable-kbd|probe-kbd> - USB local-seat diagnostics (serial/local only)";
+        if serial_only {
+            self.emit_serial_line(line);
+        } else {
+            self.emit_console_line(line);
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -1919,6 +1947,57 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn maybe_handle_usb_debug_line(&mut self, line: &str) -> bool {
+        if self.last_input_source == ConsoleInputSource::Net {
+            return false;
+        }
+
+        let mut parts = line.split_ascii_whitespace();
+        let Some(head) = parts.next() else {
+            return false;
+        };
+        if !head.eq_ignore_ascii_case("usb") {
+            return false;
+        }
+
+        let command = match parts.next() {
+            None => UsbDebugCommand::Help,
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("help") => UsbDebugCommand::Help,
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("status") => {
+                UsbDebugCommand::Status
+            }
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("enable-kbd") => {
+                UsbDebugCommand::EnableKeyboard
+            }
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("probe-kbd") => {
+                UsbDebugCommand::ProbeKeyboard
+            }
+            Some(_) => {
+                self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                self.emit_refusal(
+                    USB_DEBUG_ACK_LABEL,
+                    RefusalReason::Policy,
+                    Some("detail=unknown-subcommand"),
+                );
+                return true;
+            }
+        };
+
+        if parts.next().is_some() {
+            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+            self.emit_refusal(
+                USB_DEBUG_ACK_LABEL,
+                RefusalReason::Policy,
+                Some("detail=too-many-arguments"),
+            );
+            return true;
+        }
+
+        self.handle_usb_debug_command(command);
+        true
+    }
+
+    #[cfg(feature = "kernel")]
     fn handle_wifi_debug_command(&mut self, command: WifiDebugCommand) {
         let subcommand = match command {
             WifiDebugCommand::Help => "help",
@@ -1994,6 +2073,20 @@ where
                 self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
             }
             Err(err) => {
+                let error_snapshot_stage = match command {
+                    WifiDebugCommand::Help => None,
+                    WifiDebugCommand::DumpState => None,
+                    WifiDebugCommand::ProbeHt => Some("console-probe-ht-error"),
+                    WifiDebugCommand::LoadFirmware => Some("console-load-fw-error"),
+                    WifiDebugCommand::Retry => Some("console-retry-error"),
+                };
+                if let Some(stage) = error_snapshot_stage {
+                    if let Some(wifi_debug) = self.wifi_debug.as_mut() {
+                        if let Ok(snapshot) = wifi_debug.dump_state(stage) {
+                            self.emit_wifi_snapshot(&snapshot);
+                        }
+                    }
+                }
                 self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
                 let detail =
                     format_message(format_args!("detail=subcommand={subcommand} error={err}"));
@@ -2004,6 +2097,95 @@ where
                 );
             }
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn handle_usb_debug_command(&mut self, command: UsbDebugCommand) {
+        let subcommand = match command {
+            UsbDebugCommand::Help => "help",
+            UsbDebugCommand::Status => "status",
+            UsbDebugCommand::EnableKeyboard => "enable-kbd",
+            UsbDebugCommand::ProbeKeyboard => "probe-kbd",
+        };
+
+        if matches!(command, UsbDebugCommand::Help) {
+            self.emit_console_line("USB local-seat debug commands:");
+            self.emit_console_line(
+                "  usb status      - Show local-seat runtime attach and polling state",
+            );
+            self.emit_console_line(
+                "  usb enable-kbd  - Arm runtime USB keyboard probing after boot",
+            );
+            self.emit_console_line(
+                "  usb probe-kbd   - Arm and immediately run one keyboard probe pass",
+            );
+            self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
+            self.emit_ack_ok(
+                USB_DEBUG_ACK_LABEL,
+                Some("detail=subcommand=help scope=serial-local"),
+            );
+            return;
+        }
+
+        let Some(local_seat) = self.local_seat.as_mut() else {
+            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+            self.emit_refusal(
+                USB_DEBUG_ACK_LABEL,
+                RefusalReason::Policy,
+                Some("detail=local-seat-unavailable"),
+            );
+            return;
+        };
+
+        let action_detail = match command {
+            UsbDebugCommand::Help => unreachable!(),
+            UsbDebugCommand::Status => None,
+            UsbDebugCommand::EnableKeyboard => {
+                local_seat.enable_backend_keyboard_polling();
+                Some("action=keyboard-poll-armed")
+            }
+            UsbDebugCommand::ProbeKeyboard => {
+                local_seat.enable_backend_keyboard_polling();
+                Some("action=keyboard-probe-immediate")
+            }
+        };
+        let backend_attached = local_seat.backend_attached();
+        let polling_enabled = local_seat.backend_keyboard_polling_enabled();
+        self.emit_usb_status(backend_attached, polling_enabled, action_detail);
+        if matches!(command, UsbDebugCommand::ProbeKeyboard) {
+            self.emit_console_line("usb: probing local-seat keyboard now");
+            if let Some(local_seat) = self.local_seat.as_mut() {
+                local_seat.poll_backend_keyboard();
+            }
+        }
+
+        self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
+        let detail = format_message(format_args!(
+            "detail=subcommand={subcommand} scope=serial-local"
+        ));
+        self.emit_ack_ok(USB_DEBUG_ACK_LABEL, Some(detail.as_str()));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_usb_status(
+        &mut self,
+        backend_attached: bool,
+        polling_enabled: bool,
+        action_detail: Option<&str>,
+    ) {
+        let mut line = format_message(format_args!(
+            "usb: local-seat attached={} polling={}",
+            if backend_attached { "yes" } else { "no" },
+            if polling_enabled {
+                "enabled"
+            } else {
+                "deferred"
+            },
+        ));
+        if let Some(action_detail) = action_detail {
+            let _ = write!(line, " {action_detail}");
+        }
+        self.emit_console_line(line.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -2180,6 +2362,13 @@ where
 
     fn process_console_line(&mut self, line: &HeaplessString<LINE>) {
         self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
+        #[cfg(feature = "kernel")]
+        if self.maybe_handle_usb_debug_line(line.as_str()) {
+            if self.last_input_source == ConsoleInputSource::Serial {
+                self.emit_prompt();
+            }
+            return;
+        }
         #[cfg(feature = "kernel")]
         if self.maybe_handle_wifi_debug_line(line.as_str()) {
             if self.last_input_source == ConsoleInputSource::Serial {
@@ -5157,6 +5346,47 @@ mod tests {
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_usb_debug_command_enables_local_seat_polling() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.serial_mut().driver_mut().push_rx(b"usb enable-kbd\n");
+        pump.poll();
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("usb: local-seat attached=no polling=enabled"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK USB detail=subcommand=enable-kbd"),
+            "{rendered}"
+        );
+        assert!(local_seat.backend_keyboard_polling_enabled());
     }
 
     #[cfg(feature = "kernel")]

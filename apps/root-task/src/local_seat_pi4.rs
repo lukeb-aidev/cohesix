@@ -23,12 +23,12 @@ use usb_oxide::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
     hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook, ConfigDesc,
     DeviceDesc, Dma, DmaShareError, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice,
-    UsbError, XhciControllerParams, XhciCtrl, XhciFirmwareHandoff,
+    UsbError, XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
 };
 
 use crate::bootstrap::log as boot_log;
 use crate::hal::{dma, pi4_wifi, HalError, Hardware, KernelHal};
-use crate::local_seat::LocalSeatXhciCapabilitySnapshot;
+use crate::local_seat::{LocalSeatXhciCapabilitySnapshot, LocalSeatXhciStopStateSnapshot};
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_MASK: usize = PAGE_SIZE - 1;
@@ -493,6 +493,8 @@ pub struct Pi4LocalSeatHints {
     pub xhci_irq_quiesced: bool,
     /// Optional xHCI capability snapshot exported by the bootloader handoff.
     pub xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
+    /// Optional xHCI stop-state snapshot exported by the bootloader handoff.
+    pub xhci_stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
     /// Optional DT/firmware framebuffer hint.
     pub framebuffer_hint: Option<Pi4FramebufferHint>,
 }
@@ -595,6 +597,26 @@ const fn runtime_vl805_mailbox_reset_completed(state: u8) -> bool {
     matches!(state, VL805_RUNTIME_RESET_STATE_NOTIFIED)
 }
 
+#[inline]
+const fn runtime_vl805_mailbox_reset_allows_trusted_cold_init(state: u8) -> bool {
+    matches!(
+        state,
+        VL805_RUNTIME_RESET_STATE_NOTIFIED
+            | VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
+            | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
+    )
+}
+
+#[inline]
+const fn runtime_vl805_mailbox_reset_trusted_cold_init_detail(state: u8) -> &'static str {
+    match state {
+        VL805_RUNTIME_RESET_STATE_NOTIFIED => "mailbox-reset+trusted-cap-snapshot",
+        VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK => "mailbox-posted-fallback+trusted-cap-snapshot",
+        VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE => "mailbox-soft-continue+trusted-cap-snapshot",
+        _ => "mailbox-reset-unconfirmed+trusted-cap-snapshot",
+    }
+}
+
 /// Concrete local-seat backend for Pi 4 (HDMI text + USB keyboard).
 pub struct Pi4LocalSeat {
     display: HdmiTextSink,
@@ -605,6 +627,7 @@ pub struct Pi4LocalSeat {
     xhci_handoff_ready: bool,
     xhci_irq_quiesced: bool,
     xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
+    xhci_stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
     xhci_capability_probe: Option<XhciCapProbe>,
     hal_ptr: usize,
 }
@@ -662,6 +685,7 @@ impl Pi4LocalSeat {
             xhci_handoff_ready: hints.xhci_handoff_ready,
             xhci_irq_quiesced: hints.xhci_irq_quiesced,
             xhci_capability_snapshot: hints.xhci_capability_snapshot,
+            xhci_stop_state_snapshot: hints.xhci_stop_state_snapshot,
             xhci_capability_probe,
             hal_ptr: hal as *mut _ as usize,
         })
@@ -808,6 +832,7 @@ impl Pi4LocalSeat {
                         self.xhci_handoff_ready,
                         self.xhci_irq_quiesced,
                         self.xhci_capability_probe,
+                        self.xhci_stop_state_snapshot,
                     ) {
                         Ok(found) => {
                             self.keyboard = Some(found);
@@ -890,8 +915,9 @@ impl Pi4LocalSeat {
 }
 
 struct Mailbox {
-    regs: crate::sel4::DeviceFrame,
+    regs_vaddr: usize,
     regs_paddr: usize,
+    _regs: Option<crate::sel4::DeviceFrame>,
     request: crate::sel4::RamFrame,
     _prefix_maps: Vec<crate::sel4::DeviceFrame>,
 }
@@ -1257,11 +1283,14 @@ fn xhci_trusted_handoff_snapshot_allowed(
     xhci_pci_cmd: Option<u16>,
     xhci_handoff_ready: bool,
     xhci_irq_quiesced: bool,
-    runtime_vl805_reset: bool,
+    runtime_vl805_reset_allows_trusted_snapshot: bool,
 ) -> bool {
-    // If runtime needed to ask firmware to reset VL805 but that reset never
-    // completed, fall back to the standalone runtime xHCI path instead of
-    // keeping the later trusted-snapshot assumptions alive.
+    // Runtime still prefers firmware-mediated VL805 reset when the handoff is
+    // trusted, but the field failure has shifted to the mailbox path itself.
+    // If runtime hit a bounded soft outcome (posted fallback or timeout-based
+    // cold-init continue), keep the trusted post-stop CAP snapshot alive and
+    // rebuild ownership through a fresh cold start instead of discarding the
+    // handoff entirely.
     xhci_firmware_handoff_cold_start_trusted(
         mmio,
         firmware_hint,
@@ -1274,7 +1303,7 @@ fn xhci_trusted_handoff_snapshot_allowed(
         xhci_pci_cmd,
         xhci_handoff_ready,
         xhci_irq_quiesced,
-    ) || runtime_vl805_reset)
+    ) || runtime_vl805_reset_allows_trusted_snapshot)
 }
 
 #[inline]
@@ -2101,7 +2130,12 @@ fn validate_xhci_capability_window(probe: &XhciCapProbe) -> Result<(), &'static 
 fn xhci_controller_params_from_probe(
     probe: XhciCapProbe,
     firmware_handoff: XhciFirmwareHandoff,
+    stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
 ) -> XhciControllerParams {
+    let runtime_seed_snapshot = match firmware_handoff {
+        XhciFirmwareHandoff::None => None,
+        _ => stop_state_snapshot.map(xhci_runtime_seed_snapshot_from_stop_state),
+    };
     XhciControllerParams {
         cap_length: probe.cap_length,
         hcs1: probe.hcs1,
@@ -2110,7 +2144,23 @@ fn xhci_controller_params_from_probe(
         db_offset: probe.db_offset,
         rts_offset: probe.rts_offset,
         firmware_handoff,
-        runtime_seed_snapshot: None,
+        runtime_seed_snapshot,
+    }
+}
+
+#[inline]
+const fn xhci_runtime_seed_snapshot_from_stop_state(
+    snapshot: LocalSeatXhciStopStateSnapshot,
+) -> XhciRuntimeSeedSnapshot {
+    XhciRuntimeSeedSnapshot {
+        usbcmd: snapshot.usbcmd,
+        usbsts: snapshot.usbsts,
+        iman0: snapshot.iman0,
+        dcbaap: None,
+        crcr: None,
+        erstba0: None,
+        erdp0: None,
+        erstsz0: None,
     }
 }
 
@@ -2742,16 +2792,28 @@ fn pin_xhci_mmio_window(
 impl Mailbox {
     fn new(hal: &mut KernelHal<'_>) -> Result<Self, Pi4SeatError> {
         let mut regs = None;
+        let mut regs_vaddr = 0usize;
         let mut regs_paddr = 0usize;
         let mut prefix_maps = Vec::new();
-        for &candidate in &MAILBOX_PAGE_PADDR_CANDIDATES {
-            if let Ok(mapped) = Self::map_device_exact(hal, candidate, &mut prefix_maps) {
-                regs = Some(mapped);
-                regs_paddr = candidate;
-                break;
+        if let Some((paddr, vaddr)) = pi4_wifi::pinned_mailbox_regs() {
+            regs_paddr = paddr;
+            regs_vaddr = vaddr;
+            boot_log::force_uart_line(
+                "[local-seat] mailbox regs reuse=pinned source=pi4-wifi-preseed",
+            );
+        } else {
+            for &candidate in &MAILBOX_PAGE_PADDR_CANDIDATES {
+                if let Ok(mapped) = Self::map_device_exact(hal, candidate, &mut prefix_maps) {
+                    regs_vaddr = mapped.ptr().as_ptr() as usize;
+                    regs = Some(mapped);
+                    regs_paddr = candidate;
+                    break;
+                }
             }
         }
-        let regs = regs.ok_or(Pi4SeatError::MailboxMap)?;
+        if regs_paddr == 0 || regs_vaddr == 0 {
+            return Err(Pi4SeatError::MailboxMap);
+        }
 
         let request = hal
             .alloc_dma_frame_low_attr(sel4_sys::seL4_ARM_Page_Uncached)
@@ -2766,8 +2828,9 @@ impl Mailbox {
         );
         boot_log::force_uart_line(line.as_str());
         Ok(Self {
-            regs,
+            regs_vaddr,
             regs_paddr,
+            _regs: regs,
             request,
             _prefix_maps: prefix_maps,
         })
@@ -2948,7 +3011,7 @@ impl Mailbox {
     }
 
     fn read_reg(&self, offset: usize) -> u32 {
-        let base = self.regs.ptr().as_ptr() as usize;
+        let base = self.regs_vaddr;
         let Some(addr) = base.checked_add(offset) else {
             return 0;
         };
@@ -2957,7 +3020,7 @@ impl Mailbox {
     }
 
     fn write_reg(&self, offset: usize, value: u32) {
-        let base = self.regs.ptr().as_ptr() as usize;
+        let base = self.regs_vaddr;
         let Some(addr) = base.checked_add(offset) else {
             return;
         };
@@ -4547,6 +4610,7 @@ impl UsbKeyboard {
         xhci_handoff_ready: bool,
         xhci_irq_quiesced: bool,
         xhci_capability_probe: Option<XhciCapProbe>,
+        xhci_stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
     ) -> Result<Self, Pi4SeatError> {
         if !KEYBOARD_RUNTIME_INIT_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] usb keyboard init path entered");
@@ -5048,7 +5112,9 @@ impl UsbKeyboard {
                     runtime_vl805_reset_state = VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire);
                     runtime_vl805_reset =
                         runtime_vl805_mailbox_reset_completed(runtime_vl805_reset_state);
-                    if !runtime_vl805_reset {
+                    if !runtime_vl805_mailbox_reset_allows_trusted_cold_init(
+                        runtime_vl805_reset_state,
+                    ) {
                         let mut line = heapless::String::<224>::new();
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
@@ -5069,7 +5135,9 @@ impl UsbKeyboard {
                         xhci_pci_cmd,
                         xhci_handoff_ready,
                         xhci_irq_quiesced,
-                        runtime_vl805_reset,
+                        runtime_vl805_mailbox_reset_allows_trusted_cold_init(
+                            runtime_vl805_reset_state,
+                        ),
                     )
                 });
                 let firmware_handoff = if trusted_handoff_probe.is_some() {
@@ -5078,6 +5146,18 @@ impl UsbKeyboard {
                         boot_log::force_uart_line(
                             "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset+trusted-cap-snapshot action=fresh-init-from-cap-snapshot",
                         );
+                    } else if runtime_vl805_reset_requested {
+                        let mut line = heapless::String::<224>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci handoff=runtime-owned stage=runtime detail={} action=fresh-init-from-cap-snapshot",
+                                runtime_vl805_mailbox_reset_trusted_cold_init_detail(
+                                    runtime_vl805_reset_state,
+                                )
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
                     } else {
                         boot_log::force_uart_line(
                             "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=skip-runtime-mailbox-reset action=fresh-init-from-cap-snapshot",
@@ -5213,7 +5293,11 @@ impl UsbKeyboard {
                     }
                 }
             };
-            let controller_params = xhci_controller_params_from_probe(cap_probe, firmware_handoff);
+            let controller_params = xhci_controller_params_from_probe(
+                cap_probe,
+                firmware_handoff,
+                xhci_stop_state_snapshot,
+            );
             XhciIrqGuard::log_policy(
                 effective_mmio,
                 firmware_handoff,
@@ -9509,10 +9593,10 @@ mod tests {
         hub_retry_wait_spins, hub_should_eager_port_power, keyboard_attach_retry_allowed,
         keyboard_display_scroll_delta_for_key, keyboard_scancode_to_char,
         mailbox_visible_dimension, normalize_hub_tt_profile, normalize_pi4_xhci_mmio_hint,
-        parse_xhci_capbase, runtime_vl805_mailbox_reset_error_allows_cold_init,
-        text_backspace_target, text_row_count, text_viewport_height,
-        translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode, vl805_cfg_preseed_needed,
-        vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
+        parse_xhci_capbase, runtime_vl805_mailbox_reset_allows_trusted_cold_init,
+        runtime_vl805_mailbox_reset_error_allows_cold_init, text_backspace_target, text_row_count,
+        text_viewport_height, translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode,
+        vl805_cfg_preseed_needed, vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
         xhci_controller_params_from_probe, xhci_firmware_handoff_hint_reason, xhci_irq_sink_needed,
         xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
         xhci_root_port_connected, xhci_runtime_mmio_candidate_allowed,
@@ -9640,7 +9724,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_vl805_mailbox_reset_success_state_only_trusts_acked_reset() {
+    fn runtime_vl805_mailbox_reset_soft_states_still_allow_trusted_cold_init() {
         assert_eq!(
             runtime_vl805_mailbox_reset_success_state(pi4_wifi::Vl805ResetNotifyResult::Acked),
             VL805_RUNTIME_RESET_STATE_NOTIFIED
@@ -9658,6 +9742,15 @@ mod tests {
             VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
         ));
         assert!(!runtime_vl805_mailbox_reset_completed(
+            VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
+        ));
+        assert!(runtime_vl805_mailbox_reset_allows_trusted_cold_init(
+            VL805_RUNTIME_RESET_STATE_NOTIFIED
+        ));
+        assert!(runtime_vl805_mailbox_reset_allows_trusted_cold_init(
+            VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
+        ));
+        assert!(runtime_vl805_mailbox_reset_allows_trusted_cold_init(
             VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
         ));
     }
@@ -9716,6 +9809,7 @@ mod tests {
                 mmio_size: 0x10000,
             },
             XhciFirmwareHandoff::PreserveControllerState,
+            None,
         );
         assert_eq!(params.hccparams1, 1 << 2);
         assert_eq!(params.cap_length, 0x40);
@@ -9744,6 +9838,7 @@ mod tests {
                 mmio_size: 0x10000,
             },
             XhciFirmwareHandoff::None,
+            None,
         );
         assert_eq!(params.firmware_handoff, XhciFirmwareHandoff::None);
         assert!(params.runtime_seed_snapshot.is_none());
@@ -9766,12 +9861,49 @@ mod tests {
                 mmio_size: 0x10000,
             },
             XhciFirmwareHandoff::ColdStartFromSnapshot,
+            None,
         );
         assert_eq!(
             params.firmware_handoff,
             XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         assert!(params.runtime_seed_snapshot.is_none());
+    }
+
+    #[test]
+    fn xhci_controller_params_seed_trusted_cold_start_from_stop_state_snapshot() {
+        let params = xhci_controller_params_from_probe(
+            XhciCapProbe {
+                cap_length: 0x40,
+                hci_version: 0x0100,
+                hcs1: 32u32 | (8u32 << 24),
+                hcs2: 0,
+                hccparams1: 1 << 2,
+                db_offset: 0x1000,
+                rts_offset: 0x2000,
+                max_slots: 32,
+                max_ports: 8,
+                max_scratchpad: 0,
+                mmio_size: 0x10000,
+            },
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+        );
+        let snapshot = params
+            .runtime_seed_snapshot
+            .expect("trusted cold-start should seed stop-state snapshot");
+        assert_eq!(snapshot.usbcmd, Some(0));
+        assert_eq!(snapshot.usbsts, Some(1));
+        assert_eq!(snapshot.iman0, Some(0));
+        assert_eq!(snapshot.dcbaap, None);
+        assert_eq!(snapshot.crcr, None);
+        assert_eq!(snapshot.erstba0, None);
+        assert_eq!(snapshot.erdp0, None);
+        assert_eq!(snapshot.erstsz0, None);
     }
 
     #[test]
@@ -10724,7 +10856,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_trusted_handoff_snapshot_requires_completed_runtime_reset() {
+    fn xhci_trusted_handoff_snapshot_accepts_runtime_cold_init_permission() {
         let safe_cmd = Some(
             super::PCI_COMMAND_MEMORY_SPACE
                 | super::PCI_COMMAND_BUS_MASTER

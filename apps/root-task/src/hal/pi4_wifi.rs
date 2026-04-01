@@ -122,6 +122,10 @@ fn cloned_pinned_regs(pinned: &Mutex<Option<MappedRegs>>) -> Option<MappedRegs> 
     pinned.lock().as_ref().copied()
 }
 
+pub(crate) fn pinned_mailbox_regs() -> Option<(usize, usize)> {
+    cloned_pinned_regs(&PINNED_MAILBOX_REGS).map(|regs| (regs.paddr(), regs.vaddr()))
+}
+
 fn pinned_mailbox_request_page<H>(
     hal: &mut H,
     slot: &Mutex<Option<MappedRegs>>,
@@ -498,10 +502,7 @@ const fn core_ctrl_can_defer_in_reset_readback(
     asserted_reset: bool,
     skipped_write: bool,
 ) -> bool {
-    let _ = base;
-    let _ = asserted_reset;
-    let _ = skipped_write;
-    false
+    base == CYW43_SOCRAM_CORE_BASE && asserted_reset && skipped_write
 }
 
 #[inline]
@@ -527,9 +528,7 @@ const fn backplane_window_differs_by_mid_byte_only(
 
 #[inline]
 const fn core_ctrl_can_defer_clear_reset_readback(base: u32, attempt: usize) -> bool {
-    let _ = base;
-    let _ = attempt;
-    false
+    attempt == 0 && (base == CYW43_SOCRAM_CORE_BASE || base == CYW43_ARMCR4_CORE_BASE)
 }
 
 #[inline]
@@ -916,18 +915,32 @@ fn core_reset_can_defer_postreset_clock_en_readback(
     offset: u32,
     err: &HalError,
 ) -> bool {
-    let _ = base;
-    let _ = offset;
-    let _ = err;
-    false
+    base == CYW43_ARMCR4_CORE_BASE && offset == AI_IOCTRL_OFFSET && is_sdhci_fragile_read_error(err)
 }
 
 #[inline]
 fn core_reset_can_defer_postreset_reset_readback(base: u32, offset: u32, err: &HalError) -> bool {
-    let _ = base;
-    let _ = offset;
-    let _ = err;
-    false
+    base == CYW43_ARMCR4_CORE_BASE
+        && offset == AI_RESETCTRL_OFFSET
+        && is_sdhci_fragile_read_error(err)
+}
+
+#[inline]
+const fn core_reset_postreset_clock_en_read_reason(base: u32) -> &'static str {
+    if base == CYW43_ARMCR4_CORE_BASE {
+        "armcr4-fragile-postreset-read"
+    } else {
+        "socram-fragile-postreset-read"
+    }
+}
+
+#[inline]
+const fn core_reset_postreset_reset_read_reason(base: u32) -> &'static str {
+    if base == CYW43_ARMCR4_CORE_BASE {
+        "armcr4-fragile-postreset-reset-read"
+    } else {
+        "socram-fragile-postreset-reset-read"
+    }
 }
 
 #[inline]
@@ -953,11 +966,10 @@ fn core_wait_can_defer_after_read_error(
     current_clock_hz: u32,
     err: &HalError,
 ) -> bool {
-    let _ = base;
-    let _ = attempt;
-    let _ = current_clock_hz;
-    let _ = err;
-    false
+    base == CYW43_ARMCR4_CORE_BASE
+        && attempt >= 2
+        && current_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ
+        && is_sdhci_fragile_read_error(err)
 }
 
 #[inline]
@@ -1207,6 +1219,11 @@ const fn required_ht_clock_request_value(last_chipclkcsr: Option<u8>) -> u8 {
 #[inline]
 const fn required_ht_clock_retry_request_value(last_chipclkcsr: Option<u8>) -> u8 {
     required_ht_clock_request_value(last_chipclkcsr) | SBSDIO_FORCE_HW_CLKREQ_OFF
+}
+
+#[inline]
+const fn ht_clock_alp_prime_request_value(last_chipclkcsr: Option<u8>) -> u8 {
+    transport_phase_chipclk_value(last_chipclkcsr) | SBSDIO_ALP_AVAIL_REQ
 }
 
 #[inline]
@@ -5295,12 +5312,19 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} retry=alp-prime csr=0x{last_chipclk:02x}"
         ));
+        // Keep FORCE_HT / HT request bits asserted while priming ALP. Dropping
+        // back to a raw ALP request sheds the stronger clock request state on
+        // the exact path that later times out at HT readiness.
+        let alp_request = ht_clock_alp_prime_request_value(Some(last_chipclk));
         self.io_direct_write(
             SdioFunction::Function1,
             SBSDIO_FUNC1_CHIPCLKCSR,
-            SBSDIO_ALP_AVAIL_REQ,
+            alp_request,
         )?;
-        self.remember_chipclkcsr(SBSDIO_ALP_AVAIL_REQ);
+        self.remember_chipclkcsr(alp_request);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} alp-request=0x{alp_request:02x}"
+        ));
         for _ in 0..soft_wait_loops {
             let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
             self.remember_chipclkcsr(chipclk);
@@ -6563,7 +6587,8 @@ impl SdioHost {
                     return Err(err);
                 }
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-clock-en-read-deferred io=0x{postreset_ioctrl:02x} err={err} reason=socram-fragile-postreset-read"
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-clock-en-read-deferred io=0x{postreset_ioctrl:02x} err={err} reason={}",
+                    core_reset_postreset_clock_en_read_reason(base)
                 ));
                 self.restore_window_cache_from_shadow(
                     "core-reset-postreset-clock-en-read-deferred",
@@ -6582,7 +6607,8 @@ impl SdioHost {
                     return Err(err);
                 }
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-reset-read-deferred reset=0x{last_reset:02x} err={err} reason=socram-fragile-postreset-reset-read"
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=postreset-reset-read-deferred reset=0x{last_reset:02x} err={err} reason={}",
+                    core_reset_postreset_reset_read_reason(base)
                 ));
                 self.restore_window_cache_from_shadow("core-reset-postreset-reset-read-deferred");
                 last_reset
@@ -8138,7 +8164,7 @@ mod tests {
             CYW43_CONTROL_PLANE_CLOCK_HZ,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
-        assert!(!core_wait_can_defer_after_read_error(
+        assert!(core_wait_can_defer_after_read_error(
             CYW43_ARMCR4_CORE_BASE,
             2,
             CYW43_CONTROL_PLANE_CLOCK_HZ,
@@ -8821,6 +8847,32 @@ mod tests {
     }
 
     #[test]
+    fn ht_clock_alp_prime_request_keeps_force_and_retry_bits_asserted() {
+        assert_eq!(
+            ht_clock_alp_prime_request_value(None),
+            SBSDIO_ALP_AVAIL_REQ | SBSDIO_FORCE_HT
+        );
+        assert_eq!(
+            ht_clock_alp_prime_request_value(Some(
+                SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+            )),
+            SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+        );
+        assert_eq!(
+            ht_clock_alp_prime_request_value(Some(
+                SBSDIO_ALP_AVAIL_REQ
+                    | SBSDIO_HT_AVAIL_REQ
+                    | SBSDIO_FORCE_HW_CLKREQ_OFF
+                    | SBSDIO_ALP_AVAIL
+            )),
+            SBSDIO_ALP_AVAIL_REQ
+                | SBSDIO_HT_AVAIL_REQ
+                | SBSDIO_FORCE_HW_CLKREQ_OFF
+                | SBSDIO_FORCE_HT
+        );
+    }
+
+    #[test]
     fn firmware_bulk_clock_candidates_step_down_and_append_restore_clock() {
         assert_eq!(
             firmware_bulk_clock_candidates(400_000, true),
@@ -9207,5 +9259,20 @@ mod tests {
             SDIO_FUNC_READY_2
         );
         assert_eq!(SDIO_FUNCTION_ENABLE_SEQUENCE[1].block_size, 512);
+    }
+
+    #[test]
+    fn pinned_mailbox_regs_reports_cached_mapping() {
+        let original = PINNED_MAILBOX_REGS.lock().take();
+        {
+            let mut slot = PINNED_MAILBOX_REGS.lock();
+            *slot = Some(MappedRegs {
+                paddr: 0xFE00_B000,
+                vaddr: 0x1234_5000,
+            });
+        }
+        assert_eq!(pinned_mailbox_regs(), Some((0xFE00_B000, 0x1234_5000)));
+        let mut slot = PINNED_MAILBOX_REGS.lock();
+        *slot = original;
     }
 }
