@@ -396,7 +396,7 @@ const fn core_ctrl_postreset_read_uses_cmd52_current_window(base: u32, _offset: 
 #[inline]
 const fn core_ctrl_postreset_read_access_mode_label(base: u32, offset: u32) -> &'static str {
     if core_ctrl_postreset_read_uses_cmd52_current_window(base, offset) {
-        "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
+        "cmd52-byte-current-window retry=cmd52-byte-rewindow"
     } else {
         "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
     }
@@ -3596,6 +3596,23 @@ impl SdioHost {
     }
 
     fn io_direct_read(&mut self, function: SdioFunction, addr: u32) -> Result<u8, HalError> {
+        self.io_direct_read_with_cmd53_fallback(function, addr, true)
+    }
+
+    fn io_direct_read_no_cmd53_fallback(
+        &mut self,
+        function: SdioFunction,
+        addr: u32,
+    ) -> Result<u8, HalError> {
+        self.io_direct_read_with_cmd53_fallback(function, addr, false)
+    }
+
+    fn io_direct_read_with_cmd53_fallback(
+        &mut self,
+        function: SdioFunction,
+        addr: u32,
+        allow_cmd53_fallback: bool,
+    ) -> Result<u8, HalError> {
         let arg = cmd52_argument(function, addr, false, 0);
         let resp = self.send_command(SDIO_CMD52, arg, ResponseType::Short)?[0];
         let status = r5_status(resp);
@@ -3604,7 +3621,7 @@ impl SdioHost {
                 "[pi4-wifi] sdio cmd52 fail op=read fn={} addr=0x{addr:05x} resp=0x{resp:08x} r5=0x{status:04x}",
                 function.number()
             ));
-            if io_direct_cmd53_byte_fallback_allowed(function) {
+            if allow_cmd53_fallback && io_direct_cmd53_byte_fallback_allowed(function) {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] sdio cmd52 fallback op=read fn={} addr=0x{addr:05x} to=cmd53-byte",
                     function.number()
@@ -5732,7 +5749,9 @@ impl SdioHost {
         self.with_backplane_window_addr(
             addr,
             core_ctrl_current_window_addr(addr),
-            |this, bus_addr| this.io_direct_read(SdioFunction::Function1, bus_addr),
+            |this, bus_addr| {
+                this.io_direct_read_no_cmd53_fallback(SdioFunction::Function1, bus_addr)
+            },
         )
     }
 
@@ -8019,7 +8038,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_postreset_read_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
+            "cmd52-byte-current-window retry=cmd52-byte-rewindow"
         );
         assert!(core_ctrl_postreset_read_uses_cmd52_current_window(
             CYW43_ARMCR4_CORE_BASE,

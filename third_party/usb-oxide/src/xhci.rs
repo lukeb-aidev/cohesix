@@ -213,7 +213,6 @@ const fn skip_config_write_during_init_with_snapshot(
 ) -> bool {
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_config_write_during_init(firmware_handoff)
 }
 
@@ -232,12 +231,11 @@ const fn skip_reset_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // A trusted stop-state snapshot has now proven sufficient to carry the Pi4
-    // mailbox-reset handoff past the toxic first runtime HCRST and CONFIG
-    // writes. Keep the fresh runtime-owned ring rebuild, but do not replay
-    // those first ownership edges once the stop-state seed is present.
+    // Only the stronger mailbox-reset/runtime-ring seed is trusted enough to
+    // skip the first live HCRST edge. The weaker stop-state-only snapshot now
+    // proves the controller still needs those runtime reset/config writes
+    // before the deferred runtime-owned ring publication ladder.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_reset_during_init(firmware_handoff)
 }
@@ -2572,7 +2570,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_skips_hcrst_config_and_uses_deferred_fresh_runtime_ring_publish(
+    fn stop_state_only_snapshot_keeps_hcrst_config_and_uses_deferred_fresh_runtime_ring_publish(
     ) {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
@@ -2616,11 +2614,11 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(skip_reset_during_init_with_snapshot(
+        assert!(!skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(skip_config_write_during_init_with_snapshot(
+        assert!(!skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
