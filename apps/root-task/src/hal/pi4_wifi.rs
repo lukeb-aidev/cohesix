@@ -1297,6 +1297,32 @@ const fn ht_clock_timeout_can_continue(required: bool, last_chipclk: u8) -> bool
 }
 
 #[inline]
+fn log_ht_clock_status(
+    stage: &'static str,
+    phase: &'static str,
+    chipclk: u8,
+    wake_ctrl: Option<u8>,
+    sleep_csr: Option<u8>,
+    cardcap: Option<u8>,
+) {
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] firmware stage={stage} status={phase} csr=0x{chipclk:02x} ht_req={} alp_req={} force_ht={} clkreq_off={} alp={} ht={} wake=0x{wake:02x}/{} sleep=0x{sleep:02x}/{} cardcap=0x{cardcap:02x}/{}",
+        yn((chipclk & SBSDIO_HT_AVAIL_REQ) != 0),
+        yn((chipclk & SBSDIO_ALP_AVAIL_REQ) != 0),
+        yn((chipclk & SBSDIO_FORCE_HT) != 0),
+        yn((chipclk & SBSDIO_FORCE_HW_CLKREQ_OFF) != 0),
+        yn((chipclk & SBSDIO_ALP_AVAIL) != 0),
+        yn((chipclk & SBSDIO_HT_AVAIL) != 0),
+        wake = wake_ctrl.unwrap_or(0),
+        yn(wake_ctrl.is_some()),
+        sleep = sleep_csr.unwrap_or(0),
+        yn(sleep_csr.is_some()),
+        cardcap = cardcap.unwrap_or(0),
+        yn(cardcap.is_some()),
+    ));
+}
+
+#[inline]
 fn next_distinct_firmware_bulk_clock_candidate(
     candidates: &[u32; 4],
     attempt_index: usize,
@@ -5336,6 +5362,17 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} request-issued"
         ));
+        let request_chipclk =
+            self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+        self.remember_chipclkcsr(request_chipclk);
+        log_ht_clock_status(
+            stage,
+            "request-readback",
+            request_chipclk,
+            self.last_wakeupctrl,
+            self.last_sleepcsr,
+            self.last_cardcap,
+        );
         let mut last_chipclk = 0u8;
         for _ in 0..CYW43_HT_CLOCK_INITIAL_WAIT_LOOPS {
             let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
@@ -5386,6 +5423,18 @@ impl SdioHost {
         ));
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, request)?;
         self.remember_chipclkcsr(request);
+        let rerequest_chipclk =
+            self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+        self.remember_chipclkcsr(rerequest_chipclk);
+        last_chipclk = rerequest_chipclk;
+        log_ht_clock_status(
+            stage,
+            "ht-rerequest-readback",
+            rerequest_chipclk,
+            self.last_wakeupctrl,
+            self.last_sleepcsr,
+            self.last_cardcap,
+        );
         if required && stronger_retry_request {
             let mut remaining_loops = soft_wait_loops;
             let mut completed_loops = 0usize;
@@ -5437,6 +5486,14 @@ impl SdioHost {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} timeout-soft csr=0x{last_chipclk:02x} action=continue-with-force-ht-refresh"
                 ));
+                log_ht_clock_status(
+                    stage,
+                    "timeout-soft",
+                    last_chipclk,
+                    self.last_wakeupctrl,
+                    self.last_sleepcsr,
+                    self.last_cardcap,
+                );
                 self.remember_chipclkcsr(transport_phase_chipclk_value(Some(last_chipclk)));
                 self.log_transport_shadow("wait-ht-clock-timeout-soft");
                 Ok(false)
@@ -5444,6 +5501,14 @@ impl SdioHost {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} timeout csr=0x{last_chipclk:02x}"
                 ));
+                log_ht_clock_status(
+                    stage,
+                    "timeout-hard",
+                    last_chipclk,
+                    self.last_wakeupctrl,
+                    self.last_sleepcsr,
+                    self.last_cardcap,
+                );
                 self.log_transport_shadow("wait-ht-clock-timeout");
                 Err(HalError::Unsupported("cyw43-ht-clock-timeout"))
             }
@@ -5451,6 +5516,14 @@ impl SdioHost {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage={stage} timeout-soft csr=0x{last_chipclk:02x} action=continue-with-fallback-clocks"
             ));
+            log_ht_clock_status(
+                stage,
+                "timeout-soft",
+                last_chipclk,
+                self.last_wakeupctrl,
+                self.last_sleepcsr,
+                self.last_cardcap,
+            );
             self.log_transport_shadow("wait-ht-clock-timeout-soft");
             Ok(false)
         }

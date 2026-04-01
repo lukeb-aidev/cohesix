@@ -161,11 +161,10 @@ const fn use_live_post_reset_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Once runtime trusts a stop-state snapshot enough to skip the early halt
-    // revalidation and HCRST edge, post-reset seed reads are no longer the
-    // right model either. Keep the fresh CONFIG/DCBAAP/CRCR/ERST publishes,
-    // but seed them from zero/snapshot state instead of touching live runtime
-    // ring registers before ownership has been rebuilt.
+    // The weaker stop-state snapshot now runs the fresh HCRST/CONFIG path
+    // again, but it still keeps post-reset ring seed reads suppressed. Use
+    // zero/snapshot seeds there instead of touching live runtime ring
+    // registers before ownership has been rebuilt.
     use_live_post_reset_seed_reads(firmware_handoff)
         && !runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
@@ -273,7 +272,6 @@ const fn runtime_deferred_ring_handoff(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -353,6 +351,7 @@ const fn deferred_erst_publish_uses_size_first_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        && runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
         && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
@@ -2570,8 +2569,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_keeps_hcrst_config_and_uses_deferred_fresh_runtime_ring_publish(
-    ) {
+    fn stop_state_only_snapshot_keeps_hcrst_config_and_uses_fresh_runtime_ring_publish() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -2610,7 +2608,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(deferred_erst_publish_uses_size_first_with_snapshot(
+        assert!(!deferred_erst_publish_uses_size_first_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -2626,31 +2624,31 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(defer_scratchpad_array_publish_with_snapshot(
+        assert!(!defer_scratchpad_array_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(defer_dcbaap_publish_with_snapshot(
+        assert!(!defer_dcbaap_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(defer_crcr_publish_with_snapshot(
+        assert!(!defer_crcr_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(defer_erdp_publish_with_snapshot(
+        assert!(!defer_erdp_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(defer_erst_publish_with_snapshot(
+        assert!(!defer_erst_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!probe_live_dcbaap_before_staged_publish_with_snapshot(
+        assert!(probe_live_dcbaap_before_staged_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!probe_live_crcr_before_staged_publish_with_snapshot(
+        assert!(probe_live_crcr_before_staged_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
