@@ -1222,6 +1222,15 @@ const fn required_ht_clock_retry_request_value(last_chipclkcsr: Option<u8>) -> u
 }
 
 #[inline]
+const fn required_ht_clock_wait_loops(stronger_retry_request: bool) -> usize {
+    if stronger_retry_request {
+        CYW43_CORE_CONTROL_SETTLE_LOOPS
+    } else {
+        SDIO_INIT_WAIT_LOOPS
+    }
+}
+
+#[inline]
 const fn ht_clock_alp_prime_request_value(last_chipclkcsr: Option<u8>) -> u8 {
     transport_phase_chipclk_value(last_chipclkcsr) | SBSDIO_ALP_AVAIL_REQ
 }
@@ -5266,7 +5275,7 @@ impl SdioHost {
         stronger_retry_request: bool,
     ) -> Result<bool, HalError> {
         let soft_wait_loops = if required {
-            SDIO_INIT_WAIT_LOOPS
+            required_ht_clock_wait_loops(stronger_retry_request)
         } else {
             CYW43_HT_CLOCK_SOFT_WAIT_LOOPS
         };
@@ -5281,7 +5290,7 @@ impl SdioHost {
         };
         if required && stronger_retry_request {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} action=retry-stronger-request request=0x{request:02x}"
+                "[pi4-wifi] firmware stage={stage} action=retry-stronger-request request=0x{request:02x} wait_loops={soft_wait_loops}"
             ));
         }
         emit_breadcrumb(format_args!(
@@ -8931,6 +8940,15 @@ mod tests {
     #[test]
     fn ht_clock_soft_wait_budget_is_shorter_than_required_wait_budget() {
         assert!(super::CYW43_HT_CLOCK_SOFT_WAIT_LOOPS < SDIO_INIT_WAIT_LOOPS);
+    }
+
+    #[test]
+    fn stronger_required_ht_retry_uses_extended_wait_budget() {
+        assert_eq!(required_ht_clock_wait_loops(false), SDIO_INIT_WAIT_LOOPS);
+        assert_eq!(
+            required_ht_clock_wait_loops(true),
+            super::CYW43_CORE_CONTROL_SETTLE_LOOPS
+        );
     }
 
     #[test]

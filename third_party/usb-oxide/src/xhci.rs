@@ -354,13 +354,13 @@ const fn use_atomic_erstba_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The split low/high ERSTBA replay already proved toxic on Pi 4 once the
-    // trusted mailbox-reset handoff reached deferred event-ring publication.
-    // The weaker stop-state snapshot now uses that same deferred ladder, still
-    // seeded from zero rather than preserved firmware ring pointers, so keep
-    // the safer single 64-bit publish there as well.
+    // The stronger mailbox-reset and resetless snapshot paths still need the
+    // single 64-bit ERSTBA publish on Pi 4. The weaker stop-state snapshot
+    // now proves the opposite boundary: it reaches the deferred ERSTBA edge,
+    // but wedges on the 64-bit store itself. Keep the deferred ladder there,
+    // but fall back to the ordered low/high xHCI register write for that
+    // weaker path so the next live ownership edge becomes visible.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -1548,13 +1548,13 @@ impl<H: Dma> XhciCtrl<H> {
             }
         }
         if defer_erst_publish {
-            // The trusted mailbox-reset snapshot path no longer lets ERSTSZ /
-            // ERSTBA become the first live runtime event-ring ownership
-            // stores. Publish ERSTBA first so the controller never observes a
-            // non-zero ERSTSZ while the event-ring table base is still staged
-            // at the bootloader snapshot value. The split low/high ERSTBA
-            // replay still wedges VL805 on the first live low-dword publish,
-            // so switch just this edge to a single 64-bit MMIO transaction.
+            // The deferred ladder still publishes ERSTBA before ERSTSZ so the
+            // controller never observes a non-zero ERSTSZ while the event-ring
+            // table base is staged at the bootloader snapshot value. On Pi 4,
+            // the stronger mailbox-reset path still needs a single 64-bit
+            // ERSTBA store here, while the weaker stop-state snapshot now uses
+            // the ordered low/high xHCI write because it wedges on that atomic
+            // store itself.
             emit_xhci_diag(
                 0x02c5,
                 (int_base + reg::ERSTBA) as u64,
@@ -2576,7 +2576,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(use_atomic_erstba_publish_with_snapshot(
+        assert!(!use_atomic_erstba_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
