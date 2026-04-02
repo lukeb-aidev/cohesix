@@ -622,6 +622,11 @@ fn is_sdio_cmd52_access_error(err: &HalError) -> bool {
 }
 
 #[inline]
+fn is_armcr4_postreset_fragile_read_error(err: &HalError) -> bool {
+    is_sdhci_fragile_read_error(err) || matches!(err, HalError::Unsupported("sdio-cmd52-read"))
+}
+
+#[inline]
 const fn io_direct_cmd53_byte_fallback_allowed(function: SdioFunction) -> bool {
     matches!(function, SdioFunction::Function1)
 }
@@ -924,14 +929,16 @@ fn core_reset_can_defer_postreset_clock_en_readback(
     offset: u32,
     err: &HalError,
 ) -> bool {
-    base == CYW43_ARMCR4_CORE_BASE && offset == AI_IOCTRL_OFFSET && is_sdhci_fragile_read_error(err)
+    base == CYW43_ARMCR4_CORE_BASE
+        && offset == AI_IOCTRL_OFFSET
+        && is_armcr4_postreset_fragile_read_error(err)
 }
 
 #[inline]
 fn core_reset_can_defer_postreset_reset_readback(base: u32, offset: u32, err: &HalError) -> bool {
     base == CYW43_ARMCR4_CORE_BASE
         && offset == AI_RESETCTRL_OFFSET
-        && is_sdhci_fragile_read_error(err)
+        && is_armcr4_postreset_fragile_read_error(err)
 }
 
 #[inline]
@@ -954,7 +961,7 @@ const fn core_reset_postreset_reset_read_reason(base: u32) -> &'static str {
 
 #[inline]
 fn core_wait_can_retry_after_read_error(base: u32, err: &HalError) -> bool {
-    base == CYW43_ARMCR4_CORE_BASE && is_sdhci_fragile_read_error(err)
+    base == CYW43_ARMCR4_CORE_BASE && is_armcr4_postreset_fragile_read_error(err)
 }
 
 #[inline]
@@ -965,7 +972,7 @@ fn core_wait_should_raise_control_plane_clock(
 ) -> bool {
     base == CYW43_ARMCR4_CORE_BASE
         && current_clock_hz < CYW43_CONTROL_PLANE_CLOCK_HZ
-        && is_sdhci_fragile_read_error(err)
+        && is_armcr4_postreset_fragile_read_error(err)
 }
 
 #[inline]
@@ -978,7 +985,7 @@ fn core_wait_can_defer_after_read_error(
     base == CYW43_ARMCR4_CORE_BASE
         && attempt >= 2
         && current_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ
-        && is_sdhci_fragile_read_error(err)
+        && is_armcr4_postreset_fragile_read_error(err)
 }
 
 #[inline]
@@ -5655,7 +5662,8 @@ impl SdioHost {
         let mut attempts = 0usize;
         for attempt in 0..CYW43_CORE_RESET_RETRY_LIMIT {
             attempts = attempt.saturating_add(1);
-            last_ioctrl = match self.core_ctrl_read8(base, AI_IOCTRL_OFFSET) {
+            last_ioctrl = match self.core_ctrl_postreset_read8_logged(base, AI_IOCTRL_OFFSET, stage)
+            {
                 Ok(value) => value,
                 Err(err) => {
                     if core_wait_should_raise_control_plane_clock(base, self.current_clock_hz, &err)
@@ -5694,7 +5702,11 @@ impl SdioHost {
                     continue;
                 }
             };
-            last_resetctrl = match self.core_ctrl_read8(base, AI_RESETCTRL_OFFSET) {
+            last_resetctrl = match self.core_ctrl_postreset_read8_logged(
+                base,
+                AI_RESETCTRL_OFFSET,
+                stage,
+            ) {
                 Ok(value) => value,
                 Err(err) => {
                     if core_wait_should_raise_control_plane_clock(base, self.current_clock_hz, &err)
@@ -7549,14 +7561,14 @@ mod tests {
         experimental_control_plane_write_needs_post_write_rearm,
         experimental_function2_fifo_chunk_limit, firmware_bulk_clock_candidates,
         firmware_phase_can_retry, ht_clock_assist_shadow_is_complete, ht_clock_request_value,
-        is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word,
-        next_distinct_firmware_bulk_clock_candidate, normalize_nvram, phys_to_bus, r5_status,
-        sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
-        sdio_byte_mode_transfer_plan, sdio_core_reg_addr, sdio_core_transfer_function_addr,
-        sdio_core_transfer_increment_addr, sdio_function_ready_budget_name,
-        sdio_function_ready_extended_polls, sdio_function_ready_extended_polls_for,
-        sdio_function_ready_extended_settle_loops, sdio_function_ready_extended_settle_loops_for,
-        sdio_function_ready_retry_limit_for,
+        is_armcr4_postreset_fragile_read_error, is_mailbox_protocol_error, mailbox_tag_name,
+        make_command, merge_u16_word, next_distinct_firmware_bulk_clock_candidate, normalize_nvram,
+        phys_to_bus, r5_status, sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask,
+        sdhci_status_reason, sdio_byte_mode_transfer_plan, sdio_core_reg_addr,
+        sdio_core_transfer_function_addr, sdio_core_transfer_increment_addr,
+        sdio_function_ready_budget_name, sdio_function_ready_extended_polls,
+        sdio_function_ready_extended_polls_for, sdio_function_ready_extended_settle_loops,
+        sdio_function_ready_extended_settle_loops_for, sdio_function_ready_retry_limit_for,
         sdio_function_ready_timeout_can_continue_experimentally,
         sdio_function_ready_uses_control_plane_reply_probe_budget,
         sdio_function_ready_uses_short_probe_only_budget, sdio_transfer_addr, sdio_transfer_plan,
@@ -8242,6 +8254,9 @@ mod tests {
         assert!(is_sdhci_fragile_read_error(&HalError::Unsupported(
             "sdhci-command-error"
         )));
+        assert!(is_armcr4_postreset_fragile_read_error(
+            &HalError::Unsupported("sdio-cmd52-read")
+        ));
         assert!(!core_reset_can_assume_clear_reset_retry_commit(
             CYW43_SOCRAM_CORE_BASE,
             AI_RESETCTRL_OFFSET,
@@ -8297,10 +8312,15 @@ mod tests {
             AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-command-error"),
         ));
-        assert!(!core_reset_can_defer_postreset_clock_en_readback(
+        assert!(core_reset_can_defer_postreset_clock_en_readback(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET,
             &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(core_reset_can_defer_postreset_clock_en_readback(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            &HalError::Unsupported("sdio-cmd52-read"),
         ));
         assert!(!core_reset_can_defer_postreset_clock_en_readback(
             CYW43_SOCRAM_CORE_BASE,
@@ -8317,10 +8337,15 @@ mod tests {
             AI_RESETCTRL_OFFSET,
             &HalError::Unsupported("sdhci-command-error"),
         ));
-        assert!(!core_reset_can_defer_postreset_reset_readback(
+        assert!(core_reset_can_defer_postreset_reset_readback(
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET,
             &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(core_reset_can_defer_postreset_reset_readback(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            &HalError::Unsupported("sdio-cmd52-read"),
         ));
         assert!(!core_reset_can_defer_postreset_reset_readback(
             CYW43_SOCRAM_CORE_BASE,
@@ -8336,10 +8361,19 @@ mod tests {
             CYW43_ARMCR4_CORE_BASE,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
+        assert!(core_wait_can_retry_after_read_error(
+            CYW43_ARMCR4_CORE_BASE,
+            &HalError::Unsupported("sdio-cmd52-read"),
+        ));
         assert!(core_wait_should_raise_control_plane_clock(
             CYW43_ARMCR4_CORE_BASE,
             CYW43_STARTUP_CLOCK_HZ,
             &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(core_wait_should_raise_control_plane_clock(
+            CYW43_ARMCR4_CORE_BASE,
+            CYW43_STARTUP_CLOCK_HZ,
+            &HalError::Unsupported("sdio-cmd52-read"),
         ));
         assert!(!core_wait_should_raise_control_plane_clock(
             CYW43_ARMCR4_CORE_BASE,
@@ -8363,6 +8397,12 @@ mod tests {
             2,
             CYW43_CONTROL_PLANE_CLOCK_HZ,
             &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(core_wait_can_defer_after_read_error(
+            CYW43_ARMCR4_CORE_BASE,
+            2,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            &HalError::Unsupported("sdio-cmd52-read"),
         ));
         assert!(!core_wait_can_defer_after_read_error(
             CYW43_ARMCR4_CORE_BASE,

@@ -20,9 +20,10 @@ const CMD_RING_SIZE: usize = 256;
 const EVENT_RING_SIZE: usize = 256;
 const STOP_WAIT_SPINS: usize = 10_000_000;
 const RESET_WAIT_SPINS: usize = 10_000_000;
-// On Pi 4 mailbox-reset handoff, the first live USBSTS read can race VL805
-// while firmware is still finishing the reset boundary. Keep a short blind
-// settle before the first CNR poll on that path.
+// On Pi 4 mailbox-reset handoff, the first live USBSTS read or USBCMD reset
+// write can race VL805 while firmware is still finishing the reset boundary.
+// Keep a short blind settle before the first live reset/CNR touch on those
+// paths, including the weaker stop-state-only snapshot.
 const MAILBOX_RESET_POST_SETTLE_SPINS: usize = 1_000_000;
 const READY_WAIT_SPINS: usize = 10_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
@@ -281,6 +282,7 @@ const fn runtime_mailbox_reset_needs_blind_settle(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[cfg(test)]
@@ -2620,7 +2622,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!runtime_mailbox_reset_needs_blind_settle(
+        assert!(runtime_mailbox_reset_needs_blind_settle(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -2953,7 +2955,7 @@ mod tests {
     }
 
     #[test]
-    fn only_trusted_mailbox_reset_handoff_uses_blind_post_reset_settle() {
+    fn mailbox_reset_snapshot_paths_use_blind_post_reset_settle() {
         assert!(runtime_mailbox_reset_needs_blind_settle(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             Some(XhciRuntimeSeedSnapshot {
@@ -2971,7 +2973,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             None,
         ));
-        assert!(!runtime_mailbox_reset_needs_blind_settle(
+        assert!(runtime_mailbox_reset_needs_blind_settle(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             Some(XhciRuntimeSeedSnapshot {
                 usbcmd: Some(0),
