@@ -1306,19 +1306,19 @@ fn log_ht_clock_status(
     cardcap: Option<u8>,
 ) {
     emit_breadcrumb(format_args!(
-        "[pi4-wifi] firmware stage={stage} status={phase} csr=0x{chipclk:02x} ht_req={} alp_req={} force_ht={} clkreq_off={} alp={} ht={} wake=0x{wake:02x}/{} sleep=0x{sleep:02x}/{} cardcap=0x{cardcap:02x}/{}",
-        yn((chipclk & SBSDIO_HT_AVAIL_REQ) != 0),
-        yn((chipclk & SBSDIO_ALP_AVAIL_REQ) != 0),
-        yn((chipclk & SBSDIO_FORCE_HT) != 0),
-        yn((chipclk & SBSDIO_FORCE_HW_CLKREQ_OFF) != 0),
-        yn((chipclk & SBSDIO_ALP_AVAIL) != 0),
-        yn((chipclk & SBSDIO_HT_AVAIL) != 0),
+        "[pi4-wifi] firmware stage={stage} status={phase} csr=0x{chipclk:02x} ht_req={ht_req} alp_req={alp_req} force_ht={force_ht} clkreq_off={clkreq_off} alp={alp} ht={ht} wake=0x{wake:02x}/{wake_set} sleep=0x{sleep:02x}/{sleep_set} cardcap=0x{cardcap:02x}/{cardcap_set}",
+        ht_req = yn((chipclk & SBSDIO_HT_AVAIL_REQ) != 0),
+        alp_req = yn((chipclk & SBSDIO_ALP_AVAIL_REQ) != 0),
+        force_ht = yn((chipclk & SBSDIO_FORCE_HT) != 0),
+        clkreq_off = yn((chipclk & SBSDIO_FORCE_HW_CLKREQ_OFF) != 0),
+        alp = yn((chipclk & SBSDIO_ALP_AVAIL) != 0),
+        ht = yn((chipclk & SBSDIO_HT_AVAIL) != 0),
         wake = wake_ctrl.unwrap_or(0),
-        yn(wake_ctrl.is_some()),
+        wake_set = yn(wake_ctrl.is_some()),
         sleep = sleep_csr.unwrap_or(0),
-        yn(sleep_csr.is_some()),
+        sleep_set = yn(sleep_csr.is_some()),
         cardcap = cardcap.unwrap_or(0),
-        yn(cardcap.is_some()),
+        cardcap_set = yn(cardcap.is_some()),
     ));
 }
 

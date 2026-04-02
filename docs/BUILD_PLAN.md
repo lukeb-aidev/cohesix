@@ -105,6 +105,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26a](#26a) | Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) | Complete |
 | [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | In Progress |
 | [26c](#26c) | Humanized Surface Cleanup + Markdown Audit (Zero-Regression) | Pending |
+| [26d](#26d) | seL4 15 Baseline Refresh + Reference Manual Realignment | Pending |
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
@@ -6820,6 +6821,129 @@ Checks:
   - Pi 4 evidence includes serial logs, network or console validation, and due-diligence outputs matching the documented PASS contract.
 Deliverables:
   - Full Test Plan PASS on QEMU and Pi 4 as the hard milestone exit criterion, with archived evidence for both targets.
+```
+
+---
+
+## Milestone 26d — seL4 15 Baseline Refresh + Reference Manual Realignment <a id="26d"></a>
+[Milestones](#Milestones)
+
+**Why now (kernel truth):**
+Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, and host/VM boundary evidence explicit. Cohesix still pins its reference-manual alignment to seL4 v13.0.0 even though upstream seL4 15.0.0 changes direct API expectations relevant to custom root-task integrations. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 15.0.0, proves the current direct root-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions.
+
+**Non-negotiable constraints:**
+- No system-model change. Cohesix remains an upstream seL4, pure-Rust root-task system; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26d.
+- No new operator-visible protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a kernel-refresh label.
+- `rust-sel4` adoption is out of scope. Cohesix may audit upstream Rust support for compatibility reference, but 26d must preserve the current Cohesix-owned `sel4-sys` / `sel4-runtime` / root-task bootstrap stack unless a separate milestone authorizes replacement.
+- Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
+- Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 15 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
+- QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
+
+### Prerequisite
+- Milestone **26c** completed (target-qualified test-plan runner, docs-as-built audit, and no-std boundary evidence available).
+
+### Goal
+Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0 while preserving the existing direct root-task architecture and proving zero operator-visible drift across QEMU and Pi 4.
+
+### Deliverables
+- **Kernel baseline refresh**
+  - Refresh external seL4 build inputs used by Cohesix bring-up, CI, and Pi 4 image flows to seL4 15.0.0.
+  - Record the exact upstream seL4 version/commit accepted for Cohesix in canonical docs and test evidence.
+
+- **Reference-manual and docs realignment**
+  - Update `docs/BUILD_PLAN.md`, `docs/TOOLCHAIN_MAC_ARM64.md`, `README.md`, and other canonical docs that currently describe the normative seL4 manual/baseline so they align with seL4 15.0.0 as built.
+  - Refresh the carried seL4 manual mirror under `seL4/` if the repo continues to store it as a tracked reference artifact.
+  - Record any seL4 15 changes that are intentionally irrelevant to Cohesix today, especially domain-schedule features tied to Microkit/CAmkES/capDL workflows.
+
+- **Direct-API compatibility audit and fixes**
+  - Audit `crates/sel4-sys`, `crates/sel4-runtime`, and root-task bootstrap code against seL4 15 headers and generated metadata.
+  - Preserve Cohesix’s explicit TLS and IPC-buffer installation path unless a compatibility fix requires adjustment.
+  - Keep SMP affinity, boot-info handling, CSpace assumptions, and debug-syscall guards aligned with seL4 15 generated headers for both single-core and SMP builds.
+
+- **Domain-schedule debt removal**
+  - Audit build caches and Pi 4/U-Boot kernel configuration for stale `KernelDomainSchedule` / `domain_schedule.c` assumptions.
+  - For configurations with `KernelNumDomains=1`, remove or document any stale schedule-file dependency so Cohesix does not inherit `sel4test` domain-schedule defaults as an accidental build requirement.
+  - If any Cohesix-owned configuration genuinely uses domains later, migrate that path to seL4 15 runtime/domain-schedule semantics in a scoped follow-on task before enabling it.
+
+- **Regression and evidence refresh**
+  - Re-run generated-artifact guards, root-task checks/tests, QEMU bring-up, Pi 4 image build, and the full target-qualified Test Plan on the seL4 15 baseline.
+  - Publish refreshed audit artifacts proving that operator-visible semantics remain unchanged and that the VM build remains `no_std`.
+
+### Commands
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `scripts/check-generated.sh`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo check --workspace`
+- `cargo test --workspace`
+- `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"`
+- `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"`
+- `scripts/cohesix-build-run.sh --sel4-build seL4/build --no-run --cargo-target aarch64-unknown-none --profile release --root-task-features cohesix-dev`
+- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir seL4/build_UBOOT`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu`
+- `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4`
+
+### Checks (DoD)
+- Canonical docs no longer pin Cohesix to seL4 Reference Manual v13.0.0; they explicitly align to the accepted seL4 15.0.0 baseline and remain consistent with the refreshed as-built evidence.
+- `crates/sel4-sys`, `crates/sel4-runtime`, and root-task bootstrap code build cleanly against seL4 15 generated headers/artifacts for the QEMU baseline, SMP baseline, and Pi 4 U-Boot baseline used by Cohesix.
+- QEMU and Pi 4 target-qualified Test Plan runs pass on the refreshed kernel baseline with no `*.incomplete` markers and no undocumented operator-visible output drift.
+- Secure9P bounds, console grammar, manifest outputs, release semantics, and host/VM runtime boundaries remain unchanged unless separately documented as defects fixed in the same change.
+- Build artifacts and documentation no longer rely on an accidental `sel4test`-provided `domain_schedule.c` dependency for one-domain Cohesix configurations; any remaining dependency is explicit, justified, and documented.
+- The carried seL4 manual/reference artifacts, if tracked in-repo, match the accepted kernel baseline or are explicitly relinked to the authoritative upstream 15.0.0 source.
+
+### Compiler / docsystem touchpoints
+- `coh-rtc` outputs, docs snippets, and manifest fingerprints remain authoritative; 26d may update generators or schemas only when required by the seL4 15 baseline refresh, and any such change must be reflected in the same evidence set.
+- `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and target-qualified state-dir evidence remain the source of truth for QEMU/Pi 4 pass semantics during the kernel refresh.
+
+### Atomic tasks
+```
+Title/ID: m26d-kernel-provenance-refresh
+Goal: Refresh Cohesix seL4 baseline inputs and record accepted seL4 15.0.0 provenance.
+Inputs: external seL4 source/build trees, seL4 15.0.0 release notes/manual, docs/TOOLCHAIN_MAC_ARM64.md, README.md.
+Changes:
+  - docs/TOOLCHAIN_MAC_ARM64.md — record the accepted seL4 15.0.0 baseline and external-build expectations.
+  - README.md — update high-level kernel/manual baseline references if they mention stale versions or assumptions.
+  - seL4/ — refresh tracked manual/reference artifacts only if the repo continues carrying them as canonical mirrors.
+Commands: cargo check --workspace
+Checks: canonical docs and carried references identify the accepted seL4 15.0.0 baseline with no stale v13 pin left in normative guidance.
+Deliverables: updated docs/reference provenance and a checked-in note of the accepted upstream version/commit.
+```
+
+```
+Title/ID: m26d-sel4-api-compat-audit
+Goal: Bring Cohesix-owned seL4 bindings/runtime/bootstrap code into clean alignment with seL4 15 generated artifacts.
+Inputs: crates/sel4-sys, crates/sel4-runtime, apps/root-task, seL4/build, seL4/SMP_build, seL4/build_UBOOT.
+Changes:
+  - crates/sel4-sys — compatibility fixes required by seL4 15 headers/generated metadata.
+  - crates/sel4-runtime — compatibility fixes required by seL4 15 root-task startup behavior.
+  - apps/root-task — bootstrap adjustments only where required by seL4 15 semantics.
+Commands: cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"
+Checks: direct-seL4 Cohesix builds compile on all supported kernel profiles without changing system model or operator-visible semantics.
+Deliverables: passing workspace/build-target checks and refreshed low-level compatibility evidence.
+```
+
+```
+Title/ID: m26d-domain-schedule-debt-removal
+Goal: Remove or explicitly resolve stale legacy domain-schedule dependencies from Cohesix seL4 build configurations.
+Inputs: seL4/build_UBOOT/CMakeCache.txt, seL4/build*/generated artifacts, Pi 4 build scripts, seL4 15.0.0 upgrade notes.
+Changes:
+  - scripts/pi4-image-build.sh and related build docs — ensure Cohesix-owned Pi 4 flows do not silently depend on stale `domain_schedule.c` defaults when domains are not in use.
+  - docs/HARDWARE_BRINGUP.md and docs/BUILD_PLAN.md — document the resolved seL4 15 domain-schedule posture for Cohesix.
+Commands: scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir seL4/build_UBOOT
+Checks: one-domain Cohesix builds no longer inherit accidental `sel4test` schedule-file assumptions.
+Deliverables: documented and verified domain-schedule posture for Cohesix seL4 15 builds.
+```
+
+```
+Title/ID: m26d-full-regression-refresh
+Goal: Prove the seL4 15 baseline refresh preserves operator-visible behavior across QEMU and Pi 4.
+Inputs: refreshed generated artifacts, seL4 15 build trees, docs/TEST_PLAN.md, scripts/ci/test_plan_run.sh.
+Changes:
+  - docs/TEST_PLAN.md — update kernel-baseline references only where needed to match the refreshed evidence.
+  - out/test-plan/m26d-qemu and out/test-plan/m26d-pi4 — target-qualified PASS evidence on the refreshed baseline.
+Commands: scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu
+Checks: QEMU and Pi 4 staged Test Plan runs are PASS with no undocumented drift.
+Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety for Cohesix.
 ```
 
 ---
