@@ -1308,12 +1308,28 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset: bool) -> XhciFirmwareHandoff {
-    // The resetless deferred-ring publish path proved too fragile on Pi 4.
-    // Keep the trusted CAP/stop-state snapshot, but always rebuild runtime
-    // ownership through the cold-start path instead of inheriting firmware's
-    // runtime ring state.
-    let _ = runtime_vl805_reset;
-    XhciFirmwareHandoff::ColdStartFromSnapshot
+    // A confirmed runtime VL805 reset lets local-seat rebuild ownership from
+    // the trusted CAP/stop-state snapshot through the cold-start path again.
+    // The weaker posted-fallback or bootloader-owned stop-state contract has
+    // now proven the opposite boundary on Pi 4: the first live HCRST/CONFIG
+    // touch can still wedge the board. Keep that weaker path on the preserved
+    // controller-state mode so runtime skips the toxic reset edge while still
+    // rebuilding ring ownership locally from zero/stop-state seeds.
+    if runtime_vl805_reset {
+        XhciFirmwareHandoff::ColdStartFromSnapshot
+    } else {
+        XhciFirmwareHandoff::PreserveControllerState
+    }
+}
+
+#[inline]
+const fn xhci_firmware_handoff_mode_label(firmware_handoff: XhciFirmwareHandoff) -> &'static str {
+    match firmware_handoff {
+        XhciFirmwareHandoff::None => "none",
+        XhciFirmwareHandoff::ColdStartFromSnapshot => "cold-start-from-snapshot",
+        XhciFirmwareHandoff::ResetlessReinit => "resetless-reinit",
+        XhciFirmwareHandoff::PreserveControllerState => "preserve-controller-state",
+    }
 }
 
 #[inline]
@@ -5143,28 +5159,45 @@ impl UsbKeyboard {
                 let firmware_handoff = if trusted_handoff_probe.is_some() {
                     let handoff_mode = xhci_preferred_trusted_handoff_mode(runtime_vl805_reset);
                     if runtime_vl805_reset {
-                        boot_log::force_uart_line(
-                            "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset+trusted-cap-snapshot action=fresh-init-from-cap-snapshot",
+                        let mut line = heapless::String::<224>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci handoff=runtime-owned stage=runtime detail=mailbox-reset+trusted-cap-snapshot action=fresh-init-from-cap-snapshot mode={}",
+                                xhci_firmware_handoff_mode_label(handoff_mode),
+                            ),
                         );
+                        boot_log::force_uart_line(line.as_str());
                     } else if runtime_vl805_reset_requested {
                         let mut line = heapless::String::<224>::new();
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] xhci handoff=runtime-owned stage=runtime detail={} action=fresh-init-from-cap-snapshot",
-                                runtime_vl805_mailbox_reset_trusted_cold_init_detail(
-                                    runtime_vl805_reset_state,
-                                )
+                                "[local-seat] xhci handoff=runtime-owned stage=runtime detail={} action=fresh-init-from-cap-snapshot mode={}",
+                                runtime_vl805_mailbox_reset_trusted_cold_init_detail(runtime_vl805_reset_state),
+                                xhci_firmware_handoff_mode_label(handoff_mode),
                             ),
                         );
                         boot_log::force_uart_line(line.as_str());
                     } else {
-                        boot_log::force_uart_line(
-                            "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=skip-runtime-mailbox-reset action=fresh-init-from-cap-snapshot",
+                        let mut line = heapless::String::<224>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=skip-runtime-mailbox-reset action=fresh-init-from-cap-snapshot mode={}",
+                                xhci_firmware_handoff_mode_label(handoff_mode),
+                            ),
                         );
-                        boot_log::force_uart_line(
-                            "[local-seat] xhci handoff=bootloader-owned stage=runtime detail=skip-mailbox-reset+trusted-post-stop-cap-snapshot action=fresh-init-from-cap-snapshot",
+                        boot_log::force_uart_line(line.as_str());
+                        line.clear();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci handoff=bootloader-owned stage=runtime detail=skip-mailbox-reset+trusted-post-stop-cap-snapshot action=fresh-init-from-cap-snapshot mode={}",
+                                xhci_firmware_handoff_mode_label(handoff_mode),
+                            ),
                         );
+                        boot_log::force_uart_line(line.as_str());
                     }
                     handoff_mode
                 } else {
@@ -9907,6 +9940,42 @@ mod tests {
     }
 
     #[test]
+    fn xhci_controller_params_seed_preserved_state_from_stop_state_snapshot() {
+        let params = xhci_controller_params_from_probe(
+            XhciCapProbe {
+                cap_length: 0x40,
+                hci_version: 0x0100,
+                hcs1: 32u32 | (8u32 << 24),
+                hcs2: 0,
+                hccparams1: 1 << 2,
+                db_offset: 0x1000,
+                rts_offset: 0x2000,
+                max_slots: 32,
+                max_ports: 8,
+                max_scratchpad: 0,
+                mmio_size: 0x10000,
+            },
+            XhciFirmwareHandoff::PreserveControllerState,
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+        );
+        let snapshot = params
+            .runtime_seed_snapshot
+            .expect("preserved handoff should seed stop-state snapshot");
+        assert_eq!(snapshot.usbcmd, Some(0));
+        assert_eq!(snapshot.usbsts, Some(1));
+        assert_eq!(snapshot.iman0, Some(0));
+        assert_eq!(snapshot.dcbaap, None);
+        assert_eq!(snapshot.crcr, None);
+        assert_eq!(snapshot.erstba0, None);
+        assert_eq!(snapshot.erdp0, None);
+        assert_eq!(snapshot.erstsz0, None);
+    }
+
+    #[test]
     fn xhci_cap_probe_from_snapshot_preserves_handoff_snapshot_fields() {
         let probe = xhci_cap_probe_from_snapshot(LocalSeatXhciCapabilitySnapshot {
             cap_length: 0x40,
@@ -10239,10 +10308,10 @@ mod tests {
     }
 
     #[test]
-    fn preferred_trusted_handoff_mode_now_always_cold_starts_from_snapshot() {
+    fn preferred_trusted_handoff_mode_splits_cold_start_and_preserve_paths() {
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(false),
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::PreserveControllerState
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(true),
