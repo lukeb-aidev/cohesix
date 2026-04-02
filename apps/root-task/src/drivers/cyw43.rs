@@ -238,9 +238,14 @@ fn prepare_initial_control_plane_transport(
     let data_clock_target_hz =
         control_plane_data_clock_target_hz(state.recommended_data_clock_hz());
     let data_clock_hz = state.set_clock_hz(data_clock_target_hz)?;
+    let transport_mode = if state.cyw43_experimental_no_ht_transport() {
+        "bounded-no-ht"
+    } else {
+        "strict"
+    };
     info!(
-        "[cyw43] control transport ready clock={}Hz bus_width=4 mode=strict",
-        data_clock_hz
+        "[cyw43] control transport ready clock={}Hz bus_width=4 mode={transport_mode}",
+        data_clock_hz,
     );
     Ok((data_clock_hz, SdioBusWidth::FourBit))
 }
@@ -843,8 +848,13 @@ impl Cyw43NetDevice {
             sdpcm_seq
         );
         if self.state.cyw43_control_plane_probe_pending() {
+            let transport_mode = if self.state.cyw43_experimental_no_ht_transport() {
+                "bounded-no-ht"
+            } else {
+                "strict"
+            };
             info!(
-                "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} aligned_len={} seq={}/{} ioctl_id={} channel={} chunk_limit={} mode=strict",
+                "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} aligned_len={} seq={}/{} ioctl_id={} channel={} chunk_limit={} mode={transport_mode}",
                 cmd as u32,
                 iface,
                 payload_len,

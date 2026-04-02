@@ -877,6 +877,15 @@ const fn control_plane_snapshot_uses_live_sdio_core_reads(
 }
 
 #[inline]
+const fn cyw43_transport_mode_name(experimental_no_ht_transport: bool) -> &'static str {
+    if experimental_no_ht_transport {
+        "bounded-no-ht"
+    } else {
+        "strict"
+    }
+}
+
+#[inline]
 const fn experimental_no_ht_f2_fifo_chunk_limit() -> usize {
     // The no-HT recovery path still reaches firmware-ready, but 512-byte
     // function-2 bursts keep tripping the first control-plane exchanges on Pi
@@ -1301,6 +1310,23 @@ const fn firmware_bulk_clock_candidates(restore_clock_hz: u32, ht_ready: bool) -
 #[inline]
 const fn ht_clock_timeout_can_continue(required: bool, last_chipclk: u8) -> bool {
     required && (last_chipclk & SBSDIO_ALP_AVAIL) != 0 && (last_chipclk & SBSDIO_HT_AVAIL_REQ) != 0
+}
+
+#[inline]
+const fn ht_clock_timeout_can_enter_bounded_no_ht_transport(
+    last_chipclk: Option<u8>,
+    last_wakeupctrl: Option<u8>,
+    last_sleepcsr: Option<u8>,
+    last_cardcap: Option<u8>,
+) -> bool {
+    match last_chipclk {
+        Some(chipclk) => {
+            ht_clock_timeout_can_continue(true, chipclk)
+                && (chipclk & SBSDIO_FORCE_HT) != 0
+                && ht_clock_assist_shadow_is_complete(last_wakeupctrl, last_sleepcsr, last_cardcap)
+        }
+        None => false,
+    }
 }
 
 #[inline]
@@ -2993,6 +3019,23 @@ impl SdioHost {
         self.experimental_no_ht_transport = false;
         self.experimental_control_plane_write_probe_pending = false;
         self.experimental_control_plane_promoted_probe_pending = false;
+    }
+
+    fn enter_bounded_no_ht_transport(&mut self, stage: &'static str) {
+        self.experimental_no_ht_transport = true;
+        self.experimental_control_plane_write_probe_pending = true;
+        self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
+        self.experimental_control_plane_reply_rearm_attempts = 0;
+        self.experimental_control_plane_promoted_probe_pending = false;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=transport-mode mode={} current_clock={}Hz width={} chunk_limit={} probe_pending={}",
+            cyw43_transport_mode_name(self.experimental_no_ht_transport),
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.control_plane_chunk_limit(),
+            yn(self.experimental_control_plane_write_probe_pending),
+        ));
+        self.log_transport_shadow("bounded-no-ht-transport");
     }
 
     fn rearm_firmware_channel_on_startup_link(&mut self) -> Result<(), HalError> {
@@ -5319,16 +5362,25 @@ impl SdioHost {
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-core-up"));
         self.wait_for_core_up(CYW43_ARMCR4_CORE_BASE, "armcr4-core-up")?;
         self.ensure_control_plane_clock("wait-ht-clock-prep")?;
-        self.require_ht_clock_ready("wait-ht-clock", "wait-ht-clock assist")?;
+        let strict_ht_ready =
+            self.require_ht_clock_ready("wait-ht-clock", "wait-ht-clock assist")?;
         self.ensure_control_plane_clock("setup-firmware-channel-clock")?;
-        self.experimental_no_ht_transport = false;
-        self.experimental_control_plane_write_probe_pending = false;
+        if strict_ht_ready {
+            self.experimental_no_ht_transport = false;
+            self.experimental_control_plane_write_probe_pending = false;
+        } else {
+            self.enter_bounded_no_ht_transport("wait-ht-clock");
+        }
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=setup-firmware-channel"
+            "[pi4-wifi] firmware stage=setup-firmware-channel mode={} chunk_limit={}",
+            cyw43_transport_mode_name(self.experimental_no_ht_transport),
+            self.control_plane_chunk_limit(),
         ));
         self.setup_firmware_channel(false)?;
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=wait-firmware-ready"
+            "[pi4-wifi] firmware stage=wait-firmware-ready mode={} chunk_limit={}",
+            cyw43_transport_mode_name(self.experimental_no_ht_transport),
+            self.control_plane_chunk_limit(),
         ));
         self.wait_for_firmware_ready(false)?;
         emit_breadcrumb(format_args!("[pi4-wifi] firmware load ready"));
@@ -5501,7 +5553,7 @@ impl SdioHost {
                     self.last_sleepcsr,
                     self.last_cardcap,
                 );
-                self.remember_chipclkcsr(transport_phase_chipclk_value(Some(last_chipclk)));
+                self.remember_chipclkcsr(last_chipclk);
                 self.log_transport_shadow("wait-ht-clock-timeout-soft");
                 Ok(false)
             } else {
@@ -5540,10 +5592,10 @@ impl SdioHost {
         &mut self,
         stage: &'static str,
         assist_stage: &'static str,
-    ) -> Result<(), HalError> {
+    ) -> Result<bool, HalError> {
         for attempt in 0..=1 {
             match self.wait_for_ht_clock_with_stage(stage, assist_stage, true, attempt > 0)? {
-                true => return Ok(()),
+                true => return Ok(true),
                 false if attempt == 0 => {
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage={stage} action=recover-retry reason=ht-not-ready"
@@ -5551,6 +5603,20 @@ impl SdioHost {
                     self.recover_command_path_and_refresh_transport(stage)?;
                 }
                 false => {
+                    if ht_clock_timeout_can_enter_bounded_no_ht_transport(
+                        self.last_chipclkcsr,
+                        self.last_wakeupctrl,
+                        self.last_sleepcsr,
+                        self.last_cardcap,
+                    ) {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} action=continue mode={} reason=ht-not-ready csr=0x{:02x}",
+                            cyw43_transport_mode_name(true),
+                            self.last_chipclkcsr.unwrap_or(0),
+                        ));
+                        self.log_transport_shadow("wait-ht-clock-bounded-no-ht");
+                        return Ok(false);
+                    }
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage={stage} action=fail reason=ht-not-ready"
                     ));
@@ -7556,19 +7622,20 @@ mod tests {
         core_ctrl_trace_function_addr, core_disable_uses_upstream_socram_disable,
         core_reset_can_skip_postreset_verify, core_reset_prepare_hold_value,
         core_wait_can_defer_after_read_error, core_wait_should_raise_control_plane_clock,
-        experimental_control_plane_write_can_assume_committed,
+        cyw43_transport_mode_name, experimental_control_plane_write_can_assume_committed,
         experimental_control_plane_write_can_promote_after_post_write_rearm_timeout,
         experimental_control_plane_write_needs_post_write_rearm,
         experimental_function2_fifo_chunk_limit, firmware_bulk_clock_candidates,
         firmware_phase_can_retry, ht_clock_assist_shadow_is_complete, ht_clock_request_value,
-        is_armcr4_postreset_fragile_read_error, is_mailbox_protocol_error, mailbox_tag_name,
-        make_command, merge_u16_word, next_distinct_firmware_bulk_clock_candidate, normalize_nvram,
-        phys_to_bus, r5_status, sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask,
-        sdhci_status_reason, sdio_byte_mode_transfer_plan, sdio_core_reg_addr,
-        sdio_core_transfer_function_addr, sdio_core_transfer_increment_addr,
-        sdio_function_ready_budget_name, sdio_function_ready_extended_polls,
-        sdio_function_ready_extended_polls_for, sdio_function_ready_extended_settle_loops,
-        sdio_function_ready_extended_settle_loops_for, sdio_function_ready_retry_limit_for,
+        ht_clock_timeout_can_enter_bounded_no_ht_transport, is_armcr4_postreset_fragile_read_error,
+        is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word,
+        next_distinct_firmware_bulk_clock_candidate, normalize_nvram, phys_to_bus, r5_status,
+        sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
+        sdio_byte_mode_transfer_plan, sdio_core_reg_addr, sdio_core_transfer_function_addr,
+        sdio_core_transfer_increment_addr, sdio_function_ready_budget_name,
+        sdio_function_ready_extended_polls, sdio_function_ready_extended_polls_for,
+        sdio_function_ready_extended_settle_loops, sdio_function_ready_extended_settle_loops_for,
+        sdio_function_ready_retry_limit_for,
         sdio_function_ready_timeout_can_continue_experimentally,
         sdio_function_ready_uses_control_plane_reply_probe_budget,
         sdio_function_ready_uses_short_probe_only_budget, sdio_transfer_addr, sdio_transfer_plan,
@@ -9160,6 +9227,34 @@ mod tests {
             false,
             SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL
         ));
+    }
+
+    #[test]
+    fn ht_clock_timeout_can_enter_bounded_no_ht_transport_only_with_force_ht_and_shadow() {
+        assert!(ht_clock_timeout_can_enter_bounded_no_ht_transport(
+            Some(SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+            Some(SBSDIO_WAKE_TILL_HT_AVAIL),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_EN),
+            Some(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC),
+        ));
+        assert!(!ht_clock_timeout_can_enter_bounded_no_ht_transport(
+            Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+            Some(SBSDIO_WAKE_TILL_HT_AVAIL),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_EN),
+            Some(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC),
+        ));
+        assert!(!ht_clock_timeout_can_enter_bounded_no_ht_transport(
+            Some(SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+            Some(SBSDIO_WAKE_TILL_HT_AVAIL),
+            None,
+            Some(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC),
+        ));
+    }
+
+    #[test]
+    fn cyw43_transport_mode_names_are_stable() {
+        assert_eq!(cyw43_transport_mode_name(false), "strict");
+        assert_eq!(cyw43_transport_mode_name(true), "bounded-no-ht");
     }
 
     #[test]
