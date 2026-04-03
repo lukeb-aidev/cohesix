@@ -404,13 +404,11 @@ const fn defer_event_ring_publish_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The stop-state preserve path now reaches the first RUN store and proves
-    // that starting the controller before publishing fresh runtime ring state
-    // is the toxic edge. Keep the staged publish ladder, but complete it
-    // before RUN so the controller never observes stale firmware-owned rings.
-    let _ = firmware_handoff;
-    let _ = runtime_seed_snapshot;
-    false
+    // The resetless snapshot path has now advanced far enough to show the
+    // pre-RUN ERSTSZ/ERSTBA ownership stores are the toxic edge. Keep the
+    // staged runtime ring ladder, but move the live event-ring publish until
+    // after RUN only for that resetless handoff.
+    snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -418,9 +416,11 @@ const fn defer_dcbaap_publish_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    let _ = firmware_handoff;
-    let _ = runtime_seed_snapshot;
-    false
+    // The resetless snapshot path now reaches the staged DCBAAP publish
+    // itself as the next live ownership edge. Keep the deferred pre-RUN ring
+    // ordering intact, but move the live DCBAAP handoff until after RUN there
+    // so the next toxic store remains isolated.
+    snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -2941,7 +2941,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_does_not_use_post_run_shortcuts() {
+    fn stop_state_only_snapshot_only_uses_resetless_post_run_dcbaap() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -2980,7 +2980,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!defer_dcbaap_publish_until_after_run_with_snapshot(
+        assert!(defer_dcbaap_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
@@ -3065,6 +3065,18 @@ mod tests {
             snapshot,
         ));
         assert!(defer_dcbaap_publish_with_snapshot(
+            XhciFirmwareHandoff::ResetlessReinit,
+            snapshot,
+        ));
+        assert!(!defer_dcbaap_publish_until_after_run_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            snapshot,
+        ));
+        assert!(!defer_dcbaap_publish_until_after_run_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            snapshot,
+        ));
+        assert!(defer_dcbaap_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
@@ -3188,6 +3200,10 @@ mod tests {
         ));
         assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
+            snapshot,
+        ));
+        assert!(defer_event_ring_publish_until_after_run_with_snapshot(
+            XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
     }

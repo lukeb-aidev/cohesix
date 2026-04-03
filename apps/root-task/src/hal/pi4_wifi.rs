@@ -835,6 +835,16 @@ const fn experimental_control_plane_reply_rearm_limit() -> usize {
 }
 
 #[inline]
+const fn experimental_control_plane_reply_rearm_default_empty_poll_limit() -> u8 {
+    8
+}
+
+#[inline]
+const fn experimental_control_plane_reply_rearm_resume_empty_poll_limit() -> u8 {
+    64
+}
+
+#[inline]
 const fn control_plane_reply_rearm_none() -> u8 {
     0
 }
@@ -912,6 +922,23 @@ const fn control_plane_zero_frame_needs_reply_rearm(
     control_plane_reply_rearm_pending(reply_rearm_mode)
         && !function2_ready
         && reply_rearm_attempts < experimental_control_plane_reply_rearm_limit()
+}
+
+#[inline]
+const fn experimental_control_plane_reply_rearm_empty_poll_limit(reply_rearm_mode: u8) -> u8 {
+    if control_plane_reply_rearm_uses_slow_link_channel_rearm(reply_rearm_mode) {
+        experimental_control_plane_reply_rearm_resume_empty_poll_limit()
+    } else {
+        experimental_control_plane_reply_rearm_default_empty_poll_limit()
+    }
+}
+
+#[inline]
+const fn control_plane_reply_rearm_waits_for_empty_polls(
+    reply_rearm_mode: u8,
+    empty_polls: u8,
+) -> bool {
+    empty_polls < experimental_control_plane_reply_rearm_empty_poll_limit(reply_rearm_mode)
 }
 
 #[inline]
@@ -2961,6 +2988,7 @@ struct SdioHost {
     experimental_control_plane_write_probe_pending: bool,
     experimental_control_plane_reply_rearm_mode: u8,
     experimental_control_plane_reply_rearm_attempts: u8,
+    experimental_control_plane_reply_rearm_empty_polls: u8,
     experimental_control_plane_promoted_probe_pending: bool,
     block_size_count_shadow: u32,
     transfer_mode_shadow: u32,
@@ -3021,6 +3049,7 @@ impl SdioHost {
             experimental_control_plane_write_probe_pending: false,
             experimental_control_plane_reply_rearm_mode: control_plane_reply_rearm_none(),
             experimental_control_plane_reply_rearm_attempts: 0,
+            experimental_control_plane_reply_rearm_empty_polls: 0,
             experimental_control_plane_promoted_probe_pending: false,
             block_size_count_shadow: 0,
             transfer_mode_shadow: 0,
@@ -3035,6 +3064,7 @@ impl SdioHost {
         self.experimental_control_plane_write_probe_pending = false;
         self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
         self.experimental_control_plane_reply_rearm_attempts = 0;
+        self.experimental_control_plane_reply_rearm_empty_polls = 0;
         self.experimental_control_plane_promoted_probe_pending = false;
         self.block_size_count_shadow = 0;
         self.transfer_mode_shadow = 0;
@@ -3136,6 +3166,7 @@ impl SdioHost {
             control_plane_reply_rearm_state_for_startup_link_resume();
         self.experimental_control_plane_reply_rearm_mode = reply_rearm_mode;
         self.experimental_control_plane_reply_rearm_attempts = reply_rearm_attempts;
+        self.experimental_control_plane_reply_rearm_empty_polls = 0;
         self.experimental_control_plane_promoted_probe_pending = promoted_probe_pending;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} action=resume-startup-link-rearm current={}Hz width={} chunk_limit={} no_ht={}",
@@ -3213,6 +3244,7 @@ impl SdioHost {
                         control_plane_reply_rearm_state_for_startup_link_post_write();
                     self.experimental_control_plane_reply_rearm_mode = reply_rearm_mode;
                     self.experimental_control_plane_reply_rearm_attempts = reply_rearm_attempts;
+                    self.experimental_control_plane_reply_rearm_empty_polls = 0;
                     self.experimental_control_plane_promoted_probe_pending = promoted_probe_pending;
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=ready"
@@ -3279,6 +3311,7 @@ impl SdioHost {
                     self.experimental_control_plane_reply_rearm_mode =
                         control_plane_reply_rearm_promoted_link();
                     self.experimental_control_plane_reply_rearm_attempts = 0;
+                    self.experimental_control_plane_reply_rearm_empty_polls = 0;
                     self.experimental_control_plane_promoted_probe_pending =
                         speculative_ready_probe;
                     emit_breadcrumb(format_args!(
@@ -3313,6 +3346,7 @@ impl SdioHost {
         if function2_ready {
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
             self.experimental_control_plane_reply_rearm_attempts = 0;
+            self.experimental_control_plane_reply_rearm_empty_polls = 0;
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=control-plane-reply action=function2-ready iorx=0x{ready:02x}"
             ));
@@ -3353,6 +3387,7 @@ impl SdioHost {
             self.log_control_plane_finish_snapshot("control-plane-startup-link-rearm-stalled");
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
             self.experimental_control_plane_reply_rearm_attempts = 0;
+            self.experimental_control_plane_reply_rearm_empty_polls = 0;
             return Err(err);
         }
 
@@ -3412,6 +3447,7 @@ impl SdioHost {
         let function2_ready_after = (ready_after & SDIO_FUNC_READY_2) == SDIO_FUNC_READY_2;
         self.experimental_control_plane_reply_rearm_attempts =
             control_plane_reply_rearm_attempts_after_rearm(function2_ready_after, next_attempt);
+        self.experimental_control_plane_reply_rearm_empty_polls = 0;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=control-plane-reply action={action}-ready mode={} attempt={} iorx=0x{ready_after:02x} current_clock={}Hz width={} chunk_limit={} no_ht={}",
             control_plane_reply_rearm_mode_name(reply_rearm_mode),
@@ -3423,6 +3459,7 @@ impl SdioHost {
         ));
         if function2_ready_after {
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
+            self.experimental_control_plane_reply_rearm_empty_polls = 0;
             return Ok(());
         }
         if control_plane_startup_link_probe_stalled_after_rearm(
@@ -3459,6 +3496,7 @@ impl SdioHost {
             self.log_control_plane_finish_snapshot("control-plane-startup-link-rearm-stalled");
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
             self.experimental_control_plane_reply_rearm_attempts = 0;
+            self.experimental_control_plane_reply_rearm_empty_polls = 0;
             return Err(err);
         }
         if control_plane_promoted_probe_stalled_after_rearm(
@@ -3469,6 +3507,7 @@ impl SdioHost {
         ) {
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
             self.experimental_control_plane_reply_rearm_attempts = 0;
+            self.experimental_control_plane_reply_rearm_empty_polls = 0;
             self.experimental_control_plane_promoted_probe_pending = false;
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=control-plane-reply action=promoted-rearm-stalled mode={} attempt={} iorx=0x{ready_after:02x} current_clock={}Hz width={} chunk_limit={} no_ht={}",
@@ -5340,9 +5379,20 @@ impl SdioHost {
         let frame_len = (hi << 8) | lo;
         if frame_len != 0 {
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
+            self.experimental_control_plane_reply_rearm_empty_polls = 0;
             return Ok(frame_len);
         }
         if control_plane_reply_rearm_pending(self.experimental_control_plane_reply_rearm_mode) {
+            if control_plane_reply_rearm_waits_for_empty_polls(
+                self.experimental_control_plane_reply_rearm_mode,
+                self.experimental_control_plane_reply_rearm_empty_polls,
+            ) {
+                self.experimental_control_plane_reply_rearm_empty_polls = self
+                    .experimental_control_plane_reply_rearm_empty_polls
+                    .saturating_add(1);
+                return Ok(0);
+            }
+            self.experimental_control_plane_reply_rearm_empty_polls = 0;
             self.maybe_rearm_control_plane_reply_on_zero_frame()?;
             let lo =
                 usize::from(self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)?);
@@ -5351,9 +5401,11 @@ impl SdioHost {
             let frame_len = (hi << 8) | lo;
             if frame_len != 0 {
                 self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
+                self.experimental_control_plane_reply_rearm_empty_polls = 0;
             }
             return Ok(frame_len);
         }
+        self.experimental_control_plane_reply_rearm_empty_polls = 0;
         Ok(0)
     }
 
@@ -8433,6 +8485,34 @@ mod tests {
             true,
             false,
             2,
+        ));
+    }
+
+    #[test]
+    fn control_plane_reply_rearm_empty_poll_budget_is_mode_specific() {
+        let startup_limit = experimental_control_plane_reply_rearm_empty_poll_limit(
+            control_plane_reply_rearm_startup_link(),
+        );
+        let resume_limit = experimental_control_plane_reply_rearm_empty_poll_limit(
+            control_plane_reply_rearm_startup_link_resume(),
+        );
+        assert_eq!(startup_limit, 8);
+        assert_eq!(resume_limit, 64);
+        assert!(control_plane_reply_rearm_waits_for_empty_polls(
+            control_plane_reply_rearm_startup_link(),
+            startup_limit - 1,
+        ));
+        assert!(!control_plane_reply_rearm_waits_for_empty_polls(
+            control_plane_reply_rearm_startup_link(),
+            startup_limit,
+        ));
+        assert!(control_plane_reply_rearm_waits_for_empty_polls(
+            control_plane_reply_rearm_startup_link_resume(),
+            resume_limit - 1,
+        ));
+        assert!(!control_plane_reply_rearm_waits_for_empty_polls(
+            control_plane_reply_rearm_startup_link_resume(),
+            resume_limit,
         ));
     }
 

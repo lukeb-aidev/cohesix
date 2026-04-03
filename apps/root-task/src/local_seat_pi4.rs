@@ -1897,6 +1897,21 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x02c8 => Some("erstba-defer-high"),
         0x02c9 => Some("erstba-defer-high-done"),
         0x02ca => Some("erstba-defer-handoff"),
+        0x02cb => Some("erstsz-post-run-begin"),
+        0x02cc => Some("erstsz-post-run-write"),
+        0x02cd => Some("erstsz-post-run-write-done"),
+        0x02ce => Some("erstba-post-run-begin"),
+        0x02cf => Some("erstba-post-run-write"),
+        0x02d0 => Some("erstba-post-run-write-done"),
+        0x02d1 => Some("erstba-post-run-high"),
+        0x02d2 => Some("erstba-post-run-high-done"),
+        0x02d3 => Some("erstba-post-run-handoff"),
+        0x02d4 => Some("dcbaap-post-run-begin"),
+        0x02d5 => Some("dcbaap-post-run-done"),
+        0x02d6 => Some("crcr-post-run-begin"),
+        0x02d7 => Some("crcr-post-run-done"),
+        0x02d8 => Some("dnctrl-post-run-begin"),
+        0x02d9 => Some("dnctrl-post-run-done"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -10295,6 +10310,33 @@ mod tests {
             Some("erstba-defer-high-done")
         );
         assert_eq!(xhci_diag_stage_label(0x02ca), Some("erstba-defer-handoff"));
+        assert_eq!(xhci_diag_stage_label(0x02cb), Some("erstsz-post-run-begin"));
+        assert_eq!(xhci_diag_stage_label(0x02cc), Some("erstsz-post-run-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02cd),
+            Some("erstsz-post-run-write-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02ce), Some("erstba-post-run-begin"));
+        assert_eq!(xhci_diag_stage_label(0x02cf), Some("erstba-post-run-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02d0),
+            Some("erstba-post-run-write-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02d1), Some("erstba-post-run-high"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02d2),
+            Some("erstba-post-run-high-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x02d3),
+            Some("erstba-post-run-handoff")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02d4), Some("dcbaap-post-run-begin"));
+        assert_eq!(xhci_diag_stage_label(0x02d5), Some("dcbaap-post-run-done"));
+        assert_eq!(xhci_diag_stage_label(0x02d6), Some("crcr-post-run-begin"));
+        assert_eq!(xhci_diag_stage_label(0x02d7), Some("crcr-post-run-done"));
+        assert_eq!(xhci_diag_stage_label(0x02d8), Some("dnctrl-post-run-begin"));
+        assert_eq!(xhci_diag_stage_label(0x02d9), Some("dnctrl-post-run-done"));
         assert_eq!(xhci_diag_stage_label(0x0300), Some("cmd-submit"));
         assert_eq!(xhci_diag_stage_label(0x0301), Some("cmd-completion"));
         assert_eq!(xhci_diag_stage_label(0x0302), Some("cmd-fail"));
