@@ -428,9 +428,11 @@ const fn defer_crcr_publish_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    let _ = firmware_handoff;
-    let _ = runtime_seed_snapshot;
-    false
+    // The resetless snapshot path has now advanced past the staged DCBAAP
+    // publish and wedges on the staged CRCR ownership transfer itself. Keep
+    // the ordered pre-RUN setup intact there, but move the live CRCR handoff
+    // until after RUN so the next ownership edge stays isolated.
+    snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -438,9 +440,12 @@ const fn defer_dnctrl_write_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    let _ = firmware_handoff;
-    let _ = runtime_seed_snapshot;
-    false
+    // The resetless snapshot path now clears the pre-RUN DCBAAP / CRCR
+    // ownership edges and stalls at the first live DNCTRL write instead.
+    // Keep the generic init ordering unchanged, but move this quiesce store
+    // until after RUN for that single handoff so the next controller-visible
+    // edge stays isolated in the traces.
+    snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -2941,7 +2946,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_only_uses_resetless_post_run_dcbaap() {
+    fn stop_state_only_snapshot_only_uses_resetless_post_run_dcbaap_crcr_and_dnctrl() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -2988,7 +2993,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!defer_crcr_publish_until_after_run_with_snapshot(
+        assert!(defer_crcr_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
@@ -2996,7 +3001,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!defer_dnctrl_write_until_after_run_with_snapshot(
+        assert!(defer_dnctrl_write_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
@@ -3114,7 +3119,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!defer_crcr_publish_until_after_run_with_snapshot(
+        assert!(defer_crcr_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));

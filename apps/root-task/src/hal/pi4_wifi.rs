@@ -830,8 +830,18 @@ fn control_plane_reply_rearm_can_promote_after_timeout(
 }
 
 #[inline]
-const fn experimental_control_plane_reply_rearm_limit() -> usize {
+const fn experimental_control_plane_reply_rearm_default_attempt_limit() -> usize {
     2
+}
+
+#[inline]
+const fn experimental_control_plane_reply_rearm_resume_attempt_limit() -> usize {
+    2
+}
+
+#[inline]
+const fn experimental_control_plane_reply_rearm_promoted_attempt_limit() -> usize {
+    1
 }
 
 #[inline]
@@ -841,7 +851,7 @@ const fn experimental_control_plane_reply_rearm_default_empty_poll_limit() -> u8
 
 #[inline]
 const fn experimental_control_plane_reply_rearm_resume_empty_poll_limit() -> u8 {
-    64
+    16
 }
 
 #[inline]
@@ -921,7 +931,19 @@ const fn control_plane_zero_frame_needs_reply_rearm(
 ) -> bool {
     control_plane_reply_rearm_pending(reply_rearm_mode)
         && !function2_ready
-        && reply_rearm_attempts < experimental_control_plane_reply_rearm_limit()
+        && reply_rearm_attempts
+            < experimental_control_plane_reply_rearm_attempt_limit(reply_rearm_mode)
+}
+
+#[inline]
+const fn experimental_control_plane_reply_rearm_attempt_limit(reply_rearm_mode: u8) -> usize {
+    if control_plane_reply_rearm_uses_slow_link_channel_rearm(reply_rearm_mode) {
+        experimental_control_plane_reply_rearm_resume_attempt_limit()
+    } else if control_plane_reply_rearm_uses_promoted_link(reply_rearm_mode) {
+        experimental_control_plane_reply_rearm_promoted_attempt_limit()
+    } else {
+        experimental_control_plane_reply_rearm_default_attempt_limit()
+    }
 }
 
 #[inline]
@@ -963,7 +985,8 @@ const fn control_plane_promoted_probe_stalled_after_rearm(
     control_plane_reply_rearm_uses_promoted_link(reply_rearm_mode)
         && speculative_promoted_probe
         && !function2_ready_after
-        && (next_attempt as usize) >= experimental_control_plane_reply_rearm_limit()
+        && (next_attempt as usize)
+            >= experimental_control_plane_reply_rearm_attempt_limit(reply_rearm_mode)
 }
 
 #[inline]
@@ -974,7 +997,7 @@ const fn control_plane_startup_link_probe_stalled_after_rearm(
 ) -> bool {
     control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
         && !function2_ready_after
-        && next_attempt >= experimental_control_plane_reply_rearm_limit()
+        && next_attempt >= experimental_control_plane_reply_rearm_attempt_limit(reply_rearm_mode)
 }
 
 #[inline]
@@ -2162,7 +2185,11 @@ const fn sdio_function_ready_uses_control_plane_reply_probe_budget(
     budget: SdioFunctionReadyBudget,
 ) -> bool {
     matches!(step.function, SdioFunction::Function2)
-        && matches!(budget, SdioFunctionReadyBudget::ControlPlaneReplyProbe)
+        && matches!(
+            budget,
+            SdioFunctionReadyBudget::ControlPlaneReplyProbe
+                | SdioFunctionReadyBudget::ControlPlaneReplyBypass
+        )
 }
 
 #[inline]
@@ -2211,6 +2238,7 @@ const fn sdio_function_ready_extended_settle_loops_for(
 enum SdioFunctionReadyBudget {
     Strict,
     ControlPlaneReplyProbe,
+    ControlPlaneReplyBypass,
     ExperimentalBypass,
 }
 
@@ -2219,6 +2247,7 @@ const fn sdio_function_ready_budget_name(budget: SdioFunctionReadyBudget) -> &'s
     match budget {
         SdioFunctionReadyBudget::Strict => "strict",
         SdioFunctionReadyBudget::ControlPlaneReplyProbe => "reply-probe",
+        SdioFunctionReadyBudget::ControlPlaneReplyBypass => "reply-probe-bypass",
         SdioFunctionReadyBudget::ExperimentalBypass => "experimental-bypass",
     }
 }
@@ -2230,8 +2259,11 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
     ready: u8,
     budget: SdioFunctionReadyBudget,
 ) -> bool {
-    matches!(budget, SdioFunctionReadyBudget::ExperimentalBypass)
-        && matches!(step.function, SdioFunction::Function2)
+    matches!(
+        budget,
+        SdioFunctionReadyBudget::ExperimentalBypass
+            | SdioFunctionReadyBudget::ControlPlaneReplyBypass
+    ) && matches!(step.function, SdioFunction::Function2)
         && (desired & step.enable_bit) == step.enable_bit
         && (ready & SDIO_FUNC_READY_1) == SDIO_FUNC_READY_1
         && (ready & step.ready_bit) == 0
@@ -2240,7 +2272,7 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
 #[inline]
 const fn control_plane_promote_rearm_mode_name(speculative_ready_probe: bool) -> &'static str {
     if speculative_ready_probe {
-        "speculative-empty-poll"
+        "speculative-reply-probe"
     } else {
         "strict"
     }
@@ -2251,7 +2283,7 @@ const fn control_plane_promote_rearm_budget(
     speculative_ready_probe: bool,
 ) -> SdioFunctionReadyBudget {
     if speculative_ready_probe {
-        SdioFunctionReadyBudget::ExperimentalBypass
+        SdioFunctionReadyBudget::ControlPlaneReplyBypass
     } else {
         SdioFunctionReadyBudget::Strict
     }
@@ -8424,6 +8456,11 @@ mod tests {
             false,
             1,
         ));
+        assert!(control_plane_zero_frame_needs_reply_rearm(
+            control_plane_reply_rearm_promoted_link(),
+            false,
+            3,
+        ));
         assert!(!control_plane_zero_frame_needs_reply_rearm(
             control_plane_reply_rearm_promoted_link(),
             true,
@@ -8436,6 +8473,16 @@ mod tests {
         ));
         assert!(!control_plane_zero_frame_needs_reply_rearm(
             control_plane_reply_rearm_startup_link(),
+            false,
+            2,
+        ));
+        assert!(control_plane_zero_frame_needs_reply_rearm(
+            control_plane_reply_rearm_startup_link_resume(),
+            false,
+            1,
+        ));
+        assert!(!control_plane_zero_frame_needs_reply_rearm(
+            control_plane_reply_rearm_startup_link_resume(),
             false,
             2,
         ));
@@ -8452,6 +8499,11 @@ mod tests {
             false,
             2,
         ));
+        assert!(!control_plane_startup_link_probe_stalled_after_rearm(
+            control_plane_reply_rearm_startup_link_resume(),
+            false,
+            1,
+        ));
         assert!(control_plane_startup_link_probe_stalled_after_rearm(
             control_plane_reply_rearm_startup_link_resume(),
             false,
@@ -8472,17 +8524,57 @@ mod tests {
             control_plane_reply_rearm_promoted_link(),
             false,
             false,
-            2,
+            1,
         ));
         assert!(!control_plane_promoted_probe_stalled_after_rearm(
             control_plane_reply_rearm_promoted_link(),
             true,
             true,
-            2,
+            1,
+        ));
+        assert!(!control_plane_promoted_probe_stalled_after_rearm(
+            control_plane_reply_rearm_promoted_link(),
+            true,
+            false,
+            0,
         ));
         assert!(control_plane_promoted_probe_stalled_after_rearm(
             control_plane_reply_rearm_promoted_link(),
             true,
+            false,
+            1,
+        ));
+    }
+
+    #[test]
+    fn control_plane_reply_rearm_attempt_budget_is_mode_specific() {
+        assert!(control_plane_zero_frame_needs_reply_rearm(
+            control_plane_reply_rearm_startup_link(),
+            false,
+            1,
+        ));
+        assert!(!control_plane_zero_frame_needs_reply_rearm(
+            control_plane_reply_rearm_startup_link(),
+            false,
+            2,
+        ));
+        assert!(control_plane_zero_frame_needs_reply_rearm(
+            control_plane_reply_rearm_promoted_link(),
+            false,
+            3,
+        ));
+        assert!(!control_plane_zero_frame_needs_reply_rearm(
+            control_plane_reply_rearm_promoted_link(),
+            false,
+            1,
+        ));
+        assert!(control_plane_zero_frame_needs_reply_rearm(
+            control_plane_reply_rearm_startup_link_resume(),
+            false,
+            1,
+        ));
+        assert!(!control_plane_zero_frame_needs_reply_rearm(
+            control_plane_reply_rearm_startup_link_resume(),
             false,
             2,
         ));
@@ -8497,7 +8589,7 @@ mod tests {
             control_plane_reply_rearm_startup_link_resume(),
         );
         assert_eq!(startup_limit, 8);
-        assert_eq!(resume_limit, 64);
+        assert_eq!(resume_limit, 16);
         assert!(control_plane_reply_rearm_waits_for_empty_polls(
             control_plane_reply_rearm_startup_link(),
             startup_limit - 1,
@@ -8565,19 +8657,19 @@ mod tests {
         assert_eq!(control_plane_promote_rearm_mode_name(false), "strict");
         assert_eq!(
             control_plane_promote_rearm_mode_name(true),
-            "speculative-empty-poll"
+            "speculative-reply-probe"
         );
     }
 
     #[test]
-    fn speculative_promote_rearm_reuses_experimental_bypass_budget() {
+    fn speculative_promote_rearm_uses_reply_probe_bypass_budget() {
         assert_eq!(
             control_plane_promote_rearm_budget(false),
             SdioFunctionReadyBudget::Strict
         );
         assert_eq!(
             control_plane_promote_rearm_budget(true),
-            SdioFunctionReadyBudget::ExperimentalBypass
+            SdioFunctionReadyBudget::ControlPlaneReplyBypass
         );
     }
 
@@ -9382,19 +9474,34 @@ mod tests {
     }
 
     #[test]
-    fn function2_ready_budget_short_probe_paths_skip_extended_wait() {
+    fn function2_ready_budget_keeps_probe_and_bypass_paths_distinct() {
         assert!(sdio_function_ready_uses_short_probe_only_budget(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ExperimentalBypass,
+        ));
+        assert!(!sdio_function_ready_uses_short_probe_only_budget(
+            SDIO_FUNCTION_ENABLE_F2,
+            SdioFunctionReadyBudget::ControlPlaneReplyBypass,
         ));
         assert!(!sdio_function_ready_uses_control_plane_reply_probe_budget(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ExperimentalBypass,
         ));
+        assert!(sdio_function_ready_uses_control_plane_reply_probe_budget(
+            SDIO_FUNCTION_ENABLE_F2,
+            SdioFunctionReadyBudget::ControlPlaneReplyBypass,
+        ));
         assert_eq!(
             sdio_function_ready_retry_limit_for(
                 SDIO_FUNCTION_ENABLE_F2,
                 SdioFunctionReadyBudget::ExperimentalBypass
+            ),
+            0
+        );
+        assert_eq!(
+            sdio_function_ready_retry_limit_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::ControlPlaneReplyBypass
             ),
             0
         );
@@ -9420,6 +9527,13 @@ mod tests {
             Some(SDIO_FUNCTION_READY_POLLS_FUNCTION2_REPLY_PROBE)
         );
         assert_eq!(
+            sdio_function_ready_extended_polls_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::ControlPlaneReplyBypass
+            ),
+            Some(SDIO_FUNCTION_READY_POLLS_FUNCTION2_REPLY_PROBE)
+        );
+        assert_eq!(
             sdio_function_ready_extended_settle_loops_for(
                 SDIO_FUNCTION_ENABLE_F2,
                 SdioFunctionReadyBudget::ExperimentalBypass
@@ -9430,6 +9544,13 @@ mod tests {
             sdio_function_ready_extended_settle_loops_for(
                 SDIO_FUNCTION_ENABLE_F2,
                 SdioFunctionReadyBudget::ControlPlaneReplyProbe
+            ),
+            Some(SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE)
+        );
+        assert_eq!(
+            sdio_function_ready_extended_settle_loops_for(
+                SDIO_FUNCTION_ENABLE_F2,
+                SdioFunctionReadyBudget::ControlPlaneReplyBypass
             ),
             Some(SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE)
         );
@@ -9479,6 +9600,10 @@ mod tests {
             sdio_function_ready_budget_name(SdioFunctionReadyBudget::ControlPlaneReplyProbe),
             "reply-probe"
         );
+        assert_eq!(
+            sdio_function_ready_budget_name(SdioFunctionReadyBudget::ControlPlaneReplyBypass),
+            "reply-probe-bypass"
+        );
     }
 
     #[test]
@@ -9489,6 +9614,12 @@ mod tests {
             desired,
             SDIO_FUNC_READY_1,
             SdioFunctionReadyBudget::ExperimentalBypass,
+        ));
+        assert!(sdio_function_ready_timeout_can_continue_experimentally(
+            SDIO_FUNCTION_ENABLE_F2,
+            desired,
+            SDIO_FUNC_READY_1,
+            SdioFunctionReadyBudget::ControlPlaneReplyBypass,
         ));
         assert!(!sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
