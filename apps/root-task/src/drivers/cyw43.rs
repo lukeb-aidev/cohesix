@@ -243,10 +243,17 @@ fn control_plane_retry_after_promoted_timeout_target_clock_hz(
 }
 
 #[inline]
-const fn control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+fn control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
     err: &DriverError,
 ) -> bool {
-    matches!(err, DriverError::Protocol("ioctl-timeout"))
+    matches!(
+        err,
+        DriverError::Protocol("ioctl-timeout")
+            | DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout"))
+            | DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-startup-link-reply-timeout"
+            ))
+    )
 }
 
 #[inline]
@@ -879,6 +886,10 @@ impl Cyw43NetDevice {
                     let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
                     self.probe.effective_clock_hz = effective_clock_hz;
                     self.state.rearm_cyw43_control_plane_slow_link()?;
+                    self.state
+                        .resume_cyw43_control_plane_reply_probe_on_startup_link(
+                            "control-plane-probe-retry-original-reply",
+                        );
                     info!(
                         "[cyw43] control-plane probe retry awaiting original reply cmd=0x{:08x} iface={} len={} ioctl_id={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
                         cmd as u32,
@@ -1021,6 +1032,12 @@ impl Cyw43NetDevice {
         }
         self.state
             .write_cyw43_frame(&mut self.tx_frame[..aligned_len])?;
+        if self.state.cyw43_experimental_no_ht_transport() && allow_speculative_retry_credit {
+            self.state
+                .resume_cyw43_control_plane_reply_probe_on_startup_link(
+                    "control-plane-probe-retry-resend",
+                );
+        }
         self.wait_for_ioctl_response(cmd as u32, self.ioctl_id)
     }
 
@@ -1679,9 +1696,21 @@ mod tests {
             )
         );
         assert!(
-            !control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+            control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+                &DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout"))
+            )
+        );
+        assert!(
+            control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
                 &DriverError::Hal(HalError::Unsupported(
                     "cyw43-control-plane-startup-link-reply-timeout"
+                ))
+            )
+        );
+        assert!(
+            !control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-promoted-rearm-timeout"
                 ))
             )
         );

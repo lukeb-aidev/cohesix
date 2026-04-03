@@ -319,6 +319,7 @@ const fn runtime_mailbox_reset_needs_blind_settle(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
@@ -391,9 +392,11 @@ const fn deferred_erst_publish_uses_size_first_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     (runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot))
         && runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
-        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+        && (!runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+            || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot))
 }
 
 #[inline(always)]
@@ -445,14 +448,12 @@ const fn use_atomic_erstba_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The stronger mailbox-reset and resetless snapshot paths still need the
-    // single 64-bit ERSTBA publish on Pi 4. The weaker stop-state snapshot
-    // now proves the opposite boundary: it reaches the deferred ERSTBA edge,
-    // but wedges on the 64-bit store itself. Keep the deferred ladder there,
-    // but fall back to the ordered low/high xHCI register write for that
-    // weaker path so the next live ownership edge becomes visible.
+    // The fully confirmed mailbox-reset path still needs the single 64-bit
+    // ERSTBA publish on Pi 4. The resetless snapshot path has now reached the
+    // deferred ERSTBA edge and wedges on that atomic store itself, so fall
+    // back to the ordered low/high xHCI register write there and keep the next
+    // live ownership edge visible.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -3033,7 +3034,7 @@ mod tests {
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
-        assert!(use_atomic_erstba_publish_with_snapshot(
+        assert!(!use_atomic_erstba_publish_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
@@ -3177,6 +3178,10 @@ mod tests {
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
+        assert!(deferred_erst_publish_uses_size_first_with_snapshot(
+            XhciFirmwareHandoff::ResetlessReinit,
+            snapshot,
+        ));
         assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
@@ -3316,6 +3321,23 @@ mod tests {
         assert!(!runtime_mailbox_reset_needs_blind_settle(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             None,
+        ));
+        assert!(!runtime_mailbox_reset_needs_blind_settle(
+            XhciFirmwareHandoff::ResetlessReinit,
+            None,
+        ));
+        assert!(runtime_mailbox_reset_needs_blind_settle(
+            XhciFirmwareHandoff::ResetlessReinit,
+            Some(XhciRuntimeSeedSnapshot {
+                usbcmd: None,
+                usbsts: None,
+                iman0: None,
+                dcbaap: None,
+                crcr: None,
+                erstba0: None,
+                erdp0: None,
+                erstsz0: None,
+            }),
         ));
         assert!(runtime_mailbox_reset_needs_blind_settle(
             XhciFirmwareHandoff::ColdStartFromSnapshot,

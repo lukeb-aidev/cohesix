@@ -814,6 +814,22 @@ const fn control_plane_startup_link_timeout_needs_promoted_probe(
 }
 
 #[inline]
+fn control_plane_reply_rearm_can_promote_after_timeout(
+    experimental_no_ht_transport: bool,
+    reply_rearm_mode: u8,
+    err: &HalError,
+) -> bool {
+    control_plane_startup_link_timeout_needs_promoted_probe(
+        experimental_no_ht_transport,
+        reply_rearm_mode,
+    ) && matches!(
+        err,
+        HalError::Unsupported("sdio-function2-ready-timeout")
+            | HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout")
+    )
+}
+
+#[inline]
 const fn experimental_control_plane_reply_rearm_limit() -> usize {
     2
 }
@@ -829,6 +845,11 @@ const fn control_plane_reply_rearm_startup_link() -> u8 {
 }
 
 #[inline]
+const fn control_plane_reply_rearm_startup_link_resume() -> u8 {
+    3
+}
+
+#[inline]
 const fn control_plane_reply_rearm_promoted_link() -> u8 {
     2
 }
@@ -838,8 +859,23 @@ const fn control_plane_reply_rearm_pending(reply_rearm_mode: u8) -> bool {
     matches!(
         reply_rearm_mode,
         mode if mode == control_plane_reply_rearm_startup_link()
+            || mode == control_plane_reply_rearm_startup_link_resume()
             || mode == control_plane_reply_rearm_promoted_link()
     )
+}
+
+#[inline]
+const fn control_plane_reply_rearm_uses_startup_link(reply_rearm_mode: u8) -> bool {
+    matches!(
+        reply_rearm_mode,
+        mode if mode == control_plane_reply_rearm_startup_link()
+            || mode == control_plane_reply_rearm_startup_link_resume()
+    )
+}
+
+#[inline]
+const fn control_plane_reply_rearm_uses_slow_link_channel_rearm(reply_rearm_mode: u8) -> bool {
+    reply_rearm_mode == control_plane_reply_rearm_startup_link_resume()
 }
 
 #[inline]
@@ -851,9 +887,20 @@ const fn control_plane_reply_rearm_uses_promoted_link(reply_rearm_mode: u8) -> b
 const fn control_plane_reply_rearm_mode_name(reply_rearm_mode: u8) -> &'static str {
     match reply_rearm_mode {
         mode if mode == control_plane_reply_rearm_startup_link() => "startup-link",
+        mode if mode == control_plane_reply_rearm_startup_link_resume() => "startup-link-resume",
         mode if mode == control_plane_reply_rearm_promoted_link() => "promoted-link",
         _ => "none",
     }
+}
+
+#[inline]
+const fn control_plane_reply_rearm_state_for_startup_link_post_write() -> (u8, u8, bool) {
+    (control_plane_reply_rearm_startup_link(), 0, false)
+}
+
+#[inline]
+const fn control_plane_reply_rearm_state_for_startup_link_resume() -> (u8, u8, bool) {
+    (control_plane_reply_rearm_startup_link_resume(), 0, false)
 }
 
 #[inline]
@@ -898,7 +945,7 @@ const fn control_plane_startup_link_probe_stalled_after_rearm(
     function2_ready_after: bool,
     next_attempt: usize,
 ) -> bool {
-    reply_rearm_mode == control_plane_reply_rearm_startup_link()
+    control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
         && !function2_ready_after
         && next_attempt >= experimental_control_plane_reply_rearm_limit()
 }
@@ -2383,6 +2430,11 @@ impl Pi4WifiState {
         self.host.rearm_firmware_channel_on_startup_link()
     }
 
+    pub fn resume_cyw43_control_plane_reply_probe_on_startup_link(&mut self, stage: &'static str) {
+        self.host
+            .resume_control_plane_reply_probe_on_startup_link(stage);
+    }
+
     pub fn log_cyw43_control_plane_snapshot(&mut self, stage: &'static str) {
         self.host.log_control_plane_finish_snapshot(stage);
     }
@@ -3079,6 +3131,21 @@ impl SdioHost {
         self.experimental_control_plane_promoted_probe_pending = false;
     }
 
+    fn resume_control_plane_reply_probe_on_startup_link(&mut self, stage: &'static str) {
+        let (reply_rearm_mode, reply_rearm_attempts, promoted_probe_pending) =
+            control_plane_reply_rearm_state_for_startup_link_resume();
+        self.experimental_control_plane_reply_rearm_mode = reply_rearm_mode;
+        self.experimental_control_plane_reply_rearm_attempts = reply_rearm_attempts;
+        self.experimental_control_plane_promoted_probe_pending = promoted_probe_pending;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=resume-startup-link-rearm current={}Hz width={} chunk_limit={} no_ht={}",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.control_plane_chunk_limit(),
+            self.experimental_no_ht_transport,
+        ));
+    }
+
     fn enter_bounded_no_ht_transport(&mut self, stage: &'static str) {
         self.experimental_no_ht_transport = true;
         self.experimental_control_plane_write_probe_pending = true;
@@ -3142,10 +3209,11 @@ impl SdioHost {
                 .rearm_firmware_channel_once(SdioFunctionReadyBudget::ControlPlaneReplyProbe, true)
             {
                 Ok(()) => {
-                    self.experimental_control_plane_reply_rearm_mode =
-                        control_plane_reply_rearm_startup_link();
-                    self.experimental_control_plane_reply_rearm_attempts = 0;
-                    self.experimental_control_plane_promoted_probe_pending = false;
+                    let (reply_rearm_mode, reply_rearm_attempts, promoted_probe_pending) =
+                        control_plane_reply_rearm_state_for_startup_link_post_write();
+                    self.experimental_control_plane_reply_rearm_mode = reply_rearm_mode;
+                    self.experimental_control_plane_reply_rearm_attempts = reply_rearm_attempts;
+                    self.experimental_control_plane_promoted_probe_pending = promoted_probe_pending;
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=ready"
                     ));
@@ -3313,8 +3381,32 @@ impl SdioHost {
         ));
         if promoted_rearm {
             self.rearm_firmware_channel_after_transport_promotion(speculative_promoted_probe)?;
+        } else if control_plane_reply_rearm_uses_slow_link_channel_rearm(reply_rearm_mode) {
+            self.rearm_firmware_channel_on_startup_link()?;
         } else {
-            self.rearm_firmware_channel_after_first_control_write()?;
+            match self.rearm_firmware_channel_after_first_control_write() {
+                Ok(()) => {}
+                Err(err)
+                    if control_plane_reply_rearm_can_promote_after_timeout(
+                        self.experimental_no_ht_transport,
+                        reply_rearm_mode,
+                        &err,
+                    ) =>
+                {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=promote-startup-link-rearm-timeout mode={} attempt={} err={err} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                        next_attempt,
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        self.control_plane_chunk_limit(),
+                        self.experimental_no_ht_transport,
+                    ));
+                    self.promote_control_plane_after_post_write_rearm_timeout(&err)?;
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
+            }
         }
         let ready_after = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)?;
         let function2_ready_after = (ready_after & SDIO_FUNC_READY_2) == SDIO_FUNC_READY_2;
@@ -7821,6 +7913,7 @@ mod tests {
         control_plane_reply_rearm_attempts_after_rearm, control_plane_reply_rearm_mode_name,
         control_plane_reply_rearm_none, control_plane_reply_rearm_pending,
         control_plane_reply_rearm_promoted_link, control_plane_reply_rearm_startup_link,
+        control_plane_reply_rearm_state_for_startup_link_resume,
         control_plane_reply_rearm_uses_promoted_link,
         control_plane_snapshot_uses_live_sdio_core_reads,
         control_plane_startup_link_probe_stalled_after_rearm,
@@ -8206,9 +8299,41 @@ mod tests {
     }
 
     #[test]
+    fn startup_link_reply_rearm_timeout_promotion_tracks_bounded_probe() {
+        assert!(control_plane_reply_rearm_can_promote_after_timeout(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            &HalError::Unsupported("sdio-function2-ready-timeout"),
+        ));
+        assert!(control_plane_reply_rearm_can_promote_after_timeout(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            &HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout"),
+        ));
+        assert!(!control_plane_reply_rearm_can_promote_after_timeout(
+            false,
+            control_plane_reply_rearm_startup_link(),
+            &HalError::Unsupported("sdio-function2-ready-timeout"),
+        ));
+        assert!(!control_plane_reply_rearm_can_promote_after_timeout(
+            true,
+            control_plane_reply_rearm_promoted_link(),
+            &HalError::Unsupported("sdio-function2-ready-timeout"),
+        ));
+        assert!(!control_plane_reply_rearm_can_promote_after_timeout(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            &HalError::Unsupported("sdhci-transfer-finish"),
+        ));
+    }
+
+    #[test]
     fn control_plane_zero_frame_reply_rearm_runs_for_startup_and_promoted_paths_only() {
         assert!(control_plane_reply_rearm_pending(
             control_plane_reply_rearm_startup_link()
+        ));
+        assert!(control_plane_reply_rearm_pending(
+            control_plane_reply_rearm_startup_link_resume()
         ));
         assert!(control_plane_reply_rearm_pending(
             control_plane_reply_rearm_promoted_link()
@@ -8218,6 +8343,21 @@ mod tests {
         ));
         assert!(!control_plane_reply_rearm_uses_promoted_link(
             control_plane_reply_rearm_startup_link()
+        ));
+        assert!(control_plane_reply_rearm_uses_startup_link(
+            control_plane_reply_rearm_startup_link()
+        ));
+        assert!(control_plane_reply_rearm_uses_startup_link(
+            control_plane_reply_rearm_startup_link_resume()
+        ));
+        assert!(control_plane_reply_rearm_uses_slow_link_channel_rearm(
+            control_plane_reply_rearm_startup_link_resume()
+        ));
+        assert!(!control_plane_reply_rearm_uses_slow_link_channel_rearm(
+            control_plane_reply_rearm_startup_link()
+        ));
+        assert!(!control_plane_reply_rearm_uses_startup_link(
+            control_plane_reply_rearm_promoted_link()
         ));
         assert!(control_plane_reply_rearm_uses_promoted_link(
             control_plane_reply_rearm_promoted_link()
@@ -8261,6 +8401,11 @@ mod tests {
             2,
         ));
         assert!(control_plane_startup_link_probe_stalled_after_rearm(
+            control_plane_reply_rearm_startup_link_resume(),
+            false,
+            2,
+        ));
+        assert!(control_plane_startup_link_probe_stalled_after_rearm(
             control_plane_reply_rearm_startup_link(),
             false,
             2,
@@ -8289,6 +8434,27 @@ mod tests {
             false,
             2,
         ));
+    }
+
+    #[test]
+    fn startup_link_reply_probe_resume_state_resets_attempts_and_promoted_probe() {
+        let (reply_rearm_mode, reply_rearm_attempts, promoted_probe_pending) =
+            control_plane_reply_rearm_state_for_startup_link_resume();
+        assert_eq!(
+            reply_rearm_mode,
+            control_plane_reply_rearm_startup_link_resume()
+        );
+        assert_eq!(reply_rearm_attempts, 0);
+        assert!(!promoted_probe_pending);
+    }
+
+    #[test]
+    fn post_write_reply_probe_state_keeps_promotion_path_available() {
+        let (reply_rearm_mode, reply_rearm_attempts, promoted_probe_pending) =
+            control_plane_reply_rearm_state_for_startup_link_post_write();
+        assert_eq!(reply_rearm_mode, control_plane_reply_rearm_startup_link());
+        assert_eq!(reply_rearm_attempts, 0);
+        assert!(!promoted_probe_pending);
     }
 
     #[test]

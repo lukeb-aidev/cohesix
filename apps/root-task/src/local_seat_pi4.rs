@@ -1307,16 +1307,20 @@ fn xhci_trusted_handoff_snapshot_allowed(
 }
 
 #[inline]
-const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset: bool) -> XhciFirmwareHandoff {
-    // A confirmed runtime VL805 reset lets local-seat rebuild ownership from
-    // the trusted CAP/stop-state snapshot through the cold-start path again.
-    // The weaker posted-fallback or bootloader-owned stop-state contract has
-    // now proven the opposite boundary on Pi 4: the first live HCRST/CONFIG
-    // touch can still wedge the board. Keep that weaker path on the preserved
-    // controller-state mode so runtime skips the toxic reset edge while still
-    // rebuilding ring ownership locally from zero/stop-state seeds.
-    if runtime_vl805_reset {
+const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
+    // Confirmed runtime mailbox reset still gets the stronger cold-start path,
+    // but the weaker posted-fallback/soft-continue outcomes now fail at the
+    // first live HCRST edge. Keep those weak runtime outcomes on the trusted
+    // CAP-snapshot path while skipping that reset edge entirely, and reserve
+    // preserve-controller-state for the direct bootloader-owned stop-state
+    // contract where runtime never requested a mailbox reset.
+    if runtime_vl805_reset_state == VL805_RUNTIME_RESET_STATE_NOTIFIED {
         XhciFirmwareHandoff::ColdStartFromSnapshot
+    } else if matches!(
+        runtime_vl805_reset_state,
+        VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
+    ) {
+        XhciFirmwareHandoff::ResetlessReinit
     } else {
         XhciFirmwareHandoff::PreserveControllerState
     }
@@ -5157,7 +5161,8 @@ impl UsbKeyboard {
                     )
                 });
                 let firmware_handoff = if trusted_handoff_probe.is_some() {
-                    let handoff_mode = xhci_preferred_trusted_handoff_mode(runtime_vl805_reset);
+                    let handoff_mode =
+                        xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state);
                     if runtime_vl805_reset {
                         let mut line = heapless::String::<224>::new();
                         let _ = core::fmt::Write::write_fmt(
@@ -10308,14 +10313,28 @@ mod tests {
     }
 
     #[test]
-    fn preferred_trusted_handoff_mode_splits_cold_start_and_preserve_paths() {
+    fn preferred_trusted_handoff_mode_splits_runtime_reset_and_bootloader_paths() {
         assert_eq!(
-            super::xhci_preferred_trusted_handoff_mode(false),
+            super::xhci_preferred_trusted_handoff_mode(
+                super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
+            ),
             XhciFirmwareHandoff::PreserveControllerState
         );
         assert_eq!(
-            super::xhci_preferred_trusted_handoff_mode(true),
+            super::xhci_preferred_trusted_handoff_mode(super::VL805_RUNTIME_RESET_STATE_NOTIFIED),
             XhciFirmwareHandoff::ColdStartFromSnapshot
+        );
+        assert_eq!(
+            super::xhci_preferred_trusted_handoff_mode(
+                super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
+            ),
+            XhciFirmwareHandoff::ResetlessReinit
+        );
+        assert_eq!(
+            super::xhci_preferred_trusted_handoff_mode(
+                super::VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
+            ),
+            XhciFirmwareHandoff::ResetlessReinit
         );
     }
 
@@ -10324,19 +10343,25 @@ mod tests {
         assert_eq!(
             xhci_irq_sink_mode(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-                super::xhci_preferred_trusted_handoff_mode(false),
+                super::xhci_preferred_trusted_handoff_mode(
+                    super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
+                ),
                 XhciIrqInstallPhase::ControllerReady,
             ),
             XhciIrqSinkMode::IntxAndBridge
         );
         assert!(xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            super::xhci_preferred_trusted_handoff_mode(false),
+            super::xhci_preferred_trusted_handoff_mode(
+                super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
+            ),
             XhciIrqInstallPhase::ControllerReady,
         ));
         assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            super::xhci_preferred_trusted_handoff_mode(false),
+            super::xhci_preferred_trusted_handoff_mode(
+                super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
+            ),
             XhciIrqInstallPhase::PreControllerReady,
         ));
         assert!(!xhci_irq_sink_needed(
@@ -11007,7 +11032,9 @@ mod tests {
     fn xhci_trusted_handoff_runs_polling_only() {
         assert!(super::xhci_polling_only_runtime(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            super::xhci_preferred_trusted_handoff_mode(false),
+            super::xhci_preferred_trusted_handoff_mode(
+                super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
+            ),
         ));
         assert!(!super::xhci_polling_only_runtime(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
@@ -11023,7 +11050,9 @@ mod tests {
     fn xhci_irq_sink_keeps_untrusted_paths_disabled() {
         assert!(super::xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-            super::xhci_preferred_trusted_handoff_mode(false),
+            super::xhci_preferred_trusted_handoff_mode(
+                super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
+            ),
             XhciIrqInstallPhase::ControllerReady,
         ));
         assert!(!super::xhci_irq_sink_needed(
