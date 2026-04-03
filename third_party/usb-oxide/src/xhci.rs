@@ -26,6 +26,7 @@ const RESET_WAIT_SPINS: usize = 10_000_000;
 // paths, including the weaker stop-state-only snapshot.
 const MAILBOX_RESET_POST_SETTLE_SPINS: usize = 1_000_000;
 const READY_WAIT_SPINS: usize = 10_000_000;
+const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
@@ -84,6 +85,13 @@ const PORTSC_NEUTRAL_MASK: u32 = reg::PORTSC_CCS
     | reg::PORTSC_WOE
     | reg::PORTSC_DR;
 
+const RUN_WAIT_OBSERVABLE_USBSTS_MASK: u32 = reg::USBSTS_HCH
+    | reg::USBSTS_CNR
+    | reg::USBSTS_HSE
+    | reg::USBSTS_HCE
+    | reg::USBSTS_EINT
+    | reg::USBSTS_PCD;
+
 #[inline(always)]
 const fn polling_iman_value() -> u32 {
     reg::IMAN_IP
@@ -97,6 +105,16 @@ const fn masked_usbcmd(usbcmd: u32) -> u32 {
 #[inline(always)]
 const fn halt_revalidation_needed(usbsts: u32) -> bool {
     (usbsts & reg::USBSTS_HCH) == 0
+}
+
+#[inline(always)]
+const fn run_wait_progress_due(waited: usize) -> bool {
+    waited == 1 || (waited % READY_WAIT_PROGRESS_SPINS) == 0
+}
+
+#[inline(always)]
+const fn run_wait_observable_usbsts(usbsts: u32) -> u32 {
+    usbsts & RUN_WAIT_OBSERVABLE_USBSTS_MASK
 }
 
 #[inline(always)]
@@ -383,11 +401,13 @@ const fn defer_event_ring_publish_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
-        && deferred_erst_publish_uses_size_first_with_snapshot(
-            firmware_handoff,
-            runtime_seed_snapshot,
-        )
+    // The stop-state preserve path now reaches the first RUN store and proves
+    // that starting the controller before publishing fresh runtime ring state
+    // is the toxic edge. Keep the staged publish ladder, but complete it
+    // before RUN so the controller never observes stale firmware-owned rings.
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    false
 }
 
 #[inline(always)]
@@ -395,8 +415,9 @@ const fn defer_dcbaap_publish_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
-        && defer_dcbaap_publish_with_snapshot(firmware_handoff, runtime_seed_snapshot)
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    false
 }
 
 #[inline(always)]
@@ -404,8 +425,9 @@ const fn defer_crcr_publish_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
-        && defer_crcr_publish_with_snapshot(firmware_handoff, runtime_seed_snapshot)
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    false
 }
 
 #[inline(always)]
@@ -413,7 +435,9 @@ const fn defer_dnctrl_write_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    false
 }
 
 #[inline(always)]
@@ -1911,31 +1935,55 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0274, reg::USBSTS as u64, 0, 0);
             emit_xhci_diag(0x0270, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
         }
-        emit_xhci_diag(0x026a, reg::USBCMD as u64, run_usbcmd as u64, 0);
-        self.write_op(reg::USBCMD, run_usbcmd);
+        self.write_op_u32_store_diag(reg::USBCMD, run_usbcmd, 0x026a, 0x02da, 0);
+        let usbcmd_after_run = self.read_op::<u32>(reg::USBCMD);
+        emit_xhci_diag(0x02db, usbcmd_after_run as u64, run_usbcmd as u64, 0);
         if preserve_firmware_state {
-            emit_xhci_diag(0x0271, reg::USBCMD_RUN as u64, 1, 0);
+            emit_xhci_diag(0x0271, usbcmd_after_run as u64, 1, 0);
         } else if !skip_post_reset_verification_readbacks {
             emit_xhci_diag(0x0275, reg::USBCMD as u64, 0, 1);
-            emit_xhci_diag(0x0271, self.read_op::<u32>(reg::USBCMD) as u64, 0, 1);
+            emit_xhci_diag(0x0271, usbcmd_after_run as u64, 0, 1);
         }
         // Wait for controller to be ready
         emit_xhci_diag(0x0276, reg::USBSTS as u64, reg::USBSTS_HCH as u64, 0);
         let mut waited = 0usize;
-        while (self.read_op::<u32>(reg::USBSTS) & reg::USBSTS_HCH) != 0 {
+        let mut usbsts_after_run = self.read_op::<u32>(reg::USBSTS);
+        emit_xhci_diag(0x02dc, usbsts_after_run as u64, reg::USBSTS_HCH as u64, 0);
+        let mut last_observable_usbsts = run_wait_observable_usbsts(usbsts_after_run);
+        while (usbsts_after_run & reg::USBSTS_HCH) != 0 {
             waited = waited.saturating_add(1);
+            if run_wait_progress_due(waited) {
+                emit_xhci_diag(0x02dd, waited as u64, usbsts_after_run as u64, usbcmd_after_run as u64);
+            }
             if waited >= READY_WAIT_SPINS {
+                emit_xhci_diag(
+                    0x02de,
+                    waited as u64,
+                    usbsts_after_run as u64,
+                    usbcmd_after_run as u64,
+                );
                 emit_xhci_diag(
                     0x0272,
                     waited as u64,
-                    self.read_op::<u32>(reg::USBSTS) as u64,
+                    usbsts_after_run as u64,
                     0,
                 );
                 return Err(UsbError::Timeout);
             }
             spin_loop();
+            usbsts_after_run = self.read_op::<u32>(reg::USBSTS);
+            let observable_usbsts = run_wait_observable_usbsts(usbsts_after_run);
+            if observable_usbsts != last_observable_usbsts {
+                emit_xhci_diag(
+                    0x02df,
+                    waited as u64,
+                    usbsts_after_run as u64,
+                    last_observable_usbsts as u64,
+                );
+                last_observable_usbsts = observable_usbsts;
+            }
         }
-        emit_xhci_diag(0x0273, self.read_op::<u32>(reg::USBSTS) as u64, 0, 0);
+        emit_xhci_diag(0x0273, usbsts_after_run as u64, 0, 0);
 
         // Match U-Boot's post-start ordering for interrupter state: zero
         // moderation and pending after the controller is running.
@@ -2634,7 +2682,8 @@ mod tests {
         probe_live_dcbaap_before_staged_publish_with_snapshot,
         runtime_mailbox_reset_handoff, runtime_mailbox_reset_needs_blind_settle,
         runtime_mailbox_reset_stop_state_handoff, runtime_preserve_stop_state_handoff,
-        runtime_stop_state_needs_post_run_settle,
+        runtime_stop_state_needs_post_run_settle, run_wait_observable_usbsts,
+        run_wait_progress_due, READY_WAIT_PROGRESS_SPINS,
         skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
         skip_constructor_polling_scrub_writes,
         skip_doorbell_readback_after_ring, skip_init_pre_reset_scrub_writes,
@@ -2821,7 +2870,7 @@ mod tests {
     }
 
     #[test]
-    fn preserved_stop_state_snapshot_defers_first_live_ring_publish() {
+    fn preserved_stop_state_snapshot_publishes_runtime_rings_before_run() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -2864,19 +2913,19 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(defer_event_ring_publish_until_after_run_with_snapshot(
+        assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(defer_dcbaap_publish_until_after_run_with_snapshot(
+        assert!(!defer_dcbaap_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(defer_crcr_publish_until_after_run_with_snapshot(
+        assert!(!defer_crcr_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(defer_dnctrl_write_until_after_run_with_snapshot(
+        assert!(!defer_dnctrl_write_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
@@ -3132,6 +3181,10 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
+        assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            snapshot,
+        ));
     }
 
     #[test]
@@ -3208,6 +3261,27 @@ mod tests {
         assert!(halt_revalidation_needed(0));
         assert!(halt_revalidation_needed(reg::USBSTS_CNR));
         assert!(!halt_revalidation_needed(reg::USBSTS_HCH));
+    }
+
+    #[test]
+    fn run_wait_progress_due_is_sparse_and_deterministic() {
+        assert!(run_wait_progress_due(1));
+        assert!(!run_wait_progress_due(2));
+        assert!(run_wait_progress_due(READY_WAIT_PROGRESS_SPINS));
+        assert!(run_wait_progress_due(READY_WAIT_PROGRESS_SPINS * 2));
+    }
+
+    #[test]
+    fn run_wait_observable_usbsts_masks_non_run_bits() {
+        let raw = reg::USBSTS_HCH
+            | reg::USBSTS_CNR
+            | reg::USBSTS_HCE
+            | reg::USBSTS_EINT
+            | 0x8000_0000;
+        assert_eq!(
+            run_wait_observable_usbsts(raw),
+            reg::USBSTS_HCH | reg::USBSTS_CNR | reg::USBSTS_HCE | reg::USBSTS_EINT
+        );
     }
 
     #[test]
