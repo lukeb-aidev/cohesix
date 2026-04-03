@@ -727,8 +727,19 @@ fn setup_firmware_channel_can_assume_write_committed(
 const fn wait_for_firmware_ready_uses_experimental_mailbox_read(
     allow_function2_ready_bypass: bool,
 ) -> bool {
-    let _ = allow_function2_ready_bypass;
-    false
+    allow_function2_ready_bypass
+}
+
+#[inline]
+const fn wait_for_firmware_ready_restore_clock_hz(
+    allow_function2_ready_bypass: bool,
+    current_clock_hz: u32,
+) -> Option<u32> {
+    if allow_function2_ready_bypass && current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
+        Some(current_clock_hz)
+    } else {
+        None
+    }
 }
 
 #[inline]
@@ -737,10 +748,11 @@ fn wait_for_firmware_ready_can_assume_mailbox_ready(
     attempt: usize,
     err: &HalError,
 ) -> bool {
-    let _ = allow_function2_ready_bypass;
-    let _ = attempt;
-    let _ = err;
-    false
+    allow_function2_ready_bypass
+        && attempt > 0
+        && (is_sdhci_fragile_read_error(err)
+            || is_sdio_cmd52_access_error(err)
+            || matches!(err, HalError::Unsupported("sdhci-int-timeout")))
 }
 
 #[inline]
@@ -758,15 +770,31 @@ fn experimental_control_plane_write_can_assume_committed(
 }
 
 #[inline]
+fn experimental_control_plane_write_can_retry_on_startup_link(
+    experimental_no_ht_transport: bool,
+    first_control_plane_write_pending: bool,
+    current_clock_hz: u32,
+    err: &HalError,
+) -> bool {
+    experimental_no_ht_transport
+        && first_control_plane_write_pending
+        && current_clock_hz > CYW43_STARTUP_CLOCK_HZ
+        && is_sdhci_io_path_error(err)
+}
+
+#[inline]
 fn experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
     experimental_no_ht_transport: bool,
     first_control_plane_write_pending: bool,
     err: &HalError,
 ) -> bool {
-    let _ = experimental_no_ht_transport;
-    let _ = first_control_plane_write_pending;
-    let _ = err;
-    false
+    experimental_no_ht_transport
+        && first_control_plane_write_pending
+        && matches!(
+            err,
+            HalError::Unsupported("sdio-function2-ready-timeout")
+                | HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout")
+        )
 }
 
 #[inline]
@@ -774,9 +802,15 @@ const fn experimental_control_plane_write_needs_post_write_rearm(
     experimental_no_ht_transport: bool,
     first_control_plane_write_pending: bool,
 ) -> bool {
-    let _ = experimental_no_ht_transport;
-    let _ = first_control_plane_write_pending;
-    false
+    experimental_no_ht_transport && first_control_plane_write_pending
+}
+
+#[inline]
+const fn control_plane_startup_link_timeout_needs_promoted_probe(
+    experimental_no_ht_transport: bool,
+    reply_rearm_mode: u8,
+) -> bool {
+    experimental_no_ht_transport && reply_rearm_mode == control_plane_reply_rearm_startup_link()
 }
 
 #[inline]
@@ -1256,6 +1290,11 @@ const fn required_ht_clock_wait_loops(stronger_retry_request: bool) -> usize {
 }
 
 #[inline]
+const fn required_ht_clock_bounded_no_ht_shortcut_loops() -> usize {
+    CYW43_HT_CLOCK_SOFT_WAIT_LOOPS
+}
+
+#[inline]
 const fn ht_clock_progress_chunk_loops(remaining_loops: usize) -> usize {
     if remaining_loops > CYW43_HT_CLOCK_SOFT_WAIT_LOOPS {
         CYW43_HT_CLOCK_SOFT_WAIT_LOOPS
@@ -1327,6 +1366,25 @@ const fn ht_clock_timeout_can_enter_bounded_no_ht_transport(
         }
         None => false,
     }
+}
+
+#[inline]
+const fn ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+    stronger_retry_request: bool,
+    completed_loops: usize,
+    last_chipclk: Option<u8>,
+    last_wakeupctrl: Option<u8>,
+    last_sleepcsr: Option<u8>,
+    last_cardcap: Option<u8>,
+) -> bool {
+    stronger_retry_request
+        && completed_loops >= required_ht_clock_bounded_no_ht_shortcut_loops()
+        && ht_clock_timeout_can_enter_bounded_no_ht_transport(
+            last_chipclk,
+            last_wakeupctrl,
+            last_sleepcsr,
+            last_cardcap,
+        )
 }
 
 #[inline]
@@ -2098,11 +2156,11 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
     ready: u8,
     budget: SdioFunctionReadyBudget,
 ) -> bool {
-    let _ = step;
-    let _ = desired;
-    let _ = ready;
-    let _ = budget;
-    false
+    matches!(budget, SdioFunctionReadyBudget::ExperimentalBypass)
+        && matches!(step.function, SdioFunction::Function2)
+        && (desired & step.enable_bit) == step.enable_bit
+        && (ready & SDIO_FUNC_READY_1) == SDIO_FUNC_READY_1
+        && (ready & step.ready_bit) == 0
 }
 
 #[inline]
@@ -3198,6 +3256,23 @@ impl SdioHost {
             function2_ready,
             attempt,
         ) {
+            let err = HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout");
+            if control_plane_startup_link_timeout_needs_promoted_probe(
+                self.experimental_no_ht_transport,
+                reply_rearm_mode,
+            ) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=promote-startup-link-timeout mode={} attempt={} iorx=0x{ready:02x} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                    attempt,
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.control_plane_chunk_limit(),
+                    self.experimental_no_ht_transport,
+                ));
+                self.promote_control_plane_after_post_write_rearm_timeout(&err)?;
+                return Ok(());
+            }
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=control-plane-reply action=startup-link-rearm-stalled mode={} attempt={} iorx=0x{ready:02x} current_clock={}Hz width={} chunk_limit={} no_ht={}",
                 control_plane_reply_rearm_mode_name(reply_rearm_mode),
@@ -3210,9 +3285,7 @@ impl SdioHost {
             self.log_control_plane_finish_snapshot("control-plane-startup-link-rearm-stalled");
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
             self.experimental_control_plane_reply_rearm_attempts = 0;
-            return Err(HalError::Unsupported(
-                "cyw43-control-plane-startup-link-reply-timeout",
-            ));
+            return Err(err);
         }
 
         if !control_plane_zero_frame_needs_reply_rearm(reply_rearm_mode, function2_ready, attempt) {
@@ -3265,6 +3338,23 @@ impl SdioHost {
             function2_ready_after,
             usize::from(next_attempt),
         ) {
+            let err = HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout");
+            if control_plane_startup_link_timeout_needs_promoted_probe(
+                self.experimental_no_ht_transport,
+                reply_rearm_mode,
+            ) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=promote-startup-link-timeout mode={} attempt={} iorx=0x{ready_after:02x} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                    next_attempt,
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.control_plane_chunk_limit(),
+                    self.experimental_no_ht_transport,
+                ));
+                self.promote_control_plane_after_post_write_rearm_timeout(&err)?;
+                return Ok(());
+            }
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=control-plane-reply action=startup-link-rearm-stalled mode={} attempt={} iorx=0x{ready_after:02x} current_clock={}Hz width={} chunk_limit={} no_ht={}",
                 control_plane_reply_rearm_mode_name(reply_rearm_mode),
@@ -3277,9 +3367,7 @@ impl SdioHost {
             self.log_control_plane_finish_snapshot("control-plane-startup-link-rearm-stalled");
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
             self.experimental_control_plane_reply_rearm_attempts = 0;
-            return Err(HalError::Unsupported(
-                "cyw43-control-plane-startup-link-reply-timeout",
-            ));
+            return Err(err);
         }
         if control_plane_promoted_probe_stalled_after_rearm(
             reply_rearm_mode,
@@ -4276,40 +4364,86 @@ impl SdioHost {
         &mut self,
         allow_function2_ready_bypass: bool,
     ) -> Result<(), HalError> {
-        self.refresh_transport_phase_for("wait-firmware-ready")?;
-        let mut recovery_attempt = 0usize;
-        for _ in 0..CYW43_READY_LOOPS {
-            let value = match self.read_sdio_core_u32_for_firmware_ready(
-                "wait-firmware-ready",
-                SDPCMD_REG_TOHOSTMAILBOXDATA,
-                allow_function2_ready_bypass,
-                recovery_attempt,
-            ) {
-                Ok(value) => value,
-                Err(err) if firmware_phase_can_retry(&err, recovery_attempt) => {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=wait-firmware-ready attempt={} err={err} action=recover-retry",
-                        recovery_attempt + 1
-                    ));
-                    self.recover_command_path_and_refresh_transport("wait-firmware-ready")?;
-                    recovery_attempt += 1;
-                    continue;
-                }
-                Err(err) => return Err(err),
-            };
-            if value & (HMB_DATA_DEVREADY | HMB_DATA_FWREADY) != 0 {
-                let version = (value & HMB_DATA_VERSION_MASK) >> HMB_DATA_VERSION_SHIFT;
-                if version != 0 && version != SDPCM_PROT_VERSION {
-                    return Err(HalError::Unsupported("cyw43-protocol-version"));
-                }
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware ready mailbox=0x{value:08x} version={version}"
-                ));
-                return Ok(());
-            }
-            spin_loop();
+        let restore_clock_hz = wait_for_firmware_ready_restore_clock_hz(
+            allow_function2_ready_bypass,
+            self.current_clock_hz,
+        );
+        if let Some(clock_hz) = restore_clock_hz {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=firmware-ready-clock action=lower current={}Hz target={}Hz width={} no_ht={}",
+                self.current_clock_hz,
+                CYW43_STARTUP_CLOCK_HZ,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.experimental_no_ht_transport,
+            ));
+            self.set_clock_hz(CYW43_STARTUP_CLOCK_HZ)?;
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=firmware-ready-clock action=lower-ready previous={}Hz current={}Hz width={} no_ht={}",
+                clock_hz,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.experimental_no_ht_transport,
+            ));
         }
-        Err(HalError::Unsupported("cyw43-firmware-ready-timeout"))
+        let ready_result = (|| {
+            self.refresh_transport_phase_for("wait-firmware-ready")?;
+            let mut recovery_attempt = 0usize;
+            for _ in 0..CYW43_READY_LOOPS {
+                let value = match self.read_sdio_core_u32_for_firmware_ready(
+                    "wait-firmware-ready",
+                    SDPCMD_REG_TOHOSTMAILBOXDATA,
+                    allow_function2_ready_bypass,
+                    recovery_attempt,
+                ) {
+                    Ok(value) => value,
+                    Err(err) if firmware_phase_can_retry(&err, recovery_attempt) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage=wait-firmware-ready attempt={} err={err} action=recover-retry",
+                            recovery_attempt + 1
+                        ));
+                        self.recover_command_path_and_refresh_transport("wait-firmware-ready")?;
+                        recovery_attempt += 1;
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                };
+                if value & (HMB_DATA_DEVREADY | HMB_DATA_FWREADY) != 0 {
+                    let version = (value & HMB_DATA_VERSION_MASK) >> HMB_DATA_VERSION_SHIFT;
+                    if version != 0 && version != SDPCM_PROT_VERSION {
+                        return Err(HalError::Unsupported("cyw43-protocol-version"));
+                    }
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware ready mailbox=0x{value:08x} version={version}"
+                    ));
+                    return Ok(());
+                }
+                spin_loop();
+            }
+            Err(HalError::Unsupported("cyw43-firmware-ready-timeout"))
+        })();
+        if let Some(clock_hz) = restore_clock_hz {
+            match self.set_clock_hz(clock_hz) {
+                Ok(restored_clock_hz) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=firmware-ready-clock action=restore restored={}Hz width={} no_ht={}",
+                        restored_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        self.experimental_no_ht_transport,
+                    ));
+                }
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=firmware-ready-clock action=restore-fail target={}Hz current={}Hz width={} no_ht={} err={err}",
+                        clock_hz,
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        self.experimental_no_ht_transport,
+                    ));
+                    return Err(err);
+                }
+            }
+        }
+        ready_result
     }
 
     fn backplane_read8(&mut self, addr: u32) -> Result<u8, HalError> {
@@ -5152,33 +5286,77 @@ impl SdioHost {
     fn write_frame(&mut self, frame: &mut [u8]) -> Result<(), HalError> {
         let first_control_plane_write_pending = self.experimental_control_plane_write_probe_pending;
         let promoted_probe_pending = self.experimental_control_plane_promoted_probe_pending;
+        let frame_len = frame.len();
         self.experimental_control_plane_write_probe_pending = false;
+        let finish_successful_write = |this: &mut Self| -> Result<(), HalError> {
+            if experimental_control_plane_write_needs_post_write_rearm(
+                this.experimental_no_ht_transport,
+                first_control_plane_write_pending,
+            ) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-write action=experimental-post-write-rearm len={} chunk_limit={}",
+                    frame_len,
+                    this.control_plane_chunk_limit(),
+                ));
+                match this.rearm_firmware_channel_after_first_control_write() {
+                    Ok(()) => {}
+                    Err(err)
+                        if experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+                            this.experimental_no_ht_transport,
+                            first_control_plane_write_pending,
+                            &err,
+                        ) =>
+                    {
+                        this.promote_control_plane_after_post_write_rearm_timeout(&err)?;
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+            Ok(())
+        };
         match self.io_extended(SdioFunction::Function2, 0, false, true, frame) {
-            Ok(()) => {
-                if experimental_control_plane_write_needs_post_write_rearm(
+            Ok(()) => finish_successful_write(self),
+            Err(err)
+                if experimental_control_plane_write_can_retry_on_startup_link(
                     self.experimental_no_ht_transport,
                     first_control_plane_write_pending,
-                ) {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-write action=experimental-post-write-rearm len={} chunk_limit={}",
-                        frame.len(),
-                        self.control_plane_chunk_limit(),
-                    ));
-                    match self.rearm_firmware_channel_after_first_control_write() {
-                        Ok(()) => {}
-                        Err(err)
-                            if experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
-                                self.experimental_no_ht_transport,
-                                first_control_plane_write_pending,
-                                &err,
-                            ) =>
-                        {
-                            self.promote_control_plane_after_post_write_rearm_timeout(&err)?;
-                        }
-                        Err(err) => return Err(err),
+                    self.current_clock_hz,
+                    &err,
+                ) =>
+            {
+                let previous_clock_hz = self.current_clock_hz;
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-write action=fallback-startup-link len={} chunk_limit={} current={}Hz target={}Hz err={err}",
+                    frame_len,
+                    self.control_plane_chunk_limit(),
+                    previous_clock_hz,
+                    CYW43_STARTUP_CLOCK_HZ,
+                ));
+                self.set_clock_hz(CYW43_STARTUP_CLOCK_HZ)?;
+                self.refresh_transport_phase_for("control-plane-write-startup-retry")?;
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-write action=fallback-startup-link-ready previous={}Hz current={}Hz len={} chunk_limit={}",
+                    previous_clock_hz,
+                    self.current_clock_hz,
+                    frame_len,
+                    self.control_plane_chunk_limit(),
+                ));
+                match self.io_extended(SdioFunction::Function2, 0, false, true, frame) {
+                    Ok(()) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage=control-plane-write action=fallback-startup-link-ok len={} chunk_limit={}",
+                            frame_len,
+                            self.control_plane_chunk_limit(),
+                        ));
+                        finish_successful_write(self)
+                    }
+                    Err(retry_err) => {
+                        self.log_control_plane_finish_snapshot(
+                            "control-plane-write-startup-retry-failed",
+                        );
+                        Err(retry_err)
                     }
                 }
-                Ok(())
             }
             Err(err)
                 if experimental_control_plane_write_can_assume_committed(
@@ -5376,13 +5554,20 @@ impl SdioHost {
             cyw43_transport_mode_name(self.experimental_no_ht_transport),
             self.control_plane_chunk_limit(),
         ));
-        self.setup_firmware_channel(false)?;
+        let allow_function2_ready_bypass = self.experimental_no_ht_transport;
+        self.setup_firmware_channel(allow_function2_ready_bypass)?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=wait-firmware-ready mode={} chunk_limit={}",
             cyw43_transport_mode_name(self.experimental_no_ht_transport),
             self.control_plane_chunk_limit(),
         ));
-        self.wait_for_firmware_ready(false)?;
+        self.wait_for_firmware_ready(allow_function2_ready_bypass)?;
+        if allow_function2_ready_bypass {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=repoll"
+            ));
+            self.enable_function2(SdioFunctionReadyBudget::ExperimentalBypass)?;
+        }
         emit_breadcrumb(format_args!("[pi4-wifi] firmware load ready"));
         Ok(())
     }
@@ -5515,6 +5700,29 @@ impl SdioHost {
                 }
                 completed_loops = completed_loops.saturating_add(chunk_loops);
                 remaining_loops -= chunk_loops;
+                if ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+                    stronger_retry_request,
+                    completed_loops,
+                    self.last_chipclkcsr,
+                    self.last_wakeupctrl,
+                    self.last_sleepcsr,
+                    self.last_cardcap,
+                ) {
+                    let shortcut_loops = required_ht_clock_bounded_no_ht_shortcut_loops();
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=bounded-no-ht-early-exit polls={completed_loops}/{soft_wait_loops} shortcut={shortcut_loops} csr=0x{last_chipclk:02x}"
+                    ));
+                    log_ht_clock_status(
+                        stage,
+                        "bounded-no-ht-early-exit",
+                        last_chipclk,
+                        self.last_wakeupctrl,
+                        self.last_sleepcsr,
+                        self.last_cardcap,
+                    );
+                    self.log_transport_shadow("wait-ht-clock-bounded-no-ht-early-exit");
+                    return Ok(false);
+                }
                 if remaining_loops == 0 {
                     break;
                 }
@@ -7624,26 +7832,29 @@ mod tests {
         core_wait_can_defer_after_read_error, core_wait_should_raise_control_plane_clock,
         cyw43_transport_mode_name, experimental_control_plane_write_can_assume_committed,
         experimental_control_plane_write_can_promote_after_post_write_rearm_timeout,
+        experimental_control_plane_write_can_retry_on_startup_link,
         experimental_control_plane_write_needs_post_write_rearm,
         experimental_function2_fifo_chunk_limit, firmware_bulk_clock_candidates,
         firmware_phase_can_retry, ht_clock_assist_shadow_is_complete, ht_clock_request_value,
+        ht_clock_retry_can_cutover_to_bounded_no_ht_early,
         ht_clock_timeout_can_enter_bounded_no_ht_transport, is_armcr4_postreset_fragile_read_error,
         is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word,
         next_distinct_firmware_bulk_clock_candidate, normalize_nvram, phys_to_bus, r5_status,
-        sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
-        sdio_byte_mode_transfer_plan, sdio_core_reg_addr, sdio_core_transfer_function_addr,
-        sdio_core_transfer_increment_addr, sdio_function_ready_budget_name,
-        sdio_function_ready_extended_polls, sdio_function_ready_extended_polls_for,
-        sdio_function_ready_extended_settle_loops, sdio_function_ready_extended_settle_loops_for,
-        sdio_function_ready_retry_limit_for,
+        required_ht_clock_bounded_no_ht_shortcut_loops, sdhci_interrupt_buffer_ready_mask,
+        sdhci_present_buffer_ready_mask, sdhci_status_reason, sdio_byte_mode_transfer_plan,
+        sdio_core_reg_addr, sdio_core_transfer_function_addr, sdio_core_transfer_increment_addr,
+        sdio_function_ready_budget_name, sdio_function_ready_extended_polls,
+        sdio_function_ready_extended_polls_for, sdio_function_ready_extended_settle_loops,
+        sdio_function_ready_extended_settle_loops_for, sdio_function_ready_retry_limit_for,
         sdio_function_ready_timeout_can_continue_experimentally,
         sdio_function_ready_uses_control_plane_reply_probe_budget,
         sdio_function_ready_uses_short_probe_only_budget, sdio_transfer_addr, sdio_transfer_plan,
         setup_firmware_channel_can_assume_write_committed,
         setup_firmware_channel_uses_experimental_order, should_log_firmware_upload_progress,
         should_log_sdio_transfer_chunk, transport_phase_chipclk_value,
-        update_bcm2711_gpio_function, update_bcm2711_gpio_pull, HalError, ResponseType,
-        SdioFunction, SdioFunctionReadyBudget, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL,
+        update_bcm2711_gpio_function, update_bcm2711_gpio_pull,
+        wait_for_firmware_ready_restore_clock_hz, HalError, ResponseType, SdioFunction,
+        SdioFunctionReadyBudget, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL,
         AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET, AI_RESETCTRL_BIT_RESET,
         ARMCR4_BCMA_IOCTL_CPUHALT, ARMCR4_CAP, BACKPLANE_32BIT_FLAG, BACKPLANE_ADDRESS_MASK,
         BACKPLANE_WINDOW_MASK, BCM2711_GPIO_ALT3, CYW43_ARMCR4_CORE_BASE, CYW43_CHIPCOMMON_BASE,
@@ -7887,8 +8098,48 @@ mod tests {
     }
 
     #[test]
-    fn experimental_control_plane_write_post_write_rearm_is_disabled() {
-        assert!(!experimental_control_plane_write_needs_post_write_rearm(
+    fn experimental_control_plane_write_startup_link_retry_requires_first_high_clock_io_error() {
+        assert!(experimental_control_plane_write_can_retry_on_startup_link(
+            true,
+            true,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-transfer-finish"),
+        ));
+        assert!(experimental_control_plane_write_can_retry_on_startup_link(
+            true,
+            true,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-transfer-data"),
+        ));
+        assert!(!experimental_control_plane_write_can_retry_on_startup_link(
+            false,
+            true,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-transfer-finish"),
+        ));
+        assert!(!experimental_control_plane_write_can_retry_on_startup_link(
+            true,
+            false,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-transfer-finish"),
+        ));
+        assert!(!experimental_control_plane_write_can_retry_on_startup_link(
+            true,
+            true,
+            CYW43_STARTUP_CLOCK_HZ,
+            &HalError::Unsupported("sdhci-transfer-finish"),
+        ));
+        assert!(!experimental_control_plane_write_can_retry_on_startup_link(
+            true,
+            true,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            &HalError::Unsupported("sdio-cmd52-read"),
+        ));
+    }
+
+    #[test]
+    fn experimental_control_plane_write_post_write_rearm_tracks_bounded_probe() {
+        assert!(experimental_control_plane_write_needs_post_write_rearm(
             true, true
         ));
         assert!(!experimental_control_plane_write_needs_post_write_rearm(
@@ -7900,33 +8151,33 @@ mod tests {
     }
 
     #[test]
-    fn experimental_control_plane_write_post_write_timeout_promotion_is_disabled() {
+    fn experimental_control_plane_write_post_write_timeout_promotion_tracks_bounded_probe() {
         assert!(
-            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+            experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
                 true,
                 true,
                 &HalError::Unsupported("sdio-function2-ready-timeout"),
             )
         );
         assert!(
-            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
-                false,
-                true,
-                &HalError::Unsupported("sdio-function2-ready-timeout"),
-            )
-        );
-        assert!(
-            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
-                true,
-                false,
-                &HalError::Unsupported("sdio-function2-ready-timeout"),
-            )
-        );
-        assert!(
-            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+            experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
                 true,
                 true,
                 &HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout"),
+            )
+        );
+        assert!(
+            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+                false,
+                true,
+                &HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout"),
+            )
+        );
+        assert!(
+            !experimental_control_plane_write_can_promote_after_post_write_rearm_timeout(
+                true,
+                false,
+                &HalError::Unsupported("sdio-function2-ready-timeout"),
             )
         );
         assert!(
@@ -7936,6 +8187,22 @@ mod tests {
                 &HalError::Unsupported("sdhci-transfer-finish"),
             )
         );
+    }
+
+    #[test]
+    fn startup_link_timeout_promotes_only_on_bounded_no_ht_probe() {
+        assert!(control_plane_startup_link_timeout_needs_promoted_probe(
+            true,
+            control_plane_reply_rearm_startup_link(),
+        ));
+        assert!(!control_plane_startup_link_timeout_needs_promoted_probe(
+            false,
+            control_plane_reply_rearm_startup_link(),
+        ));
+        assert!(!control_plane_startup_link_timeout_needs_promoted_probe(
+            true,
+            control_plane_reply_rearm_promoted_link(),
+        ));
     }
 
     #[test]
@@ -8969,9 +9236,9 @@ mod tests {
     }
 
     #[test]
-    fn function2_ready_timeout_experimental_continue_is_disabled() {
+    fn function2_ready_timeout_experimental_continue_requires_f1_ready() {
         let desired = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
-        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
+        assert!(sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,
@@ -9056,40 +9323,59 @@ mod tests {
     }
 
     #[test]
-    fn wait_for_firmware_ready_experimental_mailbox_read_is_disabled() {
-        assert!(!wait_for_firmware_ready_uses_experimental_mailbox_read(
-            true
-        ));
+    fn wait_for_firmware_ready_experimental_mailbox_read_tracks_bounded_no_ht_mode() {
+        assert!(wait_for_firmware_ready_uses_experimental_mailbox_read(true));
         assert!(!wait_for_firmware_ready_uses_experimental_mailbox_read(
             false
         ));
     }
 
     #[test]
-    fn wait_for_firmware_ready_never_assumes_mailbox_ready() {
+    fn wait_for_firmware_ready_stays_on_startup_clock_only_for_bounded_no_ht_fast_path() {
+        assert_eq!(
+            wait_for_firmware_ready_restore_clock_hz(true, CYW43_CONTROL_PLANE_CLOCK_HZ),
+            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
+        );
+        assert_eq!(
+            wait_for_firmware_ready_restore_clock_hz(true, CYW43_STARTUP_CLOCK_HZ),
+            None
+        );
+        assert_eq!(
+            wait_for_firmware_ready_restore_clock_hz(false, CYW43_CONTROL_PLANE_CLOCK_HZ),
+            None
+        );
+    }
+
+    #[test]
+    fn wait_for_firmware_ready_assumes_mailbox_ready_only_after_bounded_retry() {
         assert!(!wait_for_firmware_ready_can_assume_mailbox_ready(
             true,
             0,
             &HalError::Unsupported("sdhci-transfer-data"),
-        ));
-        assert!(!wait_for_firmware_ready_can_assume_mailbox_ready(
-            true,
-            0,
-            &HalError::Unsupported("sdhci-int-timeout"),
         ));
         assert!(!wait_for_firmware_ready_can_assume_mailbox_ready(
             false,
-            0,
+            1,
             &HalError::Unsupported("sdhci-transfer-data"),
         ));
-        assert!(!wait_for_firmware_ready_can_assume_mailbox_ready(
+        assert!(wait_for_firmware_ready_can_assume_mailbox_ready(
             true,
             1,
             &HalError::Unsupported("sdhci-transfer-data"),
         ));
+        assert!(wait_for_firmware_ready_can_assume_mailbox_ready(
+            true,
+            1,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(wait_for_firmware_ready_can_assume_mailbox_ready(
+            true,
+            1,
+            &HalError::Unsupported("sdio-cmd52-read"),
+        ));
         assert!(!wait_for_firmware_ready_can_assume_mailbox_ready(
             true,
-            0,
+            1,
             &HalError::Unsupported("cyw43-firmware-ready-timeout"),
         ));
     }
@@ -9272,6 +9558,17 @@ mod tests {
     }
 
     #[test]
+    fn bounded_no_ht_shortcut_wait_budget_matches_one_soft_wait_chunk() {
+        assert_eq!(
+            required_ht_clock_bounded_no_ht_shortcut_loops(),
+            super::CYW43_HT_CLOCK_SOFT_WAIT_LOOPS
+        );
+        assert!(
+            required_ht_clock_bounded_no_ht_shortcut_loops() < required_ht_clock_wait_loops(true)
+        );
+    }
+
+    #[test]
     fn ht_clock_progress_chunk_uses_soft_wait_budget_as_cap() {
         assert_eq!(
             ht_clock_progress_chunk_loops(super::CYW43_HT_CLOCK_SOFT_WAIT_LOOPS * 4),
@@ -9313,6 +9610,38 @@ mod tests {
                 | SBSDIO_FORCE_HT
                 | SBSDIO_FORCE_HW_CLKREQ_OFF
         );
+    }
+
+    #[test]
+    fn stronger_ht_retry_cuts_over_early_only_after_shortcut_budget_and_shadow_contract() {
+        let chipclk = Some(SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL);
+        let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
+        let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_EN);
+        let cardcap = Some(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC);
+        let shortcut = required_ht_clock_bounded_no_ht_shortcut_loops();
+
+        assert!(!ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+            true,
+            shortcut.saturating_sub(1),
+            chipclk,
+            wake,
+            sleep,
+            cardcap,
+        ));
+        assert!(ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+            true, shortcut, chipclk, wake, sleep, cardcap,
+        ));
+        assert!(!ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+            false, shortcut, chipclk, wake, sleep, cardcap,
+        ));
+        assert!(!ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+            true,
+            shortcut,
+            Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+            wake,
+            sleep,
+            cardcap,
+        ));
     }
 
     #[test]

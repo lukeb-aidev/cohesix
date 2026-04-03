@@ -204,6 +204,35 @@ fn is_transport_retryable(err: &HalError) -> bool {
     )
 }
 
+#[inline]
+fn first_control_plane_retry_after_promoted_timeout(
+    experimental_no_ht_transport: bool,
+    control_plane_probe_pending: bool,
+    err: &DriverError,
+) -> bool {
+    experimental_no_ht_transport
+        && control_plane_probe_pending
+        && matches!(
+            err,
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-promoted-rearm-timeout"
+            ))
+        )
+}
+
+#[inline]
+const fn speculative_credit_window_after_promoted_timeout_retry(
+    allow_speculative_retry_credit: bool,
+    sdpcm_seq: u8,
+    sdpcm_seq_max: u8,
+) -> Option<u8> {
+    if allow_speculative_retry_credit && !has_sdpcm_credit(sdpcm_seq, sdpcm_seq_max) {
+        Some(sdpcm_seq.wrapping_add(1))
+    } else {
+        None
+    }
+}
+
 fn recover_startup_transport(
     state: &mut Pi4WifiState,
     init_transport_label: &'static str,
@@ -235,8 +264,10 @@ fn prepare_initial_control_plane_transport(
     state: &mut Pi4WifiState,
 ) -> Result<(u32, SdioBusWidth), DriverError> {
     info!("[cyw43] step: set_clock(data)");
-    let data_clock_target_hz =
-        control_plane_data_clock_target_hz(state.recommended_data_clock_hz());
+    let data_clock_target_hz = initial_control_plane_data_clock_target_hz(
+        state.recommended_data_clock_hz(),
+        state.cyw43_experimental_no_ht_transport(),
+    );
     let data_clock_hz = state.set_clock_hz(data_clock_target_hz)?;
     let transport_mode = if state.cyw43_experimental_no_ht_transport() {
         "bounded-no-ht"
@@ -497,6 +528,21 @@ impl Cyw43NetDevice {
                 true,
             );
             return Err(err);
+        }
+        if device.state.cyw43_experimental_no_ht_transport() {
+            info!("[cyw43] step: promote_control_transport");
+            device.state.finish_cyw43_experimental_transport_probe();
+            let promoted_clock_hz =
+                device
+                    .state
+                    .set_clock_hz(control_plane_data_clock_target_hz(
+                        device.state.recommended_data_clock_hz(),
+                    ))?;
+            device.probe.effective_clock_hz = promoted_clock_hz;
+            info!(
+                "[cyw43] control transport promoted clock={}Hz bus_width=4 mode=strict",
+                promoted_clock_hz
+            );
         }
         info!(
             "[cyw43] ready: mac={} clock={}Hz bus_width={} ioex=0x{:02x}",
@@ -780,7 +826,38 @@ impl Cyw43NetDevice {
         iface: u32,
         payload_len: usize,
     ) -> Result<usize, DriverError> {
-        self.ioctl_encoded_once(kind, cmd, iface, payload_len)
+        let control_plane_probe_pending = self.state.cyw43_control_plane_probe_pending();
+        let experimental_no_ht_transport = self.state.cyw43_experimental_no_ht_transport();
+        match self.ioctl_encoded_once(kind, cmd, iface, payload_len, false) {
+            Ok(response_len) => Ok(response_len),
+            Err(err)
+                if first_control_plane_retry_after_promoted_timeout(
+                    experimental_no_ht_transport,
+                    control_plane_probe_pending,
+                    &err,
+                ) =>
+            {
+                warn!(
+                    "[cyw43] control-plane probe retry cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht reason={err}",
+                    cmd as u32,
+                    iface,
+                    payload_len,
+                    self.probe.effective_clock_hz,
+                    self.state.cyw43_control_plane_chunk_limit(),
+                );
+                let response_len = self.ioctl_encoded_once(kind, cmd, iface, payload_len, true)?;
+                info!(
+                    "[cyw43] control-plane probe retry ok cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
+                    cmd as u32,
+                    iface,
+                    payload_len,
+                    self.probe.effective_clock_hz,
+                    self.state.cyw43_control_plane_chunk_limit(),
+                );
+                Ok(response_len)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn ioctl_encoded_once(
@@ -789,8 +866,9 @@ impl Cyw43NetDevice {
         cmd: Ioctl,
         iface: u32,
         payload_len: usize,
+        allow_speculative_retry_credit: bool,
     ) -> Result<usize, DriverError> {
-        self.wait_for_credit()?;
+        self.wait_for_credit(allow_speculative_retry_credit)?;
 
         let total_len = SDPCM_HEADER_LEN
             .checked_add(CDC_HEADER_LEN)
@@ -905,13 +983,27 @@ impl Cyw43NetDevice {
         Err(DriverError::Protocol("ioctl-timeout"))
     }
 
-    fn wait_for_credit(&mut self) -> Result<(), DriverError> {
+    fn wait_for_credit(&mut self, allow_speculative_retry_credit: bool) -> Result<(), DriverError> {
         for _ in 0..CREDIT_WAIT_LOOPS {
             if self.has_credit() {
                 return Ok(());
             }
             let _ = self.process_next_frame(false)?;
             spin_loop();
+        }
+        if let Some(speculative_sdpcm_seq_max) =
+            speculative_credit_window_after_promoted_timeout_retry(
+                allow_speculative_retry_credit,
+                self.sdpcm_seq,
+                self.sdpcm_seq_max,
+            )
+        {
+            warn!(
+                "[cyw43] control-plane probe retry forcing speculative credit seq={}/{} -> {}",
+                self.sdpcm_seq, self.sdpcm_seq_max, speculative_sdpcm_seq_max,
+            );
+            self.sdpcm_seq_max = speculative_sdpcm_seq_max;
+            return Ok(());
         }
         Err(DriverError::Protocol("sdpcm-credit-timeout"))
     }
@@ -1076,7 +1168,7 @@ impl Cyw43NetDevice {
     }
 
     fn transmit(&mut self, packet: &[u8]) -> Result<(), DriverError> {
-        self.wait_for_credit()?;
+        self.wait_for_credit(false)?;
         let total_len = SDPCM_HEADER_LEN
             .checked_add(DATA_PADDING_LEN)
             .and_then(|value| value.checked_add(BDC_HEADER_LEN))
@@ -1291,6 +1383,21 @@ const fn control_plane_data_clock_target_hz(recommended_data_clock_hz: u32) -> u
     }
 }
 
+const fn initial_control_plane_data_clock_target_hz(
+    recommended_data_clock_hz: u32,
+    experimental_no_ht_transport: bool,
+) -> u32 {
+    // The bounded no-HT path has now proven firmware-ready on the startup
+    // clock but still exposes the first live Function 2 control write as the
+    // fragile edge on some Pi 4 boards. Keep that first proof write on the
+    // known-good clock, then promote after control-plane init succeeds.
+    if experimental_no_ht_transport {
+        SDIO_STARTUP_CLOCK_HZ
+    } else {
+        control_plane_data_clock_target_hz(recommended_data_clock_hz)
+    }
+}
+
 #[inline]
 const fn ioctl_wait_loops() -> usize {
     IOCTL_WAIT_LOOPS
@@ -1342,9 +1449,11 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        align4, bdc_payload, control_plane_data_clock_target_hz, has_sdpcm_credit,
-        ioctl_wait_loops, is_transport_retryable, put_u16_le, EVENT_AUTH, EVENT_SET_SSID,
-        IOCTL_WAIT_LOOPS, SDIO_DATA_CLOCK_HZ,
+        align4, bdc_payload, control_plane_data_clock_target_hz,
+        first_control_plane_retry_after_promoted_timeout, has_sdpcm_credit,
+        initial_control_plane_data_clock_target_hz, ioctl_wait_loops, is_transport_retryable,
+        put_u16_le, DriverError, EVENT_AUTH, EVENT_SET_SSID, IOCTL_WAIT_LOOPS, SDIO_DATA_CLOCK_HZ,
+        SDIO_STARTUP_CLOCK_HZ,
     };
     use crate::hal::HalError;
 
@@ -1399,6 +1508,72 @@ mod tests {
         assert_eq!(
             control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ * 2),
             SDIO_DATA_CLOCK_HZ
+        );
+    }
+
+    #[test]
+    fn initial_control_plane_data_clock_keeps_bounded_no_ht_probe_on_startup_clock() {
+        assert_eq!(
+            initial_control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ, true),
+            SDIO_STARTUP_CLOCK_HZ
+        );
+        assert_eq!(
+            initial_control_plane_data_clock_target_hz(400_000, true),
+            400_000
+        );
+        assert_eq!(
+            initial_control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ, false),
+            SDIO_DATA_CLOCK_HZ
+        );
+    }
+
+    #[test]
+    fn first_control_plane_retry_after_promoted_timeout_is_precise() {
+        assert!(first_control_plane_retry_after_promoted_timeout(
+            true,
+            true,
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-promoted-rearm-timeout"
+            )),
+        ));
+        assert!(!first_control_plane_retry_after_promoted_timeout(
+            false,
+            true,
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-promoted-rearm-timeout"
+            )),
+        ));
+        assert!(!first_control_plane_retry_after_promoted_timeout(
+            true,
+            false,
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-promoted-rearm-timeout"
+            )),
+        ));
+        assert!(!first_control_plane_retry_after_promoted_timeout(
+            true,
+            true,
+            &DriverError::Hal(HalError::Unsupported("ioctl-timeout")),
+        ));
+    }
+
+    #[test]
+    fn speculative_credit_window_after_promoted_timeout_retry_is_narrow() {
+        assert_eq!(
+            speculative_credit_window_after_promoted_timeout_retry(true, 1, 1),
+            Some(2)
+        );
+        assert_eq!(
+            speculative_credit_window_after_promoted_timeout_retry(true, u8::MAX, u8::MAX),
+            Some(0)
+        );
+        assert_eq!(
+            speculative_credit_window_after_promoted_timeout_retry(false, 1, 1),
+            None
+        );
+        assert_eq!(
+            speculative_credit_window_after_promoted_timeout_retry(true, 1, 2),
+            None
         );
     }
 
