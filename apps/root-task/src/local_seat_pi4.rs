@@ -1308,20 +1308,14 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
-    // Confirmed runtime mailbox reset still gets the stronger cold-start path,
-    // but the weaker posted-fallback/soft-continue outcomes now fail at the
-    // live runtime ownership edge even when resetless reinit skips HCRST.
-    // Reserve snapshot-driven cold start for an acknowledged mailbox reset, and
-    // demote the weaker runtime outcomes to preserve-controller-state so the
-    // runtime probe never tries to synthesize stronger ownership than firmware
-    // actually established.
+    // A confirmed runtime mailbox reset is strong enough to rebuild from the
+    // trusted CAP snapshot. Weaker bounded outcomes such as posted-fallback or
+    // soft-continue still preserve the halted stop-state contract, so the
+    // default label stays conservative even though the runtime ladder now
+    // front-loads a fresh cold-start rebuild before it revisits seeded
+    // stop-state variants on those weaker branches.
     if runtime_vl805_reset_state == VL805_RUNTIME_RESET_STATE_NOTIFIED {
         XhciFirmwareHandoff::ColdStartFromSnapshot
-    } else if matches!(
-        runtime_vl805_reset_state,
-        VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
-    ) {
-        XhciFirmwareHandoff::PreserveControllerState
     } else {
         XhciFirmwareHandoff::PreserveControllerState
     }
@@ -1726,10 +1720,17 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
     if let Some(tag) = xhci_diag_stage_label(stage) {
         let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" tag={tag}"));
     }
-    let _ = core::fmt::Write::write_fmt(
-        &mut line,
-        format_args!(" a=0x{a:016x} b=0x{b:016x} c=0x{c:016x}"),
-    );
+    if let Some((a_label, b_label, c_label)) = xhci_diag_stage_value_labels(stage) {
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(" {a_label}=0x{a:016x} {b_label}=0x{b:016x} {c_label}=0x{c:016x}"),
+        );
+    } else {
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(" a=0x{a:016x} b=0x{b:016x} c=0x{c:016x}"),
+        );
+    }
     boot_log::force_uart_line(line.as_str());
 }
 
@@ -1751,11 +1752,33 @@ fn log_latest_xhci_diag_summary(context: &'static str) {
     if let Some(tag) = xhci_diag_stage_label(stage) {
         let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" tag={tag}"));
     }
-    let _ = core::fmt::Write::write_fmt(
-        &mut line,
-        format_args!(" a=0x{a:016x} b=0x{b:016x} c=0x{c:016x}"),
-    );
+    if let Some((a_label, b_label, c_label)) = xhci_diag_stage_value_labels(stage) {
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(" {a_label}=0x{a:016x} {b_label}=0x{b:016x} {c_label}=0x{c:016x}"),
+        );
+    } else {
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(" a=0x{a:016x} b=0x{b:016x} c=0x{c:016x}"),
+        );
+    }
     boot_log::force_uart_line(line.as_str());
+}
+
+#[inline]
+const fn xhci_diag_stage_value_labels(
+    stage: u16,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    match stage {
+        0x02f0 => Some(("dcbaa", "cmd_ring", "event_ring")),
+        0x02f1 => Some(("erstba", "crcr", "erdp")),
+        0x02f2 => Some(("staged_dcbaap", "current_crcr", "staged_erdp")),
+        0x02f3 => Some(("staged_erstba", "staged_erstsz", "erstsz")),
+        0x02f4 => Some(("publish_mask", "run_usbcmd", "run_mode")),
+        0x02f5 => Some(("dcbaap_off", "crcr_off", "int_base")),
+        _ => None,
+    }
 }
 
 #[inline]
@@ -1834,6 +1857,13 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x026d => Some("runtime-ring-read-begin"),
         0x026e => Some("erstba-write-low"),
         0x026f => Some("erstba-write-high"),
+        0x02e9 => Some("usbcmd-run-pre-store"),
+        0x02f0 => Some("pre-run-ring-phys"),
+        0x02f1 => Some("pre-run-ring-regs"),
+        0x02f2 => Some("pre-run-staged-state"),
+        0x02f3 => Some("pre-run-erst-state"),
+        0x02f4 => Some("pre-run-publish-mask"),
+        0x02f5 => Some("pre-run-offsets"),
         0x0270 => Some("usbsts-run-read"),
         0x0271 => Some("usbcmd-run-read"),
         0x0272 => Some("controller-ready-timeout"),
@@ -2181,6 +2211,164 @@ fn xhci_controller_params_from_probe(
         rts_offset: probe.rts_offset,
         firmware_handoff,
         runtime_seed_snapshot,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct XhciRuntimeInitStrategy {
+    firmware_handoff: XhciFirmwareHandoff,
+    seed_stop_state: bool,
+}
+
+impl XhciRuntimeInitStrategy {
+    #[inline]
+    const fn new(firmware_handoff: XhciFirmwareHandoff, seed_stop_state: bool) -> Self {
+        Self {
+            firmware_handoff,
+            seed_stop_state,
+        }
+    }
+}
+
+#[inline]
+fn xhci_controller_params_from_probe_with_strategy(
+    probe: XhciCapProbe,
+    strategy: XhciRuntimeInitStrategy,
+    stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
+) -> XhciControllerParams {
+    let runtime_seed_snapshot = if strategy.seed_stop_state {
+        stop_state_snapshot.map(xhci_runtime_seed_snapshot_from_stop_state)
+    } else {
+        None
+    };
+    XhciControllerParams {
+        cap_length: probe.cap_length,
+        hcs1: probe.hcs1,
+        hcs2: probe.hcs2,
+        hccparams1: probe.hccparams1,
+        db_offset: probe.db_offset,
+        rts_offset: probe.rts_offset,
+        firmware_handoff: strategy.firmware_handoff,
+        runtime_seed_snapshot,
+    }
+}
+
+const XHCI_RUNTIME_INIT_STRATEGY_MAX: usize = 3;
+
+#[inline]
+fn xhci_runtime_init_strategy_push(
+    strategies: &mut [XhciRuntimeInitStrategy; XHCI_RUNTIME_INIT_STRATEGY_MAX],
+    count: &mut usize,
+    strategy: XhciRuntimeInitStrategy,
+) {
+    if *count >= strategies.len() || strategies[..*count].contains(&strategy) {
+        return;
+    }
+    strategies[*count] = strategy;
+    *count += 1;
+}
+
+#[inline]
+fn xhci_runtime_init_strategies(
+    preferred_handoff: XhciFirmwareHandoff,
+    runtime_vl805_reset_state: u8,
+    stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
+) -> (
+    [XhciRuntimeInitStrategy; XHCI_RUNTIME_INIT_STRATEGY_MAX],
+    usize,
+) {
+    let mut strategies = [XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+        XHCI_RUNTIME_INIT_STRATEGY_MAX];
+    let mut count = 0usize;
+    let stop_state_seed_available = stop_state_snapshot.is_some();
+    if matches!(preferred_handoff, XhciFirmwareHandoff::None) {
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
+        );
+        return (strategies, count);
+    }
+
+    if runtime_vl805_reset_state == VL805_RUNTIME_RESET_STATE_NOTIFIED {
+        // Mirror U-Boot's known-good controller path first after a confirmed
+        // runtime VL805 reset: fresh ownership from the trusted CAP snapshot,
+        // without reusing the pre-reset stop-state seed.
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        );
+        if stop_state_seed_available {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+            );
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
+            );
+        }
+    } else {
+        // Posted-fallback / soft-continue still prove that the bootloader-owned
+        // stop-state snapshot is real, but the latest Pi 4 traces show the
+        // preserve-state first attempt can wedge on the live RUN store before
+        // the ladder ever reaches a safer fallback. Start with the same fresh
+        // U-Boot-style cold-start rebuild, then revisit seeded variants only
+        // if that stronger path still misses.
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        );
+        if stop_state_seed_available {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+            );
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
+            );
+        }
+    }
+
+    if count == 0 {
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(preferred_handoff, false),
+        );
+    }
+    (strategies, count)
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_origin_label(
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    match (strategy.firmware_handoff, strategy.seed_stop_state) {
+        (XhciFirmwareHandoff::None, false) => "live-runtime-default",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, false) => "uboot-fresh-init",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "seeded-cold-start",
+        (XhciFirmwareHandoff::ResetlessReinit, true) => "stop-state-resetless-reinit",
+        (XhciFirmwareHandoff::PreserveControllerState, true) => "stop-state-preserve",
+        (XhciFirmwareHandoff::ResetlessReinit, false) => "resetless-reinit",
+        (XhciFirmwareHandoff::PreserveControllerState, false) => "preserve-controller-state",
+        (XhciFirmwareHandoff::None, true) => "live-runtime-default",
+    }
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_seed_label(strategy: XhciRuntimeInitStrategy) -> &'static str {
+    if strategy.seed_stop_state {
+        "stop-state"
+    } else {
+        "none"
     }
 }
 
@@ -5120,7 +5308,7 @@ impl UsbKeyboard {
         let mut saw_controller = false;
         let mut saw_keyboard_init_error = false;
         for &mmio_base in &candidates[..candidate_count] {
-            let (effective_mmio, cap_probe, firmware_handoff) = {
+            let (effective_mmio, cap_probe, firmware_handoff, runtime_vl805_reset_state) = {
                 let runtime_vl805_reset_requested = xhci_runtime_vl805_mailbox_reset_required(
                     mmio_base,
                     xhci_mmio_hint,
@@ -5176,7 +5364,7 @@ impl UsbKeyboard {
                         ),
                     )
                 });
-                let firmware_handoff = if trusted_handoff_probe.is_some() {
+                let preferred_firmware_handoff = if trusted_handoff_probe.is_some() {
                     let handoff_mode =
                         xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state);
                     if runtime_vl805_reset {
@@ -5220,6 +5408,24 @@ impl UsbKeyboard {
                         );
                         boot_log::force_uart_line(line.as_str());
                     }
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci runtime selected detail={} preferred_mode={} reset_done={} snapshot={}",
+                            if runtime_vl805_reset_requested {
+                                runtime_vl805_mailbox_reset_trusted_cold_init_detail(
+                                    runtime_vl805_reset_state,
+                                )
+                            } else {
+                                "bootloader-trusted-cap-snapshot"
+                            },
+                            xhci_firmware_handoff_mode_label(handoff_mode),
+                            runtime_vl805_reset as u8,
+                            trusted_handoff_probe.is_some() as u8,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
                     handoff_mode
                 } else {
                     XhciFirmwareHandoff::None
@@ -5299,7 +5505,12 @@ impl UsbKeyboard {
                 boot_log::force_uart_line(cap_line.as_str());
 
                 match validate_xhci_capability_window(&raw_probe) {
-                    Ok(()) => (mmio_base, raw_probe, firmware_handoff),
+                    Ok(()) => (
+                        mmio_base,
+                        raw_probe,
+                        preferred_firmware_handoff,
+                        runtime_vl805_reset_state,
+                    ),
                     Err(reason) => {
                         if !xhci_runtime_allows_alias_scan(
                             mmio_base,
@@ -5329,7 +5540,12 @@ impl UsbKeyboard {
                                     ),
                                 );
                                 boot_log::force_uart_line(line.as_str());
-                                (candidate, scanned_probe, XhciFirmwareHandoff::None)
+                                (
+                                    candidate,
+                                    scanned_probe,
+                                    XhciFirmwareHandoff::None,
+                                    VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
+                                )
                             }
                             Err(_) => {
                                 let mut line = heapless::String::<208>::new();
@@ -5347,15 +5563,10 @@ impl UsbKeyboard {
                     }
                 }
             };
-            let controller_params = xhci_controller_params_from_probe(
-                cap_probe,
+            let (init_strategies, init_strategy_count) = xhci_runtime_init_strategies(
                 firmware_handoff,
+                runtime_vl805_reset_state,
                 xhci_stop_state_snapshot,
-            );
-            XhciIrqGuard::log_policy(
-                effective_mmio,
-                firmware_handoff,
-                XhciIrqInstallPhase::PreControllerReady,
             );
 
             // Keep probe order deterministic so field logs are directly
@@ -5365,147 +5576,199 @@ impl UsbKeyboard {
             } else {
                 &[false, true]
             };
-            for &prefer_high in dma_probe_order {
-                let dma_bus_modes: &[bool] =
-                    if XHCI_PCIE_DMA_WINDOW_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
-                        &[true, false]
-                    } else if XHCI_PCIE_DMA_WINDOW_ENABLED {
-                        &[true]
-                    } else {
-                        &[false]
-                    };
-                for (bus_mode_idx, &pcie_dma_window) in dma_bus_modes.iter().enumerate() {
-                    let mut probe_line = heapless::String::<224>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut probe_line,
-                        format_args!(
-                            "[local-seat] xhci probe begin mmio=0x{mmio:016x} dma={} bus={} handoff={} poll_only={}",
-                            if prefer_high { "high" } else { "low" },
-                            if pcie_dma_window {
-                                "pcie-window"
-                            } else {
-                                "phys"
-                            },
-                            xhci_irq_policy_reason(firmware_handoff),
-                            if xhci_polling_only_runtime(effective_mmio, firmware_handoff) {
-                                "yes"
-                            } else {
-                                "no"
-                            },
-                            mmio = effective_mmio
-                        ),
-                    );
-                    boot_log::force_uart_line(probe_line.as_str());
-
-                    let dma = SeatDma::new(hal, prefer_high, pcie_dma_window);
-                    let ctrl = match XhciCtrl::new_with_params(
-                        effective_mmio,
-                        dma,
-                        controller_params,
-                    ) {
-                        Ok(ctrl) => {
-                            saw_controller = true;
-                            Arc::new(ctrl)
-                        }
-                        Err(err) => {
-                            let mut line = heapless::String::<224>::new();
-                            let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
-                                    "[local-seat] xhci probe failed mmio=0x{mmio:016x} dma={} bus={} detail={err:?}",
-                                    if prefer_high { "high" } else { "low" },
-                                    if pcie_dma_window {
-                                        "pcie-window"
-                                    } else {
-                                        "phys"
-                                    },
-                                    mmio = effective_mmio
-                                ),
-                            );
-                            boot_log::force_uart_line(line.as_str());
-                            log_latest_xhci_diag_summary("probe-new");
-                            if bus_mode_idx + 1 < dma_bus_modes.len() {
-                                let next_bus = if dma_bus_modes[bus_mode_idx + 1] {
+            for (strategy_idx, strategy) in init_strategies[..init_strategy_count]
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                let controller_params = xhci_controller_params_from_probe_with_strategy(
+                    cap_probe,
+                    strategy,
+                    xhci_stop_state_snapshot,
+                );
+                XhciIrqGuard::log_policy(
+                    effective_mmio,
+                    strategy.firmware_handoff,
+                    XhciIrqInstallPhase::PreControllerReady,
+                );
+                for &prefer_high in dma_probe_order {
+                    let dma_bus_modes: &[bool] =
+                        if XHCI_PCIE_DMA_WINDOW_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
+                            &[true, false]
+                        } else if XHCI_PCIE_DMA_WINDOW_ENABLED {
+                            &[true]
+                        } else {
+                            &[false]
+                        };
+                    for (bus_mode_idx, &pcie_dma_window) in dma_bus_modes.iter().enumerate() {
+                        let mut probe_line = heapless::String::<320>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut probe_line,
+                            format_args!(
+                                "[local-seat] xhci probe begin mmio=0x{mmio:016x} attempt={}/{} origin={} dma={} bus={} handoff={} seed={} poll_only={}",
+                                strategy_idx + 1,
+                                init_strategy_count,
+                                xhci_runtime_init_strategy_origin_label(strategy),
+                                if prefer_high { "high" } else { "low" },
+                                if pcie_dma_window {
                                     "pcie-window"
                                 } else {
                                     "phys"
-                                };
-                                let mut fallback_line = heapless::String::<256>::new();
+                                },
+                                xhci_irq_policy_reason(strategy.firmware_handoff),
+                                xhci_runtime_init_strategy_seed_label(strategy),
+                                if xhci_polling_only_runtime(
+                                    effective_mmio,
+                                    strategy.firmware_handoff,
+                                ) {
+                                    "yes"
+                                } else {
+                                    "no"
+                                },
+                                mmio = effective_mmio
+                            ),
+                        );
+                        boot_log::force_uart_line(probe_line.as_str());
+
+                        let dma = SeatDma::new(hal, prefer_high, pcie_dma_window);
+                        let ctrl = match XhciCtrl::new_with_params(
+                            effective_mmio,
+                            dma,
+                            controller_params,
+                        ) {
+                            Ok(ctrl) => {
+                                saw_controller = true;
+                                Arc::new(ctrl)
+                            }
+                            Err(err) => {
+                                let mut line = heapless::String::<320>::new();
                                 let _ = core::fmt::Write::write_fmt(
-                                    &mut fallback_line,
+                                    &mut line,
                                     format_args!(
-                                        "[local-seat] xhci probe fallback mmio=0x{mmio:016x} dma={} from_bus={} to_bus={} reason={err:?}",
+                                        "[local-seat] xhci probe failed mmio=0x{mmio:016x} attempt={}/{} origin={} dma={} bus={} handoff={} seed={} detail={err:?}",
+                                        strategy_idx + 1,
+                                        init_strategy_count,
+                                        xhci_runtime_init_strategy_origin_label(strategy),
                                         if prefer_high { "high" } else { "low" },
                                         if pcie_dma_window {
                                             "pcie-window"
                                         } else {
                                             "phys"
                                         },
-                                        next_bus,
+                                        xhci_irq_policy_reason(strategy.firmware_handoff),
+                                        xhci_runtime_init_strategy_seed_label(strategy),
                                         mmio = effective_mmio
                                     ),
                                 );
-                                boot_log::force_uart_line(fallback_line.as_str());
+                                boot_log::force_uart_line(line.as_str());
+                                log_latest_xhci_diag_summary("probe-new");
+                                if bus_mode_idx + 1 < dma_bus_modes.len() {
+                                    let next_bus = if dma_bus_modes[bus_mode_idx + 1] {
+                                        "pcie-window"
+                                    } else {
+                                        "phys"
+                                    };
+                                    let mut fallback_line = heapless::String::<320>::new();
+                                    let _ = core::fmt::Write::write_fmt(
+                                        &mut fallback_line,
+                                        format_args!(
+                                            "[local-seat] xhci probe fallback mmio=0x{mmio:016x} attempt={}/{} origin={} dma={} from_bus={} to_bus={} reason={err:?}",
+                                            strategy_idx + 1,
+                                            init_strategy_count,
+                                            xhci_runtime_init_strategy_origin_label(strategy),
+                                            if prefer_high { "high" } else { "low" },
+                                            if pcie_dma_window {
+                                                "pcie-window"
+                                            } else {
+                                                "phys"
+                                            },
+                                            next_bus,
+                                            mmio = effective_mmio
+                                        ),
+                                    );
+                                    boot_log::force_uart_line(fallback_line.as_str());
+                                } else if strategy_idx + 1 < init_strategy_count {
+                                    let next_strategy = init_strategies[strategy_idx + 1];
+                                    let mut fallback_line = heapless::String::<352>::new();
+                                    let _ = core::fmt::Write::write_fmt(
+                                        &mut fallback_line,
+                                        format_args!(
+                                            "[local-seat] xhci probe fallback mmio=0x{mmio:016x} from_attempt={}/{} to_origin={} next_handoff={} next_seed={} reason={err:?}",
+                                            strategy_idx + 1,
+                                            init_strategy_count,
+                                            xhci_runtime_init_strategy_origin_label(next_strategy),
+                                            xhci_irq_policy_reason(next_strategy.firmware_handoff),
+                                            xhci_runtime_init_strategy_seed_label(next_strategy),
+                                            mmio = effective_mmio
+                                        ),
+                                    );
+                                    boot_log::force_uart_line(fallback_line.as_str());
+                                }
+                                continue;
                             }
-                            continue;
-                        }
-                    };
-                    let xhci_irq_guard = match XhciIrqGuard::install(
-                        hal,
-                        effective_mmio,
-                        firmware_handoff,
-                        XhciIrqInstallPhase::ControllerReady,
-                    ) {
-                        Ok(guard) => guard,
-                        Err(reason) => {
-                            let mut line = heapless::String::<224>::new();
-                            let _ = core::fmt::Write::write_fmt(
+                        };
+                        let xhci_irq_guard = match XhciIrqGuard::install(
+                            hal,
+                            effective_mmio,
+                            strategy.firmware_handoff,
+                            XhciIrqInstallPhase::ControllerReady,
+                        ) {
+                            Ok(guard) => guard,
+                            Err(reason) => {
+                                let mut line = heapless::String::<224>::new();
+                                let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
                                     "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} detail={reason} action=fallback-poll-only",
                                     mmio = effective_mmio
                                 ),
                             );
-                            boot_log::force_uart_line(line.as_str());
-                            None
-                        }
-                    };
+                                boot_log::force_uart_line(line.as_str());
+                                None
+                            }
+                        };
 
-                    let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
-                    let mut connected_mask = 0u32;
-                    let mut port_statuses = [0u32; XHCI_MAX_PROBE_PORTS];
-                    let mut detect_passes_used = 1usize;
-                    for pass in 0..XHCI_PORT_DETECT_PASSES {
-                        detect_passes_used = pass.saturating_add(1);
-                        connected_mask =
-                            xhci_sample_root_ports(ctrl.as_ref(), max_ports, &mut port_statuses);
-                        if connected_mask != 0 || pass + 1 >= XHCI_PORT_DETECT_PASSES {
-                            break;
+                        let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
+                        let mut connected_mask = 0u32;
+                        let mut port_statuses = [0u32; XHCI_MAX_PROBE_PORTS];
+                        let mut detect_passes_used = 1usize;
+                        for pass in 0..XHCI_PORT_DETECT_PASSES {
+                            detect_passes_used = pass.saturating_add(1);
+                            connected_mask = xhci_sample_root_ports(
+                                ctrl.as_ref(),
+                                max_ports,
+                                &mut port_statuses,
+                            );
+                            if connected_mask != 0 || pass + 1 >= XHCI_PORT_DETECT_PASSES {
+                                break;
+                            }
+                            for _ in 0..XHCI_PORT_DETECT_SETTLE_SPINS {
+                                spin_loop();
+                            }
                         }
-                        for _ in 0..XHCI_PORT_DETECT_SETTLE_SPINS {
-                            spin_loop();
+                        let mut slow_recheck_used = false;
+                        if connected_mask == 0 && max_ports != 0 {
+                            log_xhci_root_port_statuses(&port_statuses[..max_ports], "detect-zero");
+                            wait_ms(XHCI_PORT_DETECT_FINAL_WAIT_MS);
+                            slow_recheck_used = true;
+                            detect_passes_used = detect_passes_used.saturating_add(1);
+                            connected_mask = xhci_sample_root_ports(
+                                ctrl.as_ref(),
+                                max_ports,
+                                &mut port_statuses,
+                            );
+                            log_xhci_root_port_statuses(
+                                &port_statuses[..max_ports],
+                                if connected_mask == 0 {
+                                    "detect-slow-zero"
+                                } else {
+                                    "detect-slow-hit"
+                                },
+                            );
                         }
-                    }
-                    let mut slow_recheck_used = false;
-                    if connected_mask == 0 && max_ports != 0 {
-                        log_xhci_root_port_statuses(&port_statuses[..max_ports], "detect-zero");
-                        wait_ms(XHCI_PORT_DETECT_FINAL_WAIT_MS);
-                        slow_recheck_used = true;
-                        detect_passes_used = detect_passes_used.saturating_add(1);
-                        connected_mask =
-                            xhci_sample_root_ports(ctrl.as_ref(), max_ports, &mut port_statuses);
-                        log_xhci_root_port_statuses(
-                            &port_statuses[..max_ports],
-                            if connected_mask == 0 {
-                                "detect-slow-zero"
-                            } else {
-                                "detect-slow-hit"
-                            },
-                        );
-                    }
 
-                    let mut line = heapless::String::<224>::new();
-                    let _ = core::fmt::Write::write_fmt(
+                        let mut line = heapless::String::<224>::new();
+                        let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
                         "[local-seat] xhci online mmio=0x{mmio:016x} dma={} bus={} ports={} ctx={} connected_mask=0x{mask:04x} detect_passes={} slow_recheck={}",
@@ -5523,18 +5786,18 @@ impl UsbKeyboard {
                         mask = connected_mask,
                     ),
                 );
-                    boot_log::force_uart_line(line.as_str());
+                        boot_log::force_uart_line(line.as_str());
 
-                    for port in 0..max_ports {
-                        if (connected_mask & (1u32 << port)) == 0 {
-                            continue;
-                        }
+                        for port in 0..max_ports {
+                            if (connected_mask & (1u32 << port)) == 0 {
+                                continue;
+                            }
 
-                        let mut device = match UsbDevice::new(ctrl.clone(), port as u8) {
-                            Ok(device) => device,
-                            Err(err) => {
-                                let mut kind_line = heapless::String::<192>::new();
-                                let _ = core::fmt::Write::write_fmt(
+                            let mut device = match UsbDevice::new(ctrl.clone(), port as u8) {
+                                Ok(device) => device,
+                                Err(err) => {
+                                    let mut kind_line = heapless::String::<192>::new();
+                                    let _ = core::fmt::Write::write_fmt(
                                     &mut kind_line,
                                     format_args!(
                                         "[local-seat] usb root-enum classify port={} stage=address kind={} dma={} bus={}",
@@ -5548,10 +5811,10 @@ impl UsbKeyboard {
                                         },
                                     ),
                                 );
-                                boot_log::force_uart_line(kind_line.as_str());
+                                    boot_log::force_uart_line(kind_line.as_str());
 
-                                let mut line = heapless::String::<192>::new();
-                                let _ = core::fmt::Write::write_fmt(
+                                    let mut line = heapless::String::<192>::new();
+                                    let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
                                     "[local-seat] usb root-enum failed port={} stage=address dma={} bus={} detail={err:?}",
@@ -5564,16 +5827,16 @@ impl UsbKeyboard {
                                     },
                                 ),
                             );
-                                boot_log::force_uart_line(line.as_str());
-                                if matches!(
-                                    err,
-                                    UsbError::EnableSlotTimeout
-                                        | UsbError::AddressDeviceTimeout
-                                        | UsbError::CmdFail(_)
-                                ) {
-                                    if let UsbError::CmdFail(code) = err {
-                                        let mut cmd_line = heapless::String::<224>::new();
-                                        let _ = core::fmt::Write::write_fmt(
+                                    boot_log::force_uart_line(line.as_str());
+                                    if matches!(
+                                        err,
+                                        UsbError::EnableSlotTimeout
+                                            | UsbError::AddressDeviceTimeout
+                                            | UsbError::CmdFail(_)
+                                    ) {
+                                        if let UsbError::CmdFail(code) = err {
+                                            let mut cmd_line = heapless::String::<224>::new();
+                                            let _ = core::fmt::Write::write_fmt(
                                         &mut cmd_line,
                                         format_args!(
                                             "[local-seat] usb cmd completion detail port={} code={} (0x{code:02x}) name={}",
@@ -5582,11 +5845,11 @@ impl UsbKeyboard {
                                             completion::name(code),
                                         ),
                                     );
-                                        boot_log::force_uart_line(cmd_line.as_str());
-                                    }
-                                    let diag = ctrl.command_diag_for_port(port as u8);
-                                    let mut summary = heapless::String::<224>::new();
-                                    let _ = core::fmt::Write::write_fmt(
+                                            boot_log::force_uart_line(cmd_line.as_str());
+                                        }
+                                        let diag = ctrl.command_diag_for_port(port as u8);
+                                        let mut summary = heapless::String::<224>::new();
+                                        let _ = core::fmt::Write::write_fmt(
                                     &mut summary,
                                     format_args!(
                                         "[local-seat] xhci timeout diag port={} usbcmd=0x{usbcmd:08x} usbsts=0x{usbsts:08x} portsc=0x{portsc:08x}",
@@ -5596,10 +5859,10 @@ impl UsbKeyboard {
                                         portsc = diag.portsc,
                                     ),
                                 );
-                                    boot_log::force_uart_line(summary.as_str());
+                                        boot_log::force_uart_line(summary.as_str());
 
-                                    let mut regs0 = heapless::String::<192>::new();
-                                    let _ = core::fmt::Write::write_fmt(
+                                        let mut regs0 = heapless::String::<192>::new();
+                                        let _ = core::fmt::Write::write_fmt(
                                     &mut regs0,
                                     format_args!(
                                         "[local-seat] xhci timeout regs crcr=0x{crcr:016x} dcbaap=0x{dcbaap:016x} iman=0x{iman:08x}",
@@ -5608,10 +5871,10 @@ impl UsbKeyboard {
                                         iman = diag.iman,
                                     ),
                                 );
-                                    boot_log::force_uart_line(regs0.as_str());
+                                        boot_log::force_uart_line(regs0.as_str());
 
-                                    let mut regs1 = heapless::String::<192>::new();
-                                    let _ = core::fmt::Write::write_fmt(
+                                        let mut regs1 = heapless::String::<192>::new();
+                                        let _ = core::fmt::Write::write_fmt(
                                     &mut regs1,
                                     format_args!(
                                         "[local-seat] xhci timeout regs erdp=0x{erdp:016x} erstba=0x{erstba:016x}",
@@ -5619,51 +5882,51 @@ impl UsbKeyboard {
                                         erstba = diag.erstba,
                                     ),
                                 );
-                                    boot_log::force_uart_line(regs1.as_str());
+                                        boot_log::force_uart_line(regs1.as_str());
+                                    }
+                                    continue;
                                 }
-                                continue;
-                            }
-                        };
+                            };
 
-                        let device_desc = match device.get_device_descriptor() {
-                            Ok(desc) => desc,
-                            Err(err) => {
-                                let mut line = heapless::String::<192>::new();
-                                let _ = core::fmt::Write::write_fmt(
+                            let device_desc = match device.get_device_descriptor() {
+                                Ok(desc) => desc,
+                                Err(err) => {
+                                    let mut line = heapless::String::<192>::new();
+                                    let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
                                     "[local-seat] usb root-enum failed port={} stage=device-desc detail={err:?}",
                                     port + 1
                                 ),
                             );
-                                boot_log::force_uart_line(line.as_str());
-                                continue;
-                            }
-                        };
+                                    boot_log::force_uart_line(line.as_str());
+                                    continue;
+                                }
+                            };
 
-                        let config_blob = match device.get_config_descriptor(0) {
-                            Ok(config_blob) => config_blob,
-                            Err(err) => {
-                                let mut line = heapless::String::<192>::new();
-                                let _ = core::fmt::Write::write_fmt(
+                            let config_blob = match device.get_config_descriptor(0) {
+                                Ok(config_blob) => config_blob,
+                                Err(err) => {
+                                    let mut line = heapless::String::<192>::new();
+                                    let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
                                     "[local-seat] usb root-enum failed port={} stage=config-desc detail={err:?}",
                                     port + 1
                                 ),
                             );
-                                boot_log::force_uart_line(line.as_str());
-                                continue;
-                            }
-                        };
-                        let Some(config) = read_config_desc(&config_blob) else {
-                            let total_len = if config_blob.len() >= 4 {
-                                u16::from_le_bytes([config_blob[2], config_blob[3]])
-                            } else {
-                                0
+                                    boot_log::force_uart_line(line.as_str());
+                                    continue;
+                                }
                             };
-                            let mut detail = heapless::String::<224>::new();
-                            let _ = core::fmt::Write::write_fmt(
+                            let Some(config) = read_config_desc(&config_blob) else {
+                                let total_len = if config_blob.len() >= 4 {
+                                    u16::from_le_bytes([config_blob[2], config_blob[3]])
+                                } else {
+                                    0
+                                };
+                                let mut detail = heapless::String::<224>::new();
+                                let _ = core::fmt::Write::write_fmt(
                                 &mut detail,
                                 format_args!(
                                     "[local-seat] usb cfg parse detail port={} len={} b0=0x{:02x} b1=0x{:02x} total=0x{:04x}",
@@ -5674,22 +5937,22 @@ impl UsbKeyboard {
                                     total_len
                                 ),
                             );
-                            boot_log::force_uart_line(detail.as_str());
+                                boot_log::force_uart_line(detail.as_str());
 
-                            let mut line = heapless::String::<160>::new();
-                            let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
+                                let mut line = heapless::String::<160>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
                                     "[local-seat] usb root-enum failed port={} stage=config-parse",
                                     port + 1
                                 ),
-                            );
-                            boot_log::force_uart_line(line.as_str());
-                            continue;
-                        };
-                        let Some(config_value) = config_value_for_set(config) else {
-                            let mut line = heapless::String::<224>::new();
-                            let _ = core::fmt::Write::write_fmt(
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                                continue;
+                            };
+                            let Some(config_value) = config_value_for_set(config) else {
+                                let mut line = heapless::String::<224>::new();
+                                let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
                                     "[local-seat] usb root-enum failed port={} stage=set-config-value detail=invalid bConfigurationValue=0x{:02x} iConfiguration=0x{:02x}",
@@ -5698,12 +5961,12 @@ impl UsbKeyboard {
                                     config.configuration_string_index()
                                 ),
                             );
-                            boot_log::force_uart_line(line.as_str());
-                            continue;
-                        };
-                        if let Err(err) = device.set_configuration(config_value) {
-                            let mut line = heapless::String::<192>::new();
-                            let _ = core::fmt::Write::write_fmt(
+                                boot_log::force_uart_line(line.as_str());
+                                continue;
+                            };
+                            if let Err(err) = device.set_configuration(config_value) {
+                                let mut line = heapless::String::<192>::new();
+                                let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
                                 "[local-seat] usb root-enum failed port={} stage=set-config({}) detail={err:?}",
@@ -5711,29 +5974,30 @@ impl UsbKeyboard {
                                 config_value
                             ),
                         );
-                            boot_log::force_uart_line(line.as_str());
-                            continue;
-                        }
+                                boot_log::force_uart_line(line.as_str());
+                                continue;
+                            }
 
-                        let device = Arc::new(device);
-                        if let Some(hid) = Self::probe_device_for_keyboard(
-                            device,
-                            device_desc,
-                            &config_blob,
-                            HUB_ENUM_MAX_DEPTH,
-                            &mut saw_keyboard_init_error,
-                        ) {
-                            hid.device().ctrl().host().seal_runtime();
-                            return Ok(Self {
-                                hid,
-                                _xhci_irq_guard: xhci_irq_guard,
-                                last_keys: [0; 6],
-                                caps_lock_on: false,
-                                poll_error_logged: false,
-                                led_error_logged: false,
-                                first_report_logged: false,
-                                pending_display_scroll_rows: 0,
-                            });
+                            let device = Arc::new(device);
+                            if let Some(hid) = Self::probe_device_for_keyboard(
+                                device,
+                                device_desc,
+                                &config_blob,
+                                HUB_ENUM_MAX_DEPTH,
+                                &mut saw_keyboard_init_error,
+                            ) {
+                                hid.device().ctrl().host().seal_runtime();
+                                return Ok(Self {
+                                    hid,
+                                    _xhci_irq_guard: xhci_irq_guard,
+                                    last_keys: [0; 6],
+                                    caps_lock_on: false,
+                                    poll_error_logged: false,
+                                    led_error_logged: false,
+                                    first_report_logged: false,
+                                    pending_display_scroll_rows: 0,
+                                });
+                            }
                         }
                     }
                 }
@@ -9651,12 +9915,14 @@ mod tests {
         runtime_vl805_mailbox_reset_error_allows_cold_init, text_backspace_target, text_row_count,
         text_viewport_height, translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode,
         vl805_cfg_preseed_needed, vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
-        xhci_controller_params_from_probe, xhci_firmware_handoff_hint_reason, xhci_irq_sink_needed,
-        xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
-        xhci_root_port_connected, xhci_runtime_mmio_candidate_allowed,
-        xhci_runtime_mmio_has_accessible_window, xhci_safe_mode_skip_command, ConfigDesc,
-        Pi4SeatError, UsbKeyboard, Vl805CfgPreseedMode, XhciCapProbe, XhciFirmwareHandoff,
-        XhciIrqInstallPhase, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        xhci_controller_params_from_probe, xhci_controller_params_from_probe_with_strategy,
+        xhci_diag_stage_label, xhci_diag_stage_value_labels, xhci_firmware_handoff_hint_reason,
+        xhci_irq_sink_needed, xhci_preseed_allows_static_legacy_fallbacks,
+        xhci_preseed_pin_only_reason, xhci_root_port_connected, xhci_runtime_init_strategies,
+        xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
+        xhci_safe_mode_skip_command, ConfigDesc, LocalSeatXhciStopStateSnapshot, Pi4SeatError,
+        UsbKeyboard, Vl805CfgPreseedMode, XhciCapProbe, XhciFirmwareHandoff, XhciIrqInstallPhase,
+        XhciRuntimeInitStrategy, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
         RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, XHCI_MMIO_ALIAS_SCAN_STEPS,
     };
     use super::{
@@ -9847,6 +10113,58 @@ mod tests {
     }
 
     #[test]
+    fn xhci_runtime_init_strategies_prioritize_uboot_fresh_init_after_confirmed_reset() {
+        let (strategies, count) = xhci_runtime_init_strategies(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            super::VL805_RUNTIME_RESET_STATE_NOTIFIED,
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+        );
+        assert_eq!(count, 3);
+        assert_eq!(
+            strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+        );
+        assert_eq!(
+            strategies[1],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
+        );
+        assert_eq!(
+            strategies[2],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
+        );
+    }
+
+    #[test]
+    fn xhci_runtime_init_strategies_prioritize_fresh_cold_start_for_weak_runtime_reset_outcomes() {
+        let (strategies, count) = xhci_runtime_init_strategies(
+            XhciFirmwareHandoff::PreserveControllerState,
+            super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+        );
+        assert_eq!(count, 3);
+        assert_eq!(
+            strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+        );
+        assert_eq!(
+            strategies[1],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
+        );
+        assert_eq!(
+            strategies[2],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
+        );
+    }
+
+    #[test]
     fn xhci_controller_params_preserve_hccparams1_for_runtime_init() {
         let params = xhci_controller_params_from_probe(
             XhciCapProbe {
@@ -9871,6 +10189,36 @@ mod tests {
         assert_eq!(
             params.firmware_handoff,
             XhciFirmwareHandoff::PreserveControllerState
+        );
+        assert!(params.runtime_seed_snapshot.is_none());
+    }
+
+    #[test]
+    fn xhci_controller_params_strategy_can_skip_stop_state_seed_for_uboot_fresh_init() {
+        let params = xhci_controller_params_from_probe_with_strategy(
+            XhciCapProbe {
+                cap_length: 0x40,
+                hci_version: 0x0100,
+                hcs1: 32u32 | (8u32 << 24),
+                hcs2: 0,
+                hccparams1: 1 << 2,
+                db_offset: 0x1000,
+                rts_offset: 0x2000,
+                max_slots: 32,
+                max_ports: 8,
+                max_scratchpad: 0,
+                mmio_size: 0x10000,
+            },
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+        );
+        assert_eq!(
+            params.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         assert!(params.runtime_seed_snapshot.is_none());
     }
@@ -10187,6 +10535,13 @@ mod tests {
         assert_eq!(xhci_diag_stage_label(0x026f), Some("erstba-write-high"));
         assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-write"));
         assert_eq!(xhci_diag_stage_label(0x026a), Some("usbcmd-run-write"));
+        assert_eq!(xhci_diag_stage_label(0x02e9), Some("usbcmd-run-pre-store"));
+        assert_eq!(xhci_diag_stage_label(0x02f0), Some("pre-run-ring-phys"));
+        assert_eq!(xhci_diag_stage_label(0x02f1), Some("pre-run-ring-regs"));
+        assert_eq!(xhci_diag_stage_label(0x02f2), Some("pre-run-staged-state"));
+        assert_eq!(xhci_diag_stage_label(0x02f3), Some("pre-run-erst-state"));
+        assert_eq!(xhci_diag_stage_label(0x02f4), Some("pre-run-publish-mask"));
+        assert_eq!(xhci_diag_stage_label(0x02f5), Some("pre-run-offsets"));
         assert_eq!(xhci_diag_stage_label(0x0270), Some("usbsts-run-read"));
         assert_eq!(xhci_diag_stage_label(0x0271), Some("usbcmd-run-read"));
         assert_eq!(
@@ -10353,6 +10708,35 @@ mod tests {
             Some("cmd-timeout-last-event")
         );
         assert_eq!(xhci_diag_stage_label(0x9999), None);
+    }
+
+    #[test]
+    fn xhci_diag_value_labels_name_pre_run_ring_snapshot_fields() {
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x02f0),
+            Some(("dcbaa", "cmd_ring", "event_ring"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x02f1),
+            Some(("erstba", "crcr", "erdp"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x02f2),
+            Some(("staged_dcbaap", "current_crcr", "staged_erdp"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x02f3),
+            Some(("staged_erstba", "staged_erstsz", "erstsz"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x02f4),
+            Some(("publish_mask", "run_usbcmd", "run_mode"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x02f5),
+            Some(("dcbaap_off", "crcr_off", "int_base"))
+        );
+        assert_eq!(xhci_diag_stage_value_labels(0x02e9), None);
     }
 
     #[test]

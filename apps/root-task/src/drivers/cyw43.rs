@@ -257,6 +257,18 @@ fn control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
 }
 
 #[inline]
+const fn control_plane_retry_after_promoted_timeout_resend_target_clock_hz(
+    experimental_no_ht_transport: bool,
+    effective_clock_hz: u32,
+) -> u32 {
+    if experimental_no_ht_transport && effective_clock_hz > SDIO_STARTUP_CLOCK_HZ {
+        SDIO_STARTUP_CLOCK_HZ
+    } else {
+        effective_clock_hz
+    }
+}
+
+#[inline]
 const fn control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
     experimental_no_ht_transport: bool,
     allow_speculative_retry_credit: bool,
@@ -311,8 +323,9 @@ fn prepare_initial_control_plane_transport(
     state: &mut Pi4WifiState,
 ) -> Result<(u32, SdioBusWidth), DriverError> {
     info!("[cyw43] step: set_clock(data)");
+    let recommended_data_clock_hz = state.recommended_data_clock_hz();
     let data_clock_target_hz = initial_control_plane_data_clock_target_hz(
-        state.recommended_data_clock_hz(),
+        recommended_data_clock_hz,
         state.cyw43_experimental_no_ht_transport(),
     );
     let data_clock_hz = state.set_clock_hz(data_clock_target_hz)?;
@@ -322,8 +335,10 @@ fn prepare_initial_control_plane_transport(
         "strict"
     };
     info!(
-        "[cyw43] control transport ready clock={}Hz bus_width=4 mode={transport_mode} write_chunk_limit={} reply_chunk_limit={}",
+        "[cyw43] control transport ready clock={}Hz target={}Hz recommended={}Hz bus_width=4 mode={transport_mode} first_probe_policy=stable-data-link write_chunk_limit={} reply_chunk_limit={}",
         data_clock_hz,
+        data_clock_target_hz,
+        recommended_data_clock_hz,
         state.cyw43_control_plane_write_chunk_limit(),
         state.cyw43_control_plane_reply_chunk_limit(),
     );
@@ -930,52 +945,30 @@ impl Cyw43NetDevice {
                                 &wait_err,
                             ) =>
                         {
-                            let promoted_retry_clock_hz = self.state.set_clock_hz(
-                                control_plane_data_clock_target_hz(
-                                    self.state.recommended_data_clock_hz(),
+                            // Keep the first bounded-no-HT resend on the slow
+                            // startup link. The latest Pi 4 traces show that
+                            // re-promoting before any control ioctl completes
+                            // just reproduces the same promoted rearm stall.
+                            let resend_clock_hz = self.state.set_clock_hz(
+                                control_plane_retry_after_promoted_timeout_resend_target_clock_hz(
+                                    experimental_no_ht_transport,
+                                    self.probe.effective_clock_hz,
                                 ),
                             )?;
-                            self.probe.effective_clock_hz = promoted_retry_clock_hz;
-                            if control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
-                                experimental_no_ht_transport,
-                                true,
-                                promoted_retry_clock_hz,
-                            ) {
-                                self.state
-                                    .resume_cyw43_control_plane_reply_probe_on_startup_link(
-                                        "control-plane-probe-retry-resend",
-                                    );
-                            } else {
-                                match self.state.rearm_cyw43_control_plane_promoted_link(true) {
-                                    Ok(()) => {
-                                        info!(
-                                            "[cyw43] control-plane probe retry promoted resend armed cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
-                                            cmd as u32,
-                                            iface,
-                                            payload_len,
-                                            self.probe.effective_clock_hz,
-                                            self.state.cyw43_control_plane_chunk_limit(),
-                                        );
-                                    }
-                                    Err(rearm_err) => {
-                                        warn!(
-                                            "[cyw43] control-plane probe retry promoted resend rearm failed cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht reason={rearm_err}",
-                                            cmd as u32,
-                                            iface,
-                                            payload_len,
-                                            self.probe.effective_clock_hz,
-                                            self.state.cyw43_control_plane_chunk_limit(),
-                                        );
-                                        let fallback_clock_hz =
-                                            self.state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
-                                        self.probe.effective_clock_hz = fallback_clock_hz;
-                                        self.state
-                                            .resume_cyw43_control_plane_reply_probe_on_startup_link(
-                                                "control-plane-probe-retry-resend",
-                                            );
-                                    }
-                                }
-                            }
+                            self.probe.effective_clock_hz = resend_clock_hz;
+                            self.state.rearm_cyw43_control_plane_slow_link()?;
+                            self.state
+                                .resume_cyw43_control_plane_reply_probe_on_startup_link(
+                                    "control-plane-probe-retry-resend",
+                                );
+                            info!(
+                                "[cyw43] control-plane probe retry slow-link resend armed cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
+                                cmd as u32,
+                                iface,
+                                payload_len,
+                                self.probe.effective_clock_hz,
+                                self.state.cyw43_control_plane_chunk_limit(),
+                            );
                             warn!(
                                 "[cyw43] control-plane probe retry resending cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht reason={wait_err}",
                                 cmd as u32,
@@ -1601,15 +1594,13 @@ const fn initial_control_plane_data_clock_target_hz(
     recommended_data_clock_hz: u32,
     experimental_no_ht_transport: bool,
 ) -> u32 {
-    // The bounded no-HT path has now proven firmware-ready on the startup
-    // clock but still exposes the first live Function 2 control write as the
-    // fragile edge on some Pi 4 boards. Keep that first proof write on the
-    // known-good clock, then promote after control-plane init succeeds.
-    if experimental_no_ht_transport {
-        SDIO_STARTUP_CLOCK_HZ
-    } else {
-        control_plane_data_clock_target_hz(recommended_data_clock_hz)
-    }
+    // Firmware-ready is stable on the startup clock, but the latest Pi 4
+    // traces show the first live control-plane exchange stalling there after
+    // Function 2 is armed. Start the bounded probe on the same stable data
+    // link we use for the rest of control traffic, and let the retry path
+    // fall back to the startup link only if that first exchange still fails.
+    let _ = experimental_no_ht_transport;
+    control_plane_data_clock_target_hz(recommended_data_clock_hz)
 }
 
 #[inline]
@@ -1729,10 +1720,10 @@ mod tests {
     }
 
     #[test]
-    fn initial_control_plane_data_clock_keeps_bounded_no_ht_probe_on_startup_clock() {
+    fn initial_control_plane_data_clock_uses_stable_data_link_for_first_probe() {
         assert_eq!(
             initial_control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ, true),
-            SDIO_STARTUP_CLOCK_HZ
+            SDIO_DATA_CLOCK_HZ
         );
         assert_eq!(
             initial_control_plane_data_clock_target_hz(400_000, true),
@@ -1841,6 +1832,31 @@ mod tests {
             !control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
                 &DriverError::Protocol("sdpcm-credit-timeout")
             )
+        );
+    }
+
+    #[test]
+    fn promoted_timeout_retry_resend_targets_startup_clock_during_bounded_probe() {
+        assert_eq!(
+            control_plane_retry_after_promoted_timeout_resend_target_clock_hz(
+                true,
+                SDIO_DATA_CLOCK_HZ,
+            ),
+            SDIO_STARTUP_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_retry_after_promoted_timeout_resend_target_clock_hz(
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
+            ),
+            SDIO_STARTUP_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_retry_after_promoted_timeout_resend_target_clock_hz(
+                false,
+                SDIO_DATA_CLOCK_HZ,
+            ),
+            SDIO_DATA_CLOCK_HZ
         );
     }
 
