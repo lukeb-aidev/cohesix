@@ -464,12 +464,13 @@ const fn defer_dnctrl_write_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The resetless snapshot path now clears the pre-RUN DCBAAP / CRCR
-    // ownership edges and stalls at the first live DNCTRL write instead.
-    // Keep the generic init ordering unchanged, but move this quiesce store
-    // until after RUN for that single handoff so the next controller-visible
-    // edge stays isolated in the traces.
+    // Both resetless reinit and preserve-state stop-state handoff now clear
+    // the pre-RUN DCBAAP / CRCR ownership edges and stall at the first live
+    // DNCTRL write instead. Keep the generic init ordering unchanged, but
+    // move this quiesce store until after RUN for those handoffs so the next
+    // controller-visible edge stays isolated in the traces.
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -3117,7 +3118,7 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(!defer_dnctrl_write_until_after_run_with_snapshot(
+        assert!(defer_dnctrl_write_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
@@ -3240,6 +3241,10 @@ mod tests {
         ));
         assert!(!defer_dnctrl_write_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
+            stop_state_snapshot,
+        ));
+        assert!(defer_dnctrl_write_until_after_run_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
         assert!(defer_dnctrl_write_until_after_run_with_snapshot(

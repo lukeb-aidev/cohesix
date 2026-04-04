@@ -2074,7 +2074,7 @@ const I_HMB_FC_CHANGE: u32 = 1 << 5;
 const I_HMB_FRAME_IND: u32 = 1 << 6;
 const I_HMB_HOST_INT: u32 = 1 << 7;
 const I_CHIPACTIVE: u32 = 1 << 29;
-const HOSTINTMASK: u32 = I_HMB_SW_MASK | I_CHIPACTIVE;
+const HOSTINTMASK: u32 = I_HMB_SW_MASK;
 const HMB_DATA_NAKHANDLED: u32 = 0x0001;
 const HMB_DATA_DEVREADY: u32 = 0x0002;
 const HMB_DATA_FC: u32 = 0x0004;
@@ -10622,6 +10622,7 @@ mod tests {
             None, None, None,
         ));
         assert_eq!(SMB_INT_ACK, 1 << 1);
+        assert_eq!(HOSTINTMASK, I_HMB_SW_MASK);
         assert_eq!(SDPCMD_REG_TOSBMAILBOX, 0x40);
     }
 
