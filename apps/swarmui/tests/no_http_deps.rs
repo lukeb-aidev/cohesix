@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Ensure SwarmUI has no HTTP/REST dependencies.
 // Author: Lukas Bower
@@ -8,10 +8,34 @@ use std::process::Command;
 
 use serde_json::Value;
 
+fn host_triple() -> String {
+    let output = Command::new("rustc")
+        .args(["-vV"])
+        .output()
+        .expect("run rustc -vV");
+    assert!(
+        output.status.success(),
+        "rustc -vV failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("host: ").map(str::to_owned))
+        .expect("rustc host triple")
+}
+
 #[test]
 fn swarmui_has_no_http_deps() {
+    let host = host_triple();
     let output = Command::new("cargo")
-        .args(["metadata", "--format-version", "1", "--locked"])
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--locked",
+            "--filter-platform",
+            host.as_str(),
+        ])
         .output()
         .expect("run cargo metadata");
     assert!(

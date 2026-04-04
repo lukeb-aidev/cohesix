@@ -345,6 +345,7 @@ SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarm
 - Ticket minting uses `SWARMUI_TICKET_CONFIG`/`SWARMUI_TICKET_SECRET` (fallback to `COHSH_*`).
 - `--replay` resolves relative paths first against the current working directory, then the app data directory under `snapshots/`, and forces offline mode.
 - `--replay-trace` resolves relative paths under `traces/` and auto-loads a sibling `*.hive.cbor` if present.
+- Linux builds and runtime now assume the Tauri 2 WebKitGTK 4.1 package line; use `scripts/setup_environment.sh` and `scripts/linux_host_tools_sync.sh` to install the required packages.
 
 ## cas-tool
 ### Purpose

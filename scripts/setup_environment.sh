@@ -95,9 +95,12 @@ setup_ubuntu() {
       "librsvg2-2"
     )
   elif [[ "$ubuntu_version" == 22.04 ]]; then
+    if ! apt-cache show libwebkit2gtk-4.1-0 >/dev/null 2>&1 || ! apt-cache show libjavascriptcoregtk-4.1-0 >/dev/null 2>&1; then
+      fail "Ubuntu 22.04 must expose libwebkit2gtk-4.1-0 and libjavascriptcoregtk-4.1-0 for SwarmUI (Tauri 2). Enable jammy-updates/universe or use Ubuntu 24.x."
+    fi
     runtime_pkgs+=(
-      "libwebkit2gtk-4.0-37"
-      "libjavascriptcoregtk-4.0-18"
+      "libwebkit2gtk-4.1-0"
+      "libjavascriptcoregtk-4.1-0"
       "libayatana-appindicator3-1"
       "librsvg2-2"
     )
@@ -114,8 +117,6 @@ setup_ubuntu() {
     local -a webkit_candidates=(
       "libwebkit2gtk-4.1-0"
       "libjavascriptcoregtk-4.1-0"
-      "libwebkit2gtk-4.0-37"
-      "libjavascriptcoregtk-4.0-18"
     )
     for pkg in "${webkit_candidates[@]}"; do
       if apt-cache show "$pkg" >/dev/null 2>&1; then
@@ -124,7 +125,7 @@ setup_ubuntu() {
       fi
     done
     if [[ "$found_webkit" -eq 0 ]]; then
-      warn "webkit runtime packages not found in apt metadata; SwarmUI may not run until installed"
+      warn "webkit 4.1 runtime packages not found in apt metadata; SwarmUI may not run until installed"
     fi
   fi
   for pkg in "${runtime_pkgs[@]}"; do

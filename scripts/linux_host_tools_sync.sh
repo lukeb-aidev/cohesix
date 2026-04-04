@@ -166,17 +166,17 @@ fi
 printf "[sync] Installing build dependencies...\n"
 if [[ "$USE_JAMMY_CHROOT" -eq 1 ]]; then
   run_ssh "sudo chroot '${REMOTE_JAMMY_ROOT}' /bin/bash -lc \"set -euo pipefail
-    if ! dpkg -s libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev >/dev/null 2>&1; then
+    if ! dpkg -s libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev >/dev/null 2>&1; then
       apt-get update -y
-      apt-get install -y libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev
+      apt-get install -y libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
     fi
-    if ! dpkg -s build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils >/dev/null 2>&1; then
+    if ! dpkg -s build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils libxdo-dev >/dev/null 2>&1; then
       apt-get update -y
-      apt-get install -y build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils
+      apt-get install -y build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils libxdo-dev
     fi\""
 else
   run_ssh "set -euo pipefail
-    if ! dpkg -s libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev >/dev/null 2>&1; then
+    if ! dpkg -s libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev >/dev/null 2>&1; then
       sudo tee /etc/apt/sources.list.d/cohesix-jammy.list >/dev/null <<'EOF'
 deb http://ports.ubuntu.com/ubuntu-ports jammy main universe
 deb http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe
@@ -187,24 +187,28 @@ Package: *
 Pin: release n=jammy
 Pin-Priority: 100
 
-Package: libwebkit2gtk-4.0-*
+Package: libwebkit2gtk-4.1-*
 Pin: release n=jammy
 Pin-Priority: 990
 
-Package: libjavascriptcoregtk-4.0-*
+Package: libjavascriptcoregtk-4.1-*
 Pin: release n=jammy
 Pin-Priority: 990
 
-Package: gir1.2-javascriptcoregtk-4.0
+Package: gir1.2-javascriptcoregtk-4.1
+Pin: release n=jammy
+Pin-Priority: 990
+
+Package: gir1.2-webkit2-4.1
 Pin: release n=jammy
 Pin-Priority: 990
 EOF
       sudo apt-get update -y
-      sudo apt-get install -y libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev
+      sudo apt-get install -y libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
     fi
-    if ! dpkg -s build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils >/dev/null 2>&1; then
+    if ! dpkg -s build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils libxdo-dev >/dev/null 2>&1; then
       sudo apt-get update -y
-      sudo apt-get install -y build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils
+      sudo apt-get install -y build-essential pkg-config libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev curl libfuse3-dev libnvidia-ml-dev binutils libxdo-dev
     fi"
 fi
 

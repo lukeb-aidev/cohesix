@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Manager, State};
 
 use cohsh::ticket_mint::{mint_ticket_from_config, mint_ticket_from_secret, TicketMintRequest};
 #[cfg(feature = "rest")]
@@ -529,13 +529,7 @@ fn main() {
     if replay_path.is_some() && trace_replay_path.is_some() {
         panic!("cannot use --replay and --replay-trace together");
     }
-    let data_dir = tauri::api::path::data_dir().unwrap_or_else(std::env::temp_dir);
-    let mut config = SwarmUiConfig::from_generated(data_dir.clone());
-    if replay_path.is_some() {
-        config.offline = true;
-    }
     let trace_replay = trace_replay_path.is_some();
-    let offline = config.offline;
     let host = env::var("SWARMUI_9P_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
     let port = env::var("SWARMUI_9P_PORT")
         .ok()
@@ -546,91 +540,109 @@ fn main() {
         .trim()
         .to_ascii_lowercase();
     let timeout = Duration::from_secs(2);
-    let mut trace_replay_resolved = None;
-    let mut backend = if let Some(path) = trace_replay_path.clone() {
-        let resolved = resolve_replay_path(&path, &data_dir, "traces");
-        trace_replay_resolved = Some(resolved.clone());
-        let payload = fs::read(&resolved)
-            .unwrap_or_else(|err| panic!("failed to read trace {}: {err}", resolved.display()));
-        let policy = TracePolicy::new(
-            config.trace_max_bytes as u32,
-            swarmui::SECURE9P_MSIZE,
-            MAX_LINE_LEN as u32,
-        );
-        let trace = TraceLog::decode(&payload, policy)
-            .unwrap_or_else(|err| panic!("failed to decode trace: {err}"));
-        let factory = TraceTransportFactory::new(trace.frames);
-        SwarmUiService::Trace(SwarmUiBackend::new(config, factory))
-    } else {
-        match transport.as_str() {
-            "9p" | "secure9p" => {
-                let factory =
-                    TcpTransportFactory::new(host, port, timeout, swarmui::SECURE9P_MSIZE);
-                SwarmUiService::Secure9p(SwarmUiBackend::new(config, factory))
-            }
-            "console" | "tcp" => {
-                let auth_token = env::var("SWARMUI_AUTH_TOKEN")
-                    .or_else(|_| env::var("COHSH_AUTH_TOKEN"))
-                    .unwrap_or_else(|_| "changeme".to_owned());
-                SwarmUiService::Console(SwarmUiConsoleBackend::new(config, host, port, auth_token))
-            }
-            "rest" | "gateway" => {
-                #[cfg(feature = "rest")]
-                {
-                    let rest_url = env::var("SWARMUI_REST_URL")
-                        .or_else(|_| env::var("COH_REST_URL"))
-                        .unwrap_or_else(|_| "http://127.0.0.1:8080".to_owned());
-                    let rest_auth_token = resolve_rest_auth_token();
-                    let transport =
-                        CohshRestTransport::new(rest_url.clone(), rest_auth_token.clone());
-                    SwarmUiService::Rest(SwarmUiConsoleBackend::with_rest_transport(
-                        config,
-                        transport,
-                        rest_url,
-                        rest_auth_token,
-                    ))
-                }
-                #[cfg(not(feature = "rest"))]
-                {
-                    panic!("SWARMUI_TRANSPORT=rest requires swarmui built with --features rest");
-                }
-            }
-            other => panic!("unsupported SWARMUI_TRANSPORT '{other}' (use console, 9p, or rest)"),
-        }
-    };
-    let mut hive_replay_loaded = false;
-    if let Some(resolved) = trace_replay_resolved.as_ref() {
-        let hive_path = resolved.with_extension("hive.cbor");
-        if hive_path.is_file() {
-            let payload = fs::read(&hive_path).unwrap_or_else(|err| {
-                panic!("failed to read hive replay {}: {err}", hive_path.display())
-            });
-            backend
-                .load_hive_replay(&payload)
-                .unwrap_or_else(|err| panic!("failed to load hive replay: {err}"));
-            hive_replay_loaded = true;
-        }
-    }
-    if let Some(path) = replay_path {
-        let resolved = resolve_replay_path(&path, &data_dir, "snapshots");
-        let payload = fs::read(&resolved)
-            .unwrap_or_else(|err| panic!("failed to read replay {}: {err}", resolved.display()));
-        backend
-            .load_hive_replay(&payload)
-            .unwrap_or_else(|err| panic!("failed to load replay: {err}"));
-        hive_replay_loaded = true;
-    }
-    let state = AppState {
-        backend: Mutex::new(backend),
-        mode: SwarmUiMode {
-            trace_replay,
-            hive_replay: hive_replay_loaded,
-            offline,
-        },
-    };
-
     tauri::Builder::default()
-        .manage(state)
+        .setup(move |app| {
+            let data_dir = app
+                .path()
+                .data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir());
+            let mut config = SwarmUiConfig::from_generated(data_dir.clone());
+            if replay_path.is_some() {
+                config.offline = true;
+            }
+            let offline = config.offline;
+            let mut trace_replay_resolved = None;
+            let mut backend = if let Some(path) = trace_replay_path.clone() {
+                let resolved = resolve_replay_path(&path, &data_dir, "traces");
+                trace_replay_resolved = Some(resolved.clone());
+                let payload = fs::read(&resolved).unwrap_or_else(|err| {
+                    panic!("failed to read trace {}: {err}", resolved.display())
+                });
+                let policy = TracePolicy::new(
+                    config.trace_max_bytes as u32,
+                    swarmui::SECURE9P_MSIZE,
+                    MAX_LINE_LEN as u32,
+                );
+                let trace = TraceLog::decode(&payload, policy)
+                    .unwrap_or_else(|err| panic!("failed to decode trace: {err}"));
+                let factory = TraceTransportFactory::new(trace.frames);
+                SwarmUiService::Trace(SwarmUiBackend::new(config, factory))
+            } else {
+                match transport.as_str() {
+                    "9p" | "secure9p" => {
+                        let factory =
+                            TcpTransportFactory::new(host, port, timeout, swarmui::SECURE9P_MSIZE);
+                        SwarmUiService::Secure9p(SwarmUiBackend::new(config, factory))
+                    }
+                    "console" | "tcp" => {
+                        let auth_token = env::var("SWARMUI_AUTH_TOKEN")
+                            .or_else(|_| env::var("COHSH_AUTH_TOKEN"))
+                            .unwrap_or_else(|_| "changeme".to_owned());
+                        SwarmUiService::Console(SwarmUiConsoleBackend::new(
+                            config, host, port, auth_token,
+                        ))
+                    }
+                    "rest" | "gateway" => {
+                        #[cfg(feature = "rest")]
+                        {
+                            let rest_url = env::var("SWARMUI_REST_URL")
+                                .or_else(|_| env::var("COH_REST_URL"))
+                                .unwrap_or_else(|_| "http://127.0.0.1:8080".to_owned());
+                            let rest_auth_token = resolve_rest_auth_token();
+                            let transport =
+                                CohshRestTransport::new(rest_url.clone(), rest_auth_token.clone());
+                            SwarmUiService::Rest(SwarmUiConsoleBackend::with_rest_transport(
+                                config,
+                                transport,
+                                rest_url,
+                                rest_auth_token,
+                            ))
+                        }
+                        #[cfg(not(feature = "rest"))]
+                        {
+                            panic!(
+                                "SWARMUI_TRANSPORT=rest requires swarmui built with --features rest"
+                            );
+                        }
+                    }
+                    other => {
+                        panic!("unsupported SWARMUI_TRANSPORT '{other}' (use console, 9p, or rest)")
+                    }
+                }
+            };
+            let mut hive_replay_loaded = false;
+            if let Some(resolved) = trace_replay_resolved.as_ref() {
+                let hive_path = resolved.with_extension("hive.cbor");
+                if hive_path.is_file() {
+                    let payload = fs::read(&hive_path).unwrap_or_else(|err| {
+                        panic!("failed to read hive replay {}: {err}", hive_path.display())
+                    });
+                    backend
+                        .load_hive_replay(&payload)
+                        .unwrap_or_else(|err| panic!("failed to load hive replay: {err}"));
+                    hive_replay_loaded = true;
+                }
+            }
+            if let Some(path) = replay_path.clone() {
+                let resolved = resolve_replay_path(&path, &data_dir, "snapshots");
+                let payload = fs::read(&resolved).unwrap_or_else(|err| {
+                    panic!("failed to read replay {}: {err}", resolved.display())
+                });
+                backend
+                    .load_hive_replay(&payload)
+                    .unwrap_or_else(|err| panic!("failed to load replay: {err}"));
+                hive_replay_loaded = true;
+            }
+            app.manage(AppState {
+                backend: Mutex::new(backend),
+                mode: SwarmUiMode {
+                    trace_replay,
+                    hive_replay: hive_replay_loaded,
+                    offline,
+                },
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             swarmui_connect,
             swarmui_offline,

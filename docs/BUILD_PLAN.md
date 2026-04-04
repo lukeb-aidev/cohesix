@@ -6476,6 +6476,24 @@ Checks:
   - Existing QEMU `nettest` behavior and host workflows remain backward compatible with no required command changes.
 Deliverables:
   - Policy-driven `nettest` behavior for Pi 4 DHCP milestones with explicit single-active-interface guarantees and compatibility evidence.
+
+Title/ID: m26b-swarmui-tauri2-host-upgrade
+Goal: Keep SwarmUI on the latest stable Tauri desktop line without changing Cohesix transport or UI semantics during the Pi 4 DHCP rollout.
+Inputs: apps/swarmui/*, scripts/setup_environment.sh, scripts/linux_host_tools_sync.sh, docs/HOST_TOOLS.md.
+Changes:
+  - apps/swarmui/Cargo.toml + apps/swarmui/src-tauri/main.rs + apps/swarmui/tauri.conf.json — migrate SwarmUI from Tauri 1 to Tauri 2 while preserving the existing command surface, replay/bootstrap flow, CSP, and `window.__TAURI__` frontend bridge.
+  - apps/swarmui/src-tauri/capabilities/default.json — add the minimum desktop capability set required by the Tauri 2 permission model.
+  - apps/swarmui/tests/no_http_deps.rs — scope dependency-policy checks to the active desktop target so Tauri 2 mobile-only transitive crates do not create false failures.
+  - scripts/setup_environment.sh + scripts/linux_host_tools_sync.sh + docs/HOST_TOOLS.md — align Linux runtime/build prerequisites to the Tauri 2 WebKitGTK 4.1 package line.
+Commands:
+  - cargo check -p swarmui
+  - cargo test -p swarmui
+Checks:
+  - SwarmUI keeps the existing host-side command/invoke surface and passes its replay, cache, security, transcript, and console-parity tests after the Tauri 2 migration.
+  - Linux host setup/build scripts install WebKitGTK 4.1 packages required by Tauri 2.
+  - No new Cohesix protocol verbs, transports, or UI authority are introduced.
+Deliverables:
+  - SwarmUI upgraded to the current Tauri 2 desktop line with host-tool packaging and test coverage kept in sync.
 ```
 
 ---
