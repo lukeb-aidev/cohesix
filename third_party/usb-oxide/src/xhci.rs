@@ -614,6 +614,23 @@ const fn runtime_snapshot_has_runtime_ring_seed(
     }
 }
 
+#[inline(always)]
+const fn runtime_seed_snapshot_flag_bits(
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> u64 {
+    let mut flags = 0u64;
+    if runtime_seed_snapshot.is_some() {
+        flags |= 1 << 0;
+    }
+    if runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot) {
+        flags |= 1 << 1;
+    }
+    if runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot) {
+        flags |= 1 << 2;
+    }
+    flags
+}
+
 #[inline]
 const fn port_ready_for_enumeration(portsc: u32) -> bool {
     if (portsc & reg::PORTSC_CCS) == 0 {
@@ -1429,8 +1446,26 @@ impl<H: Dma> XhciCtrl<H> {
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
         ) {
+            emit_xhci_diag(
+                0x0217,
+                self.firmware_handoff as u64,
+                runtime_seed_snapshot_flag_bits(trusted_runtime_seed_snapshot),
+                1,
+            );
+            emit_xhci_diag(
+                0x0218,
+                self.firmware_handoff as u64,
+                runtime_seed_snapshot_flag_bits(trusted_runtime_seed_snapshot),
+                1,
+            );
             emit_xhci_diag(0x0224, 0, reg::USBSTS_HCH as u64, 1);
         } else {
+            emit_xhci_diag(
+                0x0217,
+                self.firmware_handoff as u64,
+                runtime_seed_snapshot_flag_bits(trusted_runtime_seed_snapshot),
+                0,
+            );
             emit_xhci_diag(
                 0x0213,
                 reg::USBSTS as u64,
@@ -3251,6 +3286,22 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
+        assert_eq!(runtime_seed_snapshot_flag_bits(snapshot), 0b011);
+    }
+
+    #[test]
+    fn runtime_seed_snapshot_flag_bits_mark_runtime_ring_seed() {
+        let snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: Some(0),
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+        assert_eq!(runtime_seed_snapshot_flag_bits(snapshot), 0b111);
     }
 
     #[test]

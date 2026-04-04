@@ -1308,13 +1308,17 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
-    // A confirmed runtime mailbox reset is strong enough to rebuild from the
-    // trusted CAP snapshot. Weaker bounded outcomes such as posted-fallback or
-    // soft-continue still preserve the halted stop-state contract, so the
-    // default label stays conservative even though the runtime ladder now
-    // front-loads a fresh cold-start rebuild before it revisits seeded
-    // stop-state variants on those weaker branches.
-    if runtime_vl805_reset_state == VL805_RUNTIME_RESET_STATE_NOTIFIED {
+    // Runtime-owned cold-start rebuild is the known-good Pi 4 direction once
+    // the trusted CAP snapshot survives handoff. Confirmed resets still use
+    // the fully fresh path, while weaker bounded outcomes keep the same
+    // cold-start mode label because the first attempted strategy now stays on
+    // the seeded cold-start branch rather than the preserve-state branch.
+    if matches!(
+        runtime_vl805_reset_state,
+        VL805_RUNTIME_RESET_STATE_NOTIFIED
+            | VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
+            | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
+    ) {
         XhciFirmwareHandoff::ColdStartFromSnapshot
     } else {
         XhciFirmwareHandoff::PreserveControllerState
@@ -1771,6 +1775,7 @@ const fn xhci_diag_stage_value_labels(
     stage: u16,
 ) -> Option<(&'static str, &'static str, &'static str)> {
     match stage {
+        0x0217 | 0x0218 => Some(("handoff", "seed_flags", "skip")),
         0x02f0 => Some(("dcbaa", "cmd_ring", "event_ring")),
         0x02f1 => Some(("erstba", "crcr", "erdp")),
         0x02f2 => Some(("staged_dcbaap", "current_crcr", "staged_erdp")),
@@ -1796,6 +1801,8 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0210 => Some("legacy-ownership-claim-begin"),
         0x0211 => Some("legacy-ownership-claim-done"),
         0x0212 => Some("fw-handoff-skip-legacy-ownership"),
+        0x0217 => Some("stop-revalidation-decision"),
+        0x0218 => Some("stop-revalidation-skip-branch"),
         0x0213 => Some("stop-revalidation-usbsts-read-begin"),
         0x0214 => Some("stop-revalidation-usbsts-read"),
         0x0215 => Some("stop-revalidation-usbcmd-read-begin"),
@@ -2417,6 +2424,28 @@ const fn xhci_runtime_seed_snapshot_from_stop_state(
         erdp0: None,
         erstsz0: None,
     }
+}
+
+#[inline]
+const fn xhci_runtime_seed_snapshot_flag_bits(snapshot: Option<XhciRuntimeSeedSnapshot>) -> u8 {
+    let mut flags = 0u8;
+    if snapshot.is_some() {
+        flags |= 1 << 0;
+    }
+    if let Some(snapshot) = snapshot {
+        if snapshot.usbcmd.is_some() || snapshot.usbsts.is_some() || snapshot.iman0.is_some() {
+            flags |= 1 << 1;
+        }
+        if snapshot.dcbaap.is_some()
+            || snapshot.crcr.is_some()
+            || snapshot.erstba0.is_some()
+            || snapshot.erdp0.is_some()
+            || snapshot.erstsz0.is_some()
+        {
+            flags |= 1 << 2;
+        }
+    }
+    flags
 }
 
 #[inline]
@@ -5617,6 +5646,23 @@ impl UsbKeyboard {
                     strategy,
                     xhci_stop_state_snapshot,
                 );
+                let seed_flags =
+                    xhci_runtime_seed_snapshot_flag_bits(controller_params.runtime_seed_snapshot);
+                let mut params_line = heapless::String::<352>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut params_line,
+                    format_args!(
+                        "[local-seat] xhci probe params attempt={}/{} origin={} mode={} seed_flags=0x{seed_flags:02x} snapshot={} stop_seed={} ring_seed={}",
+                        strategy_idx + 1,
+                        init_strategy_count,
+                        xhci_runtime_init_strategy_origin_label(strategy),
+                        xhci_firmware_handoff_mode_label(strategy.firmware_handoff),
+                        (seed_flags & 0x01) != 0,
+                        (seed_flags & 0x02) != 0,
+                        (seed_flags & 0x04) != 0,
+                    ),
+                );
+                boot_log::force_uart_line(params_line.as_str());
                 XhciIrqGuard::log_policy(
                     effective_mmio,
                     strategy.firmware_handoff,
@@ -10463,6 +10509,14 @@ mod tests {
             Some("fw-handoff-skip-legacy-ownership")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x0217),
+            Some("stop-revalidation-decision")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0218),
+            Some("stop-revalidation-skip-branch")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x0213),
             Some("stop-revalidation-usbsts-read-begin")
         );
@@ -10760,6 +10814,14 @@ mod tests {
     #[test]
     fn xhci_diag_value_labels_name_pre_run_ring_snapshot_fields() {
         assert_eq!(
+            xhci_diag_stage_value_labels(0x0217),
+            Some(("handoff", "seed_flags", "skip"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0218),
+            Some(("handoff", "seed_flags", "skip"))
+        );
+        assert_eq!(
             xhci_diag_stage_value_labels(0x02f0),
             Some(("dcbaa", "cmd_ring", "event_ring"))
         );
@@ -10802,14 +10864,29 @@ mod tests {
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
             ),
-            XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
             ),
-            XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
+    }
+
+    #[test]
+    fn xhci_runtime_seed_snapshot_flag_bits_report_stop_state_seed() {
+        let snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+        assert_eq!(super::xhci_runtime_seed_snapshot_flag_bits(snapshot), 0b011);
     }
 
     #[test]
