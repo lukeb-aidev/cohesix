@@ -322,8 +322,10 @@ fn prepare_initial_control_plane_transport(
         "strict"
     };
     info!(
-        "[cyw43] control transport ready clock={}Hz bus_width=4 mode={transport_mode}",
+        "[cyw43] control transport ready clock={}Hz bus_width=4 mode={transport_mode} write_chunk_limit={} reply_chunk_limit={}",
         data_clock_hz,
+        state.cyw43_control_plane_write_chunk_limit(),
+        state.cyw43_control_plane_reply_chunk_limit(),
     );
     Ok((data_clock_hz, SdioBusWidth::FourBit))
 }
@@ -1026,16 +1028,10 @@ impl Cyw43NetDevice {
         self.sdpcm_seq = self.sdpcm_seq.wrapping_add(1);
         self.ioctl_id = self.ioctl_id.wrapping_add(1);
 
-        put_u16_le(
-            &mut self.tx_frame,
-            0,
-            u16::try_from(total_len).map_err(|_| DriverError::FrameTooLarge)?,
-        );
-        put_u16_le(
-            &mut self.tx_frame,
-            2,
-            !(u16::try_from(total_len).map_err(|_| DriverError::FrameTooLarge)?),
-        );
+        let packet_len = u16::try_from(total_len).map_err(|_| DriverError::FrameTooLarge)?;
+        let len_inv = !packet_len;
+        put_u16_le(&mut self.tx_frame, 0, packet_len);
+        put_u16_le(&mut self.tx_frame, 2, len_inv);
         self.tx_frame[4] = sdpcm_seq;
         self.tx_frame[5] = CHANNEL_CONTROL;
         self.tx_frame[6] = 0;
@@ -1075,16 +1071,21 @@ impl Cyw43NetDevice {
                 "strict"
             };
             info!(
-                "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} aligned_len={} seq={}/{} ioctl_id={} channel={} chunk_limit={} mode={transport_mode}",
+                "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} packet_len={} len_inv=0x{:04x} aligned_len={} seq={}/{} ioctl_id={} channel={} header_len={} cdc_flags=0x{:04x} write_chunk_limit={} reply_chunk_limit={} mode={transport_mode}",
                 cmd as u32,
                 iface,
                 payload_len,
+                packet_len,
+                len_inv,
                 aligned_len,
                 sdpcm_seq,
                 self.sdpcm_seq_max,
                 self.ioctl_id,
                 CHANNEL_CONTROL,
-                self.state.cyw43_control_plane_chunk_limit(),
+                self.tx_frame[7],
+                get_u16_le(&self.tx_frame[SDPCM_HEADER_LEN..], 8).unwrap_or(0),
+                self.state.cyw43_control_plane_write_chunk_limit(),
+                self.state.cyw43_control_plane_reply_chunk_limit(),
             );
         }
         self.state
@@ -1134,7 +1135,7 @@ impl Cyw43NetDevice {
             self.state.cyw43_control_plane_reply_rearm_diag();
         let credit_ready = self.has_credit();
         warn!(
-            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} chunk_limit={}",
+            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={}",
             cmd,
             expected_id,
             self.sdpcm_seq,
@@ -1146,10 +1147,37 @@ impl Cyw43NetDevice {
             reply_empty_polls,
             promoted_probe_pending,
             self.state.cyw43_experimental_no_ht_transport(),
-            self.state.cyw43_control_plane_chunk_limit(),
+            self.state.cyw43_control_plane_write_chunk_limit(),
+            self.state.cyw43_control_plane_reply_chunk_limit(),
         );
+        self.log_pending_ioctl_frame("ioctl-timeout");
         self.state.log_cyw43_control_plane_snapshot("ioctl-timeout");
         Err(DriverError::Protocol("ioctl-timeout"))
+    }
+
+    fn log_pending_ioctl_frame(&self, stage: &'static str) {
+        let packet_len = get_u16_le(&self.tx_frame, 0).unwrap_or(0);
+        let len_inv = get_u16_le(&self.tx_frame, 2).unwrap_or(0);
+        let cdc = &self.tx_frame[SDPCM_HEADER_LEN..];
+        let cdc_cmd = get_u32_le(cdc, 0).unwrap_or(0);
+        let cdc_len = get_u32_le(cdc, 4).unwrap_or(0);
+        let cdc_flags = get_u16_le(cdc, 8).unwrap_or(0);
+        let cdc_id = get_u16_le(cdc, 10).unwrap_or(0);
+        let cdc_status = get_u32_le(cdc, 12).unwrap_or(0);
+        warn!(
+            "[cyw43] ioctl frame {stage} packet_len={} len_inv=0x{:04x} seq=0x{:02x} channel=0x{:02x} header_len={} credit=0x{:02x} cdc_cmd=0x{:08x} cdc_len={} cdc_flags=0x{:04x} cdc_id={} cdc_status=0x{:08x}",
+            packet_len,
+            len_inv,
+            self.tx_frame[4],
+            self.tx_frame[5],
+            self.tx_frame[7],
+            self.tx_frame[9],
+            cdc_cmd,
+            cdc_len,
+            cdc_flags,
+            cdc_id,
+            cdc_status,
+        );
     }
 
     fn wait_for_credit(&mut self, allow_speculative_retry_credit: bool) -> Result<(), DriverError> {
@@ -1177,7 +1205,7 @@ impl Cyw43NetDevice {
         let (reply_mode, reply_attempts, reply_empty_polls, promoted_probe_pending) =
             self.state.cyw43_control_plane_reply_rearm_diag();
         warn!(
-            "[cyw43] sdpcm credit timeout seq={}/{} credit={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} chunk_limit={}",
+            "[cyw43] sdpcm credit timeout seq={}/{} credit={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={}",
             self.sdpcm_seq,
             self.sdpcm_seq_max,
             self.has_credit(),
@@ -1186,7 +1214,8 @@ impl Cyw43NetDevice {
             reply_empty_polls,
             promoted_probe_pending,
             self.state.cyw43_experimental_no_ht_transport(),
-            self.state.cyw43_control_plane_chunk_limit(),
+            self.state.cyw43_control_plane_write_chunk_limit(),
+            self.state.cyw43_control_plane_reply_chunk_limit(),
         );
         self.state
             .log_cyw43_control_plane_snapshot("sdpcm-credit-timeout");
