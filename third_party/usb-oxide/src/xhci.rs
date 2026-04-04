@@ -451,11 +451,12 @@ const fn defer_crcr_publish_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The resetless snapshot path has now advanced past the staged DCBAAP
-    // publish and wedges on the staged CRCR ownership transfer itself. Keep
-    // the ordered pre-RUN setup intact there, but move the live CRCR handoff
-    // until after RUN so the next ownership edge stays isolated.
+    // Both resetless reinit and preserve-state stop-state handoff now advance
+    // to the staged CRCR ownership transfer itself. Keep the ordered pre-RUN
+    // setup intact there, but move the live CRCR handoff until after RUN so
+    // the next controller-visible edge stays isolated.
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -3112,7 +3113,7 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(!defer_crcr_publish_until_after_run_with_snapshot(
+        assert!(defer_crcr_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
@@ -3227,6 +3228,10 @@ mod tests {
         ));
         assert!(!defer_crcr_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
+            stop_state_snapshot,
+        ));
+        assert!(defer_crcr_publish_until_after_run_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
         assert!(defer_crcr_publish_until_after_run_with_snapshot(

@@ -1034,10 +1034,11 @@ const fn control_plane_reply_mailbox_requires_ack(mailbox_data: u32) -> bool {
 fn control_plane_reply_should_attempt_speculative_read(
     int_status: Option<u32>,
     mailbox_data: Option<u32>,
+    frame_len_hint: Option<usize>,
 ) -> bool {
     int_status.is_some_and(control_plane_reply_int_status_has_frame_indication)
         || mailbox_data.is_some_and(control_plane_reply_mailbox_has_frame_indication)
-        || (int_status.is_none() && mailbox_data.is_none())
+        || frame_len_hint.is_some_and(|frame_len| frame_len != 0)
 }
 
 #[inline]
@@ -3832,15 +3833,35 @@ impl SdioHost {
                 }
             }
         }
+        let frame_len_hint = match self
+            .read_control_plane_reply_frame_len_hint_with_retry(hint_stage)
+        {
+            Ok(value) => value,
+            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=hint-frame-len-unavailable mode={} attempt={} err={err}",
+                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                        attempt,
+                    ));
+                None
+            }
+            Err(err) => return Err(err),
+        };
         let frame_hint = int_status
             .is_some_and(control_plane_reply_int_status_has_frame_indication)
-            || mailbox_data.is_some_and(control_plane_reply_mailbox_has_frame_indication);
-        if !control_plane_reply_should_attempt_speculative_read(int_status, mailbox_data) {
+            || mailbox_data.is_some_and(control_plane_reply_mailbox_has_frame_indication)
+            || frame_len_hint.is_some_and(|frame_len| frame_len != 0);
+        if !control_plane_reply_should_attempt_speculative_read(
+            int_status,
+            mailbox_data,
+            frame_len_hint,
+        ) {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=control-plane-reply action=speculative-read-deferred mode={} attempt={} frame_hint={} int_status=0x{int_status:08x}/{} mailbox=0x{mailbox:08x}/{} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                "[pi4-wifi] firmware stage=control-plane-reply action=speculative-read-deferred mode={} attempt={} frame_hint={} frame_len_hint={} int_status=0x{int_status:08x}/{} mailbox=0x{mailbox:08x}/{} current_clock={}Hz width={} chunk_limit={} no_ht={}",
                 control_plane_reply_rearm_mode_name(reply_rearm_mode),
                 attempt,
                 yn(frame_hint),
+                frame_len_hint.unwrap_or(0),
                 yn(int_status.is_some()),
                 yn(mailbox_data.is_some()),
                 self.current_clock_hz,
@@ -3853,11 +3874,12 @@ impl SdioHost {
             return Ok(0);
         }
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=control-plane-reply action=speculative-read mode={} attempt={} len={} frame_hint={} int_status=0x{int_status:08x}/{} mailbox=0x{mailbox:08x}/{} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+            "[pi4-wifi] firmware stage=control-plane-reply action=speculative-read mode={} attempt={} len={} frame_hint={} frame_len_hint={} int_status=0x{int_status:08x}/{} mailbox=0x{mailbox:08x}/{} current_clock={}Hz width={} chunk_limit={} no_ht={}",
             control_plane_reply_rearm_mode_name(reply_rearm_mode),
             attempt,
             CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY,
             yn(frame_hint),
+            frame_len_hint.unwrap_or(0),
             yn(int_status.is_some()),
             yn(mailbox_data.is_some()),
             self.current_clock_hz,
@@ -5970,11 +5992,7 @@ impl SdioHost {
     }
 
     fn next_frame_len(&mut self) -> Result<usize, HalError> {
-        let lo =
-            usize::from(self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)?);
-        let hi =
-            usize::from(self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)?);
-        let frame_len = (hi << 8) | lo;
+        let frame_len = self.read_frame_len_registers()?;
         if frame_len != 0 {
             self.clear_control_plane_speculative_reply_frame();
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
@@ -6016,11 +6034,7 @@ impl SdioHost {
             }
             self.experimental_control_plane_reply_rearm_empty_polls = 0;
             self.maybe_rearm_control_plane_reply_on_zero_frame()?;
-            let lo =
-                usize::from(self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)?);
-            let hi =
-                usize::from(self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)?);
-            let frame_len = (hi << 8) | lo;
+            let frame_len = self.read_frame_len_registers()?;
             if frame_len != 0 {
                 self.clear_control_plane_speculative_reply_frame();
                 self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
@@ -6036,6 +6050,42 @@ impl SdioHost {
         }
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
         Ok(0)
+    }
+
+    fn read_frame_len_registers(&mut self) -> Result<usize, HalError> {
+        let lo =
+            usize::from(self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)?);
+        let hi =
+            usize::from(self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)?);
+        Ok((hi << 8) | lo)
+    }
+
+    fn read_control_plane_reply_frame_len_hint_with_retry(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<Option<usize>, HalError> {
+        match self.read_frame_len_registers() {
+            Ok(frame_len) => Ok(Some(frame_len)),
+            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] control-plane snapshot {stage} reg=rframe action=retry-rewindow err={err}"
+                ));
+                self.recover_command_path_and_refresh_transport(stage)?;
+                match self.read_frame_len_registers() {
+                    Ok(frame_len) => Ok(Some(frame_len)),
+                    Err(retry_err)
+                        if control_plane_reply_speculative_read_can_continue(&retry_err) =>
+                    {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] control-plane snapshot {stage} reg=rframe action=retry-fail err={retry_err}"
+                        ));
+                        Ok(None)
+                    }
+                    Err(retry_err) => Err(retry_err),
+                }
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn read_frame(&mut self, out: &mut [u8]) -> Result<usize, HalError> {
@@ -10534,27 +10584,42 @@ mod tests {
             HMB_DATA_NAKHANDLED
         ));
         assert!(control_plane_reply_should_attempt_speculative_read(
-            None, None
-        ));
-        assert!(control_plane_reply_should_attempt_speculative_read(
             Some(I_HMB_FRAME_IND),
+            None,
             None,
         ));
         assert!(control_plane_reply_should_attempt_speculative_read(
             None,
             Some(HMB_DATA_NAKHANDLED),
+            None,
+        ));
+        assert!(control_plane_reply_should_attempt_speculative_read(
+            Some(0),
+            Some(HMB_DATA_DEVREADY | HMB_DATA_FWREADY),
+            Some(64),
+        ));
+        assert!(control_plane_reply_should_attempt_speculative_read(
+            None,
+            None,
+            Some(64),
         ));
         assert!(!control_plane_reply_should_attempt_speculative_read(
             Some(0),
             Some(HMB_DATA_DEVREADY | HMB_DATA_FWREADY),
+            None,
         ));
         assert!(!control_plane_reply_should_attempt_speculative_read(
             Some(0),
-            None
+            None,
+            Some(0),
         ));
         assert!(!control_plane_reply_should_attempt_speculative_read(
             None,
             Some(HMB_DATA_DEVREADY),
+            None,
+        ));
+        assert!(!control_plane_reply_should_attempt_speculative_read(
+            None, None, None,
         ));
         assert_eq!(SMB_INT_ACK, 1 << 1);
         assert_eq!(SDPCMD_REG_TOSBMAILBOX, 0x40);
