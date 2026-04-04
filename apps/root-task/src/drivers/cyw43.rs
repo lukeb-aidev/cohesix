@@ -257,6 +257,17 @@ fn control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
 }
 
 #[inline]
+const fn control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
+    experimental_no_ht_transport: bool,
+    allow_speculative_retry_credit: bool,
+    effective_clock_hz: u32,
+) -> bool {
+    experimental_no_ht_transport
+        && allow_speculative_retry_credit
+        && effective_clock_hz <= SDIO_STARTUP_CLOCK_HZ
+}
+
+#[inline]
 const fn speculative_credit_window_after_promoted_timeout_retry(
     allow_speculative_retry_credit: bool,
     sdpcm_seq: u8,
@@ -917,6 +928,52 @@ impl Cyw43NetDevice {
                                 &wait_err,
                             ) =>
                         {
+                            let promoted_retry_clock_hz = self.state.set_clock_hz(
+                                control_plane_data_clock_target_hz(
+                                    self.state.recommended_data_clock_hz(),
+                                ),
+                            )?;
+                            self.probe.effective_clock_hz = promoted_retry_clock_hz;
+                            if control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
+                                experimental_no_ht_transport,
+                                true,
+                                promoted_retry_clock_hz,
+                            ) {
+                                self.state
+                                    .resume_cyw43_control_plane_reply_probe_on_startup_link(
+                                        "control-plane-probe-retry-resend",
+                                    );
+                            } else {
+                                match self.state.rearm_cyw43_control_plane_promoted_link(true) {
+                                    Ok(()) => {
+                                        info!(
+                                            "[cyw43] control-plane probe retry promoted resend armed cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
+                                            cmd as u32,
+                                            iface,
+                                            payload_len,
+                                            self.probe.effective_clock_hz,
+                                            self.state.cyw43_control_plane_chunk_limit(),
+                                        );
+                                    }
+                                    Err(rearm_err) => {
+                                        warn!(
+                                            "[cyw43] control-plane probe retry promoted resend rearm failed cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht reason={rearm_err}",
+                                            cmd as u32,
+                                            iface,
+                                            payload_len,
+                                            self.probe.effective_clock_hz,
+                                            self.state.cyw43_control_plane_chunk_limit(),
+                                        );
+                                        let fallback_clock_hz =
+                                            self.state.set_clock_hz(SDIO_STARTUP_CLOCK_HZ)?;
+                                        self.probe.effective_clock_hz = fallback_clock_hz;
+                                        self.state
+                                            .resume_cyw43_control_plane_reply_probe_on_startup_link(
+                                                "control-plane-probe-retry-resend",
+                                            );
+                                    }
+                                }
+                            }
                             warn!(
                                 "[cyw43] control-plane probe retry resending cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht reason={wait_err}",
                                 cmd as u32,
@@ -1033,10 +1090,16 @@ impl Cyw43NetDevice {
         self.state
             .write_cyw43_frame(&mut self.tx_frame[..aligned_len])?;
         if self.state.cyw43_experimental_no_ht_transport() && allow_speculative_retry_credit {
-            self.state
-                .resume_cyw43_control_plane_reply_probe_on_startup_link(
-                    "control-plane-probe-retry-resend",
-                );
+            if control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
+                true,
+                allow_speculative_retry_credit,
+                self.probe.effective_clock_hz,
+            ) {
+                self.state
+                    .resume_cyw43_control_plane_reply_probe_on_startup_link(
+                        "control-plane-probe-retry-resend",
+                    );
+            }
         }
         self.wait_for_ioctl_response(cmd as u32, self.ioctl_id)
     }
@@ -1067,9 +1130,23 @@ impl Cyw43NetDevice {
             }
             spin_loop();
         }
+        let (reply_mode, reply_attempts, reply_empty_polls, promoted_probe_pending) =
+            self.state.cyw43_control_plane_reply_rearm_diag();
+        let credit_ready = self.has_credit();
         warn!(
-            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} wait_budget={}",
-            cmd, expected_id, self.sdpcm_seq, self.sdpcm_seq_max, wait_budget,
+            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} chunk_limit={}",
+            cmd,
+            expected_id,
+            self.sdpcm_seq,
+            self.sdpcm_seq_max,
+            credit_ready,
+            wait_budget,
+            reply_mode,
+            reply_attempts,
+            reply_empty_polls,
+            promoted_probe_pending,
+            self.state.cyw43_experimental_no_ht_transport(),
+            self.state.cyw43_control_plane_chunk_limit(),
         );
         self.state.log_cyw43_control_plane_snapshot("ioctl-timeout");
         Err(DriverError::Protocol("ioctl-timeout"))
@@ -1097,6 +1174,22 @@ impl Cyw43NetDevice {
             self.sdpcm_seq_max = speculative_sdpcm_seq_max;
             return Ok(());
         }
+        let (reply_mode, reply_attempts, reply_empty_polls, promoted_probe_pending) =
+            self.state.cyw43_control_plane_reply_rearm_diag();
+        warn!(
+            "[cyw43] sdpcm credit timeout seq={}/{} credit={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} chunk_limit={}",
+            self.sdpcm_seq,
+            self.sdpcm_seq_max,
+            self.has_credit(),
+            reply_mode,
+            reply_attempts,
+            reply_empty_polls,
+            promoted_probe_pending,
+            self.state.cyw43_experimental_no_ht_transport(),
+            self.state.cyw43_control_plane_chunk_limit(),
+        );
+        self.state
+            .log_cyw43_control_plane_snapshot("sdpcm-credit-timeout");
         Err(DriverError::Protocol("sdpcm-credit-timeout"))
     }
 
@@ -1543,6 +1636,7 @@ mod tests {
     use super::{
         align4, bdc_payload, control_plane_data_clock_target_hz,
         control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait,
+        control_plane_retry_after_promoted_timeout_resend_uses_startup_link,
         control_plane_retry_after_promoted_timeout_target_clock_hz,
         first_control_plane_retry_after_promoted_timeout, has_sdpcm_credit,
         initial_control_plane_data_clock_target_hz, ioctl_wait_loops, is_transport_retryable,
@@ -1717,6 +1811,45 @@ mod tests {
         assert!(
             !control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
                 &DriverError::Protocol("sdpcm-credit-timeout")
+            )
+        );
+    }
+
+    #[test]
+    fn promoted_timeout_retry_resend_only_uses_startup_link_at_startup_clock() {
+        assert!(
+            control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
+                true,
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
+            )
+        );
+        assert!(
+            control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
+                true,
+                true,
+                SDIO_STARTUP_CLOCK_HZ / 2,
+            )
+        );
+        assert!(
+            !control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
+                true,
+                true,
+                SDIO_DATA_CLOCK_HZ,
+            )
+        );
+        assert!(
+            !control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
+                true,
+                false,
+                SDIO_STARTUP_CLOCK_HZ,
+            )
+        );
+        assert!(
+            !control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
+                false,
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
             )
         );
     }

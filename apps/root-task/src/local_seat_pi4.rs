@@ -1310,17 +1310,18 @@ fn xhci_trusted_handoff_snapshot_allowed(
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
     // Confirmed runtime mailbox reset still gets the stronger cold-start path,
     // but the weaker posted-fallback/soft-continue outcomes now fail at the
-    // first live HCRST edge. Keep those weak runtime outcomes on the trusted
-    // CAP-snapshot path while skipping that reset edge entirely, and reserve
-    // preserve-controller-state for the direct bootloader-owned stop-state
-    // contract where runtime never requested a mailbox reset.
+    // live runtime ownership edge even when resetless reinit skips HCRST.
+    // Reserve snapshot-driven cold start for an acknowledged mailbox reset, and
+    // demote the weaker runtime outcomes to preserve-controller-state so the
+    // runtime probe never tries to synthesize stronger ownership than firmware
+    // actually established.
     if runtime_vl805_reset_state == VL805_RUNTIME_RESET_STATE_NOTIFIED {
         XhciFirmwareHandoff::ColdStartFromSnapshot
     } else if matches!(
         runtime_vl805_reset_state,
         VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
     ) {
-        XhciFirmwareHandoff::ResetlessReinit
+        XhciFirmwareHandoff::PreserveControllerState
     } else {
         XhciFirmwareHandoff::PreserveControllerState
     }
@@ -10370,13 +10371,13 @@ mod tests {
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
             ),
-            XhciFirmwareHandoff::ResetlessReinit
+            XhciFirmwareHandoff::PreserveControllerState
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
             ),
-            XhciFirmwareHandoff::ResetlessReinit
+            XhciFirmwareHandoff::PreserveControllerState
         );
     }
 
