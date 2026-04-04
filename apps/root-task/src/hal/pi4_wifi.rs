@@ -826,6 +826,11 @@ const fn experimental_control_plane_write_fallback_needs_startup_link_host_reatt
 }
 
 #[inline]
+const fn startup_link_reattach_target_profile() -> (u32, SdioBusWidth) {
+    (CYW43_STARTUP_CLOCK_HZ, SdioBusWidth::OneBit)
+}
+
+#[inline]
 const fn control_plane_startup_link_timeout_needs_slow_link_resume(
     experimental_no_ht_transport: bool,
     reply_rearm_mode: u8,
@@ -3584,14 +3589,33 @@ impl SdioHost {
         &mut self,
         stage: &'static str,
     ) -> Result<(), HalError> {
+        let previous_clock_hz = self.current_clock_hz;
+        let previous_bus_width = self.desired_bus_width;
+        let (target_clock_hz, target_bus_width) = startup_link_reattach_target_profile();
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=sdio-host-reattach-begin current={}Hz width={} no_ht={}",
-            self.current_clock_hz,
-            sdio_bus_width_name(self.desired_bus_width),
+            "[pi4-wifi] firmware stage={stage} action=sdio-host-reattach-begin current={}Hz width={} target={}Hz target_width={} no_ht={}",
+            previous_clock_hz,
+            sdio_bus_width_name(previous_bus_width),
+            target_clock_hz,
+            sdio_bus_width_name(target_bus_width),
             self.experimental_no_ht_transport,
         ));
         self.card = None;
         self.clear_backplane_window_cache();
+        if self.current_clock_hz != target_clock_hz {
+            self.set_clock_hz(target_clock_hz)?;
+        }
+        if self.desired_bus_width != target_bus_width {
+            self.set_bus_width(target_bus_width)?;
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=sdio-host-reattach-profile-reset previous={}Hz/{} current={}Hz width={} no_ht={}",
+            previous_clock_hz,
+            sdio_bus_width_name(previous_bus_width),
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.experimental_no_ht_transport,
+        ));
         self.ensure_card_ready()?;
         self.enable_function1()?;
         self.refresh_transport_phase_for(stage)?;
@@ -9711,6 +9735,14 @@ mod tests {
             !experimental_control_plane_write_fallback_needs_startup_link_host_reattach(
                 true, true, false
             )
+        );
+    }
+
+    #[test]
+    fn startup_link_reattach_target_profile_forces_startup_1bit() {
+        assert_eq!(
+            startup_link_reattach_target_profile(),
+            (CYW43_STARTUP_CLOCK_HZ, SdioBusWidth::OneBit)
         );
     }
 

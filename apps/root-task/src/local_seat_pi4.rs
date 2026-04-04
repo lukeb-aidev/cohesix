@@ -1796,6 +1796,10 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0210 => Some("legacy-ownership-claim-begin"),
         0x0211 => Some("legacy-ownership-claim-done"),
         0x0212 => Some("fw-handoff-skip-legacy-ownership"),
+        0x0213 => Some("stop-revalidation-usbsts-read-begin"),
+        0x0214 => Some("stop-revalidation-usbsts-read"),
+        0x0215 => Some("stop-revalidation-usbcmd-read-begin"),
+        0x0216 => Some("stop-revalidation-usbcmd-read"),
         0x0220 => Some("stop-revalidation-state"),
         0x0221 => Some("stop-revalidation-run-clear"),
         0x0222 => Some("stop-revalidation-timeout"),
@@ -2311,13 +2315,40 @@ fn xhci_runtime_init_strategies(
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
             );
         }
+    } else if matches!(
+        runtime_vl805_reset_state,
+        VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
+    ) {
+        // The weaker bounded reset outcomes still leave us with a trusted
+        // bootloader stop-state contract. The latest Pi 4 trace now freezes
+        // before the first fresh cold-start halt revalidation read, so lead
+        // with a seeded cold-start that still rebuilds runtime-owned rings but
+        // skips that hazardous live stop-state probe. If that stalls later, we
+        // still fall back to the completely unseeded U-Boot-style rebuild and
+        // then the resetless seeded path.
+        if stop_state_seed_available {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+            );
+        }
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        );
+        if stop_state_seed_available {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
+            );
+        }
     } else {
-        // Posted-fallback / soft-continue still prove that the bootloader-owned
-        // stop-state snapshot is real, but the latest Pi 4 traces show the
-        // preserve-state first attempt can wedge on the live RUN store before
-        // the ladder ever reaches a safer fallback. Start with the same fresh
-        // U-Boot-style cold-start rebuild, then revisit seeded variants only
-        // if that stronger path still misses.
+        // On all other runtime paths, prefer to probe the fully unseeded
+        // U-Boot-style cold-start first and only revisit seeded variants if
+        // that stronger path still misses.
         xhci_runtime_init_strategy_push(
             &mut strategies,
             &mut count,
@@ -10139,7 +10170,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_prioritize_fresh_cold_start_for_weak_runtime_reset_outcomes() {
+    fn xhci_runtime_init_strategies_prioritize_seeded_cold_start_for_weak_runtime_reset_outcomes() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::PreserveControllerState,
             super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
@@ -10152,11 +10183,11 @@ mod tests {
         assert_eq!(count, 3);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
         assert_eq!(
             strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
         );
         assert_eq!(
             strategies[2],
@@ -10430,6 +10461,22 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_label(0x0212),
             Some("fw-handoff-skip-legacy-ownership")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0213),
+            Some("stop-revalidation-usbsts-read-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0214),
+            Some("stop-revalidation-usbsts-read")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0215),
+            Some("stop-revalidation-usbcmd-read-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0216),
+            Some("stop-revalidation-usbcmd-read")
         );
         assert_eq!(xhci_diag_stage_label(0x0208), Some("fw-handoff-iman-write"));
         assert_eq!(

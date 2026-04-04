@@ -1431,8 +1431,22 @@ impl<H: Dma> XhciCtrl<H> {
         ) {
             emit_xhci_diag(0x0224, 0, reg::USBSTS_HCH as u64, 1);
         } else {
+            emit_xhci_diag(
+                0x0213,
+                reg::USBSTS as u64,
+                self.firmware_handoff as u64,
+                trusted_runtime_seed_snapshot.is_some() as u64,
+            );
             let usbsts = self.read_op::<u32>(reg::USBSTS);
+            emit_xhci_diag(0x0214, usbsts as u64, reg::USBSTS_HCH as u64, 0);
+            emit_xhci_diag(
+                0x0215,
+                reg::USBCMD as u64,
+                self.firmware_handoff as u64,
+                trusted_runtime_seed_snapshot.is_some() as u64,
+            );
             let usbcmd_raw = self.read_op::<u32>(reg::USBCMD);
+            emit_xhci_diag(0x0216, usbcmd_raw as u64, reg::USBCMD_RUN as u64, 0);
             let usbcmd = masked_usbcmd(usbcmd_raw);
             emit_xhci_diag(0x0220, usbcmd as u64, usbsts as u64, usbcmd_raw as u64);
             if !SKIP_STOP_DURING_INIT && halt_revalidation_needed(usbsts) {
