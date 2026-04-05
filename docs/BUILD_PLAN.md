@@ -7571,6 +7571,203 @@ After Milestone 28b:
 - Queen control retries are safe by construction.
 - Release profiles enforce key hygiene and enable audit-grade reconstruction by default.
 
+## Milestone 28c — Host-Side AI Run Control: Delegated Agents, Durable Context, Attention Budgets <a id="28c"></a>
+[Milestones](#Milestones)
+
+**Why now (bridge):**
+Milestone 28b makes writes attributable, replay-safe, fenced, and audit-first. Before promoting AI lifecycle state into first-class VM-visible namespace roots in 29b, Cohesix needs a host-only proving ground for the operating model refined here:
+1. Cohesix is the trusted execution, evidence, and governance layer beneath agent frameworks, not a replacement for them.
+2. Long-context cost is dominated by repeated prefill, duplicated prompt state, and lossy summarization.
+3. The highest-leverage fix is to keep durable run state, retrieval manifests, approvals, and evidence outside the live prompt, then route each run to the right host-side inference strategy under ticketed authority.
+
+This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, evidence packs, GPU leases, telemetry ingest, Python playbooks) to prove that model without adding VM AI roots yet.
+
+**Goal**
+Add a host-side AI run substrate that lets external supervisors and agent frameworks coordinate long-context workflows through delegated tickets and existing host-ticket flows while preserving Cohesix's single-writer, append-only, audit-first discipline:
+1. Make run/task/step identity and context budget explicit.
+2. Keep checkpoints, exact constraints, retrieved spans, and tool receipts durable outside the prompt.
+3. Route workloads to host-side inference backends by recall/cost policy rather than one fixed attention strategy.
+4. Reuse warmed prefixes and hotsets across related runs within bounded quotas and TTLs.
+5. Expose TTFT, decode, cache-hit, and resume metrics as first-class evidence.
+
+**Non-Goals (Explicit)**
+- No in-VM transformer kernels, sparse-attention implementations, KV-compression implementations, or CUDA/NVML changes.
+- No direct many-agent writes to raw `/queen/ctl`; multi-agent host automation writes through delegated REST and/or `/host/tickets/spec`.
+- No active/active multi-queen control for one logical hive.
+- No generic mutable `/store`, vector database, or prompt blob sink divorced from existing evidence/CAS discipline.
+- No new 9P verbs, no console grammar changes, and no hidden RPC behind file names.
+- No claim that Cohesix replaces agent planners/orchestrators; it remains the authority, evidence, and actuation layer beneath them.
+
+**Deliverables**
+
+### 1) AI run envelope and context-budget contract (host-only)
+**Purpose:** Make long-context cost and recall policy explicit instead of burying them inside prompts.
+
+Implementation requirements:
+- Add typed host-run envelope fields for AI ticket/playbook flows:
+  - `run_id`, `parent_run_id`, `task_id`, `step_id`, `attempt`
+  - `context_budget_tokens`, `latency_slo_ms`, `recall_mode`, `loss_tolerance`
+  - `prefix_group`, `dataset_refs`, `artifact_refs`, `deadline_unix_ms`, `human_owner`
+- Live mutating AI flows inherit Milestone 28b safety requirements: delegated ticket, `id`, `idempotency_key`, and `writer_epoch` where applicable.
+- Dry-run and mock playbooks validate budget/policy mismatches before any host side effect.
+
+As-built leverage:
+- Reuse `cohesix` Python orchestration APIs and `/host/tickets/spec` idempotent lifecycle.
+
+---
+
+### 2) Durable checkpoints instead of prompt-only memory
+**Purpose:** Reduce prompt bloat and resume cost without relying on lossy summarization.
+
+Implementation requirements:
+- Record structured checkpoints containing:
+  - exact constraints/instructions,
+  - retrieval manifests and span references,
+  - approvals/policy receipts,
+  - tool receipts/artifact refs,
+  - resume cursor and prior-step linkage.
+- Checkpoints are host-side artifacts and evidence inputs, not a new VM filesystem or opaque prompt cache.
+- Evidence/timeline tooling can reconstruct why a run acted without replaying the entire prompt transcript.
+
+As-built leverage:
+- Reuse existing evidence pack/timeline flows, audit redaction, and telemetry ingest.
+
+---
+
+### 3) Attention routing and prefix/hotset reuse
+**Purpose:** Let operators choose the right long-context strategy per workload instead of paying full attention cost by default.
+
+Implementation requirements:
+- Host-only provider policy classifies requests as bounded strategy hints, for example:
+  - `full`
+  - `retrieval-first`
+  - `sparse-preferred`
+  - `compression-preserve`
+  - `needle-sensitive`
+- Prefix groups and hotsets can be warmed, leased, resumed, and evicted through bounded host tickets with TTL/quota enforcement.
+- GPU lease and provider selection remain host-side and reuse existing lease/publish flows.
+
+As-built leverage:
+- Reuse GPU lease control, host-ticket executor model, and telemetry/evidence surfaces.
+
+---
+
+### 4) AI run metrics and guardrails
+**Purpose:** Make long-context efficiency measurable and auditable.
+
+Implementation requirements:
+- Collect bounded per-run metrics:
+  - TTFT,
+  - decode tokens/sec,
+  - prompt bytes/tokens submitted,
+  - prompt bytes/tokens avoided via checkpoint/prefix reuse,
+  - prefix hit/miss counts,
+  - retrieval miss rate,
+  - resume count,
+  - GPU lease pressure/provider queue wait.
+- Metrics remain read-only exports and evidence inputs; they do not become a second source of truth for control.
+- Policy gating remains mandatory for high-risk live mutations initiated by AI supervisors.
+
+As-built leverage:
+- Reuse `/queen/telemetry/*`, existing evidence packs, and host snapshots.
+
+---
+
+### 5) Framework coexistence, not framework replacement
+**Purpose:** Make Cohesix usable beneath agent supervisors without inventing another agent framework.
+
+Implementation requirements:
+- Provide Python-side adapters/examples for long-context supervisors to submit delegated host tickets and consume receipts/checkpoints.
+- Ship at least one reference playbook that coordinates repo-scale analysis or closed-loop AI factory work in dry-run/mock mode before any live actuation.
+- Export receipts/checkpoints in derived, host-side forms suitable for downstream observability tooling; exports remain non-authoritative.
+
+As-built leverage:
+- Reuse `cohesix-playbook`, mock backend, and host-only REST/filesystem backends.
+
+**Commands**
+- `cargo test -p host-ticket-agent`
+- `cargo test -p coh`
+- `python -m pytest tools/cohesix-py/tests/test_orchestration.py`
+- `python -m pytest tools/cohesix-py/tests/test_playbooks.py`
+- `python -m pytest tools/cohesix-py/tests/test_evidence_receipts.py`
+- `cohesix-playbook --playbook long-context-agent-factory --dry-run --mock`
+
+**Checks (Definition of Done)**
+- Multi-agent host workflows never require an undifferentiated shared Queen writer.
+- A run can restart from checkpoint/evidence with the same authoritative constraints and receipts, without reconstructing a full prompt transcript.
+- Prefix/hotset reuse is bounded by TTL/quota, attributable to a caller, and visible in evidence.
+- Strategy selection and long-context cost metrics are observable per run/step.
+- High-risk live AI mutations remain policy-gated and ticket-scoped.
+- No new in-VM listeners, runtime, or control protocols are introduced.
+
+**Compiler touchpoints**
+- `coh-rtc` emits generated host-tool defaults for AI run envelope limits, context budget ceilings, prefix/hotset TTLs, and metrics bounds under the existing host policy/codegen path.
+- Manifest validation rejects AI host-control enablement when Milestone 28b delegated identity or audit/replay requirements are disabled in the target profile.
+- Canonical interface/architecture docs refreshed in:
+  - `docs/INTERFACES.md`
+  - `docs/ARCHITECTURE.md`
+- Generated host-tool/docs snippets refreshed in:
+  - `docs/PYTHON_SUPPORT.md`
+  - `docs/HOST_TOOLS.md`
+  - `docs/SECURITY.md`
+  - `docs/TEST_PLAN.md`
+
+**Task Breakdown**
+```
+Title/ID: m28c-ai-run-envelopes
+Goal: Add typed host-side AI run envelopes with explicit context budgets and replay identifiers.
+Inputs: tools/cohesix-py/cohesix/orchestration.py, tools/cohesix-py/cohesix/playbooks.py, docs/PYTHON_SUPPORT.md, docs/SECURITY.md
+Changes:
+  - tools/cohesix-py/cohesix/orchestration.py — RunRequest, RunStep, and ContextBudget validators for delegated AI ticket flows.
+  - tools/cohesix-py/cohesix/playbooks.py — `long-context-agent-factory` dry-run/mock playbook and receipt handling.
+  - tools/cohesix-py/tests/test_orchestration.py + tools/cohesix-py/tests/test_playbooks.py — budget, idempotency, and dry-run coverage.
+Commands: python -m pytest tools/cohesix-py/tests/test_orchestration.py && python -m pytest tools/cohesix-py/tests/test_playbooks.py
+Checks: Invalid budget/policy combinations fail before writes; dry-run outputs show run/task/step identity and budgets deterministically.
+Deliverables: Host-side AI runs become explicit, typed, and replay-addressable.
+
+Title/ID: m28c-host-ticket-ai-actions
+Goal: Extend the host ticket plane with bounded AI control actions for inference runs, checkpoints, and prefix lifecycle.
+Inputs: apps/host-ticket-agent, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md
+Changes:
+  - apps/host-ticket-agent/src/lib.rs — allowlist and schema validation for `infer.run|resume|abort`, `context.checkpoint|resume|evict`, and `prefix.warm|evict`.
+  - apps/host-ticket-agent/src/status.rs — bounded lifecycle/state counters for AI run, checkpoint, and prefix operations.
+  - apps/host-ticket-agent/src/executors/infer.rs — host-only provider adapter contract; no VM-side model runtime.
+  - docs/INTERFACES.md — canonical host-ticket AI action envelopes, receipt fields, and refusal semantics.
+  - docs/ARCHITECTURE.md — authority flow for delegated AI runs, checkpoints, prefix lifecycle, and evidence correlation.
+Commands: cargo test -p host-ticket-agent && cargo test -p tests --test host_ticket_agent
+Checks: AI host tickets stay idempotent, allowlist-gated, and stale-writer safe; unsupported actions fail deterministically with no side effects.
+Deliverables: `/host/tickets/spec` becomes the canonical AI actuation path before 29b VM roots exist.
+
+Title/ID: m28c-ai-evidence-checkpoints
+Goal: Extend evidence pack/timeline flows to reconstruct AI runs from checkpoints, receipts, and cost telemetry.
+Inputs: apps/coh/src/evidence.rs, apps/coh/src/evidence_timeline.rs, apps/coh/tests/evidence_pack.rs, apps/coh/tests/evidence_timeline.rs, docs/TEST_PLAN.md
+Changes:
+  - apps/coh/src/evidence.rs — include run envelopes, checkpoint manifests, prefix reuse stats, and provider receipts with redaction.
+  - apps/coh/src/evidence_timeline.rs — correlate run/step/checkpoint/prefix events into a deterministic operator timeline.
+  - apps/coh/tests/evidence_pack.rs + apps/coh/tests/evidence_timeline.rs — restart/resume reconstruction tests from evidence-only inputs.
+Commands: cargo test -p coh --test evidence_pack && cargo test -p coh --test evidence_timeline
+Checks: Evidence-only reconstruction preserves authoritative constraints and receipts; sensitive keys stay redacted.
+Deliverables: Long-context AI runs become auditable and resumable without prompt archaeology.
+
+Title/ID: m28c-ai-policy-and-metrics
+Goal: Generate host defaults and bounded metrics for AI context budgets, prefix reuse, and run efficiency.
+Inputs: tools/coh-rtc, configs/root_task.toml, apps/coh/src/telemetry.rs, tools/cohesix-py/cohesix/generated.py, docs/PYTHON_SUPPORT.md, docs/TEST_PLAN.md
+Changes:
+  - tools/coh-rtc/src/ir.rs + tools/coh-rtc/src/validate.rs — host AI budget/TTL/metrics bounds and dependency on 28b safety gates.
+  - apps/coh/src/telemetry.rs — bounded run-efficiency metric export helpers.
+  - tools/cohesix-py/cohesix/generated.py — generated defaults consumed by Python orchestration/playbooks.
+Commands: cargo test -p coh-rtc && cargo test -p coh && python -m pytest tools/cohesix-py/tests/test_evidence_receipts.py
+Checks: Generated defaults bound AI runs consistently across CLI/Python flows; metrics stay bounded and byte-stable.
+Deliverables: Context budgets and efficiency metrics are compiler-aligned rather than ad hoc.
+```
+
+## Outcome
+After Milestone 28c:
+- Cohesix is positioned as the trusted actuation, evidence, and governance layer beneath agent frameworks.
+- Long-context AI runs stop treating the prompt as the sole system of record.
+- Attention strategy becomes a schedulable, measurable host-side concern instead of a hidden model-side accident.
+- Milestone 29b can expose stable AI namespace roots based on proven host-side semantics rather than speculation.
+
 ## Milestone 29 — Edge Local Status (Pi 4 Host Tool)  <a id="29"></a> 
 [Milestones](#Milestones)
 
@@ -7670,10 +7867,14 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (positioning):**  
-Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. The next strategic step is to make AI fleet operations legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS.
+Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28c proves the host-side AI operating model first: delegated agent authority, durable checkpoints/evidence, explicit context budgets, and host-ticket-based actuation. The next strategic step is to make that AI fleet state legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS or creating a second executor.
 
 **Goal**  
 Add a manifest-defined, role-scoped AI control namespace that lets operators and automation inspect and drive AI lifecycle state through existing Secure9P semantics. This milestone is limited to **control-plane surfaces only**: no in-VM application runtime, no general UI stack, no mutable POSIX-like filesystem, and no new transport or RPC model.
+
+### Prerequisites
+- Milestone **28b** completed (delegated REST identity, idempotent queen intents, writer-epoch fencing, audit/replay baseline).
+- Milestone **28c** completed (host-side AI run envelopes, checkpoint/evidence model, and `/host/tickets/spec` AI actuation semantics).
 
 **Non-Goals**
 - No app runtime, package manager, bundle loader, or process model beyond the existing Queen/worker control model.
@@ -7681,8 +7882,12 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - No generic `/net` service API, sockets-by-file, or hidden request/response RPC behind file names.
 - No mutable general-purpose `/store`; existing CAS, models, telemetry, and spool semantics remain authoritative and distinct.
 - No new 9P verbs, no console grammar changes, and no deviation from `ERR = no side effects`.
+- No second host-execution plane parallel to `/host/tickets/spec`; VM-visible AI paths do not bypass delegated host-ticket authority or Milestone 28b fencing/idempotency rules.
 
 **Deliverables**
+- AI namespace roots are the VM-visible control-plane projection of the host-side semantics proven in 28c.
+- Any AI path whose write can cause host-side side effects MUST resolve to documented host-ticket actions and inherit delegated identity, idempotency, writer epoch, and audit/replay guarantees.
+- Read-only AI paths (`/metrics/*` and read views of `/jobs/*`, `/datasets/*`, `/experiments/*`) do not become a second source of truth for execution authority.
 - Manifest-gated AI control roots under the Secure9P namespace, with paths aligned to current authority rules:
   - `/jobs/*` for bounded job submission, queue state, and completion records
   - `/datasets/*` for dataset metadata, lineage pointers, and policy-visible readiness state
@@ -7710,6 +7915,7 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 **Compiler touchpoints**
 - `coh-rtc` admits `ecosystem.ai.*` IR fields for path gating, quotas, and per-surface limits.
 - Generated snippets refresh `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, and `docs/USERLAND_AND_CLI.md` so host tools consume authoritative bounds and namespace roots.
+- Validation and generated docs make the authority mapping explicit: AI namespace writes that trigger external execution are projections over the 28c host-ticket/evidence model, not an independent executor.
 - Validation rejects configurations that overload existing `/updates`, `/models`, telemetry, or spool semantics.
 
 **Task Breakdown**
@@ -7723,7 +7929,7 @@ Changes:
 Commands:
   - cargo test -p coh-rtc
 Checks:
-  - AI namespace admission is compiler-defined and rejects overlap with existing CAS/model/spool surfaces.
+  - AI namespace admission is compiler-defined, rejects overlap with existing CAS/model/spool surfaces, and preserves the 28c host-ticket authority mapping for side-effecting flows.
 Deliverables:
   - Authoritative manifest + docs snippets for AI namespace roots.
 
@@ -7737,7 +7943,7 @@ Commands:
   - cargo test -p nine-door
   - cargo test -p root-task
 Checks:
-  - Paths enforce append-only/read-only semantics, role filters, and deterministic refusals.
+  - Paths enforce append-only/read-only semantics, role filters, deterministic refusals, and documented handoff to host-ticket-backed actuation where side effects are involved.
 Deliverables:
   - AI control-plane namespace available in host and VM implementations with matching semantics.
 
