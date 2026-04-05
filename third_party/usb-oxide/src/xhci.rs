@@ -209,9 +209,9 @@ const fn use_live_post_reset_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The weaker stop-state snapshot now runs the fresh HCRST/CONFIG path
-    // again, but it still keeps post-reset ring seed reads suppressed. Use
-    // zero/snapshot seeds there instead of touching live runtime ring
+    // The weaker stop-state snapshot now skips the first live HCRST/CONFIG
+    // edge again, but it still keeps post-reset ring seed reads suppressed.
+    // Use zero/snapshot seeds there instead of touching live runtime ring
     // registers before ownership has been rebuilt.
     use_live_post_reset_seed_reads(firmware_handoff)
         && !runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -269,6 +269,7 @@ const fn skip_config_write_during_init_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_config_write_during_init(firmware_handoff)
 }
@@ -288,11 +289,13 @@ const fn skip_reset_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Only the stronger mailbox-reset/runtime-ring seed is trusted enough to
-    // skip the first live HCRST edge. The weaker stop-state-only snapshot now
-    // proves the controller still needs those runtime reset/config writes
-    // before the deferred runtime-owned ring publication ladder.
+    // Any trusted stop-state snapshot is now treated as authoritative enough
+    // to skip the first live HCRST/CONFIG edge on the weak mailbox-reset path.
+    // Runtime still rebuilds ring ownership locally, but it no longer forces
+    // the toxic first live reset store before that runtime-owned publication
+    // ladder is in place.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_reset_during_init(firmware_handoff)
 }
@@ -3203,7 +3206,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_keeps_hcrst_config_and_uses_fresh_runtime_ring_publish() {
+    fn stop_state_only_snapshot_skips_hcrst_config_and_uses_fresh_runtime_ring_publish() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -3246,11 +3249,11 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!skip_reset_during_init_with_snapshot(
+        assert!(skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(!skip_config_write_during_init_with_snapshot(
+        assert!(skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));

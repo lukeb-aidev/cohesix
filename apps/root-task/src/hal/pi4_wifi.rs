@@ -817,7 +817,7 @@ const fn experimental_control_plane_write_needs_post_write_rearm(
 }
 
 #[inline]
-const fn experimental_control_plane_write_fallback_needs_startup_link_host_reattach(
+const fn experimental_control_plane_write_fallback_needs_startup_link_resume(
     experimental_no_ht_transport: bool,
     first_control_plane_write_pending: bool,
     used_startup_link_fallback: bool,
@@ -3625,6 +3625,47 @@ impl SdioHost {
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
             self.experimental_no_ht_transport,
+        ));
+        self.log_transport_shadow(stage);
+        Ok(())
+    }
+
+    fn resume_startup_link_control_plane_transport(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        let previous_clock_hz = self.current_clock_hz;
+        let previous_bus_width = self.desired_bus_width;
+        let (target_clock_hz, target_bus_width) = startup_link_reattach_target_profile();
+        let live_card = self.card;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=sdio-host-live-resume-begin current={}Hz width={} target={}Hz target_width={} card={} rca=0x{rca:04x} no_ht={}",
+            previous_clock_hz,
+            sdio_bus_width_name(previous_bus_width),
+            target_clock_hz,
+            sdio_bus_width_name(target_bus_width),
+            yn(live_card.is_some()),
+            self.experimental_no_ht_transport,
+            rca = live_card.map_or(0, |card| card.rca),
+        ));
+        if self.desired_bus_width != target_bus_width {
+            self.set_bus_width(target_bus_width)?;
+        }
+        if self.current_clock_hz != target_clock_hz {
+            self.set_clock_hz(target_clock_hz)?;
+        }
+        self.refresh_transport_phase_for(stage)?;
+        self.enable_function1()?;
+        let (ioex, ready) = self.read_function_enable_state("post-live-resume")?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=sdio-host-live-resume-ready previous={}Hz/{} current={}Hz width={} ioex=0x{ioex:02x} ready=0x{ready:02x} card={} rca=0x{rca:04x} no_ht={}",
+            previous_clock_hz,
+            sdio_bus_width_name(previous_bus_width),
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            yn(live_card.is_some()),
+            self.experimental_no_ht_transport,
+            rca = live_card.map_or(0, |card| card.rca),
         ));
         self.log_transport_shadow(stage);
         Ok(())
@@ -6765,13 +6806,13 @@ impl SdioHost {
         let finish_successful_write = |this: &mut Self,
                                        used_startup_link_fallback: bool|
          -> Result<(), HalError> {
-            if experimental_control_plane_write_fallback_needs_startup_link_host_reattach(
+            if experimental_control_plane_write_fallback_needs_startup_link_resume(
                 this.experimental_no_ht_transport,
                 first_control_plane_write_pending,
                 used_startup_link_fallback,
             ) {
                 emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-write action=sdio-host-reattach-after-startup-fallback len={} write_chunk_limit={} reply_chunk_limit={} current={}Hz width={} no_ht={}",
+                        "[pi4-wifi] firmware stage=control-plane-write action=sdio-host-live-resume-after-startup-fallback len={} write_chunk_limit={} reply_chunk_limit={} current={}Hz width={} no_ht={}",
                         frame_len,
                         this.control_plane_write_chunk_limit(),
                         this.control_plane_reply_chunk_limit(),
@@ -6779,14 +6820,19 @@ impl SdioHost {
                         sdio_bus_width_name(this.desired_bus_width),
                         this.experimental_no_ht_transport,
                     ));
-                this.reattach_startup_link_control_plane_transport(
-                    "control-plane-write-startup-link-recover",
-                )?;
-                this.rearm_firmware_channel_on_startup_link()?;
-                this.resume_control_plane_reply_probe_on_startup_link(
-                    "control-plane-write-startup-link-recover",
-                );
-                return Ok(());
+                if let Err(err) = this.resume_startup_link_control_plane_transport(
+                    "control-plane-write-startup-link-resume",
+                ) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-write action=sdio-host-live-resume-fail err={err} fallback=cmd5-reattach current={}Hz width={} no_ht={}",
+                        this.current_clock_hz,
+                        sdio_bus_width_name(this.desired_bus_width),
+                        this.experimental_no_ht_transport,
+                    ));
+                    this.reattach_startup_link_control_plane_transport(
+                        "control-plane-write-startup-link-recover",
+                    )?;
+                }
             }
             if experimental_control_plane_write_needs_post_write_rearm(
                 this.experimental_no_ht_transport,
@@ -9349,7 +9395,7 @@ mod tests {
         cyw43_transport_mode_name, experimental_control_plane_write_can_assume_committed,
         experimental_control_plane_write_can_resume_after_post_write_rearm_timeout,
         experimental_control_plane_write_can_retry_on_startup_link,
-        experimental_control_plane_write_fallback_needs_startup_link_host_reattach,
+        experimental_control_plane_write_fallback_needs_startup_link_resume,
         experimental_control_plane_write_needs_post_write_rearm,
         experimental_function2_fifo_chunk_limit, firmware_bulk_clock_candidates,
         firmware_channel_uses_linux_minimal_setup, firmware_channel_watermark,
@@ -9715,26 +9761,18 @@ mod tests {
     }
 
     #[test]
-    fn startup_link_write_fallback_host_reattach_only_tracks_first_bounded_probe() {
+    fn startup_link_write_fallback_resume_only_tracks_first_bounded_probe() {
         assert!(
-            experimental_control_plane_write_fallback_needs_startup_link_host_reattach(
-                true, true, true
-            )
+            experimental_control_plane_write_fallback_needs_startup_link_resume(true, true, true)
         );
         assert!(
-            !experimental_control_plane_write_fallback_needs_startup_link_host_reattach(
-                false, true, true
-            )
+            !experimental_control_plane_write_fallback_needs_startup_link_resume(false, true, true)
         );
         assert!(
-            !experimental_control_plane_write_fallback_needs_startup_link_host_reattach(
-                true, false, true
-            )
+            !experimental_control_plane_write_fallback_needs_startup_link_resume(true, false, true)
         );
         assert!(
-            !experimental_control_plane_write_fallback_needs_startup_link_host_reattach(
-                true, true, false
-            )
+            !experimental_control_plane_write_fallback_needs_startup_link_resume(true, true, false)
         );
     }
 
