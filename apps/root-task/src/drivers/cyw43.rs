@@ -40,6 +40,11 @@ const FRAME_BUF_LEN: usize = 2048;
 const CONTROL_RESPONSE_BUF_LEN: usize = 512;
 const CLM_CHUNK_SIZE: usize = 1024;
 const IOCTL_WAIT_LOOPS: usize = 8_000;
+// Linux brcmfmac waits up to 2500 ms for an SDIO control response.
+// Use a wider bounded spin budget only on the fragile startup-link fallback
+// path so we can observe whether firmware eventually replies without forcing a
+// destructive reattach first.
+const IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED: usize = 2_500_000;
 const JOIN_WAIT_LOOPS: usize = 64_000;
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
@@ -221,6 +226,24 @@ fn first_control_plane_retry_after_promoted_timeout(
 }
 
 #[inline]
+fn first_control_plane_retry_after_startup_link_reply_failure(
+    experimental_no_ht_transport: bool,
+    control_plane_probe_pending: bool,
+    err: &DriverError,
+) -> bool {
+    experimental_no_ht_transport
+        && control_plane_probe_pending
+        && matches!(
+            err,
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-enable-latched-not-ready"
+            )) | DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-passive-startup-link-timeout"
+            ))
+        )
+}
+
+#[inline]
 fn control_plane_retry_after_promoted_timeout_target_clock_hz(
     experimental_no_ht_transport: bool,
     control_plane_probe_pending: bool,
@@ -243,12 +266,40 @@ fn control_plane_retry_after_promoted_timeout_target_clock_hz(
 }
 
 #[inline]
+fn control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+    experimental_no_ht_transport: bool,
+    control_plane_probe_pending: bool,
+    current_clock_hz: u32,
+    err: &DriverError,
+) -> Option<u32> {
+    if first_control_plane_retry_after_startup_link_reply_failure(
+        experimental_no_ht_transport,
+        control_plane_probe_pending,
+        err,
+    ) {
+        Some(if current_clock_hz > SDIO_STARTUP_CLOCK_HZ {
+            SDIO_STARTUP_CLOCK_HZ
+        } else {
+            current_clock_hz
+        })
+    } else {
+        None
+    }
+}
+
+#[inline]
 fn control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
     err: &DriverError,
 ) -> bool {
     matches!(
         err,
         DriverError::Protocol("ioctl-timeout")
+            | DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-enable-latched-not-ready"
+            ))
+            | DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-passive-startup-link-timeout"
+            ))
             | DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout"))
             | DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-startup-link-reply-timeout"
@@ -903,98 +954,137 @@ impl Cyw43NetDevice {
                         &err,
                     )
                 {
-                    warn!(
-                        "[cyw43] control-plane probe retry cmd=0x{:08x} iface={} len={} target_clock={}Hz chunk_limit={} mode=bounded-no-ht reason={err}",
-                        cmd as u32,
+                    self.retry_first_control_plane_ioctl_on_startup_link(
+                        kind,
+                        cmd,
                         iface,
                         payload_len,
                         target_clock_hz,
-                        self.state.cyw43_control_plane_chunk_limit(),
-                    );
-                    let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
-                    self.probe.effective_clock_hz = effective_clock_hz;
-                    self.state.rearm_cyw43_control_plane_slow_link()?;
-                    self.state
-                        .resume_cyw43_control_plane_reply_probe_on_startup_link(
-                            "control-plane-probe-retry-original-reply",
-                        );
-                    info!(
-                        "[cyw43] control-plane probe retry awaiting original reply cmd=0x{:08x} iface={} len={} ioctl_id={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
-                        cmd as u32,
+                        "control-plane probe retry",
+                        "control-plane-probe-retry-original-reply",
+                        "control-plane-probe-retry-resend",
+                        &err,
+                    )
+                } else if let Some(target_clock_hz) =
+                    control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+                        experimental_no_ht_transport,
+                        control_plane_probe_pending,
+                        self.probe.effective_clock_hz,
+                        &err,
+                    )
+                {
+                    self.retry_first_control_plane_ioctl_on_startup_link(
+                        kind,
+                        cmd,
                         iface,
                         payload_len,
-                        self.ioctl_id,
-                        self.probe.effective_clock_hz,
-                        self.state.cyw43_control_plane_chunk_limit(),
-                    );
-                    match self.wait_for_ioctl_response(cmd as u32, self.ioctl_id) {
-                        Ok(response_len) => {
-                            info!(
-                                "[cyw43] control-plane probe retry recovered-original-reply cmd=0x{:08x} iface={} len={} ioctl_id={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
-                                cmd as u32,
-                                iface,
-                                payload_len,
-                                self.ioctl_id,
-                                self.probe.effective_clock_hz,
-                                self.state.cyw43_control_plane_chunk_limit(),
-                            );
-                            Ok(response_len)
-                        }
-                        Err(wait_err)
-                            if control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
-                                &wait_err,
-                            ) =>
-                        {
-                            // Keep the first bounded-no-HT resend on the slow
-                            // startup link. The latest Pi 4 traces show that
-                            // re-promoting before any control ioctl completes
-                            // just reproduces the same promoted rearm stall.
-                            let resend_clock_hz = self.state.set_clock_hz(
-                                control_plane_retry_after_promoted_timeout_resend_target_clock_hz(
-                                    experimental_no_ht_transport,
-                                    self.probe.effective_clock_hz,
-                                ),
-                            )?;
-                            self.probe.effective_clock_hz = resend_clock_hz;
-                            self.state.rearm_cyw43_control_plane_slow_link()?;
-                            self.state
-                                .resume_cyw43_control_plane_reply_probe_on_startup_link(
-                                    "control-plane-probe-retry-resend",
-                                );
-                            info!(
-                                "[cyw43] control-plane probe retry slow-link resend armed cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
-                                cmd as u32,
-                                iface,
-                                payload_len,
-                                self.probe.effective_clock_hz,
-                                self.state.cyw43_control_plane_chunk_limit(),
-                            );
-                            warn!(
-                                "[cyw43] control-plane probe retry resending cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht reason={wait_err}",
-                                cmd as u32,
-                                iface,
-                                payload_len,
-                                self.probe.effective_clock_hz,
-                                self.state.cyw43_control_plane_chunk_limit(),
-                            );
-                            let response_len =
-                                self.ioctl_encoded_once(kind, cmd, iface, payload_len, true)?;
-                            info!(
-                                "[cyw43] control-plane probe retry ok cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
-                                cmd as u32,
-                                iface,
-                                payload_len,
-                                self.probe.effective_clock_hz,
-                                self.state.cyw43_control_plane_chunk_limit(),
-                            );
-                            Ok(response_len)
-                        }
-                        Err(wait_err) => Err(wait_err),
-                    }
+                        target_clock_hz,
+                        "control-plane startup-link reply rescue",
+                        "control-plane-startup-link-reply-rescue-original-reply",
+                        "control-plane-startup-link-reply-rescue-resend",
+                        &err,
+                    )
                 } else {
                     Err(err)
                 }
             }
+        }
+    }
+
+    fn retry_first_control_plane_ioctl_on_startup_link(
+        &mut self,
+        kind: IoctlType,
+        cmd: Ioctl,
+        iface: u32,
+        payload_len: usize,
+        target_clock_hz: u32,
+        retry_label: &'static str,
+        original_reply_stage: &'static str,
+        resend_stage: &'static str,
+        reason: &DriverError,
+    ) -> Result<usize, DriverError> {
+        warn!(
+            "[cyw43] {retry_label} cmd=0x{:08x} iface={} len={} target_clock={}Hz chunk_limit={} mode=bounded-no-ht reason={reason}",
+            cmd as u32,
+            iface,
+            payload_len,
+            target_clock_hz,
+            self.state.cyw43_control_plane_chunk_limit(),
+        );
+        let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
+        self.probe.effective_clock_hz = effective_clock_hz;
+        self.state.rearm_cyw43_control_plane_slow_link()?;
+        self.state
+            .resume_cyw43_control_plane_reply_probe_on_startup_link(original_reply_stage);
+        info!(
+            "[cyw43] {retry_label} awaiting original reply cmd=0x{:08x} iface={} len={} ioctl_id={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
+            cmd as u32,
+            iface,
+            payload_len,
+            self.ioctl_id,
+            self.probe.effective_clock_hz,
+            self.state.cyw43_control_plane_chunk_limit(),
+        );
+        match self.wait_for_ioctl_response(cmd as u32, self.ioctl_id) {
+            Ok(response_len) => {
+                info!(
+                    "[cyw43] {retry_label} recovered-original-reply cmd=0x{:08x} iface={} len={} ioctl_id={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
+                    cmd as u32,
+                    iface,
+                    payload_len,
+                    self.ioctl_id,
+                    self.probe.effective_clock_hz,
+                    self.state.cyw43_control_plane_chunk_limit(),
+                );
+                Ok(response_len)
+            }
+            Err(wait_err)
+                if control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+                    &wait_err,
+                ) =>
+            {
+                // Keep the first bounded-no-HT resend on the slow startup
+                // link. The latest Pi 4 traces still show that re-promoting
+                // before any control ioctl completes just reproduces the same
+                // early reply-path stall.
+                let resend_clock_hz = self.state.set_clock_hz(
+                    control_plane_retry_after_promoted_timeout_resend_target_clock_hz(
+                        self.state.cyw43_experimental_no_ht_transport(),
+                        self.probe.effective_clock_hz,
+                    ),
+                )?;
+                self.probe.effective_clock_hz = resend_clock_hz;
+                self.state.rearm_cyw43_control_plane_slow_link()?;
+                self.state
+                    .resume_cyw43_control_plane_reply_probe_on_startup_link(resend_stage);
+                info!(
+                    "[cyw43] {retry_label} slow-link resend armed cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
+                    cmd as u32,
+                    iface,
+                    payload_len,
+                    self.probe.effective_clock_hz,
+                    self.state.cyw43_control_plane_chunk_limit(),
+                );
+                warn!(
+                    "[cyw43] {retry_label} resending cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht reason={wait_err}",
+                    cmd as u32,
+                    iface,
+                    payload_len,
+                    self.probe.effective_clock_hz,
+                    self.state.cyw43_control_plane_chunk_limit(),
+                );
+                let response_len = self.ioctl_encoded_once(kind, cmd, iface, payload_len, true)?;
+                info!(
+                    "[cyw43] {retry_label} ok cmd=0x{:08x} iface={} len={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
+                    cmd as u32,
+                    iface,
+                    payload_len,
+                    self.probe.effective_clock_hz,
+                    self.state.cyw43_control_plane_chunk_limit(),
+                );
+                Ok(response_len)
+            }
+            Err(wait_err) => Err(wait_err),
         }
     }
 
@@ -1103,10 +1193,35 @@ impl Cyw43NetDevice {
         cmd: u32,
         expected_id: u16,
     ) -> Result<usize, DriverError> {
-        let wait_budget = ioctl_wait_loops();
+        let startup_link_stabilized = self.state.cyw43_control_plane_startup_link_stabilized();
+        let wait_budget = ioctl_wait_loops(startup_link_stabilized);
         for _ in 0..wait_budget {
             match self.process_next_frame(false) {
-                Err(err) => return Err(err),
+                Err(err) => {
+                    let (reply_mode, reply_attempts, reply_empty_polls, promoted_probe_pending) =
+                        self.state.cyw43_control_plane_reply_rearm_diag();
+                    let credit_ready = self.has_credit();
+                    warn!(
+                        "[cyw43] ioctl response error cmd=0x{:08x} id={} seq={}/{} credit={} startup_link_stabilized={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={} err={err}",
+                        cmd,
+                        expected_id,
+                        self.sdpcm_seq,
+                        self.sdpcm_seq_max,
+                        credit_ready,
+                        startup_link_stabilized,
+                        reply_mode,
+                        reply_attempts,
+                        reply_empty_polls,
+                        promoted_probe_pending,
+                        self.state.cyw43_experimental_no_ht_transport(),
+                        self.state.cyw43_control_plane_write_chunk_limit(),
+                        self.state.cyw43_control_plane_reply_chunk_limit(),
+                    );
+                    self.log_pending_ioctl_frame("ioctl-response-error");
+                    self.state
+                        .log_cyw43_control_plane_snapshot("ioctl-response-error");
+                    return Err(err);
+                }
                 Ok(RxFrameResult::Control {
                     id,
                     status,
@@ -1128,13 +1243,14 @@ impl Cyw43NetDevice {
             self.state.cyw43_control_plane_reply_rearm_diag();
         let credit_ready = self.has_credit();
         warn!(
-            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={}",
+            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} startup_link_stabilized={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={}",
             cmd,
             expected_id,
             self.sdpcm_seq,
             self.sdpcm_seq_max,
             credit_ready,
             wait_budget,
+            startup_link_stabilized,
             reply_mode,
             reply_attempts,
             reply_empty_polls,
@@ -1604,8 +1720,12 @@ const fn initial_control_plane_data_clock_target_hz(
 }
 
 #[inline]
-const fn ioctl_wait_loops() -> usize {
-    IOCTL_WAIT_LOOPS
+const fn ioctl_wait_loops(startup_link_stabilized: bool) -> usize {
+    if startup_link_stabilized {
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED
+    } else {
+        IOCTL_WAIT_LOOPS
+    }
 }
 
 #[inline]
@@ -1660,8 +1780,8 @@ mod tests {
         control_plane_retry_after_promoted_timeout_target_clock_hz,
         first_control_plane_retry_after_promoted_timeout, has_sdpcm_credit,
         initial_control_plane_data_clock_target_hz, ioctl_wait_loops, is_transport_retryable,
-        put_u16_le, DriverError, EVENT_AUTH, EVENT_SET_SSID, IOCTL_WAIT_LOOPS, SDIO_DATA_CLOCK_HZ,
-        SDIO_STARTUP_CLOCK_HZ,
+        put_u16_le, DriverError, EVENT_AUTH, EVENT_SET_SSID, IOCTL_WAIT_LOOPS,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
     };
     use crate::hal::HalError;
 
@@ -1803,10 +1923,61 @@ mod tests {
     }
 
     #[test]
+    fn startup_link_reply_failure_retry_targets_startup_clock() {
+        assert_eq!(
+            control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+                true,
+                true,
+                SDIO_DATA_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-enable-latched-not-ready"
+                )),
+            ),
+            Some(SDIO_STARTUP_CLOCK_HZ)
+        );
+        assert_eq!(
+            control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+                true,
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-passive-startup-link-timeout"
+                )),
+            ),
+            Some(SDIO_STARTUP_CLOCK_HZ)
+        );
+        assert_eq!(
+            control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+                false,
+                true,
+                SDIO_DATA_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-enable-latched-not-ready"
+                )),
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn promoted_timeout_retry_only_resends_after_reply_wait_timeout() {
         assert!(
             control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
                 &DriverError::Protocol("ioctl-timeout")
+            )
+        );
+        assert!(
+            control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-enable-latched-not-ready"
+                ))
+            )
+        );
+        assert!(
+            control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-passive-startup-link-timeout"
+                ))
             )
         );
         assert!(
@@ -1929,6 +2100,14 @@ mod tests {
 
     #[test]
     fn ioctl_wait_budget_is_fixed_for_strict_path() {
-        assert_eq!(ioctl_wait_loops(), IOCTL_WAIT_LOOPS);
+        assert_eq!(ioctl_wait_loops(false), IOCTL_WAIT_LOOPS);
+    }
+
+    #[test]
+    fn ioctl_wait_budget_expands_for_startup_link_stabilized_path() {
+        assert_eq!(
+            ioctl_wait_loops(true),
+            IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED
+        );
     }
 }

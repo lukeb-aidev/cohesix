@@ -2267,6 +2267,20 @@ fn xhci_controller_params_from_probe_with_strategy(
 const XHCI_RUNTIME_INIT_STRATEGY_MAX: usize = 3;
 
 #[inline]
+const fn xhci_runtime_init_strategy_policy_label(
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    match (strategy.firmware_handoff, strategy.seed_stop_state) {
+        (XhciFirmwareHandoff::PreserveControllerState, _) => "preserve-state",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "runtime-owned-fresh-rings",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+        | (XhciFirmwareHandoff::None, false)
+        | (XhciFirmwareHandoff::None, true) => "full-reset-start",
+        (XhciFirmwareHandoff::ResetlessReinit, _) => "resetless-reinit",
+    }
+}
+
+#[inline]
 fn xhci_runtime_init_strategy_push(
     strategies: &mut [XhciRuntimeInitStrategy; XHCI_RUNTIME_INIT_STRATEGY_MAX],
     count: &mut usize,
@@ -2319,7 +2333,7 @@ fn xhci_runtime_init_strategies(
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
             );
         }
     } else if matches!(
@@ -2349,7 +2363,7 @@ fn xhci_runtime_init_strategies(
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
             );
         }
     } else {
@@ -2370,7 +2384,7 @@ fn xhci_runtime_init_strategies(
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
             );
         }
     }
@@ -5652,9 +5666,10 @@ impl UsbKeyboard {
                 let _ = core::fmt::Write::write_fmt(
                     &mut params_line,
                     format_args!(
-                        "[local-seat] xhci probe params attempt={}/{} origin={} mode={} seed_flags=0x{seed_flags:02x} snapshot={} stop_seed={} ring_seed={}",
+                        "[local-seat] xhci probe params attempt={}/{} policy={} origin={} mode={} seed_flags=0x{seed_flags:02x} snapshot={} stop_seed={} ring_seed={}",
                         strategy_idx + 1,
                         init_strategy_count,
+                        xhci_runtime_init_strategy_policy_label(strategy),
                         xhci_runtime_init_strategy_origin_label(strategy),
                         xhci_firmware_handoff_mode_label(strategy.firmware_handoff),
                         (seed_flags & 0x01) != 0,
@@ -5682,9 +5697,10 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut probe_line,
                             format_args!(
-                                "[local-seat] xhci probe begin mmio=0x{mmio:016x} attempt={}/{} origin={} dma={} bus={} handoff={} seed={} poll_only={}",
+                                "[local-seat] xhci probe begin mmio=0x{mmio:016x} attempt={}/{} policy={} origin={} dma={} bus={} handoff={} seed={} poll_only={}",
                                 strategy_idx + 1,
                                 init_strategy_count,
+                                xhci_runtime_init_strategy_policy_label(strategy),
                                 xhci_runtime_init_strategy_origin_label(strategy),
                                 if prefer_high { "high" } else { "low" },
                                 if pcie_dma_window {
@@ -9996,10 +10012,11 @@ mod tests {
         xhci_diag_stage_label, xhci_diag_stage_value_labels, xhci_firmware_handoff_hint_reason,
         xhci_irq_sink_needed, xhci_preseed_allows_static_legacy_fallbacks,
         xhci_preseed_pin_only_reason, xhci_root_port_connected, xhci_runtime_init_strategies,
-        xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
-        xhci_safe_mode_skip_command, ConfigDesc, LocalSeatXhciStopStateSnapshot, Pi4SeatError,
-        UsbKeyboard, Vl805CfgPreseedMode, XhciCapProbe, XhciFirmwareHandoff, XhciIrqInstallPhase,
-        XhciRuntimeInitStrategy, HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        xhci_runtime_init_strategy_policy_label, xhci_runtime_mmio_candidate_allowed,
+        xhci_runtime_mmio_has_accessible_window, xhci_safe_mode_skip_command, ConfigDesc,
+        LocalSeatXhciStopStateSnapshot, Pi4SeatError, UsbKeyboard, Vl805CfgPreseedMode,
+        XhciCapProbe, XhciFirmwareHandoff, XhciIrqInstallPhase, XhciRuntimeInitStrategy,
+        HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
         RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, XHCI_MMIO_ALIAS_SCAN_STEPS,
     };
     use super::{
@@ -10211,7 +10228,7 @@ mod tests {
         );
         assert_eq!(
             strategies[2],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true)
         );
     }
 
@@ -10237,7 +10254,32 @@ mod tests {
         );
         assert_eq!(
             strategies[2],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true)
+        );
+    }
+
+    #[test]
+    fn xhci_runtime_init_strategy_policy_labels_cover_pi4_runtime_categories() {
+        assert_eq!(
+            xhci_runtime_init_strategy_policy_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                true,
+            )),
+            "runtime-owned-fresh-rings"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_policy_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                false,
+            )),
+            "full-reset-start"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_policy_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::PreserveControllerState,
+                true,
+            )),
+            "preserve-state"
         );
     }
 

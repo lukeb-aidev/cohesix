@@ -809,6 +809,15 @@ fn experimental_control_plane_write_can_resume_after_post_write_rearm_timeout(
 }
 
 #[inline]
+const fn experimental_control_plane_write_prefers_passive_startup_link_wait_after_fallback(
+    experimental_no_ht_transport: bool,
+    first_control_plane_write_pending: bool,
+    used_startup_link_fallback: bool,
+) -> bool {
+    experimental_no_ht_transport && first_control_plane_write_pending && used_startup_link_fallback
+}
+
+#[inline]
 const fn experimental_control_plane_write_needs_post_write_rearm(
     experimental_no_ht_transport: bool,
     first_control_plane_write_pending: bool,
@@ -1010,6 +1019,21 @@ const fn control_plane_reply_should_log_empty_snapshot(empty_polls: u8) -> bool 
 }
 
 #[inline]
+const fn passive_startup_link_wait_should_log_empty_poll(next_empty_poll: u8) -> bool {
+    next_empty_poll == 1 || next_empty_poll == passive_startup_link_wait_empty_poll_limit()
+}
+
+#[inline]
+const fn passive_startup_link_wait_empty_poll_limit() -> u8 {
+    u8::MAX
+}
+
+#[inline]
+const fn passive_startup_link_wait_timed_out(empty_polls: u8) -> bool {
+    empty_polls >= passive_startup_link_wait_empty_poll_limit()
+}
+
+#[inline]
 const fn control_plane_reply_rearm_supports_speculative_read(
     experimental_no_ht_transport: bool,
     reply_rearm_mode: u8,
@@ -1079,6 +1103,15 @@ fn control_plane_reply_should_attempt_hintless_speculative_read(
         && int_status.is_none()
         && mailbox_data.is_none()
         && frame_len_hint.unwrap_or(0) == 0
+}
+
+#[inline]
+const fn control_plane_reply_skips_backplane_hints(
+    experimental_no_ht_transport: bool,
+    reply_rearm_mode: u8,
+    _hint_reads_unstable: bool,
+) -> bool {
+    experimental_no_ht_transport && control_plane_reply_rearm_pending(reply_rearm_mode)
 }
 
 #[inline]
@@ -2235,6 +2268,16 @@ const fn control_plane_snapshot_hint_visibility_label(visible: usize) -> &'stati
 }
 
 #[inline]
+const fn control_plane_function2_enable_latched_not_ready(
+    ioex: Option<u8>,
+    iorx: Option<u8>,
+) -> bool {
+    let f2_enable_bit = SDIO_FUNCTION_ENABLE_F2.enable_bit;
+    matches!(ioex, Some(bits) if (bits & f2_enable_bit) != 0)
+        && matches!(iorx, Some(bits) if (bits & f2_enable_bit) == 0)
+}
+
+#[inline]
 const fn control_plane_snapshot_exact_blocker_label(
     ioex: Option<u8>,
     iorx: Option<u8>,
@@ -2248,9 +2291,7 @@ const fn control_plane_snapshot_exact_blocker_label(
     let f2_enable_bit = SDIO_FUNCTION_ENABLE_F2.enable_bit;
     if matches!(ioex, Some(bits) if (bits & f2_enable_bit) == 0) {
         "f2-disabled"
-    } else if matches!(ioex, Some(bits) if (bits & f2_enable_bit) != 0)
-        && matches!(iorx, Some(bits) if (bits & f2_enable_bit) == 0)
-    {
+    } else if control_plane_function2_enable_latched_not_ready(ioex, iorx) {
         "f2-enable-latched-not-ready"
     } else if matches!(ioex, Some(bits) if (bits & f2_enable_bit) != 0) && iorx.is_none() {
         "f2-ready-unreadable"
@@ -2270,6 +2311,31 @@ const fn control_plane_snapshot_exact_blocker_label(
         "partial-hint-visibility"
     } else {
         "state-visible"
+    }
+}
+
+#[inline]
+const fn passive_startup_link_timeout_error(ioex: Option<u8>, iorx: Option<u8>) -> &'static str {
+    if control_plane_function2_enable_latched_not_ready(ioex, iorx) {
+        "cyw43-function2-enable-latched-not-ready"
+    } else {
+        "cyw43-control-plane-passive-startup-link-timeout"
+    }
+}
+
+#[inline]
+const fn control_plane_snapshot_exact_error_label(blocker: &'static str) -> &'static str {
+    match blocker {
+        "f2-disabled" => "cyw43-function2-disabled",
+        "f2-enable-latched-not-ready" => "cyw43-function2-enable-latched-not-ready",
+        "f2-ready-unreadable" => "cyw43-function2-ready-unreadable",
+        "f2-interrupt-gated" => "cyw43-function2-interrupt-gated",
+        "f2-interrupt-unreadable" => "cyw43-function2-interrupt-unreadable",
+        "sdio-core-hints-unreadable" => "cyw43-control-plane-hints-unreadable",
+        "interrupt-programming-drift" => "cyw43-control-plane-interrupt-programming-drift",
+        "reply-frame-missing" => "cyw43-control-plane-reply-frame-missing",
+        "partial-hint-visibility" => "cyw43-control-plane-partial-hint-visibility",
+        _ => "cyw43-control-plane-state-visible-no-reply",
     }
 }
 
@@ -2769,9 +2835,13 @@ impl Pi4WifiState {
     #[must_use]
     pub fn cyw43_control_plane_reply_rearm_diag(&self) -> (&'static str, u8, u8, bool) {
         (
-            control_plane_reply_rearm_mode_name(
-                self.host.experimental_control_plane_reply_rearm_mode,
-            ),
+            if self.host.experimental_control_plane_startup_link_stabilized {
+                "startup-link-passive"
+            } else {
+                control_plane_reply_rearm_mode_name(
+                    self.host.experimental_control_plane_reply_rearm_mode,
+                )
+            },
             self.host.experimental_control_plane_reply_rearm_attempts,
             self.host.experimental_control_plane_reply_rearm_empty_polls,
             self.host.experimental_control_plane_promoted_probe_pending,
@@ -2786,6 +2856,11 @@ impl Pi4WifiState {
     #[must_use]
     pub const fn cyw43_experimental_no_ht_transport(&self) -> bool {
         self.host.experimental_no_ht_transport
+    }
+
+    #[must_use]
+    pub const fn cyw43_control_plane_startup_link_stabilized(&self) -> bool {
+        self.host.experimental_control_plane_startup_link_stabilized
     }
 
     pub fn finish_cyw43_experimental_transport_probe(&mut self) {
@@ -3333,6 +3408,8 @@ struct SdioHost {
     last_cardcap: Option<u8>,
     experimental_no_ht_transport: bool,
     experimental_control_plane_write_probe_pending: bool,
+    experimental_control_plane_startup_link_stabilized: bool,
+    experimental_control_plane_hint_reads_unstable: bool,
     experimental_control_plane_reply_rearm_mode: u8,
     experimental_control_plane_reply_rearm_attempts: u8,
     experimental_control_plane_reply_rearm_empty_polls: u8,
@@ -3397,6 +3474,8 @@ impl SdioHost {
             last_cardcap: None,
             experimental_no_ht_transport: false,
             experimental_control_plane_write_probe_pending: false,
+            experimental_control_plane_startup_link_stabilized: false,
+            experimental_control_plane_hint_reads_unstable: false,
             experimental_control_plane_reply_rearm_mode: control_plane_reply_rearm_none(),
             experimental_control_plane_reply_rearm_attempts: 0,
             experimental_control_plane_reply_rearm_empty_polls: 0,
@@ -3415,6 +3494,8 @@ impl SdioHost {
         self.preferred_data_clock_hz = CYW43_FIRMWARE_BULK_CLOCK_HZ;
         self.experimental_no_ht_transport = false;
         self.experimental_control_plane_write_probe_pending = false;
+        self.experimental_control_plane_startup_link_stabilized = false;
+        self.experimental_control_plane_hint_reads_unstable = false;
         self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
         self.experimental_control_plane_reply_rearm_attempts = 0;
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
@@ -3527,6 +3608,36 @@ impl SdioHost {
         self.experimental_control_plane_speculative_frame_len = 0;
     }
 
+    fn clear_control_plane_startup_link_stabilization(&mut self) {
+        self.experimental_control_plane_startup_link_stabilized = false;
+    }
+
+    fn mark_control_plane_hint_reads_unstable(
+        &mut self,
+        stage: &'static str,
+        name: &'static str,
+        reply_rearm_mode: u8,
+        attempt: u8,
+        err: &HalError,
+    ) {
+        let was_unstable = self.experimental_control_plane_hint_reads_unstable;
+        self.experimental_control_plane_hint_reads_unstable = true;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action={} reg={name} mode={} attempt={} current_clock={}Hz width={} chunk_limit={} no_ht={} err={err}",
+            if was_unstable {
+                "pure-f2-reply-polling-keep"
+            } else {
+                "pure-f2-reply-polling"
+            },
+            control_plane_reply_rearm_mode_name(reply_rearm_mode),
+            attempt,
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.control_plane_chunk_limit(),
+            self.experimental_no_ht_transport,
+        ));
+    }
+
     fn control_plane_speculative_reply_frame_pending(&self) -> bool {
         self.experimental_control_plane_speculative_frame_len != 0
     }
@@ -3545,6 +3656,8 @@ impl SdioHost {
     fn finish_experimental_transport_probe(&mut self) {
         self.experimental_no_ht_transport = false;
         self.experimental_control_plane_write_probe_pending = false;
+        self.experimental_control_plane_startup_link_stabilized = false;
+        self.experimental_control_plane_hint_reads_unstable = false;
         self.experimental_control_plane_promoted_probe_pending = false;
         self.clear_control_plane_speculative_reply_frame();
     }
@@ -3555,6 +3668,7 @@ impl SdioHost {
         self.experimental_control_plane_reply_rearm_mode = reply_rearm_mode;
         self.experimental_control_plane_reply_rearm_attempts = reply_rearm_attempts;
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
+        self.clear_control_plane_startup_link_stabilization();
         self.experimental_control_plane_promoted_probe_pending = promoted_probe_pending;
         self.clear_control_plane_speculative_reply_frame();
         emit_breadcrumb(format_args!(
@@ -3564,11 +3678,14 @@ impl SdioHost {
             self.control_plane_chunk_limit(),
             self.experimental_no_ht_transport,
         ));
+        self.log_control_plane_recovery_transition(stage);
     }
 
     fn enter_bounded_no_ht_transport(&mut self, stage: &'static str) {
         self.experimental_no_ht_transport = true;
         self.experimental_control_plane_write_probe_pending = true;
+        self.clear_control_plane_startup_link_stabilization();
+        self.experimental_control_plane_hint_reads_unstable = false;
         self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
         self.experimental_control_plane_reply_rearm_attempts = 0;
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
@@ -3671,12 +3788,154 @@ impl SdioHost {
         Ok(())
     }
 
+    fn keep_control_plane_on_startup_link_after_first_write(&mut self, stage: &'static str) {
+        self.experimental_control_plane_startup_link_stabilized = true;
+        self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
+        self.experimental_control_plane_reply_rearm_attempts = 0;
+        self.experimental_control_plane_reply_rearm_empty_polls = 0;
+        self.experimental_control_plane_promoted_probe_pending = false;
+        self.clear_control_plane_speculative_reply_frame();
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=stabilize-startup-link current={}Hz width={} reply_mode=startup-link-passive write_chunk_limit={} reply_chunk_limit={} no_ht={}",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.control_plane_write_chunk_limit(),
+            self.control_plane_reply_chunk_limit(),
+            self.experimental_no_ht_transport,
+        ));
+        self.log_control_plane_recovery_transition(stage);
+    }
+
+    fn fail_passive_startup_link_wait(&mut self) -> Result<usize, HalError> {
+        let empty_polls = self.experimental_control_plane_reply_rearm_empty_polls;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout poll_limit={} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+            empty_polls,
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.control_plane_chunk_limit(),
+            self.experimental_no_ht_transport,
+        ));
+        self.log_control_plane_finish_snapshot("control-plane-passive-startup-link-timeout");
+        self.clear_control_plane_startup_link_stabilization();
+        let (reply_rearm_mode, reply_rearm_attempts, promoted_probe_pending) =
+            control_plane_reply_rearm_state_for_startup_link_post_write();
+        self.experimental_control_plane_reply_rearm_mode = reply_rearm_mode;
+        self.experimental_control_plane_reply_rearm_attempts = reply_rearm_attempts;
+        self.experimental_control_plane_reply_rearm_empty_polls = 0;
+        self.experimental_control_plane_promoted_probe_pending = promoted_probe_pending;
+        match self.try_capture_control_plane_reply_speculative_frame() {
+            Ok(frame_len) => {
+                if frame_len != 0 {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-recovered frame_len={} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                        frame_len,
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        self.control_plane_chunk_limit(),
+                        self.experimental_no_ht_transport,
+                    ));
+                    Ok(frame_len)
+                } else {
+                    let ioex = self
+                        .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
+                        .ok();
+                    let ready = self
+                        .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
+                        .ok();
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-diag ioex=0x{ioex:02x}/{} iorx=0x{ready:02x}/{} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                        yn(ioex.is_some()),
+                        yn(ready.is_some()),
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        self.control_plane_chunk_limit(),
+                        self.experimental_no_ht_transport,
+                        ioex = ioex.unwrap_or(0),
+                        ready = ready.unwrap_or(0),
+                    ));
+                    if control_plane_function2_enable_latched_not_ready(ioex, ready)
+                        && self.try_strict_control_plane_reply_recovery(
+                            "passive-startup-link-timeout",
+                            reply_rearm_mode,
+                            usize::from(reply_rearm_attempts),
+                            ready.unwrap_or(0),
+                        )?
+                    {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-strict-recovered current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                            self.current_clock_hz,
+                            sdio_bus_width_name(self.desired_bus_width),
+                            self.control_plane_chunk_limit(),
+                            self.experimental_no_ht_transport,
+                        ));
+                        self.resume_control_plane_reply_probe_on_startup_link(
+                            "control-plane-passive-startup-link-timeout-strict-recovered",
+                        );
+                        self.log_control_plane_finish_snapshot(
+                            "control-plane-passive-startup-link-timeout-strict-recovered",
+                        );
+                        return Ok(0);
+                    }
+                    let final_ioex = self
+                        .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
+                        .ok();
+                    let final_ready = self
+                        .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
+                        .ok();
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-no-reply current_clock={}Hz width={} chunk_limit={} no_ht={} ioex=0x{ioex:02x}/{} iorx=0x{ready:02x}/{}",
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        self.control_plane_chunk_limit(),
+                        self.experimental_no_ht_transport,
+                        yn(final_ioex.is_some()),
+                        yn(final_ready.is_some()),
+                        ioex = final_ioex.unwrap_or(0),
+                        ready = final_ready.unwrap_or(0),
+                    ));
+                    self.log_function2_ready_snapshot("passive-startup-link-timeout-no-reply");
+                    self.log_control_plane_finish_snapshot(
+                        "control-plane-passive-startup-link-timeout-no-reply",
+                    );
+                    self.experimental_control_plane_reply_rearm_mode =
+                        control_plane_reply_rearm_none();
+                    self.experimental_control_plane_reply_rearm_attempts = 0;
+                    self.experimental_control_plane_reply_rearm_empty_polls = 0;
+                    self.experimental_control_plane_promoted_probe_pending = false;
+                    Err(HalError::Unsupported(passive_startup_link_timeout_error(
+                        final_ioex,
+                        final_ready,
+                    )))
+                }
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-probe-fail current_clock={}Hz width={} chunk_limit={} no_ht={} err={err}",
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.control_plane_chunk_limit(),
+                    self.experimental_no_ht_transport,
+                ));
+                self.log_control_plane_finish_snapshot(
+                    "control-plane-passive-startup-link-timeout-probe-fail",
+                );
+                self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
+                self.experimental_control_plane_reply_rearm_attempts = 0;
+                self.experimental_control_plane_reply_rearm_empty_polls = 0;
+                self.experimental_control_plane_promoted_probe_pending = false;
+                Err(err)
+            }
+        }
+    }
+
     fn rearm_firmware_channel_on_startup_link(&mut self) -> Result<(), HalError> {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=slow-link-channel-rearm action=begin current={}Hz width={}",
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
         ));
+        self.log_control_plane_recovery_transition("slow-link-channel-rearm-begin");
         self.refresh_transport_phase_for("slow-link-channel-rearm")?;
         let mut attempt = 0usize;
         loop {
@@ -3688,7 +3947,7 @@ impl SdioHost {
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage=slow-link-channel-rearm action=ready"
                     ));
-                    self.log_control_plane_finish_snapshot("slow-link-channel-rearm-ready");
+                    self.log_control_plane_recovery_transition("slow-link-channel-rearm-ready");
                     return Ok(());
                 }
                 Err(err) if firmware_phase_can_retry(&err, attempt) => {
@@ -3710,6 +3969,7 @@ impl SdioHost {
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
         ));
+        self.log_control_plane_recovery_transition("control-plane-post-write-rearm-begin");
         self.refresh_transport_phase_for("control-plane-post-write-rearm")?;
         let mut attempt = 0usize;
         loop {
@@ -3726,7 +3986,9 @@ impl SdioHost {
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=ready"
                     ));
-                    self.log_control_plane_finish_snapshot("control-plane-post-write-rearm-ready");
+                    self.log_control_plane_recovery_transition(
+                        "control-plane-post-write-rearm-ready",
+                    );
                     return Ok(());
                 }
                 Err(err) if firmware_phase_can_retry(&err, attempt) => {
@@ -3756,6 +4018,7 @@ impl SdioHost {
             sdio_bus_width_name(self.desired_bus_width),
             CYW43_STARTUP_CLOCK_HZ,
         ));
+        self.log_control_plane_recovery_transition("control-plane-post-write-rearm-resume-begin");
         if !matches!(self.desired_bus_width, SdioBusWidth::OneBit) {
             self.set_bus_width(SdioBusWidth::OneBit)?;
         }
@@ -3776,6 +4039,7 @@ impl SdioHost {
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
         ));
+        self.log_control_plane_recovery_transition("control-plane-post-write-rearm-resume-ready");
         Ok(())
     }
 
@@ -3789,6 +4053,7 @@ impl SdioHost {
             sdio_bus_width_name(self.desired_bus_width),
             control_plane_promote_rearm_mode_name(speculative_ready_probe),
         ));
+        self.log_control_plane_recovery_transition("control-plane-promote-rearm-begin");
         self.refresh_transport_phase_for("control-plane-promote-rearm")?;
         let mut attempt = 0usize;
         loop {
@@ -3807,7 +4072,7 @@ impl SdioHost {
                         "[pi4-wifi] firmware stage=control-plane-promote-rearm action=ready mode={}",
                         control_plane_promote_rearm_mode_name(speculative_ready_probe),
                     ));
-                    self.log_control_plane_finish_snapshot("control-plane-promote-rearm-ready");
+                    self.log_control_plane_recovery_transition("control-plane-promote-rearm-ready");
                     return Ok(());
                 }
                 Err(err) if firmware_phase_can_retry(&err, attempt) => {
@@ -3840,8 +4105,7 @@ impl SdioHost {
             self.control_plane_reply_chunk_limit(),
             self.experimental_no_ht_transport,
         ));
-        self.log_control_plane_finish_snapshot("control-plane-reply-strict-recover-begin");
-        self.log_function2_ready_snapshot("strict-recover-begin");
+        self.log_control_plane_recovery_transition("control-plane-reply-strict-recover-begin");
         self.recover_command_path_and_refresh_transport("control-plane-reply-strict-recover")?;
         match self.rearm_firmware_channel_once(
             SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
@@ -3859,8 +4123,9 @@ impl SdioHost {
                     self.control_plane_reply_chunk_limit(),
                     self.experimental_no_ht_transport,
                 ));
-                self.log_control_plane_finish_snapshot("control-plane-reply-strict-recover-ready");
-                self.log_function2_ready_snapshot("strict-recover-ready");
+                self.log_control_plane_recovery_transition(
+                    "control-plane-reply-strict-recover-ready",
+                );
                 if function2_ready_after {
                     self.experimental_control_plane_reply_rearm_mode =
                         control_plane_reply_rearm_none();
@@ -3881,8 +4146,9 @@ impl SdioHost {
                     self.control_plane_reply_chunk_limit(),
                     self.experimental_no_ht_transport,
                 ));
-                self.log_control_plane_finish_snapshot("control-plane-reply-strict-recover-fail");
-                self.log_function2_ready_snapshot("strict-recover-fail");
+                self.log_control_plane_recovery_transition(
+                    "control-plane-reply-strict-recover-fail",
+                );
                 Ok(false)
             }
         }
@@ -4114,37 +4380,76 @@ impl SdioHost {
 
         let attempt = self.experimental_control_plane_reply_rearm_attempts;
         let hint_stage = "control-plane-reply-hint";
-        let int_status = match self.read_sdio_core_u32_with_f1_fallback(
-            hint_stage,
-            "int-status",
-            SDIO_INT_STATUS,
-        ) {
-            Ok(value) => Some(value),
-            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-reply action=hint-int-status-unavailable mode={} attempt={} err={err}",
-                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
-                    attempt,
-                ));
-                None
+        let mut skip_backplane_hints = control_plane_reply_skips_backplane_hints(
+            self.experimental_no_ht_transport,
+            reply_rearm_mode,
+            self.experimental_control_plane_hint_reads_unstable,
+        );
+        if skip_backplane_hints {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=control-plane-reply action=skip-toxic-f1-hints mode={} attempt={} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                attempt,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.control_plane_chunk_limit(),
+                self.experimental_no_ht_transport,
+            ));
+        }
+        let int_status = if skip_backplane_hints {
+            None
+        } else {
+            match self.read_sdio_core_u32_with_f1_fallback(
+                hint_stage,
+                "int-status",
+                SDIO_INT_STATUS,
+            ) {
+                Ok(value) => Some(value),
+                Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                    self.mark_control_plane_hint_reads_unstable(
+                        hint_stage,
+                        "int-status",
+                        reply_rearm_mode,
+                        attempt,
+                        &err,
+                    );
+                    skip_backplane_hints = true;
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=hint-int-status-unavailable mode={} attempt={} err={err}",
+                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                        attempt,
+                    ));
+                    None
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => return Err(err),
         };
-        let mailbox_data = match self.read_sdio_core_u32_with_f1_fallback(
-            hint_stage,
-            "tohost-mailbox",
-            SDPCMD_REG_TOHOSTMAILBOXDATA,
-        ) {
-            Ok(value) => Some(value),
-            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-reply action=hint-mailbox-unavailable mode={} attempt={} err={err}",
-                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
-                    attempt,
-                ));
-                None
+        let mailbox_data = if skip_backplane_hints {
+            None
+        } else {
+            match self.read_sdio_core_u32_with_f1_fallback(
+                hint_stage,
+                "tohost-mailbox",
+                SDPCMD_REG_TOHOSTMAILBOXDATA,
+            ) {
+                Ok(value) => Some(value),
+                Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                    self.mark_control_plane_hint_reads_unstable(
+                        hint_stage,
+                        "tohost-mailbox",
+                        reply_rearm_mode,
+                        attempt,
+                        &err,
+                    );
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=hint-mailbox-unavailable mode={} attempt={} err={err}",
+                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                        attempt,
+                    ));
+                    None
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => return Err(err),
         };
         if let Some(mailbox_data) = mailbox_data {
             if control_plane_reply_mailbox_has_firmware_halt(mailbox_data) {
@@ -4568,7 +4873,7 @@ impl SdioHost {
         write_result
     }
 
-    fn log_control_plane_finish_snapshot(&mut self, stage: &'static str) {
+    fn log_control_plane_finish_snapshot(&mut self, stage: &'static str) -> &'static str {
         self.log_transport_shadow(stage);
 
         let ioex = self
@@ -4679,6 +4984,16 @@ impl SdioHost {
             + usize::from(function_int_mask.is_some())
             + usize::from(tohost_mailbox.is_some())
             + usize::from(int_status.is_some());
+        let blocker = control_plane_snapshot_exact_blocker_label(
+            ioex,
+            iorx,
+            ienx,
+            hint_visible,
+            hostintmask,
+            function_int_mask,
+            rframe_lo,
+            rframe_hi,
+        );
         emit_breadcrumb(format_args!(
             "[pi4-wifi] control-plane snapshot {stage} diag f2={}/{}/{} hints={} hm={} fm={} rf={} blocker={} probe={} clk={}Hz mode={} try={}",
             control_plane_snapshot_bit_state_label(ioex, SDIO_FUNCTION_ENABLE_F2.enable_bit),
@@ -4688,21 +5003,19 @@ impl SdioHost {
             control_plane_snapshot_match_label(hostintmask, HOSTINTMASK),
             control_plane_snapshot_match_label(function_int_mask, FUNCTIONINTMASK),
             control_plane_snapshot_reply_frame_label(rframe_lo, rframe_hi),
-            control_plane_snapshot_exact_blocker_label(
-                ioex,
-                iorx,
-                ienx,
-                hint_visible,
-                hostintmask,
-                function_int_mask,
-                rframe_lo,
-                rframe_hi,
-            ),
+            blocker,
             probe_source,
             self.current_clock_hz,
             control_plane_reply_rearm_mode_name(self.experimental_control_plane_reply_rearm_mode),
             self.experimental_control_plane_reply_rearm_attempts,
         ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] control-plane snapshot {stage} exact-error={} hint_reads_unstable={} startup_link_stable={}",
+            control_plane_snapshot_exact_error_label(blocker),
+            yn(self.experimental_control_plane_hint_reads_unstable),
+            yn(self.experimental_control_plane_startup_link_stabilized),
+        ));
+        blocker
     }
 
     fn read_control_plane_snapshot_u32s_with_low_clock_probe(
@@ -5301,6 +5614,11 @@ impl SdioHost {
         ));
     }
 
+    fn log_control_plane_recovery_transition(&mut self, stage: &'static str) {
+        self.log_function2_ready_snapshot(stage);
+        self.log_control_plane_finish_snapshot(stage);
+    }
+
     fn prime_function2_block_size_for_ready(
         &mut self,
         function_ready_budget: SdioFunctionReadyBudget,
@@ -5672,44 +5990,32 @@ impl SdioHost {
                 HOSTINTMASK,
                 allow_function2_ready_bypass,
             )?;
+            self.io_direct_write(SdioFunction::Function1, SBSDIO_WATERMARK, watermark)?;
+            let devctl = self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)?;
+            let devctl_programmed = devctl | SBSDIO_DEVCTL_F2WM_ENAB;
+            self.io_direct_write(
+                SdioFunction::Function1,
+                SBSDIO_DEVICE_CTL,
+                devctl_programmed,
+            )?;
+            self.io_direct_write(
+                SdioFunction::Function1,
+                SBSDIO_FUNC1_MESBUSYCTRL,
+                CY_43455_MESBUSYCTRL,
+            )?;
             self.arm_function2_interrupts_for_firmware_channel(
                 "setup-firmware-channel-interrupts",
                 allow_function2_ready_bypass,
             )?;
-            self.io_direct_write(SdioFunction::Function1, SBSDIO_WATERMARK, watermark)?;
             if linux_minimal_setup {
-                let devctl = self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)?;
-                let devctl_programmed = devctl | SBSDIO_DEVCTL_F2WM_ENAB;
-                self.io_direct_write(
-                    SdioFunction::Function1,
-                    SBSDIO_DEVICE_CTL,
-                    devctl_programmed,
-                )?;
-                self.io_direct_write(
-                    SdioFunction::Function1,
-                    SBSDIO_FUNC1_MESBUSYCTRL,
-                    CY_43455_MESBUSYCTRL,
-                )?;
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=setup-firmware-channel action=linux-sdio-minimal+interrupts hostintmask=0x{hostintmask:08x} fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
+                    "[pi4-wifi] firmware stage=setup-firmware-channel action=linux-sdio-minimal-strict-order order=mailbox>f2>hostintmask>watermark>devctl>mesbusy>interrupts hostintmask=0x{hostintmask:08x} fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
                     hostintmask = HOSTINTMASK,
                     fn_int_mask = FUNCTIONINTMASK,
                     ien = SDIO_INTERRUPT_ENABLE_MASK,
                     devctl = devctl_programmed,
                     mesbusy = CY_43455_MESBUSYCTRL,
                 ));
-            } else {
-                let devctl = self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)?;
-                self.io_direct_write(
-                    SdioFunction::Function1,
-                    SBSDIO_DEVICE_CTL,
-                    devctl | SBSDIO_DEVCTL_F2WM_ENAB,
-                )?;
-                self.io_direct_write(
-                    SdioFunction::Function1,
-                    SBSDIO_FUNC1_MESBUSYCTRL,
-                    CY_43455_MESBUSYCTRL,
-                )?;
             }
             Ok(())
         })();
@@ -6679,6 +6985,29 @@ impl SdioHost {
             self.experimental_control_plane_reply_rearm_empty_polls = 0;
             return Ok(frame_len);
         }
+        if self.experimental_control_plane_startup_link_stabilized {
+            if passive_startup_link_wait_timed_out(
+                self.experimental_control_plane_reply_rearm_empty_polls,
+            ) {
+                return self.fail_passive_startup_link_wait();
+            }
+            let next_empty_poll = self
+                .experimental_control_plane_reply_rearm_empty_polls
+                .saturating_add(1);
+            if passive_startup_link_wait_should_log_empty_poll(next_empty_poll) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-wait poll={} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                    next_empty_poll,
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.control_plane_chunk_limit(),
+                    self.experimental_no_ht_transport,
+                ));
+                self.log_control_plane_finish_snapshot("control-plane-passive-startup-link-wait");
+            }
+            self.experimental_control_plane_reply_rearm_empty_polls = next_empty_poll;
+            return Ok(0);
+        }
         if control_plane_reply_rearm_pending(self.experimental_control_plane_reply_rearm_mode) {
             if control_plane_reply_rearm_waits_for_empty_polls(
                 self.experimental_control_plane_reply_rearm_mode,
@@ -6806,6 +7135,16 @@ impl SdioHost {
         let finish_successful_write = |this: &mut Self,
                                        used_startup_link_fallback: bool|
          -> Result<(), HalError> {
+            if experimental_control_plane_write_prefers_passive_startup_link_wait_after_fallback(
+                this.experimental_no_ht_transport,
+                first_control_plane_write_pending,
+                used_startup_link_fallback,
+            ) {
+                this.keep_control_plane_on_startup_link_after_first_write(
+                    "control-plane-write-startup-link-passive",
+                );
+                return Ok(());
+            }
             if experimental_control_plane_write_fallback_needs_startup_link_resume(
                 this.experimental_no_ht_transport,
                 first_control_plane_write_pending,
@@ -6872,19 +7211,26 @@ impl SdioHost {
             {
                 let previous_clock_hz = self.current_clock_hz;
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-write action=fallback-startup-link len={} write_chunk_limit={} reply_chunk_limit={} current={}Hz target={}Hz err={err}",
+                    "[pi4-wifi] firmware stage=control-plane-write action=fallback-startup-link len={} write_chunk_limit={} reply_chunk_limit={} current={}Hz width={} target={}Hz target_width={} err={err}",
                     frame_len,
                     self.control_plane_write_chunk_limit(),
                     self.control_plane_reply_chunk_limit(),
                     previous_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
                     CYW43_STARTUP_CLOCK_HZ,
+                    sdio_bus_width_name(startup_link_reattach_target_profile().1),
                 ));
-                self.set_clock_hz(CYW43_STARTUP_CLOCK_HZ)?;
+                let (target_clock_hz, target_bus_width) = startup_link_reattach_target_profile();
+                self.set_clock_hz(target_clock_hz)?;
+                if self.desired_bus_width != target_bus_width {
+                    self.set_bus_width(target_bus_width)?;
+                }
                 self.refresh_transport_phase_for("control-plane-write-startup-retry")?;
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-write action=fallback-startup-link-ready previous={}Hz current={}Hz len={} write_chunk_limit={} reply_chunk_limit={}",
+                    "[pi4-wifi] firmware stage=control-plane-write action=fallback-startup-link-ready previous={}Hz current={}Hz width={} len={} write_chunk_limit={} reply_chunk_limit={}",
                     previous_clock_hz,
                     self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
                     frame_len,
                     self.control_plane_write_chunk_limit(),
                     self.control_plane_reply_chunk_limit(),
@@ -7114,9 +7460,22 @@ impl SdioHost {
         self.wait_for_firmware_ready(allow_function2_ready_bypass)?;
         if allow_function2_ready_bypass {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=repoll"
+                "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll"
             ));
-            self.enable_function2(SdioFunctionReadyBudget::ExperimentalBypass)?;
+            match self.enable_function2(SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery) {
+                Ok(()) => emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll-ok"
+                )),
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll-fail err={err} fallback=experimental-bypass"
+                    ));
+                    self.log_function2_ready_snapshot(
+                        "post-firmware-ready-function2-strict-repoll-fail",
+                    );
+                    self.enable_function2(SdioFunctionReadyBudget::ExperimentalBypass)?;
+                }
+            }
         }
         emit_breadcrumb(format_args!("[pi4-wifi] firmware load ready"));
         Ok(())
@@ -9379,11 +9738,12 @@ mod tests {
         control_plane_reply_rearm_supports_speculative_read,
         control_plane_reply_rearm_uses_promoted_link,
         control_plane_reply_should_attempt_speculative_read,
-        control_plane_reply_should_log_empty_snapshot, control_plane_reply_speculative_frame_len,
+        control_plane_reply_should_log_empty_snapshot, control_plane_reply_skips_backplane_hints,
+        control_plane_reply_speculative_frame_len,
         control_plane_reply_speculative_read_needs_startup_link_retry,
         control_plane_snapshot_bit_state_label, control_plane_snapshot_exact_blocker_label,
-        control_plane_snapshot_hint_visibility_label, control_plane_snapshot_match_label,
-        control_plane_snapshot_needs_low_clock_sdio_core_probe,
+        control_plane_snapshot_exact_error_label, control_plane_snapshot_hint_visibility_label,
+        control_plane_snapshot_match_label, control_plane_snapshot_needs_low_clock_sdio_core_probe,
         control_plane_snapshot_reply_frame_label, control_plane_snapshot_uses_live_sdio_core_reads,
         control_plane_startup_link_probe_stalled_after_rearm,
         control_plane_zero_frame_needs_reply_rearm, core_ctrl_access_mode_label,
@@ -9397,6 +9757,7 @@ mod tests {
         experimental_control_plane_write_can_retry_on_startup_link,
         experimental_control_plane_write_fallback_needs_startup_link_resume,
         experimental_control_plane_write_needs_post_write_rearm,
+        experimental_control_plane_write_prefers_passive_startup_link_wait_after_fallback,
         experimental_function2_fifo_chunk_limit, firmware_bulk_clock_candidates,
         firmware_channel_uses_linux_minimal_setup, firmware_channel_watermark,
         firmware_phase_can_retry, ht_clock_assist_shadow_is_complete, ht_clock_request_value,
@@ -9758,6 +10119,30 @@ mod tests {
         assert!(!experimental_control_plane_write_needs_post_write_rearm(
             true, false
         ));
+    }
+
+    #[test]
+    fn experimental_control_plane_write_startup_link_passive_wait_requires_fallback() {
+        assert!(
+            experimental_control_plane_write_prefers_passive_startup_link_wait_after_fallback(
+                true, true, true
+            )
+        );
+        assert!(
+            !experimental_control_plane_write_prefers_passive_startup_link_wait_after_fallback(
+                false, true, true
+            )
+        );
+        assert!(
+            !experimental_control_plane_write_prefers_passive_startup_link_wait_after_fallback(
+                true, false, true
+            )
+        );
+        assert!(
+            !experimental_control_plane_write_prefers_passive_startup_link_wait_after_fallback(
+                true, true, false
+            )
+        );
     }
 
     #[test]
@@ -10155,6 +10540,38 @@ mod tests {
         assert!(control_plane_reply_should_log_empty_snapshot(0));
         assert!(!control_plane_reply_should_log_empty_snapshot(1));
         assert!(!control_plane_reply_should_log_empty_snapshot(2));
+    }
+
+    #[test]
+    fn passive_startup_link_wait_logging_uses_first_and_saturation_boundaries() {
+        assert!(passive_startup_link_wait_should_log_empty_poll(1));
+        assert!(!passive_startup_link_wait_should_log_empty_poll(2));
+        assert!(!passive_startup_link_wait_should_log_empty_poll(254));
+        assert!(passive_startup_link_wait_should_log_empty_poll(u8::MAX));
+    }
+
+    #[test]
+    fn passive_startup_link_wait_timeout_fires_at_saturation_boundary() {
+        assert!(!passive_startup_link_wait_timed_out(0));
+        assert!(!passive_startup_link_wait_timed_out(254));
+        assert!(passive_startup_link_wait_timed_out(
+            passive_startup_link_wait_empty_poll_limit()
+        ));
+    }
+
+    #[test]
+    fn passive_startup_link_timeout_error_surfaces_function2_state() {
+        assert_eq!(
+            passive_startup_link_timeout_error(Some(SDIO_FUNCTION_ENABLE_F2.enable_bit), Some(0),),
+            "cyw43-function2-enable-latched-not-ready"
+        );
+        assert_eq!(
+            passive_startup_link_timeout_error(
+                Some(SDIO_FUNCTION_ENABLE_F2.enable_bit),
+                Some(SDIO_FUNCTION_ENABLE_F2.enable_bit),
+            ),
+            "cyw43-control-plane-passive-startup-link-timeout"
+        );
     }
 
     #[test]
@@ -11620,6 +12037,47 @@ mod tests {
             ),
             "state-visible"
         );
+        assert_eq!(
+            control_plane_snapshot_exact_error_label("sdio-core-hints-unreadable"),
+            "cyw43-control-plane-hints-unreadable"
+        );
+        assert_eq!(
+            control_plane_snapshot_exact_error_label("reply-frame-missing"),
+            "cyw43-control-plane-reply-frame-missing"
+        );
+        assert_eq!(
+            control_plane_snapshot_exact_error_label("state-visible"),
+            "cyw43-control-plane-state-visible-no-reply"
+        );
+    }
+
+    #[test]
+    fn speculative_reply_read_can_skip_toxic_backplane_hints_on_startup_link() {
+        assert!(control_plane_reply_skips_backplane_hints(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            true,
+        ));
+        assert!(control_plane_reply_skips_backplane_hints(
+            true,
+            control_plane_reply_rearm_promoted_link(),
+            true,
+        ));
+        assert!(!control_plane_reply_skips_backplane_hints(
+            false,
+            control_plane_reply_rearm_startup_link(),
+            true,
+        ));
+        assert!(!control_plane_reply_skips_backplane_hints(
+            true,
+            control_plane_reply_rearm_none(),
+            true,
+        ));
+        assert!(!control_plane_reply_skips_backplane_hints(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            false,
+        ));
     }
 
     #[test]
