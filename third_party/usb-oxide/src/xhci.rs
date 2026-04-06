@@ -173,9 +173,27 @@ const fn skip_constructor_polling_scrub_writes(firmware_handoff: XhciFirmwareHan
 }
 
 #[inline(always)]
+const fn skip_constructor_polling_scrub_writes_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    skip_constructor_polling_scrub_writes(firmware_handoff)
+        || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn skip_init_pre_reset_scrub_writes(firmware_handoff: XhciFirmwareHandoff) -> bool {
     matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
         || skip_preinit_polling_scrub(firmware_handoff)
+}
+
+#[inline(always)]
+const fn skip_init_pre_reset_scrub_writes_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    skip_init_pre_reset_scrub_writes(firmware_handoff)
+        || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -186,6 +204,15 @@ const fn skip_legacy_ownership_claim_for_handoff(firmware_handoff: XhciFirmwareH
             | XhciFirmwareHandoff::ResetlessReinit
             | XhciFirmwareHandoff::PreserveControllerState
     )
+}
+
+#[inline(always)]
+const fn skip_legacy_ownership_claim_for_handoff_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    skip_legacy_ownership_claim_for_handoff(firmware_handoff)
+        || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -319,6 +346,16 @@ const fn runtime_mailbox_reset_stop_state_handoff(
 }
 
 #[inline(always)]
+const fn runtime_seeded_full_reset_start_handoff(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    matches!(firmware_handoff, XhciFirmwareHandoff::None)
+        && runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
+        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn runtime_preserve_stop_state_handoff(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
@@ -369,6 +406,7 @@ const fn runtime_handoff_needs_pre_run_settle(
     // Give VL805 one short bounded settle after runtime ring publication so
     // the controller can observe the freshly published DMA state before RUN.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
             && runtime_seed_snapshot.is_none()
@@ -387,6 +425,14 @@ const fn runtime_handoff_needs_relaxed_run_write(
     // sequence so the next hardware trace tells us whether VL805 still dies
     // on the live RUN store when the helper machinery is removed entirely.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn runtime_handoff_needs_relaxed_reset_write(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -410,6 +456,7 @@ const fn runtime_handoff_needs_uboot_style_run_write(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -1315,7 +1362,10 @@ impl<H: Dma> XhciCtrl<H> {
             mmio,
             op_offset,
             int_base,
-            skip_constructor_polling_scrub_writes(params.firmware_handoff),
+            skip_constructor_polling_scrub_writes_with_snapshot(
+                params.firmware_handoff,
+                params.runtime_seed_snapshot,
+            ),
         );
         emit_xhci_diag(
             0x0107,
@@ -1477,8 +1527,16 @@ impl<H: Dma> XhciCtrl<H> {
         // Keep host-system and event interrupts masked during bring-up. Pi4
         // local-seat uses polling and does not install xHCI IRQ handlers in
         // this phase.
-        if skip_init_pre_reset_scrub_writes(self.firmware_handoff) {
-            emit_xhci_diag(0x0204, self.mmio as u64, self.firmware_handoff as u64, 0);
+        if skip_init_pre_reset_scrub_writes_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        ) {
+            emit_xhci_diag(
+                0x0204,
+                self.mmio as u64,
+                self.firmware_handoff as u64,
+                runtime_seed_snapshot_flag_bits(trusted_runtime_seed_snapshot),
+            );
         } else {
             let mut usbcmd = self.read_op::<u32>(reg::USBCMD);
             let usbsts_start = self.read_op::<u32>(reg::USBSTS);
@@ -1494,13 +1552,21 @@ impl<H: Dma> XhciCtrl<H> {
         // Some firmware/UEFI stacks leave xHCI under legacy ownership until
         // the OS-owned semaphore is asserted.
         if !SKIP_LEGACY_OWNERSHIP_CLAIM
-            && !skip_legacy_ownership_claim_for_handoff(self.firmware_handoff)
+            && !skip_legacy_ownership_claim_for_handoff_with_snapshot(
+                self.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+            )
         {
             emit_xhci_diag(0x0210, 0, 0, 0);
             self.claim_legacy_ownership()?;
             emit_xhci_diag(0x0211, 0, 0, 0);
         } else {
-            emit_xhci_diag(0x0212, self.firmware_handoff as u64, 0, 0);
+            emit_xhci_diag(
+                0x0212,
+                self.firmware_handoff as u64,
+                runtime_seed_snapshot_flag_bits(trusted_runtime_seed_snapshot),
+                1,
+            );
         }
 
         // Resetless/preserve-state firmware modes already proved the
@@ -1608,6 +1674,10 @@ impl<H: Dma> XhciCtrl<H> {
                 0,
             );
             let reset_cmd = usbcmd_before_reset | reg::USBCMD_HCRST;
+            let relaxed_reset_write = runtime_handoff_needs_relaxed_reset_write(
+                self.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+            );
             // Reset controller
             emit_xhci_diag(
                 0x0230,
@@ -1615,13 +1685,27 @@ impl<H: Dma> XhciCtrl<H> {
                 reset_cmd as u64,
                 self.firmware_handoff as u64,
             );
-            self.write_op_u32_store_diag(
-                reg::USBCMD,
-                reset_cmd,
-                0x0237,
-                0x0235,
-                self.firmware_handoff as u64,
-            );
+            if relaxed_reset_write {
+                self.write_op_u32_store_diag_relaxed_with_barrier_phase(
+                    reg::USBCMD,
+                    reset_cmd,
+                    0x0230,
+                    0x023a,
+                    0x0237,
+                    0x0235,
+                    self.firmware_handoff as u64,
+                );
+            } else {
+                self.write_op_u32_store_diag_with_barrier_phase(
+                    reg::USBCMD,
+                    reset_cmd,
+                    0x0230,
+                    0x023a,
+                    0x0237,
+                    0x0235,
+                    self.firmware_handoff as u64,
+                );
+            }
             let mut reset_state = self.read_op::<u32>(reg::USBCMD);
             emit_xhci_diag(0x0236, reset_state as u64, reg::USBCMD_HCRST as u64, 0);
             let mut waited = 0usize;
@@ -3179,14 +3263,17 @@ mod tests {
         probe_live_dcbaap_before_staged_publish_with_snapshot, run_usbcmd_needs_live_seed_read,
         run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
         runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_relaxed_run_write,
-        runtime_handoff_needs_release_only_run_write,
+        runtime_handoff_needs_relaxed_reset_write, runtime_handoff_needs_release_only_run_write,
         runtime_handoff_needs_uboot_style_run_write, runtime_mailbox_reset_handoff,
         runtime_mailbox_reset_needs_blind_settle, runtime_mailbox_reset_stop_state_handoff,
         runtime_preserve_stop_state_handoff, runtime_seed_snapshot_flag_bits,
         runtime_stop_state_needs_post_run_settle,
         skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
-        skip_constructor_polling_scrub_writes, skip_doorbell_readback_after_ring,
-        skip_init_pre_reset_scrub_writes, skip_legacy_ownership_claim_for_handoff,
+        skip_constructor_polling_scrub_writes,
+        skip_constructor_polling_scrub_writes_with_snapshot, skip_doorbell_readback_after_ring,
+        skip_init_pre_reset_scrub_writes, skip_init_pre_reset_scrub_writes_with_snapshot,
+        skip_legacy_ownership_claim_for_handoff,
+        skip_legacy_ownership_claim_for_handoff_with_snapshot,
         skip_live_halt_revalidation, skip_live_halt_revalidation_with_snapshot,
         skip_live_post_reset_verification_readbacks, skip_post_reset_cnr_poll_with_snapshot,
         skip_post_run_interrupter_zeroing_with_snapshot, skip_preinit_polling_scrub,
@@ -3517,8 +3604,32 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             stop_state_snapshot,
         ));
+        assert!(runtime_handoff_needs_relaxed_reset_write(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            stop_state_snapshot,
+        ));
         assert!(runtime_handoff_needs_uboot_style_run_write(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
+            stop_state_snapshot,
+        ));
+        assert!(runtime_handoff_needs_pre_run_settle(
+            XhciFirmwareHandoff::None,
+            stop_state_snapshot,
+        ));
+        assert!(!runtime_handoff_needs_relaxed_run_write(
+            XhciFirmwareHandoff::None,
+            stop_state_snapshot,
+        ));
+        assert!(runtime_handoff_needs_relaxed_reset_write(
+            XhciFirmwareHandoff::None,
+            stop_state_snapshot,
+        ));
+        assert!(runtime_handoff_needs_uboot_style_run_write(
+            XhciFirmwareHandoff::None,
+            stop_state_snapshot,
+        ));
+        assert!(!runtime_handoff_needs_release_only_run_write(
+            XhciFirmwareHandoff::None,
             stop_state_snapshot,
         ));
         assert!(!runtime_handoff_needs_pre_run_settle(
@@ -3526,6 +3637,10 @@ mod tests {
             stop_state_snapshot,
         ));
         assert!(!runtime_handoff_needs_relaxed_run_write(
+            XhciFirmwareHandoff::PreserveControllerState,
+            stop_state_snapshot,
+        ));
+        assert!(!runtime_handoff_needs_relaxed_reset_write(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
@@ -4168,6 +4283,28 @@ mod tests {
     }
 
     #[test]
+    fn runtime_seeded_full_reset_start_skips_constructor_polling_scrub_writes() {
+        let stop_state_seed = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+        assert!(skip_constructor_polling_scrub_writes_with_snapshot(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
+        assert!(!skip_constructor_polling_scrub_writes_with_snapshot(
+            XhciFirmwareHandoff::None,
+            None,
+        ));
+    }
+
+    #[test]
     fn trusted_handoff_init_still_skips_pre_reset_scrub_writes() {
         assert!(skip_init_pre_reset_scrub_writes(
             XhciFirmwareHandoff::ColdStartFromSnapshot
@@ -4179,6 +4316,24 @@ mod tests {
             XhciFirmwareHandoff::ResetlessReinit
         ));
         assert!(!skip_init_pre_reset_scrub_writes(XhciFirmwareHandoff::None));
+    }
+
+    #[test]
+    fn runtime_seeded_full_reset_start_skips_pre_reset_scrub_writes() {
+        let stop_state_seed = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+        assert!(skip_init_pre_reset_scrub_writes_with_snapshot(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
     }
 
     #[test]
@@ -4194,6 +4349,24 @@ mod tests {
         ));
         assert!(!skip_legacy_ownership_claim_for_handoff(
             XhciFirmwareHandoff::None
+        ));
+    }
+
+    #[test]
+    fn runtime_seeded_full_reset_start_skips_legacy_ownership_claim() {
+        let stop_state_seed = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+        assert!(skip_legacy_ownership_claim_for_handoff_with_snapshot(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
         ));
     }
 

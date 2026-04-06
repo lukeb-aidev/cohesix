@@ -1308,16 +1308,13 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
-    // Runtime-owned cold-start rebuild is the known-good Pi 4 direction once
-    // the trusted CAP snapshot survives handoff. Confirmed resets still use
-    // the fully fresh path, while weaker bounded outcomes keep the same
-    // cold-start mode label because the first attempted strategy now stays on
-    // the seeded cold-start branch rather than the preserve-state branch.
+    // Confirmed runtime resets still benefit from a full cold-start rebuild.
+    // The weaker bounded outcomes now reach the first live HCRST store and
+    // stall there, so prefer preserve-state handoff first and only revisit
+    // reset-based takeover as a fallback.
     if matches!(
         runtime_vl805_reset_state,
         VL805_RUNTIME_RESET_STATE_NOTIFIED
-            | VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
-            | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
     ) {
         XhciFirmwareHandoff::ColdStartFromSnapshot
     } else {
@@ -1775,6 +1772,8 @@ const fn xhci_diag_stage_value_labels(
     stage: u16,
 ) -> Option<(&'static str, &'static str, &'static str)> {
     match stage {
+        0x0204 => Some(("mmio", "handoff", "seed_flags")),
+        0x0212 => Some(("handoff", "seed_flags", "skip")),
         0x0217 | 0x0218 => Some(("handoff", "seed_flags", "skip")),
         0x02f0 => Some(("dcbaa", "cmd_ring", "event_ring")),
         0x02f1 => Some(("erstba", "crcr", "erdp")),
@@ -1818,6 +1817,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0228 => Some("reset-post-settle-done"),
         0x0229 => Some("reset-post-cnr-poll-skip"),
         0x0230 => Some("reset-write"),
+        0x023a => Some("reset-write-barrier-done"),
         0x0237 => Some("reset-write-pre-store"),
         0x0235 => Some("reset-write-issued"),
         0x0236 => Some("reset-first-readback"),
@@ -2341,29 +2341,33 @@ fn xhci_runtime_init_strategies(
         VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
     ) {
         // The weaker bounded reset outcomes still leave us with a trusted
-        // bootloader stop-state contract. The latest Pi 4 trace now freezes
-        // before the first fresh cold-start halt revalidation read, so lead
-        // with a seeded cold-start that still rebuilds runtime-owned rings but
-        // skips that hazardous live stop-state probe. If that stalls later, we
-        // still fall back to the completely unseeded U-Boot-style rebuild and
-        // then the resetless seeded path.
-        if stop_state_seed_available {
-            xhci_runtime_init_strategy_push(
-                &mut strategies,
-                &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
-            );
-        }
-        xhci_runtime_init_strategy_push(
-            &mut strategies,
-            &mut count,
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
-        );
+        // bootloader stop-state contract, but the April 6, 2026 Pi 4 trace
+        // now reaches reset-write-barrier-done and then stalls at the live
+        // HCRST store itself. Lead with the preserve-state path so runtime can
+        // take ownership without replaying that toxic reset edge. If that
+        // still misses, fall back to the plain U-Boot-style cold-start and
+        // keep the seeded full-reset start only as a last diagnostic branch.
         if stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
+            );
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+            );
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
+            );
+        } else {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
             );
         }
     } else {
@@ -2405,13 +2409,13 @@ const fn xhci_runtime_init_strategy_origin_label(
 ) -> &'static str {
     match (strategy.firmware_handoff, strategy.seed_stop_state) {
         (XhciFirmwareHandoff::None, false) => "live-runtime-default",
+        (XhciFirmwareHandoff::None, true) => "full-reset-stop-seed",
         (XhciFirmwareHandoff::ColdStartFromSnapshot, false) => "uboot-fresh-init",
         (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "seeded-cold-start",
         (XhciFirmwareHandoff::ResetlessReinit, true) => "stop-state-resetless-reinit",
         (XhciFirmwareHandoff::PreserveControllerState, true) => "stop-state-preserve",
         (XhciFirmwareHandoff::ResetlessReinit, false) => "resetless-reinit",
         (XhciFirmwareHandoff::PreserveControllerState, false) => "preserve-controller-state",
-        (XhciFirmwareHandoff::None, true) => "live-runtime-default",
     }
 }
 
@@ -10233,7 +10237,8 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_prioritize_seeded_cold_start_for_weak_runtime_reset_outcomes() {
+    fn xhci_runtime_init_strategies_prioritize_preserve_state_before_resetting_for_weak_runtime_reset_outcomes(
+    ) {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::PreserveControllerState,
             super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
@@ -10246,7 +10251,7 @@ mod tests {
         assert_eq!(count, 3);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true)
         );
         assert_eq!(
             strategies[1],
@@ -10254,7 +10259,7 @@ mod tests {
         );
         assert_eq!(
             strategies[2],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
         );
     }
 
@@ -10276,10 +10281,35 @@ mod tests {
         );
         assert_eq!(
             xhci_runtime_init_strategy_policy_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::None,
+                true,
+            )),
+            "full-reset-start"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_policy_label(XhciRuntimeInitStrategy::new(
                 XhciFirmwareHandoff::PreserveControllerState,
                 true,
             )),
             "preserve-state"
+        );
+    }
+
+    #[test]
+    fn xhci_runtime_init_strategy_origin_labels_distinguish_seeded_full_reset_start() {
+        assert_eq!(
+            super::xhci_runtime_init_strategy_origin_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::None,
+                true,
+            )),
+            "full-reset-stop-seed"
+        );
+        assert_eq!(
+            super::xhci_runtime_init_strategy_origin_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                false,
+            )),
+            "uboot-fresh-init"
         );
     }
 
@@ -10613,6 +10643,10 @@ mod tests {
             Some("reset-post-cnr-poll-skip")
         );
         assert_eq!(xhci_diag_stage_label(0x0230), Some("reset-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x023a),
+            Some("reset-write-barrier-done")
+        );
         assert_eq!(xhci_diag_stage_label(0x0235), Some("reset-write-issued"));
         assert_eq!(xhci_diag_stage_label(0x0236), Some("reset-first-readback"));
         assert_eq!(xhci_diag_stage_label(0x0237), Some("reset-write-pre-store"));
@@ -10856,6 +10890,14 @@ mod tests {
     #[test]
     fn xhci_diag_value_labels_name_pre_run_ring_snapshot_fields() {
         assert_eq!(
+            xhci_diag_stage_value_labels(0x0204),
+            Some(("mmio", "handoff", "seed_flags"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0212),
+            Some(("handoff", "seed_flags", "skip"))
+        );
+        assert_eq!(
             xhci_diag_stage_value_labels(0x0217),
             Some(("handoff", "seed_flags", "skip"))
         );
@@ -10906,13 +10948,13 @@ mod tests {
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
             ),
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::PreserveControllerState
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
             ),
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::PreserveControllerState
         );
     }
 
