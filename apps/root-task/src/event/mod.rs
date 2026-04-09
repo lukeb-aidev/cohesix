@@ -1052,6 +1052,8 @@ where
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "net-console")]
+    net_unavailable_detail: Option<HeaplessString<192>>,
+    #[cfg(feature = "net-console")]
     net_conn_id: Option<u64>,
     #[cfg(feature = "net-console")]
     last_net_diag_log_ms: Option<u64>,
@@ -1128,6 +1130,8 @@ where
             #[cfg(feature = "net-console")]
             net: None,
             #[cfg(feature = "net-console")]
+            net_unavailable_detail: None,
+            #[cfg(feature = "net-console")]
             net_conn_id: None,
             #[cfg(feature = "net-console")]
             last_net_diag_log_ms: None,
@@ -1157,6 +1161,13 @@ where
     pub fn with_network(mut self, net: &'a mut dyn NetPoller) -> Self {
         self.audit.info("event-pump: init network");
         self.net = Some(net);
+        self
+    }
+
+    /// Attach the preserved reason why the network stack was unavailable.
+    #[cfg(feature = "net-console")]
+    pub fn with_network_unavailable_detail(mut self, detail: Option<HeaplessString<192>>) -> Self {
+        self.net_unavailable_detail = detail;
         self
     }
 
@@ -1862,6 +1873,16 @@ where
         };
         self.emit_ack_err(verb, Some(detail.as_str()));
         crate::observe::record_pressure(reason.pressure_kind());
+    }
+
+    #[cfg(feature = "net-console")]
+    fn net_disabled_refusal_detail(&self) -> HeaplessString<224> {
+        let mut detail = HeaplessString::<224>::new();
+        let _ = write!(detail, "detail=net-disabled");
+        if let Some(cause) = self.net_unavailable_detail.as_ref() {
+            let _ = write!(detail, " cause={cause}");
+        }
+        detail
     }
 
     #[cfg(feature = "kernel")]
@@ -2613,11 +2634,8 @@ where
                     } else {
                         self.metrics.denied_commands += 1;
                         cmd_status = "err";
-                        self.emit_refusal(
-                            verb_label,
-                            RefusalReason::Policy,
-                            Some("detail=net-disabled"),
-                        );
+                        let detail = self.net_disabled_refusal_detail();
+                        self.emit_refusal(verb_label, RefusalReason::Policy, Some(detail.as_str()));
                     }
                 }
                 #[cfg(not(feature = "net-console"))]
@@ -2703,11 +2721,8 @@ where
                     } else {
                         self.metrics.denied_commands += 1;
                         cmd_status = "err";
-                        self.emit_refusal(
-                            verb_label,
-                            RefusalReason::Policy,
-                            Some("detail=net-disabled"),
-                        );
+                        let detail = self.net_disabled_refusal_detail();
+                        self.emit_refusal(verb_label, RefusalReason::Policy, Some(detail.as_str()));
                     }
                 }
                 #[cfg(not(feature = "net-console"))]
@@ -4519,6 +4534,51 @@ mod tests {
             4,
             DEFAULT_LINE_CAPACITY,
         >::net_diag_changed(prev, curr));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn net_disabled_refusal_detail_defaults_to_generic_reason() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        assert_eq!(
+            pump.net_disabled_refusal_detail().as_str(),
+            "detail=net-disabled"
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn net_disabled_refusal_detail_preserves_init_cause() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut cause = HeaplessString::<192>::new();
+        let _ = cause.push_str("cyw43-control-plane-pure-f2-startup-link-no-reply");
+        let pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network_unavailable_detail(Some(cause));
+
+        assert_eq!(
+            pump.net_disabled_refusal_detail().as_str(),
+            "detail=net-disabled cause=cyw43-control-plane-pure-f2-startup-link-no-reply"
+        );
     }
 
     struct NullIpc;

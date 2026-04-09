@@ -110,6 +110,8 @@ pub fn main(ctx: BootContext) -> ! {
 
     #[cfg(feature = "net-console")]
     let mut net_stack = take_net_stack(&ctx);
+    #[cfg(feature = "net-console")]
+    let net_unavailable_detail = take_net_unavailable_detail(&ctx);
 
     log::info!(
         target: "userland",
@@ -146,7 +148,7 @@ pub fn main(ctx: BootContext) -> ! {
             ctx.features.net,
             ctx.features.net_console
         );
-        pump = attach_network(pump, net_stack.as_mut());
+        pump = attach_network(pump, net_stack.as_mut(), net_unavailable_detail);
         if pump.net_console_enabled() {
             log::info!(
                 target: "net-console",
@@ -357,6 +359,11 @@ fn take_net_stack(ctx: &BootContext) -> Option<NetStackHandle> {
     ctx.net_stack.borrow_mut().take()
 }
 
+#[cfg(feature = "net-console")]
+fn take_net_unavailable_detail(ctx: &BootContext) -> Option<HeaplessString<192>> {
+    ctx.net_unavailable_detail.borrow_mut().take()
+}
+
 #[cfg(not(feature = "net-console"))]
 fn take_net_stack(_ctx: &BootContext) -> Option<NetStackHandle> {
     None
@@ -472,6 +479,7 @@ where
 fn attach_network<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
     net_stack_handle: Option<&'a mut NetStackHandle>,
+    net_unavailable_detail: Option<HeaplessString<192>>,
 ) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
     D: crate::serial::SerialDriver,
@@ -479,6 +487,7 @@ where
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
+    pump = pump.with_network_unavailable_detail(net_unavailable_detail);
     if let Some(net_stack) = net_stack_handle {
         pump = pump.with_network(net_stack);
     }
@@ -490,6 +499,7 @@ where
 fn attach_network<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
     _net_stack_handle: Option<&'a mut NetStackHandle>,
+    _net_unavailable_detail: Option<HeaplessString<192>>,
 ) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
     D: crate::serial::SerialDriver,

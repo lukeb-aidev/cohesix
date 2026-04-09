@@ -238,6 +238,8 @@ fn first_control_plane_retry_after_startup_link_reply_failure(
             DriverError::Hal(HalError::Unsupported(
                 "cyw43-function2-enable-latched-not-ready"
             )) | DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-sideband-unreadable"
+            )) | DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-passive-startup-link-timeout"
             ))
         )
@@ -282,9 +284,10 @@ fn control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
             // shows Function 2 latched with IORx clear. Retrying that exact
             // state at 400 kHz just replays the same slow-link stall, so force
             // the first recovery attempt onto the normal control-plane clock.
-            DriverError::Hal(HalError::Unsupported("cyw43-function2-enable-latched-not-ready")) => {
-                SDIO_DATA_CLOCK_HZ
-            }
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-enable-latched-not-ready"
+                | "cyw43-control-plane-sideband-unreadable",
+            )) => SDIO_DATA_CLOCK_HZ,
             _ if current_clock_hz > SDIO_STARTUP_CLOCK_HZ => SDIO_STARTUP_CLOCK_HZ,
             _ => current_clock_hz,
         })
@@ -302,6 +305,9 @@ fn control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
         DriverError::Protocol("ioctl-timeout")
             | DriverError::Hal(HalError::Unsupported(
                 "cyw43-function2-enable-latched-not-ready"
+            ))
+            | DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-sideband-unreadable"
             ))
             | DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-passive-startup-link-timeout"
@@ -335,6 +341,13 @@ fn control_plane_retry_after_reply_wait_resend_target_clock_hz(
                 effective_clock_hz
             }
         }
+        DriverError::Hal(HalError::Unsupported("cyw43-control-plane-sideband-unreadable")) => {
+            if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
+                SDIO_DATA_CLOCK_HZ
+            } else {
+                effective_clock_hz
+            }
+        }
         _ if effective_clock_hz > SDIO_STARTUP_CLOCK_HZ => SDIO_STARTUP_CLOCK_HZ,
         _ => effective_clock_hz,
     }
@@ -349,6 +362,42 @@ const fn control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
     experimental_no_ht_transport
         && allow_speculative_retry_credit
         && effective_clock_hz <= SDIO_STARTUP_CLOCK_HZ
+}
+
+#[inline]
+const fn control_plane_retry_after_reply_wait_uses_promoted_link(
+    experimental_no_ht_transport: bool,
+    effective_clock_hz: u32,
+) -> bool {
+    experimental_no_ht_transport && effective_clock_hz > SDIO_STARTUP_CLOCK_HZ
+}
+
+#[inline]
+fn rearm_control_plane_after_reply_wait(
+    state: &mut Pi4WifiState,
+    effective_clock_hz: u32,
+    stage: &'static str,
+) -> Result<(), DriverError> {
+    if control_plane_retry_after_reply_wait_uses_promoted_link(
+        state.cyw43_experimental_no_ht_transport(),
+        effective_clock_hz,
+    ) {
+        state.rearm_cyw43_control_plane_promoted_link(true)?;
+        info!(
+            "[cyw43] control-plane reply wait rearm policy=promoted-link stage={stage} clock={}Hz chunk_limit={} mode=bounded-no-ht",
+            effective_clock_hz,
+            state.cyw43_control_plane_chunk_limit(),
+        );
+    } else {
+        state.rearm_cyw43_control_plane_slow_link()?;
+        state.resume_cyw43_control_plane_reply_probe_on_startup_link(stage);
+        info!(
+            "[cyw43] control-plane reply wait rearm policy=startup-link stage={stage} clock={}Hz chunk_limit={} mode=bounded-no-ht",
+            effective_clock_hz,
+            state.cyw43_control_plane_chunk_limit(),
+        );
+    }
+    Ok(())
 }
 
 #[inline]
@@ -1037,9 +1086,11 @@ impl Cyw43NetDevice {
         );
         let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
         self.probe.effective_clock_hz = effective_clock_hz;
-        self.state.rearm_cyw43_control_plane_slow_link()?;
-        self.state
-            .resume_cyw43_control_plane_reply_probe_on_startup_link(original_reply_stage);
+        rearm_control_plane_after_reply_wait(
+            &mut self.state,
+            self.probe.effective_clock_hz,
+            original_reply_stage,
+        )?;
         info!(
             "[cyw43] {retry_label} awaiting original reply cmd=0x{:08x} iface={} len={} ioctl_id={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
             cmd as u32,
@@ -1075,9 +1126,11 @@ impl Cyw43NetDevice {
                     ),
                 )?;
                 self.probe.effective_clock_hz = resend_clock_hz;
-                self.state.rearm_cyw43_control_plane_slow_link()?;
-                self.state
-                    .resume_cyw43_control_plane_reply_probe_on_startup_link(resend_stage);
+                rearm_control_plane_after_reply_wait(
+                    &mut self.state,
+                    self.probe.effective_clock_hz,
+                    resend_stage,
+                )?;
                 let resend_bootstrap = if resend_clock_hz > SDIO_STARTUP_CLOCK_HZ {
                     "promoted-first-reply-retry"
                 } else {
@@ -1738,19 +1791,13 @@ const fn initial_control_plane_data_clock_target_hz(
     recommended_data_clock_hz: u32,
     experimental_no_ht_transport: bool,
 ) -> u32 {
-    // The latest April 5, 2026 Pi 4 trace still reaches firmware-ready but
-    // dies on the very first promoted 12.5 MHz Function 2 control write. Keep
-    // bounded-no-HT bootstrap on the slow startup link until we observe one
-    // real control response, then promote after init_control_plane().
-    if experimental_no_ht_transport {
-        if recommended_data_clock_hz < SDIO_STARTUP_CLOCK_HZ {
-            recommended_data_clock_hz
-        } else {
-            SDIO_STARTUP_CLOCK_HZ
-        }
-    } else {
-        control_plane_data_clock_target_hz(recommended_data_clock_hz)
-    }
+    // The latest April 6, 2026 Pi 4 trace reaches firmware-ready and then
+    // burns time oscillating between 400 kHz and 12.5 MHz without proving that
+    // the first post-firmware control transaction must start on the slow link.
+    // Push the first control-plane exchange onto the normal data clock and let
+    // the existing retry ladder demote only after a real failure.
+    let _ = experimental_no_ht_transport;
+    control_plane_data_clock_target_hz(recommended_data_clock_hz)
 }
 
 #[inline]
@@ -1890,10 +1937,10 @@ mod tests {
     }
 
     #[test]
-    fn initial_control_plane_data_clock_holds_startup_link_until_first_reply() {
+    fn initial_control_plane_data_clock_prefers_data_link_even_for_bounded_no_ht() {
         assert_eq!(
             initial_control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ, true),
-            SDIO_STARTUP_CLOCK_HZ
+            SDIO_DATA_CLOCK_HZ
         );
         assert_eq!(
             initial_control_plane_data_clock_target_hz(400_000, true),
@@ -2018,6 +2065,17 @@ mod tests {
                 true,
                 SDIO_STARTUP_CLOCK_HZ,
                 &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-sideband-unreadable"
+                )),
+            ),
+            Some(SDIO_DATA_CLOCK_HZ)
+        );
+        assert_eq!(
+            control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+                true,
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
                     "cyw43-control-plane-passive-startup-link-timeout"
                 )),
             ),
@@ -2047,6 +2105,13 @@ mod tests {
             control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
                 &DriverError::Hal(HalError::Unsupported(
                     "cyw43-function2-enable-latched-not-ready"
+                ))
+            )
+        );
+        assert!(
+            control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-sideband-unreadable"
                 ))
             )
         );
@@ -2101,6 +2166,16 @@ mod tests {
                 SDIO_STARTUP_CLOCK_HZ,
                 &DriverError::Hal(HalError::Unsupported(
                     "cyw43-function2-enable-latched-not-ready"
+                )),
+            ),
+            SDIO_DATA_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_retry_after_reply_wait_resend_target_clock_hz(
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-sideband-unreadable"
                 )),
             ),
             SDIO_DATA_CLOCK_HZ
@@ -2164,6 +2239,22 @@ mod tests {
                 SDIO_STARTUP_CLOCK_HZ,
             )
         );
+    }
+
+    #[test]
+    fn reply_wait_rearm_uses_promoted_link_only_above_startup_clock() {
+        assert!(control_plane_retry_after_reply_wait_uses_promoted_link(
+            true,
+            SDIO_DATA_CLOCK_HZ,
+        ));
+        assert!(!control_plane_retry_after_reply_wait_uses_promoted_link(
+            true,
+            SDIO_STARTUP_CLOCK_HZ,
+        ));
+        assert!(!control_plane_retry_after_reply_wait_uses_promoted_link(
+            false,
+            SDIO_DATA_CLOCK_HZ,
+        ));
     }
 
     #[test]

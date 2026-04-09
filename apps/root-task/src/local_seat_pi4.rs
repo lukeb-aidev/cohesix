@@ -1308,13 +1308,16 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
-    // Confirmed runtime resets still benefit from a full cold-start rebuild.
-    // The weaker bounded outcomes now reach the first live HCRST store and
-    // stall there, so prefer preserve-state handoff first and only revisit
-    // reset-based takeover as a fallback.
+    // Confirmed runtime resets and the weaker bounded mailbox outcomes both
+    // benefit from leading with a cold-start-from-snapshot path. The latest
+    // Pi 4 traces show the preserve-state branch can still wedge on the live
+    // USBCMD.RUN store before runtime gets a chance to fall through to the
+    // next strategy, so keep preserve-state as a later diagnostic branch.
     if matches!(
         runtime_vl805_reset_state,
         VL805_RUNTIME_RESET_STATE_NOTIFIED
+            | VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
+            | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
     ) {
         XhciFirmwareHandoff::ColdStartFromSnapshot
     } else {
@@ -1753,6 +1756,9 @@ fn log_latest_xhci_diag_summary(context: &'static str) {
     if let Some(tag) = xhci_diag_stage_label(stage) {
         let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" tag={tag}"));
     }
+    if let Some(exact) = xhci_diag_stage_exact_issue_label(stage) {
+        let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" exact={exact}"));
+    }
     if let Some((a_label, b_label, c_label)) = xhci_diag_stage_value_labels(stage) {
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -1765,6 +1771,27 @@ fn log_latest_xhci_diag_summary(context: &'static str) {
         );
     }
     boot_log::force_uart_line(line.as_str());
+}
+
+#[inline]
+const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
+    match stage {
+        0x0213 => Some("live-usbsts-read-before-run"),
+        0x0215 => Some("live-usbcmd-read-before-run"),
+        0x0222 => Some("halt-revalidation-timeout"),
+        0x0248 | 0x02a5 => Some("pre-run-dcbaap-low-store-wedged"),
+        0x0249 | 0x02a7 => Some("pre-run-dcbaap-high-store-wedged"),
+        0x0254 | 0x02b0 => Some("pre-run-crcr-low-store-wedged"),
+        0x0255 | 0x02b2 => Some("pre-run-crcr-high-store-wedged"),
+        0x0277 | 0x02bb => Some("pre-run-erdp-low-store-wedged"),
+        0x0278 | 0x02bd => Some("pre-run-erdp-high-store-wedged"),
+        0x02c3 => Some("pre-run-erstsz-store-wedged"),
+        0x02c6 => Some("pre-run-erstba-low-store-wedged"),
+        0x02c8 => Some("pre-run-erstba-high-store-wedged"),
+        0x02eb => Some("usbcmd-run-barrier-wedged"),
+        0x02e9 => Some("usbcmd-run-store-wedged"),
+        _ => None,
+    }
 }
 
 #[inline]
@@ -1868,6 +1895,8 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x026d => Some("runtime-ring-read-begin"),
         0x026e => Some("erstba-write-low"),
         0x026f => Some("erstba-write-high"),
+        0x02ea => Some("usbcmd-run-barrier-done"),
+        0x02eb => Some("usbcmd-run-barrier-begin"),
         0x02e9 => Some("usbcmd-run-pre-store"),
         0x02f0 => Some("pre-run-ring-phys"),
         0x02f1 => Some("pre-run-ring-regs"),
@@ -1930,14 +1959,14 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x02bf => Some("erdp-defer-handoff"),
         0x02c0 => Some("erst-defer-size"),
         0x02c1 => Some("erst-defer-base"),
-        0x02c2 => Some("erstsz-defer-begin"),
-        0x02c3 => Some("erstsz-defer-write"),
-        0x02c4 => Some("erstsz-defer-write-done"),
-        0x02c5 => Some("erstba-defer-begin"),
-        0x02c6 => Some("erstba-defer-write"),
-        0x02c7 => Some("erstba-defer-write-done"),
-        0x02c8 => Some("erstba-defer-high"),
-        0x02c9 => Some("erstba-defer-high-done"),
+        0x02c2 => Some("erstsz-publish-begin"),
+        0x02c3 => Some("erstsz-publish-write"),
+        0x02c4 => Some("erstsz-publish-write-done"),
+        0x02c5 => Some("erstba-publish-begin"),
+        0x02c6 => Some("erstba-publish-write"),
+        0x02c7 => Some("erstba-publish-write-done"),
+        0x02c8 => Some("erstba-publish-high"),
+        0x02c9 => Some("erstba-publish-high-done"),
         0x02ca => Some("erstba-defer-handoff"),
         0x02cb => Some("erstsz-post-run-begin"),
         0x02cc => Some("erstsz-post-run-write"),
@@ -2341,17 +2370,17 @@ fn xhci_runtime_init_strategies(
         VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
     ) {
         // The weaker bounded reset outcomes still leave us with a trusted
-        // bootloader stop-state contract, but the April 6, 2026 Pi 4 trace
-        // now reaches reset-write-barrier-done and then stalls at the live
-        // HCRST store itself. Lead with the preserve-state path so runtime can
-        // take ownership without replaying that toxic reset edge. If that
-        // still misses, fall back to the plain U-Boot-style cold-start and
-        // keep the seeded full-reset start only as a last diagnostic branch.
+        // bootloader stop-state contract, but the latest Pi 4 traces show the
+        // preserve-state branch can wedge at the live `USBCMD.RUN` store
+        // before runtime gets to a second attempt. Lead with the seeded
+        // cold-start path that still honours the trusted stop-state snapshot,
+        // keep the fully unseeded U-Boot-style cold-start as the second
+        // branch, and only then fall back to the seeded full-reset start.
         if stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
             );
             xhci_runtime_init_strategy_push(
                 &mut strategies,
@@ -10237,10 +10266,9 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_prioritize_preserve_state_before_resetting_for_weak_runtime_reset_outcomes(
-    ) {
+    fn xhci_runtime_init_strategies_prioritize_seeded_cold_start_for_weak_runtime_reset_outcomes() {
         let (strategies, count) = xhci_runtime_init_strategies(
-            XhciFirmwareHandoff::PreserveControllerState,
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
             Some(LocalSeatXhciStopStateSnapshot {
                 usbcmd: Some(0),
@@ -10251,7 +10279,7 @@ mod tests {
         assert_eq!(count, 3);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
         assert_eq!(
             strategies[1],
@@ -10825,22 +10853,22 @@ mod tests {
         assert_eq!(xhci_diag_stage_label(0x02bf), Some("erdp-defer-handoff"));
         assert_eq!(xhci_diag_stage_label(0x02c0), Some("erst-defer-size"));
         assert_eq!(xhci_diag_stage_label(0x02c1), Some("erst-defer-base"));
-        assert_eq!(xhci_diag_stage_label(0x02c2), Some("erstsz-defer-begin"));
-        assert_eq!(xhci_diag_stage_label(0x02c3), Some("erstsz-defer-write"));
+        assert_eq!(xhci_diag_stage_label(0x02c2), Some("erstsz-publish-begin"));
+        assert_eq!(xhci_diag_stage_label(0x02c3), Some("erstsz-publish-write"));
         assert_eq!(
             xhci_diag_stage_label(0x02c4),
-            Some("erstsz-defer-write-done")
+            Some("erstsz-publish-write-done")
         );
-        assert_eq!(xhci_diag_stage_label(0x02c5), Some("erstba-defer-begin"));
-        assert_eq!(xhci_diag_stage_label(0x02c6), Some("erstba-defer-write"));
+        assert_eq!(xhci_diag_stage_label(0x02c5), Some("erstba-publish-begin"));
+        assert_eq!(xhci_diag_stage_label(0x02c6), Some("erstba-publish-write"));
         assert_eq!(
             xhci_diag_stage_label(0x02c7),
-            Some("erstba-defer-write-done")
+            Some("erstba-publish-write-done")
         );
-        assert_eq!(xhci_diag_stage_label(0x02c8), Some("erstba-defer-high"));
+        assert_eq!(xhci_diag_stage_label(0x02c8), Some("erstba-publish-high"));
         assert_eq!(
             xhci_diag_stage_label(0x02c9),
-            Some("erstba-defer-high-done")
+            Some("erstba-publish-high-done")
         );
         assert_eq!(xhci_diag_stage_label(0x02ca), Some("erstba-defer-handoff"));
         assert_eq!(xhci_diag_stage_label(0x02cb), Some("erstsz-post-run-begin"));
@@ -10885,6 +10913,63 @@ mod tests {
             Some("cmd-timeout-last-event")
         );
         assert_eq!(xhci_diag_stage_label(0x9999), None);
+    }
+
+    #[test]
+    fn xhci_diag_exact_issue_labels_call_out_pre_run_usb_stalls() {
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0213),
+            Some("live-usbsts-read-before-run")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0215),
+            Some("live-usbcmd-read-before-run")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x02eb),
+            Some("usbcmd-run-barrier-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x02e9),
+            Some("usbcmd-run-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0248),
+            Some("pre-run-dcbaap-low-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0249),
+            Some("pre-run-dcbaap-high-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0254),
+            Some("pre-run-crcr-low-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0255),
+            Some("pre-run-crcr-high-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0277),
+            Some("pre-run-erdp-low-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0278),
+            Some("pre-run-erdp-high-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x02c3),
+            Some("pre-run-erstsz-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x02c6),
+            Some("pre-run-erstba-low-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x02c8),
+            Some("pre-run-erstba-high-store-wedged")
+        );
+        assert_eq!(super::xhci_diag_stage_exact_issue_label(0x0214), None);
     }
 
     #[test]
@@ -10948,13 +11033,13 @@ mod tests {
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
             ),
-            XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
             ),
-            XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
     }
 

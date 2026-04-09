@@ -2895,6 +2895,8 @@ pub struct BootContext {
     pub(crate) tickets: RefCell<Option<TicketTable<{ generated::TICKET_COUNT }>>>,
     #[cfg(feature = "net-console")]
     pub(crate) net_stack: RefCell<Option<NetStack>>,
+    #[cfg(feature = "net-console")]
+    pub(crate) net_unavailable_detail: RefCell<Option<HeaplessString<192>>>,
     #[cfg(feature = "kernel")]
     pub(crate) ninedoor: RefCell<Option<&'static mut NineDoorBridge>>,
     #[cfg(feature = "kernel")]
@@ -4903,6 +4905,7 @@ fn bootstrap<P: Platform>(
             ipc: RefCell::new(Some(ipc)),
             tickets: RefCell::new(Some(tickets)),
             net_stack: RefCell::new(net_stack),
+            net_unavailable_detail: RefCell::new(net_init_error),
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(Some(ninedoor)),
             #[cfg(feature = "kernel")]
