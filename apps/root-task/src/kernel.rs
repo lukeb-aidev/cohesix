@@ -190,7 +190,7 @@ fn install_init_ipc_buffer(
     );
 
     unsafe {
-        #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
         {
             sel4_sys::tls_set_base(core::ptr::addr_of_mut!(TLS_IMAGE));
             debug_assert!(
@@ -270,7 +270,7 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) -> Result<(), Fat
             init_cnode,
             guarded_src,
             depth,
-            sel4_sys::seL4_AllRights,
+            sel4_sys::seL4_CapRights_All,
         )
     };
 
@@ -339,7 +339,7 @@ fn bootstrap_notification(
     let slot = retype_one(
         cs,
         selection.cap,
-        sel4_sys::seL4_NotificationObject,
+        sel4_sys::seL4_NotificationObjectType,
         sel4_sys::seL4_NotificationBits as u8,
     )?;
 
@@ -430,7 +430,7 @@ impl<'a, P: Platform> DebugConsole<'a, P> {
             self,
             "{prefix}node_id={node_id} nodes={nodes} ipc_buffer=0x{ipc:016x}\r\n",
             prefix = Self::PREFIX,
-            node_id = header.nodeID,
+            node_id = sel4::bootinfo_node_id(header),
             nodes = header.numNodes,
             ipc = header.ipcBuffer as usize,
         );
@@ -556,7 +556,7 @@ const MINI_UART_LSR_TX_EMPTY: u32 = 1 << 5;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const DEBUG_SINK_SPIN_LIMIT: usize = 1_000_000;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
@@ -5574,7 +5574,14 @@ struct FaultRegistry {
 }
 
 static FAULT_REGISTRY: FaultRegistry = FaultRegistry::new();
+const FAULT_EP_POLL_BUDGET_PER_DISPATCH: usize = 8;
 static STRAY_FAULT_WARNED: AtomicBool = AtomicBool::new(false);
+static FAULT_EP_POLL_BUDGET_WARNED: AtomicBool = AtomicBool::new(false);
+
+#[inline]
+const fn fault_ep_poll_budget_exhausted(processed: usize) -> bool {
+    processed >= FAULT_EP_POLL_BUDGET_PER_DISPATCH
+}
 
 impl FaultRegistry {
     const fn new() -> Self {
@@ -5896,7 +5903,7 @@ fn decode_fault_context(
     let mut regs = [0u64; MAX_FAULT_REGS];
     let len = cmp::min(length, regs.len());
     for idx in 0..len {
-        regs[idx] = unsafe { sel4_sys::seL4_GetMR(idx as i32) };
+        regs[idx] = unsafe { sel4_sys::seL4_GetMR(idx as sel4_sys::seL4_Word) };
     }
 
     let mut ip = regs.first().copied().unwrap_or_default();
@@ -6147,11 +6154,8 @@ struct StagedMessage {
 
 impl StagedMessage {
     fn new(info: sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> Self {
-        let payload = copy_message_words(info, |index| {
-            let mr_index: i32 = index
-                .try_into()
-                .expect("message register index must fit in i32");
-            unsafe { sel4_sys::seL4_GetMR(mr_index) }
+        let payload = copy_message_words(info, |index| unsafe {
+            sel4_sys::seL4_GetMR(index as sel4_sys::seL4_Word)
         });
         Self {
             badge,
@@ -6209,11 +6213,11 @@ pub(crate) struct KernelIpc {
     control_labels_logged: HeaplessVec<u64, 4>,
 }
 
-fn current_node_id() -> sel4_sys::seL4_NodeId {
+fn current_node_id() -> sel4_sys::seL4_Word {
     unsafe {
         sel4_sys::bootinfo
             .as_ref()
-            .map_or(0, |bootinfo| (*bootinfo).nodeID)
+            .map_or(0, |bootinfo| sel4::bootinfo_node_id(bootinfo))
     }
 }
 
@@ -6287,6 +6291,20 @@ impl KernelIpc {
         }
     }
 
+    fn warn_fault_poll_budget_once(&self) {
+        if FAULT_EP_POLL_BUDGET_WARNED
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            log::warn!(
+                target: "root_task::kernel::fault",
+                "[fault] fault EP drain budget exhausted ep=0x{ep:04x} budget={budget}; yielding to the event pump",
+                ep = self.fault_endpoint.raw(),
+                budget = FAULT_EP_POLL_BUDGET_PER_DISPATCH,
+            );
+        }
+    }
+
     fn log_stray_fault(
         &self,
         info: &sel4_sys::seL4_MessageInfo,
@@ -6294,8 +6312,9 @@ impl KernelIpc {
         label: u64,
         length: usize,
     ) {
-        let payload =
-            copy_message_words(*info, |index| unsafe { sel4_sys::seL4_GetMR(index as i32) });
+        let payload = copy_message_words(*info, |index| unsafe {
+            sel4_sys::seL4_GetMR(index as sel4_sys::seL4_Word)
+        });
         let preview = preview_payload(payload.as_slice());
         let summary = summarize_preview(preview);
         let overflow = FAULT_REGISTRY.stray_overflowed();
@@ -6332,7 +6351,7 @@ impl KernelIpc {
             buf[..chunk.len()].copy_from_slice(chunk);
             let value = sel4_sys::seL4_Word::from_le_bytes(buf);
             unsafe {
-                sel4_sys::seL4_SetMR(index as i32, value);
+                sel4_sys::seL4_SetMR(index as sel4_sys::seL4_Word, value);
             }
             words_written = words_written.saturating_add(1);
         }
@@ -6391,12 +6410,18 @@ impl KernelIpc {
             return;
         }
 
+        let mut processed = 0usize;
         loop {
+            if fault_ep_poll_budget_exhausted(processed) {
+                self.warn_fault_poll_budget_once();
+                return;
+            }
             let mut badge: sel4_sys::seL4_Word = 0;
-            let info = unsafe { sel4_sys::seL4_NBRecv(self.fault_endpoint.raw(), &mut badge) };
+            let info = crate::sel4::nb_recv(self.fault_endpoint.raw(), &mut badge);
             if !Self::message_present(&info, badge) {
                 return;
             }
+            processed = processed.saturating_add(1);
 
             let label = info.label();
             let length = info.length() as usize;
@@ -6693,10 +6718,13 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_message_words, copy_message_words, dtb_rejected_net_policy_reason, preview_payload,
-        ControlEndpoint, FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource,
-        StagedMessage, HEX_CHUNK_BYTES, MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
+        bounded_message_words, copy_message_words, dtb_rejected_net_policy_reason,
+        fault_ep_poll_budget_exhausted, preview_payload, ControlEndpoint, FaultEndpoint, KernelIpc,
+        PayloadPreview, Pi4BootNetPolicySource, StagedMessage, StrayTracker,
+        FAULT_EP_POLL_BUDGET_PER_DISPATCH, HEX_CHUNK_BYTES, MAX_HEX_LINES, MAX_MESSAGE_WORDS,
+        MAX_PAYLOAD_LOG_BYTES,
     };
+    use crate::event::IpcDispatcher;
     use crate::rust_alloc::vec::Vec;
     use core::fmt::Write as _;
     use heapless::{String as HeaplessString, Vec as HeaplessVec};
@@ -6902,15 +6930,18 @@ mod tests {
     #[test]
     fn copy_message_words_clamps_to_kernel_limit() {
         let info = sel4_sys::seL4_MessageInfo::new(0x11, 0, 0, 127);
-        let mut source = [0usize; MAX_MESSAGE_WORDS + 16];
+        let mut source = [0u64; MAX_MESSAGE_WORDS + 16];
         for (index, word) in source.iter_mut().enumerate() {
-            *word = index as usize;
+            *word = index as sel4_sys::seL4_Word;
         }
         let copied = copy_message_words(info, |index| source[index]);
         assert_eq!(copied.len(), MAX_MESSAGE_WORDS);
         assert_eq!(bounded_message_words(info), MAX_MESSAGE_WORDS);
         assert_eq!(copied[0], 0);
-        assert_eq!(copied[MAX_MESSAGE_WORDS - 1], MAX_MESSAGE_WORDS - 1);
+        assert_eq!(
+            copied[MAX_MESSAGE_WORDS - 1],
+            (MAX_MESSAGE_WORDS - 1) as sel4_sys::seL4_Word
+        );
     }
 
     #[test]
@@ -6925,6 +6956,17 @@ mod tests {
         assert!(tracker.first_observation(0xDEAD, 0x0E));
         assert!(tracker.overflowed());
         assert!(!tracker.first_observation(0xDEAD, 0x0E));
+    }
+
+    #[test]
+    fn fault_endpoint_poll_budget_boundary_is_bounded() {
+        assert!(!fault_ep_poll_budget_exhausted(0));
+        assert!(!fault_ep_poll_budget_exhausted(
+            FAULT_EP_POLL_BUDGET_PER_DISPATCH.saturating_sub(1)
+        ));
+        assert!(fault_ep_poll_budget_exhausted(
+            FAULT_EP_POLL_BUDGET_PER_DISPATCH
+        ));
     }
 
     #[test]
@@ -6954,7 +6996,7 @@ mod tests {
 
     #[test]
     fn preview_payload_emits_hex_for_binary() {
-        let words = [usize::MAX; 2];
+        let words = [sel4_sys::seL4_Word::MAX; 2];
         match preview_payload(&words) {
             PayloadPreview::Hex(lines) => {
                 assert!(!lines.is_empty());
@@ -6966,7 +7008,7 @@ mod tests {
 
     #[test]
     fn preview_payload_truncates_to_cap() {
-        let words = [usize::MAX; MAX_MESSAGE_WORDS];
+        let words = [sel4_sys::seL4_Word::MAX; MAX_MESSAGE_WORDS];
         match preview_payload(&words) {
             PayloadPreview::Hex(lines) => {
                 assert_eq!(lines.len(), MAX_HEX_LINES);

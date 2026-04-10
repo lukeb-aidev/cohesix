@@ -116,7 +116,7 @@ impl CohesixConsole {
     }
 
     fn bootinfo(&self) -> &'static sel4_sys::seL4_BootInfo {
-        unsafe { &*sel4_sys::seL4_GetBootInfo() }
+        crate::sel4::runtime_bootinfo()
     }
 
     fn print_help(&mut self) {

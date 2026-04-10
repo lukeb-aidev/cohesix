@@ -237,8 +237,24 @@ fn first_control_plane_retry_after_startup_link_reply_failure(
             err,
             DriverError::Hal(HalError::Unsupported(
                 "cyw43-function2-enable-latched-not-ready"
+                    | "cyw43-function2-enable-latched-not-ready-command-timeout"
+                    | "cyw43-function2-enable-latched-not-ready-command-crc"
+                    | "cyw43-function2-enable-latched-not-ready-command-end-bit"
+                    | "cyw43-function2-enable-latched-not-ready-command-index"
+                    | "cyw43-function2-enable-latched-not-ready-command-error"
+                    | "cyw43-function2-enable-latched-not-ready-command-stall"
+                    | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
+                    | "cyw43-function2-enable-latched-not-ready-data-end-bit"
+                    | "cyw43-function2-enable-latched-not-ready-data-crc"
+            )) | DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-linux-interrupts-deferred"
             )) | DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-sideband-unreadable"
+                    | "cyw43-control-plane-sideband-command-timeout"
+                    | "cyw43-control-plane-sideband-command-crc"
+                    | "cyw43-control-plane-sideband-command-end-bit"
+                    | "cyw43-control-plane-sideband-command-index"
+                    | "cyw43-control-plane-sideband-command-error"
             )) | DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-passive-startup-link-timeout"
             ))
@@ -286,7 +302,22 @@ fn control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
             // the first recovery attempt onto the normal control-plane clock.
             DriverError::Hal(HalError::Unsupported(
                 "cyw43-function2-enable-latched-not-ready"
-                | "cyw43-control-plane-sideband-unreadable",
+                | "cyw43-function2-enable-latched-not-ready-command-timeout"
+                | "cyw43-function2-enable-latched-not-ready-command-crc"
+                | "cyw43-function2-enable-latched-not-ready-command-end-bit"
+                | "cyw43-function2-enable-latched-not-ready-command-index"
+                | "cyw43-function2-enable-latched-not-ready-command-error"
+                | "cyw43-function2-enable-latched-not-ready-command-stall"
+                | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
+                | "cyw43-function2-enable-latched-not-ready-data-end-bit"
+                | "cyw43-function2-enable-latched-not-ready-data-crc"
+                | "cyw43-control-plane-linux-interrupts-deferred"
+                | "cyw43-control-plane-sideband-unreadable"
+                | "cyw43-control-plane-sideband-command-timeout"
+                | "cyw43-control-plane-sideband-command-crc"
+                | "cyw43-control-plane-sideband-command-end-bit"
+                | "cyw43-control-plane-sideband-command-index"
+                | "cyw43-control-plane-sideband-command-error",
             )) => SDIO_DATA_CLOCK_HZ,
             _ if current_clock_hz > SDIO_STARTUP_CLOCK_HZ => SDIO_STARTUP_CLOCK_HZ,
             _ => current_clock_hz,
@@ -305,9 +336,26 @@ fn control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
         DriverError::Protocol("ioctl-timeout")
             | DriverError::Hal(HalError::Unsupported(
                 "cyw43-function2-enable-latched-not-ready"
+                    | "cyw43-function2-enable-latched-not-ready-command-timeout"
+                    | "cyw43-function2-enable-latched-not-ready-command-crc"
+                    | "cyw43-function2-enable-latched-not-ready-command-end-bit"
+                    | "cyw43-function2-enable-latched-not-ready-command-index"
+                    | "cyw43-function2-enable-latched-not-ready-command-error"
+                    | "cyw43-function2-enable-latched-not-ready-command-stall"
+                    | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
+                    | "cyw43-function2-enable-latched-not-ready-data-end-bit"
+                    | "cyw43-function2-enable-latched-not-ready-data-crc"
+            ))
+            | DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-linux-interrupts-deferred"
             ))
             | DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-sideband-unreadable"
+                    | "cyw43-control-plane-sideband-command-timeout"
+                    | "cyw43-control-plane-sideband-command-crc"
+                    | "cyw43-control-plane-sideband-command-end-bit"
+                    | "cyw43-control-plane-sideband-command-index"
+                    | "cyw43-control-plane-sideband-command-error"
             ))
             | DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-passive-startup-link-timeout"
@@ -341,7 +389,46 @@ fn control_plane_retry_after_reply_wait_resend_target_clock_hz(
                 effective_clock_hz
             }
         }
+        DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-command-timeout"
+            | "cyw43-function2-enable-latched-not-ready-command-crc"
+            | "cyw43-function2-enable-latched-not-ready-command-end-bit"
+            | "cyw43-function2-enable-latched-not-ready-command-index"
+            | "cyw43-function2-enable-latched-not-ready-command-error"
+            | "cyw43-function2-enable-latched-not-ready-command-stall"
+            | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
+            | "cyw43-function2-enable-latched-not-ready-data-end-bit"
+            | "cyw43-function2-enable-latched-not-ready-data-crc",
+        )) => {
+            if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
+                SDIO_DATA_CLOCK_HZ
+            } else {
+                effective_clock_hz
+            }
+        }
+        DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-linux-interrupts-deferred",
+        )) => {
+            if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
+                SDIO_DATA_CLOCK_HZ
+            } else {
+                effective_clock_hz
+            }
+        }
         DriverError::Hal(HalError::Unsupported("cyw43-control-plane-sideband-unreadable")) => {
+            if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
+                SDIO_DATA_CLOCK_HZ
+            } else {
+                effective_clock_hz
+            }
+        }
+        DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-sideband-command-timeout"
+            | "cyw43-control-plane-sideband-command-crc"
+            | "cyw43-control-plane-sideband-command-end-bit"
+            | "cyw43-control-plane-sideband-command-index"
+            | "cyw43-control-plane-sideband-command-error",
+        )) => {
             if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
                 SDIO_DATA_CLOCK_HZ
             } else {
@@ -351,6 +438,54 @@ fn control_plane_retry_after_reply_wait_resend_target_clock_hz(
         _ if effective_clock_hz > SDIO_STARTUP_CLOCK_HZ => SDIO_STARTUP_CLOCK_HZ,
         _ => effective_clock_hz,
     }
+}
+
+#[inline]
+fn control_plane_bootstrap_needs_full_replay_retry(err: &DriverError) -> bool {
+    matches!(
+        err,
+        DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-command-timeout"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-command-crc"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-command-end-bit"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-command-index"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-command-error"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-command-stall"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-data-end-bit"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-function2-enable-latched-not-ready-data-crc"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-linux-interrupts-deferred"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-sideband-unreadable"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-sideband-command-timeout"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-sideband-command-crc"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-sideband-command-end-bit"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-sideband-command-index"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-sideband-command-error"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-passive-startup-link-timeout"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-startup-link-reply-timeout"
+        )) | DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-pure-f2-startup-link-no-reply"
+        ))
+    )
 }
 
 #[inline]
@@ -580,6 +715,12 @@ impl Cyw43NetDevice {
         let credentials = config
             .wifi_credentials
             .ok_or(DriverError::Config("wifi-credentials-missing"))?;
+        let retry_credentials = WifiCredentials {
+            ssid_len: credentials.ssid_len,
+            ssid: credentials.ssid,
+            psk_len: credentials.psk_len,
+            psk: credentials.psk,
+        };
 
         info!(
             "[cyw43] init: begin ssid_len={} psk_len={}",
@@ -709,13 +850,33 @@ impl Cyw43NetDevice {
 
         info!("[cyw43] step: init_control_plane");
         if let Err(err) = device.init_control_plane(firmware, credentials) {
-            log_cyw43_init_failure(
-                "cyw43-init-control-plane-fail",
-                &mut device.state,
-                &err,
-                true,
-            );
-            return Err(err);
+            if control_plane_bootstrap_needs_full_replay_retry(&err) {
+                warn!(
+                    "[cyw43] init_control_plane hard-retry armed reason={err} action=replay-firmware-control-bootstrap"
+                );
+                if let Err(retry_err) =
+                    device.replay_control_plane_bootstrap(firmware, retry_credentials, &err)
+                {
+                    log_cyw43_init_failure(
+                        "cyw43-init-control-plane-hard-retry-fail",
+                        &mut device.state,
+                        &retry_err,
+                        true,
+                    );
+                    return Err(retry_err);
+                }
+                info!(
+                    "[cyw43] init_control_plane hard-retry recovered action=replay-firmware-control-bootstrap"
+                );
+            } else {
+                log_cyw43_init_failure(
+                    "cyw43-init-control-plane-fail",
+                    &mut device.state,
+                    &err,
+                    true,
+                );
+                return Err(err);
+            }
         }
         if device.state.cyw43_experimental_no_ht_transport() {
             info!("[cyw43] step: promote_control_transport");
@@ -748,6 +909,58 @@ impl Cyw43NetDevice {
     #[must_use]
     pub const fn probe_report(&self) -> ProbeReport {
         self.probe
+    }
+
+    fn reset_control_plane_bootstrap_state(&mut self) {
+        self.sdpcm_seq = 0;
+        self.sdpcm_seq_max = 1;
+        self.ioctl_id = 0;
+        self.link_up = false;
+        self.rx_frame.fill(0);
+        self.tx_frame.fill(0);
+        self.control_response.fill(0);
+    }
+
+    fn replay_control_plane_bootstrap(
+        &mut self,
+        firmware: WifiFirmwareBundle<'static>,
+        credentials: WifiCredentials,
+        reason: &DriverError,
+    ) -> Result<(), DriverError> {
+        warn!(
+            "[cyw43] control-plane bootstrap hard-retry action=replay-firmware-control-bootstrap reason={reason} current_clock={}Hz write_chunk_limit={} reply_chunk_limit={} mode={}",
+            self.probe.effective_clock_hz,
+            self.state.cyw43_control_plane_chunk_limit(),
+            self.state.cyw43_control_plane_reply_chunk_limit(),
+            initial_control_plane_bootstrap_policy_label(
+                self.state.cyw43_experimental_no_ht_transport(),
+                self.probe.effective_clock_hz,
+            ),
+        );
+
+        info!("[cyw43] step: control_plane_hard_retry(recover_transport)");
+        recover_startup_transport(&mut self.state, "init_transport(control-plane-hard-retry)")?;
+        info!("[cyw43] step: control_plane_hard_retry(set_bus_width=4bit)");
+        self.state.set_bus_width(SdioBusWidth::FourBit)?;
+        info!("[cyw43] step: control_plane_hard_retry(load_firmware)");
+        self.state.load_cyw43_firmware()?;
+        let (data_clock_hz, bus_width) = prepare_initial_control_plane_transport(&mut self.state)?;
+        self.probe.effective_clock_hz = data_clock_hz;
+        self.probe.bus_width = bus_width;
+        self.probe.ioex = self
+            .state
+            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
+        self.reset_control_plane_bootstrap_state();
+        info!(
+            "[cyw43] control-plane bootstrap hard-retry ready clock={}Hz bus_width={} ioex=0x{:02x}",
+            self.probe.effective_clock_hz,
+            match self.probe.bus_width {
+                SdioBusWidth::OneBit => "1",
+                SdioBusWidth::FourBit => "4",
+            },
+            self.probe.ioex,
+        );
+        self.init_control_plane(firmware, credentials)
     }
 
     fn init_control_plane(
@@ -1871,14 +2084,20 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        align4, bdc_payload, control_plane_data_clock_target_hz,
+        align4, bdc_payload, control_plane_bootstrap_needs_full_replay_retry,
+        control_plane_data_clock_target_hz,
         control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait,
         control_plane_retry_after_promoted_timeout_resend_uses_startup_link,
         control_plane_retry_after_promoted_timeout_target_clock_hz,
+        control_plane_retry_after_reply_wait_resend_target_clock_hz,
+        control_plane_retry_after_reply_wait_uses_promoted_link,
+        control_plane_retry_after_startup_link_reply_failure_target_clock_hz,
         first_control_plane_retry_after_promoted_timeout, has_sdpcm_credit,
-        initial_control_plane_data_clock_target_hz, ioctl_wait_loops, is_transport_retryable,
-        put_u16_le, DriverError, EVENT_AUTH, EVENT_SET_SSID, IOCTL_WAIT_LOOPS,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
+        initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
+        ioctl_wait_loops, is_transport_retryable, put_u16_le,
+        speculative_credit_window_after_promoted_timeout_retry, DriverError, EVENT_AUTH,
+        EVENT_SET_SSID, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
     };
     use crate::hal::HalError;
 
@@ -2092,6 +2311,28 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn control_plane_bootstrap_replay_retry_only_triggers_for_pure_f2_reply_failures() {
+        assert!(control_plane_bootstrap_needs_full_replay_retry(
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-pure-f2-startup-link-no-reply"
+            ))
+        ));
+        assert!(control_plane_bootstrap_needs_full_replay_retry(
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-startup-link-reply-timeout"
+            ))
+        ));
+        assert!(!control_plane_bootstrap_needs_full_replay_retry(
+            &DriverError::Protocol("ioctl-timeout")
+        ));
+        assert!(!control_plane_bootstrap_needs_full_replay_retry(
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-promoted-rearm-timeout"
+            ))
+        ));
     }
 
     #[test]

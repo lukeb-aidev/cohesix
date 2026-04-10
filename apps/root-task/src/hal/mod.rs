@@ -14,10 +14,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "kernel")]
 use core::{fmt, ptr::NonNull};
 
-#[cfg(any(
-    all(feature = "kernel", target_os = "none"),
-    feature = "cache-maintenance"
-))]
+#[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod cache;
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
@@ -118,6 +115,17 @@ pub struct WifiDebugSnapshot {
     pub programmed_backplane_window: Option<u32>,
     pub shadow_backplane_window: Option<u32>,
     pub shadow_backplane_fn_addr: Option<u32>,
+    pub control_plane_bootstrap_phase: &'static str,
+    pub control_plane_reply_mode: &'static str,
+    pub control_plane_reply_attempts: u8,
+    pub control_plane_reply_empty_polls: u8,
+    pub control_plane_no_ht_transport: bool,
+    pub control_plane_probe_pending: bool,
+    pub control_plane_startup_link_stable: bool,
+    pub control_plane_promoted_probe_pending: bool,
+    pub control_plane_f2_state: &'static str,
+    pub control_plane_sdhci_read_diag: &'static str,
+    pub control_plane_exact_error: &'static str,
 }
 
 /// Root-console Wi-Fi debug hooks backed by the kernel HAL.

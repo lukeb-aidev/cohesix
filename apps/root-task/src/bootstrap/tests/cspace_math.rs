@@ -4,11 +4,12 @@
 // Author: Lukas Bower
 
 use crate::bootstrap::cspace::{slot_advance, slot_in_empty_window};
+use crate::sel4::seL4_CPtr;
 
 #[test]
 fn slot_window_bounds() {
-    let start = 0x0140u32;
-    let end = 0x2000u32;
+    let start: seL4_CPtr = 0x0140;
+    let end: seL4_CPtr = 0x2000;
     assert!(!slot_in_empty_window(start - 1, start, end));
     assert!(slot_in_empty_window(start, start, end));
     assert!(slot_in_empty_window(start + 1, start, end));
@@ -17,8 +18,8 @@ fn slot_window_bounds() {
 
 #[test]
 fn slot_sequence_progresses_monotonically() {
-    let start = 0x0140u32;
-    let end = 0x2000u32;
+    let start: seL4_CPtr = 0x0140;
+    let end: seL4_CPtr = 0x2000;
     let mut current = start;
     let mut count = 0u32;
     while current < start + 256 {
@@ -26,11 +27,11 @@ fn slot_sequence_progresses_monotonically() {
         current = slot_advance(current).expect("slot_advance should not overflow within window");
         count += 1;
     }
-    assert_eq!(current, start + count);
+    assert_eq!(current, start + seL4_CPtr::from(count));
 }
 
 #[test]
 fn slot_advance_overflow_returns_none() {
-    let max = u32::MAX;
+    let max = seL4_CPtr::MAX;
     assert!(slot_advance(max).is_none());
 }

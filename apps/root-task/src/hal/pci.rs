@@ -95,6 +95,7 @@ impl fmt::Debug for PciTopology {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rust_alloc::boxed::Box;
 
     fn sample_device() -> PciDeviceInfo {
         PciDeviceInfo {
@@ -123,9 +124,8 @@ mod tests {
     #[test]
     fn topology_find_by_id_matches_expected_device() {
         let device = sample_device();
-        let topology = PciTopology {
-            devices: core::slice::from_ref(&device),
-        };
+        let devices = Box::leak(Box::new([device]));
+        let topology = PciTopology { devices };
 
         let found = topology.find_by_vendor_device(0x10ec, 0x8139);
         assert!(found.is_some());

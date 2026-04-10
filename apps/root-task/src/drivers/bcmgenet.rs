@@ -374,7 +374,7 @@ impl BcmGenetDevice {
         device.mac = device.read_or_default_mac();
         device.write_mac(device.mac);
         device.refresh_tx_counters();
-        let dma_attr_raw: usize = dma_attr as usize;
+        let dma_attr_raw: usize = crate::sel4::vm_attributes_raw(dma_attr) as usize;
         info!(
             "[bcmgenet][dma] attr=0x{:08x} cacheable={} rx=[0x{:016x}..0x{:016x}) tx=[0x{:016x}..0x{:016x})",
             dma_attr_raw,
@@ -1642,8 +1642,9 @@ mod tests {
         decode_bmcr_speed, decode_rx_length, dma_phys_to_bus_addr, encode_tx_len_status,
         ring_distance, ring_slot, rx_owned_len_status, should_emit_repeated_breadcrumb,
         should_log_rx_idle, should_log_tx_drop, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP,
-        DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100,
-        MII_BMCR_SPEED1000, RX_BUF_LENGTH, UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
+        DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, GENET_DMA_USE_BUS_ALIAS,
+        MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH, UMAC_SPEED_10, UMAC_SPEED_100,
+        UMAC_SPEED_1000,
     };
 
     #[test]

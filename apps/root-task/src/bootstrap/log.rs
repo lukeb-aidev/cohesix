@@ -507,8 +507,9 @@ mod tests {
             let _ = long.push('A');
         }
 
+        let args = format_args!("{}", long.as_str());
         let record = Record::builder()
-            .args(format_args!("{}", long.as_str()))
+            .args(args)
             .level(Level::Info)
             .target("root_task::bootstrap::test")
             .build();
@@ -530,8 +531,9 @@ mod tests {
         message.push_str("\u{2192}");
         message.push('B');
 
+        let args = format_args!("{}", message);
         let record = Record::builder()
-            .args(format_args!("{}", message))
+            .args(args)
             .level(Level::Info)
             .target(target)
             .build();

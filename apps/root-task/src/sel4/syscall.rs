@@ -9,11 +9,18 @@
 use core::panic::Location;
 
 use super::{ipc_bootstrap_trap, IpcSyscallKind};
+#[cfg(target_os = "none")]
 use sel4_sys::{
     seL4_CPtr, seL4_CallWithMRs, seL4_MessageInfo, seL4_NBRecv, seL4_NBSend, seL4_Recv, seL4_Reply,
     seL4_Send, seL4_Wait, seL4_Word, seL4_Yield,
 };
+#[cfg(not(target_os = "none"))]
+use sel4_sys::{
+    seL4_CPtr, seL4_CallWithMRs, seL4_MessageInfo, seL4_Poll, seL4_Recv, seL4_Send, seL4_Word,
+    seL4_Yield,
+};
 
+#[cfg(target_os = "none")]
 extern "C" {
     fn seL4_ReplyRecv(
         dest: seL4_CPtr,
@@ -37,7 +44,15 @@ pub(super) unsafe fn nb_send(dest: seL4_CPtr, info: seL4_MessageInfo) {
         return;
     }
 
-    unsafe { seL4_NBSend(dest, info) };
+    #[cfg(target_os = "none")]
+    unsafe {
+        seL4_NBSend(dest, info);
+    }
+
+    #[cfg(not(target_os = "none"))]
+    unsafe {
+        seL4_Send(dest, info);
+    }
 }
 
 #[track_caller]
@@ -66,7 +81,16 @@ pub(super) unsafe fn reply(info: seL4_MessageInfo) {
         return;
     }
 
-    unsafe { seL4_Reply(info) };
+    #[cfg(target_os = "none")]
+    unsafe {
+        seL4_Reply(info);
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = info;
+        panic!("seL4_Reply is unavailable on host targets");
+    }
 }
 
 #[track_caller]
@@ -79,7 +103,16 @@ pub(super) unsafe fn reply_recv(
         return seL4_MessageInfo::new(0, 0, 0, 0);
     }
 
-    unsafe { seL4_ReplyRecv(dest, info, badge) }
+    #[cfg(target_os = "none")]
+    unsafe {
+        seL4_ReplyRecv(dest, info, badge)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (dest, info, badge);
+        panic!("seL4_ReplyRecv is unavailable on host targets");
+    }
 }
 
 #[track_caller]
@@ -97,7 +130,15 @@ pub(super) unsafe fn wait(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_Messag
         return seL4_MessageInfo::new(0, 0, 0, 0);
     }
 
-    unsafe { seL4_Wait(dest, badge) }
+    #[cfg(target_os = "none")]
+    unsafe {
+        seL4_Wait(dest, badge)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    unsafe {
+        seL4_Recv(dest, badge)
+    }
 }
 
 #[track_caller]
@@ -106,7 +147,15 @@ pub(super) unsafe fn nb_recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_Mes
         return seL4_MessageInfo::new(0, 0, 0, 0);
     }
 
-    unsafe { seL4_NBRecv(dest, badge) }
+    #[cfg(target_os = "none")]
+    unsafe {
+        seL4_NBRecv(dest, badge)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    unsafe {
+        seL4_Poll(dest, badge)
+    }
 }
 
 pub(super) unsafe fn yield_now() {

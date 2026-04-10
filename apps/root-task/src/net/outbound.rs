@@ -703,7 +703,10 @@ mod tests {
             coalescer.enqueue_log(&line);
         }
         let stats = coalescer.stats();
-        assert!(usize::from(stats.queued_bytes) <= OUTBOUND_RING_CAP);
+        assert!(
+            usize::try_from(stats.queued_bytes).expect("queued bytes fits usize")
+                <= OUTBOUND_RING_CAP
+        );
         assert!(stats.drops > 0);
     }
 }

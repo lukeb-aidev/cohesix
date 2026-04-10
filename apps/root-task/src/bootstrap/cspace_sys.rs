@@ -299,7 +299,7 @@ pub fn cnode_copy_raw_single(
             #[cfg(not(target_os = "none"))]
             {
                 let _ = (
-                    bi, dst_root, dst_slot, src_root, src_slot, rights, style, depth_word,
+                    _bi, dst_root, dst_slot, src_root, src_slot, rights, style, depth_word,
                 );
                 sys::seL4_NoError
             }
@@ -1508,7 +1508,9 @@ pub(crate) unsafe fn install_test_bootinfo_for_tests(
     bootinfo: sys::seL4_BootInfo,
 ) -> &'static sys::seL4_BootInfo {
     let leaked = Box::leak(Box::new(bootinfo));
-    TEST_BOOTINFO_PTR = leaked as *const _;
+    unsafe {
+        TEST_BOOTINFO_PTR = leaked as *const _;
+    }
     leaked
 }
 
@@ -2072,11 +2074,15 @@ pub mod canonical {
         obj: u32,
         sz_bits: u32,
         dst_slot: u32,
-        _bi: &sys::seL4_BootInfo,
+        bi: &sys::seL4_BootInfo,
     ) -> Result<(), sys::seL4_Error> {
-        let (root, idx, depth, offset) = super::init_cnode_retype_dest(dst_slot as _);
-        let depth_bits = u8::try_from(depth)
-            .expect("init CNode depth must fit within a u8 for seL4_Untyped_Retype");
+        let root = sys::seL4_CapInitThreadCNode;
+        let idx = super::init_root_index();
+        let offset = dst_slot as sys::seL4_Word;
+        let init_cnode_bits = sel4::init_cnode_bits(bi);
+        super::check_slot_in_range(init_cnode_bits, dst_slot as sys::seL4_CPtr);
+        let depth_bits = super::bits_as_u8(init_cnode_bits as usize);
+        let depth = super::encode_cnode_depth(depth_bits);
         debug_log(format_args!(
             "[retype:call] ut=0x{ut:x} obj={obj} sz={sz} -> (root,index,depth,raw)=(0x{root:x},{index},{depth},0x{raw:04x})",
             ut = ut,
@@ -2573,7 +2579,7 @@ mod tests {
         encode_cnode_depth, init_cnode_dest, init_cnode_direct_destination_words_for_test,
         init_root_index, path_depth, sel4, sys, untyped_retype_into_init_root,
     };
-    use crate::sel4::store_bootinfo_empty_region;
+    use crate::sel4::{blank_bootinfo_for_tests, store_bootinfo_empty_region};
 
     #[test]
     fn encode_slot_aligns_to_word_bits() {
@@ -2584,7 +2590,7 @@ mod tests {
 
     #[cfg(not(target_os = "none"))]
     fn mock_bootinfo(empty_start: u32, empty_end: u32, bits: u8) -> sys::seL4_BootInfo {
-        let mut bootinfo: sys::seL4_BootInfo = unsafe { core::mem::zeroed() };
+        let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
         bootinfo.initThreadCNodeSizeBits = bits as _;
         store_bootinfo_empty_region(
             &mut bootinfo.empty,
@@ -2599,7 +2605,7 @@ mod tests {
     fn init_cnode_dest_radix_depth_is_valid() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
             bootinfo.initThreadCNodeSizeBits = 13;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
@@ -2616,7 +2622,7 @@ mod tests {
     fn canonical_depth_tracks_bootinfo_bits() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
             bootinfo.initThreadCNodeSizeBits = 15;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
@@ -2629,7 +2635,7 @@ mod tests {
     fn retype_into_init_root_uses_canonical_tuple() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
             bootinfo.initThreadCNodeSizeBits = 13;
             store_bootinfo_empty_region(
                 &mut bootinfo.empty,
@@ -2653,7 +2659,7 @@ mod tests {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
                 assert_eq!(trace.node_index, init_root_index());
                 assert_eq!(trace.node_depth, canonical_depth_word());
-                assert_eq!(trace.node_offset, slot as _);
+                assert_eq!(trace.node_offset, slot as sys::seL4_Word);
                 assert_eq!(trace.object_type, 0);
                 assert_eq!(trace.size_bits, 0);
             } else {
@@ -2672,7 +2678,7 @@ mod tests {
     fn init_cnode_retype_dest_matches_canonical_tuple() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
             bootinfo.initThreadCNodeSizeBits = 13;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
@@ -2682,7 +2688,7 @@ mod tests {
         assert_eq!(root, bi_init_cnode_cptr());
         assert_eq!(idx, init_root_index());
         assert_eq!(depth, canonical_depth_word());
-        assert_eq!(off, slot as _);
+        assert_eq!(off, slot as sys::seL4_Word);
     }
 
     #[test]
@@ -2691,14 +2697,14 @@ mod tests {
         let (idx, depth, off) = init_cnode_direct_destination_words_for_test(13, slot as _);
         assert_eq!(idx, init_root_index());
         assert_eq!(depth, canonical_depth_word());
-        assert_eq!(off, slot as _);
+        assert_eq!(off, slot as sys::seL4_Word);
     }
 
     #[test]
     fn validate_retype_args_accepts_canonical_call() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
             bootinfo.initThreadCNodeSizeBits = 13;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
@@ -2727,7 +2733,7 @@ mod tests {
     fn validate_retype_args_rejects_offset_before_window() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
             bootinfo.initThreadCNodeSizeBits = 13;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
@@ -2762,7 +2768,7 @@ mod tests {
         use std::panic;
 
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
             bootinfo.initThreadCNodeSizeBits = 5;
             super::install_test_bootinfo_for_tests(bootinfo);
         }

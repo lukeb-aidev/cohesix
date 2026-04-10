@@ -8,6 +8,8 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(unsafe_code)]
 
+#[cfg(all(test, not(target_os = "none")))]
+use crate::rust_alloc::boxed::Box;
 use core::{
     arch::asm,
     convert::TryInto,
@@ -87,9 +89,19 @@ static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTIN
 static EP_VALIDATED: AtomicBool = AtomicBool::new(false);
 static IPC_SEND_UNLOCKED: AtomicBool = AtomicBool::new(false);
 static BOOTINFO_WINDOW_DUMPED: AtomicBool = AtomicBool::new(false);
+#[cfg(all(test, not(target_os = "none")))]
+static mut TEST_BOOTINFO_PTR: *const seL4_BootInfo = ptr::null();
 const DMA_MAP_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const DMA_MAP_LOG_CAPACITY: usize = 128;
 const MAX_DEVICE_SKIP_OBJECTS: usize = 512;
+const SEL4_UNTYPED_OBJECT_WORD: seL4_Word = sel4_sys::seL4_UntypedObject as seL4_Word;
+const SEL4_TCB_OBJECT_WORD: seL4_Word = sel4_sys::seL4_TCBObject as seL4_Word;
+const SEL4_ENDPOINT_OBJECT_WORD: seL4_Word = sel4_sys::seL4_EndpointObject as seL4_Word;
+const SEL4_NOTIFICATION_OBJECT_WORD: seL4_Word = sel4_sys::seL4_NotificationObject as seL4_Word;
+const SEL4_CAP_TABLE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_CapTableObject as seL4_Word;
+const SEL4_ARM_PAGE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_Page as seL4_Word;
+const SEL4_ARM_LARGE_PAGE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_LargePage as seL4_Word;
+const SEL4_ARM_PAGE_TABLE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_PageTableObject as seL4_Word;
 // Local-seat DMA frame trace can generate thousands of UART lines during USB
 // enumeration; keep it opt-in for targeted diagnostics.
 const LOCAL_SEAT_DMA_FRAME_VERBOSE_LOGS: bool = false;
@@ -104,6 +116,68 @@ struct DmaMapRecord {
 
 static DMA_MAP_LOG: SpinMutex<Vec<DmaMapRecord, DMA_MAP_LOG_CAPACITY>> = SpinMutex::new(Vec::new());
 static DMA_MAP_DROPS_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "none")]
+#[inline(always)]
+pub(crate) fn runtime_bootinfo() -> &'static seL4_BootInfo {
+    unsafe { &*sel4_sys::seL4_GetBootInfo() }
+}
+
+#[cfg(all(test, not(target_os = "none")))]
+#[inline(always)]
+pub(crate) fn runtime_bootinfo() -> &'static seL4_BootInfo {
+    unsafe {
+        TEST_BOOTINFO_PTR
+            .as_ref()
+            .expect("test bootinfo not installed")
+    }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+#[inline(always)]
+pub(crate) fn runtime_bootinfo() -> &'static seL4_BootInfo {
+    panic!("runtime bootinfo unavailable on host targets");
+}
+
+#[cfg(all(test, not(target_os = "none")))]
+#[inline(always)]
+pub(crate) fn install_test_bootinfo_for_tests(
+    bootinfo: seL4_BootInfo,
+) -> &'static mut seL4_BootInfo {
+    let leaked = Box::leak(Box::new(bootinfo));
+    unsafe {
+        TEST_BOOTINFO_PTR = leaked as *const _;
+    }
+    leaked
+}
+
+#[cfg(test)]
+#[inline(always)]
+pub(crate) fn blank_bootinfo_for_tests() -> seL4_BootInfo {
+    seL4_BootInfo {
+        extraLen: 0,
+        nodeId: 0,
+        numNodes: 0,
+        numIOPTLevels: 0,
+        ipcBuffer: ptr::null_mut(),
+        empty: sel4_sys::seL4_SlotRegion { start: 0, end: 0 },
+        sharedFrames: sel4_sys::seL4_SlotRegion { start: 0, end: 0 },
+        userImageFrames: sel4_sys::seL4_SlotRegion { start: 0, end: 0 },
+        userImagePaging: sel4_sys::seL4_SlotRegion { start: 0, end: 0 },
+        ioSpaceCaps: sel4_sys::seL4_SlotRegion { start: 0, end: 0 },
+        extraBIPages: sel4_sys::seL4_SlotRegion { start: 0, end: 0 },
+        initThreadCNodeSizeBits: 0,
+        _padding_init_cnode_bits: [0; core::mem::size_of::<seL4_Word>() - 1],
+        initThreadDomain: 0,
+        untyped: sel4_sys::seL4_SlotRegion { start: 0, end: 0 },
+        untypedList: [sel4_sys::seL4_UntypedDesc {
+            paddr: 0,
+            sizeBits: 0,
+            isDevice: 0,
+            padding: [0; core::mem::size_of::<seL4_Word>() - 2],
+        }; sel4_sys::MAX_BOOTINFO_UNTYPEDS],
+    }
+}
 
 pub fn record_dma_mapping(paddr: usize, vaddr: usize, len: usize, attr: usize) {
     if !DMA_MAP_DIAG || len == 0 {
@@ -372,6 +446,30 @@ use sel4_panicking::DebugSink;
 
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
+
+#[inline(always)]
+pub const fn bootinfo_node_id(bootinfo: &seL4_BootInfo) -> seL4_Word {
+    #[cfg(target_os = "none")]
+    {
+        bootinfo.nodeID
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        bootinfo.nodeId
+    }
+}
+
+#[inline(always)]
+pub const fn vm_attributes_raw(attr: seL4_ARM_VMAttributes) -> seL4_Word {
+    #[cfg(target_os = "none")]
+    {
+        attr
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        attr.0
+    }
+}
 
 /// Returns the capability pointer for the init thread's root CNode.
 #[inline(always)]
@@ -813,9 +911,9 @@ pub fn ipc_send_unlocked() -> bool {
 #[cfg(feature = "kernel")]
 #[inline]
 pub fn set_message_register(index: usize, value: seL4_Word) {
-    let mr_index: i32 = index
+    let mr_index: seL4_Word = index
         .try_into()
-        .expect("message register index must fit in i32");
+        .expect("message register index must fit in seL4_Word");
     unsafe { sel4_sys::seL4_SetMR(mr_index, value) };
 }
 
@@ -823,9 +921,9 @@ pub fn set_message_register(index: usize, value: seL4_Word) {
 #[cfg(feature = "kernel")]
 #[inline]
 pub fn message_register(index: usize) -> seL4_Word {
-    let reg_index: i32 = index
+    let reg_index: seL4_Word = index
         .try_into()
-        .expect("message register index must fit in i32");
+        .expect("message register index must fit in seL4_Word");
     unsafe { sel4_sys::seL4_GetMR(reg_index) }
 }
 
@@ -849,6 +947,13 @@ pub fn recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
 #[inline]
 pub fn wait(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
     unsafe { syscall::wait(dest, badge) }
+}
+
+/// Issues a non-blocking receive on the supplied endpoint.
+#[cfg(feature = "kernel")]
+#[inline]
+pub fn nb_recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
+    unsafe { syscall::nb_recv(dest, badge) }
 }
 
 /// Yields the current thread to the scheduler.
@@ -1352,7 +1457,7 @@ pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
 }
 
 /// Returns the physical address for a mapped ARM page capability.
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", target_os = "none"))]
 pub fn page_get_address(frame: seL4_CPtr) -> Result<usize, seL4_Error> {
     let mut mr0: seL4_Word = 0;
     let mut mr1: seL4_Word = 0;
@@ -1374,17 +1479,23 @@ pub fn page_get_address(frame: seL4_CPtr) -> Result<usize, seL4_Error> {
     }
 }
 
-#[cfg(not(feature = "kernel"))]
-/// Stub returning zero because page address queries require the kernel feature.
+#[cfg(all(feature = "kernel", not(target_os = "none")))]
+/// Host-test stub used when page address queries are unavailable.
 pub fn page_get_address(_frame: seL4_CPtr) -> Result<usize, seL4_Error> {
-    Ok(0)
+    Err(sel4_sys::seL4_IllegalOperation)
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(not(feature = "kernel"))]
+/// Host stub used when page address queries require the kernel feature.
+pub fn page_get_address(_frame: seL4_CPtr) -> Result<usize, seL4_Error> {
+    Err(sel4_sys::seL4_IllegalOperation)
+}
+
+#[cfg(all(feature = "kernel", target_os = "none"))]
 static USER_IMAGE_PADDR_RANGE: SpinOnce<Option<Range<usize>>> = SpinOnce::new();
 
 /// Returns the page-aligned base virtual address of the root-task user image.
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", target_os = "none"))]
 #[must_use]
 pub fn user_image_base_vaddr() -> usize {
     extern "C" {
@@ -1394,17 +1505,17 @@ pub fn user_image_base_vaddr() -> usize {
     base & !(PAGE_SIZE - 1)
 }
 
-#[cfg(not(feature = "kernel"))]
+#[cfg(any(not(feature = "kernel"), not(target_os = "none")))]
 #[must_use]
 pub fn user_image_base_vaddr() -> usize {
     0
 }
 
 /// Resolves a user-image virtual address to its physical address when available.
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", target_os = "none"))]
 #[must_use]
 pub fn user_image_vaddr_to_paddr(vaddr: usize) -> Option<usize> {
-    let bootinfo = unsafe { &*sel4_sys::seL4_GetBootInfo() };
+    let bootinfo = runtime_bootinfo();
     let base = user_image_base_vaddr();
     if vaddr < base {
         return None;
@@ -1421,18 +1532,18 @@ pub fn user_image_vaddr_to_paddr(vaddr: usize) -> Option<usize> {
     Some(page_paddr.saturating_add(offset & (PAGE_SIZE - 1)))
 }
 
-#[cfg(not(feature = "kernel"))]
+#[cfg(any(not(feature = "kernel"), not(target_os = "none")))]
 #[must_use]
 pub fn user_image_vaddr_to_paddr(_vaddr: usize) -> Option<usize> {
     None
 }
 
 /// Returns the physical address range covering the root-task user image frames.
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", target_os = "none"))]
 #[must_use]
 pub fn user_image_paddr_range() -> Option<Range<usize>> {
     let cached = USER_IMAGE_PADDR_RANGE.call_once(|| {
-        let bootinfo = unsafe { &*sel4_sys::seL4_GetBootInfo() };
+        let bootinfo = runtime_bootinfo();
         let start = bootinfo.userImageFrames.start as usize;
         let end = bootinfo.userImageFrames.end as usize;
         if start >= end {
@@ -1445,7 +1556,7 @@ pub fn user_image_paddr_range() -> Option<Range<usize>> {
     cached.clone()
 }
 
-#[cfg(not(feature = "kernel"))]
+#[cfg(any(not(feature = "kernel"), not(target_os = "none")))]
 #[must_use]
 pub fn user_image_paddr_range() -> Option<Range<usize>> {
     None
@@ -1975,14 +2086,14 @@ unsafe fn sel4_debug_poll_char() -> i32 {
 
 fn objtype_name(t: seL4_Word) -> &'static str {
     match t {
-        x if x == sel4_sys::seL4_UntypedObject as seL4_Word => "seL4_UntypedObject",
-        x if x == sel4_sys::seL4_TCBObject as seL4_Word => "seL4_TCBObject",
-        x if x == sel4_sys::seL4_EndpointObject as seL4_Word => "seL4_EndpointObject",
-        x if x == sel4_sys::seL4_NotificationObject as seL4_Word => "seL4_NotificationObject",
-        x if x == sel4_sys::seL4_CapTableObject as seL4_Word => "seL4_CapTableObject",
-        x if x == sel4_sys::seL4_ARM_Page as seL4_Word => "seL4_ARM_Page",
-        x if x == sel4_sys::seL4_ARM_LargePage as seL4_Word => "seL4_ARM_LargePage",
-        x if x == sel4_sys::seL4_ARM_PageTableObject as seL4_Word => "seL4_ARM_PageTableObject",
+        x if x == SEL4_UNTYPED_OBJECT_WORD => "seL4_UntypedObject",
+        x if x == SEL4_TCB_OBJECT_WORD => "seL4_TCBObject",
+        x if x == SEL4_ENDPOINT_OBJECT_WORD => "seL4_EndpointObject",
+        x if x == SEL4_NOTIFICATION_OBJECT_WORD => "seL4_NotificationObject",
+        x if x == SEL4_CAP_TABLE_OBJECT_WORD => "seL4_CapTableObject",
+        x if x == SEL4_ARM_PAGE_OBJECT_WORD => "seL4_ARM_Page",
+        x if x == SEL4_ARM_LARGE_PAGE_OBJECT_WORD => "seL4_ARM_LargePage",
+        x if x == SEL4_ARM_PAGE_TABLE_OBJECT_WORD => "seL4_ARM_PageTableObject",
         _ => "<?>",
     }
 }
@@ -2010,14 +2121,14 @@ pub fn error_name(err: seL4_Error) -> &'static str {
 #[must_use]
 pub fn object_type_name(object_type: seL4_ObjectType) -> &'static str {
     match object_type {
-        x if x == sel4_sys::seL4_UntypedObject => "seL4_UntypedObject",
-        x if x == sel4_sys::seL4_TCBObject => "seL4_TCBObject",
-        x if x == sel4_sys::seL4_EndpointObject => "seL4_EndpointObject",
-        x if x == sel4_sys::seL4_NotificationObject => "seL4_NotificationObject",
-        x if x == sel4_sys::seL4_CapTableObject => "seL4_CapTableObject",
-        x if x == sel4_sys::seL4_ARM_Page => "seL4_ARM_Page",
-        x if x == sel4_sys::seL4_ARM_LargePage => "seL4_ARM_LargePage",
-        x if x == sel4_sys::seL4_ARM_PageTableObject => "seL4_ARM_PageTableObject",
+        sel4_sys::seL4_UntypedObjectType => "seL4_UntypedObject",
+        sel4_sys::seL4_TCBObjectType => "seL4_TCBObject",
+        sel4_sys::seL4_EndpointObjectType => "seL4_EndpointObject",
+        sel4_sys::seL4_NotificationObjectType => "seL4_NotificationObject",
+        sel4_sys::seL4_CapTableObjectType => "seL4_CapTableObject",
+        sel4_sys::seL4_ARM_PageObjectType => "seL4_ARM_Page",
+        sel4_sys::seL4_ARM_LargePageObjectType => "seL4_ARM_LargePage",
+        sel4_sys::seL4_ARM_PageTableObjectType => "seL4_ARM_PageTableObject",
         _ => "<?>",
     }
 }
@@ -2530,7 +2641,11 @@ const DMA_LOW_GUARD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_TABLES: usize = 64;
 const MAX_PAGE_DIRECTORIES: usize = 32;
 const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
+#[cfg(target_os = "none")]
 pub(crate) const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = 1 << 2;
+#[cfg(not(target_os = "none"))]
+pub(crate) const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes =
+    sel4_sys::seL4_ARM_VMAttributes(1 << 2);
 
 /// Returns the exclusive virtual address range reserved for device page tables and mappings.
 pub const fn device_window_range() -> core::ops::Range<usize> {
@@ -2808,6 +2923,7 @@ pub fn is_boot_reserved_slot(slot: seL4_CPtr) -> bool {
 }
 
 /// Handle to an untyped capability reserved from the bootinfo catalog.
+#[derive(Debug, PartialEq, Eq)]
 pub struct ReservedUntyped {
     cap: seL4_Untyped,
     paddr: usize,
@@ -3338,6 +3454,13 @@ impl RamFrame {
     #[must_use]
     pub fn cap(&self) -> seL4_CPtr {
         self.cap
+    }
+
+    /// Builds a bounded dummy RAM frame for host-side unit tests.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test(ptr: NonNull<u8>, paddr: usize) -> Self {
+        Self { cap: 0, paddr, ptr }
     }
 
     /// Returns the frame as a mutable byte slice covering one page.
@@ -3927,7 +4050,7 @@ impl<'a> KernelEnv<'a> {
         }
         let frame_slot = self.allocate_slot();
         #[cfg(target_arch = "aarch64")]
-        let page_obj: seL4_Word = sel4_sys::seL4_ARM_Page as seL4_Word;
+        let page_obj: seL4_Word = SEL4_ARM_PAGE_OBJECT_WORD;
         #[cfg(target_arch = "aarch64")]
         let page_bits: seL4_Word = 12;
 
@@ -4206,7 +4329,7 @@ impl<'a> KernelEnv<'a> {
                 &mut line,
                 "[local-seat] dma-frame begin source={} attr=0x{:08x}",
                 if prefer_high { "high" } else { "low" },
-                attr as u32
+                vm_attributes_raw(attr) as u32
             );
             boot_log::force_uart_line(line.as_str());
         }
@@ -4234,7 +4357,7 @@ impl<'a> KernelEnv<'a> {
         let mut trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
-            sel4_sys::seL4_ARM_Page as seL4_Word,
+            SEL4_ARM_PAGE_OBJECT_WORD,
             PAGE_BITS as seL4_Word,
             RetypeKind::DmaPage { paddr: 0 },
         );
@@ -4360,8 +4483,7 @@ impl<'a> KernelEnv<'a> {
             "retype_page expects a page-related trace"
         );
         debug_assert_eq!(
-            trace.object_type,
-            sel4_sys::seL4_ARM_Page as seL4_Word,
+            trace.object_type, SEL4_ARM_PAGE_OBJECT_WORD,
             "ARM device/RAM frames must use seL4_ARM_Page",
         );
         debug_assert_eq!(
@@ -4375,8 +4497,7 @@ impl<'a> KernelEnv<'a> {
         #[cfg(target_arch = "aarch64")]
         if matches!(trace.kind, RetypeKind::DevicePage { .. }) {
             debug_assert_eq!(
-                trace.object_type,
-                sel4_sys::seL4_ARM_Page as seL4_Word,
+                trace.object_type, SEL4_ARM_PAGE_OBJECT_WORD,
                 "Device page retype must use seL4_ARM_Page on AArch64"
             );
             debug_assert_eq!(
@@ -5466,6 +5587,7 @@ mod tests {
             *byte = (index as u8).wrapping_add(1);
         }
         source.bootinfo.extraLen = EXTRA_BYTES as seL4_Word;
+        let source = Box::leak(Box::new(source));
 
         let source_view = BootInfoView::new(&source.bootinfo).expect("source bootinfo view");
         let mut snapshot_backing = [0u8; mem::size_of::<seL4_BootInfo>() + EXTRA_BYTES];
@@ -5510,10 +5632,8 @@ mod tests {
 
     #[test]
     fn canonical_cnode_bits_accepts_word_width() {
-        use core::mem::MaybeUninit;
-
-        let mut bi: sel4_sys::seL4_BootInfo = unsafe { MaybeUninit::zeroed().assume_init() };
-        bi.initThreadCNodeSizeBits = sel4_sys::seL4_WordBits as sel4_sys::seL4_Word;
+        let mut bi = blank_bootinfo_for_tests();
+        bi.initThreadCNodeSizeBits = sel4_sys::seL4_WordBits as u8;
         bi.empty.end = 1;
 
         let bits = canonical_cnode_bits(&bi);
@@ -5522,10 +5642,8 @@ mod tests {
 
     #[test]
     fn canonical_cnode_bits_clamps_overflow() {
-        use core::mem::MaybeUninit;
-
-        let mut bi: sel4_sys::seL4_BootInfo = unsafe { MaybeUninit::zeroed().assume_init() };
-        bi.initThreadCNodeSizeBits = (sel4_sys::seL4_WordBits as usize * 4) as sel4_sys::seL4_Word;
+        let mut bi = blank_bootinfo_for_tests();
+        bi.initThreadCNodeSizeBits = u8::MAX;
         bi.empty.end = 0;
 
         let bits = canonical_cnode_bits(&bi);
@@ -5561,7 +5679,7 @@ mod tests {
         let trace = env.prepare_retype_trace(
             &reserved,
             slot,
-            sel4_sys::seL4_ARM_Page as seL4_Word,
+            SEL4_ARM_PAGE_OBJECT_WORD,
             PAGE_BITS as seL4_Word,
             RetypeKind::DevicePage { paddr: 0 },
         );
@@ -5644,7 +5762,7 @@ mod tests {
             dest_offset: slot as seL4_Word,
             cnode_depth: expected_depth,
             node_index: canonical_index,
-            object_type: sel4_sys::seL4_ARM_Page as seL4_Word,
+            object_type: SEL4_ARM_PAGE_OBJECT_WORD,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DevicePage { paddr: 0 },
         };
@@ -5652,7 +5770,7 @@ mod tests {
         let (_, init_bits) = env.sanitise_retype_trace(trace);
         let max_slots = 1usize << init_bits;
         assert_eq!(init_bits, env.bootinfo().init_cnode_bits());
-        assert!(slot as usize < max_slots);
+        assert!((slot as usize) < max_slots);
     }
 
     #[test]
@@ -5681,7 +5799,7 @@ mod tests {
             dest_offset: slot as seL4_Word,
             cnode_depth: expected_depth,
             node_index: canonical_index,
-            object_type: sel4_sys::seL4_ARM_Page as seL4_Word,
+            object_type: SEL4_ARM_PAGE_OBJECT_WORD,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DevicePage { paddr: 0 },
         };
@@ -5718,7 +5836,7 @@ mod tests {
             dest_offset: 0x1ff,
             cnode_depth: expected_depth,
             node_index: init_root as seL4_Word,
-            object_type: sel4_sys::seL4_ARM_Page as seL4_Word,
+            object_type: SEL4_ARM_PAGE_OBJECT_WORD,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DmaPage { paddr: 0 },
         };

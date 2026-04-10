@@ -9,8 +9,8 @@
 use crate::bootstrap::log as boot_log;
 use crate::hal::cache::{CacheError, CacheMaintenance};
 
-#[cfg(not(feature = "kernel"))]
-use std::sync::Mutex;
+#[cfg(not(target_os = "none"))]
+use std::{string::String, sync::Mutex, vec::Vec};
 
 /// Error surfaced when pinning a DMA range fails validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +95,7 @@ fn cache_ops_requested(policy: CachePolicy) -> bool {
     policy.dma_clean || policy.dma_invalidate || policy.unify_instructions
 }
 
-#[cfg(not(feature = "kernel"))]
+#[cfg(not(target_os = "none"))]
 static DMA_AUDIT_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn emit_audit_line(line: &str) {
@@ -108,7 +108,7 @@ fn emit_audit_line(line: &str) {
         boot_log::force_uart_line(line);
     }
 
-    #[cfg(not(feature = "kernel"))]
+    #[cfg(not(target_os = "none"))]
     {
         let mut guard = DMA_AUDIT_LOG.lock().expect("dma audit log");
         guard.push(line.to_string());

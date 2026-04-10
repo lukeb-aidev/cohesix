@@ -241,7 +241,7 @@ fn assert_caps_known() {
 }
 
 fn cap_type_of(slot: usize) -> seL4_Word {
-    unsafe { sel4_sys::seL4_DebugCapIdentify(idx(slot)).into() }
+    sel4::debug_cap_identify(idx(slot)).into()
 }
 
 #[inline(always)]

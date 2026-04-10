@@ -2701,6 +2701,7 @@ impl VirtioNet {
                 error!(
                     target: "net-console",
                     "[virtio-net] unsupported buffer map attribute: attr=0x{other:08x}; virtio-net disabled",
+                    other = crate::sel4::vm_attributes_raw(other),
                 );
                 regs.set_status(STATUS_FAILED);
                 return Err(DriverError::NoQueue);
@@ -9803,7 +9804,7 @@ mod tests {
         }
     }
 
-    static USED_ELEM_PTR: Mutex<Option<*mut VirtqUsedElem>> = Mutex::new(None);
+    static USED_ELEM_PTR: Mutex<Option<usize>> = Mutex::new(None);
     static USED_ELEM_INVALIDATES: AtomicUsize = AtomicUsize::new(0);
 
     fn used_elem_visibility_hook(op: CacheOp, ptr: usize, len: usize) {
@@ -9813,11 +9814,12 @@ mod tests {
         let Some(elem_ptr) = *USED_ELEM_PTR.lock() else {
             return;
         };
-        if ptr != elem_ptr as usize {
+        if ptr != elem_ptr {
             return;
         }
         let count = USED_ELEM_INVALIDATES.fetch_add(1, Ordering::SeqCst);
         if count == 1 {
+            let elem_ptr = elem_ptr as *mut VirtqUsedElem;
             unsafe {
                 (*elem_ptr).len = 64u32.to_le();
             }
@@ -9855,11 +9857,14 @@ mod tests {
                     len: 0u32.to_le(),
                 },
             );
-            *USED_ELEM_PTR.lock() = Some(elem_ptr);
+            *USED_ELEM_PTR.lock() = Some(elem_ptr as usize);
         }
         USED_ELEM_INVALIDATES.store(0, Ordering::SeqCst);
         let mut queue = VirtQueue {
-            _frame: unsafe { core::mem::zeroed() },
+            _frame: crate::sel4::RamFrame::for_test(
+                NonNull::new(base_ptr).expect("base ptr"),
+                base_ptr as usize,
+            ),
             layout,
             size: QSIZE,
             desc: desc_ptr,
@@ -11869,34 +11874,30 @@ mod tx_tests {
             slots.reserve_next().is_none(),
             "no additional slots while none are free"
         );
-        assert!(matches!(
-            slots.mark_in_flight(s0),
-            Ok(_),
+        assert!(
+            matches!(slots.mark_in_flight(s0), Ok(_)),
             "reserved slot transitions to inflight"
-        ));
+        );
         assert!(
             slots.reserve_next().is_none(),
             "inflight slot cannot be reused until completion"
         );
-        assert!(matches!(
-            slots.complete(s0),
-            Ok(_),
+        assert!(
+            matches!(slots.complete(s0), Ok(_)),
             "completion frees the slot"
-        ));
+        );
         let (reuse, _, _) = slots
             .reserve_next()
             .expect("slot reusable after completion");
         assert_eq!(reuse, s0, "same slot may be reused after completion");
-        assert!(matches!(
-            slots.cancel(reuse),
-            Ok(_),
+        assert!(
+            matches!(slots.cancel(reuse), Ok(_)),
             "cancellation permitted only from reserved"
-        ));
-        assert!(matches!(
-            slots.cancel(s1),
-            Ok(_),
+        );
+        assert!(
+            matches!(slots.cancel(s1), Ok(_)),
             "reserved slot can be cancelled"
-        ));
+        );
     }
 
     #[test]
@@ -11908,16 +11909,14 @@ mod tx_tests {
             Err(TxSlotError::NotReserved)
         ));
         let (slot, _, _) = slots.reserve_next().expect("reserve");
-        assert!(matches!(
-            slots.cancel(slot),
-            Ok(()),
+        assert!(
+            matches!(slots.cancel(slot), Ok(())),
             "cancel allowed from reserved"
-        ));
-        assert!(matches!(
-            slots.cancel(slot),
-            Err(TxSlotError::NotReserved),
+        );
+        assert!(
+            matches!(slots.cancel(slot), Err(TxSlotError::NotReserved)),
             "double cancel rejected"
-        ));
+        );
     }
 
     #[test]

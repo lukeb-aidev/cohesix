@@ -10,7 +10,8 @@ use crate::bootstrap::cspace_sys::{self, RetypeArgs, RetypeCallError};
 use crate::sel4;
 use crate::trace::DebugPutc;
 use sel4_sys::{
-    seL4_CPtr, seL4_Error, seL4_NoError, seL4_ObjectType, seL4_Untyped_Retype, seL4_Word,
+    seL4_CPtr, seL4_EndpointObjectType, seL4_Error, seL4_NoError, seL4_ObjectType,
+    seL4_Untyped_Retype, seL4_Word,
 };
 
 #[cfg(any(test, feature = "test-support"))]
@@ -176,7 +177,7 @@ pub fn retype_endpoint_into_slot(
 ) -> Result<(), seL4_Error> {
     traced_retype_into_slot(
         untyped,
-        sel4_sys::seL4_EndpointObject,
+        seL4_EndpointObjectType,
         0,
         dst_root,
         node_index,

@@ -76,12 +76,12 @@ mod imp {
     }
 
     #[inline(always)]
-    pub unsafe fn seL4_GetMR(index: i32) -> seL4_Word {
+    pub unsafe fn seL4_GetMR(index: seL4_Word) -> seL4_Word {
         (*seL4_GetIPCBuffer()).msg[index as usize]
     }
 
     #[inline(always)]
-    pub unsafe fn seL4_SetMR(index: i32, value: seL4_Word) {
+    pub unsafe fn seL4_SetMR(index: seL4_Word, value: seL4_Word) {
         (*seL4_GetIPCBuffer()).msg[index as usize] = value;
     }
 
@@ -1383,6 +1383,14 @@ mod imp {
     pub const seL4_ARM_PageTableObject: seL4_ObjectType =
         _object_seL4_ARM_PageTableObject as seL4_ObjectType;
     pub const seL4_ARM_SmallPageObject: seL4_ObjectType = seL4_ARM_Page;
+    pub const seL4_UntypedObjectType: seL4_ObjectType = seL4_UntypedObject;
+    pub const seL4_TCBObjectType: seL4_ObjectType = seL4_TCBObject;
+    pub const seL4_EndpointObjectType: seL4_ObjectType = seL4_EndpointObject;
+    pub const seL4_NotificationObjectType: seL4_ObjectType = seL4_NotificationObject;
+    pub const seL4_CapTableObjectType: seL4_ObjectType = seL4_CapTableObject;
+    pub const seL4_ARM_PageObjectType: seL4_ObjectType = seL4_ARM_Page;
+    pub const seL4_ARM_LargePageObjectType: seL4_ObjectType = seL4_ARM_LargePage;
+    pub const seL4_ARM_PageTableObjectType: seL4_ObjectType = seL4_ARM_PageTableObject;
 
     pub const seL4_CapNull: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapNull as seL4_CPtr;
     pub const seL4_CapInitThreadTCB: seL4_CPtr =
@@ -1597,7 +1605,7 @@ mod imp {
         panic!("sel4-sys stubs must not be used on host targets");
     }
 
-    pub const MAX_BOOTINFO_UNTYPEDS: usize = 0;
+    pub const MAX_BOOTINFO_UNTYPEDS: usize = 230;
 
     pub type seL4_Word = u64;
     #[allow(clippy::manual_bits)]
@@ -1611,6 +1619,12 @@ mod imp {
     pub type seL4_VSpace = seL4_CPtr;
     pub type seL4_ARM_Page = seL4_CPtr;
     pub type seL4_ARM_PageTable = seL4_CPtr;
+
+    #[no_mangle]
+    pub static mut __sel4_ipc_buffer: *mut seL4_IPCBuffer = ptr::null_mut();
+
+    #[no_mangle]
+    pub static mut bootinfo: *mut seL4_BootInfo = core::ptr::null_mut();
 
     pub const seL4_CapNull: seL4_CPtr = 0;
     pub const seL4_CapInitThreadTCB: seL4_CPtr = 1;
@@ -1654,6 +1668,17 @@ mod imp {
         seL4_ARM_LargePage = seL4_ARM_LargePageObject as usize,
         seL4_ARM_PageTableObject = seL4_ARM_PageTableObject as usize,
     }
+
+    pub const seL4_UntypedObjectType: seL4_ObjectType = seL4_ObjectType::seL4_UntypedObject;
+    pub const seL4_TCBObjectType: seL4_ObjectType = seL4_ObjectType::seL4_TCBObject;
+    pub const seL4_EndpointObjectType: seL4_ObjectType = seL4_ObjectType::seL4_EndpointObject;
+    pub const seL4_NotificationObjectType: seL4_ObjectType =
+        seL4_ObjectType::seL4_NotificationObject;
+    pub const seL4_CapTableObjectType: seL4_ObjectType = seL4_ObjectType::seL4_CapTableObject;
+    pub const seL4_ARM_PageObjectType: seL4_ObjectType = seL4_ObjectType::seL4_ARM_Page;
+    pub const seL4_ARM_LargePageObjectType: seL4_ObjectType = seL4_ObjectType::seL4_ARM_LargePage;
+    pub const seL4_ARM_PageTableObjectType: seL4_ObjectType =
+        seL4_ObjectType::seL4_ARM_PageTableObject;
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -1791,16 +1816,46 @@ mod imp {
     #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct seL4_IPCBuffer {
-        _private: u8,
+        pub tag: seL4_MessageInfo,
+        pub msg: [seL4_Word; 120],
+        pub userData: seL4_Word,
+        pub caps_or_badges: [seL4_Word; 4],
+        pub receiveCNode: seL4_CPtr,
+        pub receiveIndex: seL4_CPtr,
+        pub receiveDepth: seL4_Word,
     }
 
-    #[derive(Clone, Copy)]
+    impl seL4_IPCBuffer {
+        pub const fn new() -> Self {
+            Self {
+                tag: seL4_MessageInfo::new(0, 0, 0, 0),
+                msg: [0; 120],
+                userData: 0,
+                caps_or_badges: [0; 4],
+                receiveCNode: 0,
+                receiveIndex: 0,
+                receiveDepth: 0,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct seL4_ARM_VMAttributes(pub seL4_Word);
 
     pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
     pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0x03);
 
     pub type seL4_CapData_t = seL4_CNode_CapData;
+
+    static mut HOST_IPC_BUFFER: seL4_IPCBuffer = seL4_IPCBuffer::new();
+
+    #[inline(always)]
+    unsafe fn ensure_ipc_buffer() -> *mut seL4_IPCBuffer {
+        if __sel4_ipc_buffer.is_null() {
+            __sel4_ipc_buffer = ptr::addr_of_mut!(HOST_IPC_BUFFER);
+        }
+        __sel4_ipc_buffer
+    }
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -1824,8 +1879,23 @@ mod imp {
     }
 
     #[inline(always)]
-    pub unsafe fn seL4_InitBootInfo(_bi: *mut seL4_BootInfo) {
-        unsupported();
+    pub unsafe fn seL4_InitBootInfo(bi: *mut seL4_BootInfo) {
+        bootinfo = bi;
+        if !bi.is_null() {
+            seL4_SetIPCBuffer((*bi).ipcBuffer);
+        } else {
+            seL4_SetIPCBuffer(ptr::null_mut());
+        }
+    }
+
+    #[export_name = "seL4_GetBootInfo"]
+    pub unsafe extern "C" fn sel4_get_bootinfo() -> *mut seL4_BootInfo {
+        bootinfo
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetBootInfo() -> *mut seL4_BootInfo {
+        sel4_get_bootinfo()
     }
 
     #[inline(always)]
@@ -1843,7 +1913,7 @@ mod imp {
         _src_depth: seL4_Word,
         _rights: seL4_CapRights,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
@@ -1852,7 +1922,7 @@ mod imp {
         _index: seL4_Word,
         _depth: seL4_Word,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
@@ -1864,7 +1934,7 @@ mod imp {
         _src_index: seL4_Word,
         _src_depth: seL4_Word,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
@@ -1878,7 +1948,7 @@ mod imp {
         _rights: seL4_CapRights_t,
         _badge: seL4_Word,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
@@ -1892,7 +1962,7 @@ mod imp {
         _node_offset: seL4_Word,
         _num: seL4_Word,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[repr(C)]
@@ -1953,64 +2023,89 @@ mod imp {
 
     #[inline(always)]
     pub fn seL4_DebugPutChar(_c: u8) {
-        unsupported();
+        // Host tests have no kernel debug console.
     }
 
     #[inline(always)]
     pub fn seL4_DebugDumpScheduler() {
-        unsupported();
+        // Host tests have no kernel scheduler state.
     }
 
     #[inline(always)]
     pub fn seL4_DebugDumpCPUInfo() {
-        unsupported();
+        // Host tests have no kernel CPU debug state.
     }
 
     #[inline(always)]
     pub unsafe fn seL4_CapIdentify(_cap: seL4_CPtr) -> seL4_Word {
-        unsupported();
+        seL4_CapNull
     }
 
     #[inline(always)]
     pub fn seL4_Yield() {
-        unsupported();
+        // Cooperative host tests do not model kernel scheduling.
     }
 
     #[inline(always)]
     pub unsafe fn seL4_Send(_dest: seL4_CPtr, _msg: seL4_MessageInfo) {
-        unsupported();
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = _msg;
     }
 
     #[inline(always)]
     pub unsafe fn seL4_Recv(_src: seL4_CPtr, _sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
-        unsupported();
+        if !_sender_badge.is_null() {
+            *_sender_badge = 0;
+        }
+        (*ensure_ipc_buffer()).tag
     }
 
     #[inline(always)]
     pub unsafe fn seL4_Poll(_src: seL4_CPtr, _sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
-        unsupported();
+        if !_sender_badge.is_null() {
+            *_sender_badge = 0;
+        }
+        seL4_MessageInfo::new(0, 0, 0, 0)
     }
 
     #[inline(always)]
     pub unsafe fn seL4_CallWithMRs(
         _dest: seL4_CPtr,
-        _msg: seL4_MessageInfo,
+        msg: seL4_MessageInfo,
         _mr0: *mut seL4_Word,
         _mr1: *mut seL4_Word,
         _mr2: *mut seL4_Word,
         _mr3: *mut seL4_Word,
     ) -> seL4_MessageInfo {
-        unsupported();
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = msg;
+        if !_mr0.is_null() {
+            (*ipc).msg[0] = *_mr0;
+        }
+        if !_mr1.is_null() {
+            (*ipc).msg[1] = *_mr1;
+        }
+        if !_mr2.is_null() {
+            (*ipc).msg[2] = *_mr2;
+        }
+        if !_mr3.is_null() {
+            (*ipc).msg[3] = *_mr3;
+        }
+        msg
     }
 
     #[inline(always)]
-    pub unsafe fn seL4_SetMR(_index: seL4_Word, _value: seL4_Word) {
-        unsupported();
+    pub unsafe fn seL4_SetMR(index: seL4_Word, value: seL4_Word) {
+        let ipc = ensure_ipc_buffer();
+        if let Some(slot) = (*ipc).msg.get_mut(index as usize) {
+            *slot = value;
+        }
     }
 
     #[inline(always)]
-    pub unsafe fn seL4_GetMR(_index: seL4_Word) -> seL4_Word {
-        unsupported();
+    pub unsafe fn seL4_GetMR(index: seL4_Word) -> seL4_Word {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).msg.get(index as usize).copied().unwrap_or(0)
     }
 
     #[inline(always)]
@@ -2022,7 +2117,7 @@ mod imp {
         _vspace_root: seL4_CPtr,
         _vspace_root_data: seL4_Word,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
@@ -2034,7 +2129,7 @@ mod imp {
         _vspace_root: seL4_CPtr,
         _vspace_root_data: seL4_Word,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
@@ -2043,22 +2138,28 @@ mod imp {
         _buffer_addr: seL4_Word,
         _buffer_frame: seL4_CPtr,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
     pub unsafe fn seL4_TCB_Suspend(_service: seL4_TCB) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
-    pub fn seL4_SetIPCBuffer(_buf: *mut seL4_IPCBuffer) {
-        unsupported();
+    pub fn seL4_SetIPCBuffer(buf: *mut seL4_IPCBuffer) {
+        unsafe {
+            __sel4_ipc_buffer = if buf.is_null() {
+                ptr::addr_of_mut!(HOST_IPC_BUFFER)
+            } else {
+                buf
+            };
+        }
     }
 
     #[inline(always)]
     pub unsafe fn seL4_GetIPCBuffer() -> *mut seL4_IPCBuffer {
-        ptr::null_mut()
+        ensure_ipc_buffer()
     }
 
     #[inline(always)]
@@ -2069,7 +2170,7 @@ mod imp {
         _rights: seL4_CapRights_t,
         _attr: seL4_ARM_VMAttributes,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
@@ -2079,12 +2180,12 @@ mod imp {
         _vaddr: seL4_Word,
         _attr: seL4_ARM_VMAttributes,
     ) -> seL4_Error {
-        unsupported_error()
+        seL4_NoError
     }
 
     #[inline(always)]
     pub fn yield_now() {
-        unsupported();
+        // Cooperative host tests do not model kernel scheduling.
     }
 
     #[inline(always)]

@@ -5713,16 +5713,12 @@ mod tests {
         SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
         SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
         SOCKET_STORAGE_TAG_ID.store(0, Ordering::Release);
-        if let Ok(mut tag) = SOCKET_STORAGE_TAG_LABEL.lock() {
-            *tag = None;
-        }
+        *SOCKET_STORAGE_TAG_LABEL.lock() = None;
 
         TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
         TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
         TCP_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
-        if let Ok(mut tag) = TCP_RX_STORAGE_TAG_LABEL.lock() {
-            *tag = None;
-        }
+        *TCP_RX_STORAGE_TAG_LABEL.lock() = None;
     }
 
     #[test]
@@ -5731,7 +5727,8 @@ mod tests {
 
         TCP_RX_STORAGE_IN_USE.store(true, Ordering::Release);
         let attempt = NetInitAttempt::new("test.reservation");
-        let result = StorageReservation::acquire::<Infallible>(true, &attempt, "test.reservation");
+        let result =
+            StorageReservation::acquire::<Infallible>(true, false, &attempt, "test.reservation");
         assert!(matches!(result, Err(NetStackError::TcpRxStorageInUse)));
 
         assert!(!SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
@@ -5779,7 +5776,7 @@ mod tests {
 
         let attempt = NetInitAttempt::new("test.acquisition");
         let reservation =
-            StorageReservation::acquire::<Infallible>(false, &attempt, "test.acquisition")
+            StorageReservation::acquire::<Infallible>(false, false, &attempt, "test.acquisition")
                 .expect("reservation should succeed");
 
         assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
@@ -5802,7 +5799,8 @@ mod tests {
         SOCKET_STORAGE_TAG_ID.store(0, Ordering::Release);
 
         let attempt = NetInitAttempt::new("test.poisoned");
-        let result = StorageReservation::acquire::<Infallible>(false, &attempt, "test.poisoned");
+        let result =
+            StorageReservation::acquire::<Infallible>(false, false, &attempt, "test.poisoned");
 
         assert!(matches!(result, Err(NetStackError::SocketStoragePoisoned)));
         assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
@@ -5816,13 +5814,11 @@ mod tests {
 
         SOCKET_STORAGE_OWNER.store(0xdead_beef, Ordering::Release);
         SOCKET_STORAGE_TAG_ID.store(0xcafe_0001, Ordering::Release);
-        if let Ok(mut tag) = SOCKET_STORAGE_TAG_LABEL.lock() {
-            *tag = Some("test.busy");
-        }
+        *SOCKET_STORAGE_TAG_LABEL.lock() = Some("test.busy");
         SOCKET_STORAGE_IN_USE.store(true, Ordering::Release);
 
         let attempt = NetInitAttempt::new("test.busy");
-        let result = StorageReservation::acquire::<Infallible>(false, &attempt, "test.busy");
+        let result = StorageReservation::acquire::<Infallible>(false, false, &attempt, "test.busy");
 
         assert!(matches!(result, Err(NetStackError::SocketStorageInUse)));
         assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));

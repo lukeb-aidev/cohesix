@@ -450,6 +450,16 @@ const fn runtime_handoff_needs_release_only_run_write(
 }
 
 #[inline(always)]
+const fn runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
+        && runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
+        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn runtime_handoff_needs_uboot_style_run_write(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
@@ -1486,22 +1496,21 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let skip_post_reset_verification_readbacks =
             skip_live_post_reset_verification_readbacks(self.firmware_handoff);
-        let runtime_handoff_mask =
-            u64::from(runtime_mailbox_reset_handoff(
+        let runtime_handoff_mask = u64::from(runtime_mailbox_reset_handoff(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        )) | (u64::from(runtime_mailbox_reset_stop_state_handoff(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        )) << 1)
+            | (u64::from(snapshot_resetless_reinit_handoff(
                 self.firmware_handoff,
                 trusted_runtime_seed_snapshot,
-            )) | (u64::from(runtime_mailbox_reset_stop_state_handoff(
+            )) << 2)
+            | (u64::from(runtime_preserve_stop_state_handoff(
                 self.firmware_handoff,
                 trusted_runtime_seed_snapshot,
-            )) << 1)
-                | (u64::from(snapshot_resetless_reinit_handoff(
-                    self.firmware_handoff,
-                    trusted_runtime_seed_snapshot,
-                )) << 2)
-                | (u64::from(runtime_preserve_stop_state_handoff(
-                    self.firmware_handoff,
-                    trusted_runtime_seed_snapshot,
-                )) << 3);
+            )) << 3);
         let publish_policy_mask = u64::from(defer_dcbaap_publish)
             | (u64::from(defer_dcbaap_publish_until_after_run) << 1)
             | (u64::from(defer_crcr_publish) << 2)
@@ -1824,7 +1833,23 @@ impl<H: Dma> XhciCtrl<H> {
                 0,
             );
         }
+        let release_only_dcbaap_publish =
+            runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
+                self.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+            );
+        let dcbaap_publish_policy_mask = u64::from(atomic_runtime_ring_publish)
+            | (u64::from(release_only_dcbaap_publish) << 1)
+            | (u64::from(preserve_firmware_state) << 2)
+            | (u64::from(defer_dcbaap_publish) << 3)
+            | (u64::from(defer_dcbaap_publish_until_after_run) << 4);
         let publish_dcbaap = |this: &mut Self| {
+            emit_xhci_diag(
+                0x02f7,
+                dcbaap_publish_policy_mask,
+                this.firmware_handoff as u64,
+                runtime_seed_snapshot_flag_bits(trusted_runtime_seed_snapshot),
+            );
             emit_xhci_diag(0x0244, reg::DCBAAP as u64, dcbaa_phys, 0);
             if preserve_firmware_state && TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE {
                 emit_xhci_diag(0x024e, reg::DCBAAP as u64, dcbaap_offset as u64, 1);
@@ -1849,6 +1874,29 @@ impl<H: Dma> XhciCtrl<H> {
                     dcbaa_phys,
                     0x0291,
                     0x0292,
+                );
+            } else if release_only_dcbaap_publish {
+                let [target_low, target_high] = split_u64_reg_write_ops(dcbaap_offset, dcbaa_phys);
+                emit_xhci_diag(0x029c, reg::DCBAAP as u64, dcbaa_phys, 1);
+                Self::write_reg_u32_store_diag_release_only_at_with_barrier_phase(
+                    this.mmio,
+                    target_low.0,
+                    target_low.1,
+                    0x0248,
+                    0x029d,
+                    0x029e,
+                    0x024a,
+                    dcbaa_phys,
+                );
+                Self::write_reg_u32_store_diag_release_only_at_with_barrier_phase(
+                    this.mmio,
+                    target_high.0,
+                    target_high.1,
+                    0x0249,
+                    0x029f,
+                    0x02f6,
+                    0x024b,
+                    dcbaa_phys,
                 );
             } else {
                 Self::write_reg_u64_done_diag_at(
@@ -2432,7 +2480,12 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x02eb, reg::USBCMD as u64, run_usbcmd as u64, 3);
             mmio_write_barrier();
             emit_xhci_diag(0x02ea, reg::USBCMD as u64, run_usbcmd as u64, 3);
-            emit_xhci_diag(0x02e9, (self.op_base + reg::USBCMD) as u64, run_usbcmd as u64, 3);
+            emit_xhci_diag(
+                0x02e9,
+                (self.op_base + reg::USBCMD) as u64,
+                run_usbcmd as u64,
+                3,
+            );
             unsafe {
                 ((self.op_base + reg::USBCMD) as *mut u32).write_volatile(run_usbcmd);
             }
@@ -3287,22 +3340,21 @@ mod tests {
         preserve_firmware_handoff_config, probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot, run_usbcmd_needs_live_seed_read,
         run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
-        runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_relaxed_run_write,
-        runtime_handoff_needs_relaxed_reset_write, runtime_handoff_needs_release_only_run_write,
-        runtime_handoff_needs_uboot_style_run_write, runtime_mailbox_reset_handoff,
-        runtime_mailbox_reset_needs_blind_settle, runtime_mailbox_reset_stop_state_handoff,
-        runtime_preserve_stop_state_handoff, runtime_seed_snapshot_flag_bits,
-        runtime_stop_state_needs_post_run_settle,
+        runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_relaxed_reset_write,
+        runtime_handoff_needs_relaxed_run_write,
+        runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
+        runtime_handoff_needs_release_only_run_write, runtime_handoff_needs_uboot_style_run_write,
+        runtime_mailbox_reset_handoff, runtime_mailbox_reset_needs_blind_settle,
+        runtime_mailbox_reset_stop_state_handoff, runtime_preserve_stop_state_handoff,
+        runtime_seed_snapshot_flag_bits, runtime_stop_state_needs_post_run_settle,
         skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
-        skip_constructor_polling_scrub_writes,
-        skip_constructor_polling_scrub_writes_with_snapshot, skip_doorbell_readback_after_ring,
-        skip_init_pre_reset_scrub_writes, skip_init_pre_reset_scrub_writes_with_snapshot,
-        skip_legacy_ownership_claim_for_handoff,
-        skip_legacy_ownership_claim_for_handoff_with_snapshot,
-        skip_live_halt_revalidation, skip_live_halt_revalidation_with_snapshot,
-        skip_live_post_reset_verification_readbacks, skip_post_reset_cnr_poll_with_snapshot,
-        skip_post_run_interrupter_zeroing_with_snapshot, skip_preinit_polling_scrub,
-        skip_reset_during_init, skip_reset_during_init_with_snapshot,
+        skip_constructor_polling_scrub_writes, skip_constructor_polling_scrub_writes_with_snapshot,
+        skip_doorbell_readback_after_ring, skip_init_pre_reset_scrub_writes,
+        skip_init_pre_reset_scrub_writes_with_snapshot, skip_legacy_ownership_claim_for_handoff,
+        skip_legacy_ownership_claim_for_handoff_with_snapshot, skip_live_halt_revalidation,
+        skip_live_halt_revalidation_with_snapshot, skip_live_post_reset_verification_readbacks,
+        skip_post_reset_cnr_poll_with_snapshot, skip_post_run_interrupter_zeroing_with_snapshot,
+        skip_preinit_polling_scrub, skip_reset_during_init, skip_reset_during_init_with_snapshot,
         skip_usbsts_clear_before_run_with_snapshot, split_u64_reg_write_ops,
         u64_register_change_mask, use_atomic_erstba_publish_with_snapshot,
         use_atomic_runtime_ring_publish_with_snapshot, use_live_config_seed_reads,
@@ -3637,6 +3689,12 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             stop_state_snapshot,
         ));
+        assert!(
+            runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                stop_state_snapshot,
+            )
+        );
         assert!(runtime_handoff_needs_pre_run_settle(
             XhciFirmwareHandoff::None,
             stop_state_snapshot,
@@ -3657,6 +3715,12 @@ mod tests {
             XhciFirmwareHandoff::None,
             stop_state_snapshot,
         ));
+        assert!(
+            !runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
+                XhciFirmwareHandoff::None,
+                stop_state_snapshot,
+            )
+        );
         assert!(!runtime_handoff_needs_pre_run_settle(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
@@ -3701,10 +3765,22 @@ mod tests {
             XhciFirmwareHandoff::ResetlessReinit,
             stop_state_snapshot,
         ));
+        assert!(
+            !runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
+                XhciFirmwareHandoff::ResetlessReinit,
+                stop_state_snapshot,
+            )
+        );
         assert!(!runtime_handoff_needs_release_only_run_write(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             runtime_ring_snapshot,
         ));
+        assert!(
+            !runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                runtime_ring_snapshot,
+            )
+        );
         assert!(defer_dcbaap_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,

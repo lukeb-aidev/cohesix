@@ -9,8 +9,10 @@
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ops::Range;
+#[cfg(target_os = "none")]
 use core::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(target_os = "none")]
 use linked_list_allocator::LockedHeap;
 
 use crate::bootstrap::{log as boot_log, no_alloc};
@@ -18,12 +20,15 @@ use crate::bootstrap::{log as boot_log, no_alloc};
 /// Statically reserved heap span used during bootstrap.
 pub const HEAP_BYTES: usize = 2 * 1024 * 1024;
 
+#[cfg(target_os = "none")]
 static HEAP_INITIALISED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(target_os = "none")]
 struct GuardedAllocator {
     inner: LockedHeap,
 }
 
+#[cfg(target_os = "none")]
 impl GuardedAllocator {
     const fn new() -> Self {
         Self {
@@ -45,6 +50,7 @@ impl GuardedAllocator {
     }
 }
 
+#[cfg(target_os = "none")]
 unsafe impl GlobalAlloc for GuardedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if !no_alloc::alloc_ready() {
@@ -105,9 +111,15 @@ unsafe impl GlobalAlloc for GuardedAllocator {
     }
 }
 
+#[cfg(target_os = "none")]
 #[global_allocator]
 static GLOBAL_ALLOCATOR: GuardedAllocator = GuardedAllocator::new();
 
+#[cfg(not(target_os = "none"))]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: std::alloc::System = std::alloc::System;
+
+#[cfg(target_os = "none")]
 fn report_heap_error(tag: &str, detail: &str) -> ! {
     let mut line = heapless::String::<96>::new();
     let _ = core::fmt::write(&mut line, format_args!("[alloc:init] {tag}: {detail}"));
@@ -116,6 +128,7 @@ fn report_heap_error(tag: &str, detail: &str) -> ! {
 }
 
 /// Installs the global allocator over the supplied heap span once all layout checks pass.
+#[cfg(target_os = "none")]
 pub fn init_heap(span: Range<usize>) {
     if span.start >= span.end {
         report_heap_error("invalid-span", "heap start >= end");
@@ -138,4 +151,10 @@ pub fn init_heap(span: Range<usize>) {
 
     no_alloc::mark_alloc_ready();
     boot_log::force_uart_line("[boot] allocator ready");
+}
+
+/// Host-test allocator initialisation is a no-op because the system allocator is active.
+#[cfg(not(target_os = "none"))]
+pub fn init_heap(_span: Range<usize>) {
+    no_alloc::mark_alloc_ready();
 }

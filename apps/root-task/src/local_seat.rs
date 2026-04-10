@@ -242,6 +242,30 @@ impl LocalSeatRuntime {
         self.backend_keyboard_polling_enabled = true;
     }
 
+    /// Run one bounded backend keyboard probe pass without permanently arming
+    /// background polling unless the caller had already enabled it or the
+    /// keyboard comes online during the probe.
+    pub fn probe_backend_keyboard_once(&mut self) {
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        {
+            let was_enabled = self.backend_keyboard_polling_enabled;
+            if let Some(backend) = self.backend.as_mut() {
+                backend.arm_prompt_safe_probe();
+            }
+            self.backend_keyboard_polling_enabled = true;
+            self.poll_backend_keyboard();
+            let keep_polling = was_enabled
+                || self
+                    .backend
+                    .as_ref()
+                    .is_some_and(Pi4LocalSeat::keyboard_attached);
+            self.backend_keyboard_polling_enabled = keep_polling;
+            if !keep_polling {
+                self.backend_keyboard_poll_deferred_logged = false;
+            }
+        }
+    }
+
     fn echo_input_bytes(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             update_input_echo_preview(
@@ -319,6 +343,10 @@ impl LocalSeatRuntime {
             backend.register_boot_progress_display();
         }
     }
+
+    /// Host-test no-op for boot-progress backend publication.
+    #[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+    pub fn register_boot_progress_backend(&mut self) {}
 
     /// Preseed platform keyboard MMIO windows after core boot mappings settle.
     pub fn preseed_backend_keyboard_mmio(&mut self) {
@@ -720,5 +748,19 @@ mod tests {
         runtime.enable_backend_keyboard_polling();
 
         assert!(runtime.backend_keyboard_polling_enabled());
+    }
+
+    #[test]
+    fn runtime_probe_backend_keyboard_once_restores_deferred_state_by_default() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        runtime.probe_backend_keyboard_once();
+
+        assert!(!runtime.backend_keyboard_polling_enabled());
     }
 }

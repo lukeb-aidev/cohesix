@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Root-task library surface exposing console and networking modules for tests.
 // Author: Lukas Bower
-#![cfg_attr(feature = "kernel", no_std)]
+#![cfg_attr(all(feature = "kernel", not(test)), no_std)]
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(deprecated)]
@@ -73,7 +73,7 @@ pub mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built_info.rs"));
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", not(test)))]
 mod panic;
 
 #[cfg(any(

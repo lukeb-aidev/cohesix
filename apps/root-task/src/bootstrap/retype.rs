@@ -170,10 +170,7 @@ fn record_retype_call(record: RetypeCallRecord) {
 
 #[cfg(any(test, feature = "ffi_shim"))]
 pub fn last_retype_args() -> RetypeCallRecord {
-    LAST_RETYPE
-        .lock()
-        .copied()
-        .expect("no retype calls recorded")
+    (*LAST_RETYPE.lock()).expect("no retype calls recorded")
 }
 
 #[cfg(any(test, feature = "ffi_shim"))]
@@ -321,9 +318,9 @@ fn boot_retype_limit() -> u32 {
 
 fn object_name(obj_type: sys::seL4_ObjectType) -> &'static str {
     match obj_type {
-        x if x == sys::seL4_ARM_PageTableObject => "PageTable",
-        x if x == sys::seL4_ARM_Page => "Page",
-        x if x == sys::seL4_NotificationObject => "Notification",
+        sys::seL4_ARM_PageTableObjectType => "PageTable",
+        sys::seL4_ARM_PageObjectType => "Page",
+        sys::seL4_NotificationObjectType => "Notification",
         _ => "Object",
     }
 }
@@ -331,15 +328,15 @@ fn object_name(obj_type: sys::seL4_ObjectType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sel4::store_bootinfo_empty_region;
+    use crate::sel4::{blank_bootinfo_for_tests, store_bootinfo_empty_region};
     use sel4_sys::{seL4_BootInfo, seL4_CapInitThreadCNode};
 
     fn mock_bootinfo(empty_start: u32, empty_end: u32, bits: u8) -> BootInfoView {
-        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        let mut bootinfo: seL4_BootInfo = blank_bootinfo_for_tests();
         store_bootinfo_empty_region(
             &mut bootinfo.empty,
-            empty_start,
-            empty_end,
+            empty_start.into(),
+            empty_end.into(),
             "test.retype.mock",
         );
         bootinfo.initThreadCNodeSizeBits = bits as usize as u8;
@@ -529,8 +526,12 @@ where
     let mut used_bytes = selection.used_bytes;
 
     let categories: [(u32, sys::seL4_ObjectType, u8); 2] = [
-        (tables, sys::seL4_ARM_PageTableObject, PAGE_TABLE_BITS as u8),
-        (pages, sys::seL4_ARM_Page, PAGE_BITS as u8),
+        (
+            tables,
+            sys::seL4_ARM_PageTableObjectType,
+            PAGE_TABLE_BITS as u8,
+        ),
+        (pages, sys::seL4_ARM_PageObjectType, PAGE_BITS as u8),
     ];
 
     let mut done = 0u32;
