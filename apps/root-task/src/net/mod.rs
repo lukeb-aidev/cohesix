@@ -65,6 +65,38 @@ pub const AUTH_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 /// Number of console lines retained between pump cycles.
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;
 
+pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "cyw43-function2-enable-latched-not-ready"
+            | "cyw43-function2-enable-latched-not-ready-command-timeout"
+            | "cyw43-function2-enable-latched-not-ready-command-crc"
+            | "cyw43-function2-enable-latched-not-ready-command-end-bit"
+            | "cyw43-function2-enable-latched-not-ready-command-index"
+            | "cyw43-function2-enable-latched-not-ready-command-error"
+            | "cyw43-function2-enable-latched-not-ready-command-stall"
+            | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
+            | "cyw43-function2-enable-latched-not-ready-data-end-bit"
+            | "cyw43-function2-enable-latched-not-ready-data-crc"
+            | "cyw43-control-plane-linux-interrupts-deferred"
+            | "cyw43-control-plane-sideband-unreadable"
+            | "cyw43-control-plane-sideband-command-timeout"
+            | "cyw43-control-plane-sideband-command-crc"
+            | "cyw43-control-plane-sideband-command-end-bit"
+            | "cyw43-control-plane-sideband-command-index"
+            | "cyw43-control-plane-sideband-command-error"
+            | "cyw43-control-plane-passive-startup-link-timeout"
+            | "cyw43-control-plane-startup-link-rescue-budget-exhausted"
+            | "cyw43-control-plane-startup-link-reply-timeout"
+            | "cyw43-control-plane-pure-f2-startup-link-no-reply"
+    )
+}
+
+#[must_use]
+pub(crate) const fn wifi_boot_join_should_defer(interface: NetInterfacePolicy) -> bool {
+    matches!(interface, NetInterfacePolicy::Wifi)
+}
+
 /// Build-time network bring-up stage selector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetStage {
@@ -709,6 +741,11 @@ pub trait NetDevice: Device {
         "wired"
     }
 
+    /// Optional runtime bring-up status surfaced before the device can carry traffic.
+    fn bringup_status_label(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Optional debug snapshot hook surfaced to stack callers.
     fn debug_snapshot(&mut self);
 
@@ -993,6 +1030,17 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn cyw43_control_plane_bootstrap_replay_reason_includes_rescue_budget_exhaustion() {
+        assert!(cyw43_control_plane_bootstrap_replay_reason(
+            "cyw43-control-plane-pure-f2-startup-link-no-reply"
+        ));
+        assert!(cyw43_control_plane_bootstrap_replay_reason(
+            "cyw43-control-plane-startup-link-rescue-budget-exhausted"
+        ));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn runtime_policy_override_changes_pi4_mode_and_interface() {
         let config = ConsoleNetConfig {
             auth_token: "token",
@@ -1098,5 +1146,12 @@ mod tests {
         assert!(WifiCredentials::new("ssid", "short").is_err());
         assert!(WifiCredentials::new("ssid", "12345678").is_ok());
         assert!(WifiCredentials::new("open-network", "").is_ok());
+    }
+
+    #[test]
+    fn wifi_join_deferral_only_applies_to_explicit_wifi_policy() {
+        assert!(wifi_boot_join_should_defer(NetInterfacePolicy::Wifi));
+        assert!(!wifi_boot_join_should_defer(NetInterfacePolicy::Auto));
+        assert!(!wifi_boot_join_should_defer(NetInterfacePolicy::Wired));
     }
 }

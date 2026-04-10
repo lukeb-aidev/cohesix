@@ -1079,6 +1079,15 @@ const fn passive_startup_link_wait_timed_out(empty_polls: u8) -> bool {
 }
 
 #[inline]
+const fn control_plane_reply_progress_clears_startup_link_rescue(
+    function2_ready: bool,
+    reply_frame_captured: bool,
+) -> bool {
+    let _ = function2_ready;
+    reply_frame_captured
+}
+
+#[inline]
 const fn control_plane_reply_rearm_supports_speculative_read(
     experimental_no_ht_transport: bool,
     reply_rearm_mode: u8,
@@ -2989,6 +2998,8 @@ const CYW43_STARTUP_CLOCK_HZ: u32 = 400_000;
 const CYW43_CONTROL_PLANE_CLOCK_HZ: u32 = 12_500_000;
 const CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT: u8 = 64;
 const CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT: u8 = 3;
+const CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT: u8 =
+    super::control_plane_startup_link_rescue_limit();
 const SDIO_MAX_BYTE_MODE: usize = 511;
 const SDIO_TRANSFER_TRACE_INCREMENT_CHUNKS: usize = 2;
 const CYW43_HT_CLOCK_INITIAL_WAIT_LOOPS: usize = 2_048;
@@ -3500,6 +3511,12 @@ impl Pi4WifiState {
     #[must_use]
     pub const fn cyw43_control_plane_startup_link_stabilized(&self) -> bool {
         self.host.experimental_control_plane_startup_link_stabilized
+    }
+
+    #[must_use]
+    pub const fn cyw43_control_plane_startup_link_rescue_cycles(&self) -> u8 {
+        self.host
+            .experimental_control_plane_startup_link_rescue_cycles
     }
 
     pub fn finish_cyw43_experimental_transport_probe(&mut self) {
@@ -4144,6 +4161,7 @@ struct SdioHost {
     experimental_control_plane_startup_link_stabilized: bool,
     experimental_control_plane_hint_reads_unstable: bool,
     experimental_control_plane_sideband_unreadable_recovery_cycles: u8,
+    experimental_control_plane_startup_link_rescue_cycles: u8,
     experimental_control_plane_reply_rearm_mode: u8,
     experimental_control_plane_reply_rearm_attempts: u8,
     experimental_control_plane_reply_rearm_empty_polls: u8,
@@ -4226,6 +4244,7 @@ impl SdioHost {
             experimental_control_plane_startup_link_stabilized: false,
             experimental_control_plane_hint_reads_unstable: false,
             experimental_control_plane_sideband_unreadable_recovery_cycles: 0,
+            experimental_control_plane_startup_link_rescue_cycles: 0,
             experimental_control_plane_reply_rearm_mode: control_plane_reply_rearm_none(),
             experimental_control_plane_reply_rearm_attempts: 0,
             experimental_control_plane_reply_rearm_empty_polls: 0,
@@ -4410,6 +4429,9 @@ impl SdioHost {
             .copy_from_slice(&frame[..frame_len]);
         self.experimental_control_plane_speculative_frame_len = frame_len;
         self.clear_control_plane_sideband_unreadable_recovery_cycles();
+        if control_plane_reply_progress_clears_startup_link_rescue(false, true) {
+            self.clear_control_plane_startup_link_rescue_cycles();
+        }
         self.clear_last_function2_frame_recovery();
         self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
         self.experimental_control_plane_reply_rearm_attempts = 0;
@@ -4427,6 +4449,10 @@ impl SdioHost {
 
     fn clear_control_plane_sideband_unreadable_recovery_cycles(&mut self) {
         self.experimental_control_plane_sideband_unreadable_recovery_cycles = 0;
+    }
+
+    fn clear_control_plane_startup_link_rescue_cycles(&mut self) {
+        self.experimental_control_plane_startup_link_rescue_cycles = 0;
     }
 
     fn clear_last_function2_frame_recovery(&mut self) {
@@ -4494,6 +4520,7 @@ impl SdioHost {
         self.experimental_control_plane_startup_link_stabilized = false;
         self.experimental_control_plane_hint_reads_unstable = false;
         self.experimental_control_plane_sideband_unreadable_recovery_cycles = 0;
+        self.experimental_control_plane_startup_link_rescue_cycles = 0;
         self.experimental_control_plane_promoted_probe_pending = false;
         self.clear_control_plane_speculative_reply_frame();
         self.clear_preserved_control_plane_data_wait_diag();
@@ -4524,6 +4551,7 @@ impl SdioHost {
         self.clear_control_plane_startup_link_stabilization();
         self.experimental_control_plane_hint_reads_unstable = false;
         self.experimental_control_plane_sideband_unreadable_recovery_cycles = 0;
+        self.experimental_control_plane_startup_link_rescue_cycles = 0;
         self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
         self.experimental_control_plane_reply_rearm_attempts = 0;
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
@@ -4645,6 +4673,46 @@ impl SdioHost {
         self.log_control_plane_recovery_transition(stage);
     }
 
+    fn begin_control_plane_startup_link_rescue(
+        &mut self,
+        stage: &'static str,
+        err: &HalError,
+    ) -> Result<u8, HalError> {
+        let next_cycle = self
+            .experimental_control_plane_startup_link_rescue_cycles
+            .saturating_add(1);
+        self.experimental_control_plane_startup_link_rescue_cycles = next_cycle;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=startup-link-rescue cycle={}/{} err={err} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+            next_cycle,
+            CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.control_plane_chunk_limit(),
+            self.experimental_no_ht_transport,
+        ));
+        if super::control_plane_startup_link_rescue_budget_exhausted(next_cycle) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=startup-link-rescue-exhausted cycle={}/{} err={err} current_clock={}Hz width={} chunk_limit={} no_ht={} exact_error=cyw43-control-plane-startup-link-rescue-budget-exhausted",
+                next_cycle,
+                CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.control_plane_chunk_limit(),
+                self.experimental_no_ht_transport,
+            ));
+            self.log_control_plane_finish_snapshot("control-plane-startup-link-rescue-exhausted");
+            self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
+            self.experimental_control_plane_reply_rearm_attempts = 0;
+            self.experimental_control_plane_reply_rearm_empty_polls = 0;
+            self.experimental_control_plane_promoted_probe_pending = false;
+            return Err(HalError::Unsupported(
+                "cyw43-control-plane-startup-link-rescue-budget-exhausted",
+            ));
+        }
+        Ok(next_cycle)
+    }
+
     fn fail_passive_startup_link_wait(&mut self) -> Result<usize, HalError> {
         let empty_polls = self.experimental_control_plane_reply_rearm_empty_polls;
         emit_breadcrumb(format_args!(
@@ -4667,6 +4735,9 @@ impl SdioHost {
             Ok(frame_len) => {
                 if frame_len != 0 {
                     self.clear_control_plane_sideband_unreadable_recovery_cycles();
+                    if control_plane_reply_progress_clears_startup_link_rescue(false, true) {
+                        self.clear_control_plane_startup_link_rescue_cycles();
+                    }
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-recovered frame_len={} current_clock={}Hz width={} chunk_limit={} no_ht={}",
                         frame_len,
@@ -4946,10 +5017,16 @@ impl SdioHost {
         &mut self,
         err: &HalError,
     ) -> Result<(), HalError> {
+        let rescue_cycle = self.begin_control_plane_startup_link_rescue(
+            "control-plane-post-write-rearm-resume",
+            err,
+        )?;
         let previous_clock_hz = self.current_clock_hz;
         let previous_bus_width = self.desired_bus_width;
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=resume-startup-link-after-timeout err={err} current={}Hz width={} target_clock={}Hz target_bus_width=1 mode=slow-link-resume",
+            "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=resume-startup-link-after-timeout cycle={}/{} err={err} current={}Hz width={} target_clock={}Hz target_bus_width=1 mode=slow-link-resume",
+            rescue_cycle,
+            CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
             CYW43_STARTUP_CLOCK_HZ,
@@ -6648,13 +6725,15 @@ impl SdioHost {
             sdhci_read_diag_resolved,
         );
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] control-plane snapshot {stage} exact-error={} sdhci-read-diag={} hint_reads_unstable={} startup_link_stable={} sideband_cycles={}/{}",
+            "[pi4-wifi] control-plane snapshot {stage} exact-error={} sdhci-read-diag={} hint_reads_unstable={} startup_link_stable={} sideband_cycles={}/{} rescue_cycles={}/{}",
             exact_error,
             sdhci_read_diag_resolved,
             yn(self.experimental_control_plane_hint_reads_unstable),
             yn(self.experimental_control_plane_startup_link_stabilized),
             self.experimental_control_plane_sideband_unreadable_recovery_cycles,
             CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT,
+            self.experimental_control_plane_startup_link_rescue_cycles,
+            CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
         ));
         emit_breadcrumb(format_args!(
             "[pi4-wifi] control-plane snapshot {stage} f2-recover stage={} policy={} op={} drained={} count=0x{count:04x}/{}",
@@ -9014,6 +9093,9 @@ impl SdioHost {
         };
         if frame_len != 0 {
             self.clear_control_plane_sideband_unreadable_recovery_cycles();
+            if control_plane_reply_progress_clears_startup_link_rescue(false, true) {
+                self.clear_control_plane_startup_link_rescue_cycles();
+            }
             self.clear_control_plane_speculative_reply_frame();
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
             self.experimental_control_plane_reply_rearm_empty_polls = 0;
@@ -9086,6 +9168,9 @@ impl SdioHost {
             self.maybe_rearm_control_plane_reply_on_zero_frame()?;
             let frame_len = self.read_frame_len_registers()?;
             if frame_len != 0 {
+                if control_plane_reply_progress_clears_startup_link_rescue(false, true) {
+                    self.clear_control_plane_startup_link_rescue_cycles();
+                }
                 self.clear_control_plane_speculative_reply_frame();
                 self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
                 self.experimental_control_plane_reply_rearm_empty_polls = 0;
@@ -11924,6 +12009,7 @@ mod tests {
         control_plane_reply_int_status_has_frame_indication,
         control_plane_reply_mailbox_has_firmware_halt,
         control_plane_reply_mailbox_has_frame_indication, control_plane_reply_mailbox_requires_ack,
+        control_plane_reply_progress_clears_startup_link_rescue,
         control_plane_reply_rearm_attempts_after_rearm,
         control_plane_reply_rearm_can_resume_after_timeout, control_plane_reply_rearm_mode_name,
         control_plane_reply_rearm_none, control_plane_reply_rearm_pending,
@@ -12881,6 +12967,22 @@ mod tests {
         assert!(control_plane_reply_should_log_empty_snapshot(0));
         assert!(!control_plane_reply_should_log_empty_snapshot(1));
         assert!(!control_plane_reply_should_log_empty_snapshot(2));
+    }
+
+    #[test]
+    fn startup_link_rescue_only_clears_after_reply_progress() {
+        assert!(!control_plane_reply_progress_clears_startup_link_rescue(
+            true, false
+        ));
+        assert!(!control_plane_reply_progress_clears_startup_link_rescue(
+            false, false
+        ));
+        assert!(control_plane_reply_progress_clears_startup_link_rescue(
+            false, true
+        ));
+        assert!(control_plane_reply_progress_clears_startup_link_rescue(
+            true, true
+        ));
     }
 
     #[test]

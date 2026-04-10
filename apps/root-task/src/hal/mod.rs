@@ -80,6 +80,14 @@ impl SdioFunction {
     }
 }
 
+const fn control_plane_startup_link_rescue_limit() -> u8 {
+    4
+}
+
+const fn control_plane_startup_link_rescue_budget_exhausted(next_cycle: u8) -> bool {
+    next_cycle >= control_plane_startup_link_rescue_limit()
+}
+
 /// HAL-owned power state for the Pi 4 Wi-Fi device.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum WifiPowerState {
@@ -841,5 +849,14 @@ mod tests {
         assert_eq!(SdioFunction::Function0.number(), 0);
         assert_eq!(SdioFunction::Function1.number(), 1);
         assert_eq!(SdioFunction::Function2.number(), 2);
+    }
+
+    #[test]
+    fn startup_link_rescue_budget_is_bounded() {
+        assert_eq!(super::control_plane_startup_link_rescue_limit(), 4);
+        assert!(!super::control_plane_startup_link_rescue_budget_exhausted(
+            3
+        ));
+        assert!(super::control_plane_startup_link_rescue_budget_exhausted(4));
     }
 }

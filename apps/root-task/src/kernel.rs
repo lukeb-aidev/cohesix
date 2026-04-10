@@ -4608,7 +4608,14 @@ fn bootstrap<P: Platform>(
                         let port = stack.console_listen_port();
                         let status = stack.status_report();
                         let mut ok_line = heapless::String::<160>::new();
-                        if status.mode == "dhcp" && status.address_source == "dhcp-pending" {
+                        if status.address_source == "wifi-associating" {
+                            let _ = write!(
+                                ok_line,
+                                "[net-console] pending-link backend={} detail={} port={port} mac={mac}",
+                                status.backend,
+                                status.address_source,
+                            );
+                        } else if status.mode == "dhcp" && status.address_source == "dhcp-pending" {
                             let _ = write!(
                                 ok_line,
                                 "[net-console] pending-dhcp backend={} dhcp={} port={port} mac={mac}",

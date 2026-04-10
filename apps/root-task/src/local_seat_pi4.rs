@@ -2800,10 +2800,11 @@ fn xhci_runtime_init_strategies(
         VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
     ) {
         // The weaker bounded reset outcomes still leave us inside the trusted
-        // bootloader handoff contract, but the latest Pi 4 logs also show the
-        // unseeded fresh-init branch stalling on the first live halt-state
-        // read. Lead with the stop-state-seeded cold start so runtime gets one
-        // clean ownership rebuild before revisiting the live-read path.
+        // bootloader handoff contract, but the latest Pi 4 logs now reach the
+        // seeded cold-start HCRST edge itself. After giving that stronger path
+        // the first shot, avoid immediately spending the second probe on
+        // another reset-bearing fresh-init branch; try the seeded resetless
+        // path next, then fall back to the unseeded cold start last.
         if stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
@@ -2813,12 +2814,12 @@ fn xhci_runtime_init_strategies(
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
             );
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
             );
         } else {
             xhci_runtime_init_strategy_push(
@@ -10994,11 +10995,11 @@ mod tests {
         );
         assert_eq!(
             strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
         );
         assert_eq!(
             strategies[2],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
         );
     }
 

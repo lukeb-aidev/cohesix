@@ -21,7 +21,10 @@ use crate::hal::{
 };
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
 use crate::local_seat_pi4::{wifi_progress_begin, wifi_progress_finish, wifi_progress_tick};
-use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, WifiCredentials};
+use crate::net::{
+    wifi_boot_join_should_defer, ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError,
+    WifiCredentials,
+};
 use crate::net_consts::MAX_FRAME_LEN;
 
 const SDIO_STARTUP_CLOCK_HZ: u32 = 400_000;
@@ -41,11 +44,16 @@ const CONTROL_RESPONSE_BUF_LEN: usize = 512;
 const CLM_CHUNK_SIZE: usize = 1024;
 const IOCTL_WAIT_LOOPS: usize = 8_000;
 // Linux brcmfmac waits up to 2500 ms for an SDIO control response.
-// Use a wider bounded spin budget only on the fragile startup-link fallback
-// path so we can observe whether firmware eventually replies without forcing a
-// destructive reattach first.
+// Keep that full grace window only for the first passive startup-link wait.
+// If recovery has already bounced through one or more startup-link rescue
+// cycles without reply progress, ratchet the wait budget down sharply so boot
+// no longer burns the same Linux-sized timeout on every no-progress retry.
 const IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED: usize = 2_500_000;
+const IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE: usize = 250_000;
+const IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT: usize = 64_000;
 const JOIN_WAIT_LOOPS: usize = 64_000;
+const DEFERRED_JOIN_FRAME_BUDGET: usize = 8;
+const DEFERRED_JOIN_POLL_LIMIT: u16 = 1_200;
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
 
@@ -452,47 +460,8 @@ fn control_plane_retry_after_reply_wait_resend_target_clock_hz(
 fn control_plane_bootstrap_needs_full_replay_retry(err: &DriverError) -> bool {
     matches!(
         err,
-        DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-command-timeout"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-command-crc"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-command-end-bit"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-command-index"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-command-error"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-command-stall"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-data-end-bit"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-data-crc"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-linux-interrupts-deferred"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-sideband-unreadable"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-sideband-command-timeout"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-sideband-command-crc"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-sideband-command-end-bit"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-sideband-command-index"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-sideband-command-error"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-passive-startup-link-timeout"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-startup-link-reply-timeout"
-        )) | DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-pure-f2-startup-link-no-reply"
-        ))
+        DriverError::Hal(HalError::Unsupported(reason))
+            if crate::net::cyw43_control_plane_bootstrap_replay_reason(reason)
     )
 }
 
@@ -560,6 +529,19 @@ fn recover_startup_transport(
     state: &mut Pi4WifiState,
     init_transport_label: &'static str,
 ) -> Result<(), HalError> {
+    if startup_transport_recovery_should_reset_experimental_state(
+        state.cyw43_experimental_no_ht_transport(),
+        state.cyw43_control_plane_probe_pending(),
+        state.cyw43_control_plane_startup_link_stabilized(),
+    ) {
+        info!(
+            "[cyw43] step: recover_transport(reset-experimental-state no_ht={} probe_pending={} startup_link_stable={})",
+            state.cyw43_experimental_no_ht_transport(),
+            state.cyw43_control_plane_probe_pending(),
+            state.cyw43_control_plane_startup_link_stabilized(),
+        );
+        state.finish_cyw43_experimental_transport_probe();
+    }
     info!("[cyw43] step: recover_transport(assert-reset)");
     state.set_reset(WifiResetState::Asserted)?;
     info!("[cyw43] step: recover_transport(power-off)");
@@ -581,6 +563,15 @@ fn recover_startup_transport(
     info!("[cyw43] step: {init_transport_label}");
     state.init_cyw43_transport()?;
     Ok(())
+}
+
+#[inline]
+const fn startup_transport_recovery_should_reset_experimental_state(
+    experimental_no_ht_transport: bool,
+    control_plane_probe_pending: bool,
+    startup_link_stabilized: bool,
+) -> bool {
+    experimental_no_ht_transport || control_plane_probe_pending || startup_link_stabilized
 }
 
 fn prepare_initial_control_plane_transport(
@@ -691,6 +682,13 @@ impl NetDriverError for DriverError {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredJoinState {
+    Disabled,
+    Pending { auth_status: u32, polls: u16 },
+    Failed,
+}
+
 pub struct Cyw43NetDevice {
     state: Pi4WifiState,
     probe: ProbeReport,
@@ -702,6 +700,7 @@ pub struct Cyw43NetDevice {
     sdpcm_seq_max: u8,
     ioctl_id: u16,
     link_up: bool,
+    deferred_join_state: DeferredJoinState,
     rx_frame: [u8; FRAME_BUF_LEN],
     tx_frame: [u8; FRAME_BUF_LEN],
     control_response: [u8; CONTROL_RESPONSE_BUF_LEN],
@@ -723,6 +722,7 @@ impl Cyw43NetDevice {
         let credentials = config
             .wifi_credentials
             .ok_or(DriverError::Config("wifi-credentials-missing"))?;
+        let defer_join_completion = wifi_boot_join_should_defer(config.policy.interface);
         let retry_credentials = WifiCredentials {
             ssid_len: credentials.ssid_len,
             ssid: credentials.ssid,
@@ -851,13 +851,14 @@ impl Cyw43NetDevice {
             sdpcm_seq_max: 1,
             ioctl_id: 0,
             link_up: false,
+            deferred_join_state: DeferredJoinState::Disabled,
             rx_frame: [0; FRAME_BUF_LEN],
             tx_frame: [0; FRAME_BUF_LEN],
             control_response: [0; CONTROL_RESPONSE_BUF_LEN],
         };
 
         info!("[cyw43] step: init_control_plane");
-        if let Err(err) = device.init_control_plane(firmware, credentials) {
+        if let Err(err) = device.init_control_plane(firmware, credentials, !defer_join_completion) {
             if control_plane_bootstrap_needs_full_replay_retry(&err) {
                 warn!(
                     "[cyw43] init_control_plane hard-retry armed reason={err} action=replay-firmware-control-bootstrap"
@@ -885,6 +886,9 @@ impl Cyw43NetDevice {
                 );
                 return Err(err);
             }
+        }
+        if defer_join_completion {
+            info!("[cyw43] join completion deferred action=event-pump-association");
         }
         if device.state.cyw43_experimental_no_ht_transport() {
             info!("[cyw43] step: promote_control_transport");
@@ -924,6 +928,7 @@ impl Cyw43NetDevice {
         self.sdpcm_seq_max = 1;
         self.ioctl_id = 0;
         self.link_up = false;
+        self.deferred_join_state = DeferredJoinState::Disabled;
         self.rx_frame.fill(0);
         self.tx_frame.fill(0);
         self.control_response.fill(0);
@@ -968,13 +973,14 @@ impl Cyw43NetDevice {
             },
             self.probe.ioex,
         );
-        self.init_control_plane(firmware, credentials)
+        self.init_control_plane(firmware, credentials, true)
     }
 
     fn init_control_plane(
         &mut self,
         firmware: WifiFirmwareBundle<'static>,
         credentials: WifiCredentials,
+        wait_for_join_completion: bool,
     ) -> Result<(), DriverError> {
         if let Some(clm) = firmware.clm_blob {
             self.load_clm(clm)?;
@@ -992,7 +998,7 @@ impl Cyw43NetDevice {
         self.ioctl_set_u32(Ioctl::SetBand, 0, 0)?;
         self.ioctl_set_u32(Ioctl::SetPm, 0, 0)?;
         self.mac = self.read_mac_address();
-        self.join(credentials)?;
+        self.join(credentials, wait_for_join_completion)?;
         Ok(())
     }
 
@@ -1056,9 +1062,14 @@ impl Cyw43NetDevice {
         self.set_iovar_from_payload("bsscfg:event_msgs", payload_len)
     }
 
-    fn join(&mut self, credentials: WifiCredentials) -> Result<(), DriverError> {
+    fn join(
+        &mut self,
+        credentials: WifiCredentials,
+        wait_for_completion: bool,
+    ) -> Result<(), DriverError> {
         let ssid = credentials.ssid().map_err(DriverError::Config)?;
         let psk = credentials.psk().map_err(DriverError::Config)?;
+        self.deferred_join_state = DeferredJoinState::Disabled;
         if psk.is_empty() {
             self.ioctl_set_u32(Ioctl::SetWsec, 0, 0)?;
             self.set_iovar_u32x2("bsscfg:sup_wpa", 0, 0)?;
@@ -1095,7 +1106,21 @@ impl Cyw43NetDevice {
             payload[4..4 + ssid.len()].copy_from_slice(ssid.as_bytes());
         }
         let _ = self.ioctl_encoded(IoctlType::Set, Ioctl::SetSsid, 0, payload_len)?;
-        self.wait_for_join()
+        if wait_for_completion {
+            self.wait_for_join()
+        } else {
+            self.link_up = false;
+            self.deferred_join_state = DeferredJoinState::Pending {
+                auth_status: 0,
+                polls: 0,
+            };
+            info!(
+                "[cyw43] join armed mode=deferred ssid_len={} psk_len={}",
+                ssid.len(),
+                psk.len(),
+            );
+            Ok(())
+        }
     }
 
     fn set_wsec_pmk(&mut self, psk: &[u8]) -> Result<(), DriverError> {
@@ -1142,6 +1167,65 @@ impl Cyw43NetDevice {
             spin_loop();
         }
         Err(DriverError::Protocol("join-timeout"))
+    }
+
+    fn service_deferred_join(&mut self) {
+        let DeferredJoinState::Pending {
+            mut auth_status,
+            mut polls,
+        } = self.deferred_join_state
+        else {
+            return;
+        };
+
+        for _ in 0..DEFERRED_JOIN_FRAME_BUDGET {
+            match self.process_next_frame(false) {
+                Ok(RxFrameResult::Event(event)) => {
+                    if event.event_type == EVENT_AUTH && event.status != STATUS_SUCCESS {
+                        auth_status = event.status;
+                    } else if event.event_type == EVENT_SET_SSID {
+                        if event.status == STATUS_SUCCESS {
+                            self.link_up = true;
+                            self.deferred_join_state = DeferredJoinState::Disabled;
+                            info!("[cyw43] join complete mode=deferred polls={polls}");
+                        } else {
+                            self.link_up = false;
+                            self.deferred_join_state = DeferredJoinState::Failed;
+                            warn!(
+                                "[cyw43] join failed mode=deferred status=0x{:08x} auth_status=0x{:08x} polls={polls}",
+                                event.status,
+                                auth_status,
+                            );
+                        }
+                        return;
+                    }
+                }
+                Ok(RxFrameResult::None) => break,
+                Ok(RxFrameResult::Control { .. }) | Ok(RxFrameResult::Data(_)) => {}
+                Err(err) => {
+                    self.link_up = false;
+                    self.deferred_join_state = DeferredJoinState::Failed;
+                    warn!(
+                        "[cyw43] join failed mode=deferred reason=progress-error auth_status=0x{:08x} polls={polls} err={err}",
+                        auth_status,
+                    );
+                    return;
+                }
+            }
+        }
+
+        polls = polls.saturating_add(1);
+        if polls >= DEFERRED_JOIN_POLL_LIMIT {
+            self.link_up = false;
+            self.deferred_join_state = DeferredJoinState::Failed;
+            warn!(
+                "[cyw43] join failed mode=deferred reason=timeout auth_status=0x{:08x} polls={polls}",
+                auth_status,
+            );
+            return;
+        }
+
+        self.deferred_join_state = DeferredJoinState::Pending { auth_status, polls };
     }
 
     fn read_mac_address(&mut self) -> EthernetAddress {
@@ -1496,7 +1580,9 @@ impl Cyw43NetDevice {
         expected_id: u16,
     ) -> Result<usize, DriverError> {
         let startup_link_stabilized = self.state.cyw43_control_plane_startup_link_stabilized();
-        let wait_budget = ioctl_wait_loops(startup_link_stabilized);
+        let startup_link_rescue_cycles =
+            self.state.cyw43_control_plane_startup_link_rescue_cycles();
+        let wait_budget = ioctl_wait_loops(startup_link_stabilized, startup_link_rescue_cycles);
         for _ in 0..wait_budget {
             match self.process_next_frame(false) {
                 Err(err) => {
@@ -1504,13 +1590,14 @@ impl Cyw43NetDevice {
                         self.state.cyw43_control_plane_reply_rearm_diag();
                     let credit_ready = self.has_credit();
                     warn!(
-                        "[cyw43] ioctl response error cmd=0x{:08x} id={} seq={}/{} credit={} startup_link_stabilized={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={} err={err}",
+                        "[cyw43] ioctl response error cmd=0x{:08x} id={} seq={}/{} credit={} startup_link_stabilized={} startup_link_rescue_cycles={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={} err={err}",
                         cmd,
                         expected_id,
                         self.sdpcm_seq,
                         self.sdpcm_seq_max,
                         credit_ready,
                         startup_link_stabilized,
+                        startup_link_rescue_cycles,
                         reply_mode,
                         reply_attempts,
                         reply_empty_polls,
@@ -1545,7 +1632,7 @@ impl Cyw43NetDevice {
             self.state.cyw43_control_plane_reply_rearm_diag();
         let credit_ready = self.has_credit();
         warn!(
-            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} startup_link_stabilized={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={}",
+            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} startup_link_stabilized={} startup_link_rescue_cycles={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={}",
             cmd,
             expected_id,
             self.sdpcm_seq,
@@ -1553,6 +1640,7 @@ impl Cyw43NetDevice {
             credit_ready,
             wait_budget,
             startup_link_stabilized,
+            startup_link_rescue_cycles,
             reply_mode,
             reply_attempts,
             reply_empty_polls,
@@ -1774,6 +1862,12 @@ impl Cyw43NetDevice {
     }
 
     fn poll_rx(&mut self) -> Option<HeaplessVec<u8, MAX_FRAME_LEN>> {
+        if matches!(self.deferred_join_state, DeferredJoinState::Pending { .. }) {
+            self.service_deferred_join();
+            if !self.link_up {
+                return None;
+            }
+        }
         for _ in 0..RX_PUMP_LIMIT {
             match self.process_next_frame(true) {
                 Ok(RxFrameResult::Data(frame)) => {
@@ -1895,7 +1989,11 @@ impl Device for Cyw43NetDevice {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        Some(TxToken { device: self })
+        if self.link_up {
+            Some(TxToken { device: self })
+        } else {
+            None
+        }
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -1946,6 +2044,14 @@ impl NetDevice for Cyw43NetDevice {
 
     fn interface_label(&self) -> &'static str {
         "wifi"
+    }
+
+    fn bringup_status_label(&self) -> Option<&'static str> {
+        match self.deferred_join_state {
+            DeferredJoinState::Disabled => None,
+            DeferredJoinState::Pending { .. } => Some("wifi-associating"),
+            DeferredJoinState::Failed => Some("wifi-association-failed"),
+        }
     }
 
     fn debug_snapshot(&mut self) {
@@ -2045,11 +2151,20 @@ const fn initial_control_plane_bootstrap_policy_label(
 }
 
 #[inline]
-const fn ioctl_wait_loops(startup_link_stabilized: bool) -> usize {
+const fn ioctl_wait_loops(startup_link_stabilized: bool, startup_link_rescue_cycles: u8) -> usize {
     if startup_link_stabilized {
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED
+        startup_link_rescue_wait_loops(startup_link_rescue_cycles)
     } else {
         IOCTL_WAIT_LOOPS
+    }
+}
+
+#[inline]
+const fn startup_link_rescue_wait_loops(startup_link_rescue_cycles: u8) -> usize {
+    match startup_link_rescue_cycles {
+        0 => IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
+        1 => IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
+        _ => IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT,
     }
 }
 
@@ -2110,8 +2225,10 @@ mod tests {
         first_control_plane_retry_after_promoted_timeout, has_sdpcm_credit,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
         ioctl_wait_loops, is_transport_retryable, put_u16_le,
-        speculative_credit_window_after_promoted_timeout_retry, DriverError, EVENT_AUTH,
-        EVENT_SET_SSID, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
+        speculative_credit_window_after_promoted_timeout_retry,
+        startup_transport_recovery_should_reset_experimental_state, DriverError, EVENT_AUTH,
+        EVENT_SET_SSID, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
         SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
     };
     use crate::hal::HalError;
@@ -2340,6 +2457,11 @@ mod tests {
                 "cyw43-control-plane-startup-link-reply-timeout"
             ))
         ));
+        assert!(control_plane_bootstrap_needs_full_replay_retry(
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-startup-link-rescue-budget-exhausted"
+            ))
+        ));
         assert!(!control_plane_bootstrap_needs_full_replay_retry(
             &DriverError::Protocol("ioctl-timeout")
         ));
@@ -2347,6 +2469,22 @@ mod tests {
             &DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-promoted-rearm-timeout"
             ))
+        ));
+    }
+
+    #[test]
+    fn startup_transport_recovery_resets_only_when_bootstrap_state_is_stale() {
+        assert!(startup_transport_recovery_should_reset_experimental_state(
+            true, false, false
+        ));
+        assert!(startup_transport_recovery_should_reset_experimental_state(
+            false, true, false
+        ));
+        assert!(startup_transport_recovery_should_reset_experimental_state(
+            false, false, true
+        ));
+        assert!(!startup_transport_recovery_should_reset_experimental_state(
+            false, false, false
         ));
     }
 
@@ -2543,14 +2681,31 @@ mod tests {
 
     #[test]
     fn ioctl_wait_budget_is_fixed_for_strict_path() {
-        assert_eq!(ioctl_wait_loops(false), IOCTL_WAIT_LOOPS);
+        assert_eq!(ioctl_wait_loops(false, 0), IOCTL_WAIT_LOOPS);
+        assert_eq!(ioctl_wait_loops(false, 3), IOCTL_WAIT_LOOPS);
     }
 
     #[test]
-    fn ioctl_wait_budget_expands_for_startup_link_stabilized_path() {
+    fn ioctl_wait_budget_keeps_linux_sized_first_startup_link_window() {
         assert_eq!(
-            ioctl_wait_loops(true),
+            ioctl_wait_loops(true, 0),
             IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED
+        );
+    }
+
+    #[test]
+    fn ioctl_wait_budget_ratchets_down_after_startup_link_rescues() {
+        assert_eq!(
+            ioctl_wait_loops(true, 1),
+            IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE
+        );
+        assert_eq!(
+            ioctl_wait_loops(true, 2),
+            IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT
+        );
+        assert_eq!(
+            ioctl_wait_loops(true, u8::MAX),
+            IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT
         );
     }
 }

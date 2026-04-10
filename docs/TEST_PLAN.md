@@ -492,15 +492,16 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
 - Pi 4 image / U-Boot gate:
   - `scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
   - `scripts/uboot/qemu-uboot-smoke.sh --net user`
-  - Confirm U-Boot env control remains deterministic (`ipaddr`, `serverip`, `coh_net_mode`, `coh_net_interface`), the staged Pi 4 boot script reloads `cohesix.env`, mirrors `coh_net_*` values into the staged padded `bcm2711-rpi-4-b.dtb`, and boots the seL4 elfloader through U-Boot `bootm` with that DTB.
+  - Confirm U-Boot env control remains deterministic (`ipaddr`, `serverip`, `coh_net_mode`, `coh_net_interface`), `CONFIG_PREBOOT` stays on the serial/video console path, the staged Pi 4 boot script owns the first menu/input USB bootstrap, reloads `cohesix.env`, mirrors `coh_net_*` values into the staged padded `bcm2711-rpi-4-b.dtb`, and boots the seL4 elfloader through U-Boot `bootm` with that DTB.
 - QEMU compatibility gate:
   - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
   - Existing QEMU hostfwd defaults (`127.0.0.1:{31337,31338,31339}`) and ACK/ERR/END fixtures must remain unchanged.
-- Pi 4 runtime evidence gate:
+  - Pi 4 runtime evidence gate:
   - Capture boot evidence showing:
     - `manifest.hw.network.mode=<static|dhcp>`
     - `manifest.hw.network.interface=<wired|wifi|auto>`
     - `[net-policy] source=<manifest|dtb> ...` or `[net-policy] source=dtb rejected reason=<reason> ...`
+    - explicit `wifi` boots may now emit `[net-console] pending-link backend=bcmgenet-v5 detail=wifi-associating ...` before later association / DHCP progress
     - when saved Cohesix policy exists, the U-Boot wizard defaults to `Continue with existing config`; otherwise it defaults to `Boot with manifest defaults`
     - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`

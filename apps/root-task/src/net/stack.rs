@@ -2853,7 +2853,9 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         self.telemetry.last_poll_ms = now_ms;
-        if activity {
+        if self.device.bringup_status_label().is_some() {
+            self.telemetry.link_up = false;
+        } else if activity {
             self.telemetry.link_up = true;
         }
         self.telemetry.tx_drops = self.device.tx_drop_count();
@@ -5496,22 +5498,36 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             "{}",
             self.gateway.unwrap_or(Ipv4Address::UNSPECIFIED)
         );
-        let (address_source, dhcp_phase) = match self.dhcp.as_ref() {
-            Some(client) => {
-                let status = client.status();
-                let source = if self.ip == Ipv4Address::UNSPECIFIED {
-                    if status.failure.is_some() {
-                        "dhcp-failed"
-                    } else {
-                        "dhcp-pending"
-                    }
+        let (address_source, dhcp_phase) = if let Some(status) = self.device.bringup_status_label()
+        {
+            let phase = if matches!(self.mode, NetMode::Dhcp) {
+                if status == "wifi-association-failed" {
+                    "failed"
                 } else {
-                    "dhcp-lease"
-                };
-                (source, status.phase.as_str())
+                    "associating"
+                }
+            } else {
+                "disabled"
+            };
+            (status, phase)
+        } else {
+            match self.dhcp.as_ref() {
+                Some(client) => {
+                    let status = client.status();
+                    let source = if self.ip == Ipv4Address::UNSPECIFIED {
+                        if status.failure.is_some() {
+                            "dhcp-failed"
+                        } else {
+                            "dhcp-pending"
+                        }
+                    } else {
+                        "dhcp-lease"
+                    };
+                    (source, status.phase.as_str())
+                }
+                None if self.backend.uses_dev_virt_defaults() => ("dev-virt", "disabled"),
+                None => ("manifest-static", "disabled"),
             }
-            None if self.backend.uses_dev_virt_defaults() => ("dev-virt", "disabled"),
-            None => ("manifest-static", "disabled"),
         };
         let active_interface = self.device.interface_label();
         let standby_interface = match (self.interface_policy, self.backend, active_interface) {
