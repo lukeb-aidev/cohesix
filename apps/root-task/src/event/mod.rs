@@ -2341,7 +2341,7 @@ where
         self.emit_console_line(recovery.as_str());
 
         let bootstrap = format_message(format_args!(
-            "wifi: bootstrap={} no_ht={} probe_pending={} startup_link_stable={} reply_mode={} reply_attempts={} empty_polls={} promoted_probe={}",
+            "wifi: bootstrap={} no_ht={} probe_pending={} startup_link_stable={} safe_profile_locked={} safe_reason={} reply_mode={} reply_attempts={} empty_polls={} promoted_probe={}",
             snapshot.control_plane_bootstrap_phase,
             if snapshot.control_plane_no_ht_transport {
                 "yes"
@@ -2358,6 +2358,12 @@ where
             } else {
                 "no"
             },
+            if snapshot.control_plane_startup_profile_locked {
+                "yes"
+            } else {
+                "no"
+            },
+            snapshot.control_plane_startup_profile_reason,
             snapshot.control_plane_reply_mode,
             snapshot.control_plane_reply_attempts,
             snapshot.control_plane_reply_empty_polls,
@@ -4957,6 +4963,8 @@ mod tests {
                     control_plane_no_ht_transport: true,
                     control_plane_probe_pending: true,
                     control_plane_startup_link_stable: false,
+                    control_plane_startup_profile_locked: true,
+                    control_plane_startup_profile_reason: "promoted-io-unstable",
                     control_plane_promoted_probe_pending: false,
                     control_plane_f2_state: "latched-linux-configured-no-iorx",
                     control_plane_sdhci_read_diag: "f1-reply-read-command-phase-no-data-active",
@@ -5573,6 +5581,10 @@ mod tests {
         assert!(rendered.contains("wifi: power=on"), "{rendered}");
         assert!(
             rendered.contains("wifi: bootstrap=first-write-startup-link"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("safe_profile_locked=yes safe_reason=promoted-io-unstable"),
             "{rendered}"
         );
         assert!(

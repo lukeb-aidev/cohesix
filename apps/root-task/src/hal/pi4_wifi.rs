@@ -760,7 +760,9 @@ const fn wait_for_firmware_ready_restore_clock_hz(
     allow_function2_ready_bypass: bool,
     current_clock_hz: u32,
 ) -> Option<u32> {
-    if allow_function2_ready_bypass && current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
+    if allow_function2_ready_bypass {
+        None
+    } else if current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
         Some(current_clock_hz)
     } else {
         None
@@ -2663,7 +2665,10 @@ fn cached_wifi_debug_snapshot() -> Option<WifiDebugSnapshot> {
 
 #[inline]
 fn should_use_cached_wifi_debug_snapshot(snapshot: &WifiDebugSnapshot) -> bool {
-    !snapshot.card_ready && snapshot.control_plane_f2_state == "unproven"
+    (!snapshot.card_ready && snapshot.control_plane_f2_state == "unproven")
+        || (snapshot.control_plane_no_ht_transport
+            && snapshot.control_plane_f2_state == "latched-linux-configured-no-iorx"
+            && snapshot.control_plane_exact_error == "cyw43-control-plane-state-visible-no-reply")
 }
 
 #[inline]
@@ -2996,8 +3001,8 @@ const CYW43_FIRMWARE_PROGRESS_INTERVAL: usize = 16 * 1024;
 const CYW43_FIRMWARE_BULK_CLOCK_HZ: u32 = 12_500_000;
 const CYW43_STARTUP_CLOCK_HZ: u32 = 400_000;
 const CYW43_CONTROL_PLANE_CLOCK_HZ: u32 = 12_500_000;
-const CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT: u8 = 64;
-const CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT: u8 = 3;
+const CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT: u8 = 16;
+const CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT: u8 = 2;
 const CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT: u8 =
     super::control_plane_startup_link_rescue_limit();
 const SDIO_MAX_BYTE_MODE: usize = 511;
@@ -3258,7 +3263,6 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
         budget,
         SdioFunctionReadyBudget::ExperimentalBypass
             | SdioFunctionReadyBudget::ControlPlaneReplyBypass
-            | SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
     ) && matches!(step.function, SdioFunction::Function2)
         && (desired & step.enable_bit) == step.enable_bit
         && (ready & SDIO_FUNC_READY_1) == SDIO_FUNC_READY_1
@@ -3669,6 +3673,12 @@ impl Pi4WifiState {
             control_plane_startup_link_stable: self
                 .host
                 .experimental_control_plane_startup_link_stabilized,
+            control_plane_startup_profile_locked: self
+                .host
+                .experimental_control_plane_startup_profile_locked,
+            control_plane_startup_profile_reason: self
+                .host
+                .experimental_control_plane_startup_profile_reason,
             control_plane_promoted_probe_pending,
             control_plane_f2_state,
             control_plane_sdhci_read_diag,
@@ -4159,6 +4169,8 @@ struct SdioHost {
     experimental_no_ht_transport: bool,
     experimental_control_plane_write_probe_pending: bool,
     experimental_control_plane_startup_link_stabilized: bool,
+    experimental_control_plane_startup_profile_locked: bool,
+    experimental_control_plane_startup_profile_reason: &'static str,
     experimental_control_plane_hint_reads_unstable: bool,
     experimental_control_plane_sideband_unreadable_recovery_cycles: u8,
     experimental_control_plane_startup_link_rescue_cycles: u8,
@@ -4242,6 +4254,8 @@ impl SdioHost {
             experimental_no_ht_transport: false,
             experimental_control_plane_write_probe_pending: false,
             experimental_control_plane_startup_link_stabilized: false,
+            experimental_control_plane_startup_profile_locked: false,
+            experimental_control_plane_startup_profile_reason: "none",
             experimental_control_plane_hint_reads_unstable: false,
             experimental_control_plane_sideband_unreadable_recovery_cycles: 0,
             experimental_control_plane_startup_link_rescue_cycles: 0,
@@ -4277,6 +4291,8 @@ impl SdioHost {
         self.experimental_no_ht_transport = false;
         self.experimental_control_plane_write_probe_pending = false;
         self.experimental_control_plane_startup_link_stabilized = false;
+        self.experimental_control_plane_startup_profile_locked = false;
+        self.experimental_control_plane_startup_profile_reason = "none";
         self.experimental_control_plane_hint_reads_unstable = false;
         self.experimental_control_plane_sideband_unreadable_recovery_cycles = 0;
         self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
@@ -4518,12 +4534,50 @@ impl SdioHost {
         self.experimental_no_ht_transport = false;
         self.experimental_control_plane_write_probe_pending = false;
         self.experimental_control_plane_startup_link_stabilized = false;
+        self.experimental_control_plane_startup_profile_locked = false;
+        self.experimental_control_plane_startup_profile_reason = "none";
         self.experimental_control_plane_hint_reads_unstable = false;
         self.experimental_control_plane_sideband_unreadable_recovery_cycles = 0;
         self.experimental_control_plane_startup_link_rescue_cycles = 0;
         self.experimental_control_plane_promoted_probe_pending = false;
         self.clear_control_plane_speculative_reply_frame();
         self.clear_preserved_control_plane_data_wait_diag();
+    }
+
+    fn lock_control_plane_to_startup_profile(
+        &mut self,
+        stage: &'static str,
+        reason: &'static str,
+    ) -> Result<(), HalError> {
+        let previous_clock_hz = self.current_clock_hz;
+        let previous_bus_width = self.desired_bus_width;
+        let previous_reason = self.experimental_control_plane_startup_profile_reason;
+        let (target_clock_hz, target_bus_width) = startup_link_reattach_target_profile();
+        self.experimental_control_plane_startup_profile_locked = true;
+        self.experimental_control_plane_startup_profile_reason = reason;
+        self.experimental_control_plane_promoted_probe_pending = false;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=startup-profile-lock-begin previous={}Hz/{} target={}Hz/{} reason={} prior_reason={}",
+            previous_clock_hz,
+            sdio_bus_width_name(previous_bus_width),
+            target_clock_hz,
+            sdio_bus_width_name(target_bus_width),
+            reason,
+            previous_reason,
+        ));
+        if self.current_clock_hz != target_clock_hz {
+            self.set_clock_hz(target_clock_hz)?;
+        }
+        if self.desired_bus_width != target_bus_width {
+            self.set_bus_width(target_bus_width)?;
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=startup-profile-lock-ready current={}Hz width={} reason={}",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.experimental_control_plane_startup_profile_reason,
+        ));
+        Ok(())
     }
 
     fn resume_control_plane_reply_probe_on_startup_link(&mut self, stage: &'static str) {
@@ -4545,10 +4599,12 @@ impl SdioHost {
         self.log_control_plane_recovery_transition(stage);
     }
 
-    fn enter_bounded_no_ht_transport(&mut self, stage: &'static str) {
+    fn enter_bounded_no_ht_transport(&mut self, stage: &'static str) -> Result<(), HalError> {
         self.experimental_no_ht_transport = true;
         self.experimental_control_plane_write_probe_pending = true;
         self.clear_control_plane_startup_link_stabilization();
+        self.experimental_control_plane_startup_profile_locked = false;
+        self.experimental_control_plane_startup_profile_reason = "none";
         self.experimental_control_plane_hint_reads_unstable = false;
         self.experimental_control_plane_sideband_unreadable_recovery_cycles = 0;
         self.experimental_control_plane_startup_link_rescue_cycles = 0;
@@ -4558,15 +4614,19 @@ impl SdioHost {
         self.experimental_control_plane_promoted_probe_pending = false;
         self.clear_control_plane_speculative_reply_frame();
         self.clear_preserved_control_plane_data_wait_diag();
+        self.lock_control_plane_to_startup_profile(stage, "ht-not-ready")?;
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=transport-mode mode={} current_clock={}Hz width={} chunk_limit={} probe_pending={}",
+            "[pi4-wifi] firmware stage={stage} action=transport-mode mode={} current_clock={}Hz width={} chunk_limit={} probe_pending={} safe_profile_locked={} safe_reason={}",
             cyw43_transport_mode_name(self.experimental_no_ht_transport),
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
             self.control_plane_chunk_limit(),
             yn(self.experimental_control_plane_write_probe_pending),
+            yn(self.experimental_control_plane_startup_profile_locked),
+            self.experimental_control_plane_startup_profile_reason,
         ));
         self.log_transport_shadow("bounded-no-ht-transport");
+        Ok(())
     }
 
     fn reattach_startup_link_control_plane_transport(
@@ -6484,7 +6544,7 @@ impl SdioHost {
             ienx = ienx.unwrap_or(0),
         ));
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] control-plane snapshot {stage} bootstrap={} current_clock={}Hz width={} no_ht={} probe_pending={} startup_link_stable={} promoted_probe_pending={}",
+            "[pi4-wifi] control-plane snapshot {stage} bootstrap={} current_clock={}Hz width={} no_ht={} probe_pending={} startup_link_stable={} safe_profile_locked={} safe_reason={} promoted_probe_pending={}",
             control_plane_snapshot_bootstrap_phase_label(
                 self.experimental_no_ht_transport,
                 self.experimental_control_plane_write_probe_pending,
@@ -6496,6 +6556,8 @@ impl SdioHost {
             yn(self.experimental_no_ht_transport),
             yn(self.experimental_control_plane_write_probe_pending),
             yn(self.experimental_control_plane_startup_link_stabilized),
+            yn(self.experimental_control_plane_startup_profile_locked),
+            self.experimental_control_plane_startup_profile_reason,
             yn(self.experimental_control_plane_promoted_probe_pending),
         ));
         if pure_f2_diag_mode {
@@ -6791,6 +6853,10 @@ impl SdioHost {
             control_plane_probe_pending: self.experimental_control_plane_write_probe_pending,
             control_plane_startup_link_stable: self
                 .experimental_control_plane_startup_link_stabilized,
+            control_plane_startup_profile_locked: self
+                .experimental_control_plane_startup_profile_locked,
+            control_plane_startup_profile_reason: self
+                .experimental_control_plane_startup_profile_reason,
             control_plane_promoted_probe_pending: self
                 .experimental_control_plane_promoted_probe_pending,
             control_plane_f2_state: control_plane_function2_linux_state_label(
@@ -8982,33 +9048,20 @@ impl SdioHost {
                     promoted_clock_hz,
                     CYW43_STARTUP_CLOCK_HZ,
                 ));
-                self.set_clock_hz(CYW43_STARTUP_CLOCK_HZ)?;
+                self.lock_control_plane_to_startup_profile(stage, "promoted-io-unstable")?;
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} action=low-clock-retry-clock addr=0x{offset:05x} value=0x{value:08x} previous={}Hz current={}Hz",
+                    "[pi4-wifi] firmware stage={stage} action=low-clock-retry-clock addr=0x{offset:05x} value=0x{value:08x} previous={}Hz current={}Hz width={} reason={}",
                     promoted_clock_hz,
                     self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.experimental_control_plane_startup_profile_reason,
                 ));
-                let retry_result = self.write_sdio_core_u32_for_firmware_channel_inner(
+                self.write_sdio_core_u32_for_firmware_channel_inner(
                     stage,
                     offset,
                     value,
                     allow_function2_ready_bypass,
-                );
-                match self.set_clock_hz(promoted_clock_hz) {
-                    Ok(restored_clock_hz) => emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage={stage} action=low-clock-retry-restore addr=0x{offset:05x} value=0x{value:08x} restored={}Hz",
-                        restored_clock_hz,
-                    )),
-                    Err(restore_err) => {
-                        emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware stage={stage} action=low-clock-retry-restore-fail addr=0x{offset:05x} value=0x{value:08x} target={}Hz current={}Hz err={restore_err}",
-                            promoted_clock_hz,
-                            self.current_clock_hz,
-                        ));
-                        return Err(restore_err);
-                    }
-                }
-                retry_result
+                )
             }
             Err(err) => Err(err),
         }
@@ -9743,7 +9796,7 @@ impl SdioHost {
             self.experimental_no_ht_transport = false;
             self.experimental_control_plane_write_probe_pending = false;
         } else {
-            self.enter_bounded_no_ht_transport("wait-ht-clock");
+            self.enter_bounded_no_ht_transport("wait-ht-clock")?;
         }
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=setup-firmware-channel mode={} chunk_limit={}",
@@ -9767,13 +9820,16 @@ impl SdioHost {
                     "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll-ok"
                 )),
                 Err(err) => {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll-fail err={err} fallback=experimental-bypass"
-                    ));
-                    self.log_function2_ready_snapshot(
+                    let exact_error = self.log_control_plane_finish_snapshot(
                         "post-firmware-ready-function2-strict-repoll-fail",
                     );
-                    self.enable_function2(SdioFunctionReadyBudget::ExperimentalBypass)?;
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll-fail-fast err={err} exact_error={exact_error} retry=aborted"
+                    ));
+                    return Err(match exact_error {
+                        "none" => err,
+                        _ => HalError::Unsupported(exact_error),
+                    });
                 }
             }
         }
@@ -13130,7 +13186,7 @@ mod tests {
 
     #[test]
     fn sideband_unreadable_recovery_budget_is_bounded() {
-        assert_eq!(CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT, 3);
+        assert_eq!(CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT, 2);
     }
 
     #[test]
@@ -14399,7 +14455,7 @@ mod tests {
             SDIO_FUNC_READY_1,
             SdioFunctionReadyBudget::Strict,
         ));
-        assert!(sdio_function_ready_timeout_can_continue_experimentally(
+        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,
@@ -15178,7 +15234,7 @@ mod tests {
     fn wait_for_firmware_ready_stays_on_startup_clock_only_for_bounded_no_ht_fast_path() {
         assert_eq!(
             wait_for_firmware_ready_restore_clock_hz(true, CYW43_CONTROL_PLANE_CLOCK_HZ),
-            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
+            None
         );
         assert_eq!(
             wait_for_firmware_ready_restore_clock_hz(true, CYW43_STARTUP_CLOCK_HZ),
@@ -15222,6 +15278,48 @@ mod tests {
             1,
             &HalError::Unsupported("cyw43-firmware-ready-timeout"),
         ));
+    }
+
+    #[test]
+    fn cached_wifi_snapshot_is_preferred_for_generic_bounded_no_ht_latched_f2_state() {
+        let snapshot = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::OneBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: None,
+            wakeupctrl: None,
+            sleepcsr: None,
+            cardcap: None,
+            programmed_backplane_window: None,
+            shadow_backplane_window: None,
+            shadow_backplane_fn_addr: None,
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            control_plane_bootstrap_phase: "startup-link-recovery",
+            control_plane_reply_mode: "none",
+            control_plane_reply_attempts: 0,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "ht-not-ready",
+            control_plane_promoted_probe_pending: false,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "none",
+            control_plane_exact_error: "cyw43-control-plane-state-visible-no-reply",
+        };
+        assert!(should_use_cached_wifi_debug_snapshot(&snapshot));
     }
 
     #[test]

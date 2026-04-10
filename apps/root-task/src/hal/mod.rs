@@ -81,7 +81,7 @@ impl SdioFunction {
 }
 
 const fn control_plane_startup_link_rescue_limit() -> u8 {
-    4
+    2
 }
 
 const fn control_plane_startup_link_rescue_budget_exhausted(next_cycle: u8) -> bool {
@@ -135,6 +135,8 @@ pub struct WifiDebugSnapshot {
     pub control_plane_no_ht_transport: bool,
     pub control_plane_probe_pending: bool,
     pub control_plane_startup_link_stable: bool,
+    pub control_plane_startup_profile_locked: bool,
+    pub control_plane_startup_profile_reason: &'static str,
     pub control_plane_promoted_probe_pending: bool,
     pub control_plane_f2_state: &'static str,
     pub control_plane_sdhci_read_diag: &'static str,
@@ -853,10 +855,10 @@ mod tests {
 
     #[test]
     fn startup_link_rescue_budget_is_bounded() {
-        assert_eq!(super::control_plane_startup_link_rescue_limit(), 4);
+        assert_eq!(super::control_plane_startup_link_rescue_limit(), 2);
         assert!(!super::control_plane_startup_link_rescue_budget_exhausted(
-            3
+            1
         ));
-        assert!(super::control_plane_startup_link_rescue_budget_exhausted(4));
+        assert!(super::control_plane_startup_link_rescue_budget_exhausted(2));
     }
 }

@@ -48,6 +48,19 @@ const USBSTS_CLEAR_MASK: u32 =
 const USBLEGACY_BIOS_OWNED: u32 = 1 << 16;
 const USBLEGACY_OS_OWNED: u32 = 1 << 24;
 const EXT_CAP_SCAN_LIMIT: usize = 64;
+const BRCM_XHCI_AXIWRA: usize = 0xC08;
+const BRCM_XHCI_AXIRDA: usize = 0xC0C;
+const BRCM_XHCI_USBAXI_CACHE: u32 = 0xF;
+const BRCM_XHCI_USBAXI_PROT: u32 = 0x8;
+const BRCM_XHCI_USBAXI_SA_MASK: u32 = 0x1FF;
+const BRCM_XHCI_USBAXI_UA_MASK: u32 = 0x1FF << 16;
+const BRCM_XHCI_USBAXI_SA_VAL: u32 =
+    (BRCM_XHCI_USBAXI_CACHE << 4) | BRCM_XHCI_USBAXI_PROT;
+const BRCM_XHCI_USBAXI_UA_VAL: u32 = BRCM_XHCI_USBAXI_SA_VAL << 16;
+const BRCM_XHCI_USBAXI_SA_UA_MASK: u32 =
+    BRCM_XHCI_USBAXI_UA_MASK | BRCM_XHCI_USBAXI_SA_MASK;
+const BRCM_XHCI_USBAXI_SA_UA_VAL: u32 =
+    BRCM_XHCI_USBAXI_UA_VAL | BRCM_XHCI_USBAXI_SA_VAL;
 // Perform an explicit host controller reset after stop so ring/DCBAA
 // programming starts from a deterministic post-firmware baseline on generic
 // xHCI bring-up paths.
@@ -944,6 +957,8 @@ pub struct XhciControllerParams {
     pub firmware_handoff: XhciFirmwareHandoff,
     /// Optional bootloader stop/ring seed snapshot for trusted handoff.
     pub runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+    /// Apply the Broadcom/VL805 AXI attribute quirk used by Pi 4 U-Boot.
+    pub apply_brcm_axi_setup: bool,
 }
 
 impl XhciControllerParams {
@@ -1086,6 +1101,11 @@ fn compose_config(current: u32, max_slots: u8) -> u32 {
 #[inline(always)]
 fn compose_initial_erdp(event_ring_ptr: u64) -> u64 {
     event_ring_ptr & !reg::ERST_PTR_MASK
+}
+
+#[inline(always)]
+const fn compose_brcm_usbaxi_attr(current: u32) -> u32 {
+    (current & !BRCM_XHCI_USBAXI_SA_UA_MASK) | BRCM_XHCI_USBAXI_SA_UA_VAL
 }
 
 impl<H: Dma> XhciCtrl<H> {
@@ -1318,6 +1338,7 @@ impl<H: Dma> XhciCtrl<H> {
             rts_offset,
             firmware_handoff: XhciFirmwareHandoff::None,
             runtime_seed_snapshot: None,
+            apply_brcm_axi_setup: false,
         };
 
         unsafe {
@@ -1358,6 +1379,7 @@ impl<H: Dma> XhciCtrl<H> {
         // Remap with full size
         let mmio = unsafe { host.map_mmio(mmio_phys, mmio_size) }.ok_or(UsbError::MapFail)?;
         emit_xhci_diag(0x0105, mmio as u64, mmio_size as u64, 0);
+        Self::apply_brcm_axi_setup(mmio, params.apply_brcm_axi_setup);
 
         let op_base = mmio + params.cap_length as usize;
         let rt_base = mmio + params.rts_offset as usize;
@@ -1440,6 +1462,47 @@ impl<H: Dma> XhciCtrl<H> {
         ctrl.init()?;
         emit_xhci_diag(0x0110, 0, 0, 0);
         Ok(ctrl)
+    }
+
+    #[inline(always)]
+    fn apply_brcm_axi_setup(mmio: usize, enabled: bool) {
+        if !enabled {
+            return;
+        }
+
+        let axiwr_before = Self::read_reg_at::<u32>(mmio, BRCM_XHCI_AXIWRA);
+        let axiwr_after = compose_brcm_usbaxi_attr(axiwr_before);
+        emit_xhci_diag(
+            0x0112,
+            BRCM_XHCI_AXIWRA as u64,
+            axiwr_before as u64,
+            axiwr_after as u64,
+        );
+        Self::write_reg_at::<u32>(mmio, BRCM_XHCI_AXIWRA, axiwr_after);
+        let axiwr_readback = Self::read_reg_at::<u32>(mmio, BRCM_XHCI_AXIWRA);
+        emit_xhci_diag(
+            0x0113,
+            BRCM_XHCI_AXIWRA as u64,
+            axiwr_readback as u64,
+            axiwr_after as u64,
+        );
+
+        let axird_before = Self::read_reg_at::<u32>(mmio, BRCM_XHCI_AXIRDA);
+        let axird_after = compose_brcm_usbaxi_attr(axird_before);
+        emit_xhci_diag(
+            0x0114,
+            BRCM_XHCI_AXIRDA as u64,
+            axird_before as u64,
+            axird_after as u64,
+        );
+        Self::write_reg_at::<u32>(mmio, BRCM_XHCI_AXIRDA, axird_after);
+        let axird_readback = Self::read_reg_at::<u32>(mmio, BRCM_XHCI_AXIRDA);
+        emit_xhci_diag(
+            0x0115,
+            BRCM_XHCI_AXIRDA as u64,
+            axird_readback as u64,
+            axird_after as u64,
+        );
     }
 
     fn init(&mut self) -> Result<()> {
@@ -3335,7 +3398,8 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compose_config, compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
+        compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base,
+        compose_erst_size, compose_initial_erdp,
         compose_run_usbcmd, defer_crcr_publish_until_after_run_with_snapshot,
         defer_crcr_publish_with_snapshot, defer_dcbaap_publish_until_after_run_with_snapshot,
         defer_dcbaap_publish_with_snapshot, defer_dnctrl_write_until_after_run_with_snapshot,
@@ -3367,7 +3431,8 @@ mod tests {
         use_atomic_runtime_ring_publish_with_snapshot, use_live_config_seed_reads,
         use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
         use_live_post_reset_seed_reads_with_snapshot, XhciControllerParams, XhciFirmwareHandoff,
-        XhciRuntimeSeedSnapshot, READY_WAIT_PROGRESS_SPINS, SKIP_HCRST_DURING_INIT,
+        XhciRuntimeSeedSnapshot, BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
+        READY_WAIT_PROGRESS_SPINS, SKIP_HCRST_DURING_INIT,
         TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
     };
     use crate::reg;
@@ -3398,9 +3463,22 @@ mod tests {
             rts_offset: 0x2000,
             firmware_handoff: XhciFirmwareHandoff::None,
             runtime_seed_snapshot: None,
+            apply_brcm_axi_setup: false,
         };
         let validated = params.validated().expect("validated controller params");
         assert_eq!(validated.4, 64);
+    }
+
+    #[test]
+    fn brcm_usbaxi_attr_matches_u_boot_masking() {
+        assert_eq!(
+            compose_brcm_usbaxi_attr(0),
+            BRCM_XHCI_USBAXI_SA_UA_VAL
+        );
+        assert_eq!(
+            compose_brcm_usbaxi_attr(0xffff_ffff),
+            (0xffff_ffff & !BRCM_XHCI_USBAXI_SA_UA_MASK) | BRCM_XHCI_USBAXI_SA_UA_VAL
+        );
     }
 
     #[test]

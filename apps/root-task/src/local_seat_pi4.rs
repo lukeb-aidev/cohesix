@@ -2678,6 +2678,7 @@ fn xhci_controller_params_from_probe(
         rts_offset: probe.rts_offset,
         firmware_handoff,
         runtime_seed_snapshot,
+        apply_brcm_axi_setup: true,
     }
 }
 
@@ -2717,6 +2718,7 @@ fn xhci_controller_params_from_probe_with_strategy(
         rts_offset: probe.rts_offset,
         firmware_handoff: strategy.firmware_handoff,
         runtime_seed_snapshot,
+        apply_brcm_axi_setup: true,
     }
 }
 
