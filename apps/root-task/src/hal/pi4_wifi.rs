@@ -94,6 +94,7 @@ static MAILBOX_TRANSPORT_READY: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 static MAILBOX_TRANSPORT_READY_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
+static LAST_WIFI_DEBUG_SNAPSHOT: Mutex<Option<WifiDebugSnapshot>> = Mutex::new(None);
 
 #[derive(Clone, Copy)]
 struct MappedRegs {
@@ -2573,6 +2574,7 @@ const fn strict_control_plane_reply_recovery_error(
     watermark: Option<u8>,
     devctl: Option<u8>,
     mesbusy: Option<u8>,
+    sdhci_read_diag: &'static str,
 ) -> Option<&'static str> {
     if control_plane_function2_ready_hidden_from_cccr(ioex, iorx, corecontrol) {
         Some("cyw43-function2-ready-hidden-from-cccr")
@@ -2580,14 +2582,63 @@ const fn strict_control_plane_reply_recovery_error(
         ioex, iorx, ienx, watermark, devctl, mesbusy,
     ) && corecontrol.is_none()
     {
-        Some("cyw43-control-plane-sideband-unreadable")
+        Some(control_plane_snapshot_exact_error_label_with_sdhci_diag(
+            "sdio-core-hints-unreadable",
+            sdhci_read_diag,
+        ))
     } else if control_plane_function2_latched_linux_configured_without_iorx(
         ioex, iorx, ienx, watermark, devctl, mesbusy,
     ) {
-        Some("cyw43-function2-enable-latched-not-ready")
+        Some(control_plane_snapshot_exact_error_label_with_sdhci_diag(
+            "f2-enable-latched-not-ready",
+            sdhci_read_diag,
+        ))
     } else {
         None
     }
+}
+
+#[inline]
+fn resolved_control_plane_sdhci_read_diag(
+    current_cmd: Option<u16>,
+    current_arg: Option<u32>,
+    current_present: Option<u32>,
+    current_status: Option<u32>,
+    preserved_cmd: Option<u16>,
+    preserved_arg: Option<u32>,
+    preserved_present: Option<u32>,
+    preserved_status: Option<u32>,
+) -> &'static str {
+    let current = control_plane_snapshot_sdhci_read_diag_label(
+        current_cmd,
+        current_arg,
+        current_present,
+        current_status,
+    );
+    if current != "none" {
+        return current;
+    }
+    control_plane_snapshot_sdhci_read_diag_label(
+        preserved_cmd,
+        preserved_arg,
+        preserved_present,
+        preserved_status,
+    )
+}
+
+#[inline]
+fn cache_wifi_debug_snapshot(snapshot: WifiDebugSnapshot) {
+    *LAST_WIFI_DEBUG_SNAPSHOT.lock() = Some(snapshot);
+}
+
+#[inline]
+fn cached_wifi_debug_snapshot() -> Option<WifiDebugSnapshot> {
+    LAST_WIFI_DEBUG_SNAPSHOT.lock().as_ref().copied()
+}
+
+#[inline]
+const fn should_use_cached_wifi_debug_snapshot(snapshot: &WifiDebugSnapshot) -> bool {
+    !snapshot.card_ready && snapshot.control_plane_f2_state == "unproven"
 }
 
 #[inline]
@@ -3287,7 +3338,18 @@ impl Pi4WifiState {
 
     pub fn debug_dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
         self.host.log_transport_shadow(stage);
-        self.debug_snapshot()
+        let snapshot = self.debug_snapshot()?;
+        if should_use_cached_wifi_debug_snapshot(&snapshot) {
+            if let Some(cached) = cached_wifi_debug_snapshot() {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] debug snapshot stage={stage} source=cached exact_error={} sdhci_read_diag={}",
+                    cached.control_plane_exact_error,
+                    cached.control_plane_sdhci_read_diag,
+                ));
+                return Ok(cached);
+            }
+        }
+        Ok(snapshot)
     }
 
     pub fn debug_probe_ht_clock(&mut self) -> Result<bool, HalError> {
@@ -3474,23 +3536,16 @@ impl Pi4WifiState {
             control_plane_reply_empty_polls,
             control_plane_promoted_probe_pending,
         ) = self.cyw43_control_plane_reply_rearm_diag();
-        let sdhci_read_diag_current = control_plane_snapshot_sdhci_read_diag_label(
+        let control_plane_sdhci_read_diag = resolved_control_plane_sdhci_read_diag(
             self.host.last_data_wait_cmd,
             self.host.last_data_wait_arg,
             self.host.last_data_wait_present,
             self.host.last_data_wait_int_status,
-        );
-        let sdhci_read_diag_preserved = control_plane_snapshot_sdhci_read_diag_label(
             self.host.preserved_control_plane_data_wait_cmd,
             self.host.preserved_control_plane_data_wait_arg,
             self.host.preserved_control_plane_data_wait_present,
             self.host.preserved_control_plane_data_wait_int_status,
         );
-        let control_plane_sdhci_read_diag = if sdhci_read_diag_current == "none" {
-            sdhci_read_diag_preserved
-        } else {
-            sdhci_read_diag_current
-        };
         let control_plane_f2_state = control_plane_function2_linux_state_label(
             io_enable,
             io_ready,
@@ -5147,6 +5202,16 @@ impl SdioHost {
                     watermark_after,
                     devctl_after,
                     mesbusy_after,
+                    resolved_control_plane_sdhci_read_diag(
+                        self.last_data_wait_cmd,
+                        self.last_data_wait_arg,
+                        self.last_data_wait_present,
+                        self.last_data_wait_int_status,
+                        self.preserved_control_plane_data_wait_cmd,
+                        self.preserved_control_plane_data_wait_arg,
+                        self.preserved_control_plane_data_wait_present,
+                        self.preserved_control_plane_data_wait_int_status,
+                    ),
                 ) {
                     if exact_error == "cyw43-control-plane-sideband-unreadable"
                         && self.experimental_no_ht_transport
@@ -6452,11 +6517,16 @@ impl SdioHost {
             self.preserved_control_plane_data_wait_present,
             self.preserved_control_plane_data_wait_int_status,
         );
-        let sdhci_read_diag_resolved = if sdhci_read_diag_current == "none" {
-            sdhci_read_diag_preserved
-        } else {
-            sdhci_read_diag_current
-        };
+        let sdhci_read_diag_resolved = resolved_control_plane_sdhci_read_diag(
+            self.last_data_wait_cmd,
+            self.last_data_wait_arg,
+            self.last_data_wait_present,
+            self.last_data_wait_int_status,
+            self.preserved_control_plane_data_wait_cmd,
+            self.preserved_control_plane_data_wait_arg,
+            self.preserved_control_plane_data_wait_present,
+            self.preserved_control_plane_data_wait_int_status,
+        );
         emit_breadcrumb(format_args!(
             "[pi4-wifi] control-plane snapshot {stage} sdhci-read-diag=current:{} preserved:{} resolved:{} cmd={} arg=0x{:08x} ps=0x{:08x} stat=0x{:08x} preserved_cmd={} preserved_arg=0x{:08x} preserved_ps=0x{:08x} preserved_stat=0x{:08x}",
             sdhci_read_diag_current,
@@ -6505,18 +6575,61 @@ impl SdioHost {
             control_plane_reply_rearm_mode_name(self.experimental_control_plane_reply_rearm_mode),
             self.experimental_control_plane_reply_rearm_attempts,
         ));
+        let exact_error = control_plane_snapshot_exact_error_label_with_sdhci_diag(
+            blocker,
+            sdhci_read_diag_resolved,
+        );
         emit_breadcrumb(format_args!(
             "[pi4-wifi] control-plane snapshot {stage} exact-error={} sdhci-read-diag={} hint_reads_unstable={} startup_link_stable={} sideband_cycles={}/{}",
-            control_plane_snapshot_exact_error_label_with_sdhci_diag(
-                blocker,
-                sdhci_read_diag_resolved,
-            ),
+            exact_error,
             sdhci_read_diag_resolved,
             yn(self.experimental_control_plane_hint_reads_unstable),
             yn(self.experimental_control_plane_startup_link_stabilized),
             self.experimental_control_plane_sideband_unreadable_recovery_cycles,
             CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT,
         ));
+        cache_wifi_debug_snapshot(WifiDebugSnapshot {
+            power_state: self.power_state,
+            reset_state: self.reset_state,
+            current_clock_hz: self.current_clock_hz,
+            preferred_data_clock_hz: self.preferred_data_clock_hz,
+            bus_width: self.desired_bus_width,
+            card_ready: self.card.is_some(),
+            card_rca: self.card.map_or(0, |card| card.rca),
+            card_ocr: self.card.map_or(0, |card| card.ocr),
+            io_enable: ioex,
+            io_ready: iorx,
+            chipclkcsr: self.last_chipclkcsr,
+            wakeupctrl: self.last_wakeupctrl,
+            sleepcsr: self.last_sleepcsr,
+            cardcap: self.last_cardcap,
+            programmed_backplane_window: self.programmed_backplane_window,
+            shadow_backplane_window: self.last_backplane_window,
+            shadow_backplane_fn_addr: self.last_backplane_function_addr,
+            control_plane_bootstrap_phase: control_plane_snapshot_bootstrap_phase_label(
+                self.experimental_no_ht_transport,
+                self.experimental_control_plane_write_probe_pending,
+                self.experimental_control_plane_startup_link_stabilized,
+                self.current_clock_hz,
+            ),
+            control_plane_reply_mode: control_plane_reply_rearm_mode_name(
+                self.experimental_control_plane_reply_rearm_mode,
+            ),
+            control_plane_reply_attempts: self.experimental_control_plane_reply_rearm_attempts,
+            control_plane_reply_empty_polls: self
+                .experimental_control_plane_reply_rearm_empty_polls,
+            control_plane_no_ht_transport: self.experimental_no_ht_transport,
+            control_plane_probe_pending: self.experimental_control_plane_write_probe_pending,
+            control_plane_startup_link_stable: self
+                .experimental_control_plane_startup_link_stabilized,
+            control_plane_promoted_probe_pending: self
+                .experimental_control_plane_promoted_probe_pending,
+            control_plane_f2_state: control_plane_function2_linux_state_label(
+                ioex, iorx, ienx, watermark, devctl, mesbusy,
+            ),
+            control_plane_sdhci_read_diag: sdhci_read_diag_resolved,
+            control_plane_exact_error: exact_error,
+        });
         blocker
     }
 
@@ -12496,7 +12609,7 @@ mod tests {
         let mesbusy = Some(CY_43455_MESBUSYCTRL);
         assert_eq!(
             strict_control_plane_reply_recovery_error(
-                ioex, iorx, ienx, None, watermark, devctl, mesbusy,
+                ioex, iorx, ienx, None, watermark, devctl, mesbusy, "none",
             ),
             Some("cyw43-control-plane-sideband-unreadable")
         );
@@ -12509,6 +12622,7 @@ mod tests {
                 watermark,
                 devctl,
                 mesbusy,
+                "none",
             ),
             Some("cyw43-function2-enable-latched-not-ready")
         );
@@ -12521,6 +12635,7 @@ mod tests {
                 watermark,
                 devctl,
                 mesbusy,
+                "none",
             ),
             Some("cyw43-function2-ready-hidden-from-cccr")
         );
@@ -12533,8 +12648,35 @@ mod tests {
                 watermark,
                 devctl,
                 mesbusy,
+                "none",
             ),
             None
+        );
+        assert_eq!(
+            strict_control_plane_reply_recovery_error(
+                ioex,
+                iorx,
+                ienx,
+                None,
+                watermark,
+                devctl,
+                mesbusy,
+                "f1-reply-read-command-timeout",
+            ),
+            Some("cyw43-control-plane-sideband-command-timeout")
+        );
+        assert_eq!(
+            strict_control_plane_reply_recovery_error(
+                ioex,
+                iorx,
+                ienx,
+                Some(0),
+                watermark,
+                devctl,
+                mesbusy,
+                "f2-reply-read-command-phase-no-data-active",
+            ),
+            Some("cyw43-function2-enable-latched-not-ready-command-stall")
         );
     }
 

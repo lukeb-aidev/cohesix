@@ -255,6 +255,8 @@ fn first_control_plane_retry_after_startup_link_reply_failure(
                     | "cyw43-control-plane-sideband-command-end-bit"
                     | "cyw43-control-plane-sideband-command-index"
                     | "cyw43-control-plane-sideband-command-error"
+                    | "cyw43-control-plane-sideband-command-stall"
+                    | "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
             )) | DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-passive-startup-link-timeout"
             ))
@@ -317,7 +319,9 @@ fn control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
                 | "cyw43-control-plane-sideband-command-crc"
                 | "cyw43-control-plane-sideband-command-end-bit"
                 | "cyw43-control-plane-sideband-command-index"
-                | "cyw43-control-plane-sideband-command-error",
+                | "cyw43-control-plane-sideband-command-error"
+                | "cyw43-control-plane-sideband-command-stall"
+                | "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
             )) => SDIO_DATA_CLOCK_HZ,
             _ if current_clock_hz > SDIO_STARTUP_CLOCK_HZ => SDIO_STARTUP_CLOCK_HZ,
             _ => current_clock_hz,
@@ -356,6 +360,8 @@ fn control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
                     | "cyw43-control-plane-sideband-command-end-bit"
                     | "cyw43-control-plane-sideband-command-index"
                     | "cyw43-control-plane-sideband-command-error"
+                    | "cyw43-control-plane-sideband-command-stall"
+                    | "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
             ))
             | DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-passive-startup-link-timeout"
@@ -427,7 +433,9 @@ fn control_plane_retry_after_reply_wait_resend_target_clock_hz(
             | "cyw43-control-plane-sideband-command-crc"
             | "cyw43-control-plane-sideband-command-end-bit"
             | "cyw43-control-plane-sideband-command-index"
-            | "cyw43-control-plane-sideband-command-error",
+            | "cyw43-control-plane-sideband-command-error"
+            | "cyw43-control-plane-sideband-command-stall"
+            | "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
         )) => {
             if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
                 SDIO_DATA_CLOCK_HZ

@@ -2247,6 +2247,17 @@ where
             let _ = write!(line, " {action_detail}");
         }
         self.emit_console_line(line.as_str());
+        if let Some(diag) = crate::local_seat_pi4::latest_xhci_diag_status() {
+            let mut diag_line =
+                format_message(format_args!("usb: xhci stage=0x{:04x}", diag.stage));
+            if let Some(tag) = diag.tag {
+                let _ = write!(diag_line, " tag={tag}");
+            }
+            if let Some(exact_issue) = diag.exact_issue {
+                let _ = write!(diag_line, " exact={exact_issue}");
+            }
+            self.emit_console_line(diag_line.as_str());
+        }
     }
 
     #[cfg(feature = "kernel")]

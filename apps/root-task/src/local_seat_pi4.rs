@@ -548,6 +548,13 @@ impl XhciDiagSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbXhciDiagStatus {
+    pub stage: u16,
+    pub tag: Option<&'static str>,
+    pub exact_issue: Option<&'static str>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum UsbProbePathProgress {
     NoController,
@@ -2027,6 +2034,18 @@ fn read_latest_xhci_diag_snapshot() -> XhciDiagSnapshot {
         b: XHCI_DIAG_LAST_B.load(Ordering::Acquire) as u64,
         c: XHCI_DIAG_LAST_C.load(Ordering::Acquire) as u64,
     }
+}
+
+pub(crate) fn latest_xhci_diag_status() -> Option<UsbXhciDiagStatus> {
+    let snapshot = read_latest_xhci_diag_snapshot();
+    if snapshot.line_count == 0 {
+        return None;
+    }
+    Some(UsbXhciDiagStatus {
+        stage: snapshot.stage,
+        tag: xhci_diag_stage_label(snapshot.stage),
+        exact_issue: xhci_diag_stage_exact_issue_label(snapshot.stage),
+    })
 }
 
 #[inline]
