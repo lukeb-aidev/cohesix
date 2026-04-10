@@ -427,11 +427,17 @@ const fn runtime_handoff_needs_relaxed_run_write(
 }
 
 #[inline(always)]
-const fn runtime_handoff_needs_relaxed_reset_write(
+const fn runtime_handoff_needs_uboot_style_reset_write(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
+    // The latest Pi 4 traces now isolate the next runtime wedge to the HCRST
+    // store itself. Match U-Boot's xhci_reset() write discipline on every
+    // fresh-init path so the next hardware run answers the only remaining
+    // question: whether VL805 accepts a plain writel() reset edge after the
+    // runtime mailbox handoff.
+    matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
+        || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -1679,7 +1685,7 @@ impl<H: Dma> XhciCtrl<H> {
                 0,
             );
             let reset_cmd = usbcmd_before_reset | reg::USBCMD_HCRST;
-            let relaxed_reset_write = runtime_handoff_needs_relaxed_reset_write(
+            let uboot_style_reset_write = runtime_handoff_needs_uboot_style_reset_write(
                 self.firmware_handoff,
                 trusted_runtime_seed_snapshot,
             );
@@ -1690,13 +1696,11 @@ impl<H: Dma> XhciCtrl<H> {
                 reset_cmd as u64,
                 self.firmware_handoff as u64,
             );
-            if relaxed_reset_write {
-                self.write_op_u32_store_diag_relaxed_with_barrier_phase(
+            if uboot_style_reset_write {
+                self.write_op_u32_store_diag(
                     reg::USBCMD,
                     reset_cmd,
                     0x0230,
-                    0x023a,
-                    0x0237,
                     0x0235,
                     self.firmware_handoff as u64,
                 );
@@ -3343,7 +3347,7 @@ mod tests {
         preserve_firmware_handoff_config, probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot, run_usbcmd_needs_live_seed_read,
         run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
-        runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_relaxed_reset_write,
+        runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_uboot_style_reset_write,
         runtime_handoff_needs_relaxed_run_write,
         runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
         runtime_handoff_needs_release_only_run_write, runtime_handoff_needs_uboot_style_run_write,
@@ -3684,7 +3688,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             stop_state_snapshot,
         ));
-        assert!(!runtime_handoff_needs_relaxed_reset_write(
+        assert!(runtime_handoff_needs_uboot_style_reset_write(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             stop_state_snapshot,
         ));
@@ -3704,7 +3708,7 @@ mod tests {
             XhciFirmwareHandoff::None,
             stop_state_snapshot,
         ));
-        assert!(runtime_handoff_needs_relaxed_reset_write(
+        assert!(runtime_handoff_needs_uboot_style_reset_write(
             XhciFirmwareHandoff::None,
             stop_state_snapshot,
         ));
@@ -3730,7 +3734,7 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
-        assert!(!runtime_handoff_needs_relaxed_reset_write(
+        assert!(!runtime_handoff_needs_uboot_style_reset_write(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));

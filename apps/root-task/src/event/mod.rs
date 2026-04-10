@@ -2320,6 +2320,26 @@ where
         ));
         self.emit_console_line(shadow.as_str());
 
+        let recovery = format_message(format_args!(
+            "wifi: f2_recover stage={} policy={} op={} drained={} count={}",
+            snapshot.control_plane_frame_recovery_stage.unwrap_or("n/a"),
+            snapshot
+                .control_plane_frame_recovery_policy
+                .unwrap_or("n/a"),
+            match snapshot.control_plane_frame_recovery_write {
+                Some(true) => "write",
+                Some(false) => "read",
+                None => "n/a",
+            },
+            match snapshot.control_plane_frame_recovery_drained {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "n/a",
+            },
+            Self::format_optional_u16(snapshot.control_plane_frame_recovery_count),
+        ));
+        self.emit_console_line(recovery.as_str());
+
         let bootstrap = format_message(format_args!(
             "wifi: bootstrap={} no_ht={} probe_pending={} startup_link_stable={} reply_mode={} reply_attempts={} empty_polls={} promoted_probe={}",
             snapshot.control_plane_bootstrap_phase,
@@ -2402,6 +2422,20 @@ where
         match value {
             Some(value) => {
                 let _ = write!(buf, "0x{value:08x}");
+            }
+            None => {
+                let _ = buf.push_str("n/a");
+            }
+        }
+        buf
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_optional_u16(value: Option<u16>) -> HeaplessString<16> {
+        let mut buf = HeaplessString::new();
+        match value {
+            Some(value) => {
+                let _ = write!(buf, "0x{value:04x}");
             }
             None => {
                 let _ = buf.push_str("n/a");
@@ -4911,6 +4945,11 @@ mod tests {
                     programmed_backplane_window: Some(0x0019_8000),
                     shadow_backplane_window: Some(0x0019_8000),
                     shadow_backplane_fn_addr: Some(0x08000),
+                    control_plane_frame_recovery_stage: Some("control-plane-reply-full-block-read"),
+                    control_plane_frame_recovery_policy: Some("linux-rxfail"),
+                    control_plane_frame_recovery_write: Some(false),
+                    control_plane_frame_recovery_drained: Some(false),
+                    control_plane_frame_recovery_count: Some(0x0040),
                     control_plane_bootstrap_phase: "first-write-startup-link",
                     control_plane_reply_mode: "startup-link",
                     control_plane_reply_attempts: 1,
@@ -5534,6 +5573,10 @@ mod tests {
         assert!(rendered.contains("wifi: power=on"), "{rendered}");
         assert!(
             rendered.contains("wifi: bootstrap=first-write-startup-link"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: f2_recover stage=control-plane-reply-full-block-read policy=linux-rxfail op=read drained=no count=0x0040"),
             "{rendered}"
         );
         assert!(

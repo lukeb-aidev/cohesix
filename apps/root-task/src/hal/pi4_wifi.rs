@@ -3633,6 +3633,11 @@ impl Pi4WifiState {
             programmed_backplane_window: self.host.programmed_backplane_window,
             shadow_backplane_window: self.host.last_backplane_window,
             shadow_backplane_fn_addr: self.host.last_backplane_function_addr,
+            control_plane_frame_recovery_stage: self.host.last_function2_frame_recovery_stage,
+            control_plane_frame_recovery_policy: self.host.last_function2_frame_recovery_policy,
+            control_plane_frame_recovery_write: self.host.last_function2_frame_recovery_write,
+            control_plane_frame_recovery_drained: self.host.last_function2_frame_recovery_drained,
+            control_plane_frame_recovery_count: self.host.last_function2_frame_recovery_count,
             control_plane_bootstrap_phase: control_plane_snapshot_bootstrap_phase_label(
                 self.host.experimental_no_ht_transport,
                 self.host.experimental_control_plane_write_probe_pending,
@@ -4156,6 +4161,11 @@ struct SdioHost {
     preserved_control_plane_data_wait_arg: Option<u32>,
     preserved_control_plane_data_wait_present: Option<u32>,
     preserved_control_plane_data_wait_int_status: Option<u32>,
+    last_function2_frame_recovery_stage: Option<&'static str>,
+    last_function2_frame_recovery_policy: Option<&'static str>,
+    last_function2_frame_recovery_write: Option<bool>,
+    last_function2_frame_recovery_drained: Option<bool>,
+    last_function2_frame_recovery_count: Option<u16>,
 }
 
 impl SdioHost {
@@ -4233,6 +4243,11 @@ impl SdioHost {
             preserved_control_plane_data_wait_arg: None,
             preserved_control_plane_data_wait_present: None,
             preserved_control_plane_data_wait_int_status: None,
+            last_function2_frame_recovery_stage: None,
+            last_function2_frame_recovery_policy: None,
+            last_function2_frame_recovery_write: None,
+            last_function2_frame_recovery_drained: None,
+            last_function2_frame_recovery_count: None,
         })
     }
 
@@ -4395,6 +4410,7 @@ impl SdioHost {
             .copy_from_slice(&frame[..frame_len]);
         self.experimental_control_plane_speculative_frame_len = frame_len;
         self.clear_control_plane_sideband_unreadable_recovery_cycles();
+        self.clear_last_function2_frame_recovery();
         self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
         self.experimental_control_plane_reply_rearm_attempts = 0;
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
@@ -4411,6 +4427,14 @@ impl SdioHost {
 
     fn clear_control_plane_sideband_unreadable_recovery_cycles(&mut self) {
         self.experimental_control_plane_sideband_unreadable_recovery_cycles = 0;
+    }
+
+    fn clear_last_function2_frame_recovery(&mut self) {
+        self.last_function2_frame_recovery_stage = None;
+        self.last_function2_frame_recovery_policy = None;
+        self.last_function2_frame_recovery_write = None;
+        self.last_function2_frame_recovery_drained = None;
+        self.last_function2_frame_recovery_count = None;
     }
 
     fn control_plane_uses_low_touch_pure_f2_diagnostics(&self) -> bool {
@@ -5766,7 +5790,10 @@ impl SdioHost {
         ));
 
         let mut frame = [0u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY];
-        match self.io_extended(SdioFunction::Function2, 0, false, false, &mut frame) {
+        match self.read_function2_reply_with_linux_recovery(
+            "control-plane-reply-speculative-read",
+            &mut frame,
+        ) {
             Ok(()) => {
                 let Some(frame_len) = control_plane_reply_speculative_frame_len(&frame) else {
                     if let Some(frame_len) = self.try_capture_control_plane_reply_full_block_probe(
@@ -5868,7 +5895,10 @@ impl SdioHost {
                     self.control_plane_chunk_limit(),
                     self.experimental_no_ht_transport,
                 ));
-                match self.io_extended(SdioFunction::Function2, 0, false, false, &mut frame) {
+                match self.read_function2_reply_with_linux_recovery(
+                    "control-plane-reply-fallback-startup-link",
+                    &mut frame,
+                ) {
                     Ok(()) => {
                         let Some(frame_len) = control_plane_reply_speculative_frame_len(&frame)
                         else {
@@ -6071,11 +6101,8 @@ impl SdioHost {
             ));
 
             frame[..probe_len].fill(0);
-            match self.io_extended_single_chunk_diagnostic(
-                SdioFunction::Function2,
-                0,
-                false,
-                false,
+            match self.read_function2_reply_single_chunk_diagnostic_with_linux_recovery(
+                "control-plane-reply-prefix-read",
                 &mut frame[..probe_len],
                 "control-plane-reply-prefix-read",
             ) {
@@ -6111,11 +6138,8 @@ impl SdioHost {
                     }
 
                     if frame_len > probe_len {
-                        if let Err(err) = self.io_extended(
-                            SdioFunction::Function2,
-                            0,
-                            false,
-                            false,
+                        if let Err(err) = self.read_function2_reply_with_linux_recovery(
+                            "control-plane-reply-prefix-remainder-read",
                             &mut frame[probe_len..frame_len],
                         ) {
                             if control_plane_reply_speculative_read_can_continue(&err) {
@@ -6188,11 +6212,8 @@ impl SdioHost {
             self.experimental_no_ht_transport,
         ));
 
-        match self.io_extended_single_chunk_diagnostic(
-            SdioFunction::Function2,
-            0,
-            false,
-            false,
+        match self.read_function2_reply_single_chunk_diagnostic_with_linux_recovery(
+            "control-plane-reply-full-block-read",
             frame,
             "control-plane-reply-full-block-read",
         ) {
@@ -6635,6 +6656,23 @@ impl SdioHost {
             self.experimental_control_plane_sideband_unreadable_recovery_cycles,
             CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT,
         ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] control-plane snapshot {stage} f2-recover stage={} policy={} op={} drained={} count=0x{count:04x}/{}",
+            self.last_function2_frame_recovery_stage.unwrap_or("none"),
+            self.last_function2_frame_recovery_policy.unwrap_or("none"),
+            match self.last_function2_frame_recovery_write {
+                Some(true) => "write",
+                Some(false) => "read",
+                None => "none",
+            },
+            match self.last_function2_frame_recovery_drained {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "n/a",
+            },
+            yn(self.last_function2_frame_recovery_count.is_some()),
+            count = self.last_function2_frame_recovery_count.unwrap_or(0),
+        ));
         cache_wifi_debug_snapshot(WifiDebugSnapshot {
             power_state: self.power_state,
             reset_state: self.reset_state,
@@ -6653,6 +6691,11 @@ impl SdioHost {
             programmed_backplane_window: self.programmed_backplane_window,
             shadow_backplane_window: self.last_backplane_window,
             shadow_backplane_fn_addr: self.last_backplane_function_addr,
+            control_plane_frame_recovery_stage: self.last_function2_frame_recovery_stage,
+            control_plane_frame_recovery_policy: self.last_function2_frame_recovery_policy,
+            control_plane_frame_recovery_write: self.last_function2_frame_recovery_write,
+            control_plane_frame_recovery_drained: self.last_function2_frame_recovery_drained,
+            control_plane_frame_recovery_count: self.last_function2_frame_recovery_count,
             control_plane_bootstrap_phase: control_plane_snapshot_bootstrap_phase_label(
                 self.experimental_no_ht_transport,
                 self.experimental_control_plane_write_probe_pending,
@@ -7250,6 +7293,109 @@ impl SdioHost {
             plan,
             false,
         )
+    }
+
+    fn recover_control_plane_function2_read_path(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        self.recover_failed_function2_frame_transfer(stage, false, "linux-rxfail");
+        self.recover_command_path_and_refresh_transport(stage)?;
+        if self.experimental_no_ht_transport {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=function2-read-rearm budget={} current_clock={}Hz width={} no_ht={}",
+                sdio_function_ready_budget_name(SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery),
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.experimental_no_ht_transport,
+            ));
+            self.rearm_firmware_channel_once(
+                SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
+                false,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn read_function2_reply_once_with_linux_recovery<F>(
+        &mut self,
+        stage: &'static str,
+        len: usize,
+        mut transfer: F,
+    ) -> Result<(), HalError>
+    where
+        F: FnMut(&mut Self) -> Result<(), HalError>,
+    {
+        let mut recovered = false;
+        loop {
+            match transfer(self) {
+                Ok(()) => {
+                    if recovered {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} action=function2-read-retry-ready len={} current_clock={}Hz width={} no_ht={}",
+                            len,
+                            self.current_clock_hz,
+                            sdio_bus_width_name(self.desired_bus_width),
+                            self.experimental_no_ht_transport,
+                        ));
+                    }
+                    return Ok(());
+                }
+                Err(err)
+                    if !recovered && control_plane_frame_transfer_error_needs_terminate(&err) =>
+                {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=function2-read-retry-begin len={} current_clock={}Hz width={} no_ht={} err={err}",
+                        len,
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                        self.experimental_no_ht_transport,
+                    ));
+                    self.recover_control_plane_function2_read_path(stage)?;
+                    recovered = true;
+                }
+                Err(err) => {
+                    if recovered {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} action=function2-read-retry-fail len={} current_clock={}Hz width={} no_ht={} err={err}",
+                            len,
+                            self.current_clock_hz,
+                            sdio_bus_width_name(self.desired_bus_width),
+                            self.experimental_no_ht_transport,
+                        ));
+                    }
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    fn read_function2_reply_with_linux_recovery(
+        &mut self,
+        stage: &'static str,
+        buffer: &mut [u8],
+    ) -> Result<(), HalError> {
+        self.read_function2_reply_once_with_linux_recovery(stage, buffer.len(), |this| {
+            this.io_extended(SdioFunction::Function2, 0, false, false, buffer)
+        })
+    }
+
+    fn read_function2_reply_single_chunk_diagnostic_with_linux_recovery(
+        &mut self,
+        stage: &'static str,
+        buffer: &mut [u8],
+        diagnostic_stage: &'static str,
+    ) -> Result<(), HalError> {
+        self.read_function2_reply_once_with_linux_recovery(stage, buffer.len(), |this| {
+            this.io_extended_single_chunk_diagnostic(
+                SdioFunction::Function2,
+                0,
+                false,
+                false,
+                buffer,
+                diagnostic_stage,
+            )
+        })
     }
 
     fn read_function_enable_state(&mut self, stage: &'static str) -> Result<(u8, u8), HalError> {
@@ -9117,6 +9263,11 @@ impl SdioHost {
             sdio_bus_width_name(self.desired_bus_width),
             self.experimental_no_ht_transport,
         ));
+        self.last_function2_frame_recovery_stage = Some(stage);
+        self.last_function2_frame_recovery_policy = Some(policy);
+        self.last_function2_frame_recovery_write = Some(write);
+        self.last_function2_frame_recovery_drained = None;
+        self.last_function2_frame_recovery_count = None;
         match self.io_direct_write(
             SdioFunction::Function0,
             SDIO_CCCR_ABORT,
@@ -9139,6 +9290,7 @@ impl SdioHost {
                     "[pi4-wifi] firmware stage={stage} action=function2-frame-recover {} status=err err={err}",
                     framectrl_name,
                 ));
+                self.last_function2_frame_recovery_drained = Some(false);
                 self.log_transport_shadow(stage);
                 return;
             }
@@ -9163,6 +9315,8 @@ impl SdioHost {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} action=function2-frame-recover drained=yes"
                 ));
+                self.last_function2_frame_recovery_drained = Some(true);
+                self.last_function2_frame_recovery_count = Some(count);
                 self.log_transport_shadow(stage);
                 return;
             }
@@ -9175,6 +9329,8 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} action=function2-frame-recover drained=no final_count=0x{last_count:04x}"
         ));
+        self.last_function2_frame_recovery_drained = Some(false);
+        self.last_function2_frame_recovery_count = Some(last_count);
         self.log_transport_shadow(stage);
     }
 
