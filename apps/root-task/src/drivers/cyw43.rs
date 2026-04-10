@@ -2012,13 +2012,20 @@ const fn initial_control_plane_data_clock_target_hz(
     recommended_data_clock_hz: u32,
     experimental_no_ht_transport: bool,
 ) -> u32 {
-    // The latest April 6, 2026 Pi 4 trace reaches firmware-ready and then
-    // burns time oscillating between 400 kHz and 12.5 MHz without proving that
-    // the first post-firmware control transaction must start on the slow link.
-    // Push the first control-plane exchange onto the normal data clock and let
-    // the existing retry ladder demote only after a real failure.
-    let _ = experimental_no_ht_transport;
-    control_plane_data_clock_target_hz(recommended_data_clock_hz)
+    // The April 10, 2026 Pi 4 trace now shows the first promoted-link control
+    // write failing immediately, while the fallback write on the startup link
+    // gets far enough to prove the remaining bug is in reply-side readiness.
+    // Keep bounded no-HT bootstrap on the startup link until the first control
+    // reply is real, then let the existing promotion path raise the clock.
+    if experimental_no_ht_transport {
+        if recommended_data_clock_hz < SDIO_STARTUP_CLOCK_HZ {
+            recommended_data_clock_hz
+        } else {
+            SDIO_STARTUP_CLOCK_HZ
+        }
+    } else {
+        control_plane_data_clock_target_hz(recommended_data_clock_hz)
+    }
 }
 
 #[inline]
@@ -2164,10 +2171,10 @@ mod tests {
     }
 
     #[test]
-    fn initial_control_plane_data_clock_prefers_data_link_even_for_bounded_no_ht() {
+    fn initial_control_plane_data_clock_holds_startup_link_for_bounded_no_ht() {
         assert_eq!(
             initial_control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ, true),
-            SDIO_DATA_CLOCK_HZ
+            SDIO_STARTUP_CLOCK_HZ
         );
         assert_eq!(
             initial_control_plane_data_clock_target_hz(400_000, true),

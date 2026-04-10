@@ -236,10 +236,10 @@ const fn use_live_post_reset_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The weaker stop-state snapshot now skips the first live HCRST/CONFIG
-    // edge again, but it still keeps post-reset ring seed reads suppressed.
-    // Use zero/snapshot seeds there instead of touching live runtime ring
-    // registers before ownership has been rebuilt.
+    // The weaker stop-state snapshot now replays the U-Boot-style reset/config
+    // sequence again, but it still keeps post-reset ring seed reads
+    // suppressed. Use zero/snapshot seeds there instead of touching live
+    // runtime ring registers before ownership has been rebuilt.
     use_live_post_reset_seed_reads(firmware_handoff)
         && !runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
@@ -296,7 +296,6 @@ const fn skip_config_write_during_init_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_config_write_during_init(firmware_handoff)
 }
@@ -316,13 +315,13 @@ const fn skip_reset_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Any trusted stop-state snapshot is now treated as authoritative enough
-    // to skip the first live HCRST/CONFIG edge on the weak mailbox-reset path.
-    // Runtime still rebuilds ring ownership locally, but it no longer forces
-    // the toxic first live reset store before that runtime-owned publication
-    // ladder is in place.
+    // The stronger runtime-ring snapshot still skips HCRST, but the weaker
+    // stop-state-only path now needs the plain U-Boot-style reset sequence
+    // again. The April 10 Pi 4 traces reached DCBAAP publication and then
+    // wedged there, so the next step is to restore the proven reset/config
+    // ownership path rather than keep layering resetless runtime helpers onto
+    // a partial firmware handoff.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || skip_reset_during_init(firmware_handoff)
 }
@@ -454,9 +453,13 @@ const fn runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
-        && runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
-        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+    // Keep DCBAAP publication on the ordinary write path. The stop-state-only
+    // runtime handoff is no longer trying to protect a resetless edge, so the
+    // release-only helper just adds one more policy difference from U-Boot at
+    // exactly the point the latest Pi 4 trace wedged.
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    false
 }
 
 #[inline(always)]
@@ -3447,7 +3450,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_only_snapshot_skips_hcrst_config_and_uses_fresh_runtime_ring_publish() {
+    fn stop_state_only_snapshot_replays_uboot_reset_config_and_uses_plain_runtime_ring_publish() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -3490,11 +3493,11 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(skip_reset_during_init_with_snapshot(
+        assert!(!skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(skip_config_write_during_init_with_snapshot(
+        assert!(!skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -3689,12 +3692,10 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             stop_state_snapshot,
         ));
-        assert!(
-            runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
-                XhciFirmwareHandoff::ColdStartFromSnapshot,
-                stop_state_snapshot,
-            )
-        );
+        assert!(!runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            stop_state_snapshot,
+        ));
         assert!(runtime_handoff_needs_pre_run_settle(
             XhciFirmwareHandoff::None,
             stop_state_snapshot,

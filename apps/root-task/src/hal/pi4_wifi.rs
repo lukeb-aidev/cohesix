@@ -616,6 +616,11 @@ fn is_sdhci_io_path_error(err: &HalError) -> bool {
 }
 
 #[inline]
+fn control_plane_frame_transfer_error_needs_terminate(err: &HalError) -> bool {
+    is_sdhci_io_path_error(err) || is_sdhci_int_timeout(err)
+}
+
+#[inline]
 fn is_sdio_cmd52_access_error(err: &HalError) -> bool {
     matches!(
         err,
@@ -782,7 +787,12 @@ const fn firmware_channel_uses_linux_minimal_setup(experimental_no_ht_transport:
 
 #[inline]
 const fn firmware_channel_defers_function2_interrupts(experimental_no_ht_transport: bool) -> bool {
-    experimental_no_ht_transport
+    // Linux arms the dongle-side interrupt path as part of the initial F2
+    // channel setup. Keep that order even on the bounded no-HT path; the Pi 4
+    // host still polls, but the device-side routing should not stay deferred
+    // once watermark/devctl/mesbusy programming is live.
+    let _ = experimental_no_ht_transport;
+    false
 }
 
 #[inline]
@@ -2213,6 +2223,7 @@ const SDIO_OCR_3V2_3V4: u32 = 0x00FF_8000;
 const SDIO_CCCR_IOEX: u32 = 0x02;
 const SDIO_CCCR_IORX: u32 = 0x03;
 const SDIO_CCCR_IENX: u32 = 0x04;
+const SDIO_CCCR_ABORT: u32 = 0x06;
 const SDIO_CCCR_IF: u32 = 0x07;
 const SDIO_CCCR_BRCM_CARDCAP: u32 = 0xF0;
 const SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC: u8 = 0x08;
@@ -2246,8 +2257,11 @@ const SBSDIO_DEVCTL_F2WM_ENAB: u8 = 0x10;
 const SBSDIO_FUNC1_SBADDRLOW: u32 = 0x1000A;
 const SBSDIO_FUNC1_SBADDRMID: u32 = 0x1000B;
 const SBSDIO_FUNC1_SBADDRHIGH: u32 = 0x1000C;
+const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1000D;
 const SBSDIO_FUNC1_CHIPCLKCSR: u32 = 0x1000E;
 const SBSDIO_FUNC1_SDIOPULLUP: u32 = 0x1000F;
+const SBSDIO_FUNC1_WFRAMEBCLO: u32 = 0x10019;
+const SBSDIO_FUNC1_WFRAMEBCHI: u32 = 0x1001A;
 const SBSDIO_FUNC1_RFRAMEBCLO: u32 = 0x1001B;
 const SBSDIO_FUNC1_RFRAMEBCHI: u32 = 0x1001C;
 const SBSDIO_FUNC1_MESBUSYCTRL: u32 = 0x1001D;
@@ -2260,6 +2274,8 @@ const SBSDIO_FORCE_HT: u8 = 0x02;
 const SBSDIO_FORCE_HW_CLKREQ_OFF: u8 = 0x20;
 const SBSDIO_ALP_AVAIL: u8 = 0x40;
 const SBSDIO_HT_AVAIL: u8 = 0x80;
+const SFC_RF_TERM: u8 = 1 << 0;
+const SFC_WF_TERM: u8 = 1 << 1;
 const SBSDIO_CHIPCLKCSR_WRITABLE_MASK: u8 =
     SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_FORCE_HW_CLKREQ_OFF;
 const SBSDIO_WAKE_TILL_HT_AVAIL: u8 = 0x02;
@@ -2566,7 +2582,7 @@ const fn passive_startup_link_timeout_error(
 }
 
 #[inline]
-const fn strict_control_plane_reply_recovery_error(
+fn strict_control_plane_reply_recovery_error(
     ioex: Option<u8>,
     iorx: Option<u8>,
     ienx: Option<u8>,
@@ -2637,7 +2653,7 @@ fn cached_wifi_debug_snapshot() -> Option<WifiDebugSnapshot> {
 }
 
 #[inline]
-const fn should_use_cached_wifi_debug_snapshot(snapshot: &WifiDebugSnapshot) -> bool {
+fn should_use_cached_wifi_debug_snapshot(snapshot: &WifiDebugSnapshot) -> bool {
     !snapshot.card_ready && snapshot.control_plane_f2_state == "unproven"
 }
 
@@ -2867,6 +2883,31 @@ fn control_plane_snapshot_exact_error_label_with_sdhci_diag(
         }
         "f2-enable-latched-not-ready" if sdhci_read_diag == "f2-reply-read-data-crc" => {
             "cyw43-function2-enable-latched-not-ready-data-crc"
+        }
+        "f2-enable-latched-not-ready" if sdhci_read_diag == "f1-reply-read-command-timeout" => {
+            "cyw43-function2-enable-latched-not-ready-sideband-command-timeout"
+        }
+        "f2-enable-latched-not-ready" if sdhci_read_diag == "f1-reply-read-command-crc" => {
+            "cyw43-function2-enable-latched-not-ready-sideband-command-crc"
+        }
+        "f2-enable-latched-not-ready" if sdhci_read_diag == "f1-reply-read-command-end-bit" => {
+            "cyw43-function2-enable-latched-not-ready-sideband-command-end-bit"
+        }
+        "f2-enable-latched-not-ready" if sdhci_read_diag == "f1-reply-read-command-index" => {
+            "cyw43-function2-enable-latched-not-ready-sideband-command-index"
+        }
+        "f2-enable-latched-not-ready" if sdhci_read_diag == "f1-reply-read-command-error" => {
+            "cyw43-function2-enable-latched-not-ready-sideband-command-error"
+        }
+        "f2-enable-latched-not-ready"
+            if sdhci_read_diag == "f1-reply-read-command-phase-no-data-active" =>
+        {
+            "cyw43-function2-enable-latched-not-ready-sideband-command-stall"
+        }
+        "f2-enable-latched-not-ready"
+            if sdhci_read_diag == "f1-reply-read-stalled-no-buffer-ready" =>
+        {
+            "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
         }
         "sdio-core-hints-unreadable" if sdhci_read_diag == "f1-reply-read-command-timeout" => {
             "cyw43-control-plane-sideband-command-timeout"
@@ -3301,6 +3342,7 @@ impl Pi4WifiState {
         ));
         let was_enabled = wifi_gpio_line_enabled(self.power_state);
         self.power_state = state;
+        self.host.power_state = state;
         self.apply_wifi_line(was_enabled)
     }
 
@@ -3310,6 +3352,7 @@ impl Pi4WifiState {
             wifi_reset_state_name(state)
         ));
         self.reset_state = state;
+        self.host.reset_state = state;
         if matches!(state, WifiResetState::Deasserted) {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] reset state=deasserted action=logical-only settle=skipped"
@@ -4078,6 +4121,8 @@ struct SdioHost {
     current_clock_hz: u32,
     preferred_data_clock_hz: u32,
     desired_bus_width: SdioBusWidth,
+    power_state: WifiPowerState,
+    reset_state: WifiResetState,
     card: Option<CardInfo>,
     programmed_backplane_window: Option<u32>,
     last_backplane_window: Option<u32>,
@@ -4153,6 +4198,8 @@ impl SdioHost {
             current_clock_hz: 0,
             preferred_data_clock_hz: CYW43_FIRMWARE_BULK_CLOCK_HZ,
             desired_bus_width: SdioBusWidth::OneBit,
+            power_state: WifiPowerState::Off,
+            reset_state: WifiResetState::Asserted,
             card: None,
             programmed_backplane_window: None,
             last_backplane_window: None,
@@ -8952,13 +8999,23 @@ impl SdioHost {
     ) -> Result<(), HalError> {
         let request_len = control_plane_frame_request_len(frame_len);
         if request_len == frame_len {
-            self.io_extended(
+            let result = self.io_extended(
                 SdioFunction::Function2,
                 0,
                 control_plane_read_uses_incrementing_addr(),
                 false,
                 &mut out[..frame_len],
-            )
+            );
+            if let Err(err) = &result {
+                if control_plane_frame_transfer_error_needs_terminate(err) {
+                    self.recover_failed_function2_frame_transfer(
+                        "control-plane-read",
+                        false,
+                        "linux-rxfail",
+                    );
+                }
+            }
+            result
         } else {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=control-plane-read action=linux-f2-read-shape frame_len={} request_len={} padded=yes addr_mode=fixed",
@@ -8967,13 +9024,23 @@ impl SdioHost {
             ));
             let mut request = Vec::with_capacity(request_len);
             request.resize(request_len, 0);
-            self.io_extended(
+            let result = self.io_extended(
                 SdioFunction::Function2,
                 0,
                 control_plane_read_uses_incrementing_addr(),
                 false,
                 &mut request,
-            )?;
+            );
+            if let Err(err) = &result {
+                if control_plane_frame_transfer_error_needs_terminate(err) {
+                    self.recover_failed_function2_frame_transfer(
+                        "control-plane-read-padded",
+                        false,
+                        "linux-rxfail",
+                    );
+                }
+            }
+            result?;
             out[..frame_len].copy_from_slice(&request[..frame_len]);
             Ok(())
         }
@@ -8991,13 +9058,19 @@ impl SdioHost {
                 frame.len(),
                 request_len,
             ));
-            self.io_extended(
+            let result = self.io_extended(
                 SdioFunction::Function2,
                 0,
                 control_plane_write_uses_incrementing_addr(),
                 true,
                 frame,
-            )
+            );
+            if let Err(err) = &result {
+                if control_plane_frame_transfer_error_needs_terminate(err) {
+                    self.recover_failed_function2_frame_transfer(stage, true, "linux-txfail");
+                }
+            }
+            result
         } else {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage={stage} action=linux-f2-write-shape frame_len={} request_len={} padded=yes addr_mode=increment",
@@ -9007,14 +9080,102 @@ impl SdioHost {
             let mut request = Vec::with_capacity(request_len);
             request.resize(request_len, 0);
             request[..frame.len()].copy_from_slice(frame);
-            self.io_extended(
+            let result = self.io_extended(
                 SdioFunction::Function2,
                 0,
                 control_plane_write_uses_incrementing_addr(),
                 true,
                 &mut request,
-            )
+            );
+            if let Err(err) = &result {
+                if control_plane_frame_transfer_error_needs_terminate(err) {
+                    self.recover_failed_function2_frame_transfer(stage, true, "linux-txfail");
+                }
+            }
+            result
         }
+    }
+
+    fn recover_failed_function2_frame_transfer(
+        &mut self,
+        stage: &'static str,
+        write: bool,
+        policy: &'static str,
+    ) {
+        let framectrl = if write { SFC_WF_TERM } else { SFC_RF_TERM };
+        let framectrl_name = if write { "wf-term" } else { "rf-term" };
+        let (count_lo_reg, count_hi_reg) = if write {
+            (SBSDIO_FUNC1_WFRAMEBCLO, SBSDIO_FUNC1_WFRAMEBCHI)
+        } else {
+            (SBSDIO_FUNC1_RFRAMEBCLO, SBSDIO_FUNC1_RFRAMEBCHI)
+        };
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=function2-frame-recover begin op={} policy={} current={}Hz width={} no_ht={}",
+            if write { "write" } else { "read" },
+            policy,
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.experimental_no_ht_transport,
+        ));
+        match self.io_direct_write(
+            SdioFunction::Function0,
+            SDIO_CCCR_ABORT,
+            SdioFunction::Function2.number(),
+        ) {
+            Ok(()) => emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=function2-frame-recover abort-f2 status=ok"
+            )),
+            Err(err) => emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=function2-frame-recover abort-f2 status=err err={err}"
+            )),
+        }
+        match self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_FRAMECTRL, framectrl) {
+            Ok(()) => emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=function2-frame-recover {} status=ok",
+                framectrl_name,
+            )),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=function2-frame-recover {} status=err err={err}",
+                    framectrl_name,
+                ));
+                self.log_transport_shadow(stage);
+                return;
+            }
+        }
+
+        let mut last_count = u16::MAX;
+        for poll in 0..=15usize {
+            let lo = self
+                .io_direct_read(SdioFunction::Function1, count_lo_reg)
+                .unwrap_or(0xFF);
+            let hi = self
+                .io_direct_read(SdioFunction::Function1, count_hi_reg)
+                .unwrap_or(0xFF);
+            let count = u16::from(lo) | (u16::from(hi) << 8);
+            if poll == 0 || count == 0 || count != last_count || poll == 15 {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=function2-frame-recover count poll={}/16 count=0x{count:04x}",
+                    poll + 1,
+                ));
+            }
+            if count == 0 {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=function2-frame-recover drained=yes"
+                ));
+                self.log_transport_shadow(stage);
+                return;
+            }
+            last_count = count;
+            for _ in 0..SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE {
+                spin_loop();
+            }
+            wifi_progress_advance_loops(SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE);
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=function2-frame-recover drained=no final_count=0x{last_count:04x}"
+        ));
+        self.log_transport_shadow(stage);
     }
 
     fn read_frame(&mut self, out: &mut [u8]) -> Result<usize, HalError> {
@@ -11974,9 +12135,25 @@ mod tests {
     }
 
     #[test]
-    fn firmware_channel_linux_minimal_setup_defers_function2_interrupt_arm() {
-        assert!(firmware_channel_defers_function2_interrupts(true));
+    fn firmware_channel_linux_minimal_setup_arms_function2_interrupts_even_in_no_ht_mode() {
+        assert!(!firmware_channel_defers_function2_interrupts(true));
         assert!(!firmware_channel_defers_function2_interrupts(false));
+    }
+
+    #[test]
+    fn control_plane_frame_transfer_errors_trigger_linux_style_termination() {
+        assert!(control_plane_frame_transfer_error_needs_terminate(
+            &HalError::Unsupported("sdhci-transfer-data")
+        ));
+        assert!(control_plane_frame_transfer_error_needs_terminate(
+            &HalError::Unsupported("sdhci-transfer-command")
+        ));
+        assert!(control_plane_frame_transfer_error_needs_terminate(
+            &HalError::Unsupported("sdhci-int-timeout")
+        ));
+        assert!(!control_plane_frame_transfer_error_needs_terminate(
+            &HalError::Unsupported("sdio-function2-ready-timeout")
+        ));
     }
 
     #[test]
@@ -12677,6 +12854,19 @@ mod tests {
                 "f2-reply-read-command-phase-no-data-active",
             ),
             Some("cyw43-function2-enable-latched-not-ready-command-stall")
+        );
+        assert_eq!(
+            strict_control_plane_reply_recovery_error(
+                ioex,
+                iorx,
+                ienx,
+                Some(0),
+                watermark,
+                devctl,
+                mesbusy,
+                "f1-reply-read-command-timeout",
+            ),
+            Some("cyw43-function2-enable-latched-not-ready-sideband-command-timeout")
         );
     }
 
