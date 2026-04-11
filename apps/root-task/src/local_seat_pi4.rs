@@ -6167,11 +6167,11 @@ impl UsbKeyboard {
                 );
                 let seed_flags =
                     xhci_runtime_seed_snapshot_flag_bits(controller_params.runtime_seed_snapshot);
-                let mut params_line = heapless::String::<352>::new();
+                let mut params_line = heapless::String::<384>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut params_line,
                     format_args!(
-                        "[local-seat] xhci probe params attempt={}/{} policy={} origin={} mode={} halt_guard={} seed_flags=0x{seed_flags:02x} snapshot={} stop_seed={} ring_seed={}",
+                        "[local-seat] xhci probe params attempt={}/{} policy={} origin={} mode={} halt_guard={} seed_flags=0x{seed_flags:02x} snapshot={} stop_seed={} ring_seed={} axi_setup={}",
                         strategy_idx + 1,
                         init_strategy_count,
                         xhci_runtime_init_strategy_policy_label(strategy),
@@ -6181,6 +6181,7 @@ impl UsbKeyboard {
                         (seed_flags & 0x01) != 0,
                         (seed_flags & 0x02) != 0,
                         (seed_flags & 0x04) != 0,
+                        controller_params.apply_brcm_axi_setup,
                     ),
                 );
                 boot_log::force_uart_line(params_line.as_str());
@@ -6223,11 +6224,11 @@ impl UsbKeyboard {
                             pcie_dma_window,
                             poll_only,
                         );
-                        let mut probe_line = heapless::String::<320>::new();
+                        let mut probe_line = heapless::String::<352>::new();
                         let _ = core::fmt::Write::write_fmt(
                             &mut probe_line,
                             format_args!(
-                                "[local-seat] xhci probe begin mmio=0x{mmio:016x} attempt={}/{} policy={} origin={} dma={} bus={} handoff={} seed={} poll_only={}",
+                                "[local-seat] xhci probe begin mmio=0x{mmio:016x} attempt={}/{} policy={} origin={} dma={} bus={} handoff={} seed={} poll_only={} axi_setup={}",
                                 strategy_idx + 1,
                                 init_strategy_count,
                                 policy_label,
@@ -6241,6 +6242,7 @@ impl UsbKeyboard {
                                 xhci_irq_policy_reason(strategy.firmware_handoff),
                                 seed_label,
                                 if poll_only { "yes" } else { "no" },
+                                controller_params.apply_brcm_axi_setup,
                                 mmio = effective_mmio
                             ),
                         );

@@ -1470,6 +1470,7 @@ impl<H: Dma> XhciCtrl<H> {
             return;
         }
 
+        emit_xhci_diag(0x0111, mmio as u64, BRCM_XHCI_AXIWRA as u64, 0);
         let axiwr_before = Self::read_reg_at::<u32>(mmio, BRCM_XHCI_AXIWRA);
         let axiwr_after = compose_brcm_usbaxi_attr(axiwr_before);
         emit_xhci_diag(
@@ -1487,6 +1488,7 @@ impl<H: Dma> XhciCtrl<H> {
             axiwr_after as u64,
         );
 
+        emit_xhci_diag(0x0116, mmio as u64, BRCM_XHCI_AXIRDA as u64, 0);
         let axird_before = Self::read_reg_at::<u32>(mmio, BRCM_XHCI_AXIRDA);
         let axird_after = compose_brcm_usbaxi_attr(axird_before);
         emit_xhci_diag(
