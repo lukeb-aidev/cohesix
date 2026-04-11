@@ -2247,7 +2247,15 @@ where
             let _ = write!(line, " {action_detail}");
         }
         self.emit_console_line(line.as_str());
-        if let Some(diag) = crate::local_seat_pi4::latest_xhci_diag_status() {
+        let diag = crate::local_seat_pi4::latest_xhci_diag_status();
+        let (verdict, focus) = Self::usb_capture_verdict(
+            backend_attached,
+            polling_enabled,
+            diag.as_ref().and_then(|status| status.exact_issue),
+        );
+        let verdict_line = format_message(format_args!("usb: verdict={verdict} focus={focus}"));
+        self.emit_console_line(verdict_line.as_str());
+        if let Some(diag) = diag {
             let mut diag_line =
                 format_message(format_args!("usb: xhci stage=0x{:04x}", diag.stage));
             if let Some(tag) = diag.tag {
@@ -2257,6 +2265,47 @@ where
                 let _ = write!(diag_line, " exact={exact_issue}");
             }
             self.emit_console_line(diag_line.as_str());
+            let mut values_line = format_message(format_args!("usb: xhci values"));
+            if let Some((a_label, b_label, c_label)) = diag.value_labels {
+                let _ = write!(
+                    values_line,
+                    " {a_label}=0x{:016x} {b_label}=0x{:016x} {c_label}=0x{:016x}",
+                    diag.a, diag.b, diag.c
+                );
+            } else {
+                let _ = write!(
+                    values_line,
+                    " a=0x{:016x} b=0x{:016x} c=0x{:016x}",
+                    diag.a, diag.b, diag.c
+                );
+            }
+            self.emit_console_line(values_line.as_str());
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn usb_capture_verdict(
+        backend_attached: bool,
+        polling_enabled: bool,
+        exact_issue: Option<&'static str>,
+    ) -> (&'static str, &'static str) {
+        match exact_issue {
+            Some("live-usbsts-read-before-run")
+            | Some("live-usbcmd-read-before-run")
+            | Some("halt-revalidation-timeout") => ("pre-run-halt-revalidation", "halt-before-run"),
+            Some(issue) if issue.starts_with("pre-run-") => {
+                ("pre-run-ownership-edge", "publish-before-run")
+            }
+            Some(issue) if issue.starts_with("post-run-") => {
+                ("post-run-ownership-edge", "publish-after-run")
+            }
+            Some("usbcmd-run-barrier-wedged") | Some("usbcmd-run-store-wedged") => {
+                ("run-transition-edge", "usbcmd-run")
+            }
+            Some(_) => ("xhci-diagnostic-edge", "controller-transition"),
+            None if !backend_attached => ("backend-not-attached", "probe-controller"),
+            None if polling_enabled => ("probe-in-progress", "poll-keyboard"),
+            None => ("no-controller-edge-yet", "probe-keyboard"),
         }
     }
 
@@ -2382,6 +2431,42 @@ where
             snapshot.control_plane_sdhci_read_diag,
         ));
         self.emit_console_line(control.as_str());
+
+        let (verdict, focus) = Self::wifi_capture_verdict(snapshot);
+        let verdict_line = format_message(format_args!(
+            "wifi: verdict={verdict} focus={focus} bootstrap={}",
+            snapshot.control_plane_bootstrap_phase,
+        ));
+        self.emit_console_line(verdict_line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_capture_verdict(snapshot: &WifiDebugSnapshot) -> (&'static str, &'static str) {
+        if !snapshot.card_ready {
+            return ("sdio-card-edge", "card-select");
+        }
+        match snapshot.control_plane_exact_error {
+            "cyw43-function2-disabled"
+            | "cyw43-function2-enable-latched-not-ready"
+            | "cyw43-function2-ready-hidden-from-cccr"
+            | "cyw43-function2-ready-unreadable" => ("function2-ready-edge", "function2-ready"),
+            "cyw43-function2-interrupt-gated"
+            | "cyw43-function2-interrupt-unreadable"
+            | "cyw43-control-plane-linux-interrupts-deferred" => {
+                ("interrupt-programming-edge", "function2-interrupts")
+            }
+            "cyw43-control-plane-sideband-command-stall"
+            | "cyw43-control-plane-sideband-unreadable" => {
+                ("function1-sideband-edge", "function1-sideband")
+            }
+            "cyw43-control-plane-passive-startup-link-timeout"
+            | "cyw43-control-plane-startup-link-rescue-budget-exhausted"
+            | "cyw43-control-plane-pure-f2-startup-link-no-reply"
+            | "cyw43-control-plane-state-visible-no-reply" => {
+                ("function2-reply-edge", "first-function2-reply")
+            }
+            _ => ("transport-edge", "control-plane-bootstrap"),
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -5597,6 +5682,12 @@ mod tests {
         );
         assert!(
             rendered.contains(
+                "wifi: verdict=function1-sideband-edge focus=function1-sideband bootstrap=first-write-startup-link"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
                 "wifi: debug subcommand=dump-state action=complete profile=bounded mode=one-shot result=ok"
             ),
             "{rendered}"
@@ -5640,6 +5731,10 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
             rendered.contains("usb: local-seat attached=no polling=enabled"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: verdict=backend-not-attached focus=probe-controller"),
             "{rendered}"
         );
         assert!(
@@ -5690,10 +5785,77 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered.contains("usb: verdict=backend-not-attached focus=probe-controller"),
+            "{rendered}"
+        );
+        assert!(
             rendered.contains("OK USB detail=subcommand=probe-kbd"),
             "{rendered}"
         );
         assert!(!local_seat.backend_keyboard_polling_enabled());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_capture_verdict_classifies_first_reply_edge() {
+        let snapshot = WifiDebugSnapshot {
+            power_state: WifiPowerState::On,
+            reset_state: WifiResetState::Deasserted,
+            current_clock_hz: 400_000,
+            preferred_data_clock_hz: 12_500_000,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0xb0ff_ff00,
+            io_enable: Some(0x06),
+            io_ready: Some(0x02),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: Some("control-plane-reply-prefix-read"),
+            control_plane_frame_recovery_policy: Some("linux-rxfail"),
+            control_plane_frame_recovery_write: Some(false),
+            control_plane_frame_recovery_drained: Some(false),
+            control_plane_frame_recovery_count: Some(0x40),
+            control_plane_bootstrap_phase: "first-write-startup-link",
+            control_plane_reply_mode: "startup-link",
+            control_plane_reply_attempts: 1,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "promoted-io-unstable",
+            control_plane_promoted_probe_pending: false,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f2-reply-read-data-wait",
+            control_plane_exact_error: "cyw43-control-plane-pure-f2-startup-link-no-reply",
+        };
+        assert_eq!(
+            EventPump::<
+                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
+                TestTimer,
+                NullIpc,
+            >::wifi_capture_verdict(&snapshot),
+            ("function2-reply-edge", "first-function2-reply")
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_capture_verdict_classifies_run_transition_edge() {
+        assert_eq!(
+            EventPump::<
+                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
+                TestTimer,
+                NullIpc,
+            >::usb_capture_verdict(true, true, Some("usbcmd-run-store-wedged")),
+            ("run-transition-edge", "usbcmd-run")
+        );
     }
 
     #[cfg(feature = "kernel")]

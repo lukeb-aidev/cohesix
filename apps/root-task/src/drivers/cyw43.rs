@@ -577,7 +577,7 @@ const fn startup_transport_recovery_should_reset_experimental_state(
 fn prepare_initial_control_plane_transport(
     state: &mut Pi4WifiState,
 ) -> Result<(u32, SdioBusWidth), DriverError> {
-    info!("[cyw43] step: set_clock(data)");
+    info!("[cyw43] step: set_clock(control-plane-bootstrap)");
     let recommended_data_clock_hz = state.recommended_data_clock_hz();
     let experimental_no_ht_transport = state.cyw43_experimental_no_ht_transport();
     let data_clock_target_hz = initial_control_plane_data_clock_target_hz(
@@ -2118,17 +2118,12 @@ const fn initial_control_plane_data_clock_target_hz(
     recommended_data_clock_hz: u32,
     experimental_no_ht_transport: bool,
 ) -> u32 {
-    // The April 10, 2026 Pi 4 trace now shows the first promoted-link control
-    // write failing immediately, while the fallback write on the startup link
-    // gets far enough to prove the remaining bug is in reply-side readiness.
-    // Keep bounded no-HT bootstrap on the startup link until the first control
-    // reply is real, then let the existing promotion path raise the clock.
     if experimental_no_ht_transport {
-        if recommended_data_clock_hz < SDIO_STARTUP_CLOCK_HZ {
-            recommended_data_clock_hz
-        } else {
-            SDIO_STARTUP_CLOCK_HZ
-        }
+        // Linux keeps the first Function 2 control exchange on the startup
+        // link, then promotes after the device answers. Keep that smaller
+        // bootstrap shape here instead of starting at data clock and falling
+        // back later.
+        SDIO_STARTUP_CLOCK_HZ
     } else {
         control_plane_data_clock_target_hz(recommended_data_clock_hz)
     }
@@ -2140,11 +2135,8 @@ const fn initial_control_plane_bootstrap_policy_label(
     effective_clock_hz: u32,
 ) -> &'static str {
     if experimental_no_ht_transport {
-        if effective_clock_hz <= SDIO_STARTUP_CLOCK_HZ {
-            "startup-link-until-first-reply"
-        } else {
-            "bounded-no-ht-promoted-first"
-        }
+        let _ = effective_clock_hz;
+        "startup-link-until-first-reply"
     } else {
         "strict-data-link"
     }
@@ -2295,7 +2287,7 @@ mod tests {
         );
         assert_eq!(
             initial_control_plane_data_clock_target_hz(400_000, true),
-            400_000
+            SDIO_STARTUP_CLOCK_HZ
         );
         assert_eq!(
             initial_control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ, false),
@@ -2311,7 +2303,7 @@ mod tests {
         );
         assert_eq!(
             initial_control_plane_bootstrap_policy_label(true, SDIO_DATA_CLOCK_HZ),
-            "bounded-no-ht-promoted-first"
+            "startup-link-until-first-reply"
         );
         assert_eq!(
             initial_control_plane_bootstrap_policy_label(false, SDIO_DATA_CLOCK_HZ),

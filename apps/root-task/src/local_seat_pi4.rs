@@ -553,6 +553,10 @@ pub(crate) struct UsbXhciDiagStatus {
     pub stage: u16,
     pub tag: Option<&'static str>,
     pub exact_issue: Option<&'static str>,
+    pub a: u64,
+    pub b: u64,
+    pub c: u64,
+    pub value_labels: Option<(&'static str, &'static str, &'static str)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -2045,6 +2049,10 @@ pub(crate) fn latest_xhci_diag_status() -> Option<UsbXhciDiagStatus> {
         stage: snapshot.stage,
         tag: xhci_diag_stage_label(snapshot.stage),
         exact_issue: xhci_diag_stage_exact_issue_label(snapshot.stage),
+        a: snapshot.a,
+        b: snapshot.b,
+        c: snapshot.c,
+        value_labels: xhci_diag_stage_value_labels(snapshot.stage),
     })
 }
 
@@ -2199,8 +2207,11 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x0213 => Some("live-usbsts-read-before-run"),
         0x0215 => Some("live-usbcmd-read-before-run"),
         0x0222 => Some("halt-revalidation-timeout"),
-        0x0248 | 0x029e | 0x02a5 => Some("pre-run-dcbaap-low-store-wedged"),
-        0x0249 | 0x02a7 | 0x02f6 => Some("pre-run-dcbaap-high-store-wedged"),
+        0x0238 => Some("pre-run-config-store-wedged"),
+        0x0248 | 0x029e => Some("pre-run-dcbaap-low-store-wedged"),
+        0x02a5 => Some("post-run-dcbaap-low-store-wedged"),
+        0x0249 | 0x02f6 => Some("pre-run-dcbaap-high-store-wedged"),
+        0x02a7 => Some("post-run-dcbaap-high-store-wedged"),
         0x0254 | 0x02b0 => Some("pre-run-crcr-low-store-wedged"),
         0x0255 | 0x02b2 => Some("pre-run-crcr-high-store-wedged"),
         0x0277 | 0x02bb => Some("pre-run-erdp-low-store-wedged"),
@@ -11746,12 +11757,24 @@ mod tests {
             Some("pre-run-dcbaap-low-store-wedged")
         );
         assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0238),
+            Some("pre-run-config-store-wedged")
+        );
+        assert_eq!(
             super::xhci_diag_stage_exact_issue_label(0x029e),
             Some("pre-run-dcbaap-low-store-wedged")
         );
         assert_eq!(
             super::xhci_diag_stage_exact_issue_label(0x0249),
             Some("pre-run-dcbaap-high-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x02a5),
+            Some("post-run-dcbaap-low-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x02a7),
+            Some("post-run-dcbaap-high-store-wedged")
         );
         assert_eq!(
             super::xhci_diag_stage_exact_issue_label(0x02f6),
