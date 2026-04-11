@@ -2438,7 +2438,7 @@ mod tests {
     }
 
     #[test]
-    fn control_plane_bootstrap_replay_retry_only_triggers_for_pure_f2_reply_failures() {
+    fn control_plane_bootstrap_replay_retry_only_triggers_for_bootstrap_failures() {
         assert!(control_plane_bootstrap_needs_full_replay_retry(
             &DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-pure-f2-startup-link-no-reply"

@@ -2794,17 +2794,13 @@ fn xhci_runtime_init_strategies(
     }
 
     if runtime_vl805_reset_state == VL805_RUNTIME_RESET_STATE_NOTIFIED {
-        // The April 10, 2026 Pi 4 traces now show the unseeded U-Boot-shaped
-        // path stalling on the first live USBSTS read before RUN. Keep that
-        // path available, but spend the first runtime probe on the stronger
-        // stop-state-seeded cold start so prompt-safe keyboard bring-up avoids
-        // that toxic first MMIO edge when firmware already proved the stop
-        // state.
-        xhci_runtime_init_strategy_push(
-            &mut strategies,
-            &mut count,
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
-        );
+        if stop_state_seed_available {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+            );
+        }
         xhci_runtime_init_strategy_push(
             &mut strategies,
             &mut count,
@@ -2821,39 +2817,13 @@ fn xhci_runtime_init_strategies(
         runtime_vl805_reset_state,
         VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
     ) {
-        // The weaker bounded reset outcomes still leave us inside the trusted
-        // bootloader handoff contract, but the latest Pi 4 logs now reach the
-        // seeded cold-start HCRST edge itself. After giving that stronger path
-        // the first shot, avoid immediately spending the second probe on
-        // another reset-bearing fresh-init branch; try the seeded resetless
-        // path next, then fall back to the unseeded cold start last.
         if stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
             );
-            xhci_runtime_init_strategy_push(
-                &mut strategies,
-                &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
-            );
-            xhci_runtime_init_strategy_push(
-                &mut strategies,
-                &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
-            );
-        } else {
-            xhci_runtime_init_strategy_push(
-                &mut strategies,
-                &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
-            );
         }
-    } else {
-        // On all other runtime paths, prefer to probe the fully unseeded
-        // U-Boot-style cold-start first and only revisit seeded variants if
-        // that stronger path still misses.
         xhci_runtime_init_strategy_push(
             &mut strategies,
             &mut count,
@@ -2863,8 +2833,23 @@ fn xhci_runtime_init_strategies(
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
+            );
+        }
+    } else {
+        if stop_state_seed_available {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
             );
+        }
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        );
+        if stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
@@ -10976,7 +10961,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_prioritize_seeded_cold_start_after_confirmed_reset() {
+    fn xhci_runtime_init_strategies_prefer_seeded_cold_start_after_confirmed_reset() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_NOTIFIED,
@@ -11002,7 +10987,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_prioritize_seeded_cold_start_for_weak_runtime_reset_outcomes() {
+    fn xhci_runtime_init_strategies_prefer_seeded_cold_start_for_weak_runtime_reset_outcomes() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
@@ -11019,11 +11004,11 @@ mod tests {
         );
         assert_eq!(
             strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
         );
         assert_eq!(
             strategies[2],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
         );
     }
 

@@ -760,9 +760,8 @@ const fn wait_for_firmware_ready_restore_clock_hz(
     allow_function2_ready_bypass: bool,
     current_clock_hz: u32,
 ) -> Option<u32> {
-    if allow_function2_ready_bypass {
-        None
-    } else if current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
+    let _ = allow_function2_ready_bypass;
+    if current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
         Some(current_clock_hz)
     } else {
         None
@@ -3192,13 +3191,14 @@ const fn sdio_function_ready_uses_control_plane_reply_probe_budget(
 
 #[inline]
 const fn sdio_function_ready_uses_force_reenable_budget(
-    _step: SdioFunctionEnableStep,
-    _budget: SdioFunctionReadyBudget,
+    step: SdioFunctionEnableStep,
+    budget: SdioFunctionReadyBudget,
 ) -> bool {
-    // Linux's CYW43 path does not clear/re-enable Function 2 once IOEX is
-    // latched. Pi 4 reply recovery is more stable when we preserve that
-    // enable latch and only re-prime channel programming around it.
-    false
+    matches!(step.function, SdioFunction::Function2)
+        && matches!(
+            budget,
+            SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
+        )
 }
 
 #[inline]
@@ -6359,6 +6359,20 @@ impl SdioHost {
             return Ok(None);
         }
 
+        if self.control_plane_uses_low_touch_pure_f2_diagnostics() {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=control-plane-reply action=diagnostic-skip trigger={trigger} mode={} attempt={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={} diagnosis=bounded-pure-f2-fail-fast",
+                control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                attempt,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.control_plane_reply_chunk_limit(),
+                self.experimental_no_ht_transport,
+            ));
+            self.log_transport_shadow("control-plane-reply-diagnostic-skip");
+            return Ok(None);
+        }
+
         for probe_len in [CYW43_SDPCM_HEADER_LEN, 16usize, 32usize] {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=control-plane-reply action=diagnostic-prefix-read trigger={trigger} mode={} attempt={} len={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={}",
@@ -9284,7 +9298,7 @@ impl SdioHost {
         }
 
         if !setup_firmware_channel_uses_experimental_order(allow_function2_ready_bypass) {
-            return self.write_f1_u32(offset, value);
+            return self.write_sdio_core_u32_via_f1_bytes(offset, value);
         }
 
         emit_breadcrumb(format_args!(
@@ -14607,7 +14621,7 @@ mod tests {
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyBypass,
         ));
-        assert!(!sdio_function_ready_uses_force_reenable_budget(
+        assert!(sdio_function_ready_uses_force_reenable_budget(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
         ));
@@ -14786,7 +14800,7 @@ mod tests {
             enabled,
             SDIO_FUNC_READY_1,
         ));
-        assert!(!sdio_function_ready_should_force_reenable(
+        assert!(sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
             enabled,
@@ -14811,7 +14825,7 @@ mod tests {
                 SDIO_FUNCTION_ENABLE_F2,
                 SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
             ),
-            0
+            SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE
         );
         assert!(!sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
@@ -15676,10 +15690,10 @@ mod tests {
     }
 
     #[test]
-    fn wait_for_firmware_ready_stays_on_startup_clock_only_for_bounded_no_ht_fast_path() {
+    fn wait_for_firmware_ready_restores_promoted_clock_after_startup_mailbox_poll() {
         assert_eq!(
             wait_for_firmware_ready_restore_clock_hz(true, CYW43_CONTROL_PLANE_CLOCK_HZ),
-            None
+            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
         );
         assert_eq!(
             wait_for_firmware_ready_restore_clock_hz(true, CYW43_STARTUP_CLOCK_HZ),
@@ -15687,7 +15701,7 @@ mod tests {
         );
         assert_eq!(
             wait_for_firmware_ready_restore_clock_hz(false, CYW43_CONTROL_PLANE_CLOCK_HZ),
-            None
+            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
         );
     }
 
