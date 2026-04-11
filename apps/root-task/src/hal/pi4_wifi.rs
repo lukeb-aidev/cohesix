@@ -3271,6 +3271,19 @@ const fn sdio_function_ready_budget_name(budget: SdioFunctionReadyBudget) -> &'s
 }
 
 #[inline]
+const fn sdio_function_ready_budget_preserves_latched_function2_enable(
+    budget: SdioFunctionReadyBudget,
+) -> bool {
+    matches!(
+        budget,
+        SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
+            | SdioFunctionReadyBudget::ControlPlaneReplyProbe
+            | SdioFunctionReadyBudget::ControlPlaneReplyBypass
+            | SdioFunctionReadyBudget::ExperimentalBypass
+    )
+}
+
+#[inline]
 const fn sdio_function_ready_timeout_can_continue_experimentally(
     step: SdioFunctionEnableStep,
     desired: u8,
@@ -4505,6 +4518,72 @@ impl SdioHost {
             self.experimental_control_plane_startup_link_stabilized,
             self.current_clock_hz,
         )
+    }
+
+    fn should_preserve_function2_enable_latch_for_channel_rearm(
+        &mut self,
+        stage: &'static str,
+        function2_ready_budget: SdioFunctionReadyBudget,
+    ) -> bool {
+        if !self.experimental_no_ht_transport
+            || !sdio_function_ready_budget_preserves_latched_function2_enable(
+                function2_ready_budget,
+            )
+        {
+            return false;
+        }
+
+        let ioex = self
+            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
+            .ok();
+        let iorx = self
+            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
+            .ok();
+        let ienx = self
+            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
+            .ok();
+        let watermark = self
+            .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
+            .ok();
+        let devctl = self
+            .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
+            .ok();
+        let mesbusy = self
+            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
+            .ok();
+        let preserve = control_plane_function2_latched_linux_configured_without_iorx(
+            ioex, iorx, ienx, watermark, devctl, mesbusy,
+        );
+        if preserve {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=preserve-function2-enable-latch budget={} ioex=0x{ioex:02x}/{} iorx=0x{iorx:02x}/{} ienx=0x{ienx:02x}/{} watermark=0x{watermark:02x}/{} devctl=0x{devctl:02x}/{} mesbusy=0x{mesbusy:02x}/{} f2_state={} current_clock={}Hz width={} no_ht={}",
+                sdio_function_ready_budget_name(function2_ready_budget),
+                yn(ioex.is_some()),
+                yn(iorx.is_some()),
+                yn(ienx.is_some()),
+                yn(watermark.is_some()),
+                yn(devctl.is_some()),
+                yn(mesbusy.is_some()),
+                control_plane_function2_linux_state_label(
+                    ioex,
+                    iorx,
+                    ienx,
+                    watermark,
+                    devctl,
+                    mesbusy,
+                ),
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.experimental_no_ht_transport,
+                ioex = ioex.unwrap_or(0),
+                iorx = iorx.unwrap_or(0),
+                ienx = ienx.unwrap_or(0),
+                watermark = watermark.unwrap_or(0),
+                devctl = devctl.unwrap_or(0),
+                mesbusy = mesbusy.unwrap_or(0),
+            ));
+        }
+        preserve
     }
 
     fn mark_control_plane_hint_reads_unstable(
@@ -6459,6 +6538,11 @@ impl SdioHost {
                 self.experimental_no_ht_transport,
             ));
         }
+        let preserve_function2_enable_latch = self
+            .should_preserve_function2_enable_latch_for_channel_rearm(
+                "slow-link-channel-rearm-preserve-f2",
+                function2_ready_budget,
+            );
         let write_result = (|| {
             self.write_sdio_core_u32_for_firmware_channel(
                 "slow-link-channel-rearm-mailbox-version",
@@ -6466,7 +6550,18 @@ impl SdioHost {
                 SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT,
                 allow_setup_write_bypass,
             )?;
-            self.enable_function2(function2_ready_budget)?;
+            if preserve_function2_enable_latch {
+                self.prime_function2_block_size_for_ready(function2_ready_budget)?;
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=slow-link-channel-rearm action=skip-function2-ready-repoll budget={} current_clock={}Hz width={} no_ht={} reason=linux-f2-latched-configured-no-iorx",
+                    sdio_function_ready_budget_name(function2_ready_budget),
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.experimental_no_ht_transport,
+                ));
+            } else {
+                self.enable_function2(function2_ready_budget)?;
+            }
             self.write_sdio_core_u32_for_firmware_channel(
                 "slow-link-channel-rearm-hostintmask",
                 SDPCMD_REG_HOSTINTMASK,
@@ -6500,14 +6595,19 @@ impl SdioHost {
                 )?;
             }
             if linux_minimal_setup {
+                let function2_order = if preserve_function2_enable_latch {
+                    "f2-preserved"
+                } else {
+                    "f2"
+                };
                 if defer_interrupts {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=linux-sdio-minimal-strict-order order=mailbox>f2>hostintmask>watermark>devctl>mesbusy budget={} interrupts=deferred",
+                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=linux-sdio-minimal-strict-order order=mailbox>{function2_order}>hostintmask>watermark>devctl>mesbusy budget={} interrupts=deferred",
                         sdio_function_ready_budget_name(function2_ready_budget),
                     ));
                 } else {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=linux-sdio-minimal-strict-order order=mailbox>f2>hostintmask>watermark>devctl>mesbusy>interrupts hostintmask=0x{hostintmask:08x} fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x} budget={}",
+                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=linux-sdio-minimal-strict-order order=mailbox>{function2_order}>hostintmask>watermark>devctl>mesbusy>interrupts hostintmask=0x{hostintmask:08x} fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x} budget={}",
                         sdio_function_ready_budget_name(function2_ready_budget),
                         hostintmask = HOSTINTMASK,
                         fn_int_mask = FUNCTIONINTMASK,
@@ -9854,6 +9954,53 @@ impl SdioHost {
         ));
         self.wait_for_firmware_ready(allow_function2_ready_bypass)?;
         if allow_function2_ready_bypass {
+            let ioex = self
+                .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
+                .ok();
+            let iorx = self
+                .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
+                .ok();
+            let ienx = self
+                .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
+                .ok();
+            let watermark = self
+                .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
+                .ok();
+            let devctl = self
+                .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
+                .ok();
+            let mesbusy = self
+                .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
+                .ok();
+            let f2_state = control_plane_function2_linux_state_label(
+                ioex, iorx, ienx, watermark, devctl, mesbusy,
+            );
+            if post_firmware_ready_function2_strict_repoll_can_soft_continue(
+                ioex, iorx, ienx, watermark, devctl, mesbusy,
+            ) {
+                let skip_err = HalError::Unsupported("cyw43-function2-enable-latched-not-ready");
+                self.mark_control_plane_hint_reads_unstable(
+                    "post-firmware-ready-function2-strict-repoll-skip",
+                    "post-firmware-ready-function2-sideband",
+                    control_plane_reply_rearm_startup_link_resume(),
+                    0,
+                    &skip_err,
+                );
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll-skip reason=latched-linux-configured-no-iorx f2_state={f2_state} current_clock={}Hz width={} chunk_limit={} no_ht={} next=reply-probe",
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.control_plane_chunk_limit(),
+                    self.experimental_no_ht_transport,
+                ));
+                self.resume_control_plane_reply_probe_on_startup_link(
+                    "post-firmware-ready-function2-strict-repoll-skip",
+                );
+                self.log_control_plane_finish_snapshot(
+                    "post-firmware-ready-function2-strict-repoll-skip",
+                );
+                return Ok(());
+            }
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll"
             ));
@@ -12719,6 +12866,35 @@ mod tests {
                 Some(CY_43455_F2_WATERMARK),
                 Some(SBSDIO_DEVCTL_F2WM_ENAB),
                 Some(CY_43455_MESBUSYCTRL),
+            )
+        );
+    }
+
+    #[test]
+    fn function2_ready_budget_preserves_latched_enable_only_for_reply_recovery_paths() {
+        assert!(
+            !sdio_function_ready_budget_preserves_latched_function2_enable(
+                SdioFunctionReadyBudget::Strict
+            )
+        );
+        assert!(
+            sdio_function_ready_budget_preserves_latched_function2_enable(
+                SdioFunctionReadyBudget::ExperimentalBypass
+            )
+        );
+        assert!(
+            sdio_function_ready_budget_preserves_latched_function2_enable(
+                SdioFunctionReadyBudget::ControlPlaneReplyBypass
+            )
+        );
+        assert!(
+            sdio_function_ready_budget_preserves_latched_function2_enable(
+                SdioFunctionReadyBudget::ControlPlaneReplyProbe
+            )
+        );
+        assert!(
+            sdio_function_ready_budget_preserves_latched_function2_enable(
+                SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
             )
         );
     }

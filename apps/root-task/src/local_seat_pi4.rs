@@ -2660,6 +2660,13 @@ fn validate_xhci_capability_window(probe: &XhciCapProbe) -> Result<(), &'static 
 }
 
 #[inline]
+const fn xhci_controller_should_apply_brcm_axi_setup(
+    firmware_handoff: XhciFirmwareHandoff,
+) -> bool {
+    matches!(firmware_handoff, XhciFirmwareHandoff::None)
+}
+
+#[inline]
 fn xhci_controller_params_from_probe(
     probe: XhciCapProbe,
     firmware_handoff: XhciFirmwareHandoff,
@@ -2678,7 +2685,7 @@ fn xhci_controller_params_from_probe(
         rts_offset: probe.rts_offset,
         firmware_handoff,
         runtime_seed_snapshot,
-        apply_brcm_axi_setup: true,
+        apply_brcm_axi_setup: xhci_controller_should_apply_brcm_axi_setup(firmware_handoff),
     }
 }
 
@@ -2718,7 +2725,9 @@ fn xhci_controller_params_from_probe_with_strategy(
         rts_offset: probe.rts_offset,
         firmware_handoff: strategy.firmware_handoff,
         runtime_seed_snapshot,
-        apply_brcm_axi_setup: true,
+        apply_brcm_axi_setup: xhci_controller_should_apply_brcm_axi_setup(
+            strategy.firmware_handoff,
+        ),
     }
 }
 
@@ -11162,6 +11171,7 @@ mod tests {
         );
         assert_eq!(params.firmware_handoff, XhciFirmwareHandoff::None);
         assert!(params.runtime_seed_snapshot.is_none());
+        assert!(params.apply_brcm_axi_setup);
     }
 
     #[test]
@@ -11188,6 +11198,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         assert!(params.runtime_seed_snapshot.is_none());
+        assert!(!params.apply_brcm_axi_setup);
     }
 
     #[test]
@@ -11260,6 +11271,41 @@ mod tests {
         assert_eq!(snapshot.erstba0, None);
         assert_eq!(snapshot.erdp0, None);
         assert_eq!(snapshot.erstsz0, None);
+        assert!(!params.apply_brcm_axi_setup);
+    }
+
+    #[test]
+    fn xhci_controller_params_strategy_disables_axi_setup_for_trusted_handoffs() {
+        let probe = XhciCapProbe {
+            cap_length: 0x40,
+            hci_version: 0x0100,
+            hcs1: 32u32 | (8u32 << 24),
+            hcs2: 0,
+            hccparams1: 1 << 2,
+            db_offset: 0x1000,
+            rts_offset: 0x2000,
+            max_slots: 32,
+            max_ports: 8,
+            max_scratchpad: 0,
+            mmio_size: 0x10000,
+        };
+        let live = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
+            None,
+        );
+        assert!(live.apply_brcm_axi_setup);
+
+        let trusted = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+        );
+        assert!(!trusted.apply_brcm_axi_setup);
     }
 
     #[test]
