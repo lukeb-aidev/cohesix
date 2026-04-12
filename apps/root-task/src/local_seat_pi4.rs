@@ -1548,12 +1548,29 @@ fn xhci_runtime_vl805_mailbox_reset_required(
     xhci_handoff_ready: bool,
     xhci_irq_quiesced: bool,
 ) -> bool {
-    // The failing edge has moved past every trusted post-stop read and now
-    // lands on the first runtime xHCI MMIO store. That means the controller is
-    // still not in a state runtime can safely own directly from U-Boot's
-    // post-stop snapshot. Take the working U-Boot-style path instead: ask
-    // firmware to reset VL805 first, then cold-start xHCI from the trusted CAP
-    // snapshot without relying on live CAP reads.
+    let _ = (
+        mmio,
+        firmware_hint,
+        xhci_pci_cmd,
+        xhci_handoff_ready,
+        xhci_irq_quiesced,
+    );
+    // Match the working U-Boot flow on the trusted high-BAR handoff: once the
+    // bootloader has already exported a safe post-stop snapshot, runtime keeps
+    // that contract and rebuilds xHCI from the cached CAP snapshot directly.
+    // Runtime VL805 mailbox reset remains diagnostic-only.
+    false
+}
+
+#[inline]
+fn xhci_trusted_handoff_snapshot_allowed(
+    mmio: usize,
+    firmware_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    xhci_handoff_ready: bool,
+    xhci_irq_quiesced: bool,
+    _runtime_vl805_reset_allows_trusted_snapshot: bool,
+) -> bool {
     xhci_firmware_handoff_cold_start_trusted(
         mmio,
         firmware_hint,
@@ -1564,52 +1581,10 @@ fn xhci_runtime_vl805_mailbox_reset_required(
 }
 
 #[inline]
-fn xhci_trusted_handoff_snapshot_allowed(
-    mmio: usize,
-    firmware_hint: Option<usize>,
-    xhci_pci_cmd: Option<u16>,
-    xhci_handoff_ready: bool,
-    xhci_irq_quiesced: bool,
-    runtime_vl805_reset_allows_trusted_snapshot: bool,
-) -> bool {
-    // Runtime still prefers firmware-mediated VL805 reset when the handoff is
-    // trusted, but the field failure has shifted to the mailbox path itself.
-    // If runtime hit a bounded soft outcome (posted fallback or timeout-based
-    // cold-init continue), keep the trusted post-stop CAP snapshot alive and
-    // rebuild ownership through a fresh cold start instead of discarding the
-    // handoff entirely.
-    xhci_firmware_handoff_cold_start_trusted(
-        mmio,
-        firmware_hint,
-        xhci_pci_cmd,
-        xhci_handoff_ready,
-        xhci_irq_quiesced,
-    ) && (!xhci_runtime_vl805_mailbox_reset_required(
-        mmio,
-        firmware_hint,
-        xhci_pci_cmd,
-        xhci_handoff_ready,
-        xhci_irq_quiesced,
-    ) || runtime_vl805_reset_allows_trusted_snapshot)
-}
-
-#[inline]
-const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
-    // Confirmed runtime resets and the weaker bounded mailbox outcomes both
-    // benefit from leading with a cold-start-from-snapshot path. The latest
-    // Pi 4 traces show the preserve-state branch can still wedge on the live
-    // USBCMD.RUN store before runtime gets a chance to fall through to the
-    // next strategy, so keep preserve-state as a later diagnostic branch.
-    if matches!(
-        runtime_vl805_reset_state,
-        VL805_RUNTIME_RESET_STATE_NOTIFIED
-            | VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
-            | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
-    ) {
-        XhciFirmwareHandoff::ColdStartFromSnapshot
-    } else {
-        XhciFirmwareHandoff::PreserveControllerState
-    }
+const fn xhci_preferred_trusted_handoff_mode(
+    _runtime_vl805_reset_state: u8,
+) -> XhciFirmwareHandoff {
+    XhciFirmwareHandoff::ColdStartFromSnapshot
 }
 
 #[inline]
@@ -2226,6 +2201,72 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
 }
 
 #[inline]
+const fn xhci_diag_stage_after_run(stage: u16) -> bool {
+    matches!(stage, 0x02a5 | 0x02a7 | 0x02cb..=0x02d9 | 0x02e9 | 0x02eb)
+}
+
+#[inline]
+fn xhci_probe_failure_edge_label(
+    runtime_vl805_reset_requested: bool,
+    firmware_handoff: XhciFirmwareHandoff,
+    diag_before: XhciDiagSnapshot,
+    diag_after: XhciDiagSnapshot,
+) -> &'static str {
+    if runtime_vl805_reset_requested {
+        "before-mailbox-reset-suppression"
+    } else if matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
+        && !xhci_diag_snapshot_changed(diag_before, diag_after)
+    {
+        "trusted-path-selection"
+    } else if diag_after.line_count != 0 && xhci_diag_stage_after_run(diag_after.stage) {
+        "after-run"
+    } else if diag_after.line_count != 0 {
+        "first-live-ownership-write"
+    } else {
+        "controller-init-before-diag"
+    }
+}
+
+#[inline]
+fn log_xhci_probe_failure_edge(
+    runtime_vl805_reset_requested: bool,
+    strategy: XhciRuntimeInitStrategy,
+    diag_before: XhciDiagSnapshot,
+    diag_after: XhciDiagSnapshot,
+) {
+    let edge = xhci_probe_failure_edge_label(
+        runtime_vl805_reset_requested,
+        strategy.firmware_handoff,
+        diag_before,
+        diag_after,
+    );
+    let mut line = heapless::String::<320>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] xhci edge classify=edge={edge} origin={} handoff={}",
+            xhci_runtime_init_strategy_origin_label(strategy),
+            xhci_firmware_handoff_mode_label(strategy.firmware_handoff),
+        ),
+    );
+    if diag_after.line_count != 0 {
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(" stage=0x{:04x}", diag_after.stage),
+        );
+        if let Some(tag) = xhci_diag_stage_label(diag_after.stage) {
+            let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" tag={tag}"));
+        }
+        if let Some(exact) = xhci_diag_stage_exact_issue_label(diag_after.stage) {
+            let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" exact={exact}"));
+        }
+    } else {
+        let _ = core::fmt::Write::write_str(&mut line, " stage=none");
+    }
+    boot_log::force_uart_line(line.as_str());
+}
+
+#[inline]
 const fn xhci_diag_stage_value_labels(
     stage: u16,
 ) -> Option<(&'static str, &'static str, &'static str)> {
@@ -2774,7 +2815,7 @@ fn xhci_runtime_init_strategy_push(
 #[inline]
 fn xhci_runtime_init_strategies(
     preferred_handoff: XhciFirmwareHandoff,
-    runtime_vl805_reset_state: u8,
+    _runtime_vl805_reset_state: u8,
     stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
 ) -> (
     [XhciRuntimeInitStrategy; XHCI_RUNTIME_INIT_STRATEGY_MAX],
@@ -2793,7 +2834,15 @@ fn xhci_runtime_init_strategies(
         return (strategies, count);
     }
 
-    if runtime_vl805_reset_state == VL805_RUNTIME_RESET_STATE_NOTIFIED {
+    if matches!(
+        preferred_handoff,
+        XhciFirmwareHandoff::ColdStartFromSnapshot
+    ) {
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        );
         if stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
@@ -2801,11 +2850,6 @@ fn xhci_runtime_init_strategies(
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
             );
         }
-        xhci_runtime_init_strategy_push(
-            &mut strategies,
-            &mut count,
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
-        );
         if stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
@@ -2813,43 +2857,25 @@ fn xhci_runtime_init_strategies(
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
             );
         }
-    } else if matches!(
-        runtime_vl805_reset_state,
-        VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
-    ) {
-        if stop_state_seed_available {
-            xhci_runtime_init_strategy_push(
-                &mut strategies,
-                &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
-            );
-        }
-        xhci_runtime_init_strategy_push(
-            &mut strategies,
-            &mut count,
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
-        );
-        if stop_state_seed_available {
-            xhci_runtime_init_strategy_push(
-                &mut strategies,
-                &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true),
-            );
-        }
     } else {
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(preferred_handoff, false),
+        );
         if stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+                XhciRuntimeInitStrategy::new(preferred_handoff, true),
             );
         }
-        xhci_runtime_init_strategy_push(
-            &mut strategies,
-            &mut count,
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
-        );
-        if stop_state_seed_available {
+        if stop_state_seed_available
+            && !matches!(
+                preferred_handoff,
+                XhciFirmwareHandoff::PreserveControllerState
+            )
+        {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
@@ -5874,7 +5900,13 @@ impl UsbKeyboard {
         let mut saw_keyboard_init_error = false;
         let mut best_probe_pathway = None;
         for &mmio_base in &candidates[..candidate_count] {
-            let (effective_mmio, cap_probe, firmware_handoff, runtime_vl805_reset_state) = {
+            let (
+                effective_mmio,
+                cap_probe,
+                firmware_handoff,
+                runtime_vl805_reset_state,
+                runtime_vl805_reset_requested,
+            ) = {
                 let runtime_vl805_reset_requested = xhci_runtime_vl805_mailbox_reset_required(
                     mmio_base,
                     xhci_mmio_hint,
@@ -6076,6 +6108,7 @@ impl UsbKeyboard {
                         raw_probe,
                         preferred_firmware_handoff,
                         runtime_vl805_reset_state,
+                        runtime_vl805_reset_requested,
                     ),
                     Err(reason) => {
                         if !xhci_runtime_allows_alias_scan(
@@ -6111,6 +6144,7 @@ impl UsbKeyboard {
                                     scanned_probe,
                                     XhciFirmwareHandoff::None,
                                     VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
+                                    runtime_vl805_reset_requested,
                                 )
                             }
                             Err(_) => {
@@ -6296,6 +6330,12 @@ impl UsbKeyboard {
                                     ),
                                 );
                                 boot_log::force_uart_line(line.as_str());
+                                log_xhci_probe_failure_edge(
+                                    runtime_vl805_reset_requested,
+                                    strategy,
+                                    diag_before,
+                                    diag_after,
+                                );
                                 log_latest_xhci_diag_summary("probe-new");
                                 log_usb_probe_pathway_summary(&pathway_summary);
                                 usb_probe_best_pathway_update(
@@ -10961,7 +11001,8 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_prefer_seeded_cold_start_after_confirmed_reset() {
+    fn xhci_runtime_init_strategies_try_unseeded_cold_start_before_seeded_retry_after_confirmed_reset(
+    ) {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_NOTIFIED,
@@ -10974,11 +11015,11 @@ mod tests {
         assert_eq!(count, 3);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
         );
         assert_eq!(
             strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
         assert_eq!(
             strategies[2],
@@ -10987,7 +11028,8 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_prefer_seeded_cold_start_for_weak_runtime_reset_outcomes() {
+    fn xhci_runtime_init_strategies_keep_preserve_retry_for_trusted_handoff_even_after_weak_reset_outcomes(
+    ) {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
@@ -11000,15 +11042,15 @@ mod tests {
         assert_eq!(count, 3);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
-        );
-        assert_eq!(
-            strategies[1],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
         );
         assert_eq!(
+            strategies[1],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
+        );
+        assert_eq!(
             strategies[2],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true)
         );
     }
 
@@ -11797,6 +11839,75 @@ mod tests {
     }
 
     #[test]
+    fn xhci_diag_stage_after_run_distinguishes_post_run_and_pre_run_edges() {
+        assert!(super::xhci_diag_stage_after_run(0x02d4));
+        assert!(super::xhci_diag_stage_after_run(0x02e9));
+        assert!(!super::xhci_diag_stage_after_run(0x0248));
+        assert!(!super::xhci_diag_stage_after_run(0x0213));
+    }
+
+    #[test]
+    fn xhci_probe_failure_edge_label_prefers_trusted_selection_without_new_diag() {
+        let before = XhciDiagSnapshot::empty();
+        let after = XhciDiagSnapshot::empty();
+        assert_eq!(
+            super::xhci_probe_failure_edge_label(
+                false,
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                before,
+                after,
+            ),
+            "trusted-path-selection"
+        );
+        assert_eq!(
+            super::xhci_probe_failure_edge_label(
+                true,
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                before,
+                after,
+            ),
+            "before-mailbox-reset-suppression"
+        );
+    }
+
+    #[test]
+    fn xhci_probe_failure_edge_label_separates_pre_run_and_post_run_failures() {
+        let before = XhciDiagSnapshot::empty();
+        let pre_run = XhciDiagSnapshot {
+            line_count: 1,
+            stage: 0x0248,
+            a: 0,
+            b: 0,
+            c: 0,
+        };
+        let post_run = XhciDiagSnapshot {
+            line_count: 1,
+            stage: 0x02d4,
+            a: 0,
+            b: 0,
+            c: 0,
+        };
+        assert_eq!(
+            super::xhci_probe_failure_edge_label(
+                false,
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                before,
+                pre_run,
+            ),
+            "first-live-ownership-write"
+        );
+        assert_eq!(
+            super::xhci_probe_failure_edge_label(
+                false,
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                before,
+                post_run,
+            ),
+            "after-run"
+        );
+    }
+
+    #[test]
     fn xhci_diag_value_labels_name_pre_run_ring_snapshot_fields() {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0204),
@@ -11846,12 +11957,12 @@ mod tests {
     }
 
     #[test]
-    fn preferred_trusted_handoff_mode_splits_runtime_reset_and_bootloader_paths() {
+    fn preferred_trusted_handoff_mode_keeps_bootloader_snapshot_as_primary_path() {
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
             ),
-            XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(super::VL805_RUNTIME_RESET_STATE_NOTIFIED),
@@ -12461,13 +12572,13 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_vl805_mailbox_reset_runs_on_trusted_high_bar_handoff() {
+    fn xhci_runtime_vl805_mailbox_reset_stays_disabled_on_trusted_high_bar_handoff() {
         let safe_cmd = Some(
             super::PCI_COMMAND_MEMORY_SPACE
                 | super::PCI_COMMAND_BUS_MASTER
                 | super::PCI_COMMAND_INTERRUPT_DISABLE,
         );
-        assert!(super::xhci_runtime_vl805_mailbox_reset_required(
+        assert!(!super::xhci_runtime_vl805_mailbox_reset_required(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             safe_cmd,
@@ -12498,7 +12609,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_trusted_handoff_snapshot_accepts_runtime_cold_init_permission() {
+    fn xhci_trusted_handoff_snapshot_ignores_runtime_reset_permission_once_handoff_is_safe() {
         let safe_cmd = Some(
             super::PCI_COMMAND_MEMORY_SPACE
                 | super::PCI_COMMAND_BUS_MASTER
@@ -12512,7 +12623,7 @@ mod tests {
             true,
             true,
         ));
-        assert!(!super::xhci_trusted_handoff_snapshot_allowed(
+        assert!(super::xhci_trusted_handoff_snapshot_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             safe_cmd,

@@ -762,6 +762,38 @@ const fn firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout(
 }
 
 #[inline]
+const fn required_ht_clock_soft_timeout_keeps_strict_transport(
+    last_chipclkcsr: Option<u8>,
+    last_wakeupctrl: Option<u8>,
+    last_sleepcsr: Option<u8>,
+    last_cardcap: Option<u8>,
+) -> bool {
+    !firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout()
+        || !ht_clock_timeout_can_enter_bounded_no_ht_transport(
+            last_chipclkcsr,
+            last_wakeupctrl,
+            last_sleepcsr,
+            last_cardcap,
+        )
+}
+
+#[inline]
+fn startup_link_first_blocker_for_snapshot_stage(stage: &'static str) -> Option<&'static str> {
+    match stage {
+        "post-firmware-ready-function2-strict-repoll-fail" => Some("firmware-channel-f2"),
+        "control-plane-passive-startup-link-timeout"
+        | "control-plane-passive-startup-link-timeout-no-reply"
+        | "control-plane-passive-startup-link-timeout-probe-fail"
+        | "control-plane-reply-sideband-unreadable-exhausted"
+        | "control-plane-reply-speculative-read-empty"
+        | "control-plane-reply-speculative-read-fail"
+        | "control-plane-startup-link-rearm-stalled"
+        | "control-plane-promoted-rearm-stalled" => Some("first-control-plane-reply"),
+        _ => None,
+    }
+}
+
+#[inline]
 const fn wait_for_firmware_ready_uses_experimental_mailbox_read(
     allow_function2_ready_bypass: bool,
 ) -> bool {
@@ -4404,6 +4436,31 @@ impl SdioHost {
         self.clear_backplane_window_cache();
     }
 
+    fn emit_startup_link_first_status(
+        &self,
+        blocker: &'static str,
+        outcome: &'static str,
+        detail: &'static str,
+    ) {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] startup-link-first blocker={blocker} outcome={outcome} detail={detail} current_clock={}Hz width={} mode={} no_ht={}",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            cyw43_transport_mode_name(self.experimental_no_ht_transport),
+            yn(self.experimental_no_ht_transport),
+        ));
+    }
+
+    fn emit_startup_link_first_error(&self, blocker: &'static str, err: &HalError) {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] startup-link-first blocker={blocker} outcome=fail err={err} current_clock={}Hz width={} mode={} no_ht={}",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            cyw43_transport_mode_name(self.experimental_no_ht_transport),
+            yn(self.experimental_no_ht_transport),
+        ));
+    }
+
     fn clear_last_data_wait_diag(&mut self) {
         self.last_data_wait_cmd = None;
         self.last_data_wait_arg = None;
@@ -7036,6 +7093,9 @@ impl SdioHost {
             self.experimental_control_plane_startup_link_rescue_cycles,
             CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
         ));
+        if let Some(blocker) = startup_link_first_blocker_for_snapshot_stage(stage) {
+            self.emit_startup_link_first_status(blocker, "fail", exact_error);
+        }
         emit_breadcrumb(format_args!(
             "[pi4-wifi] control-plane snapshot {stage} f2-recover stage={} policy={} op={} drained={} count=0x{count:04x}/{}",
             self.last_function2_frame_recovery_stage.unwrap_or("none"),
@@ -10170,6 +10230,11 @@ impl SdioHost {
                 cyw43_transport_mode_name(false),
             ));
             self.log_transport_shadow("wait-ht-clock-strict-soft-continue");
+            self.emit_startup_link_first_status(
+                "ht-soft-timeout",
+                "continue",
+                "linux-f2-before-no-ht-cutover",
+            );
         }
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=setup-firmware-channel mode={} chunk_limit={}",
@@ -10178,13 +10243,19 @@ impl SdioHost {
         ));
         let allow_function2_ready_bypass =
             firmware_stage_allows_function2_ready_bypass(self.experimental_no_ht_transport);
-        self.setup_firmware_channel(allow_function2_ready_bypass)?;
+        if let Err(err) = self.setup_firmware_channel(allow_function2_ready_bypass) {
+            self.emit_startup_link_first_error("firmware-channel-f2", &err);
+            return Err(err);
+        }
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=wait-firmware-ready mode={} chunk_limit={}",
             cyw43_transport_mode_name(self.experimental_no_ht_transport),
             self.control_plane_chunk_limit(),
         ));
-        self.wait_for_firmware_ready(allow_function2_ready_bypass)?;
+        if let Err(err) = self.wait_for_firmware_ready(allow_function2_ready_bypass) {
+            self.emit_startup_link_first_error("mailbox-ready", &err);
+            return Err(err);
+        }
         if allow_function2_ready_bypass {
             let ioex = self
                 .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
@@ -10527,7 +10598,7 @@ impl SdioHost {
                     self.recover_command_path_and_refresh_transport(stage)?;
                 }
                 false => {
-                    if ht_clock_timeout_can_enter_bounded_no_ht_transport(
+                    if !required_ht_clock_soft_timeout_keeps_strict_transport(
                         self.last_chipclkcsr,
                         self.last_wakeupctrl,
                         self.last_sleepcsr,
@@ -10541,10 +10612,7 @@ impl SdioHost {
                         self.log_transport_shadow("wait-ht-clock-bounded-no-ht");
                         return Ok(false);
                     }
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage={stage} action=fail reason=ht-not-ready"
-                    ));
-                    return Err(HalError::Unsupported("cyw43-ht-clock-timeout"));
+                    return Ok(false);
                 }
             }
         }
@@ -15779,11 +15847,6 @@ mod tests {
     }
 
     #[test]
-    fn firmware_stage_keeps_strict_transport_after_soft_ht_timeout() {
-        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
-    }
-
-    #[test]
     fn firmware_channel_write_low_clock_retry_is_only_used_for_promoted_no_ht_io_errors() {
         assert!(firmware_channel_write_needs_low_clock_retry(
             true,
@@ -15810,6 +15873,11 @@ mod tests {
             CYW43_CONTROL_PLANE_CLOCK_HZ,
             &HalError::Unsupported("cyw43-firmware-ready-timeout"),
         ));
+    }
+
+    #[test]
+    fn firmware_stage_keeps_strict_transport_after_soft_ht_timeout() {
+        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]
@@ -16096,6 +16164,36 @@ mod tests {
             None,
             Some(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC),
         ));
+    }
+
+    #[test]
+    fn required_ht_soft_timeout_keeps_strict_transport_even_with_bounded_no_ht_snapshot() {
+        assert!(required_ht_clock_soft_timeout_keeps_strict_transport(
+            Some(SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+            Some(SBSDIO_WAKE_TILL_HT_AVAIL),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_EN),
+            Some(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC),
+        ));
+    }
+
+    #[test]
+    fn startup_link_first_blocker_labels_are_stable() {
+        assert_eq!(
+            startup_link_first_blocker_for_snapshot_stage(
+                "post-firmware-ready-function2-strict-repoll-fail"
+            ),
+            Some("firmware-channel-f2")
+        );
+        assert_eq!(
+            startup_link_first_blocker_for_snapshot_stage(
+                "control-plane-startup-link-rearm-stalled"
+            ),
+            Some("first-control-plane-reply")
+        );
+        assert_eq!(
+            startup_link_first_blocker_for_snapshot_stage("setup-firmware-channel-ready"),
+            None
+        );
     }
 
     #[test]
