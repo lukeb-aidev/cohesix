@@ -331,7 +331,7 @@ const fn xhci_runtime_init_strategy_prompt_safe(strategy: XhciRuntimeInitStrateg
     }
 }
 
-const XHCI_DIAG_MAX_LINES: u32 = 64;
+const XHCI_DIAG_MAX_LINES: u32 = 160;
 const VL805_RUNTIME_RESET_STATE_UNATTEMPTED: u8 = 0;
 const VL805_RUNTIME_RESET_STATE_NOTIFIED: u8 = 1;
 const VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE: u8 = 2;
@@ -2076,6 +2076,15 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
         );
     }
     boot_log::force_uart_line(line.as_str());
+}
+
+#[inline]
+fn reset_latest_xhci_diag_snapshot() {
+    XHCI_DIAG_LINE_COUNT.store(0, Ordering::Release);
+    XHCI_DIAG_LAST_STAGE.store(0, Ordering::Release);
+    XHCI_DIAG_LAST_A.store(0, Ordering::Release);
+    XHCI_DIAG_LAST_B.store(0, Ordering::Release);
+    XHCI_DIAG_LAST_C.store(0, Ordering::Release);
 }
 
 #[inline]
@@ -4972,11 +4981,6 @@ struct XhciIrqBinding {
     shadow: bool,
 }
 
-enum XhciIrqHandlerAcquisition {
-    AllocateFresh,
-    ReuseExisting(sel4_sys::seL4_CPtr),
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum XhciIrqInstallPhase {
     PreControllerReady,
@@ -5089,20 +5093,7 @@ impl XhciIrqGuard {
                 .map(XhciIrqHandlerScanSummary::unique_slot)
                 .unwrap_or_else(|| unique_existing_irq_handler_slot(env));
             match resolve_xhci_irq_handler_acquisition(get_err, existing_handler) {
-                Ok(XhciIrqHandlerAcquisition::AllocateFresh) => (requested_handler_slot, true),
-                Ok(XhciIrqHandlerAcquisition::ReuseExisting(slot)) => {
-                    let _ = crate::sel4::cnode_delete(root_cnode, requested_handler_slot, depth);
-                    let mut line = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] xhci irq sink reusing existing handler irq={} mmio=0x{mmio:016x} slot=0x{slot:04x} after=get-revoke-first",
-                            irq,
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    (slot, false)
-                }
+                Ok(()) => (requested_handler_slot, true),
                 Err("irq-handler-ambiguous") => {
                     let _ = crate::sel4::cnode_delete(root_cnode, requested_handler_slot, depth);
                     let mut line = heapless::String::<224>::new();
@@ -5355,15 +5346,15 @@ fn xhci_irq_handler_scan_summary(env: &crate::sel4::KernelEnv<'_>) -> XhciIrqHan
 fn resolve_xhci_irq_handler_acquisition(
     get_err: sel4_sys::seL4_Error,
     existing: Result<Option<sel4_sys::seL4_CPtr>, usize>,
-) -> Result<XhciIrqHandlerAcquisition, &'static str> {
+) -> Result<(), &'static str> {
     if get_err == sel4_sys::seL4_NoError {
-        return Ok(XhciIrqHandlerAcquisition::AllocateFresh);
+        return Ok(());
     }
     if get_err != sel4_sys::seL4_RevokeFirst {
         return Err("irq-get-handler");
     }
     match existing {
-        Ok(Some(slot)) => Ok(XhciIrqHandlerAcquisition::ReuseExisting(slot)),
+        Ok(Some(_)) => Err("irq-get-revoke-first-owned"),
         Ok(None) => Err("irq-get-revoke-first-no-handler"),
         Err(_) => Err("irq-handler-ambiguous"),
     }
@@ -6377,6 +6368,7 @@ impl UsbKeyboard {
                             xhci_runtime_init_strategy_halt_guard_label(strategy);
                         let poll_only =
                             xhci_polling_only_runtime(effective_mmio, strategy.firmware_handoff);
+                        reset_latest_xhci_diag_snapshot();
                         let diag_before = read_latest_xhci_diag_snapshot();
                         let mut pathway_summary = UsbProbePathwaySummary::new(
                             pathway_idx,
@@ -12296,15 +12288,15 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_handler_acquisition_only_reuses_after_revoke_first() {
-        assert!(matches!(
+    fn xhci_irq_handler_acquisition_fails_closed_on_revoke_first() {
+        assert_eq!(
             resolve_xhci_irq_handler_acquisition(sel4_sys::seL4_NoError, Ok(Some(0x42)),),
-            Ok(XhciIrqHandlerAcquisition::AllocateFresh)
-        ));
-        assert!(matches!(
+            Ok(())
+        );
+        assert_eq!(
             resolve_xhci_irq_handler_acquisition(sel4_sys::seL4_RevokeFirst, Ok(Some(0x42)),),
-            Ok(XhciIrqHandlerAcquisition::ReuseExisting(0x42))
-        ));
+            Err("irq-get-revoke-first-owned")
+        );
         assert_eq!(
             resolve_xhci_irq_handler_acquisition(sel4_sys::seL4_RevokeFirst, Ok(None)),
             Err("irq-get-revoke-first-no-handler")

@@ -2572,18 +2572,9 @@ const fn post_firmware_ready_function2_strict_repoll_can_soft_continue(
     devctl: Option<u8>,
     mesbusy: Option<u8>,
 ) -> bool {
-    // Linux never proceeds past function enable until IORx reports the
-    // function ready bit. If the Pi 4 no-HT path still has Function 2 enabled
-    // but unreadable after the strict repoll, fail fast and let the existing
-    // control-plane bootstrap replay path own recovery instead of forcing a
-    // broken pure-F2 startup-link bootstrap.
-    let _ = ioex;
-    let _ = iorx;
-    let _ = ienx;
-    let _ = watermark;
-    let _ = devctl;
-    let _ = mesbusy;
-    false
+    control_plane_function2_latched_linux_configured_without_iorx(
+        ioex, iorx, ienx, watermark, devctl, mesbusy,
+    )
 }
 
 #[inline]
@@ -13159,13 +13150,43 @@ mod tests {
     }
 
     #[test]
-    fn post_firmware_ready_strict_repoll_never_soft_continues_without_function2_ready() {
+    fn post_firmware_ready_strict_repoll_soft_continues_only_for_latched_linux_f2_state() {
+        assert!(
+            post_firmware_ready_function2_strict_repoll_can_soft_continue(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                Some(SDIO_INTERRUPT_ENABLE_MASK),
+                Some(CY_43455_F2_WATERMARK),
+                Some(SBSDIO_DEVCTL_F2WM_ENAB),
+                Some(CY_43455_MESBUSYCTRL),
+            )
+        );
+        assert!(
+            !post_firmware_ready_function2_strict_repoll_can_soft_continue(
+                Some(SDIO_FUNC_ENABLE_1),
+                Some(SDIO_FUNC_READY_1),
+                Some(SDIO_INTERRUPT_ENABLE_MASK),
+                Some(CY_43455_F2_WATERMARK),
+                Some(SBSDIO_DEVCTL_F2WM_ENAB),
+                Some(CY_43455_MESBUSYCTRL),
+            )
+        );
+        assert!(
+            !post_firmware_ready_function2_strict_repoll_can_soft_continue(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2),
+                Some(SDIO_INTERRUPT_ENABLE_MASK),
+                Some(CY_43455_F2_WATERMARK),
+                Some(SBSDIO_DEVCTL_F2WM_ENAB),
+                Some(CY_43455_MESBUSYCTRL),
+            )
+        );
         assert!(
             !post_firmware_ready_function2_strict_repoll_can_soft_continue(
                 Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
                 Some(SDIO_FUNC_READY_1),
                 Some(SDIO_INTERRUPT_ENABLE_MASK),
-                Some(CY_43455_F2_WATERMARK),
+                Some(0),
                 Some(SBSDIO_DEVCTL_F2WM_ENAB),
                 Some(CY_43455_MESBUSYCTRL),
             )
@@ -15875,8 +15896,8 @@ mod tests {
     }
 
     #[test]
-    fn firmware_stage_keeps_strict_transport_after_soft_ht_timeout() {
-        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
+    fn firmware_stage_can_cut_over_to_bounded_no_ht_after_soft_ht_timeout() {
+        assert!(firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]
