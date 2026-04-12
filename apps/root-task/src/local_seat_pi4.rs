@@ -2926,7 +2926,9 @@ const fn xhci_runtime_init_strategy_halt_guard_label(
     if strategy.seed_stop_state
         || matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+                | XhciFirmwareHandoff::ResetlessReinit
+                | XhciFirmwareHandoff::PreserveControllerState
         )
     {
         "skip-live-halt-read"
@@ -11105,13 +11107,13 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategy_halt_guard_labels_distinguish_live_and_seeded_paths() {
+    fn xhci_runtime_init_strategy_halt_guard_labels_match_trusted_and_seeded_paths() {
         assert_eq!(
             super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 false,
             )),
-            "live-halt-read"
+            "skip-live-halt-read"
         );
         assert_eq!(
             super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(

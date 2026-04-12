@@ -696,7 +696,12 @@ const fn skip_post_reset_cnr_poll_with_snapshot(
 
 #[inline(always)]
 const fn skip_live_halt_revalidation(firmware_handoff: XhciFirmwareHandoff) -> bool {
-    skip_preinit_polling_scrub(firmware_handoff)
+    matches!(
+        firmware_handoff,
+        XhciFirmwareHandoff::ColdStartFromSnapshot
+            | XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PreserveControllerState
+    )
 }
 
 #[inline(always)]
@@ -1660,11 +1665,11 @@ impl<H: Dma> XhciCtrl<H> {
             );
         }
 
-        // Resetless/preserve-state firmware modes already proved the
-        // controller safe for takeover and can skip this halt check. The
-        // trusted snapshot cold-start path instead mirrors U-Boot's
-        // xhci_reset() entry more closely: live halt-state reads first,
-        // then HCRST from the current USBCMD value.
+        // Firmware-owned handoff modes that already exported a safe post-stop
+        // boundary can skip the extra live halt-state reads and jump straight
+        // to the reset gate. On Pi 4 the trusted U-Boot cold-start contract is
+        // already post-`usb stop`, and the first live USBSTS read can still
+        // trigger IRQ 27 before runtime has owned the controller.
         if skip_live_halt_revalidation_with_snapshot(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -4401,8 +4406,8 @@ mod tests {
     }
 
     #[test]
-    fn only_resetless_firmware_handoffs_skip_live_halt_revalidation() {
-        assert!(!skip_live_halt_revalidation(
+    fn trusted_and_resetless_firmware_handoffs_skip_live_halt_revalidation() {
+        assert!(skip_live_halt_revalidation(
             XhciFirmwareHandoff::ColdStartFromSnapshot
         ));
         assert!(skip_live_halt_revalidation(
@@ -4412,6 +4417,14 @@ mod tests {
             XhciFirmwareHandoff::ResetlessReinit
         ));
         assert!(!skip_live_halt_revalidation(XhciFirmwareHandoff::None));
+    }
+
+    #[test]
+    fn trusted_cold_start_skips_live_halt_revalidation_without_seed_snapshot() {
+        assert!(skip_live_halt_revalidation_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            None,
+        ));
     }
 
     #[test]
