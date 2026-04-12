@@ -1215,22 +1215,24 @@ fn control_plane_reply_should_attempt_hintless_speculative_read(
     experimental_no_ht_transport: bool,
     reply_rearm_mode: u8,
     current_clock_hz: u32,
-    startup_link_stabilized: bool,
     hint_reads_unstable: bool,
     int_status: Option<u32>,
     mailbox_data: Option<u32>,
     frame_len_hint: Option<usize>,
 ) -> bool {
     let frame_len_hint_blocks_hintless_probe = frame_len_hint.is_some();
+    let startup_link_hintless_probe = control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+        && current_clock_hz <= CYW43_STARTUP_CLOCK_HZ;
+    // Startup-link first replies are the golden path: once the F1 hints have
+    // gone stale, do not let that suppress the hintless Function 2 read that
+    // can actually surface the reply frame.
     experimental_no_ht_transport
         && control_plane_reply_rearm_pending(reply_rearm_mode)
         && int_status.is_none()
         && mailbox_data.is_none()
         && !frame_len_hint_blocks_hintless_probe
-        && !control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
-        && !startup_link_stabilized
-        && !hint_reads_unstable
-        && current_clock_hz > CYW43_STARTUP_CLOCK_HZ
+        && (current_clock_hz > CYW43_STARTUP_CLOCK_HZ || startup_link_hintless_probe)
+        && (!hint_reads_unstable || startup_link_hintless_probe)
 }
 
 #[inline]
@@ -6095,7 +6097,6 @@ impl SdioHost {
             self.experimental_no_ht_transport,
             reply_rearm_mode,
             self.current_clock_hz,
-            self.experimental_control_plane_startup_link_stabilized,
             self.experimental_control_plane_hint_reads_unstable,
             int_status,
             mailbox_data,
@@ -15215,7 +15216,6 @@ mod tests {
                 control_plane_reply_rearm_promoted_link(),
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
                 false,
-                false,
                 None,
                 None,
                 None,
@@ -15226,7 +15226,6 @@ mod tests {
                 false,
                 control_plane_reply_rearm_startup_link(),
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
-                false,
                 false,
                 None,
                 None,
@@ -15239,7 +15238,6 @@ mod tests {
                 control_plane_reply_rearm_none(),
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
                 false,
-                false,
                 None,
                 None,
                 None,
@@ -15250,7 +15248,6 @@ mod tests {
                 true,
                 control_plane_reply_rearm_promoted_link(),
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
-                false,
                 false,
                 Some(0),
                 None,
@@ -15262,7 +15259,6 @@ mod tests {
                 true,
                 control_plane_reply_rearm_promoted_link(),
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
-                false,
                 false,
                 None,
                 Some(HMB_DATA_DEVREADY),
@@ -15275,7 +15271,6 @@ mod tests {
                 control_plane_reply_rearm_promoted_link(),
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
                 false,
-                false,
                 None,
                 None,
                 Some(64),
@@ -15286,7 +15281,6 @@ mod tests {
                 true,
                 control_plane_reply_rearm_promoted_link(),
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
-                true,
                 false,
                 None,
                 None,
@@ -15299,18 +15293,16 @@ mod tests {
                 control_plane_reply_rearm_promoted_link(),
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
                 false,
-                false,
                 None,
                 None,
                 Some(0),
             )
         );
         assert!(
-            !control_plane_reply_should_attempt_hintless_speculative_read(
+            control_plane_reply_should_attempt_hintless_speculative_read(
                 true,
                 control_plane_reply_rearm_startup_link(),
                 CYW43_STARTUP_CLOCK_HZ,
-                true,
                 false,
                 None,
                 None,
@@ -15318,11 +15310,10 @@ mod tests {
             )
         );
         assert!(
-            !control_plane_reply_should_attempt_hintless_speculative_read(
+            control_plane_reply_should_attempt_hintless_speculative_read(
                 true,
                 control_plane_reply_rearm_startup_link(),
                 CYW43_STARTUP_CLOCK_HZ,
-                true,
                 true,
                 None,
                 None,
@@ -15334,7 +15325,6 @@ mod tests {
                 true,
                 control_plane_reply_rearm_startup_link(),
                 CYW43_STARTUP_CLOCK_HZ,
-                true,
                 true,
                 None,
                 None,
@@ -15346,7 +15336,6 @@ mod tests {
                 true,
                 control_plane_reply_rearm_promoted_link(),
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
-                true,
                 true,
                 None,
                 None,

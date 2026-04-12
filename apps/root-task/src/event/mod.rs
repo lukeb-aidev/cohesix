@@ -2199,6 +2199,13 @@ where
             }
             UsbDebugCommand::ProbeKeyboard => {
                 self.emit_console_line("usb: probing local-seat keyboard now");
+                if let Some(preflight) = self
+                    .local_seat
+                    .as_ref()
+                    .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
+                {
+                    self.emit_usb_probe_preflight(preflight);
+                }
                 let (backend_attached, polling_enabled) = {
                     let local_seat = match self.local_seat.as_mut() {
                         Some(local_seat) => local_seat,
@@ -2225,6 +2232,43 @@ where
             "detail=subcommand={subcommand} scope=serial-local"
         ));
         self.emit_ack_ok(USB_DEBUG_ACK_LABEL, Some(detail.as_str()));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_usb_probe_preflight(&mut self, status: crate::local_seat_pi4::UsbProbePreflightStatus) {
+        let route_line = format_message(format_args!(
+            "usb: golden_path preflight route={} attempt={}/{} current={} next={} origin={} handoff={} seed={} halt_guard={}",
+            status.route,
+            status.strategy_idx,
+            status.strategy_count,
+            status.current_step,
+            status.next_step,
+            status.origin,
+            status.handoff,
+            status.seed,
+            status.halt_guard,
+        ));
+        self.emit_console_line(route_line.as_str());
+        let mut edge_line = format_message(format_args!(
+            "usb: golden_path preflight policy={} dma={} bus={} poll_only={} followup={} expected_diag=0x{:04x}",
+            status.policy,
+            if status.prefer_high { "high" } else { "low" },
+            if status.pcie_dma_window {
+                "pcie-window"
+            } else {
+                "phys"
+            },
+            if status.poll_only { "yes" } else { "no" },
+            status.followup_step,
+            status.expected_diag_stage,
+        ));
+        if let Some(tag) = status.expected_diag_tag {
+            let _ = write!(edge_line, " expected_tag={tag}");
+        }
+        if let Some(exact) = status.expected_diag_exact {
+            let _ = write!(edge_line, " expected_exact={exact}");
+        }
+        self.emit_console_line(edge_line.as_str());
     }
 
     #[cfg(feature = "kernel")]

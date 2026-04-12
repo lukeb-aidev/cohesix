@@ -196,6 +196,12 @@ const fn skip_constructor_polling_scrub_writes(firmware_handoff: XhciFirmwareHan
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConstructorPollingScrubMode {
+    Full,
+    TrustedQuiesceOnly,
+}
+
 #[inline(always)]
 const fn skip_constructor_polling_scrub_writes_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
@@ -203,6 +209,21 @@ const fn skip_constructor_polling_scrub_writes_with_snapshot(
 ) -> bool {
     skip_constructor_polling_scrub_writes(firmware_handoff)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn constructor_polling_scrub_mode(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> ConstructorPollingScrubMode {
+    if skip_constructor_polling_scrub_writes_with_snapshot(
+        firmware_handoff,
+        runtime_seed_snapshot,
+    ) {
+        ConstructorPollingScrubMode::TrustedQuiesceOnly
+    } else {
+        ConstructorPollingScrubMode::Full
+    }
 }
 
 #[inline(always)]
@@ -1297,31 +1318,38 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     #[inline(always)]
-    fn write_only_polling_scrub(mmio: usize, op_offset: usize, int_base: usize, skip_writes: bool) {
-        if skip_writes {
+    fn write_only_polling_scrub(
+        mmio: usize,
+        op_offset: usize,
+        int_base: usize,
+        mode: ConstructorPollingScrubMode,
+    ) {
+        if matches!(mode, ConstructorPollingScrubMode::TrustedQuiesceOnly) {
             emit_xhci_diag(0x0209, reg::USBCMD as u64, 0, 1);
-        } else {
-            emit_xhci_diag(0x0205, reg::USBCMD as u64, 0, 1);
-            Self::write_reg_at(mmio, op_offset + reg::USBCMD, 0u32);
-        }
-        if skip_writes {
-            emit_xhci_diag(0x020a, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 1);
-        } else {
+            emit_xhci_diag(0x020d, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 1);
             Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
-        }
-        if skip_writes {
-            emit_xhci_diag(0x020b, (int_base + reg::IMOD) as u64, 0, 1);
-        } else {
             Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
-        }
-        if skip_writes {
+            emit_xhci_diag(0x020e, (int_base + reg::IMOD) as u64, 0, 1);
             emit_xhci_diag(
-                0x020c,
+                0x020f,
                 (int_base + reg::IMAN) as u64,
                 polling_iman_value() as u64,
                 1,
             );
+            Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
         } else {
+            emit_xhci_diag(0x0205, reg::USBCMD as u64, 0, 1);
+            Self::write_reg_at(mmio, op_offset + reg::USBCMD, 0u32);
+            emit_xhci_diag(0x0206, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 0);
+            Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
+            emit_xhci_diag(0x0207, (int_base + reg::IMOD) as u64, 0, 0);
+            Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
+            emit_xhci_diag(
+                0x0208,
+                (int_base + reg::IMAN) as u64,
+                polling_iman_value() as u64,
+                0,
+            );
             Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
         }
     }
@@ -1408,15 +1436,16 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Generic xHCI probing still needs to quiesce interrupt delivery
         // immediately after mapping, before any runtime register reads. On the
-        // Pi4 trusted-handoff path, the first pre-reset operational write has
-        // proven unsafe, so runtime stays read-only until live halt
-        // revalidation/HCRST and only emits the skip breadcrumbs here.
+        // Pi4 trusted-handoff path, the first pre-reset USBCMD write has
+        // proven unsafe, so runtime skips only that store and still clears the
+        // stale status / moderation / interrupter state before live halt
+        // revalidation/HCRST.
         emit_xhci_diag(0x0106, op_offset as u64, rt_base as u64, int_base as u64);
         Self::write_only_polling_scrub(
             mmio,
             op_offset,
             int_base,
-            skip_constructor_polling_scrub_writes_with_snapshot(
+            constructor_polling_scrub_mode(
                 params.firmware_handoff,
                 params.runtime_seed_snapshot,
             ),
@@ -3484,6 +3513,7 @@ mod tests {
         runtime_mailbox_reset_handoff, runtime_mailbox_reset_needs_blind_settle,
         runtime_mailbox_reset_stop_state_handoff, runtime_preserve_stop_state_handoff,
         runtime_seed_snapshot_flag_bits, runtime_stop_state_needs_post_run_settle,
+        constructor_polling_scrub_mode, ConstructorPollingScrubMode,
         skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
         skip_constructor_polling_scrub_writes, skip_constructor_polling_scrub_writes_with_snapshot,
         skip_doorbell_readback_after_ring, skip_init_pre_reset_scrub_writes,
@@ -4585,19 +4615,39 @@ mod tests {
     }
 
     #[test]
-    fn trusted_handoff_constructor_still_skips_early_polling_scrub_writes() {
-        assert!(skip_constructor_polling_scrub_writes(
-            XhciFirmwareHandoff::ColdStartFromSnapshot
-        ));
-        assert!(skip_constructor_polling_scrub_writes(
-            XhciFirmwareHandoff::PreserveControllerState
-        ));
-        assert!(skip_constructor_polling_scrub_writes(
-            XhciFirmwareHandoff::ResetlessReinit
-        ));
-        assert!(!skip_constructor_polling_scrub_writes(
-            XhciFirmwareHandoff::None
-        ));
+    fn trusted_handoff_constructor_keeps_interrupt_quiesce_while_skipping_usbcmd_write() {
+        assert_eq!(
+            constructor_polling_scrub_mode(XhciFirmwareHandoff::ColdStartFromSnapshot, None),
+            ConstructorPollingScrubMode::TrustedQuiesceOnly
+        );
+        assert_eq!(
+            constructor_polling_scrub_mode(XhciFirmwareHandoff::PreserveControllerState, None),
+            ConstructorPollingScrubMode::TrustedQuiesceOnly
+        );
+        assert_eq!(
+            constructor_polling_scrub_mode(XhciFirmwareHandoff::ResetlessReinit, None),
+            ConstructorPollingScrubMode::TrustedQuiesceOnly
+        );
+        assert_eq!(
+            constructor_polling_scrub_mode(XhciFirmwareHandoff::None, None),
+            ConstructorPollingScrubMode::Full
+        );
+        assert_eq!(
+            constructor_polling_scrub_mode(
+                XhciFirmwareHandoff::None,
+                Some(XhciRuntimeSeedSnapshot {
+                    usbcmd: Some(0),
+                    usbsts: Some(reg::USBSTS_HCH),
+                    iman0: Some(0),
+                    dcbaap: None,
+                    crcr: None,
+                    erstba0: None,
+                    erdp0: None,
+                    erstsz0: None,
+                }),
+            ),
+            ConstructorPollingScrubMode::TrustedQuiesceOnly
+        );
     }
 
     #[test]

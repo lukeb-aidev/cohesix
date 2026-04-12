@@ -12,7 +12,9 @@ use crate::bootstrap::log as boot_log;
 use crate::console::{Command, CommandParser, ConsoleError};
 use crate::generated::{self, HardwareDeviceKind};
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
-use crate::local_seat_pi4::{Pi4FramebufferHint, Pi4LocalSeat, Pi4LocalSeatHints, Pi4SeatError};
+use crate::local_seat_pi4::{
+    Pi4FramebufferHint, Pi4LocalSeat, Pi4LocalSeatHints, Pi4SeatError, UsbProbePreflightStatus,
+};
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -240,6 +242,17 @@ impl LocalSeatRuntime {
     /// control point.
     pub fn enable_backend_keyboard_polling(&mut self) {
         self.backend_keyboard_polling_enabled = true;
+    }
+
+    /// Predict the first prompt-safe USB probe route before xHCI MMIO starts.
+    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[must_use]
+    pub(crate) fn backend_keyboard_probe_preflight_status(
+        &self,
+    ) -> Option<UsbProbePreflightStatus> {
+        self.backend
+            .as_ref()
+            .and_then(Pi4LocalSeat::keyboard_probe_preflight_status)
     }
 
     /// Run one bounded backend keyboard probe pass without permanently arming

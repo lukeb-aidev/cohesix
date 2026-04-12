@@ -587,6 +587,27 @@ pub(crate) struct UsbProbeRouteStatus {
     pub diag_exact: Option<&'static str>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbProbePreflightStatus {
+    pub route: &'static str,
+    pub strategy_idx: usize,
+    pub strategy_count: usize,
+    pub policy: &'static str,
+    pub origin: &'static str,
+    pub handoff: &'static str,
+    pub seed: &'static str,
+    pub halt_guard: &'static str,
+    pub current_step: &'static str,
+    pub next_step: &'static str,
+    pub followup_step: &'static str,
+    pub prefer_high: bool,
+    pub pcie_dma_window: bool,
+    pub poll_only: bool,
+    pub expected_diag_stage: u16,
+    pub expected_diag_tag: Option<&'static str>,
+    pub expected_diag_exact: Option<&'static str>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum UsbProbePathProgress {
     NoController,
@@ -879,6 +900,103 @@ fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
 }
 
 #[inline]
+const fn usb_probe_preflight_current_step() -> &'static str {
+    "pre-controller-ready"
+}
+
+#[inline]
+const fn usb_probe_preflight_next_step(strategy: XhciRuntimeInitStrategy) -> &'static str {
+    if xhci_runtime_init_strategy_skips_live_halt_read(strategy) {
+        "skip-stop-revalidation"
+    } else {
+        "live-stop-revalidation"
+    }
+}
+
+#[inline]
+const fn usb_probe_preflight_followup_step() -> &'static str {
+    "reset-post-settle"
+}
+
+#[inline]
+const fn usb_probe_preflight_expected_diag_stage(strategy: XhciRuntimeInitStrategy) -> u16 {
+    if xhci_runtime_init_strategy_skips_live_halt_read(strategy) {
+        0x0224
+    } else {
+        0x0213
+    }
+}
+
+#[inline]
+fn usb_probe_preflight_status(
+    xhci_mmio_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    xhci_handoff_ready: bool,
+    xhci_irq_quiesced: bool,
+    stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
+    prompt_safe_probe: bool,
+) -> Option<UsbProbePreflightStatus> {
+    let runtime_vl805_reset_state = VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire);
+    let preferred_handoff = if xhci_firmware_handoff_cold_start_trusted(
+        RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        xhci_mmio_hint,
+        xhci_pci_cmd,
+        xhci_handoff_ready,
+        xhci_irq_quiesced,
+    ) {
+        xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state)
+    } else {
+        XhciFirmwareHandoff::None
+    };
+    let effective_mmio = xhci_mmio_hint.unwrap_or(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE);
+    let (strategies, strategy_count) = xhci_runtime_init_strategies(
+        preferred_handoff,
+        runtime_vl805_reset_state,
+        stop_state_snapshot,
+    );
+    let (strategy_idx, strategy) = strategies[..strategy_count]
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, strategy)| {
+            !prompt_safe_probe || xhci_runtime_init_strategy_prompt_safe(*strategy)
+        })?;
+    let summary = UsbProbePathwaySummary::new(
+        1,
+        strategy_idx + 1,
+        strategy_count,
+        xhci_runtime_init_strategy_policy_label(strategy),
+        xhci_runtime_init_strategy_origin_label(strategy),
+        xhci_firmware_handoff_mode_label(strategy.firmware_handoff),
+        xhci_runtime_init_strategy_seed_label(strategy),
+        xhci_runtime_init_strategy_halt_guard_label(strategy),
+        false,
+        XHCI_PCIE_DMA_WINDOW_ENABLED,
+        xhci_polling_only_runtime(effective_mmio, strategy.firmware_handoff),
+    );
+    let expected_diag_stage = usb_probe_preflight_expected_diag_stage(strategy);
+    Some(UsbProbePreflightStatus {
+        route: usb_probe_route_label(summary),
+        strategy_idx: strategy_idx + 1,
+        strategy_count,
+        policy: summary.policy,
+        origin: summary.origin,
+        handoff: summary.handoff,
+        seed: summary.seed,
+        halt_guard: summary.halt_guard,
+        current_step: usb_probe_preflight_current_step(),
+        next_step: usb_probe_preflight_next_step(strategy),
+        followup_step: usb_probe_preflight_followup_step(),
+        prefer_high: summary.prefer_high,
+        pcie_dma_window: summary.pcie_dma_window,
+        poll_only: summary.poll_only,
+        expected_diag_stage,
+        expected_diag_tag: xhci_diag_stage_label(expected_diag_stage),
+        expected_diag_exact: xhci_diag_stage_exact_issue_label(expected_diag_stage),
+    })
+}
+
+#[inline]
 const fn runtime_vl805_mailbox_reset_error_allows_cold_init(err: Pi4SeatError) -> bool {
     matches!(
         err,
@@ -1157,6 +1275,21 @@ impl Pi4LocalSeat {
     /// Arm a bounded prompt-safe keyboard probe for the next manual poll.
     pub fn arm_prompt_safe_probe(&mut self) {
         self.prompt_safe_probe_armed = true;
+    }
+
+    /// Predict the first prompt-safe USB probe route before xHCI MMIO starts.
+    #[must_use]
+    pub(crate) fn keyboard_probe_preflight_status(&self) -> Option<UsbProbePreflightStatus> {
+        if self.keyboard.is_some() {
+            return None;
+        }
+        next_usb_probe_preflight_status(
+            self.xhci_mmio_hint,
+            self.xhci_pci_cmd,
+            self.xhci_handoff_ready,
+            self.xhci_irq_quiesced,
+            self.xhci_stop_state_snapshot,
+        )
     }
 
     /// Poll USB keyboard and write canonical bytes into `out`.
@@ -2148,6 +2281,23 @@ pub(crate) fn latest_usb_probe_route_status() -> Option<UsbProbeRouteStatus> {
     })
 }
 
+pub(crate) fn next_usb_probe_preflight_status(
+    xhci_mmio_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    xhci_handoff_ready: bool,
+    xhci_irq_quiesced: bool,
+    stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
+) -> Option<UsbProbePreflightStatus> {
+    usb_probe_preflight_status(
+        xhci_mmio_hint,
+        xhci_pci_cmd,
+        xhci_handoff_ready,
+        xhci_irq_quiesced,
+        stop_state_snapshot,
+        true,
+    )
+}
+
 #[inline]
 fn xhci_diag_snapshot_changed(before: XhciDiagSnapshot, after: XhciDiagSnapshot) -> bool {
     before != after
@@ -2391,6 +2541,9 @@ const fn xhci_diag_stage_value_labels(
 ) -> Option<(&'static str, &'static str, &'static str)> {
     match stage {
         0x0204 => Some(("mmio", "handoff", "seed_flags")),
+        0x020d => Some(("usbsts", "imod", "iman")),
+        0x020e => Some(("imod", "polling", "trusted")),
+        0x020f => Some(("iman", "polling", "trusted")),
         0x0212 => Some(("handoff", "seed_flags", "skip")),
         0x0217 | 0x0218 => Some(("handoff", "seed_flags", "skip")),
         0x02f0 => Some(("dcbaa", "cmd_ring", "event_ring")),
@@ -2416,6 +2569,9 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x020a => Some("fw-handoff-skip-usbsts-clear-write"),
         0x020b => Some("fw-handoff-skip-imod-write"),
         0x020c => Some("fw-handoff-skip-iman-write"),
+        0x020d => Some("fw-handoff-trusted-usbsts-clear-write"),
+        0x020e => Some("fw-handoff-trusted-imod-write"),
+        0x020f => Some("fw-handoff-trusted-iman-write"),
         0x0210 => Some("legacy-ownership-claim-begin"),
         0x0211 => Some("legacy-ownership-claim-done"),
         0x0212 => Some("fw-handoff-skip-legacy-ownership"),
@@ -3042,18 +3198,24 @@ const fn xhci_runtime_init_strategy_seed_label(strategy: XhciRuntimeInitStrategy
 const fn xhci_runtime_init_strategy_halt_guard_label(
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
-    if strategy.seed_stop_state
+    if xhci_runtime_init_strategy_skips_live_halt_read(strategy) {
+        "skip-live-halt-read"
+    } else {
+        "live-halt-read"
+    }
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_skips_live_halt_read(
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    strategy.seed_stop_state
         || matches!(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::ColdStartFromSnapshot
                 | XhciFirmwareHandoff::ResetlessReinit
                 | XhciFirmwareHandoff::PreserveControllerState
         )
-    {
-        "skip-live-halt-read"
-    } else {
-        "live-halt-read"
-    }
 }
 
 #[inline]
@@ -11303,6 +11465,43 @@ mod tests {
     }
 
     #[test]
+    fn usb_probe_preflight_status_prefers_trusted_high_bar_prompt_safe_path() {
+        let status = super::usb_probe_preflight_status(
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            Some(0x0546),
+            true,
+            true,
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+            true,
+        )
+        .expect("trusted prompt-safe path should be classified");
+        assert_eq!(status.route, "trusted-high-bar-primary");
+        assert_eq!(status.strategy_idx, 1);
+        assert_eq!(status.strategy_count, 3);
+        assert_eq!(status.policy, "full-reset-start");
+        assert_eq!(status.origin, "uboot-fresh-init");
+        assert_eq!(status.handoff, "cold-start-from-snapshot");
+        assert_eq!(status.seed, "none");
+        assert_eq!(status.halt_guard, "skip-live-halt-read");
+        assert_eq!(status.current_step, "pre-controller-ready");
+        assert_eq!(status.next_step, "skip-stop-revalidation");
+        assert_eq!(status.followup_step, "reset-post-settle");
+        assert!(!status.prefer_high);
+        assert!(status.pcie_dma_window);
+        assert!(status.poll_only);
+        assert_eq!(status.expected_diag_stage, 0x0224);
+        assert_eq!(
+            status.expected_diag_tag,
+            Some("fw-handoff-skip-stop-revalidation")
+        );
+        assert_eq!(status.expected_diag_exact, None);
+    }
+
+    #[test]
     fn xhci_runtime_init_strategy_halt_guard_labels_match_trusted_and_seeded_paths() {
         assert_eq!(
             super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(
@@ -11618,6 +11817,18 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_label(0x020c),
             Some("fw-handoff-skip-iman-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x020d),
+            Some("fw-handoff-trusted-usbsts-clear-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x020e),
+            Some("fw-handoff-trusted-imod-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x020f),
+            Some("fw-handoff-trusted-iman-write")
         );
         assert_eq!(
             xhci_diag_stage_label(0x0210),
