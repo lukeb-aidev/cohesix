@@ -754,11 +754,10 @@ const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transpo
 
 #[inline]
 const fn firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout() -> bool {
-    // Keep the HT-promoted transport alive through firmware-channel setup.
-    // Linux requests HT and then advances straight into
-    // mailbox -> F2 -> hostintmask -> watermark -> devctl -> mesbusy rather
-    // than demoting the transport before `sdio_enable_func(func2)`.
-    false
+    // Once the shadowed HT-assist state is complete, the Pi 4 path cuts over
+    // to the bounded no-HT transport rather than burning the full stronger
+    // retry budget on an HT-ready bit that never arrives.
+    true
 }
 
 #[inline]
@@ -16167,8 +16166,8 @@ mod tests {
     }
 
     #[test]
-    fn required_ht_soft_timeout_keeps_strict_transport_even_with_bounded_no_ht_snapshot() {
-        assert!(required_ht_clock_soft_timeout_keeps_strict_transport(
+    fn required_ht_soft_timeout_allows_bounded_no_ht_transport_with_complete_snapshot() {
+        assert!(!required_ht_clock_soft_timeout_keeps_strict_transport(
             Some(SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_EN),
@@ -16272,7 +16271,7 @@ mod tests {
     }
 
     #[test]
-    fn stronger_ht_retry_never_cuts_over_early_when_soft_timeout_keeps_strict_transport() {
+    fn stronger_ht_retry_cuts_over_early_when_bounded_no_ht_snapshot_is_complete() {
         let chipclk = Some(SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL);
         let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
         let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_EN);
@@ -16287,7 +16286,7 @@ mod tests {
             sleep,
             cardcap,
         ));
-        assert!(!ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+        assert!(ht_clock_retry_can_cutover_to_bounded_no_ht_early(
             true, shortcut, chipclk, wake, sleep, cardcap,
         ));
         assert!(!ht_clock_retry_can_cutover_to_bounded_no_ht_early(

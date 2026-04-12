@@ -306,6 +306,7 @@ static XHCI_DIAG_LAST_B: AtomicUsize = AtomicUsize::new(0);
 static XHCI_DIAG_LAST_C: AtomicUsize = AtomicUsize::new(0);
 static VL805_CFG_VIRT: AtomicUsize = AtomicUsize::new(0);
 static VL805_XHCI_MMIO_HINT: AtomicUsize = AtomicUsize::new(0);
+static LATEST_USB_PROBE_ROUTE: Mutex<Option<UsbProbePathwaySummary>> = Mutex::new(None);
 static PINNED_XHCI_MMIO: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
 static PINNED_VL805_CFG: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
 static USB_PROGRESS_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -559,6 +560,33 @@ pub(crate) struct UsbXhciDiagStatus {
     pub value_labels: Option<(&'static str, &'static str, &'static str)>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbProbeRouteStatus {
+    pub route: &'static str,
+    pub pathway_idx: usize,
+    pub strategy_idx: usize,
+    pub strategy_count: usize,
+    pub policy: &'static str,
+    pub origin: &'static str,
+    pub handoff: &'static str,
+    pub seed: &'static str,
+    pub halt_guard: &'static str,
+    pub current_step: &'static str,
+    pub next_step: &'static str,
+    pub progress: &'static str,
+    pub outcome: &'static str,
+    pub prefer_high: bool,
+    pub pcie_dma_window: bool,
+    pub poll_only: bool,
+    pub port: Option<u8>,
+    pub connected_mask: u32,
+    pub detect_passes: usize,
+    pub slow_recheck: bool,
+    pub diag_stage: Option<u16>,
+    pub diag_tag: Option<&'static str>,
+    pub diag_exact: Option<&'static str>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum UsbProbePathProgress {
     NoController,
@@ -797,6 +825,56 @@ fn usb_probe_best_pathway_update(
     }
     if best.is_none_or(|current| candidate.is_better_than(current)) {
         *best = Some(candidate);
+    }
+}
+
+#[inline]
+fn remember_latest_usb_probe_route(summary: &UsbProbePathwaySummary) {
+    *LATEST_USB_PROBE_ROUTE.lock() = Some(*summary);
+}
+
+#[inline]
+fn usb_probe_route_label(summary: UsbProbePathwaySummary) -> &'static str {
+    match (summary.handoff, summary.origin) {
+        ("cold-start-from-snapshot", "uboot-fresh-init") => "trusted-high-bar-primary",
+        ("cold-start-from-snapshot", "seeded-cold-start") => "trusted-high-bar-seeded-retry",
+        ("preserve-controller-state", "stop-state-preserve") => "stop-state-preserve-fallback",
+        ("resetless-reinit", "stop-state-resetless-reinit") => "stop-state-resetless-fallback",
+        _ => "diagnostic-fallback",
+    }
+}
+
+#[inline]
+fn usb_probe_current_step(summary: UsbProbePathwaySummary) -> &'static str {
+    match summary.progress {
+        UsbProbePathProgress::NoController if summary.diag.stage == 0x0224 => {
+            "skip-stop-revalidation"
+        }
+        UsbProbePathProgress::NoController => "controller-init",
+        UsbProbePathProgress::ControllerReady => "controller-ready",
+        UsbProbePathProgress::RootPortConnected => "root-port-detect",
+        UsbProbePathProgress::DeviceAddressed => "device-addressed",
+        UsbProbePathProgress::DeviceDescriptor => "device-descriptor",
+        UsbProbePathProgress::ConfigDescriptor => "config-descriptor",
+        UsbProbePathProgress::ConfigParsed => "config-parse",
+        UsbProbePathProgress::DeviceConfigured => "device-configure",
+        UsbProbePathProgress::KeyboardReady => "keyboard-ready",
+    }
+}
+
+#[inline]
+fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
+    match summary.progress {
+        UsbProbePathProgress::NoController if summary.diag.stage == 0x0224 => "reset-post-settle",
+        UsbProbePathProgress::NoController => "controller-ready",
+        UsbProbePathProgress::ControllerReady => "root-port-detect",
+        UsbProbePathProgress::RootPortConnected => "device-addressed",
+        UsbProbePathProgress::DeviceAddressed => "device-descriptor",
+        UsbProbePathProgress::DeviceDescriptor => "config-descriptor",
+        UsbProbePathProgress::ConfigDescriptor => "config-parse",
+        UsbProbePathProgress::ConfigParsed => "device-configure",
+        UsbProbePathProgress::DeviceConfigured => "keyboard-ready",
+        UsbProbePathProgress::KeyboardReady => "none",
     }
 }
 
@@ -2031,12 +2109,43 @@ pub(crate) fn latest_xhci_diag_status() -> Option<UsbXhciDiagStatus> {
     })
 }
 
+pub(crate) fn latest_usb_probe_route_status() -> Option<UsbProbeRouteStatus> {
+    let summary = (*LATEST_USB_PROBE_ROUTE.lock())?;
+    let diag_stage = (summary.diag.line_count != 0).then_some(summary.diag.stage);
+    Some(UsbProbeRouteStatus {
+        route: usb_probe_route_label(summary),
+        pathway_idx: summary.pathway_idx,
+        strategy_idx: summary.strategy_idx,
+        strategy_count: summary.strategy_count,
+        policy: summary.policy,
+        origin: summary.origin,
+        handoff: summary.handoff,
+        seed: summary.seed,
+        halt_guard: summary.halt_guard,
+        current_step: usb_probe_current_step(summary),
+        next_step: usb_probe_next_step(summary),
+        progress: summary.progress.as_str(),
+        outcome: summary.outcome.as_str(),
+        prefer_high: summary.prefer_high,
+        pcie_dma_window: summary.pcie_dma_window,
+        poll_only: summary.poll_only,
+        port: summary.port,
+        connected_mask: summary.connected_mask,
+        detect_passes: summary.detect_passes,
+        slow_recheck: summary.slow_recheck,
+        diag_stage,
+        diag_tag: diag_stage.and_then(xhci_diag_stage_label),
+        diag_exact: diag_stage.and_then(xhci_diag_stage_exact_issue_label),
+    })
+}
+
 #[inline]
 fn xhci_diag_snapshot_changed(before: XhciDiagSnapshot, after: XhciDiagSnapshot) -> bool {
     before != after
 }
 
 fn log_usb_probe_pathway_summary(summary: &UsbProbePathwaySummary) {
+    remember_latest_usb_probe_route(summary);
     let mut line = heapless::String::<640>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
@@ -2090,6 +2199,7 @@ fn log_usb_probe_pathway_summary(summary: &UsbProbePathwaySummary) {
 }
 
 fn log_usb_probe_best_pathway(result: &str, summary: &UsbProbePathwaySummary) {
+    remember_latest_usb_probe_route(summary);
     let mut line = heapless::String::<640>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
@@ -5313,15 +5423,15 @@ const fn xhci_irq_sink_mode(
     phase: XhciIrqInstallPhase,
 ) -> XhciIrqSinkMode {
     if xhci_polling_only_runtime(mmio, firmware_handoff) {
-        if matches!(phase, XhciIrqInstallPhase::PreControllerReady) {
-            XhciIrqSinkMode::Disabled
-        } else if TRUSTED_XHCI_PCIE_SINKS_ENABLED {
+        if TRUSTED_XHCI_PCIE_SINKS_ENABLED {
             // The trusted Pi4 handoff stays polling-driven, but the first live
             // ownership transition can still surface either the child INTx line
             // from the bcm2711 interrupt-map or the parent PCIe bridge IRQ.
             // Install only those bounded sinks (GIC SPI 143 + 148 on Pi 4)
-            // after controller-ready and leave primary xHCI IRQ ownership out
-            // of the runtime path.
+            // across both the pre-controller-ready and controller-ready
+            // windows, and leave primary xHCI IRQ ownership out of the runtime
+            // path.
+            let _ = phase;
             XhciIrqSinkMode::IntxAndBridge
         } else {
             XhciIrqSinkMode::Disabled
@@ -6226,11 +6336,27 @@ impl UsbKeyboard {
                     ),
                 );
                 boot_log::force_uart_line(params_line.as_str());
-                XhciIrqGuard::log_policy(
+                let mut xhci_irq_guard = match XhciIrqGuard::install(
+                    hal,
                     effective_mmio,
                     strategy.firmware_handoff,
                     XhciIrqInstallPhase::PreControllerReady,
-                );
+                ) {
+                    Ok(guard) => guard,
+                    Err(reason) => {
+                        let mut line = heapless::String::<224>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} stage={} detail={reason} action=fallback-poll-only",
+                                xhci_irq_phase_label(XhciIrqInstallPhase::PreControllerReady),
+                                mmio = effective_mmio
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        None
+                    }
+                };
                 for &prefer_high in dma_probe_order {
                     let dma_bus_modes: &[bool] =
                         if XHCI_PCIE_DMA_WINDOW_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
@@ -6389,26 +6515,35 @@ impl UsbKeyboard {
                                 continue;
                             }
                         };
-                        let xhci_irq_guard = match XhciIrqGuard::install(
-                            hal,
-                            effective_mmio,
-                            strategy.firmware_handoff,
-                            XhciIrqInstallPhase::ControllerReady,
-                        ) {
-                            Ok(guard) => guard,
-                            Err(reason) => {
-                                let mut line = heapless::String::<224>::new();
-                                let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
-                                    "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} detail={reason} action=fallback-poll-only",
-                                    mmio = effective_mmio
-                                ),
-                            );
-                                boot_log::force_uart_line(line.as_str());
-                                None
-                            }
-                        };
+                        if xhci_irq_guard.is_none()
+                            && xhci_irq_sink_needed(
+                                effective_mmio,
+                                strategy.firmware_handoff,
+                                XhciIrqInstallPhase::ControllerReady,
+                            )
+                        {
+                            xhci_irq_guard = match XhciIrqGuard::install(
+                                hal,
+                                effective_mmio,
+                                strategy.firmware_handoff,
+                                XhciIrqInstallPhase::ControllerReady,
+                            ) {
+                                Ok(guard) => guard,
+                                Err(reason) => {
+                                    let mut line = heapless::String::<224>::new();
+                                    let _ = core::fmt::Write::write_fmt(
+                                        &mut line,
+                                        format_args!(
+                                            "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} stage={} detail={reason} action=fallback-poll-only",
+                                            xhci_irq_phase_label(XhciIrqInstallPhase::ControllerReady),
+                                            mmio = effective_mmio
+                                        ),
+                                    );
+                                    boot_log::force_uart_line(line.as_str());
+                                    None
+                                }
+                            };
+                        }
 
                         let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
                         let mut connected_mask = 0u32;
@@ -11107,6 +11242,75 @@ mod tests {
     }
 
     #[test]
+    fn usb_probe_route_labels_distinguish_primary_and_fallback_paths() {
+        let primary = UsbProbePathwaySummary::new(
+            0,
+            0,
+            3,
+            "full-reset-start",
+            "uboot-fresh-init",
+            "cold-start-from-snapshot",
+            "none",
+            "skip-live-halt-read",
+            true,
+            true,
+            true,
+        );
+        let preserve = UsbProbePathwaySummary::new(
+            1,
+            2,
+            3,
+            "preserve-state",
+            "stop-state-preserve",
+            "preserve-controller-state",
+            "stop-state",
+            "stop-state-seed",
+            true,
+            true,
+            true,
+        );
+        assert_eq!(
+            super::usb_probe_route_label(primary),
+            "trusted-high-bar-primary"
+        );
+        assert_eq!(
+            super::usb_probe_route_label(preserve),
+            "stop-state-preserve-fallback"
+        );
+    }
+
+    #[test]
+    fn usb_probe_next_step_uses_reset_post_settle_after_skip_stop_revalidation() {
+        let summary = UsbProbePathwaySummary {
+            diag: XhciDiagSnapshot {
+                line_count: 1,
+                stage: 0x0224,
+                a: 0,
+                b: 0,
+                c: 0,
+            },
+            ..UsbProbePathwaySummary::new(
+                0,
+                0,
+                3,
+                "full-reset-start",
+                "uboot-fresh-init",
+                "cold-start-from-snapshot",
+                "none",
+                "skip-live-halt-read",
+                true,
+                true,
+                true,
+            )
+        };
+        assert_eq!(
+            super::usb_probe_current_step(summary),
+            "skip-stop-revalidation"
+        );
+        assert_eq!(super::usb_probe_next_step(summary), "reset-post-settle");
+    }
+
+    #[test]
     fn xhci_runtime_init_strategy_halt_guard_labels_match_trusted_and_seeded_paths() {
         assert_eq!(
             super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(
@@ -12000,7 +12204,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_sink_mode_uses_bounded_pcie_sinks_for_trusted_high_handoff_probe() {
+    fn xhci_irq_sink_mode_uses_bounded_pcie_sinks_across_trusted_high_handoff_probe() {
         assert_eq!(
             xhci_irq_sink_mode(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -12016,14 +12220,14 @@ mod tests {
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
             ),
-            XhciIrqInstallPhase::ControllerReady,
+            XhciIrqInstallPhase::PreControllerReady,
         ));
-        assert!(!xhci_irq_sink_needed(
+        assert!(xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
             ),
-            XhciIrqInstallPhase::PreControllerReady,
+            XhciIrqInstallPhase::ControllerReady,
         ));
         assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,

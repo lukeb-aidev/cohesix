@@ -2253,6 +2253,52 @@ where
             polling_enabled,
             diag.as_ref().and_then(|status| status.exact_issue),
         );
+        if let Some(route) = crate::local_seat_pi4::latest_usb_probe_route_status() {
+            let route_line = format_message(format_args!(
+                "usb: golden_path route={} attempt={}/{} current={} next={} origin={} handoff={} seed={} halt_guard={}",
+                route.route,
+                route.strategy_idx + 1,
+                route.strategy_count,
+                route.current_step,
+                route.next_step,
+                route.origin,
+                route.handoff,
+                route.seed,
+                route.halt_guard,
+            ));
+            self.emit_console_line(route_line.as_str());
+            let mut progress_line = format_message(format_args!(
+                "usb: golden_path outcome={} progress={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} detect_passes={}",
+                route.outcome,
+                route.progress,
+                route.policy,
+                if route.prefer_high { "high" } else { "low" },
+                if route.pcie_dma_window {
+                    "pcie-window"
+                } else {
+                    "phys"
+                },
+                if route.poll_only { "yes" } else { "no" },
+                route.connected_mask,
+                route.detect_passes,
+            ));
+            if let Some(port) = route.port {
+                let _ = write!(progress_line, " port={port}");
+            }
+            if route.slow_recheck {
+                let _ = write!(progress_line, " slow_recheck=yes");
+            }
+            if let Some(stage) = route.diag_stage {
+                let _ = write!(progress_line, " diag_stage=0x{stage:04x}");
+                if let Some(tag) = route.diag_tag {
+                    let _ = write!(progress_line, " diag_tag={tag}");
+                }
+                if let Some(exact) = route.diag_exact {
+                    let _ = write!(progress_line, " diag_exact={exact}");
+                }
+            }
+            self.emit_console_line(progress_line.as_str());
+        }
         let verdict_line = format_message(format_args!("usb: verdict={verdict} focus={focus}"));
         self.emit_console_line(verdict_line.as_str());
         if let Some(diag) = diag {
@@ -2424,6 +2470,23 @@ where
         ));
         self.emit_console_line(bootstrap.as_str());
 
+        let (verdict, focus) = Self::wifi_capture_verdict(snapshot);
+        let golden_route = format_message(format_args!(
+            "wifi: golden_path route={} state={} transport={} current={} next={} focus={} verdict={}",
+            Self::wifi_golden_path_route(snapshot),
+            Self::wifi_golden_path_state(snapshot),
+            if snapshot.control_plane_no_ht_transport {
+                "bounded-no-ht"
+            } else {
+                "strict"
+            },
+            Self::wifi_golden_path_current_step(snapshot),
+            Self::wifi_golden_path_next_step(snapshot),
+            focus,
+            verdict,
+        ));
+        self.emit_console_line(golden_route.as_str());
+
         let control = format_message(format_args!(
             "wifi: f2_state={} exact_error={} sdhci_read_diag={}",
             snapshot.control_plane_f2_state,
@@ -2432,7 +2495,6 @@ where
         ));
         self.emit_console_line(control.as_str());
 
-        let (verdict, focus) = Self::wifi_capture_verdict(snapshot);
         let verdict_line = format_message(format_args!(
             "wifi: verdict={verdict} focus={focus} bootstrap={}",
             snapshot.control_plane_bootstrap_phase,
@@ -2474,6 +2536,84 @@ where
             return ("sdio-card-edge", "card-select");
         }
         ("transport-edge", "control-plane-bootstrap")
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_golden_path_route(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if snapshot.control_plane_no_ht_transport {
+            "strict-then-bounded-no-ht"
+        } else {
+            "strict-startup-link"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_golden_path_state(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if snapshot.control_plane_no_ht_transport {
+            "fallback-no-ht"
+        } else if snapshot.control_plane_startup_link_stable {
+            "startup-link-stable"
+        } else {
+            "primary"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_golden_path_current_step(snapshot: &WifiDebugSnapshot) -> &'static str {
+        let exact_error = snapshot.control_plane_exact_error;
+        if exact_error.starts_with("cyw43-function2-disabled")
+            || exact_error.starts_with("cyw43-function2-enable-latched-not-ready")
+            || exact_error.starts_with("cyw43-function2-ready-hidden-from-cccr")
+            || exact_error.starts_with("cyw43-function2-ready-unreadable")
+        {
+            return "function2-ready";
+        }
+        if exact_error.starts_with("cyw43-function2-interrupt-gated")
+            || exact_error.starts_with("cyw43-function2-interrupt-unreadable")
+            || exact_error == "cyw43-control-plane-linux-interrupts-deferred"
+        {
+            return "function2-interrupts";
+        }
+        if exact_error.starts_with("cyw43-control-plane-sideband-")
+            || exact_error == "cyw43-control-plane-sideband-unreadable"
+        {
+            return "function1-sideband";
+        }
+        if matches!(
+            exact_error,
+            "cyw43-control-plane-passive-startup-link-timeout"
+                | "cyw43-control-plane-startup-link-rescue-budget-exhausted"
+                | "cyw43-control-plane-pure-f2-startup-link-no-reply"
+                | "cyw43-control-plane-state-visible-no-reply"
+        ) {
+            return "first-function2-reply";
+        }
+        if !snapshot.card_ready {
+            return "sdio-card-select";
+        }
+        match snapshot.control_plane_bootstrap_phase {
+            "first-write-startup-link" => "setup-firmware-channel",
+            "startup-link-recovery" => "startup-link-recovery",
+            "steady-state" if snapshot.control_plane_probe_pending => "setup-firmware-channel",
+            "steady-state" => "wait-ht-clock",
+            _ if snapshot.control_plane_startup_link_stable => "first-function2-reply",
+            _ => "wait-ht-clock",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_golden_path_next_step(snapshot: &WifiDebugSnapshot) -> &'static str {
+        match Self::wifi_golden_path_current_step(snapshot) {
+            "sdio-card-select" => "enable-function1",
+            "wait-ht-clock" => "setup-firmware-channel",
+            "function2-ready" => "setup-firmware-channel",
+            "function2-interrupts" => "mailbox-ready",
+            "setup-firmware-channel" => "wait-firmware-ready",
+            "startup-link-recovery" => "first-function2-reply",
+            "function1-sideband" => "first-function2-reply",
+            "first-function2-reply" => "promote-link",
+            _ => "wait-firmware-ready",
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -5676,6 +5816,12 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered.contains(
+                "wifi: golden_path route=strict-then-bounded-no-ht state=fallback-no-ht transport=bounded-no-ht current=function1-sideband next=first-function2-reply focus=function1-sideband verdict=function1-sideband-edge"
+            ),
+            "{rendered}"
+        );
+        assert!(
             rendered.contains("safe_profile_locked=yes safe_reason=promoted-io-unstable"),
             "{rendered}"
         );
@@ -5899,6 +6045,64 @@ mod tests {
                 NullIpc,
             >::wifi_capture_verdict(&snapshot),
             ("function1-sideband-edge", "function1-sideband")
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_golden_path_step_prefers_function1_sideband_edge() {
+        let snapshot = WifiDebugSnapshot {
+            power_state: WifiPowerState::Off,
+            reset_state: WifiResetState::Asserted,
+            current_clock_hz: 0,
+            preferred_data_clock_hz: 12_500_000,
+            bus_width: SdioBusWidth::OneBit,
+            card_ready: false,
+            card_rca: 0,
+            card_ocr: 0,
+            io_enable: None,
+            io_ready: None,
+            chipclkcsr: None,
+            wakeupctrl: None,
+            sleepcsr: None,
+            cardcap: None,
+            programmed_backplane_window: None,
+            shadow_backplane_window: None,
+            shadow_backplane_fn_addr: None,
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            control_plane_bootstrap_phase: "steady-state",
+            control_plane_reply_mode: "none",
+            control_plane_reply_attempts: 0,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: false,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: false,
+            control_plane_startup_profile_reason: "none",
+            control_plane_promoted_probe_pending: false,
+            control_plane_f2_state: "unproven",
+            control_plane_sdhci_read_diag: "f1-reply-read-command-timeout",
+            control_plane_exact_error: "cyw43-control-plane-sideband-command-timeout",
+        };
+        assert_eq!(
+            EventPump::<
+                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
+                TestTimer,
+                NullIpc,
+            >::wifi_golden_path_current_step(&snapshot),
+            "function1-sideband"
+        );
+        assert_eq!(
+            EventPump::<
+                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
+                TestTimer,
+                NullIpc,
+            >::wifi_golden_path_next_step(&snapshot),
+            "first-function2-reply"
         );
     }
 

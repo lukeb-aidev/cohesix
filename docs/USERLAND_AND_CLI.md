@@ -49,8 +49,8 @@ Use the root console for low-level validation (bootinfo, capability layout, unty
 - `smp` – dump SMP scheduler/CPU info in debug builds (prints `ERR reason=unsupported` otherwise). The command emits mirrored `[smp] ...` probe lines; raw kernel scheduler/CPU dump bodies are serial/UART only.【F:apps/root-task/src/console/mod.rs†L265-L300】
 - `mem` – untyped cap counts with RAM vs device breakdown.【F:apps/root-task/src/console/mod.rs†L265-L283】
 - `ping` – replies `pong` as a liveness check.【F:apps/root-task/src/console/mod.rs†L285-L293】
-- `usb <help|status|enable-kbd|probe-kbd>` – Pi 4 USB local-seat diagnostics on the serial/local diagnostics console only. `usb status` and `usb probe-kbd` surface the latest classified xHCI diagnostic edge, a compact `verdict=... focus=...` line, and the labelled cached xHCI stage values when runtime has already reached one.
-- `wifi <help|dump-state|probe-ht|load-fw|retry>` – Pi 4 WiFi bring-up diagnostics on the serial/local diagnostics console only. `wifi dump-state` now ends with a compact `verdict=... focus=...` line that classifies the current last-mile blocker from the cached transport snapshot. These commands do not extend the shared TCP/`cohsh` grammar; TCP clients still reject raw `wifi ...` lines as parse errors.
+- `usb <help|status|enable-kbd|probe-kbd>` – Pi 4 USB local-seat diagnostics on the serial/local diagnostics console only. `usb status` and `usb probe-kbd` now surface a compact `golden_path ...` route summary before the existing `verdict=... focus=...` line, including the chosen origin/handoff/seed/halt-guard plus the next expected controller step and the freshest cached xHCI stage values when runtime has already reached one.
+- `wifi <help|dump-state|probe-ht|load-fw|retry>` – Pi 4 WiFi bring-up diagnostics on the serial/local diagnostics console only. `wifi dump-state` now emits a compact `golden_path ...` route summary before the existing `verdict=... focus=...` line so operators can see whether the active path is still on the strict startup-link route or has already fallen back to bounded no-HT, plus the current step and next expected control-plane edge. These commands do not extend the shared TCP/`cohsh` grammar; TCP clients still reject raw `wifi ...` lines as parse errors.
 - `quit` – currently prints `quit not supported on root console`; the loop continues (no session exit).【F:apps/root-task/src/console/mod.rs†L285-L299】
 
 ### Example boot and probe
@@ -81,6 +81,7 @@ wifi: power=on reset=deasserted card=yes rca=0x0001 ocr=0xb0ffff00
 wifi: clock=400000Hz preferred=3125000Hz width=4bit ioex=0x02 iordy=0x02
 wifi: chipclk=0x50 wake=0x02 sleep=0x01 cardcap=0x08 programmed=0x00198000 shadow=0x00198000 fn=0x08000
 wifi: bootstrap=first-write-startup-link no_ht=yes probe_pending=yes startup_link_stable=no reply_mode=startup-link reply_attempts=1 empty_polls=0 promoted_probe=no
+wifi: golden_path route=strict-then-bounded-no-ht state=fallback-no-ht transport=bounded-no-ht current=function1-sideband next=first-function2-reply focus=function1-sideband verdict=function1-sideband-edge
 wifi: f2_state=latched-linux-configured-no-iorx exact_error=cyw43-control-plane-sideband-command-stall sdhci_read_diag=f1-reply-read-command-phase-no-data-active
 wifi: verdict=function1-sideband-edge focus=function1-sideband bootstrap=first-write-startup-link
 ```
