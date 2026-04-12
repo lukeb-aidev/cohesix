@@ -712,17 +712,12 @@ const fn firmware_channel_write_restore_clock_hz(
     experimental_no_ht_transport: bool,
     current_clock_hz: u32,
 ) -> Option<u32> {
-    if experimental_no_ht_transport {
-        // Keep the Pi 4 no-HT recovery path aligned with Linux's BCM43455
-        // Function 2/channel programming: once the link has been promoted,
-        // do not demote mailbox/interrupt/watermark writes back to 400 kHz.
-        return None;
-    }
-    if current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
-        Some(current_clock_hz)
-    } else {
-        None
-    }
+    let _ = experimental_no_ht_transport;
+    let _ = current_clock_hz;
+    // Keep the Pi 4 BCM43455 setup path aligned with Linux brcmfmac:
+    // once the bus has been promoted for firmware bring-up, do not demote the
+    // mailbox / Function-2 / hostintmask programming sequence back to 400 kHz.
+    None
 }
 
 #[inline]
@@ -754,6 +749,15 @@ const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transpo
     // Linux does not treat a latched F2 enable as sufficient to continue:
     // `sdio_enable_func()` waits for IORx before brcmfmac advances the
     // mailbox/channel setup. Keep the Pi 4 firmware stages on that contract.
+    false
+}
+
+#[inline]
+const fn firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout() -> bool {
+    // Keep the HT-promoted transport alive through firmware-channel setup.
+    // Linux requests HT and then advances straight into
+    // mailbox -> F2 -> hostintmask -> watermark -> devctl -> mesbusy rather
+    // than demoting the transport before `sdio_enable_func(func2)`.
     false
 }
 
@@ -1835,7 +1839,8 @@ const fn ht_clock_retry_can_cutover_to_bounded_no_ht_early(
     last_sleepcsr: Option<u8>,
     last_cardcap: Option<u8>,
 ) -> bool {
-    stronger_retry_request
+    firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout()
+        && stronger_retry_request
         && completed_loops >= required_ht_clock_bounded_no_ht_shortcut_loops()
         && ht_clock_timeout_can_enter_bounded_no_ht_transport(
             last_chipclk,
@@ -2286,6 +2291,7 @@ const SDIO_FUNCTION_READY_POLLS: usize = 64;
 const SDIO_FUNCTION_READY_POLLS_FUNCTION2: usize = 16;
 const SDIO_FUNCTION_READY_POLLS_FUNCTION2_REPLY_PROBE: usize = 64;
 const SDIO_FUNCTION_READY_POLLS_FUNCTION2_EXTENDED: usize = 256;
+const SDIO_FUNCTION_READY_POLLS_FUNCTION2_EXTENDED_STRICT: usize = 1024;
 const SDIO_FUNCTION_READY_SETTLE_LOOPS: usize = 200_000;
 const SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2: usize = 50_000;
 const SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE: usize =
@@ -3222,6 +3228,15 @@ const fn sdio_function_ready_uses_control_plane_reply_probe_budget(
 }
 
 #[inline]
+const fn sdio_function_ready_uses_linux_strict_wait_only_budget(
+    step: SdioFunctionEnableStep,
+    budget: SdioFunctionReadyBudget,
+) -> bool {
+    matches!(step.function, SdioFunction::Function2)
+        && matches!(budget, SdioFunctionReadyBudget::Strict)
+}
+
+#[inline]
 const fn sdio_function_ready_uses_force_reenable_budget(
     _step: SdioFunctionEnableStep,
     _budget: SdioFunctionReadyBudget,
@@ -3261,7 +3276,9 @@ const fn sdio_function_ready_retry_limit_for(
     step: SdioFunctionEnableStep,
     budget: SdioFunctionReadyBudget,
 ) -> usize {
-    if sdio_function_ready_uses_short_probe_only_budget(step, budget)
+    if sdio_function_ready_uses_linux_strict_wait_only_budget(step, budget) {
+        0
+    } else if sdio_function_ready_uses_short_probe_only_budget(step, budget)
         || sdio_function_ready_uses_control_plane_reply_probe_budget(step, budget)
     {
         0
@@ -3277,6 +3294,8 @@ const fn sdio_function_ready_extended_polls_for(
 ) -> Option<usize> {
     if sdio_function_ready_uses_short_probe_only_budget(step, budget) {
         None
+    } else if sdio_function_ready_uses_linux_strict_wait_only_budget(step, budget) {
+        Some(SDIO_FUNCTION_READY_POLLS_FUNCTION2_EXTENDED_STRICT)
     } else if sdio_function_ready_uses_control_plane_reply_probe_budget(step, budget) {
         Some(SDIO_FUNCTION_READY_POLLS_FUNCTION2_REPLY_PROBE)
     } else {
@@ -8160,7 +8179,17 @@ impl SdioHost {
                 }
                 self.log_function_ready_timeout_state(step, desired, last_ready, attempt);
                 if matches!(step.function, SdioFunction::Function2) {
-                    self.log_function2_ready_snapshot("timeout");
+                    if sdio_function_ready_uses_linux_strict_wait_only_budget(
+                        step,
+                        function_ready_budget,
+                    ) {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] sdio function-ready fn=2 action=linux-strict-timeout-skip-sideband-snapshot polls={} settle_loops={}",
+                            ready_polls, settle_loops
+                        ));
+                    } else {
+                        self.log_function2_ready_snapshot("timeout");
+                    }
                 }
                 if !used_extended_budget {
                     if let (Some(extended_polls), Some(extended_settle_loops)) = (
@@ -10133,8 +10162,14 @@ impl SdioHost {
         if strict_ht_ready {
             self.experimental_no_ht_transport = false;
             self.experimental_control_plane_write_probe_pending = false;
-        } else {
+        } else if firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout() {
             self.enter_bounded_no_ht_transport("wait-ht-clock")?;
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=wait-ht-clock action=continue mode={} reason=soft-timeout keep-order=linux-f2-before-no-ht-cutover",
+                cyw43_transport_mode_name(false),
+            ));
+            self.log_transport_shadow("wait-ht-clock-strict-soft-continue");
         }
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=setup-firmware-channel mode={} chunk_limit={}",
@@ -14813,7 +14848,7 @@ mod tests {
                 SDIO_FUNCTION_ENABLE_F2,
                 SdioFunctionReadyBudget::Strict
             ),
-            SDIO_FUNCTION2_READY_RETRY_LIMIT
+            0
         );
         assert_eq!(
             sdio_function_ready_retry_limit_for(
@@ -14827,7 +14862,7 @@ mod tests {
                 SDIO_FUNCTION_ENABLE_F2,
                 SdioFunctionReadyBudget::Strict
             ),
-            Some(SDIO_FUNCTION_READY_POLLS_FUNCTION2_EXTENDED)
+            Some(SDIO_FUNCTION_READY_POLLS_FUNCTION2_EXTENDED_STRICT)
         );
         assert_eq!(
             sdio_function_ready_extended_polls_for(
@@ -15728,7 +15763,7 @@ mod tests {
     }
 
     #[test]
-    fn firmware_channel_writes_stay_at_current_clock_for_no_ht_transport() {
+    fn firmware_channel_writes_keep_firmware_channel_programming_at_current_clock() {
         assert_eq!(
             firmware_channel_write_restore_clock_hz(true, CYW43_CONTROL_PLANE_CLOCK_HZ),
             None
@@ -15739,8 +15774,13 @@ mod tests {
         );
         assert_eq!(
             firmware_channel_write_restore_clock_hz(false, CYW43_CONTROL_PLANE_CLOCK_HZ),
-            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
+            None
         );
+    }
+
+    #[test]
+    fn firmware_stage_keeps_strict_transport_after_soft_ht_timeout() {
+        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]
@@ -16134,7 +16174,7 @@ mod tests {
     }
 
     #[test]
-    fn stronger_ht_retry_cuts_over_early_only_after_shortcut_budget_and_shadow_contract() {
+    fn stronger_ht_retry_never_cuts_over_early_when_soft_timeout_keeps_strict_transport() {
         let chipclk = Some(SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL);
         let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
         let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_EN);
@@ -16149,7 +16189,7 @@ mod tests {
             sleep,
             cardcap,
         ));
-        assert!(ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+        assert!(!ht_clock_retry_can_cutover_to_bounded_no_ht_early(
             true, shortcut, chipclk, wake, sleep, cardcap,
         ));
         assert!(!ht_clock_retry_can_cutover_to_bounded_no_ht_early(
