@@ -136,6 +136,17 @@ const fn run_usbcmd_needs_live_seed_read(
 }
 
 #[inline(always)]
+const fn run_usbcmd_prefers_snapshot_seed(
+    firmware_handoff: XhciFirmwareHandoff,
+    preserve_firmware_state: bool,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    preserve_firmware_state
+        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn compose_run_usbcmd(current_usbcmd: u32, merge_existing_bits: bool) -> u32 {
     if merge_existing_bits {
         current_usbcmd | reg::USBCMD_RUN
@@ -523,11 +534,14 @@ const fn defer_dcbaap_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The weak stop-state-only mailbox snapshot has now proved that the first
-    // live pre-RUN DCBAAP store is still toxic on Pi 4. Put it back on the
-    // deferred ownership ladder with the stronger mailbox-reset handoff so the
-    // next trace isolates the RUN transition instead of another publish edge.
-    runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
+    // Keep both Pi 4 mailbox-reset handoffs on the deferred DCBAAP contract.
+    // The latest stop-state trace now wedges at the first live DCBAAP low-word
+    // store, so that path needs the same deferred ladder as the stronger
+    // runtime-ring seed while preserve-state and resetless reinit stay put.
+    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -567,18 +581,26 @@ const fn deferred_erst_publish_uses_size_first_with_snapshot(
 }
 
 #[inline(always)]
+const fn deferred_erdp_publish_precedes_erst_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    // The Pi 4 stop-state mailbox snapshot now reaches the deferred ERSTBA
+    // publish and wedges there. Match U-Boot's event-ring order on that path:
+    // publish ERDP first, then describe the ERST.
+    runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn defer_event_ring_publish_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     // Preserve-state and resetless snapshot paths still need the late event
-    // ring publish ladder. The weaker stop-state-only mailbox handoff now
-    // keeps the same smaller U-Boot-faithful contract as the deferred
-    // DCBAAP/CRCR/DNCTRL ladder, so the next live edge stays on the post-RUN
-    // transition instead of another pre-RUN event-ring publish experiment.
+    // ring publish ladder. The weaker Pi 4 stop-state mailbox handoff should
+    // match U-Boot's smaller contract and publish the event ring before RUN.
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -2101,6 +2123,12 @@ impl<H: Dma> XhciCtrl<H> {
         // Prime ERDP to the first event TRB without setting EHB during init.
         let erdp = compose_initial_erdp(event_ring_phys);
         emit_xhci_diag(0x0266, (int_base + reg::ERDP) as u64, erdp, 0);
+        let publish_deferred_erdp_before_erst = defer_erdp_publish
+            && !defer_event_ring_publish_until_after_run
+            && deferred_erdp_publish_precedes_erst_with_snapshot(
+                self.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+            );
         if defer_erdp_publish {
             emit_xhci_diag(0x02b5, reg::ERDP as u64, erdp, staged_current_erdp);
             emit_xhci_diag(
@@ -2120,6 +2148,32 @@ impl<H: Dma> XhciCtrl<H> {
             );
         } else {
             self.write_reg_u64_diag(int_base + reg::ERDP, erdp, 0x0277, 0x0278);
+        }
+        if publish_deferred_erdp_before_erst {
+            // Match U-Boot's cold-start order on the Pi 4 stop-state mailbox
+            // handoff: hand the deque pointer to the controller before
+            // publishing ERSTSZ/ERSTBA. Do not replay the staged snapshot
+            // value first: U-Boot writes the live dequeue pointer directly,
+            // and the extra snapshot prewrite is now the first Pi 4 runtime
+            // edge to wedge.
+            let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
+            emit_xhci_diag(
+                0x02bb,
+                target_low.0 as u64,
+                target_low.1 as u64,
+                staged_current_erdp,
+            );
+            Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
+            emit_xhci_diag(0x02bc, target_low.0 as u64, target_low.1 as u64, erdp);
+            emit_xhci_diag(
+                0x02bd,
+                target_high.0 as u64,
+                target_high.1 as u64,
+                staged_current_erdp,
+            );
+            Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
+            emit_xhci_diag(0x02be, target_high.0 as u64, target_high.1 as u64, erdp);
+            emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
         }
         let (current_erst_size, current_erstba) = if preserve_firmware_state {
             (0, 0)
@@ -2277,21 +2331,16 @@ impl<H: Dma> XhciCtrl<H> {
                 );
             }
         }
-        if defer_erdp_publish && !defer_event_ring_publish_until_after_run {
+        if defer_erdp_publish
+            && !defer_event_ring_publish_until_after_run
+            && !publish_deferred_erdp_before_erst
+        {
             // The trusted mailbox-reset snapshot path no longer lets ERSTSZ /
             // ERSTBA / ERDP become the first live runtime event-ring
             // ownership stores. Publish the table first, then hand ERDP to
-            // the controller with the same staged low/high breadcrumbs used
-            // for the later runtime ring registers.
-            Self::write_reg_u64_done_diag_at(
-                self.mmio,
-                int_base + reg::ERDP,
-                staged_current_erdp,
-                0x02b7,
-                0x02b8,
-                0x02b9,
-                0x02ba,
-            );
+            // the controller with the live dequeue pointer only. Replaying
+            // the staged snapshot value does not match U-Boot and has become
+            // the first Pi 4 runtime ownership edge to wedge.
             let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
             emit_xhci_diag(
                 0x02bb,
@@ -2427,14 +2476,29 @@ impl<H: Dma> XhciCtrl<H> {
         // Start controller in polling mode (interrupt delivery remains masked).
         let run_usbcmd = if let Some(snapshot_usbcmd) =
             run_usbcmd_snapshot_seed(trusted_runtime_seed_snapshot)
-                .filter(|_| preserve_firmware_state)
+                .filter(|_| {
+                    run_usbcmd_prefers_snapshot_seed(
+                        self.firmware_handoff,
+                        preserve_firmware_state,
+                        trusted_runtime_seed_snapshot,
+                    )
+                })
                 .map(masked_usbcmd)
         {
-            // The Pi 4 preserved stop-state handoff now treats the bootloader
-            // snapshot as the only safe RUN seed. A fresh live USBCMD read on
-            // this path wedges VL805 before the write even lands.
+            // The Pi 4 trusted stop-state handoff must reuse the bootloader
+            // snapshot as the RUN seed. A fresh live USBCMD read on these
+            // seeded reset-start paths wedges VL805 before the write lands.
             let composed = compose_run_usbcmd(snapshot_usbcmd, true);
-            emit_xhci_diag(0x02ee, snapshot_usbcmd as u64, composed as u64, 1);
+            emit_xhci_diag(
+                0x02ee,
+                snapshot_usbcmd as u64,
+                composed as u64,
+                run_usbcmd_prefers_snapshot_seed(
+                    self.firmware_handoff,
+                    preserve_firmware_state,
+                    trusted_runtime_seed_snapshot,
+                ) as u64,
+            );
             composed
         } else if run_usbcmd_needs_live_seed_read(
             preserve_firmware_state,
@@ -3413,11 +3477,13 @@ mod tests {
         defer_erdp_publish_with_snapshot, defer_erst_publish_with_snapshot,
         defer_event_ring_publish_until_after_run_with_snapshot,
         defer_scratchpad_array_publish_with_snapshot,
+        deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, halt_revalidation_needed,
         masked_usbcmd, parse_controller_params, polling_iman_value, port_ready_for_enumeration,
         preserve_firmware_handoff_config, probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot, run_usbcmd_needs_live_seed_read,
-        run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
+        run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed,
+        run_wait_observable_usbsts, run_wait_progress_due,
         runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_uboot_style_reset_write,
         runtime_handoff_needs_relaxed_run_write,
         runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
@@ -3614,7 +3680,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
-        assert!(defer_event_ring_publish_until_after_run_with_snapshot(
+        assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -4117,6 +4183,10 @@ mod tests {
             XhciFirmwareHandoff::ResetlessReinit,
             snapshot,
         ));
+        assert!(!deferred_erdp_publish_precedes_erst_with_snapshot(
+            XhciFirmwareHandoff::ResetlessReinit,
+            snapshot,
+        ));
         assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
@@ -4127,6 +4197,24 @@ mod tests {
         ));
         assert!(defer_event_ring_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
+            snapshot,
+        ));
+    }
+
+    #[test]
+    fn stop_state_snapshot_matches_uboot_erdp_before_erst_publish_order() {
+        let snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+        assert!(deferred_erdp_publish_precedes_erst_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
     }
@@ -4245,6 +4333,32 @@ mod tests {
         let current =
             masked_usbcmd(run_usbcmd_snapshot_seed(snapshot).expect("snapshot preserves usbcmd"));
         assert!(!run_usbcmd_needs_live_seed_read(true, false, snapshot));
+        assert_eq!(current, reg::USBCMD_EWE);
+        assert_eq!(
+            compose_run_usbcmd(current, true),
+            reg::USBCMD_EWE | reg::USBCMD_RUN
+        );
+    }
+
+    #[test]
+    fn cold_start_snapshot_run_usbcmd_prefers_stop_state_seed_when_available() {
+        let snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(reg::USBCMD_EWE | reg::USBCMD_INTE),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+        let current =
+            masked_usbcmd(run_usbcmd_snapshot_seed(snapshot).expect("snapshot preserves usbcmd"));
+        assert!(run_usbcmd_prefers_snapshot_seed(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            false,
+            snapshot,
+        ));
         assert_eq!(current, reg::USBCMD_EWE);
         assert_eq!(
             compose_run_usbcmd(current, true),

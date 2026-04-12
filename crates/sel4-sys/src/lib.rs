@@ -1839,6 +1839,12 @@ mod imp {
         }
     }
 
+    impl Default for seL4_IPCBuffer {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct seL4_ARM_VMAttributes(pub seL4_Word);
 

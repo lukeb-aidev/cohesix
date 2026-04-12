@@ -749,6 +749,15 @@ fn setup_firmware_channel_can_assume_write_committed(
 }
 
 #[inline]
+const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transport: bool) -> bool {
+    let _ = experimental_no_ht_transport;
+    // Linux does not treat a latched F2 enable as sufficient to continue:
+    // `sdio_enable_func()` waits for IORx before brcmfmac advances the
+    // mailbox/channel setup. Keep the Pi 4 firmware stages on that contract.
+    false
+}
+
+#[inline]
 const fn wait_for_firmware_ready_uses_experimental_mailbox_read(
     allow_function2_ready_bypass: bool,
 ) -> bool {
@@ -1177,21 +1186,16 @@ fn control_plane_reply_should_attempt_hintless_speculative_read(
     mailbox_data: Option<u32>,
     frame_len_hint: Option<usize>,
 ) -> bool {
-    let startup_link_hintless_probe = control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
-        && current_clock_hz <= CYW43_STARTUP_CLOCK_HZ
-        && (startup_link_stabilized || hint_reads_unstable);
-    let frame_len_hint_blocks_hintless_probe = match frame_len_hint {
-        None => false,
-        Some(0) => !startup_link_hintless_probe,
-        Some(_) => true,
-    };
+    let frame_len_hint_blocks_hintless_probe = frame_len_hint.is_some();
     experimental_no_ht_transport
         && control_plane_reply_rearm_pending(reply_rearm_mode)
         && int_status.is_none()
         && mailbox_data.is_none()
         && !frame_len_hint_blocks_hintless_probe
-        && ((!startup_link_stabilized && current_clock_hz > CYW43_STARTUP_CLOCK_HZ)
-            || startup_link_hintless_probe)
+        && !control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+        && !startup_link_stabilized
+        && !hint_reads_unstable
+        && current_clock_hz > CYW43_STARTUP_CLOCK_HZ
 }
 
 #[inline]
@@ -1247,6 +1251,19 @@ fn control_plane_reply_header_frame_len(frame: &[u8]) -> Option<usize> {
         return None;
     }
     Some(packet_len)
+}
+
+#[inline]
+fn control_plane_reply_remainder_len_from_firstread(
+    first_read: &[u8],
+    frame_capacity: usize,
+) -> Option<usize> {
+    let frame_len = control_plane_reply_header_frame_len(first_read)?;
+    if frame_len > first_read.len() && frame_len <= frame_capacity {
+        Some(frame_len - first_read.len())
+    } else {
+        None
+    }
 }
 
 #[inline]
@@ -2518,9 +2535,18 @@ const fn post_firmware_ready_function2_strict_repoll_can_soft_continue(
     devctl: Option<u8>,
     mesbusy: Option<u8>,
 ) -> bool {
-    control_plane_function2_latched_linux_configured_without_iorx(
-        ioex, iorx, ienx, watermark, devctl, mesbusy,
-    ) && control_plane_function2_interrupts_armed(ienx)
+    // Linux never proceeds past function enable until IORx reports the
+    // function ready bit. If the Pi 4 no-HT path still has Function 2 enabled
+    // but unreadable after the strict repoll, fail fast and let the existing
+    // control-plane bootstrap replay path own recovery instead of forcing a
+    // broken pure-F2 startup-link bootstrap.
+    let _ = ioex;
+    let _ = iorx;
+    let _ = ienx;
+    let _ = watermark;
+    let _ = devctl;
+    let _ = mesbusy;
+    false
 }
 
 #[inline]
@@ -3118,6 +3144,12 @@ const CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN: usize = 64;
 const CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY: usize =
     SDIO_FUNCTION_ENABLE_F2.block_size as usize;
 const CYW43_SDPCM_HEADER_LEN: usize = 12;
+const CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS: [usize; 4] = [
+    CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
+    32,
+    16,
+    CYW43_SDPCM_HEADER_LEN,
+];
 
 #[inline]
 const fn sdio_function_ready_transport_stage(step: SdioFunctionEnableStep) -> Option<&'static str> {
@@ -3191,14 +3223,13 @@ const fn sdio_function_ready_uses_control_plane_reply_probe_budget(
 
 #[inline]
 const fn sdio_function_ready_uses_force_reenable_budget(
-    step: SdioFunctionEnableStep,
-    budget: SdioFunctionReadyBudget,
+    _step: SdioFunctionEnableStep,
+    _budget: SdioFunctionReadyBudget,
 ) -> bool {
-    matches!(step.function, SdioFunction::Function2)
-        && matches!(
-            budget,
-            SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
-        )
+    // Linux reasserts Function 2 enable and then polls IORx; it does not tear
+    // the function down in the middle of control-plane recovery. On Pi 4 that
+    // clear/re-enable cycle drops the newly booted sideband link.
+    false
 }
 
 #[inline]
@@ -3307,14 +3338,13 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
     ready: u8,
     budget: SdioFunctionReadyBudget,
 ) -> bool {
-    matches!(
-        budget,
-        SdioFunctionReadyBudget::ExperimentalBypass
-            | SdioFunctionReadyBudget::ControlPlaneReplyBypass
-    ) && matches!(step.function, SdioFunction::Function2)
-        && (desired & step.enable_bit) == step.enable_bit
-        && (ready & SDIO_FUNC_READY_1) == SDIO_FUNC_READY_1
-        && (ready & step.ready_bit) == 0
+    let _ = step;
+    let _ = desired;
+    let _ = ready;
+    let _ = budget;
+    // Mailbox DEVREADY/FWREADY is not a substitute for the CCCR ready bit, and
+    // Linux never promotes a latched F2 enable into a usable data path.
+    false
 }
 
 #[inline]
@@ -5870,7 +5900,7 @@ impl SdioHost {
 
         let attempt = self.experimental_control_plane_reply_rearm_attempts;
         let hint_stage = "control-plane-reply-hint";
-        let mut skip_backplane_hints = control_plane_reply_skips_backplane_hints(
+        let skip_backplane_hints = control_plane_reply_skips_backplane_hints(
             self.experimental_no_ht_transport,
             reply_rearm_mode,
             self.experimental_control_plane_hint_reads_unstable,
@@ -5879,7 +5909,7 @@ impl SdioHost {
         );
         if skip_backplane_hints {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=control-plane-reply action=skip-toxic-f1-hints mode={} attempt={} current_clock={}Hz width={} chunk_limit={} no_ht={} reason=linux-firstread",
+                "[pi4-wifi] firmware stage=control-plane-reply action=skip-toxic-f1-frame-hints mode={} attempt={} current_clock={}Hz width={} chunk_limit={} no_ht={} reason=linux-firstread",
                 control_plane_reply_rearm_mode_name(reply_rearm_mode),
                 attempt,
                 self.current_clock_hz,
@@ -5888,60 +5918,51 @@ impl SdioHost {
                 self.experimental_no_ht_transport,
             ));
         }
-        let int_status = if skip_backplane_hints {
-            None
-        } else {
-            match self.read_sdio_core_u32_with_f1_fallback(
-                hint_stage,
-                "int-status",
-                SDIO_INT_STATUS,
-            ) {
-                Ok(value) => Some(value),
-                Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
-                    self.mark_control_plane_hint_reads_unstable(
-                        hint_stage,
-                        "int-status",
-                        reply_rearm_mode,
-                        attempt,
-                        &err,
-                    );
-                    skip_backplane_hints = true;
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-reply action=hint-int-status-unavailable mode={} attempt={} err={err}",
-                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
-                        attempt,
-                    ));
-                    None
-                }
-                Err(err) => return Err(err),
+        let int_status = match self.read_sdio_core_u32_with_f1_fallback(
+            hint_stage,
+            "int-status",
+            SDIO_INT_STATUS,
+        ) {
+            Ok(value) => Some(value),
+            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                self.mark_control_plane_hint_reads_unstable(
+                    hint_stage,
+                    "int-status",
+                    reply_rearm_mode,
+                    attempt,
+                    &err,
+                );
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=hint-int-status-unavailable mode={} attempt={} err={err}",
+                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                    attempt,
+                ));
+                None
             }
+            Err(err) => return Err(err),
         };
-        let mailbox_data = if skip_backplane_hints {
-            None
-        } else {
-            match self.read_sdio_core_u32_with_f1_fallback(
-                hint_stage,
-                "tohost-mailbox",
-                SDPCMD_REG_TOHOSTMAILBOXDATA,
-            ) {
-                Ok(value) => Some(value),
-                Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
-                    self.mark_control_plane_hint_reads_unstable(
-                        hint_stage,
-                        "tohost-mailbox",
-                        reply_rearm_mode,
-                        attempt,
-                        &err,
-                    );
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-reply action=hint-mailbox-unavailable mode={} attempt={} err={err}",
-                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
-                        attempt,
-                    ));
-                    None
-                }
-                Err(err) => return Err(err),
+        let mailbox_data = match self.read_sdio_core_u32_with_f1_fallback(
+            hint_stage,
+            "tohost-mailbox",
+            SDPCMD_REG_TOHOSTMAILBOXDATA,
+        ) {
+            Ok(value) => Some(value),
+            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                self.mark_control_plane_hint_reads_unstable(
+                    hint_stage,
+                    "tohost-mailbox",
+                    reply_rearm_mode,
+                    attempt,
+                    &err,
+                );
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=hint-mailbox-unavailable mode={} attempt={} err={err}",
+                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                    attempt,
+                ));
+                None
             }
+            Err(err) => return Err(err),
         };
         if let Some(mailbox_data) = mailbox_data {
             if control_plane_reply_mailbox_has_firmware_halt(mailbox_data) {
@@ -6359,9 +6380,10 @@ impl SdioHost {
             return Ok(None);
         }
 
-        if self.control_plane_uses_low_touch_pure_f2_diagnostics() {
+        let low_touch_pure_f2_mode = self.control_plane_uses_low_touch_pure_f2_diagnostics();
+        if low_touch_pure_f2_mode {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=control-plane-reply action=diagnostic-skip trigger={trigger} mode={} attempt={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={} diagnosis=bounded-pure-f2-fail-fast",
+                "[pi4-wifi] firmware stage=control-plane-reply action=diagnostic-prefix-only trigger={trigger} mode={} attempt={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={} diagnosis=linux-firstread-before-full-block",
                 control_plane_reply_rearm_mode_name(reply_rearm_mode),
                 attempt,
                 self.current_clock_hz,
@@ -6369,11 +6391,9 @@ impl SdioHost {
                 self.control_plane_reply_chunk_limit(),
                 self.experimental_no_ht_transport,
             ));
-            self.log_transport_shadow("control-plane-reply-diagnostic-skip");
-            return Ok(None);
         }
 
-        for probe_len in [CYW43_SDPCM_HEADER_LEN, 16usize, 32usize] {
+        for probe_len in CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=control-plane-reply action=diagnostic-prefix-read trigger={trigger} mode={} attempt={} len={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={}",
                 control_plane_reply_rearm_mode_name(reply_rearm_mode),
@@ -6484,6 +6504,20 @@ impl SdioHost {
                 }
                 Err(err) => return Err(err),
             }
+        }
+
+        if low_touch_pure_f2_mode {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=control-plane-reply action=diagnostic-full-block-skip trigger={trigger} mode={} attempt={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={} diagnosis=bounded-pure-f2-prefix-only",
+                control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                attempt,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.control_plane_reply_chunk_limit(),
+                self.experimental_no_ht_transport,
+            ));
+            self.log_transport_shadow("control-plane-reply-diagnostic-full-block-skip");
+            return Ok(None);
         }
 
         emit_breadcrumb(format_args!(
@@ -7327,10 +7361,31 @@ impl SdioHost {
         if matches!(self.desired_bus_width, SdioBusWidth::FourBit) {
             self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_IF, SDIO_BUS_WIDTH_4BIT)?;
         }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio card-init phase=preseed-block-sizes"
+        ));
+        self.configure_function_block_sizes_before_enable()?;
 
         emit_breadcrumb(format_args!(
             "[pi4-wifi] sdio card-init ready rca=0x{rca:04x} ocr=0x{ocr:08x} width={}",
             sdio_bus_width_name(self.desired_bus_width)
+        ));
+        Ok(())
+    }
+
+    fn configure_function_block_sizes_before_enable(&mut self) -> Result<(), HalError> {
+        self.set_function_block_size(SdioFunction::Function1, SDIO_FUNCTION_ENABLE_F1.block_size)?;
+        self.set_function_block_size(SdioFunction::Function2, SDIO_FUNCTION_ENABLE_F2.block_size)?;
+        let function1_block_size = self.read_function_block_size(SdioFunction::Function1).ok();
+        let function2_block_size = self.read_function_block_size(SdioFunction::Function2).ok();
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] sdio block-size preseed f1={} readback=0x{function1_block_size:04x}/{} f2={} readback=0x{function2_block_size:04x}/{}",
+            SDIO_FUNCTION_ENABLE_F1.block_size,
+            yn(function1_block_size.is_some()),
+            SDIO_FUNCTION_ENABLE_F2.block_size,
+            yn(function2_block_size.is_some()),
+            function1_block_size = function1_block_size.unwrap_or(0),
+            function2_block_size = function2_block_size.unwrap_or(0),
         ));
         Ok(())
     }
@@ -7706,14 +7761,42 @@ impl SdioHost {
         stage: &'static str,
         buffer: &mut [u8],
     ) -> Result<(), HalError> {
-        self.read_function2_reply_once_with_linux_recovery(stage, buffer.len(), |this| {
+        let first_read_len = cmp::min(buffer.len(), CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN);
+        self.read_function2_reply_once_with_linux_recovery(stage, first_read_len, |this| {
             this.with_control_plane_function2_port(|this, function_addr| {
                 this.io_extended(
                     SdioFunction::Function2,
                     function_addr,
                     control_plane_read_uses_incrementing_addr(),
                     false,
-                    buffer,
+                    &mut buffer[..first_read_len],
+                )
+            })
+        })?;
+        let Some(remainder_len) = control_plane_reply_remainder_len_from_firstread(
+            &buffer[..first_read_len],
+            buffer.len(),
+        ) else {
+            return Ok(());
+        };
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=linux-firstread-remainder prefix_len={} remainder_len={} frame_len={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={}",
+            first_read_len,
+            remainder_len,
+            first_read_len + remainder_len,
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.control_plane_reply_chunk_limit(),
+            self.experimental_no_ht_transport,
+        ));
+        self.read_function2_reply_once_with_linux_recovery(stage, remainder_len, |this| {
+            this.with_control_plane_function2_port(|this, function_addr| {
+                this.io_extended(
+                    SdioFunction::Function2,
+                    function_addr,
+                    control_plane_read_uses_incrementing_addr(),
+                    false,
+                    &mut buffer[first_read_len..first_read_len + remainder_len],
                 )
             })
         })
@@ -8002,10 +8085,6 @@ impl SdioHost {
             return Err(HalError::Unsupported("sdio-function-enable-latch"));
         }
         if matches!(step.function, SdioFunction::Function2) {
-            // Keep Function 2 on the Linux-sized block configuration even
-            // before IORX asserts so failures separate "not ready" from
-            // "ready bit blocked on missing FBR programming".
-            self.prime_function2_block_size_for_ready(function_ready_budget)?;
             if !force_reenable && (ready_before & step.ready_bit) == 0 {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] sdio function-enable fn=2 action=preserve-enable-latch budget={} ioex=0x{ioex_after:02x} ready=0x{ready_before:02x} reason=linux-aligned-no-clear",
@@ -8062,6 +8141,9 @@ impl SdioHost {
                         logged_ready = ready;
                     }
                     if (ready & step.ready_bit) == step.ready_bit {
+                        if matches!(step.function, SdioFunction::Function2) {
+                            self.prime_function2_block_size_for_ready(function_ready_budget)?;
+                        }
                         self.set_function_block_size(step.function, step.block_size)?;
                         emit_breadcrumb(format_args!(
                             "[pi4-wifi] sdio function-ready fn={} block={} ready=0x{ready:02x}",
@@ -8113,6 +8195,9 @@ impl SdioHost {
         ) {
             if let Some(stage) = ready_stage {
                 self.refresh_transport_phase_for(stage)?;
+            }
+            if matches!(step.function, SdioFunction::Function2) {
+                self.prime_function2_block_size_for_ready(function_ready_budget)?;
             }
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] sdio function-ready fn={} action=experimental-continue-without-ready desired=0x{desired:02x} ready=0x{last_ready:02x}",
@@ -10056,7 +10141,8 @@ impl SdioHost {
             cyw43_transport_mode_name(self.experimental_no_ht_transport),
             self.control_plane_chunk_limit(),
         ));
-        let allow_function2_ready_bypass = self.experimental_no_ht_transport;
+        let allow_function2_ready_bypass =
+            firmware_stage_allows_function2_ready_bypass(self.experimental_no_ht_transport);
         self.setup_firmware_channel(allow_function2_ready_bypass)?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=wait-firmware-ready mode={} chunk_limit={}",
@@ -10086,34 +10172,18 @@ impl SdioHost {
             let f2_state = control_plane_function2_linux_state_label(
                 ioex, iorx, ienx, watermark, devctl, mesbusy,
             );
-            if post_firmware_ready_function2_strict_repoll_can_soft_continue(
-                ioex, iorx, ienx, watermark, devctl, mesbusy,
-            ) {
-                let skip_err = HalError::Unsupported("cyw43-function2-enable-latched-not-ready");
-                self.mark_control_plane_hint_reads_unstable(
-                    "post-firmware-ready-function2-strict-repoll-skip",
-                    "post-firmware-ready-function2-sideband",
-                    control_plane_reply_rearm_startup_link_resume(),
-                    0,
-                    &skip_err,
-                );
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll-skip reason=latched-linux-configured-no-iorx f2_state={f2_state} current_clock={}Hz width={} chunk_limit={} no_ht={} next=reply-probe",
-                    self.current_clock_hz,
-                    sdio_bus_width_name(self.desired_bus_width),
-                    self.control_plane_chunk_limit(),
-                    self.experimental_no_ht_transport,
-                ));
-                self.resume_control_plane_reply_probe_on_startup_link(
-                    "post-firmware-ready-function2-strict-repoll-skip",
-                );
-                self.log_control_plane_finish_snapshot(
-                    "post-firmware-ready-function2-strict-repoll-skip",
-                );
-                return Ok(());
-            }
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll"
+                "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll f2_state={f2_state} ioex=0x{ioex:02x}/{} iorx=0x{iorx:02x}/{} ienx=0x{ienx:02x}/{} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                yn(ioex.is_some()),
+                yn(iorx.is_some()),
+                yn(ienx.is_some()),
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.control_plane_chunk_limit(),
+                self.experimental_no_ht_transport,
+                ioex = ioex.unwrap_or(0),
+                iorx = iorx.unwrap_or(0),
+                ienx = ienx.unwrap_or(0),
             ));
             match self.enable_function2(SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery) {
                 Ok(()) => emit_breadcrumb(format_args!(
@@ -10265,7 +10335,6 @@ impl SdioHost {
         for _ in 0..soft_wait_loops {
             let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
             self.remember_chipclkcsr(chipclk);
-            last_chipclk = chipclk;
             if (chipclk & SBSDIO_ALP_AVAIL) != 0 {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} alp-ready csr=0x{chipclk:02x}"
@@ -12988,9 +13057,9 @@ mod tests {
     }
 
     #[test]
-    fn post_firmware_ready_strict_repoll_soft_continue_requires_linux_f2_armed_state() {
+    fn post_firmware_ready_strict_repoll_never_soft_continues_without_function2_ready() {
         assert!(
-            post_firmware_ready_function2_strict_repoll_can_soft_continue(
+            !post_firmware_ready_function2_strict_repoll_can_soft_continue(
                 Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
                 Some(SDIO_FUNC_READY_1),
                 Some(SDIO_INTERRUPT_ENABLE_MASK),
@@ -13652,6 +13721,20 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_prefix_probes_start_with_linux_firstread_size() {
+        assert_eq!(
+            CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS[0],
+            CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
+        );
+        assert_eq!(
+            *CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS
+                .last()
+                .expect("diagnostic probe lengths"),
+            CYW43_SDPCM_HEADER_LEN
+        );
+    }
+
+    #[test]
     fn speculative_reply_frame_len_requires_valid_sdpcm_header() {
         let mut frame = [0u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY];
         let packet_len = CYW43_SDPCM_HEADER_LEN + 32;
@@ -13683,6 +13766,31 @@ mod tests {
         frame[2..4].copy_from_slice(&len_inv);
         frame[7] = u8::try_from(packet_len + 1).expect("header length fits");
         assert_eq!(control_plane_reply_speculative_frame_len(&frame), None);
+    }
+
+    #[test]
+    fn linux_firstread_remainder_len_uses_header_and_capacity() {
+        let mut first_read = [0u8; CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN];
+        let packet_len = CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN + 32;
+        let packet_len_u16 = u16::try_from(packet_len).expect("packet length fits");
+        let len_inv = (!packet_len_u16).to_le_bytes();
+        first_read[0..2].copy_from_slice(&packet_len_u16.to_le_bytes());
+        first_read[2..4].copy_from_slice(&len_inv);
+        first_read[7] = u8::try_from(CYW43_SDPCM_HEADER_LEN).expect("header length fits");
+        assert_eq!(
+            control_plane_reply_remainder_len_from_firstread(
+                &first_read,
+                CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY,
+            ),
+            Some(32)
+        );
+        assert_eq!(
+            control_plane_reply_remainder_len_from_firstread(
+                &first_read,
+                CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
+            ),
+            None
+        );
     }
 
     #[test]
@@ -14621,7 +14729,7 @@ mod tests {
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyBypass,
         ));
-        assert!(sdio_function_ready_uses_force_reenable_budget(
+        assert!(!sdio_function_ready_uses_force_reenable_budget(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
         ));
@@ -14780,7 +14888,7 @@ mod tests {
     }
 
     #[test]
-    fn function2_force_reenable_requires_enabled_without_ready() {
+    fn function2_force_reenable_is_disabled_for_reply_recovery() {
         let enabled = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
         assert!(!sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
@@ -14800,7 +14908,7 @@ mod tests {
             enabled,
             SDIO_FUNC_READY_1,
         ));
-        assert!(sdio_function_ready_should_force_reenable(
+        assert!(!sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
             enabled,
@@ -14825,7 +14933,7 @@ mod tests {
                 SDIO_FUNCTION_ENABLE_F2,
                 SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
             ),
-            SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE
+            0
         );
         assert!(!sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
@@ -14855,20 +14963,21 @@ mod tests {
     }
 
     #[test]
-    fn function2_block_size_matches_linux_baseline() {
+    fn function_block_sizes_match_linux_baseline() {
+        assert_eq!(SDIO_FUNCTION_ENABLE_F1.block_size, 64);
         assert_eq!(SDIO_FUNCTION_ENABLE_F2.block_size, 512);
     }
 
     #[test]
-    fn function2_ready_timeout_experimental_continue_requires_f1_ready() {
+    fn function2_ready_timeout_never_bypasses_missing_f2_ready() {
         let desired = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
-        assert!(sdio_function_ready_timeout_can_continue_experimentally(
+        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,
             SdioFunctionReadyBudget::ExperimentalBypass,
         ));
-        assert!(sdio_function_ready_timeout_can_continue_experimentally(
+        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,
@@ -14910,6 +15019,12 @@ mod tests {
             SDIO_FUNC_READY_1,
             SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
         ));
+    }
+
+    #[test]
+    fn firmware_stage_never_allows_function2_ready_bypass() {
+        assert!(!firmware_stage_allows_function2_ready_bypass(true));
+        assert!(!firmware_stage_allows_function2_ready_bypass(false));
     }
 
     #[test]
@@ -15068,7 +15183,7 @@ mod tests {
             )
         );
         assert!(
-            control_plane_reply_should_attempt_hintless_speculative_read(
+            !control_plane_reply_should_attempt_hintless_speculative_read(
                 true,
                 control_plane_reply_rearm_startup_link(),
                 CYW43_STARTUP_CLOCK_HZ,
@@ -15080,7 +15195,7 @@ mod tests {
             )
         );
         assert!(
-            control_plane_reply_should_attempt_hintless_speculative_read(
+            !control_plane_reply_should_attempt_hintless_speculative_read(
                 true,
                 control_plane_reply_rearm_startup_link(),
                 CYW43_STARTUP_CLOCK_HZ,
@@ -15092,7 +15207,7 @@ mod tests {
             )
         );
         assert!(
-            control_plane_reply_should_attempt_hintless_speculative_read(
+            !control_plane_reply_should_attempt_hintless_speculative_read(
                 true,
                 control_plane_reply_rearm_startup_link(),
                 CYW43_STARTUP_CLOCK_HZ,
