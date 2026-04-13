@@ -2559,6 +2559,11 @@ where
     #[cfg(feature = "kernel")]
     fn wifi_capture_verdict(snapshot: &WifiDebugSnapshot) -> (&'static str, &'static str) {
         let exact_error = snapshot.control_plane_exact_error;
+        if exact_error
+            == "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
+        {
+            return ("function1-sideband-edge", "function1-sideband");
+        }
         if exact_error.starts_with("cyw43-function2-disabled")
             || exact_error.starts_with("cyw43-function2-enable-latched-not-ready")
             || exact_error.starts_with("cyw43-function2-ready-hidden-from-cccr")
@@ -6155,6 +6160,57 @@ mod tests {
             control_plane_f2_state: "unproven",
             control_plane_sdhci_read_diag: "f1-reply-read-command-timeout",
             control_plane_exact_error: "cyw43-control-plane-sideband-command-timeout",
+        };
+        assert_eq!(
+            EventPump::<
+                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
+                TestTimer,
+                NullIpc,
+            >::wifi_capture_verdict(&snapshot),
+            ("function1-sideband-edge", "function1-sideband")
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_capture_verdict_keeps_sideband_read_stall_specific() {
+        let snapshot = WifiDebugSnapshot {
+            power_state: WifiPowerState::Off,
+            reset_state: WifiResetState::Asserted,
+            current_clock_hz: 0,
+            preferred_data_clock_hz: 12_500_000,
+            bus_width: SdioBusWidth::OneBit,
+            card_ready: false,
+            card_rca: 0,
+            card_ocr: 0,
+            io_enable: None,
+            io_ready: None,
+            chipclkcsr: None,
+            wakeupctrl: None,
+            sleepcsr: None,
+            cardcap: None,
+            programmed_backplane_window: None,
+            shadow_backplane_window: None,
+            shadow_backplane_fn_addr: None,
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            control_plane_bootstrap_phase: "startup-link-recovery",
+            control_plane_reply_mode: "none",
+            control_plane_reply_attempts: 0,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: true,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "ht-not-ready",
+            control_plane_promoted_probe_pending: false,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error:
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
         };
         assert_eq!(
             EventPump::<

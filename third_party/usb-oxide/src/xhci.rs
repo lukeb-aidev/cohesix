@@ -1155,6 +1155,21 @@ fn compose_erst_size(current: u32, entries: u32) -> u32 {
 }
 
 #[inline(always)]
+fn preserve_state_erstsz_write_is_redundant(current: u32, desired: u32) -> bool {
+    current == desired
+}
+
+#[inline(always)]
+fn emit_preserve_state_erstsz_skip_diag(int_base: usize, current: u32, desired: u32) {
+    emit_xhci_diag(
+        0x02da,
+        (int_base + reg::ERSTSZ) as u64,
+        current as u64,
+        desired as u64,
+    );
+}
+
+#[inline(always)]
 fn compose_erst_base(current: u64, base: u64) -> u64 {
     (current & reg::ERST_PTR_MASK) | (base & !reg::ERST_PTR_MASK)
 }
@@ -2243,6 +2258,11 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0261, current_erst_size as u64, current_erstba, 0);
             (current_erst_size, current_erstba)
         };
+        let current_erstsz_publish = if preserve_firmware_state {
+            self.read_reg::<u32>(int_base + reg::ERSTSZ)
+        } else {
+            staged_current_erst_size
+        };
         let erst_size = compose_erst_size(
             if preserve_firmware_state || !live_post_reset_seed_reads {
                 0
@@ -2266,7 +2286,7 @@ impl<H: Dma> XhciCtrl<H> {
                 0x02c0,
                 (int_base + reg::ERSTSZ) as u64,
                 erst_size as u64,
-                staged_current_erst_size as u64,
+                current_erstsz_publish as u64,
             );
             emit_xhci_diag(
                 0x02c1,
@@ -2278,17 +2298,27 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(
                 0x02c2,
                 (int_base + reg::ERSTSZ) as u64,
-                staged_current_erst_size as u64,
+                current_erstsz_publish as u64,
                 erst_size as u64,
             );
-            Self::write_reg_u32_store_diag_at(
-                self.mmio,
-                int_base + reg::ERSTSZ,
-                erst_size,
-                0x02c3,
-                0x02c4,
-                staged_current_erst_size as u64,
-            );
+            if preserve_firmware_state
+                && preserve_state_erstsz_write_is_redundant(current_erstsz_publish, erst_size)
+            {
+                emit_preserve_state_erstsz_skip_diag(
+                    int_base,
+                    current_erstsz_publish,
+                    erst_size,
+                );
+            } else {
+                Self::write_reg_u32_store_diag_at(
+                    self.mmio,
+                    int_base + reg::ERSTSZ,
+                    erst_size,
+                    0x02c3,
+                    0x02c4,
+                    current_erstsz_publish as u64,
+                );
+            }
             emit_xhci_diag(
                 0x02c5,
                 (int_base + reg::ERSTBA) as u64,
@@ -2328,17 +2358,30 @@ impl<H: Dma> XhciCtrl<H> {
                 emit_xhci_diag(
                     0x02c2,
                     (int_base + reg::ERSTSZ) as u64,
-                    staged_current_erst_size as u64,
+                    current_erstsz_publish as u64,
                     erst_size as u64,
                 );
-                Self::write_reg_u32_store_diag_at(
-                    self.mmio,
-                    int_base + reg::ERSTSZ,
-                    erst_size,
-                    0x02c3,
-                    0x02c4,
-                    staged_current_erst_size as u64,
-                );
+                if preserve_firmware_state
+                    && preserve_state_erstsz_write_is_redundant(
+                        current_erstsz_publish,
+                        erst_size,
+                    )
+                {
+                    emit_preserve_state_erstsz_skip_diag(
+                        int_base,
+                        current_erstsz_publish,
+                        erst_size,
+                    );
+                } else {
+                    Self::write_reg_u32_store_diag_at(
+                        self.mmio,
+                        int_base + reg::ERSTSZ,
+                        erst_size,
+                        0x02c3,
+                        0x02c4,
+                        current_erstsz_publish as u64,
+                    );
+                }
             }
             emit_xhci_diag(
                 0x02c5,
@@ -2370,17 +2413,30 @@ impl<H: Dma> XhciCtrl<H> {
                 emit_xhci_diag(
                     0x02c2,
                     (int_base + reg::ERSTSZ) as u64,
-                    staged_current_erst_size as u64,
+                    current_erstsz_publish as u64,
                     erst_size as u64,
                 );
-                Self::write_reg_u32_store_diag_at(
-                    self.mmio,
-                    int_base + reg::ERSTSZ,
-                    erst_size,
-                    0x02c3,
-                    0x02c4,
-                    staged_current_erst_size as u64,
-                );
+                if preserve_firmware_state
+                    && preserve_state_erstsz_write_is_redundant(
+                        current_erstsz_publish,
+                        erst_size,
+                    )
+                {
+                    emit_preserve_state_erstsz_skip_diag(
+                        int_base,
+                        current_erstsz_publish,
+                        erst_size,
+                    );
+                } else {
+                    Self::write_reg_u32_store_diag_at(
+                        self.mmio,
+                        int_base + reg::ERSTSZ,
+                        erst_size,
+                        0x02c3,
+                        0x02c4,
+                        current_erstsz_publish as u64,
+                    );
+                }
             }
         }
         if defer_erdp_publish
@@ -3541,8 +3597,8 @@ mod tests {
         deferred_erst_publish_uses_size_first_with_snapshot, halt_revalidation_needed,
         masked_usbcmd, parse_controller_params, polling_iman_value, port_ready_for_enumeration,
         preserve_firmware_handoff_config, probe_live_crcr_before_staged_publish_with_snapshot,
-        probe_live_dcbaap_before_staged_publish_with_snapshot, run_usbcmd_needs_live_seed_read,
-        run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed,
+        preserve_state_erstsz_write_is_redundant, probe_live_dcbaap_before_staged_publish_with_snapshot,
+        run_usbcmd_needs_live_seed_read, run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed,
         run_wait_observable_usbsts, run_wait_progress_due,
         runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_uboot_style_reset_write,
         runtime_handoff_needs_relaxed_run_write,
@@ -3876,6 +3932,14 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
+    }
+
+    #[test]
+    fn preserve_state_erstsz_skip_only_triggers_on_matching_live_size() {
+        assert!(preserve_state_erstsz_write_is_redundant(1, 1));
+        assert!(preserve_state_erstsz_write_is_redundant(0, 0));
+        assert!(!preserve_state_erstsz_write_is_redundant(0, 1));
+        assert!(!preserve_state_erstsz_write_is_redundant(1, 0));
     }
 
     #[test]
