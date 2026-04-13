@@ -1799,10 +1799,13 @@ fn xhci_trusted_handoff_snapshot_allowed(
 }
 
 #[inline]
-const fn xhci_preferred_trusted_handoff_mode(
-    _runtime_vl805_reset_state: u8,
-) -> XhciFirmwareHandoff {
-    XhciFirmwareHandoff::ColdStartFromSnapshot
+const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
+    match runtime_vl805_reset_state {
+        VL805_RUNTIME_RESET_STATE_UNATTEMPTED
+        | VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
+        | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE => XhciFirmwareHandoff::PreserveControllerState,
+        _ => XhciFirmwareHandoff::ColdStartFromSnapshot,
+    }
 }
 
 #[inline]
@@ -3113,6 +3116,41 @@ fn xhci_runtime_init_strategies(
             &mut count,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
         );
+        return (strategies, count);
+    }
+
+    if matches!(
+        preferred_handoff,
+        XhciFirmwareHandoff::PreserveControllerState
+    ) {
+        if stop_state_seed_available {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
+            );
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+            );
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+            );
+        } else {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, false),
+            );
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+            );
+        }
         return (strategies, count);
     }
 
@@ -12363,12 +12401,12 @@ mod tests {
     }
 
     #[test]
-    fn preferred_trusted_handoff_mode_keeps_bootloader_snapshot_as_primary_path() {
+    fn preferred_trusted_handoff_mode_prefers_preserve_on_bootloader_owned_or_weak_reset_paths() {
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
             ),
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::PreserveControllerState
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(super::VL805_RUNTIME_RESET_STATE_NOTIFIED),
@@ -12378,13 +12416,39 @@ mod tests {
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
             ),
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::PreserveControllerState
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
             ),
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::PreserveControllerState
+        );
+    }
+
+    #[test]
+    fn xhci_runtime_init_strategies_lead_with_seeded_preserve_when_bootloader_handoff_is_trusted() {
+        let (strategies, count) = xhci_runtime_init_strategies(
+            XhciFirmwareHandoff::PreserveControllerState,
+            super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+        );
+        assert_eq!(count, 3);
+        assert_eq!(
+            strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true)
+        );
+        assert_eq!(
+            strategies[1],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+        );
+        assert_eq!(
+            strategies[2],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
     }
 

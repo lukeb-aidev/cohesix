@@ -1270,8 +1270,19 @@ const fn control_plane_reply_uses_low_touch_pure_f2_diagnostics(
 }
 
 #[inline]
+const fn control_plane_diagnostic_prefix_probe_lens(
+    low_touch_pure_f2_mode: bool,
+) -> &'static [usize] {
+    if low_touch_pure_f2_mode {
+        &CYW43_CONTROL_PLANE_LOW_TOUCH_DIAGNOSTIC_PREFIX_PROBE_LENS
+    } else {
+        &CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS
+    }
+}
+
+#[inline]
 fn control_plane_reply_header_frame_len(frame: &[u8]) -> Option<usize> {
-    if frame.len() < CYW43_SDPCM_HEADER_LEN {
+    if frame.len() < CYW43_SDPCM_PREFIX_MIN_LEN {
         return None;
     }
     let packet_len = usize::from(u16::from_le_bytes([frame[0], frame[1]]));
@@ -3237,12 +3248,20 @@ const SDIO_FUNCTION_ENABLE_SEQUENCE: [SdioFunctionEnableStep; 2] =
 const CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN: usize = 64;
 const CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY: usize =
     SDIO_FUNCTION_ENABLE_F2.block_size as usize;
+const CYW43_SDPCM_PREFIX_MIN_LEN: usize = 8;
 const CYW43_SDPCM_HEADER_LEN: usize = 12;
 const CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS: [usize; 4] = [
     CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
     32,
     16,
     CYW43_SDPCM_HEADER_LEN,
+];
+const CYW43_CONTROL_PLANE_LOW_TOUCH_DIAGNOSTIC_PREFIX_PROBE_LENS: [usize; 5] = [
+    CYW43_SDPCM_PREFIX_MIN_LEN,
+    CYW43_SDPCM_HEADER_LEN,
+    16,
+    32,
+    CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
 ];
 
 #[inline]
@@ -6076,51 +6095,59 @@ impl SdioHost {
                 self.experimental_no_ht_transport,
             ));
         }
-        let int_status = match self.read_sdio_core_u32_with_f1_fallback(
-            hint_stage,
-            "int-status",
-            SDIO_INT_STATUS,
-        ) {
-            Ok(value) => Some(value),
-            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
-                self.mark_control_plane_hint_reads_unstable(
-                    hint_stage,
-                    "int-status",
-                    reply_rearm_mode,
-                    attempt,
-                    &err,
-                );
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-reply action=hint-int-status-unavailable mode={} attempt={} err={err}",
-                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
-                    attempt,
-                ));
-                None
+        let int_status = if skip_backplane_hints {
+            None
+        } else {
+            match self.read_sdio_core_u32_with_f1_fallback(
+                hint_stage,
+                "int-status",
+                SDIO_INT_STATUS,
+            ) {
+                Ok(value) => Some(value),
+                Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                    self.mark_control_plane_hint_reads_unstable(
+                        hint_stage,
+                        "int-status",
+                        reply_rearm_mode,
+                        attempt,
+                        &err,
+                    );
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=hint-int-status-unavailable mode={} attempt={} err={err}",
+                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                        attempt,
+                    ));
+                    None
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => return Err(err),
         };
-        let mailbox_data = match self.read_sdio_core_u32_with_f1_fallback(
-            hint_stage,
-            "tohost-mailbox",
-            SDPCMD_REG_TOHOSTMAILBOXDATA,
-        ) {
-            Ok(value) => Some(value),
-            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
-                self.mark_control_plane_hint_reads_unstable(
-                    hint_stage,
-                    "tohost-mailbox",
-                    reply_rearm_mode,
-                    attempt,
-                    &err,
-                );
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-reply action=hint-mailbox-unavailable mode={} attempt={} err={err}",
-                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
-                    attempt,
-                ));
-                None
+        let mailbox_data = if skip_backplane_hints {
+            None
+        } else {
+            match self.read_sdio_core_u32_with_f1_fallback(
+                hint_stage,
+                "tohost-mailbox",
+                SDPCMD_REG_TOHOSTMAILBOXDATA,
+            ) {
+                Ok(value) => Some(value),
+                Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                    self.mark_control_plane_hint_reads_unstable(
+                        hint_stage,
+                        "tohost-mailbox",
+                        reply_rearm_mode,
+                        attempt,
+                        &err,
+                    );
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=hint-mailbox-unavailable mode={} attempt={} err={err}",
+                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                        attempt,
+                    ));
+                    None
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => return Err(err),
         };
         if let Some(mailbox_data) = mailbox_data {
             if control_plane_reply_mailbox_has_firmware_halt(mailbox_data) {
@@ -6550,7 +6577,7 @@ impl SdioHost {
             ));
         }
 
-        for probe_len in CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS {
+        for &probe_len in control_plane_diagnostic_prefix_probe_lens(low_touch_pure_f2_mode) {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=control-plane-reply action=diagnostic-prefix-read trigger={trigger} mode={} attempt={} len={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={}",
                 control_plane_reply_rearm_mode_name(reply_rearm_mode),
@@ -13991,6 +14018,20 @@ mod tests {
     }
 
     #[test]
+    fn low_touch_diagnostic_prefix_probes_start_from_minimal_sdpcm_prefix() {
+        assert_eq!(
+            control_plane_diagnostic_prefix_probe_lens(true)[0],
+            CYW43_SDPCM_PREFIX_MIN_LEN
+        );
+        assert_eq!(
+            *control_plane_diagnostic_prefix_probe_lens(true)
+                .last()
+                .expect("low-touch diagnostic probe lengths"),
+            CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
+        );
+    }
+
+    #[test]
     fn speculative_reply_frame_len_requires_valid_sdpcm_header() {
         let mut frame = [0u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY];
         let packet_len = CYW43_SDPCM_HEADER_LEN + 32;
@@ -13999,6 +14040,10 @@ mod tests {
         frame[0..2].copy_from_slice(&packet_len_u16.to_le_bytes());
         frame[2..4].copy_from_slice(&len_inv);
         frame[7] = u8::try_from(CYW43_SDPCM_HEADER_LEN).expect("header length fits");
+        assert_eq!(
+            control_plane_reply_header_frame_len(&frame[..CYW43_SDPCM_PREFIX_MIN_LEN]),
+            Some(packet_len)
+        );
         assert_eq!(
             control_plane_reply_header_frame_len(&frame[..CYW43_SDPCM_HEADER_LEN]),
             Some(packet_len)
