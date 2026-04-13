@@ -632,11 +632,11 @@ const fn defer_event_ring_publish_until_after_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Preserve-state and resetless snapshot paths still need the late event
-    // ring publish ladder. The weaker Pi 4 stop-state mailbox handoff should
-    // match U-Boot's smaller contract and publish the event ring before RUN.
+    // Preserve-state already publishes the rest of the runtime-visible ring
+    // ladder before RUN on the trusted stop-state seed. Keeping only the
+    // resetless snapshot path late avoids a final post-RUN ERSTSZ write on
+    // the degraded IRQ 27 Pi 4 path.
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -646,10 +646,10 @@ const fn defer_dcbaap_publish_until_after_run_with_snapshot(
 ) -> bool {
     // The weaker Pi 4 stop-state mailbox handoff now publishes DCBAAP before
     // RUN again to match U-Boot. Keep the later post-RUN ladder only on the
-    // stronger runtime-ring and resetless/preserve-state paths.
+    // stronger runtime-ring and resetless paths; the degraded preserve-state
+    // lane must now avoid any remaining post-RUN ownership writes.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -659,10 +659,10 @@ const fn defer_crcr_publish_until_after_run_with_snapshot(
 ) -> bool {
     // The weaker Pi 4 stop-state mailbox handoff now publishes CRCR before
     // RUN again to match U-Boot. Keep the later post-RUN ladder only on the
-    // stronger runtime-ring and resetless/preserve-state paths.
+    // stronger runtime-ring and resetless paths; the degraded preserve-state
+    // lane must now avoid any remaining post-RUN ownership writes.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -672,10 +672,10 @@ const fn defer_dnctrl_write_until_after_run_with_snapshot(
 ) -> bool {
     // The weaker Pi 4 stop-state mailbox handoff now zeroes DNCTRL before RUN
     // again to match U-Boot. Keep the later DNCTRL publish only on the
-    // stronger runtime-ring and resetless/preserve-state paths.
+    // stronger runtime-ring and resetless paths; the degraded preserve-state
+    // lane must now avoid any remaining post-RUN ownership writes.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -3805,7 +3805,7 @@ mod tests {
     }
 
     #[test]
-    fn preserved_stop_state_snapshot_defers_event_ring_publish_until_after_run() {
+    fn preserved_stop_state_snapshot_publishes_event_ring_before_run() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -3848,19 +3848,19 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(defer_event_ring_publish_until_after_run_with_snapshot(
+        assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(defer_dcbaap_publish_until_after_run_with_snapshot(
+        assert!(!defer_dcbaap_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(defer_crcr_publish_until_after_run_with_snapshot(
+        assert!(!defer_crcr_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
-        assert!(defer_dnctrl_write_until_after_run_with_snapshot(
+        assert!(!defer_dnctrl_write_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             snapshot,
         ));
@@ -4043,7 +4043,7 @@ mod tests {
                 runtime_ring_snapshot,
             )
         );
-        assert!(defer_dcbaap_publish_until_after_run_with_snapshot(
+        assert!(!defer_dcbaap_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
@@ -4063,7 +4063,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             stop_state_snapshot,
         ));
-        assert!(defer_crcr_publish_until_after_run_with_snapshot(
+        assert!(!defer_crcr_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
@@ -4075,7 +4075,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             stop_state_snapshot,
         ));
-        assert!(defer_dnctrl_write_until_after_run_with_snapshot(
+        assert!(!defer_dnctrl_write_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));

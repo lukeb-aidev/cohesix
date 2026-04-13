@@ -6202,7 +6202,9 @@ impl SdioHost {
         Ok(())
     }
 
-    fn try_capture_control_plane_reply_speculative_frame(&mut self) -> Result<usize, HalError> {
+    fn try_capture_control_plane_reply_speculative_frame_inner(
+        &mut self,
+    ) -> Result<usize, HalError> {
         let reply_rearm_mode = self.experimental_control_plane_reply_rearm_mode;
         if !control_plane_reply_rearm_supports_speculative_read(
             self.experimental_no_ht_transport,
@@ -6684,6 +6686,29 @@ impl SdioHost {
                 Err(err)
             }
         }
+    }
+
+    fn try_capture_control_plane_reply_speculative_frame(&mut self) -> Result<usize, HalError> {
+        let reply_rearm_mode = self.experimental_control_plane_reply_rearm_mode;
+        if control_plane_reply_probe_prefers_bulk_clock(
+            self.experimental_no_ht_transport,
+            reply_rearm_mode,
+        ) {
+            let target_clock_hz = self.preferred_data_clock_hz;
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=control-plane-reply action=reply-probe-bulk-clock target={}Hz current={}Hz width={} mode={} chunk_limit={} no_ht={}",
+                target_clock_hz,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                self.control_plane_reply_chunk_limit(),
+                self.experimental_no_ht_transport,
+            ));
+            return self.with_firmware_bulk_clock("control-plane-reply", target_clock_hz, |this| {
+                this.try_capture_control_plane_reply_speculative_frame_inner()
+            });
+        }
+        self.try_capture_control_plane_reply_speculative_frame_inner()
     }
 
     fn try_capture_control_plane_reply_full_block_probe(
@@ -8184,6 +8209,38 @@ impl SdioHost {
         buffer: &mut [u8],
         diagnostic_stage: &'static str,
     ) -> Result<(), HalError> {
+        let reply_rearm_mode = self.experimental_control_plane_reply_rearm_mode;
+        if control_plane_reply_probe_prefers_bulk_clock(
+            self.experimental_no_ht_transport,
+            reply_rearm_mode,
+        ) {
+            let target_clock_hz = self.preferred_data_clock_hz;
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=reply-prefix-read-bulk-clock target={}Hz current={}Hz width={} mode={} diagnostic_stage={} len={} no_ht={}",
+                target_clock_hz,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                diagnostic_stage,
+                buffer.len(),
+                self.experimental_no_ht_transport,
+            ));
+            return self.with_firmware_bulk_clock(stage, target_clock_hz, |this| {
+                this.read_function2_reply_once_with_linux_recovery(stage, buffer.len(), |this| {
+                    this.with_control_plane_function2_port(|this, function_addr| {
+                        this.io_extended_single_chunk_diagnostic(
+                            SdioFunction::Function2,
+                            function_addr,
+                            control_plane_read_uses_incrementing_addr(),
+                            false,
+                            buffer,
+                            diagnostic_stage,
+                        )
+                    })
+                })
+            });
+        }
+
         self.read_function2_reply_once_with_linux_recovery(stage, buffer.len(), |this| {
             this.with_control_plane_function2_port(|this, function_addr| {
                 this.io_extended_single_chunk_diagnostic(
@@ -14216,6 +14273,26 @@ mod tests {
 
     #[test]
     fn startup_link_reply_probes_prefer_bounded_bulk_clock_reads() {
+        assert!(control_plane_reply_probe_prefers_bulk_clock(
+            true,
+            control_plane_reply_rearm_startup_link(),
+        ));
+        assert!(control_plane_reply_probe_prefers_bulk_clock(
+            true,
+            control_plane_reply_rearm_startup_link_resume(),
+        ));
+        assert!(!control_plane_reply_probe_prefers_bulk_clock(
+            true,
+            control_plane_reply_rearm_promoted_link(),
+        ));
+        assert!(!control_plane_reply_probe_prefers_bulk_clock(
+            false,
+            control_plane_reply_rearm_startup_link(),
+        ));
+    }
+
+    #[test]
+    fn startup_link_reply_prefix_reads_prefer_bounded_bulk_clock_reads() {
         assert!(control_plane_reply_probe_prefers_bulk_clock(
             true,
             control_plane_reply_rearm_startup_link(),
