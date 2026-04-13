@@ -319,7 +319,6 @@ const fn skip_usbsts_clear_before_run_with_snapshot(
 ) -> bool {
     matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -2759,12 +2758,10 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Match U-Boot's post-start ordering for interrupter state: zero
         // moderation and pending after the controller is running.
-        if preserve_firmware_state
-            || skip_post_run_interrupter_zeroing_with_snapshot(
-                self.firmware_handoff,
-                trusted_runtime_seed_snapshot,
-            )
-        {
+        if skip_post_run_interrupter_zeroing_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        ) {
             emit_xhci_diag(0x026b, (int_base + reg::IMOD) as u64, 0, 1);
             emit_xhci_diag(0x026c, (int_base + reg::IMAN) as u64, 0, 1);
         } else {
@@ -4904,7 +4901,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_stop_state_paths_skip_usbsts_clear_before_run() {
+    fn only_coldstart_and_resetless_skip_usbsts_clear_before_run() {
         let stop_state_snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -4919,7 +4916,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             None,
         ));
-        assert!(skip_usbsts_clear_before_run_with_snapshot(
+        assert!(!skip_usbsts_clear_before_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));

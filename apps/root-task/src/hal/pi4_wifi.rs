@@ -3345,13 +3345,20 @@ const fn sdio_function_ready_uses_linux_strict_wait_only_budget(
 
 #[inline]
 const fn sdio_function_ready_uses_force_reenable_budget(
-    _step: SdioFunctionEnableStep,
-    _budget: SdioFunctionReadyBudget,
+    step: SdioFunctionEnableStep,
+    budget: SdioFunctionReadyBudget,
 ) -> bool {
-    // Linux reasserts Function 2 enable and then polls IORx; it does not tear
-    // the function down in the middle of control-plane recovery. On Pi 4 that
-    // clear/re-enable cycle drops the newly booted sideband link.
-    false
+    // The bounded reply-recovery path now proves the opposite failure mode on
+    // Pi 4: preserving the Linux-shaped Function 2 latch can leave reply reads
+    // stuck forever on a stale no-IORX state. Keep the destructive clear out
+    // of the short probe/bypass paths, but force a real clear+re-enable on the
+    // strict reply-recovery budget so runtime actually replays Function 2
+    // readiness instead of trusting the stale latch.
+    matches!(step.function, SdioFunction::Function2)
+        && matches!(
+            budget,
+            SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
+        )
 }
 
 #[inline]
@@ -4732,11 +4739,25 @@ impl SdioHost {
         stage: &'static str,
         function2_ready_budget: SdioFunctionReadyBudget,
     ) -> bool {
-        if !self.experimental_no_ht_transport
-            || !sdio_function_ready_budget_preserves_latched_function2_enable(
-                function2_ready_budget,
-            )
-        {
+        if !self.experimental_no_ht_transport {
+            return false;
+        }
+
+        if matches!(
+            function2_ready_budget,
+            SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
+        ) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=force-function2-ready-repoll budget={} current_clock={}Hz width={} no_ht={} reason=reply-strict-recovery-disallows-preserve-latch",
+                sdio_function_ready_budget_name(function2_ready_budget),
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.experimental_no_ht_transport,
+            ));
+            return false;
+        }
+
+        if !sdio_function_ready_budget_preserves_latched_function2_enable(function2_ready_budget) {
             return false;
         }
 
@@ -6799,7 +6820,10 @@ impl SdioHost {
                 self.experimental_no_ht_transport,
             ));
         }
-        let preserve_function2_enable_latch = self
+        let preserve_function2_enable_latch = !matches!(
+            function2_ready_budget,
+            SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
+        ) && self
             .should_preserve_function2_enable_latch_for_channel_rearm(
                 "slow-link-channel-rearm-preserve-f2",
                 function2_ready_budget,
@@ -15188,7 +15212,7 @@ mod tests {
     }
 
     #[test]
-    fn function2_force_reenable_is_disabled_for_reply_recovery() {
+    fn function2_force_reenable_is_used_only_for_strict_reply_recovery() {
         let enabled = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
         assert!(!sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
@@ -15208,7 +15232,7 @@ mod tests {
             enabled,
             SDIO_FUNC_READY_1,
         ));
-        assert!(!sdio_function_ready_should_force_reenable(
+        assert!(sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
             enabled,
@@ -15233,7 +15257,7 @@ mod tests {
                 SDIO_FUNCTION_ENABLE_F2,
                 SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
             ),
-            0
+            SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE
         );
         assert!(!sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
