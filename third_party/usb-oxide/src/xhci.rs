@@ -328,6 +328,7 @@ const fn skip_usbsts_clear_before_run_with_snapshot(
 ) -> bool {
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -555,6 +556,7 @@ const fn skip_post_run_interrupter_zeroing_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -3997,6 +3999,10 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
+        assert!(skip_post_run_interrupter_zeroing_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            stop_state_snapshot,
+        ));
         assert!(runtime_stop_state_needs_post_run_settle(
             XhciFirmwareHandoff::ResetlessReinit,
             stop_state_snapshot,
@@ -4954,7 +4960,7 @@ mod tests {
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             stop_state_snapshot,
         ));
-        assert!(!skip_usbsts_clear_before_run_with_snapshot(
+        assert!(skip_usbsts_clear_before_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));

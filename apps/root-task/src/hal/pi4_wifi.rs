@@ -1168,6 +1168,14 @@ const fn control_plane_reply_skips_strict_function2_rearm_after_read_recover(
 }
 
 #[inline]
+const fn control_plane_reply_probe_prefers_bulk_clock(
+    experimental_no_ht_transport: bool,
+    reply_rearm_mode: u8,
+) -> bool {
+    experimental_no_ht_transport && control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+}
+
+#[inline]
 fn control_plane_reply_speculative_read_can_continue(err: &HalError) -> bool {
     is_sdhci_io_path_error(err) || is_sdhci_int_timeout(err)
 }
@@ -8093,7 +8101,7 @@ impl SdioHost {
         }
     }
 
-    fn read_function2_reply_with_linux_recovery(
+    fn read_function2_reply_with_linux_recovery_inner(
         &mut self,
         stage: &'static str,
         buffer: &mut [u8],
@@ -8141,6 +8149,33 @@ impl SdioHost {
                 )
             })
         })
+    }
+
+    fn read_function2_reply_with_linux_recovery(
+        &mut self,
+        stage: &'static str,
+        buffer: &mut [u8],
+    ) -> Result<(), HalError> {
+        let reply_rearm_mode = self.experimental_control_plane_reply_rearm_mode;
+        if control_plane_reply_probe_prefers_bulk_clock(
+            self.experimental_no_ht_transport,
+            reply_rearm_mode,
+        ) {
+            let target_clock_hz = self.preferred_data_clock_hz;
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=reply-read-bulk-clock target={}Hz current={}Hz width={} mode={} chunk_limit={} no_ht={}",
+                target_clock_hz,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                self.control_plane_reply_chunk_limit(),
+                self.experimental_no_ht_transport,
+            ));
+            return self.with_firmware_bulk_clock(stage, target_clock_hz, |this| {
+                this.read_function2_reply_with_linux_recovery_inner(stage, buffer)
+            });
+        }
+        self.read_function2_reply_with_linux_recovery_inner(stage, buffer)
     }
 
     fn read_function2_reply_single_chunk_diagnostic_with_linux_recovery(
@@ -14177,6 +14212,26 @@ mod tests {
                 control_plane_reply_rearm_none(),
             )
         );
+    }
+
+    #[test]
+    fn startup_link_reply_probes_prefer_bounded_bulk_clock_reads() {
+        assert!(control_plane_reply_probe_prefers_bulk_clock(
+            true,
+            control_plane_reply_rearm_startup_link(),
+        ));
+        assert!(control_plane_reply_probe_prefers_bulk_clock(
+            true,
+            control_plane_reply_rearm_startup_link_resume(),
+        ));
+        assert!(!control_plane_reply_probe_prefers_bulk_clock(
+            true,
+            control_plane_reply_rearm_promoted_link(),
+        ));
+        assert!(!control_plane_reply_probe_prefers_bulk_clock(
+            false,
+            control_plane_reply_rearm_startup_link(),
+        ));
     }
 
     #[test]
