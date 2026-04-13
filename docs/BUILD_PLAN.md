@@ -7607,6 +7607,7 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 - No claim that Cohesix replaces agent planners/orchestrators; it remains the authority, evidence, and actuation layer beneath them.
 - No opaque prompt transcript as the source of truth for agent state, approvals, retrieval, or tool output.
 - No hidden inter-agent mailbox or side-channel coordination surface outside delegated tickets, durable artifacts, and existing evidence flows.
+- No NeMo-specific control plane, namespace grammar, or provider lock-in semantics; NeMo support must remain an optional host-side provider family under the same Cohesix authority/evidence contract as other backends.
 
 **Deliverables**
 
@@ -7704,12 +7705,46 @@ Implementation requirements:
 As-built leverage:
 - Reuse `cohesix-playbook`, mock backend, and host-only REST/filesystem backends.
 
+---
+
+### 6) Optional NeMo runtime family (host-only, governed, cross-provider)
+**Purpose:** Support NVIDIA NeMo where it creates clear operational leverage over simpler direct-serving alternatives, while keeping Cohesix as the authority, evidence, and policy layer.
+
+Implementation requirements:
+- Treat NeMo as an optional host-side provider family under the Milestone 28c run-envelope contract, not as a new runtime plane:
+  - `nemo.infer` for NIM / NeMo Export-Deploy / Triton / TensorRT-LLM-backed inference
+  - `nemo.guardrails` for safety policy evaluation and refusal receipts
+  - `nemo.evaluate` for model / RAG / agent evaluation jobs and score receipts
+  - optional `nemo.retrieve` and `nemo.customize` only when they remain host-side and ticket-scoped
+- Add host capability probes that discover NeMo endpoints, deployed model profiles, guardrail policy ids, evaluator availability, and deployment state without making NeMo the source of truth.
+- Live NeMo-backed actuation remains ticketed and fenced:
+  - all mutating NeMo actions flow through delegated host tickets,
+  - all actions carry `id`, `idempotency_key`, and `writer_epoch` where applicable,
+  - unsupported or unauthorised NeMo actions fail deterministically with no side effects.
+- Guardrail and evaluator outputs become first-class receipts and evidence inputs:
+  - `guardrail_policy_hash`,
+  - `guardrail_decision`,
+  - `evaluation_profile_hash`,
+  - `evaluation_job_ref`,
+  - `evaluation_summary_ref`,
+  - `deployment_config_hash`.
+- Cohesix must remain more valuable than direct NeMo or direct vLLM use:
+  - the same run envelope, delegated ticket model, evidence pack, and policy gates must work against NeMo and at least one alternate provider family,
+  - NeMo support must not introduce NeMo-only authoritative state or bypasses that other providers cannot satisfy.
+- NeMo Agent Toolkit, MCP, or A2A features may be consumed only as downstream host integrations behind existing Cohesix auth and evidence boundaries; they must not become public control surfaces or authoritative coordination channels.
+
+As-built leverage:
+- Reuse `host-ticket-agent`, `cohesix-py` orchestration/playbooks, evidence packs, telemetry exports, GPU lease flows, and production audit/replay defaults from Milestone 28b.
+
 **Commands**
 - `cargo test -p host-ticket-agent`
 - `cargo test -p coh`
 - `python -m pytest tools/cohesix-py/tests/test_orchestration.py`
 - `python -m pytest tools/cohesix-py/tests/test_playbooks.py`
 - `python -m pytest tools/cohesix-py/tests/test_evidence_receipts.py`
+- `python -m pytest tools/cohesix-py/tests/test_integrations.py -k nemo`
+- `python -m pytest tools/cohesix-py/tests/test_playbooks.py -k nemo`
+- `cargo test -p tests --test host_ticket_agent -- nemo`
 - `cohesix-playbook --playbook long-context-agent-factory --dry-run --mock`
 
 **Checks (Definition of Done)**
@@ -7720,11 +7755,15 @@ As-built leverage:
 - Prefix cache hits and misses are explainable from bounded eligibility/invalidation fields rather than hidden provider behavior.
 - Strategy selection and long-context cost metrics are observable per run/step.
 - High-risk live AI mutations remain policy-gated and ticket-scoped.
+- Optional NeMo support remains host-side, ticket-scoped, writer-fenced, and evidence-backed; disabling NeMo leaves the baseline 28c substrate intact.
+- The same Cohesix run envelope and evidence model works against NeMo and at least one alternate provider family, proving NeMo support adds governed lifecycle value rather than vendor-specific lock-in.
+- Guardrail and evaluator receipts can gate live promotion or actuation decisions deterministically in dry-run/mock tests before any real provider mutation is allowed.
 - No new in-VM listeners, runtime, or control protocols are introduced.
 
 **Compiler touchpoints**
 - `coh-rtc` emits generated host-tool defaults for AI run envelope limits, task-graph/handoff bounds, context budget ceilings, retrieval-manifest and artifact-ref bounds, prefix/hotset TTLs, and metrics bounds under the existing host policy/codegen path.
 - Manifest validation rejects AI host-control enablement when Milestone 28b delegated identity or audit/replay requirements are disabled in the target profile.
+- `coh-rtc` additionally emits optional provider-family policy for NeMo capability probes, action allowlists, endpoint/auth refs, deployment/evaluation/guardrail bounds, and alternate-provider parity requirements.
 - Canonical interface/architecture docs refreshed in:
   - `docs/INTERFACES.md`
   - `docs/ARCHITECTURE.md`
@@ -7793,6 +7832,50 @@ Changes:
 Commands: python -m pytest tools/cohesix-py/tests/test_integrations.py && python -m pytest tools/cohesix-py/tests/test_examples_ci_siem.py
 Checks: Reference adapters use delegated tickets, explicit handoff/checkpoint refs, and evidence exports only; no hidden side-channel state or direct `/queen/ctl` mutation is required.
 Deliverables: Cohesix remains the authority/evidence layer beneath supervisor frameworks instead of becoming one.
+
+Title/ID: m28c-nemo-capability-probes
+Goal: Detect and classify optional NeMo runtime capabilities without making NeMo the source of truth.
+Inputs: tools/cohesix-py/cohesix/integrations.py, tools/cohesix-py/cohesix/generated.py, docs/PYTHON_SUPPORT.md, docs/HOST_TOOLS.md
+Changes:
+  - tools/cohesix-py/cohesix/integrations.py — `probe_nemo_runtime`, `probe_nemo_guardrails`, and `probe_nemo_evaluator` helpers that resolve configured endpoints/auth refs, deployed model profiles, and capability summaries.
+  - tools/cohesix-py/cohesix/generated.py — generated NeMo capability defaults and bounded endpoint/profile limits from `coh-rtc`.
+  - docs/PYTHON_SUPPORT.md + docs/HOST_TOOLS.md — operator-visible NeMo capability probe contract and failure semantics.
+Commands: python -m pytest tools/cohesix-py/tests/test_integrations.py -k nemo_probe
+Checks: Capability probes are read-only, bounded, deterministic, and return the same shape whether NeMo is unavailable, partially configured, or fully available.
+Deliverables: Cohesix can reason about NeMo availability and profile shape before choosing provider strategy or issuing any host-ticket mutation.
+
+Title/ID: m28c-nemo-provider-family
+Goal: Add NeMo-backed provider adapters under the same delegated ticket, checkpoint, and evidence contract as other AI backends.
+Inputs: apps/host-ticket-agent/src/executors/infer.rs, tools/cohesix-py/cohesix/orchestration.py, docs/ARCHITECTURE.md, docs/INTERFACES.md
+Changes:
+  - apps/host-ticket-agent/src/executors/infer.rs — optional NeMo provider adapters for `nemo.infer`, `nemo.guardrails`, and `nemo.evaluate`, including deterministic refusal mapping and bounded receipt fields.
+  - tools/cohesix-py/cohesix/orchestration.py — provider-family selection hints and provider receipt normalization for NeMo vs alternate backends.
+  - docs/INTERFACES.md + docs/ARCHITECTURE.md — host-ticket NeMo action envelopes, receipt fields, and authority mapping back to delegated tickets and checkpoints.
+Commands: cargo test -p host-ticket-agent && cargo test -p tests --test host_ticket_agent -- nemo_provider
+Checks: NeMo-backed actions are idempotent, allowlist-gated, writer-fenced, and produce the same Cohesix-level receipt contract as alternate providers; unsupported NeMo features fail deterministically with no side effects.
+Deliverables: NeMo becomes an optional provider family beneath Cohesix rather than a special-case control plane.
+
+Title/ID: m28c-nemo-guardrails-and-eval
+Goal: Make NeMo guardrail and evaluator results first-class policy receipts that can gate live AI actions.
+Inputs: apps/coh/src/evidence.rs, apps/coh/src/evidence_timeline.rs, tools/cohesix-py/cohesix/playbooks.py, docs/SECURITY.md, docs/TEST_PLAN.md
+Changes:
+  - apps/coh/src/evidence.rs + apps/coh/src/evidence_timeline.rs — include guardrail policy hashes, decisions, evaluation refs/summaries, and deployment config hashes in evidence and timeline correlation.
+  - tools/cohesix-py/cohesix/playbooks.py — dry-run/mock playbooks that require successful NeMo guardrail/evaluator receipts before promotion or live mutation steps become admissible.
+  - docs/SECURITY.md + docs/TEST_PLAN.md — policy-gating contract for NeMo-backed guardrails/evaluations and additive regression expectations.
+Commands: cargo test -p coh --test evidence_pack && cargo test -p coh --test evidence_timeline && python -m pytest tools/cohesix-py/tests/test_playbooks.py -k nemo_gate
+Checks: Guardrail/evaluator receipts are durable, redacted where needed, correlated to run/task/step identity, and can deterministically block promotion or actuation in mock and evidence-only reconstruction paths.
+Deliverables: NeMo safety and evaluation add operational value to Cohesix instead of existing as unaudited provider-side metadata.
+
+Title/ID: m28c-nemo-policy-and-parity
+Goal: Enforce that optional NeMo support remains governed, bounded, and more valuable than direct backend-specific alternatives.
+Inputs: tools/coh-rtc/src/ir.rs, tools/coh-rtc/src/validate.rs, tools/cohesix-py/cohesix/generated.py, docs/BUILD_PLAN.md, docs/HOST_TOOLS.md
+Changes:
+  - tools/coh-rtc/src/ir.rs + tools/coh-rtc/src/validate.rs — optional NeMo endpoint/auth refs, action allowlists, receipt-field bounds, and alternate-provider parity requirements under the host AI policy path.
+  - tools/cohesix-py/cohesix/generated.py — compiler-aligned NeMo policy defaults consumed by orchestration and probes.
+  - docs/HOST_TOOLS.md — operational guidance stating that NeMo support is optional, host-side, and governed by the same Cohesix authority/evidence model as other providers.
+Commands: cargo test -p coh-rtc && python -m pytest tools/cohesix-py/tests/test_integrations.py -k nemo_policy
+Checks: Invalid NeMo policy, missing delegated-authority prerequisites, or NeMo-only authoritative semantics are rejected at validation time; the same run envelope/evidence contract remains valid with NeMo disabled or replaced by another provider family.
+Deliverables: NeMo support is compiler-governed, optional, and demonstrably cross-provider rather than a lock-in path.
 ```
 
 ## Outcome
@@ -7801,6 +7884,7 @@ After Milestone 28c:
 - Long-context AI runs stop treating the prompt as the sole system of record.
 - Attention strategy becomes a schedulable, measurable host-side concern instead of a hidden model-side accident.
 - Delegation, retrieval admission, cache eligibility, and handoff lineage become explicit artifacts rather than implicit prompt behavior.
+- Optional NeMo capabilities can be used where they materially improve guardrails, evaluation, deployment, or retrieval workflows, without becoming a second control plane or displacing Cohesix authority.
 - Milestone 29b can expose stable AI namespace roots based on proven host-side semantics rather than speculation.
 
 ## Milestone 29 — Edge Local Status (Pi 4 Host Tool)  <a id="29"></a> 
