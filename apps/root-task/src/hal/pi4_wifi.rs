@@ -1155,6 +1155,14 @@ const fn control_plane_reply_rearm_supports_speculative_read(
 }
 
 #[inline]
+const fn control_plane_reply_skips_strict_function2_rearm_after_read_recover(
+    low_touch_pure_f2_mode: bool,
+    reply_rearm_mode: u8,
+) -> bool {
+    low_touch_pure_f2_mode && control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+}
+
+#[inline]
 fn control_plane_reply_speculative_read_can_continue(err: &HalError) -> bool {
     is_sdhci_io_path_error(err) || is_sdhci_int_timeout(err)
 }
@@ -7952,12 +7960,31 @@ impl SdioHost {
         &mut self,
         stage: &'static str,
     ) -> Result<(), HalError> {
+        let low_touch_pure_f2_mode = self.control_plane_uses_low_touch_pure_f2_diagnostics();
+        let reply_rearm_mode = self.experimental_control_plane_reply_rearm_mode;
         self.recover_failed_function2_frame_transfer(stage, false, "linux-rxfail");
         self.recover_command_path_and_refresh_transport(stage)?;
         if self.experimental_no_ht_transport {
+            if control_plane_reply_skips_strict_function2_rearm_after_read_recover(
+                low_touch_pure_f2_mode,
+                reply_rearm_mode,
+            ) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=function2-read-rearm-skip budget={} mode={} current_clock={}Hz width={} no_ht={} reason=pure-f2-startup-link-reply-poll",
+                    sdio_function_ready_budget_name(
+                        SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
+                    ),
+                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.experimental_no_ht_transport,
+                ));
+                return Ok(());
+            }
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} action=function2-read-rearm budget={} current_clock={}Hz width={} no_ht={}",
+                "[pi4-wifi] firmware stage={stage} action=function2-read-rearm budget={} mode={} current_clock={}Hz width={} no_ht={}",
                 sdio_function_ready_budget_name(SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery),
+                control_plane_reply_rearm_mode_name(reply_rearm_mode),
                 self.current_clock_hz,
                 sdio_bus_width_name(self.desired_bus_width),
                 self.experimental_no_ht_transport,
@@ -14073,6 +14100,40 @@ mod tests {
             true,
             control_plane_reply_rearm_none(),
         ));
+    }
+
+    #[test]
+    fn low_touch_reply_read_recovery_skips_strict_rearm_only_on_startup_link_paths() {
+        assert!(
+            control_plane_reply_skips_strict_function2_rearm_after_read_recover(
+                true,
+                control_plane_reply_rearm_startup_link(),
+            )
+        );
+        assert!(
+            control_plane_reply_skips_strict_function2_rearm_after_read_recover(
+                true,
+                control_plane_reply_rearm_startup_link_resume(),
+            )
+        );
+        assert!(
+            !control_plane_reply_skips_strict_function2_rearm_after_read_recover(
+                false,
+                control_plane_reply_rearm_startup_link(),
+            )
+        );
+        assert!(
+            !control_plane_reply_skips_strict_function2_rearm_after_read_recover(
+                true,
+                control_plane_reply_rearm_promoted_link(),
+            )
+        );
+        assert!(
+            !control_plane_reply_skips_strict_function2_rearm_after_read_recover(
+                true,
+                control_plane_reply_rearm_none(),
+            )
+        );
     }
 
     #[test]

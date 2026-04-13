@@ -604,6 +604,12 @@ pub(crate) struct UsbProbePreflightStatus {
     pub handoff: &'static str,
     pub seed: &'static str,
     pub halt_guard: &'static str,
+    pub constructor: &'static str,
+    pub pre_reset: &'static str,
+    pub legacy: &'static str,
+    pub run: &'static str,
+    pub publish: &'static str,
+    pub post_ready_irq: &'static str,
     pub current_step: &'static str,
     pub next_step: &'static str,
     pub followup_step: &'static str,
@@ -991,6 +997,12 @@ fn usb_probe_preflight_status(
         handoff: summary.handoff,
         seed: summary.seed,
         halt_guard: summary.halt_guard,
+        constructor: xhci_runtime_init_strategy_constructor_label(strategy),
+        pre_reset: xhci_runtime_init_strategy_pre_reset_label(strategy),
+        legacy: xhci_runtime_init_strategy_legacy_label(strategy),
+        run: xhci_runtime_init_strategy_run_label(strategy),
+        publish: xhci_runtime_init_strategy_publish_label(strategy),
+        post_ready_irq: xhci_runtime_init_strategy_post_ready_irq_label(strategy),
         current_step: usb_probe_preflight_current_step(),
         next_step: usb_probe_preflight_next_step(strategy),
         followup_step: usb_probe_preflight_followup_step(),
@@ -3259,10 +3271,95 @@ const fn xhci_runtime_init_strategy_skips_live_halt_read(
     strategy.seed_stop_state
         || matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::ColdStartFromSnapshot
-                | XhciFirmwareHandoff::ResetlessReinit
-                | XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
         )
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_constructor_label(
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if strategy.seed_stop_state
+        || matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        )
+    {
+        "trusted-quiesce"
+    } else {
+        "full-quiesce"
+    }
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_pre_reset_label(
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if strategy.seed_stop_state
+        || matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        )
+    {
+        "skip-pre-reset"
+    } else {
+        "full-pre-reset"
+    }
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_legacy_label(
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if strategy.seed_stop_state
+        || matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        )
+    {
+        "skip-legacy"
+    } else {
+        "claim-legacy"
+    }
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_run_label(strategy: XhciRuntimeInitStrategy) -> &'static str {
+    match (strategy.firmware_handoff, strategy.seed_stop_state) {
+        (XhciFirmwareHandoff::PreserveControllerState, _) => "run-skip",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, _) | (XhciFirmwareHandoff::None, true) => {
+            "run-uboot"
+        }
+        _ => "run-default",
+    }
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_publish_label(
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+    ) {
+        "rings-post-run"
+    } else {
+        "rings-pre-run"
+    }
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_post_ready_irq_label(
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::ResetlessReinit
+    ) {
+        "irq-skip"
+    } else {
+        "irq-zero"
+    }
 }
 
 #[inline]
@@ -6512,13 +6609,19 @@ impl UsbKeyboard {
                 let _ = core::fmt::Write::write_fmt(
                     &mut params_line,
                     format_args!(
-                        "[local-seat] xhci probe params attempt={}/{} policy={} origin={} mode={} halt_guard={} seed_flags=0x{seed_flags:02x} snapshot={} stop_seed={} ring_seed={} axi_setup={}",
+                        "[local-seat] xhci probe params attempt={}/{} policy={} origin={} mode={} halt_guard={} ctor={} pre={} legacy={} run={} publish={} post_ready={} seed_flags=0x{seed_flags:02x} snapshot={} stop_seed={} ring_seed={} axi_setup={}",
                         strategy_idx + 1,
                         init_strategy_count,
                         xhci_runtime_init_strategy_policy_label(strategy),
                         xhci_runtime_init_strategy_origin_label(strategy),
                         xhci_firmware_handoff_mode_label(strategy.firmware_handoff),
                         xhci_runtime_init_strategy_halt_guard_label(strategy),
+                        xhci_runtime_init_strategy_constructor_label(strategy),
+                        xhci_runtime_init_strategy_pre_reset_label(strategy),
+                        xhci_runtime_init_strategy_legacy_label(strategy),
+                        xhci_runtime_init_strategy_run_label(strategy),
+                        xhci_runtime_init_strategy_publish_label(strategy),
+                        xhci_runtime_init_strategy_post_ready_irq_label(strategy),
                         (seed_flags & 0x01) != 0,
                         (seed_flags & 0x02) != 0,
                         (seed_flags & 0x04) != 0,
@@ -11485,9 +11588,9 @@ mod tests {
                 0,
                 3,
                 "full-reset-start",
-                "uboot-fresh-init",
+                "seeded-cold-start",
                 "cold-start-from-snapshot",
-                "none",
+                "stop-state",
                 "skip-live-halt-read",
                 true,
                 true,
@@ -11523,17 +11626,23 @@ mod tests {
         assert_eq!(status.origin, "uboot-fresh-init");
         assert_eq!(status.handoff, "cold-start-from-snapshot");
         assert_eq!(status.seed, "none");
-        assert_eq!(status.halt_guard, "skip-live-halt-read");
+        assert_eq!(status.halt_guard, "live-halt-read");
+        assert_eq!(status.constructor, "full-quiesce");
+        assert_eq!(status.pre_reset, "full-pre-reset");
+        assert_eq!(status.legacy, "claim-legacy");
+        assert_eq!(status.run, "run-uboot");
+        assert_eq!(status.publish, "rings-pre-run");
+        assert_eq!(status.post_ready_irq, "irq-zero");
         assert_eq!(status.current_step, "pre-controller-ready");
-        assert_eq!(status.next_step, "skip-stop-revalidation");
+        assert_eq!(status.next_step, "live-stop-revalidation");
         assert_eq!(status.followup_step, "reset-post-settle");
         assert!(!status.prefer_high);
         assert!(status.pcie_dma_window);
         assert!(status.poll_only);
-        assert_eq!(status.expected_diag_stage, 0x0224);
+        assert_eq!(status.expected_diag_stage, 0x0213);
         assert_eq!(
             status.expected_diag_tag,
-            Some("fw-handoff-skip-stop-revalidation")
+            Some("stop-revalidation-usbsts-read-begin")
         );
         assert_eq!(status.expected_diag_exact, None);
     }
@@ -11545,7 +11654,7 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 false,
             )),
-            "skip-live-halt-read"
+            "live-halt-read"
         );
         assert_eq!(
             super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(

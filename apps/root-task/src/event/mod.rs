@@ -2269,6 +2269,16 @@ where
             let _ = write!(edge_line, " expected_exact={exact}");
         }
         self.emit_console_line(edge_line.as_str());
+        let plan_line = format_message(format_args!(
+            "usb: golden_path preflight ctor={} pre={} legacy={} run={} publish={} post_ready={}",
+            status.constructor,
+            status.pre_reset,
+            status.legacy,
+            status.run,
+            status.publish,
+            status.post_ready_irq,
+        ));
+        self.emit_console_line(plan_line.as_str());
     }
 
     #[cfg(feature = "kernel")]
