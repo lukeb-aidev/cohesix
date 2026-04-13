@@ -293,8 +293,6 @@ pub struct MscDevice<H: Dma> {
     interface: u8,
     ep_in: u8,
     ep_out: u8,
-    ep_in_max_packet: u16,
-    ep_out_max_packet: u16,
     max_lun: u8,
     tag: u32,
 }
@@ -320,8 +318,6 @@ impl<H: Dma> MscDevice<H> {
             interface: iface.interface_number,
             ep_in: ep_in.number(),
             ep_out: ep_out.number(),
-            ep_in_max_packet: ep_in.max_packet_size,
-            ep_out_max_packet: ep_out.max_packet_size,
             max_lun: 0,
             tag: 1,
         };

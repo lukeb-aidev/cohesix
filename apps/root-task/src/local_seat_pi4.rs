@@ -2569,7 +2569,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x020a => Some("fw-handoff-skip-usbsts-clear-write"),
         0x020b => Some("fw-handoff-skip-imod-write"),
         0x020c => Some("fw-handoff-skip-iman-write"),
-        0x020d => Some("fw-handoff-trusted-usbsts-clear-write"),
+        0x020d => Some("fw-handoff-trusted-usbsts-clear-skip"),
         0x020e => Some("fw-handoff-trusted-imod-write"),
         0x020f => Some("fw-handoff-trusted-iman-write"),
         0x0210 => Some("legacy-ownership-claim-begin"),
@@ -11820,7 +11820,7 @@ mod tests {
         );
         assert_eq!(
             xhci_diag_stage_label(0x020d),
-            Some("fw-handoff-trusted-usbsts-clear-write")
+            Some("fw-handoff-trusted-usbsts-clear-skip")
         );
         assert_eq!(
             xhci_diag_stage_label(0x020e),

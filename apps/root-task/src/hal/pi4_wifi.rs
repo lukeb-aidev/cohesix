@@ -2579,6 +2579,30 @@ const fn post_firmware_ready_function2_strict_repoll_can_soft_continue(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Function2StrictRepollRecovery {
+    FailFast,
+    CutoverToBoundedNoHtReplyProbe,
+}
+
+#[inline]
+const fn post_firmware_ready_function2_strict_repoll_recovery(
+    ioex: Option<u8>,
+    iorx: Option<u8>,
+    ienx: Option<u8>,
+    watermark: Option<u8>,
+    devctl: Option<u8>,
+    mesbusy: Option<u8>,
+) -> Function2StrictRepollRecovery {
+    if post_firmware_ready_function2_strict_repoll_can_soft_continue(
+        ioex, iorx, ienx, watermark, devctl, mesbusy,
+    ) {
+        Function2StrictRepollRecovery::CutoverToBoundedNoHtReplyProbe
+    } else {
+        Function2StrictRepollRecovery::FailFast
+    }
+}
+
 #[inline]
 const fn control_plane_function2_linux_state_label(
     ioex: Option<u8>,
@@ -4852,6 +4876,32 @@ impl SdioHost {
         Ok(())
     }
 
+    fn cutover_control_plane_reply_probe_to_bounded_no_ht(
+        &mut self,
+        stage: &'static str,
+        reason: &'static str,
+    ) -> Result<(), HalError> {
+        if !self.experimental_no_ht_transport {
+            self.enter_bounded_no_ht_transport(stage)?;
+        } else {
+            self.lock_control_plane_to_startup_profile(stage, reason)?;
+        }
+        self.experimental_control_plane_write_probe_pending = false;
+        self.experimental_control_plane_startup_profile_reason = reason;
+        self.rearm_firmware_channel_on_startup_link()?;
+        self.resume_control_plane_reply_probe_on_startup_link(stage);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=reply-probe-cutover mode={} current={}Hz width={} chunk_limit={} no_ht={} reason={reason}",
+            cyw43_transport_mode_name(self.experimental_no_ht_transport),
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            self.control_plane_chunk_limit(),
+            self.experimental_no_ht_transport,
+        ));
+        self.log_transport_shadow("control-plane-reply-bounded-no-ht-cutover");
+        Ok(())
+    }
+
     fn reattach_startup_link_control_plane_transport(
         &mut self,
         stage: &'static str,
@@ -5371,12 +5421,12 @@ impl SdioHost {
                 )?;
             }
         }
-        self.rearm_firmware_channel_on_startup_link()?;
-        self.resume_control_plane_reply_probe_on_startup_link(
+        self.cutover_control_plane_reply_probe_to_bounded_no_ht(
             "control-plane-post-write-rearm-resume",
-        );
+            "post-write-timeout",
+        )?;
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=resume-ready previous={}Hz/{} current={}Hz width={} mode=slow-link-rearm",
+            "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=resume-ready previous={}Hz/{} current={}Hz width={} mode=bounded-no-ht-reply",
             previous_clock_hz,
             sdio_bus_width_name(previous_bus_width),
             self.current_clock_hz,
@@ -10311,8 +10361,11 @@ impl SdioHost {
                     let f2_state = control_plane_function2_linux_state_label(
                         ioex, iorx, ienx, watermark, devctl, mesbusy,
                     );
-                    if post_firmware_ready_function2_strict_repoll_can_soft_continue(
-                        ioex, iorx, ienx, watermark, devctl, mesbusy,
+                    if matches!(
+                        post_firmware_ready_function2_strict_repoll_recovery(
+                            ioex, iorx, ienx, watermark, devctl, mesbusy,
+                        ),
+                        Function2StrictRepollRecovery::CutoverToBoundedNoHtReplyProbe
                     ) {
                         let soft_continue_err = HalError::Unsupported(exact_error);
                         self.mark_control_plane_hint_reads_unstable(
@@ -10329,9 +10382,10 @@ impl SdioHost {
                             self.control_plane_chunk_limit(),
                             self.experimental_no_ht_transport,
                         ));
-                        self.resume_control_plane_reply_probe_on_startup_link(
+                        self.cutover_control_plane_reply_probe_to_bounded_no_ht(
                             "post-firmware-ready-function2-strict-repoll-soft-continue",
-                        );
+                            "post-firmware-ready-function2-sideband",
+                        )?;
                         self.log_control_plane_finish_snapshot(
                             "post-firmware-ready-function2-strict-repoll-soft-continue",
                         );
@@ -13201,6 +13255,32 @@ mod tests {
                 Some(SBSDIO_DEVCTL_F2WM_ENAB),
                 Some(CY_43455_MESBUSYCTRL),
             )
+        );
+    }
+
+    #[test]
+    fn post_firmware_ready_strict_repoll_recovery_cuts_over_to_bounded_no_ht_reply_probe() {
+        assert_eq!(
+            post_firmware_ready_function2_strict_repoll_recovery(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                Some(SDIO_INTERRUPT_ENABLE_MASK),
+                Some(CY_43455_F2_WATERMARK),
+                Some(SBSDIO_DEVCTL_F2WM_ENAB),
+                Some(CY_43455_MESBUSYCTRL),
+            ),
+            Function2StrictRepollRecovery::CutoverToBoundedNoHtReplyProbe
+        );
+        assert_eq!(
+            post_firmware_ready_function2_strict_repoll_recovery(
+                Some(SDIO_FUNC_ENABLE_1),
+                Some(SDIO_FUNC_READY_1),
+                Some(SDIO_INTERRUPT_ENABLE_MASK),
+                Some(CY_43455_F2_WATERMARK),
+                Some(SBSDIO_DEVCTL_F2WM_ENAB),
+                Some(CY_43455_MESBUSYCTRL),
+            ),
+            Function2StrictRepollRecovery::FailFast
         );
     }
 

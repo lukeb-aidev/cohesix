@@ -1326,8 +1326,11 @@ impl<H: Dma> XhciCtrl<H> {
     ) {
         if matches!(mode, ConstructorPollingScrubMode::TrustedQuiesceOnly) {
             emit_xhci_diag(0x0209, reg::USBCMD as u64, 0, 1);
+            // The Pi 4 trusted-handoff path still faults on the first live
+            // USBSTS write. Keep the constructor scrub read-free and quiesce
+            // only the interrupter state until the later blind-settle/reset
+            // boundary takes ownership for real.
             emit_xhci_diag(0x020d, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 1);
-            Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
             Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
             emit_xhci_diag(0x020e, (int_base + reg::IMOD) as u64, 0, 1);
             emit_xhci_diag(
@@ -3515,7 +3518,7 @@ mod tests {
         runtime_seed_snapshot_flag_bits, runtime_stop_state_needs_post_run_settle,
         constructor_polling_scrub_mode, ConstructorPollingScrubMode,
         skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
-        skip_constructor_polling_scrub_writes, skip_constructor_polling_scrub_writes_with_snapshot,
+        skip_constructor_polling_scrub_writes_with_snapshot,
         skip_doorbell_readback_after_ring, skip_init_pre_reset_scrub_writes,
         skip_init_pre_reset_scrub_writes_with_snapshot, skip_legacy_ownership_claim_for_handoff,
         skip_legacy_ownership_claim_for_handoff_with_snapshot, skip_live_halt_revalidation,
@@ -3526,12 +3529,34 @@ mod tests {
         u64_register_change_mask, use_atomic_erstba_publish_with_snapshot,
         use_atomic_runtime_ring_publish_with_snapshot, use_live_config_seed_reads,
         use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
-        use_live_post_reset_seed_reads_with_snapshot, XhciControllerParams, XhciFirmwareHandoff,
-        XhciRuntimeSeedSnapshot, BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
-        READY_WAIT_PROGRESS_SPINS, SKIP_HCRST_DURING_INIT,
+        use_live_post_reset_seed_reads_with_snapshot, XhciControllerParams, XhciCtrl,
+        XhciFirmwareHandoff, XhciRuntimeSeedSnapshot, BRCM_XHCI_USBAXI_SA_UA_MASK,
+        BRCM_XHCI_USBAXI_SA_UA_VAL, READY_WAIT_PROGRESS_SPINS, SKIP_HCRST_DURING_INIT,
         TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
+        USBSTS_CLEAR_MASK,
     };
-    use crate::reg;
+    use alloc::vec;
+    use crate::{reg, Dma};
+
+    struct MockDma;
+
+    impl Dma for MockDma {
+        unsafe fn alloc(&self, _size: usize, _align: usize) -> Option<usize> {
+            None
+        }
+
+        unsafe fn free(&self, _addr: usize, _size: usize, _align: usize) {}
+
+        unsafe fn map_mmio(&self, _phys: usize, _size: usize) -> Option<usize> {
+            None
+        }
+
+        unsafe fn unmap_mmio(&self, _virt: usize, _size: usize) {}
+
+        fn virt_to_phys(&self, va: usize) -> usize {
+            va
+        }
+    }
 
     #[test]
     fn parse_controller_params_rejects_all_ones() {
@@ -4647,6 +4672,78 @@ mod tests {
                 }),
             ),
             ConstructorPollingScrubMode::TrustedQuiesceOnly
+        );
+    }
+
+    #[test]
+    fn trusted_constructor_scrub_skips_live_usbsts_write_but_quiesces_interrupter() {
+        let mut mmio = vec![0u8; 0x400];
+        let mmio_base = mmio.as_mut_ptr() as usize;
+        let op_offset = 0x40;
+        let int_base = 0x180;
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD, 0xa5a5_5a5a);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS, 0x55aa_cc33);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMOD, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMAN, 0);
+
+        XhciCtrl::<MockDma>::write_only_polling_scrub(
+            mmio_base,
+            op_offset,
+            int_base,
+            ConstructorPollingScrubMode::TrustedQuiesceOnly,
+        );
+
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD),
+            0xa5a5_5a5a
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS),
+            0x55aa_cc33
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMOD),
+            0
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMAN),
+            polling_iman_value()
+        );
+    }
+
+    #[test]
+    fn full_constructor_scrub_still_masks_controller_and_clears_status() {
+        let mut mmio = vec![0u8; 0x400];
+        let mmio_base = mmio.as_mut_ptr() as usize;
+        let op_offset = 0x40;
+        let int_base = 0x180;
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS, 0);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMOD, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMAN, 0);
+
+        XhciCtrl::<MockDma>::write_only_polling_scrub(
+            mmio_base,
+            op_offset,
+            int_base,
+            ConstructorPollingScrubMode::Full,
+        );
+
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD),
+            0
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS),
+            USBSTS_CLEAR_MASK
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMOD),
+            0
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMAN),
+            polling_iman_value()
         );
     }
 
