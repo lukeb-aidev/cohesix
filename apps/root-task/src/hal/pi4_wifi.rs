@@ -1315,6 +1315,32 @@ fn control_plane_reply_remainder_len_from_firstread(
 }
 
 #[inline]
+const fn control_plane_reply_first_read_len(
+    frame_capacity: usize,
+    low_touch_pure_f2_mode: bool,
+) -> usize {
+    let preferred = if low_touch_pure_f2_mode {
+        CYW43_SDPCM_PREFIX_MIN_LEN
+    } else {
+        CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
+    };
+    if frame_capacity < preferred {
+        frame_capacity
+    } else {
+        preferred
+    }
+}
+
+#[inline]
+const fn control_plane_reply_first_read_mode_name(low_touch_pure_f2_mode: bool) -> &'static str {
+    if low_touch_pure_f2_mode {
+        "pure-f2-prefix"
+    } else {
+        "linux-firstread"
+    }
+}
+
+#[inline]
 fn control_plane_reply_speculative_frame_len(frame: &[u8]) -> Option<usize> {
     let packet_len = control_plane_reply_header_frame_len(frame)?;
     if packet_len > frame.len() {
@@ -3032,6 +3058,37 @@ fn control_plane_snapshot_exact_error_label_with_sdhci_diag(
     sdhci_read_diag: &'static str,
 ) -> &'static str {
     match blocker {
+        "sdio-core-hints-unreadable" if sdhci_read_diag == "f2-reply-read-command-timeout" => {
+            "cyw43-function2-reply-command-timeout"
+        }
+        "sdio-core-hints-unreadable" if sdhci_read_diag == "f2-reply-read-command-crc" => {
+            "cyw43-function2-reply-command-crc"
+        }
+        "sdio-core-hints-unreadable" if sdhci_read_diag == "f2-reply-read-command-end-bit" => {
+            "cyw43-function2-reply-command-end-bit"
+        }
+        "sdio-core-hints-unreadable" if sdhci_read_diag == "f2-reply-read-command-index" => {
+            "cyw43-function2-reply-command-index"
+        }
+        "sdio-core-hints-unreadable" if sdhci_read_diag == "f2-reply-read-command-error" => {
+            "cyw43-function2-reply-command-error"
+        }
+        "sdio-core-hints-unreadable"
+            if sdhci_read_diag == "f2-reply-read-command-phase-no-data-active" =>
+        {
+            "cyw43-function2-reply-command-stall"
+        }
+        "sdio-core-hints-unreadable"
+            if sdhci_read_diag == "f2-reply-read-stalled-no-buffer-ready" =>
+        {
+            "cyw43-function2-reply-read-stall-no-buffer-ready"
+        }
+        "sdio-core-hints-unreadable" if sdhci_read_diag == "f2-reply-read-data-end-bit" => {
+            "cyw43-function2-reply-data-end-bit"
+        }
+        "sdio-core-hints-unreadable" if sdhci_read_diag == "f2-reply-read-data-crc" => {
+            "cyw43-function2-reply-data-crc"
+        }
         "f2-enable-latched-not-ready" if sdhci_read_diag == "f2-reply-read-command-timeout" => {
             "cyw43-function2-enable-latched-not-ready-command-timeout"
         }
@@ -7971,7 +8028,10 @@ impl SdioHost {
         stage: &'static str,
         buffer: &mut [u8],
     ) -> Result<(), HalError> {
-        let first_read_len = cmp::min(buffer.len(), CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN);
+        let low_touch_pure_f2_mode = self.control_plane_uses_low_touch_pure_f2_diagnostics();
+        let first_read_len =
+            control_plane_reply_first_read_len(buffer.len(), low_touch_pure_f2_mode);
+        let first_read_mode = control_plane_reply_first_read_mode_name(low_touch_pure_f2_mode);
         self.read_function2_reply_once_with_linux_recovery(stage, first_read_len, |this| {
             this.with_control_plane_function2_port(|this, function_addr| {
                 this.io_extended(
@@ -7990,7 +8050,8 @@ impl SdioHost {
             return Ok(());
         };
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=linux-firstread-remainder prefix_len={} remainder_len={} frame_len={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={}",
+            "[pi4-wifi] firmware stage={stage} action=reply-remainder read_mode={} prefix_len={} remainder_len={} frame_len={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={}",
+            first_read_mode,
             first_read_len,
             remainder_len,
             first_read_len + remainder_len,
@@ -14114,6 +14175,51 @@ mod tests {
                 CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn control_plane_reply_first_read_len_uses_prefix_for_low_touch_mode() {
+        assert_eq!(
+            control_plane_reply_first_read_len(
+                CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY,
+                false,
+            ),
+            CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
+        );
+        assert_eq!(
+            control_plane_reply_first_read_len(
+                CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY,
+                true,
+            ),
+            CYW43_SDPCM_PREFIX_MIN_LEN
+        );
+        assert_eq!(control_plane_reply_first_read_len(4, true), 4);
+        assert_eq!(
+            control_plane_reply_first_read_mode_name(false),
+            "linux-firstread"
+        );
+        assert_eq!(
+            control_plane_reply_first_read_mode_name(true),
+            "pure-f2-prefix"
+        );
+    }
+
+    #[test]
+    fn control_plane_exact_error_prefers_function2_reply_stall_when_sideband_is_suppressed() {
+        assert_eq!(
+            control_plane_snapshot_exact_error_label_with_sdhci_diag(
+                "sdio-core-hints-unreadable",
+                "f2-reply-read-stalled-no-buffer-ready",
+            ),
+            "cyw43-function2-reply-read-stall-no-buffer-ready"
+        );
+        assert_eq!(
+            control_plane_snapshot_exact_error_label_with_sdhci_diag(
+                "sdio-core-hints-unreadable",
+                "f2-reply-read-command-timeout",
+            ),
+            "cyw43-function2-reply-command-timeout"
         );
     }
 

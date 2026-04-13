@@ -1800,12 +1800,13 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
-    match runtime_vl805_reset_state {
-        VL805_RUNTIME_RESET_STATE_UNATTEMPTED
-        | VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
-        | VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE => XhciFirmwareHandoff::PreserveControllerState,
-        _ => XhciFirmwareHandoff::ColdStartFromSnapshot,
-    }
+    // The Pi 4 preserve-state path has now exposed every remaining live
+    // ownership edge one register at a time, and it still wedges on the first
+    // post-ready USBSTS clear. Prefer the U-Boot-style cold-start replay for
+    // every trusted handoff and keep preserve/resetless only as later
+    // fallbacks inside the runtime strategy ladder.
+    let _ = runtime_vl805_reset_state;
+    XhciFirmwareHandoff::ColdStartFromSnapshot
 }
 
 #[inline]
@@ -12406,12 +12407,12 @@ mod tests {
     }
 
     #[test]
-    fn preferred_trusted_handoff_mode_prefers_preserve_on_bootloader_owned_or_weak_reset_paths() {
+    fn preferred_trusted_handoff_mode_prefers_cold_start_on_every_trusted_path() {
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
             ),
-            XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(super::VL805_RUNTIME_RESET_STATE_NOTIFIED),
@@ -12421,13 +12422,13 @@ mod tests {
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
             ),
-            XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
             ),
-            XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         );
     }
 
