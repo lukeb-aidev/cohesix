@@ -1327,11 +1327,11 @@ impl<H: Dma> XhciCtrl<H> {
         if matches!(mode, ConstructorPollingScrubMode::TrustedQuiesceOnly) {
             emit_xhci_diag(0x0209, reg::USBCMD as u64, 0, 1);
             // The Pi 4 trusted-handoff path still faults on the first live
-            // USBSTS write. Keep the constructor scrub read-free and quiesce
-            // only the interrupter state until the later blind-settle/reset
-            // boundary takes ownership for real.
+            // constructor scrub writes, including USBSTS and interrupter
+            // programming. Keep this path completely read-free and write-free
+            // until the later blind-settle/reset boundary takes ownership for
+            // real.
             emit_xhci_diag(0x020d, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 1);
-            Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
             emit_xhci_diag(0x020e, (int_base + reg::IMOD) as u64, 0, 1);
             emit_xhci_diag(
                 0x020f,
@@ -1339,7 +1339,6 @@ impl<H: Dma> XhciCtrl<H> {
                 polling_iman_value() as u64,
                 1,
             );
-            Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
         } else {
             emit_xhci_diag(0x0205, reg::USBCMD as u64, 0, 1);
             Self::write_reg_at(mmio, op_offset + reg::USBCMD, 0u32);
@@ -4703,11 +4702,11 @@ mod tests {
         );
         assert_eq!(
             XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMOD),
-            0
+            0xffff_ffff
         );
         assert_eq!(
             XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMAN),
-            polling_iman_value()
+            0
         );
     }
 

@@ -2603,6 +2603,23 @@ const fn post_firmware_ready_function2_strict_repoll_recovery(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StrictControlPlaneReplyRecoveryAction {
+    FailFast,
+    ResumeBoundedNoHtReplyProbe,
+}
+
+#[inline]
+fn strict_control_plane_reply_recovery_action(
+    exact_error: &'static str,
+) -> StrictControlPlaneReplyRecoveryAction {
+    if exact_error == "cyw43-control-plane-sideband-unreadable" {
+        StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
+    } else {
+        StrictControlPlaneReplyRecoveryAction::FailFast
+    }
+}
+
 #[inline]
 const fn control_plane_function2_linux_state_label(
     ioex: Option<u8>,
@@ -5698,9 +5715,10 @@ impl SdioHost {
                         self.preserved_control_plane_data_wait_int_status,
                     ),
                 ) {
-                    if exact_error == "cyw43-control-plane-sideband-unreadable"
-                        && self.experimental_no_ht_transport
-                    {
+                    if matches!(
+                        strict_control_plane_reply_recovery_action(exact_error),
+                        StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
+                    ) {
                         let sideband_err = HalError::Unsupported(exact_error);
                         let bounded_attempt = attempt.min(usize::from(u8::MAX)) as u8;
                         let next_cycle = self
@@ -5740,7 +5758,7 @@ impl SdioHost {
                             ));
                         }
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware stage=control-plane-reply action=strict-recover-sideband-unreadable trigger={trigger} mode={} attempt={} cycle={}/{} current_clock={}Hz width={} reply_chunk_limit={} no_ht={} exact_error={exact_error} continue=pure-f2-startup-link",
+                            "[pi4-wifi] firmware stage=control-plane-reply action=strict-recover-sideband-unreadable trigger={trigger} mode={} attempt={} cycle={}/{} current_clock={}Hz width={} reply_chunk_limit={} no_ht={} exact_error={exact_error} continue=bounded-no-ht-reply",
                             control_plane_reply_rearm_mode_name(reply_rearm_mode),
                             attempt,
                             next_cycle,
@@ -13281,6 +13299,18 @@ mod tests {
                 Some(CY_43455_MESBUSYCTRL),
             ),
             Function2StrictRepollRecovery::FailFast
+        );
+    }
+
+    #[test]
+    fn strict_control_plane_reply_recovery_promotes_sideband_unreadable_into_bounded_retry() {
+        assert_eq!(
+            strict_control_plane_reply_recovery_action("cyw43-control-plane-sideband-unreadable"),
+            StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
+        );
+        assert_eq!(
+            strict_control_plane_reply_recovery_action("cyw43-function2-enable-latched-not-ready"),
+            StrictControlPlaneReplyRecoveryAction::FailFast
         );
     }
 
