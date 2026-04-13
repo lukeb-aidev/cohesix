@@ -3418,16 +3418,16 @@ const fn sdio_function_ready_uses_force_reenable_budget(
     step: SdioFunctionEnableStep,
     budget: SdioFunctionReadyBudget,
 ) -> bool {
-    // The bounded reply-recovery path now proves the opposite failure mode on
-    // Pi 4: preserving the Linux-shaped Function 2 latch can leave reply reads
-    // stuck forever on a stale no-IORX state. Keep the destructive clear out
-    // of the short probe/bypass paths, but force a real clear+re-enable on the
-    // strict reply-recovery budget so runtime actually replays Function 2
-    // readiness instead of trusting the stale latch.
+    // Pi 4 recovery now has two paths that must force a real Function 2
+    // clear+re-enable instead of trusting the stale Linux-shaped latch:
+    // the strict reply-recovery path and the bounded reply-probe-bypass path
+    // used on startup-link resume. Both paths still differ in what they do
+    // after the bounded ready poll expires.
     matches!(step.function, SdioFunction::Function2)
         && matches!(
             budget,
             SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
+                | SdioFunctionReadyBudget::ControlPlaneReplyBypass
         )
 }
 
@@ -3541,7 +3541,11 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
     budget: SdioFunctionReadyBudget,
 ) -> bool {
     matches!(step.function, SdioFunction::Function2)
-        && matches!(budget, SdioFunctionReadyBudget::ExperimentalBypass)
+        && matches!(
+            budget,
+            SdioFunctionReadyBudget::ExperimentalBypass
+                | SdioFunctionReadyBudget::ControlPlaneReplyBypass
+        )
         && (desired & (SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2))
             == (SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2)
         && (ready & SDIO_FUNC_READY_1) == SDIO_FUNC_READY_1
@@ -15290,11 +15294,11 @@ mod tests {
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyProbe,
         ));
-        assert!(!sdio_function_ready_uses_force_reenable_budget(
+        assert!(sdio_function_ready_uses_force_reenable_budget(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyBypass,
         ));
-        assert!(!sdio_function_ready_uses_force_reenable_budget(
+        assert!(sdio_function_ready_uses_force_reenable_budget(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
         ));
@@ -15453,7 +15457,7 @@ mod tests {
     }
 
     #[test]
-    fn function2_force_reenable_is_used_only_for_strict_reply_recovery() {
+    fn function2_force_reenable_is_used_for_reply_recovery_and_bypass() {
         let enabled = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
         assert!(!sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
@@ -15467,7 +15471,7 @@ mod tests {
             enabled,
             SDIO_FUNC_READY_1,
         ));
-        assert!(!sdio_function_ready_should_force_reenable(
+        assert!(sdio_function_ready_should_force_reenable(
             SDIO_FUNCTION_ENABLE_F2,
             SdioFunctionReadyBudget::ControlPlaneReplyBypass,
             enabled,
@@ -15491,7 +15495,7 @@ mod tests {
                 SDIO_FUNCTION_ENABLE_F2,
                 SdioFunctionReadyBudget::ControlPlaneReplyBypass,
             ),
-            0
+            SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE
         );
         assert_eq!(
             sdio_function_ready_force_reenable_settle_loops(
@@ -15534,7 +15538,7 @@ mod tests {
     }
 
     #[test]
-    fn function2_ready_timeout_only_bypasses_linux_latched_f2_state_on_experimental_path() {
+    fn function2_ready_timeout_bypasses_linux_latched_f2_state_on_reply_bypass_paths() {
         let desired = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
         assert!(sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
@@ -15542,7 +15546,7 @@ mod tests {
             SDIO_FUNC_READY_1,
             SdioFunctionReadyBudget::ExperimentalBypass,
         ));
-        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
+        assert!(sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,

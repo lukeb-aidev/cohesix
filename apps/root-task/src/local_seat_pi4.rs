@@ -5778,7 +5778,6 @@ const fn xhci_runtime_init_strategy_requires_primary_pcie_irq(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::ColdStartFromSnapshot
         )
-        && !strategy.seed_stop_state
 }
 
 #[derive(Clone, Copy)]
@@ -12723,7 +12722,7 @@ mod tests {
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));
-        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
         ));
