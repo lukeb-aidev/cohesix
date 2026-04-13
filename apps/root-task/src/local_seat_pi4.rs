@@ -177,12 +177,19 @@ const WIFI_PROGRESS_EMIT_INTERVAL_TICKS: usize = 64;
 const WIFI_PROGRESS_MAX_DOTS: usize = 3;
 const PI4_VL805_XHCI_INTX_IRQ: u32 = 143;
 const PI4_PCIE_BRIDGE_IRQ: u32 = 148;
+const PI4_PCIE_ECAM_SAFE_READ_IRQ: u32 = 27;
+const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 3] = [
+    PI4_PCIE_ECAM_SAFE_READ_IRQ,
+    PI4_PCIE_BRIDGE_IRQ,
+    PI4_VL805_XHCI_INTX_IRQ,
+];
 // The trusted Pi 4 handoff stays polling-driven, but once runtime has a live
 // controller the first ownership transition can still surface either the child
-// INTx line or the parent PCIe bridge interrupt even after U-Boot exported an
+// INTx line, the parent PCIe bridge interrupt, or the bcm2711 PCIe-side IRQ 27
+// that also shows up on safe-mode ECAM reads even after U-Boot exported an
 // interrupt-quiesced handoff contract. Keep early bring-up poll-based, then
-// bind only those two bounded bcm2711 PCIe sinks after controller-ready so a
-// posted bridge-side interrupt cannot derail steady-state ownership.
+// bind only that bounded Pi 4 PCIe sink set so a posted bridge-side or legacy
+// PCIe interrupt cannot derail steady-state ownership.
 const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = true;
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
@@ -5131,7 +5138,7 @@ struct UsbKeyboard {
 
 struct XhciIrqGuard {
     root_cnode: sel4_sys::seL4_CPtr,
-    bindings: [Option<XhciIrqBinding>; 2],
+    bindings: [Option<XhciIrqBinding>; TRUSTED_XHCI_PCIE_SINK_IRQS.len()],
 }
 
 #[derive(Clone, Copy)]
@@ -5179,7 +5186,9 @@ impl XhciIrqGuard {
                 xhci_irq_phase_label(phase),
                 match sink_mode {
                     XhciIrqSinkMode::Disabled => "poll-only",
-                    XhciIrqSinkMode::IntxAndBridge => "poll-only+pcie-intx+bridge-sink",
+                    XhciIrqSinkMode::TrustedPcieSinks => {
+                        "poll-only+pcie-irq27+bridge+intx-sink"
+                    }
                 },
                 xhci_irq_policy_reason(firmware_handoff),
             ),
@@ -5385,52 +5394,39 @@ impl XhciIrqGuard {
         let depth = crate::sel4::word_bits() as u8;
         let root_cnode = env.init_cnode_cap();
 
-        let (bridge_binding, intx_binding) = match sink_mode {
-            XhciIrqSinkMode::IntxAndBridge => {
-                let bridge_binding = Self::install_binding(
-                    env,
-                    root_cnode,
-                    depth,
-                    mmio,
-                    PI4_PCIE_BRIDGE_IRQ,
-                    false,
-                )?;
-                let intx_binding = match Self::install_binding(
-                    env,
-                    root_cnode,
-                    depth,
-                    mmio,
-                    PI4_VL805_XHCI_INTX_IRQ,
-                    false,
-                ) {
-                    Ok(binding) => binding,
-                    Err(err) => {
-                        if let Some(binding) = bridge_binding {
-                            let _ = crate::sel4::irq_handler_clear(binding.handler_slot);
-                            let _ = crate::sel4::cnode_delete(
-                                root_cnode,
-                                binding.notification_slot,
-                                depth,
-                            );
-                            if binding.owns_handler {
+        let mut bindings = [None; TRUSTED_XHCI_PCIE_SINK_IRQS.len()];
+        match sink_mode {
+            XhciIrqSinkMode::TrustedPcieSinks => {
+                for (index, irq) in TRUSTED_XHCI_PCIE_SINK_IRQS.iter().copied().enumerate() {
+                    match Self::install_binding(env, root_cnode, depth, mmio, irq, false) {
+                        Ok(binding) => bindings[index] = binding,
+                        Err(err) => {
+                            for binding in bindings.iter().flatten() {
+                                let _ = crate::sel4::irq_handler_clear(binding.handler_slot);
                                 let _ = crate::sel4::cnode_delete(
                                     root_cnode,
-                                    binding.handler_slot,
+                                    binding.notification_slot,
                                     depth,
                                 );
+                                if binding.owns_handler {
+                                    let _ = crate::sel4::cnode_delete(
+                                        root_cnode,
+                                        binding.handler_slot,
+                                        depth,
+                                    );
+                                }
                             }
+                            return Err(err);
                         }
-                        return Err(err);
                     }
-                };
-                (bridge_binding, intx_binding)
+                }
             }
-            XhciIrqSinkMode::Disabled => (None, None),
+            XhciIrqSinkMode::Disabled => {}
         };
 
         Ok(Some(Self {
             root_cnode,
-            bindings: [bridge_binding, intx_binding],
+            bindings,
         }))
     }
 }
@@ -5566,7 +5562,7 @@ const fn xhci_irq_phase_label(phase: XhciIrqInstallPhase) -> &'static str {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum XhciIrqSinkMode {
     Disabled,
-    IntxAndBridge,
+    TrustedPcieSinks,
 }
 
 #[inline]
@@ -5579,13 +5575,14 @@ const fn xhci_irq_sink_mode(
         if TRUSTED_XHCI_PCIE_SINKS_ENABLED {
             // The trusted Pi4 handoff stays polling-driven, but the first live
             // ownership transition can still surface either the child INTx line
-            // from the bcm2711 interrupt-map or the parent PCIe bridge IRQ.
-            // Install only those bounded sinks (GIC SPI 143 + 148 on Pi 4)
+            // from the bcm2711 interrupt-map, the parent PCIe bridge IRQ, or
+            // the observed legacy PCIe-side IRQ 27 that still surfaces on the
+            // trusted high-BAR path. Install only that bounded Pi 4 sink set
             // across both the pre-controller-ready and controller-ready
             // windows, and leave primary xHCI IRQ ownership out of the runtime
             // path.
             let _ = phase;
-            XhciIrqSinkMode::IntxAndBridge
+            XhciIrqSinkMode::TrustedPcieSinks
         } else {
             XhciIrqSinkMode::Disabled
         }
@@ -12416,7 +12413,7 @@ mod tests {
                 ),
                 XhciIrqInstallPhase::ControllerReady,
             ),
-            XhciIrqSinkMode::IntxAndBridge
+            XhciIrqSinkMode::TrustedPcieSinks
         );
         assert!(xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -12442,6 +12439,18 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             XhciIrqInstallPhase::ControllerReady,
         ));
+    }
+
+    #[test]
+    fn trusted_xhci_irq_sink_set_covers_ecam_bridge_and_child_intx_lines() {
+        assert_eq!(
+            TRUSTED_XHCI_PCIE_SINK_IRQS,
+            [
+                PI4_PCIE_ECAM_SAFE_READ_IRQ,
+                PI4_PCIE_BRIDGE_IRQ,
+                PI4_VL805_XHCI_INTX_IRQ
+            ]
+        );
     }
 
     #[test]

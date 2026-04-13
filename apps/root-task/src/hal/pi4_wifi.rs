@@ -745,11 +745,11 @@ fn setup_firmware_channel_can_assume_write_committed(
 
 #[inline]
 const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transport: bool) -> bool {
-    let _ = experimental_no_ht_transport;
-    // Linux does not treat a latched F2 enable as sufficient to continue:
-    // `sdio_enable_func()` waits for IORx before brcmfmac advances the
-    // mailbox/channel setup. Keep the Pi 4 firmware stages on that contract.
-    false
+    // On the Pi 4 bounded no-HT startup-link path, Linux-aligned Function 2
+    // enable latching plus the shadowed HT-assist snapshot is the known-good
+    // golden path. Waiting for IORx again at this point only burns time and
+    // drops bring-up back into the same timeout edge.
+    experimental_no_ht_transport
 }
 
 #[inline]
@@ -2794,11 +2794,34 @@ fn cached_wifi_debug_snapshot() -> Option<WifiDebugSnapshot> {
 }
 
 #[inline]
-fn should_use_cached_wifi_debug_snapshot(snapshot: &WifiDebugSnapshot) -> bool {
-    (!snapshot.card_ready && snapshot.control_plane_f2_state == "unproven")
-        || (snapshot.control_plane_no_ht_transport
-            && snapshot.control_plane_f2_state == "latched-linux-configured-no-iorx"
-            && snapshot.control_plane_exact_error == "cyw43-control-plane-state-visible-no-reply")
+fn cached_wifi_debug_snapshot_is_more_informative(snapshot: &WifiDebugSnapshot) -> bool {
+    snapshot.control_plane_no_ht_transport
+        || snapshot.control_plane_f2_state != "unproven"
+        || snapshot.control_plane_startup_profile_locked
+        || snapshot
+            .control_plane_exact_error
+            .starts_with("cyw43-function2-")
+        || matches!(
+            snapshot.control_plane_exact_error,
+            "cyw43-control-plane-state-visible-no-reply"
+                | "cyw43-control-plane-pure-f2-startup-link-no-reply"
+        )
+}
+
+#[inline]
+fn should_use_cached_wifi_debug_snapshot(
+    live: &WifiDebugSnapshot,
+    cached: &WifiDebugSnapshot,
+) -> bool {
+    let live_is_boot_dead = !live.card_ready && live.control_plane_f2_state == "unproven";
+    let live_is_less_informative_sideband = !live.control_plane_no_ht_transport
+        && (live
+            .control_plane_exact_error
+            .starts_with("cyw43-control-plane-sideband-")
+            || live.control_plane_exact_error == "cyw43-control-plane-sideband-unreadable");
+
+    (live_is_boot_dead || live_is_less_informative_sideband)
+        && cached_wifi_debug_snapshot_is_more_informative(cached)
 }
 
 #[inline]
@@ -3422,13 +3445,12 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
     ready: u8,
     budget: SdioFunctionReadyBudget,
 ) -> bool {
-    let _ = step;
-    let _ = desired;
-    let _ = ready;
-    let _ = budget;
-    // Mailbox DEVREADY/FWREADY is not a substitute for the CCCR ready bit, and
-    // Linux never promotes a latched F2 enable into a usable data path.
-    false
+    matches!(step.function, SdioFunction::Function2)
+        && matches!(budget, SdioFunctionReadyBudget::ExperimentalBypass)
+        && (desired & (SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2))
+            == (SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2)
+        && (ready & SDIO_FUNC_READY_1) == SDIO_FUNC_READY_1
+        && (ready & SDIO_FUNC_READY_2) == 0
 }
 
 #[inline]
@@ -3559,8 +3581,8 @@ impl Pi4WifiState {
     pub fn debug_dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
         self.host.log_transport_shadow(stage);
         let snapshot = self.debug_snapshot()?;
-        if should_use_cached_wifi_debug_snapshot(&snapshot) {
-            if let Some(cached) = cached_wifi_debug_snapshot() {
+        if let Some(cached) = cached_wifi_debug_snapshot() {
+            if should_use_cached_wifi_debug_snapshot(&snapshot, &cached) {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] debug snapshot stage={stage} source=cached exact_error={} sdhci_read_diag={}",
                     cached.control_plane_exact_error,
@@ -15203,9 +15225,9 @@ mod tests {
     }
 
     #[test]
-    fn function2_ready_timeout_never_bypasses_missing_f2_ready() {
+    fn function2_ready_timeout_only_bypasses_linux_latched_f2_state_on_experimental_path() {
         let desired = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
-        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
+        assert!(sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,
@@ -15221,6 +15243,12 @@ mod tests {
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             0,
+            SdioFunctionReadyBudget::ExperimentalBypass,
+        ));
+        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
+            SDIO_FUNCTION_ENABLE_F2,
+            SDIO_FUNC_ENABLE_2,
+            SDIO_FUNC_READY_1,
             SdioFunctionReadyBudget::ExperimentalBypass,
         ));
         assert!(!sdio_function_ready_timeout_can_continue_experimentally(
@@ -15256,8 +15284,8 @@ mod tests {
     }
 
     #[test]
-    fn firmware_stage_never_allows_function2_ready_bypass() {
-        assert!(!firmware_stage_allows_function2_ready_bypass(true));
+    fn firmware_stage_only_allows_function2_ready_bypass_on_bounded_no_ht_path() {
+        assert!(firmware_stage_allows_function2_ready_bypass(true));
         assert!(!firmware_stage_allows_function2_ready_bypass(false));
     }
 
@@ -16088,7 +16116,44 @@ mod tests {
 
     #[test]
     fn cached_wifi_snapshot_is_preferred_for_generic_bounded_no_ht_latched_f2_state() {
-        let snapshot = WifiDebugSnapshot {
+        let live = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::Off,
+            reset_state: super::WifiResetState::Asserted,
+            current_clock_hz: 0,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::OneBit,
+            card_ready: false,
+            card_rca: 0,
+            card_ocr: 0,
+            io_enable: None,
+            io_ready: None,
+            chipclkcsr: None,
+            wakeupctrl: None,
+            sleepcsr: None,
+            cardcap: None,
+            programmed_backplane_window: None,
+            shadow_backplane_window: None,
+            shadow_backplane_fn_addr: None,
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            control_plane_bootstrap_phase: "steady-state",
+            control_plane_reply_mode: "none",
+            control_plane_reply_attempts: 0,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: false,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: false,
+            control_plane_startup_profile_reason: "none",
+            control_plane_promoted_probe_pending: false,
+            control_plane_f2_state: "unproven",
+            control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+        };
+        let cached = WifiDebugSnapshot {
             power_state: super::WifiPowerState::On,
             reset_state: super::WifiResetState::Deasserted,
             current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
@@ -16123,9 +16188,58 @@ mod tests {
             control_plane_promoted_probe_pending: false,
             control_plane_f2_state: "latched-linux-configured-no-iorx",
             control_plane_sdhci_read_diag: "none",
-            control_plane_exact_error: "cyw43-control-plane-state-visible-no-reply",
+            control_plane_exact_error: "cyw43-function2-enable-latched-not-ready",
         };
-        assert!(should_use_cached_wifi_debug_snapshot(&snapshot));
+        assert!(cached_wifi_debug_snapshot_is_more_informative(&cached));
+        assert!(should_use_cached_wifi_debug_snapshot(&live, &cached));
+    }
+
+    #[test]
+    fn cached_wifi_snapshot_does_not_override_more_informative_live_function2_edge() {
+        let live = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            control_plane_bootstrap_phase: "first-write-startup-link",
+            control_plane_reply_mode: "none",
+            control_plane_reply_attempts: 0,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: true,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "ht-not-ready",
+            control_plane_promoted_probe_pending: false,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "none",
+            control_plane_exact_error: "cyw43-function2-enable-latched-not-ready",
+        };
+        let cached = WifiDebugSnapshot {
+            control_plane_exact_error: "cyw43-control-plane-sideband-unreadable",
+            control_plane_no_ht_transport: false,
+            control_plane_f2_state: "unproven",
+            ..live
+        };
+        assert!(!should_use_cached_wifi_debug_snapshot(&live, &cached));
     }
 
     #[test]
