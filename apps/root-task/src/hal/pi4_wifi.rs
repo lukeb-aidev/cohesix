@@ -1025,6 +1025,11 @@ const fn control_plane_reply_rearm_uses_slow_link_channel_rearm(reply_rearm_mode
 }
 
 #[inline]
+const fn control_plane_reply_rearm_disallows_preserve_latch(reply_rearm_mode: u8) -> bool {
+    control_plane_reply_rearm_uses_slow_link_channel_rearm(reply_rearm_mode)
+}
+
+#[inline]
 const fn control_plane_reply_rearm_uses_promoted_link(reply_rearm_mode: u8) -> bool {
     reply_rearm_mode == control_plane_reply_rearm_promoted_link()
 }
@@ -3574,6 +3579,20 @@ const fn sdio_function_ready_budget_for_bypass(
     }
 }
 
+#[inline]
+const fn control_plane_startup_link_rearm_budget(
+    reply_rearm_mode: u8,
+    low_touch_pure_f2_mode: bool,
+) -> SdioFunctionReadyBudget {
+    if low_touch_pure_f2_mode
+        || control_plane_reply_rearm_disallows_preserve_latch(reply_rearm_mode)
+    {
+        SdioFunctionReadyBudget::ControlPlaneReplyBypass
+    } else {
+        SdioFunctionReadyBudget::ExperimentalBypass
+    }
+}
+
 pub struct Pi4WifiState {
     mailbox: Mailbox,
     host: SdioHost,
@@ -4822,6 +4841,20 @@ impl SdioHost {
             return false;
         }
 
+        if control_plane_reply_rearm_disallows_preserve_latch(
+            self.experimental_control_plane_reply_rearm_mode,
+        ) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=force-function2-ready-repoll budget={} mode={} current_clock={}Hz width={} no_ht={} reason=startup-link-resume-disallows-preserve-latch",
+                sdio_function_ready_budget_name(function2_ready_budget),
+                control_plane_reply_rearm_mode_name(self.experimental_control_plane_reply_rearm_mode),
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.experimental_no_ht_transport,
+            ));
+            return false;
+        }
+
         if !sdio_function_ready_budget_preserves_latched_function2_enable(function2_ready_budget) {
             return false;
         }
@@ -5413,22 +5446,28 @@ impl SdioHost {
     }
 
     fn rearm_firmware_channel_on_startup_link(&mut self) -> Result<(), HalError> {
+        let reply_rearm_mode = self.experimental_control_plane_reply_rearm_mode;
+        let low_touch_pure_f2_mode = self.control_plane_uses_low_touch_pure_f2_diagnostics();
+        let function2_ready_budget =
+            control_plane_startup_link_rearm_budget(reply_rearm_mode, low_touch_pure_f2_mode);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=slow-link-channel-rearm action=begin current={}Hz width={}",
+            "[pi4-wifi] firmware stage=slow-link-channel-rearm action=begin current={}Hz width={} budget={} mode={}",
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
+            sdio_function_ready_budget_name(function2_ready_budget),
+            control_plane_reply_rearm_mode_name(reply_rearm_mode),
         ));
         self.log_control_plane_recovery_transition("slow-link-channel-rearm-begin");
         self.refresh_transport_phase_for("slow-link-channel-rearm")?;
         let mut attempt = 0usize;
         loop {
-            match self
-                .rearm_firmware_channel_once(SdioFunctionReadyBudget::ExperimentalBypass, false)
-            {
+            match self.rearm_firmware_channel_once(function2_ready_budget, false) {
                 Ok(()) => {
                     self.experimental_control_plane_promoted_probe_pending = false;
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=ready"
+                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=ready budget={} mode={}",
+                        sdio_function_ready_budget_name(function2_ready_budget),
+                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
                     ));
                     self.log_control_plane_recovery_transition("slow-link-channel-rearm-ready");
                     return Ok(());
@@ -14352,6 +14391,41 @@ mod tests {
             "promoted-link"
         );
         assert_eq!(control_plane_reply_rearm_mode_name(99), "none");
+    }
+
+    #[test]
+    fn startup_link_resume_disallows_preserve_latch() {
+        assert!(!control_plane_reply_rearm_disallows_preserve_latch(
+            control_plane_reply_rearm_none()
+        ));
+        assert!(!control_plane_reply_rearm_disallows_preserve_latch(
+            control_plane_reply_rearm_startup_link()
+        ));
+        assert!(control_plane_reply_rearm_disallows_preserve_latch(
+            control_plane_reply_rearm_startup_link_resume()
+        ));
+        assert!(!control_plane_reply_rearm_disallows_preserve_latch(
+            control_plane_reply_rearm_promoted_link()
+        ));
+    }
+
+    #[test]
+    fn startup_link_rearm_budget_uses_bounded_reply_probe_for_resume_paths() {
+        assert_eq!(
+            control_plane_startup_link_rearm_budget(control_plane_reply_rearm_none(), false),
+            SdioFunctionReadyBudget::ExperimentalBypass
+        );
+        assert_eq!(
+            control_plane_startup_link_rearm_budget(
+                control_plane_reply_rearm_startup_link_resume(),
+                false
+            ),
+            SdioFunctionReadyBudget::ControlPlaneReplyBypass
+        );
+        assert_eq!(
+            control_plane_startup_link_rearm_budget(control_plane_reply_rearm_startup_link(), true),
+            SdioFunctionReadyBudget::ControlPlaneReplyBypass
+        );
     }
 
     #[test]

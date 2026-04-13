@@ -5313,6 +5313,14 @@ impl XhciIrqHandlerScanSummary {
 }
 
 impl XhciIrqGuard {
+    #[inline]
+    fn covers_irq(&self, irq: u32) -> bool {
+        self.bindings
+            .iter()
+            .flatten()
+            .any(|binding| binding.irq == irq)
+    }
+
     fn log_policy(mmio: usize, firmware_handoff: XhciFirmwareHandoff, phase: XhciIrqInstallPhase) {
         let sink_mode = xhci_irq_sink_mode(mmio, firmware_handoff, phase);
         let mut line = heapless::String::<256>::new();
@@ -5537,6 +5545,17 @@ impl XhciIrqGuard {
                 for (index, irq) in TRUSTED_XHCI_PCIE_SINK_IRQS.iter().copied().enumerate() {
                     match Self::install_binding(env, root_cnode, depth, mmio, irq, false) {
                         Ok(binding) => bindings[index] = binding,
+                        Err(err) if xhci_trusted_irq_soft_ignore_reason(irq, err) => {
+                            let mut line = heapless::String::<256>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci irq sink degraded irq={} mmio=0x{mmio:016x} detail={err} action=continue-with-partial-sinks",
+                                    irq,
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                        }
                         Err(err) => {
                             for binding in bindings.iter().flatten() {
                                 let _ = crate::sel4::irq_handler_clear(binding.handler_slot);
@@ -5738,6 +5757,28 @@ const fn xhci_irq_sink_needed(
         xhci_irq_sink_mode(mmio, firmware_handoff, phase),
         XhciIrqSinkMode::Disabled
     )
+}
+
+#[inline]
+fn xhci_trusted_irq_soft_ignore_reason(irq: u32, reason: &'static str) -> bool {
+    irq == PI4_PCIE_ECAM_SAFE_READ_IRQ
+        && matches!(
+            reason,
+            "irq-get-revoke-first-owned" | "irq-get-revoke-first-no-handler"
+        )
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_requires_primary_pcie_irq(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        )
+        && !strategy.seed_stop_state
 }
 
 #[derive(Clone, Copy)]
@@ -6650,6 +6691,30 @@ impl UsbKeyboard {
                         None
                     }
                 };
+                if xhci_runtime_init_strategy_requires_primary_pcie_irq(effective_mmio, strategy)
+                    && !xhci_irq_guard
+                        .as_ref()
+                        .is_some_and(|guard| guard.covers_irq(PI4_PCIE_ECAM_SAFE_READ_IRQ))
+                {
+                    let next_origin = if strategy_idx + 1 < init_strategy_count {
+                        xhci_runtime_init_strategy_origin_label(init_strategies[strategy_idx + 1])
+                    } else {
+                        "none"
+                    };
+                    let mut line = heapless::String::<320>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci trusted fresh-init skip mmio=0x{mmio:016x} attempt={}/{} origin={} reason=primary-pcie-irq-unbound fallback={next_origin}",
+                            strategy_idx + 1,
+                            init_strategy_count,
+                            xhci_runtime_init_strategy_origin_label(strategy),
+                            mmio = effective_mmio,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    continue;
+                }
                 for &prefer_high in dma_probe_order {
                     let dma_bus_modes: &[bool] =
                         if XHCI_PCIE_DMA_WINDOW_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
@@ -12630,6 +12695,46 @@ mod tests {
                 PI4_VL805_XHCI_INTX_IRQ
             ]
         );
+    }
+
+    #[test]
+    fn trusted_primary_pcie_irq_soft_ignore_is_limited_to_revoke_first_owner_cases() {
+        assert!(xhci_trusted_irq_soft_ignore_reason(
+            PI4_PCIE_ECAM_SAFE_READ_IRQ,
+            "irq-get-revoke-first-no-handler",
+        ));
+        assert!(xhci_trusted_irq_soft_ignore_reason(
+            PI4_PCIE_ECAM_SAFE_READ_IRQ,
+            "irq-get-revoke-first-owned",
+        ));
+        assert!(!xhci_trusted_irq_soft_ignore_reason(
+            PI4_PCIE_BRIDGE_IRQ,
+            "irq-get-revoke-first-no-handler",
+        ));
+        assert!(!xhci_trusted_irq_soft_ignore_reason(
+            PI4_PCIE_ECAM_SAFE_READ_IRQ,
+            "irq-handler-ambiguous",
+        ));
+    }
+
+    #[test]
+    fn trusted_fresh_init_requires_primary_pcie_irq_contract() {
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        ));
+        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+        ));
+        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
+        ));
+        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        ));
     }
 
     #[test]
