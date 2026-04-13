@@ -326,9 +326,13 @@ const fn skip_usbsts_clear_before_run_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+    // Preserve-state on the trusted Pi 4 handoff is already a no-touch path
+    // for the remaining controller-visible writes. Do not reintroduce a live
+    // USBSTS clear just because the seed snapshot is absent; the fallback must
+    // stay on the same no-touch boundary that avoids the degraded IRQ 27 edge.
+    matches!(firmware_handoff, XhciFirmwareHandoff::PreserveControllerState)
+        || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -4968,7 +4972,7 @@ mod tests {
             XhciFirmwareHandoff::ResetlessReinit,
             stop_state_snapshot,
         ));
-        assert!(!skip_usbsts_clear_before_run_with_snapshot(
+        assert!(skip_usbsts_clear_before_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             None,
         ));

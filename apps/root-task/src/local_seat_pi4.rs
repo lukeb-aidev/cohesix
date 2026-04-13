@@ -3340,7 +3340,7 @@ const fn xhci_runtime_init_strategy_publish_label(
 ) -> &'static str {
     if matches!(
         strategy.firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::ResetlessReinit
     ) {
         "rings-post-run"
     } else {
@@ -11578,6 +11578,31 @@ mod tests {
                 true,
             )),
             "preserve-state"
+        );
+    }
+
+    #[test]
+    fn xhci_runtime_init_strategy_publish_labels_match_actual_pi4_publish_order() {
+        assert_eq!(
+            xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                true,
+            )),
+            "rings-pre-run"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::PreserveControllerState,
+                true,
+            )),
+            "rings-pre-run"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ResetlessReinit,
+                true,
+            )),
+            "rings-post-run"
         );
     }
 
