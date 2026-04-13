@@ -306,10 +306,9 @@ fn control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
         err,
     ) {
         Some(match err {
-            // The April 6, 2026 Pi 4 trace reaches firmware-ready but still
-            // shows Function 2 latched with IORx clear. Retrying that exact
-            // state at 400 kHz just replays the same slow-link stall, so force
-            // the first recovery attempt onto the normal control-plane clock.
+            // Keep the first bounded no-HT reply retry on the startup-safe
+            // clock until Function 2 has succeeded once. Latched-F2 and
+            // sideband failures still need that startup-link recovery step.
             DriverError::Hal(HalError::Unsupported(
                 "cyw43-function2-enable-latched-not-ready"
                 | "cyw43-function2-enable-latched-not-ready-command-timeout"
@@ -330,7 +329,13 @@ fn control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
                 | "cyw43-control-plane-sideband-command-error"
                 | "cyw43-control-plane-sideband-command-stall"
                 | "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
-            )) => SDIO_DATA_CLOCK_HZ,
+            )) => {
+                if current_clock_hz > SDIO_STARTUP_CLOCK_HZ {
+                    SDIO_STARTUP_CLOCK_HZ
+                } else {
+                    current_clock_hz
+                }
+            }
             _ if current_clock_hz > SDIO_STARTUP_CLOCK_HZ => SDIO_STARTUP_CLOCK_HZ,
             _ => current_clock_hz,
         })
@@ -2379,7 +2384,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_link_reply_failure_retry_promotes_latched_f2_but_keeps_passive_timeout_slow() {
+    fn startup_link_reply_failure_retry_stays_startup_safe_until_f2_succeeds() {
         assert_eq!(
             control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
                 true,
@@ -2389,7 +2394,7 @@ mod tests {
                     "cyw43-function2-enable-latched-not-ready"
                 )),
             ),
-            Some(SDIO_DATA_CLOCK_HZ)
+            Some(SDIO_STARTUP_CLOCK_HZ)
         );
         assert_eq!(
             control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
@@ -2400,7 +2405,7 @@ mod tests {
                     "cyw43-function2-enable-latched-not-ready"
                 )),
             ),
-            Some(SDIO_DATA_CLOCK_HZ)
+            Some(SDIO_STARTUP_CLOCK_HZ)
         );
         assert_eq!(
             control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
@@ -2411,7 +2416,18 @@ mod tests {
                     "cyw43-control-plane-sideband-unreadable"
                 )),
             ),
-            Some(SDIO_DATA_CLOCK_HZ)
+            Some(SDIO_STARTUP_CLOCK_HZ)
+        );
+        assert_eq!(
+            control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+                true,
+                true,
+                SDIO_DATA_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-linux-interrupts-deferred"
+                )),
+            ),
+            Some(SDIO_STARTUP_CLOCK_HZ)
         );
         assert_eq!(
             control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
