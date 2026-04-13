@@ -518,7 +518,17 @@ const fn runtime_handoff_needs_uboot_style_run_write(
 ) -> bool {
     runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn runtime_handoff_skips_live_run_write(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    // The trusted preserve-state Pi 4 handoff already reaches the RUN edge
+    // with HCH clear, so replaying a live USBCMD.RUN store is not ownership
+    // recovery anymore. It is just the final MMIO edge that still trips IRQ27.
+    runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -2569,6 +2579,10 @@ impl<H: Dma> XhciCtrl<H> {
             }
             emit_xhci_diag(0x02e3, reg::USBCMD as u64, run_usbcmd as u64, 1);
         }
+        let skip_live_run_write = runtime_handoff_skips_live_run_write(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        );
         let relaxed_run_write = runtime_handoff_needs_relaxed_run_write(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -2581,7 +2595,9 @@ impl<H: Dma> XhciCtrl<H> {
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
         );
-        let run_write_mode = if release_only_run_write {
+        let run_write_mode = if skip_live_run_write {
+            4
+        } else if release_only_run_write {
             2
         } else if uboot_style_run_write {
             3
@@ -2630,7 +2646,9 @@ impl<H: Dma> XhciCtrl<H> {
             run_usbcmd as u64,
             run_write_mode,
         );
-        if release_only_run_write {
+        if skip_live_run_write {
+            emit_xhci_diag(0x02e8, reg::USBCMD as u64, run_usbcmd as u64, 4);
+        } else if release_only_run_write {
             self.write_op_u32_store_diag_release_only_with_barrier_phase(
                 reg::USBCMD,
                 run_usbcmd,
@@ -2680,7 +2698,9 @@ impl<H: Dma> XhciCtrl<H> {
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
         );
-        if post_run_blind_settle {
+        if skip_live_run_write {
+            emit_xhci_diag(0x0273, 0, 0, 1);
+        } else if post_run_blind_settle {
             emit_xhci_diag(0x02e0, reg::USBCMD as u64, run_usbcmd as u64, 1);
             for _ in 0..MAILBOX_RESET_POST_SETTLE_SPINS {
                 spin_loop();
@@ -3512,6 +3532,7 @@ mod tests {
         runtime_handoff_needs_relaxed_run_write,
         runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
         runtime_handoff_needs_release_only_run_write, runtime_handoff_needs_uboot_style_run_write,
+        runtime_handoff_skips_live_run_write,
         runtime_mailbox_reset_handoff, runtime_mailbox_reset_needs_blind_settle,
         runtime_mailbox_reset_stop_state_handoff, runtime_preserve_stop_state_handoff,
         runtime_seed_snapshot_flag_bits, runtime_stop_state_needs_post_run_settle,
@@ -3948,7 +3969,11 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
-        assert!(runtime_handoff_needs_uboot_style_run_write(
+        assert!(!runtime_handoff_needs_uboot_style_run_write(
+            XhciFirmwareHandoff::PreserveControllerState,
+            stop_state_snapshot,
+        ));
+        assert!(runtime_handoff_skips_live_run_write(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
@@ -4912,6 +4937,32 @@ mod tests {
         ));
         assert!(!skip_usbsts_clear_before_run_with_snapshot(
             XhciFirmwareHandoff::None,
+            stop_state_snapshot,
+        ));
+    }
+
+    #[test]
+    fn preserve_state_handoff_skips_live_run_write() {
+        let stop_state_snapshot = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(reg::USBCMD_RUN),
+            usbsts: Some(0),
+            iman0: Some(reg::IMAN_IE),
+            dcbaap: Some(0x2000),
+            crcr: Some(0x3000),
+            erstba0: Some(0x4000),
+            erdp0: Some(0x5000),
+            erstsz0: Some(1),
+        });
+        assert!(runtime_handoff_skips_live_run_write(
+            XhciFirmwareHandoff::PreserveControllerState,
+            stop_state_snapshot,
+        ));
+        assert!(!runtime_handoff_skips_live_run_write(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            stop_state_snapshot,
+        ));
+        assert!(!runtime_handoff_skips_live_run_write(
+            XhciFirmwareHandoff::ResetlessReinit,
             stop_state_snapshot,
         ));
     }

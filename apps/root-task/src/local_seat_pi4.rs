@@ -2653,6 +2653,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x026d => Some("runtime-ring-read-begin"),
         0x026e => Some("erstba-write-low"),
         0x026f => Some("erstba-write-high"),
+        0x02e8 => Some("fw-handoff-trusted-usbcmd-run-skip"),
         0x02ea => Some("usbcmd-run-barrier-done"),
         0x02eb => Some("usbcmd-run-barrier-begin"),
         0x02e9 => Some("usbcmd-run-pre-store"),
@@ -12009,6 +12010,10 @@ mod tests {
         assert_eq!(xhci_diag_stage_label(0x026f), Some("erstba-write-high"));
         assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-write"));
         assert_eq!(xhci_diag_stage_label(0x026a), Some("usbcmd-run-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x02e8),
+            Some("fw-handoff-trusted-usbcmd-run-skip")
+        );
         assert_eq!(xhci_diag_stage_label(0x02e9), Some("usbcmd-run-pre-store"));
         assert_eq!(xhci_diag_stage_label(0x02f0), Some("pre-run-ring-phys"));
         assert_eq!(xhci_diag_stage_label(0x02f1), Some("pre-run-ring-regs"));

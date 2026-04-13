@@ -3450,8 +3450,7 @@ const fn sdio_function_ready_budget_preserves_latched_function2_enable(
 ) -> bool {
     matches!(
         budget,
-        SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
-            | SdioFunctionReadyBudget::ControlPlaneReplyProbe
+        SdioFunctionReadyBudget::ControlPlaneReplyProbe
             | SdioFunctionReadyBudget::ControlPlaneReplyBypass
             | SdioFunctionReadyBudget::ExperimentalBypass
     )
@@ -13364,7 +13363,7 @@ mod tests {
     }
 
     #[test]
-    fn function2_ready_budget_preserves_latched_enable_only_for_reply_recovery_paths() {
+    fn function2_ready_budget_preserves_latched_enable_only_for_probe_and_bypass_paths() {
         assert!(
             !sdio_function_ready_budget_preserves_latched_function2_enable(
                 SdioFunctionReadyBudget::Strict
@@ -13386,7 +13385,7 @@ mod tests {
             )
         );
         assert!(
-            sdio_function_ready_budget_preserves_latched_function2_enable(
+            !sdio_function_ready_budget_preserves_latched_function2_enable(
                 SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
             )
         );
