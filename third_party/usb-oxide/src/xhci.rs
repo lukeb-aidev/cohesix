@@ -1203,6 +1203,34 @@ fn emit_preserve_state_erstba_skip_diag(int_base: usize, current: u64, desired: 
 }
 
 #[inline(always)]
+fn preserve_state_erdp_write_is_redundant(current: u64, desired: u64) -> bool {
+    current == desired
+}
+
+#[inline(always)]
+fn preserve_state_erdp_publish_seed(
+    preserve_firmware_state: bool,
+    staged_current_erdp: u64,
+    desired_erdp: u64,
+) -> u64 {
+    if preserve_firmware_state {
+        desired_erdp
+    } else {
+        staged_current_erdp
+    }
+}
+
+#[inline(always)]
+fn emit_preserve_state_erdp_skip_diag(int_base: usize, current: u64, desired: u64) {
+    emit_xhci_diag(
+        0x0311,
+        (int_base + reg::ERDP) as u64,
+        current,
+        desired,
+    );
+}
+
+#[inline(always)]
 fn compose_erst_base(current: u64, base: u64) -> u64 {
     (current & reg::ERST_PTR_MASK) | (base & !reg::ERST_PTR_MASK)
 }
@@ -2219,6 +2247,11 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Prime ERDP to the first event TRB without setting EHB during init.
         let erdp = compose_initial_erdp(event_ring_phys);
+        let current_erdp_publish = preserve_state_erdp_publish_seed(
+            preserve_firmware_state,
+            staged_current_erdp,
+            erdp,
+        );
         emit_xhci_diag(0x0266, (int_base + reg::ERDP) as u64, erdp, 0);
         let publish_deferred_erdp_before_erst = defer_erdp_publish
             && !defer_event_ring_publish_until_after_run
@@ -2247,30 +2280,55 @@ impl<H: Dma> XhciCtrl<H> {
             self.write_reg_u64_diag(int_base + reg::ERDP, erdp, 0x0277, 0x0278);
         }
         if publish_deferred_erdp_before_erst {
-            // Match U-Boot's cold-start order on the Pi 4 stop-state mailbox
-            // handoff: hand the deque pointer to the controller before
-            // publishing ERSTSZ/ERSTBA. Do not replay the staged snapshot
-            // value first: U-Boot writes the live dequeue pointer directly,
-            // and the extra snapshot prewrite is now the first Pi 4 runtime
-            // edge to wedge.
-            let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
-            emit_xhci_diag(
-                0x02bb,
-                target_low.0 as u64,
-                target_low.1 as u64,
-                staged_current_erdp,
-            );
-            Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
-            emit_xhci_diag(0x02bc, target_low.0 as u64, target_low.1 as u64, erdp);
-            emit_xhci_diag(
-                0x02bd,
-                target_high.0 as u64,
-                target_high.1 as u64,
-                staged_current_erdp,
-            );
-            Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
-            emit_xhci_diag(0x02be, target_high.0 as u64, target_high.1 as u64, erdp);
-            emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
+            let publish_deferred_erdp = |mmio: usize, include_staged_snapshot: bool| {
+                if preserve_firmware_state
+                    && preserve_state_erdp_write_is_redundant(current_erdp_publish, erdp)
+                {
+                    emit_preserve_state_erdp_skip_diag(
+                        int_base,
+                        current_erdp_publish,
+                        erdp,
+                    );
+                    return;
+                }
+                if include_staged_snapshot {
+                    Self::write_reg_u64_done_diag_at(
+                        mmio,
+                        int_base + reg::ERDP,
+                        staged_current_erdp,
+                        0x02b7,
+                        0x02b8,
+                        0x02b9,
+                        0x02ba,
+                    );
+                }
+                // Match U-Boot's cold-start order on the Pi 4 stop-state
+                // mailbox handoff: hand the deque pointer to the controller
+                // before publishing ERSTSZ/ERSTBA when we are on the live
+                // write path. Do not replay the staged snapshot value first:
+                // U-Boot writes the live dequeue pointer directly, and the
+                // extra snapshot prewrite is now the first Pi 4 runtime edge
+                // to wedge.
+                let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
+                emit_xhci_diag(
+                    0x02bb,
+                    target_low.0 as u64,
+                    target_low.1 as u64,
+                    staged_current_erdp,
+                );
+                Self::write_reg_at::<u32>(mmio, target_low.0, target_low.1);
+                emit_xhci_diag(0x02bc, target_low.0 as u64, target_low.1 as u64, erdp);
+                emit_xhci_diag(
+                    0x02bd,
+                    target_high.0 as u64,
+                    target_high.1 as u64,
+                    staged_current_erdp,
+                );
+                Self::write_reg_at::<u32>(mmio, target_high.0, target_high.1);
+                emit_xhci_diag(0x02be, target_high.0 as u64, target_high.1 as u64, erdp);
+                emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
+            };
+            publish_deferred_erdp(self.mmio, false);
         }
         let (current_erst_size, current_erstba) = if preserve_firmware_state {
             (0, 0)
@@ -2482,27 +2540,34 @@ impl<H: Dma> XhciCtrl<H> {
             // The trusted mailbox-reset snapshot path no longer lets ERSTSZ /
             // ERSTBA / ERDP become the first live runtime event-ring
             // ownership stores. Publish the table first, then hand ERDP to
-            // the controller with the live dequeue pointer only. Replaying
-            // the staged snapshot value does not match U-Boot and has become
-            // the first Pi 4 runtime ownership edge to wedge.
-            let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
-            emit_xhci_diag(
-                0x02bb,
-                target_low.0 as u64,
-                target_low.1 as u64,
-                staged_current_erdp,
-            );
-            Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
-            emit_xhci_diag(0x02bc, target_low.0 as u64, target_low.1 as u64, erdp);
-            emit_xhci_diag(
-                0x02bd,
-                target_high.0 as u64,
-                target_high.1 as u64,
-                staged_current_erdp,
-            );
-            Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
-            emit_xhci_diag(0x02be, target_high.0 as u64, target_high.1 as u64, erdp);
-            emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
+            // the controller with the live dequeue pointer only. If the
+            // trusted preserve-state seed already matches the desired queue
+            // pointer, skip the write entirely and keep the lane no-touch.
+            if preserve_firmware_state
+                && preserve_state_erdp_write_is_redundant(current_erdp_publish, erdp)
+            {
+                emit_preserve_state_erdp_skip_diag(int_base, current_erdp_publish, erdp);
+            } else {
+                let [target_low, target_high] =
+                    split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
+                emit_xhci_diag(
+                    0x02bb,
+                    target_low.0 as u64,
+                    target_low.1 as u64,
+                    staged_current_erdp,
+                );
+                Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
+                emit_xhci_diag(0x02bc, target_low.0 as u64, target_low.1 as u64, erdp);
+                emit_xhci_diag(
+                    0x02bd,
+                    target_high.0 as u64,
+                    target_high.1 as u64,
+                    staged_current_erdp,
+                );
+                Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
+                emit_xhci_diag(0x02be, target_high.0 as u64, target_high.1 as u64, erdp);
+                emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
+            }
         }
         if preserve_firmware_state {
             emit_xhci_diag(0x0262, int_base as u64, polling_iman_value() as u64, 1);
@@ -2913,33 +2978,40 @@ impl<H: Dma> XhciCtrl<H> {
                 0x02d2,
             );
             emit_xhci_diag(0x02d3, reg::ERSTBA as u64, erstba, 1);
-            Self::write_reg_u64_done_diag_at(
-                self.mmio,
-                int_base + reg::ERDP,
-                staged_current_erdp,
-                0x02b7,
-                0x02b8,
-                0x02b9,
-                0x02ba,
-            );
-            let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
-            emit_xhci_diag(
-                0x02bb,
-                target_low.0 as u64,
-                target_low.1 as u64,
-                staged_current_erdp,
-            );
-            Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
-            emit_xhci_diag(0x02bc, target_low.0 as u64, target_low.1 as u64, erdp);
-            emit_xhci_diag(
-                0x02bd,
-                target_high.0 as u64,
-                target_high.1 as u64,
-                staged_current_erdp,
-            );
-            Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
-            emit_xhci_diag(0x02be, target_high.0 as u64, target_high.1 as u64, erdp);
-            emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
+            if preserve_firmware_state
+                && preserve_state_erdp_write_is_redundant(current_erdp_publish, erdp)
+            {
+                emit_preserve_state_erdp_skip_diag(int_base, current_erdp_publish, erdp);
+            } else {
+                Self::write_reg_u64_done_diag_at(
+                    self.mmio,
+                    int_base + reg::ERDP,
+                    staged_current_erdp,
+                    0x02b7,
+                    0x02b8,
+                    0x02b9,
+                    0x02ba,
+                );
+                let [target_low, target_high] =
+                    split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
+                emit_xhci_diag(
+                    0x02bb,
+                    target_low.0 as u64,
+                    target_low.1 as u64,
+                    staged_current_erdp,
+                );
+                Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
+                emit_xhci_diag(0x02bc, target_low.0 as u64, target_low.1 as u64, erdp);
+                emit_xhci_diag(
+                    0x02bd,
+                    target_high.0 as u64,
+                    target_high.1 as u64,
+                    staged_current_erdp,
+                );
+                Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
+                emit_xhci_diag(0x02be, target_high.0 as u64, target_high.1 as u64, erdp);
+                emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
+            }
         }
         if defer_dcbaap_publish_until_after_run {
             emit_xhci_diag(0x02d4, reg::DCBAAP as u64, dcbaa_phys, 1);
@@ -3633,7 +3705,8 @@ mod tests {
         deferred_erst_publish_uses_size_first_with_snapshot, halt_revalidation_needed,
         masked_usbcmd, parse_controller_params, polling_iman_value, port_ready_for_enumeration,
         preserve_firmware_handoff_config, preserve_state_erstba_publish_seed,
-        preserve_state_erstba_write_is_redundant, preserve_state_erstsz_publish_seed,
+        preserve_state_erstba_write_is_redundant, preserve_state_erdp_publish_seed,
+        preserve_state_erdp_write_is_redundant, preserve_state_erstsz_publish_seed,
         preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot, run_usbcmd_needs_live_seed_read,
@@ -3987,6 +4060,16 @@ mod tests {
             0x1234
         );
         assert_eq!(preserve_state_erstba_publish_seed(false, 0x5678, 0x1234), 0x5678);
+    }
+
+    #[test]
+    fn preserve_state_erdp_skip_only_triggers_on_matching_trusted_seed_pointer() {
+        assert!(preserve_state_erdp_write_is_redundant(0x1000, 0x1000));
+        assert!(preserve_state_erdp_write_is_redundant(0, 0));
+        assert!(!preserve_state_erdp_write_is_redundant(0, 0x1000));
+        assert!(!preserve_state_erdp_write_is_redundant(0x1000, 0));
+        assert_eq!(preserve_state_erdp_publish_seed(true, 0, 0x1234), 0x1234);
+        assert_eq!(preserve_state_erdp_publish_seed(false, 0x5678, 0x1234), 0x5678);
     }
 
     #[test]

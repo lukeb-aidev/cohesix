@@ -1124,24 +1124,32 @@ const fn control_plane_reply_should_log_empty_snapshot(empty_polls: u8) -> bool 
 }
 
 #[inline]
-const fn passive_startup_link_wait_should_log_empty_poll(next_empty_poll: u8) -> bool {
-    next_empty_poll == 1 || next_empty_poll == passive_startup_link_wait_empty_poll_limit()
+const fn passive_startup_link_wait_empty_poll_limit_for(rescue_cycles: u8) -> u8 {
+    match rescue_cycles {
+        0 => CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
+        1 => 8,
+        _ => 4,
+    }
+}
+
+const fn passive_startup_link_wait_should_log_empty_poll(
+    next_empty_poll: u8,
+    empty_poll_limit: u8,
+) -> bool {
+    next_empty_poll == 1 || next_empty_poll == empty_poll_limit
 }
 
 #[inline]
-const fn passive_startup_link_wait_should_probe_reply(next_empty_poll: u8) -> bool {
-    matches!(next_empty_poll, 1 | 4 | 16 | 64)
-        || next_empty_poll == passive_startup_link_wait_empty_poll_limit()
+const fn passive_startup_link_wait_should_probe_reply(
+    next_empty_poll: u8,
+    empty_poll_limit: u8,
+) -> bool {
+    matches!(next_empty_poll, 1 | 4 | 16 | 64) || next_empty_poll == empty_poll_limit
 }
 
 #[inline]
-const fn passive_startup_link_wait_empty_poll_limit() -> u8 {
-    CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT
-}
-
-#[inline]
-const fn passive_startup_link_wait_timed_out(empty_polls: u8) -> bool {
-    empty_polls >= passive_startup_link_wait_empty_poll_limit()
+const fn passive_startup_link_wait_timed_out(empty_polls: u8, empty_poll_limit: u8) -> bool {
+    empty_polls >= empty_poll_limit
 }
 
 #[inline]
@@ -5292,9 +5300,13 @@ impl SdioHost {
 
     fn fail_passive_startup_link_wait(&mut self) -> Result<usize, HalError> {
         let empty_polls = self.experimental_control_plane_reply_rearm_empty_polls;
+        let passive_startup_link_wait_limit = passive_startup_link_wait_empty_poll_limit_for(
+            self.experimental_control_plane_startup_link_rescue_cycles,
+        );
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout poll_limit={} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+            "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout poll={} limit={} current_clock={}Hz width={} chunk_limit={} no_ht={}",
             empty_polls,
+            passive_startup_link_wait_limit,
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
             self.control_plane_chunk_limit(),
@@ -9974,25 +9986,36 @@ impl SdioHost {
             return Ok(frame_len);
         }
         if self.experimental_control_plane_startup_link_stabilized {
+            let passive_startup_link_wait_limit = passive_startup_link_wait_empty_poll_limit_for(
+                self.experimental_control_plane_startup_link_rescue_cycles,
+            );
             if passive_startup_link_wait_timed_out(
                 self.experimental_control_plane_reply_rearm_empty_polls,
+                passive_startup_link_wait_limit,
             ) {
                 return self.fail_passive_startup_link_wait();
             }
             let next_empty_poll = self
                 .experimental_control_plane_reply_rearm_empty_polls
                 .saturating_add(1);
-            if passive_startup_link_wait_should_probe_reply(next_empty_poll) {
+            if passive_startup_link_wait_should_probe_reply(
+                next_empty_poll,
+                passive_startup_link_wait_limit,
+            ) {
                 let speculative_frame_len =
                     self.try_capture_passive_startup_link_reply(next_empty_poll)?;
                 if speculative_frame_len != 0 {
                     return Ok(speculative_frame_len);
                 }
             }
-            if passive_startup_link_wait_should_log_empty_poll(next_empty_poll) {
+            if passive_startup_link_wait_should_log_empty_poll(
+                next_empty_poll,
+                passive_startup_link_wait_limit,
+            ) {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-wait poll={} current_clock={}Hz width={} chunk_limit={} no_ht={}",
+                    "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-wait poll={} limit={} current_clock={}Hz width={} chunk_limit={} no_ht={}",
                     next_empty_poll,
+                    passive_startup_link_wait_limit,
                     self.current_clock_hz,
                     sdio_bus_width_name(self.desired_bus_width),
                     self.control_plane_chunk_limit(),
@@ -13578,13 +13601,45 @@ mod tests {
 
     #[test]
     fn passive_startup_link_wait_reply_probe_budget_is_sparse_and_bounded() {
-        assert!(passive_startup_link_wait_should_probe_reply(1));
-        assert!(!passive_startup_link_wait_should_probe_reply(2));
-        assert!(passive_startup_link_wait_should_probe_reply(4));
-        assert!(passive_startup_link_wait_should_probe_reply(16));
-        assert!(passive_startup_link_wait_should_probe_reply(64));
-        assert!(!passive_startup_link_wait_should_probe_reply(65));
-        assert!(passive_startup_link_wait_should_probe_reply(u8::MAX));
+        let initial_limit = passive_startup_link_wait_empty_poll_limit_for(0);
+        let rescue_limit = passive_startup_link_wait_empty_poll_limit_for(1);
+        let repeat_limit = passive_startup_link_wait_empty_poll_limit_for(2);
+        assert!(passive_startup_link_wait_should_probe_reply(
+            1,
+            initial_limit,
+        ));
+        assert!(!passive_startup_link_wait_should_probe_reply(
+            2,
+            initial_limit,
+        ));
+        assert!(passive_startup_link_wait_should_probe_reply(
+            4,
+            initial_limit,
+        ));
+        assert!(passive_startup_link_wait_should_probe_reply(
+            initial_limit,
+            initial_limit,
+        ));
+        assert!(passive_startup_link_wait_should_probe_reply(
+            1,
+            rescue_limit,
+        ));
+        assert!(passive_startup_link_wait_should_probe_reply(
+            rescue_limit,
+            rescue_limit,
+        ));
+        assert!(passive_startup_link_wait_should_probe_reply(
+            1,
+            repeat_limit,
+        ));
+        assert!(passive_startup_link_wait_should_probe_reply(
+            repeat_limit,
+            repeat_limit,
+        ));
+        assert!(!passive_startup_link_wait_should_probe_reply(
+            repeat_limit + 1,
+            repeat_limit,
+        ));
     }
 
     #[test]
@@ -14177,23 +14232,57 @@ mod tests {
 
     #[test]
     fn passive_startup_link_wait_logging_uses_first_and_saturation_boundaries() {
-        let limit = passive_startup_link_wait_empty_poll_limit();
-        assert!(passive_startup_link_wait_should_log_empty_poll(1));
-        assert!(!passive_startup_link_wait_should_log_empty_poll(2));
+        let limit = passive_startup_link_wait_empty_poll_limit_for(0);
+        let rescue_limit = passive_startup_link_wait_empty_poll_limit_for(1);
+        let repeat_limit = passive_startup_link_wait_empty_poll_limit_for(2);
         assert_eq!(
             limit,
             CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT
         );
-        assert!(!passive_startup_link_wait_should_log_empty_poll(limit - 1));
-        assert!(passive_startup_link_wait_should_log_empty_poll(limit));
+        assert_eq!(rescue_limit, 8);
+        assert_eq!(repeat_limit, 4);
+        assert!(passive_startup_link_wait_should_log_empty_poll(1, limit));
+        assert!(!passive_startup_link_wait_should_log_empty_poll(2, limit));
+        assert!(!passive_startup_link_wait_should_log_empty_poll(
+            limit - 1,
+            limit
+        ));
+        assert!(passive_startup_link_wait_should_log_empty_poll(
+            limit, limit
+        ));
+        assert!(!passive_startup_link_wait_should_log_empty_poll(
+            2,
+            rescue_limit
+        ));
+        assert!(passive_startup_link_wait_should_log_empty_poll(
+            rescue_limit,
+            rescue_limit,
+        ));
+        assert!(!passive_startup_link_wait_should_log_empty_poll(
+            3,
+            repeat_limit,
+        ));
+        assert!(passive_startup_link_wait_should_log_empty_poll(
+            repeat_limit,
+            repeat_limit,
+        ));
     }
 
     #[test]
     fn passive_startup_link_wait_timeout_fires_at_saturation_boundary() {
-        let limit = passive_startup_link_wait_empty_poll_limit();
-        assert!(!passive_startup_link_wait_timed_out(0));
-        assert!(!passive_startup_link_wait_timed_out(limit - 1));
-        assert!(passive_startup_link_wait_timed_out(limit));
+        let limit = passive_startup_link_wait_empty_poll_limit_for(0);
+        let rescue_limit = passive_startup_link_wait_empty_poll_limit_for(1);
+        assert!(!passive_startup_link_wait_timed_out(0, limit));
+        assert!(!passive_startup_link_wait_timed_out(limit - 1, limit));
+        assert!(passive_startup_link_wait_timed_out(limit, limit));
+        assert!(!passive_startup_link_wait_timed_out(
+            rescue_limit - 1,
+            rescue_limit
+        ));
+        assert!(passive_startup_link_wait_timed_out(
+            rescue_limit,
+            rescue_limit
+        ));
     }
 
     #[test]

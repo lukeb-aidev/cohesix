@@ -2409,7 +2409,7 @@ mod tests {
                 "cyw43-control-plane-startup-link-reply-timeout"
             ))
         ));
-        assert!(control_plane_bootstrap_needs_full_replay_retry(
+        assert!(!control_plane_bootstrap_needs_full_replay_retry(
             &DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-startup-link-rescue-budget-exhausted"
             ))

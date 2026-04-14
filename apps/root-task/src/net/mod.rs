@@ -74,7 +74,6 @@ pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(reason: &str) -> bool 
         || matches!(
             reason,
             "cyw43-control-plane-passive-startup-link-timeout"
-                | "cyw43-control-plane-startup-link-rescue-budget-exhausted"
                 | "cyw43-control-plane-startup-link-reply-timeout"
                 | "cyw43-control-plane-pure-f2-startup-link-no-reply"
         )
@@ -1018,12 +1017,9 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn cyw43_control_plane_bootstrap_replay_reason_includes_rescue_budget_exhaustion() {
+    fn cyw43_control_plane_bootstrap_replay_reason_excludes_rescue_budget_exhaustion() {
         assert!(cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-control-plane-pure-f2-startup-link-no-reply"
-        ));
-        assert!(cyw43_control_plane_bootstrap_replay_reason(
-            "cyw43-control-plane-startup-link-rescue-budget-exhausted"
         ));
         assert!(cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
@@ -1033,6 +1029,9 @@ mod tests {
         ));
         assert!(cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-control-plane-no-reply-linux-f2-armed"
+        ));
+        assert!(!cyw43_control_plane_bootstrap_replay_reason(
+            "cyw43-control-plane-startup-link-rescue-budget-exhausted"
         ));
     }
 

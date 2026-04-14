@@ -2763,6 +2763,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x02d9 => Some("dnctrl-post-run-done"),
         0x02da => Some("erstsz-publish-skip-preserve"),
         0x0310 => Some("erstba-publish-skip-preserve"),
+        0x0311 => Some("erdp-publish-skip-preserve"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -12401,6 +12402,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_label(0x0310),
             Some("erstba-publish-skip-preserve")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0311),
+            Some("erdp-publish-skip-preserve")
         );
         assert_eq!(xhci_diag_stage_label(0x0300), Some("cmd-submit"));
         assert_eq!(xhci_diag_stage_label(0x0301), Some("cmd-completion"));
