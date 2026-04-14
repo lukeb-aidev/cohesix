@@ -243,32 +243,28 @@ fn first_control_plane_retry_after_startup_link_reply_failure(
         && control_plane_probe_pending
         && matches!(
             err,
-            DriverError::Hal(HalError::Unsupported(
-                "cyw43-function2-enable-latched-not-ready"
-                    | "cyw43-function2-enable-latched-not-ready-command-timeout"
-                    | "cyw43-function2-enable-latched-not-ready-command-crc"
-                    | "cyw43-function2-enable-latched-not-ready-command-end-bit"
-                    | "cyw43-function2-enable-latched-not-ready-command-index"
-                    | "cyw43-function2-enable-latched-not-ready-command-error"
-                    | "cyw43-function2-enable-latched-not-ready-command-stall"
-                    | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
-                    | "cyw43-function2-enable-latched-not-ready-data-end-bit"
-                    | "cyw43-function2-enable-latched-not-ready-data-crc"
-            )) | DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-linux-interrupts-deferred"
-            )) | DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-sideband-unreadable"
-                    | "cyw43-control-plane-sideband-command-timeout"
-                    | "cyw43-control-plane-sideband-command-crc"
-                    | "cyw43-control-plane-sideband-command-end-bit"
-                    | "cyw43-control-plane-sideband-command-index"
-                    | "cyw43-control-plane-sideband-command-error"
-                    | "cyw43-control-plane-sideband-command-stall"
-                    | "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
-            )) | DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-passive-startup-link-timeout"
-            ))
+            DriverError::Hal(HalError::Unsupported(reason))
+                if startup_link_reply_failure_reason(reason)
         )
+}
+
+#[inline]
+fn startup_link_reply_failure_reason(reason: &str) -> bool {
+    reason.starts_with("cyw43-function2-enable-latched-not-ready")
+        || reason == "cyw43-control-plane-no-reply-linux-f2-armed"
+        || reason == "cyw43-control-plane-linux-interrupts-deferred"
+        || reason == "cyw43-control-plane-sideband-unreadable"
+        || reason.starts_with("cyw43-control-plane-sideband-")
+        || reason == "cyw43-control-plane-passive-startup-link-timeout"
+}
+
+#[inline]
+fn reply_wait_resend_prefers_promoted_clock_reason(reason: &str) -> bool {
+    reason.starts_with("cyw43-function2-enable-latched-not-ready")
+        || reason == "cyw43-control-plane-no-reply-linux-f2-armed"
+        || reason == "cyw43-control-plane-linux-interrupts-deferred"
+        || reason == "cyw43-control-plane-sideband-unreadable"
+        || reason.starts_with("cyw43-control-plane-sideband-")
 }
 
 #[inline]
@@ -305,39 +301,10 @@ fn control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
         control_plane_probe_pending,
         err,
     ) {
-        Some(match err {
-            // Keep the first bounded no-HT reply retry on the startup-safe
-            // clock until Function 2 has succeeded once. Latched-F2 and
-            // sideband failures still need that startup-link recovery step.
-            DriverError::Hal(HalError::Unsupported(
-                "cyw43-function2-enable-latched-not-ready"
-                | "cyw43-function2-enable-latched-not-ready-command-timeout"
-                | "cyw43-function2-enable-latched-not-ready-command-crc"
-                | "cyw43-function2-enable-latched-not-ready-command-end-bit"
-                | "cyw43-function2-enable-latched-not-ready-command-index"
-                | "cyw43-function2-enable-latched-not-ready-command-error"
-                | "cyw43-function2-enable-latched-not-ready-command-stall"
-                | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
-                | "cyw43-function2-enable-latched-not-ready-data-end-bit"
-                | "cyw43-function2-enable-latched-not-ready-data-crc"
-                | "cyw43-control-plane-linux-interrupts-deferred"
-                | "cyw43-control-plane-sideband-unreadable"
-                | "cyw43-control-plane-sideband-command-timeout"
-                | "cyw43-control-plane-sideband-command-crc"
-                | "cyw43-control-plane-sideband-command-end-bit"
-                | "cyw43-control-plane-sideband-command-index"
-                | "cyw43-control-plane-sideband-command-error"
-                | "cyw43-control-plane-sideband-command-stall"
-                | "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
-            )) => {
-                if current_clock_hz > SDIO_STARTUP_CLOCK_HZ {
-                    SDIO_STARTUP_CLOCK_HZ
-                } else {
-                    current_clock_hz
-                }
-            }
-            _ if current_clock_hz > SDIO_STARTUP_CLOCK_HZ => SDIO_STARTUP_CLOCK_HZ,
-            _ => current_clock_hz,
+        Some(if current_clock_hz > SDIO_STARTUP_CLOCK_HZ {
+            SDIO_STARTUP_CLOCK_HZ
+        } else {
+            current_clock_hz
         })
     } else {
         None
@@ -348,42 +315,16 @@ fn control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
 fn control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
     err: &DriverError,
 ) -> bool {
-    matches!(
-        err,
-        DriverError::Protocol("ioctl-timeout")
-            | DriverError::Hal(HalError::Unsupported(
-                "cyw43-function2-enable-latched-not-ready"
-                    | "cyw43-function2-enable-latched-not-ready-command-timeout"
-                    | "cyw43-function2-enable-latched-not-ready-command-crc"
-                    | "cyw43-function2-enable-latched-not-ready-command-end-bit"
-                    | "cyw43-function2-enable-latched-not-ready-command-index"
-                    | "cyw43-function2-enable-latched-not-ready-command-error"
-                    | "cyw43-function2-enable-latched-not-ready-command-stall"
-                    | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
-                    | "cyw43-function2-enable-latched-not-ready-data-end-bit"
-                    | "cyw43-function2-enable-latched-not-ready-data-crc"
-            ))
-            | DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-linux-interrupts-deferred"
-            ))
-            | DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-sideband-unreadable"
-                    | "cyw43-control-plane-sideband-command-timeout"
-                    | "cyw43-control-plane-sideband-command-crc"
-                    | "cyw43-control-plane-sideband-command-end-bit"
-                    | "cyw43-control-plane-sideband-command-index"
-                    | "cyw43-control-plane-sideband-command-error"
-                    | "cyw43-control-plane-sideband-command-stall"
-                    | "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
-            ))
-            | DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-passive-startup-link-timeout"
-            ))
-            | DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout"))
-            | DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-startup-link-reply-timeout"
-            ))
-    )
+    match err {
+        DriverError::Protocol("ioctl-timeout") => true,
+        DriverError::Hal(HalError::Unsupported(reason)) => {
+            let reason = *reason;
+            startup_link_reply_failure_reason(reason)
+                || reason == "sdio-function2-ready-timeout"
+                || reason == "cyw43-control-plane-startup-link-reply-timeout"
+        }
+        _ => false,
+    }
 }
 
 #[inline]
@@ -397,59 +338,13 @@ fn control_plane_retry_after_reply_wait_resend_target_clock_hz(
     }
 
     match initial_reason {
-        // The April 6, 2026 Pi 4 trace now proves the first promoted retry
-        // reaches the exact Function 2/control-plane edge we care about. Do
-        // not throw that away by dropping straight back to 400 kHz before the
-        // resend has had one chance to complete on the promoted link.
-        DriverError::Hal(HalError::Unsupported("cyw43-function2-enable-latched-not-ready")) => {
-            if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
-                SDIO_DATA_CLOCK_HZ
-            } else {
-                effective_clock_hz
-            }
-        }
-        DriverError::Hal(HalError::Unsupported(
-            "cyw43-function2-enable-latched-not-ready-command-timeout"
-            | "cyw43-function2-enable-latched-not-ready-command-crc"
-            | "cyw43-function2-enable-latched-not-ready-command-end-bit"
-            | "cyw43-function2-enable-latched-not-ready-command-index"
-            | "cyw43-function2-enable-latched-not-ready-command-error"
-            | "cyw43-function2-enable-latched-not-ready-command-stall"
-            | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
-            | "cyw43-function2-enable-latched-not-ready-data-end-bit"
-            | "cyw43-function2-enable-latched-not-ready-data-crc",
-        )) => {
-            if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
-                SDIO_DATA_CLOCK_HZ
-            } else {
-                effective_clock_hz
-            }
-        }
-        DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-linux-interrupts-deferred",
-        )) => {
-            if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
-                SDIO_DATA_CLOCK_HZ
-            } else {
-                effective_clock_hz
-            }
-        }
-        DriverError::Hal(HalError::Unsupported("cyw43-control-plane-sideband-unreadable")) => {
-            if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
-                SDIO_DATA_CLOCK_HZ
-            } else {
-                effective_clock_hz
-            }
-        }
-        DriverError::Hal(HalError::Unsupported(
-            "cyw43-control-plane-sideband-command-timeout"
-            | "cyw43-control-plane-sideband-command-crc"
-            | "cyw43-control-plane-sideband-command-end-bit"
-            | "cyw43-control-plane-sideband-command-index"
-            | "cyw43-control-plane-sideband-command-error"
-            | "cyw43-control-plane-sideband-command-stall"
-            | "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
-        )) => {
+        // The April 2026 Pi 4 traces now prove the first promoted retry
+        // reaches the exact Function 2/control-plane edge we care about. Keep
+        // the resend on the promoted link for any latched-F2 or sideband
+        // exact error instead of downgrading immediately back to 400 kHz.
+        DriverError::Hal(HalError::Unsupported(reason))
+            if reply_wait_resend_prefers_promoted_clock_reason(reason) =>
+        {
             if effective_clock_hz < SDIO_DATA_CLOCK_HZ {
                 SDIO_DATA_CLOCK_HZ
             } else {
@@ -2402,7 +2297,29 @@ mod tests {
                 true,
                 SDIO_DATA_CLOCK_HZ,
                 &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
+                )),
+            ),
+            Some(SDIO_STARTUP_CLOCK_HZ)
+        );
+        assert_eq!(
+            control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+                true,
+                true,
+                SDIO_DATA_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
                     "cyw43-function2-enable-latched-not-ready"
+                )),
+            ),
+            Some(SDIO_STARTUP_CLOCK_HZ)
+        );
+        assert_eq!(
+            control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+                true,
+                true,
+                SDIO_DATA_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-no-reply-linux-f2-armed"
                 )),
             ),
             Some(SDIO_STARTUP_CLOCK_HZ)
@@ -2513,6 +2430,20 @@ mod tests {
         assert!(
             control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
                 &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
+                ))
+            )
+        );
+        assert!(
+            control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-no-reply-linux-f2-armed"
+                ))
+            )
+        );
+        assert!(
+            control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait(
+                &DriverError::Hal(HalError::Unsupported(
                     "cyw43-control-plane-sideband-unreadable"
                 ))
             )
@@ -2568,6 +2499,26 @@ mod tests {
                 SDIO_STARTUP_CLOCK_HZ,
                 &DriverError::Hal(HalError::Unsupported(
                     "cyw43-function2-enable-latched-not-ready"
+                )),
+            ),
+            SDIO_DATA_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_retry_after_reply_wait_resend_target_clock_hz(
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
+                )),
+            ),
+            SDIO_DATA_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_retry_after_reply_wait_resend_target_clock_hz(
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-no-reply-linux-f2-armed"
                 )),
             ),
             SDIO_DATA_CLOCK_HZ

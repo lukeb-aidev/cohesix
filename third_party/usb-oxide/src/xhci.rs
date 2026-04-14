@@ -1152,6 +1152,19 @@ fn preserve_state_erstsz_write_is_redundant(current: u32, desired: u32) -> bool 
 }
 
 #[inline(always)]
+fn preserve_state_erstsz_publish_seed(
+    preserve_firmware_state: bool,
+    staged_current_erst_size: u32,
+    desired_erst_size: u32,
+) -> u32 {
+    if preserve_firmware_state {
+        desired_erst_size
+    } else {
+        staged_current_erst_size
+    }
+}
+
+#[inline(always)]
 fn emit_preserve_state_erstsz_skip_diag(int_base: usize, current: u32, desired: u32) {
     emit_xhci_diag(
         0x02da,
@@ -2247,10 +2260,6 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0261, current_erst_size as u64, current_erstba, 0);
             (current_erst_size, current_erstba)
         };
-        // On the degraded preserve-state path, the trusted stopped snapshot is
-        // already the contract we are adopting. Another live ERSTSZ read has
-        // become the next IRQ27-sensitive edge, so reuse the staged seed here.
-        let current_erstsz_publish = staged_current_erst_size;
         let erst_size = compose_erst_size(
             if preserve_firmware_state || !live_post_reset_seed_reads {
                 0
@@ -2258,6 +2267,14 @@ impl<H: Dma> XhciCtrl<H> {
                 current_erst_size
             },
             1,
+        );
+        // Preserve-state is already trusting the bootloader's halted seed.
+        // Use the desired size as the publish seed so this lane stays no-touch
+        // unless a future non-preserve handoff needs an actual rewrite.
+        let current_erstsz_publish = preserve_state_erstsz_publish_seed(
+            preserve_firmware_state,
+            staged_current_erst_size,
+            erst_size,
         );
         emit_xhci_diag(0x0264, (int_base + reg::ERSTSZ) as u64, erst_size as u64, 0);
         let erstba = compose_erst_base(
@@ -3574,7 +3591,8 @@ mod tests {
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, halt_revalidation_needed,
         masked_usbcmd, parse_controller_params, polling_iman_value, port_ready_for_enumeration,
-        preserve_firmware_handoff_config, preserve_state_erstsz_write_is_redundant,
+        preserve_firmware_handoff_config, preserve_state_erstsz_publish_seed,
+        preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot, run_usbcmd_needs_live_seed_read,
         run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed, run_wait_observable_usbsts,
@@ -3914,6 +3932,13 @@ mod tests {
         assert!(preserve_state_erstsz_write_is_redundant(0, 0));
         assert!(!preserve_state_erstsz_write_is_redundant(0, 1));
         assert!(!preserve_state_erstsz_write_is_redundant(1, 0));
+    }
+
+    #[test]
+    fn preserve_state_erstsz_publish_seed_prefers_desired_size() {
+        assert_eq!(preserve_state_erstsz_publish_seed(true, 0, 1), 1);
+        assert_eq!(preserve_state_erstsz_publish_seed(true, 4, 1), 1);
+        assert_eq!(preserve_state_erstsz_publish_seed(false, 0, 1), 0);
     }
 
     #[test]

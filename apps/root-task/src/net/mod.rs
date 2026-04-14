@@ -66,30 +66,18 @@ pub const AUTH_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;
 
 pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(reason: &str) -> bool {
-    matches!(
-        reason,
-        "cyw43-function2-enable-latched-not-ready"
-            | "cyw43-function2-enable-latched-not-ready-command-timeout"
-            | "cyw43-function2-enable-latched-not-ready-command-crc"
-            | "cyw43-function2-enable-latched-not-ready-command-end-bit"
-            | "cyw43-function2-enable-latched-not-ready-command-index"
-            | "cyw43-function2-enable-latched-not-ready-command-error"
-            | "cyw43-function2-enable-latched-not-ready-command-stall"
-            | "cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"
-            | "cyw43-function2-enable-latched-not-ready-data-end-bit"
-            | "cyw43-function2-enable-latched-not-ready-data-crc"
-            | "cyw43-control-plane-linux-interrupts-deferred"
-            | "cyw43-control-plane-sideband-unreadable"
-            | "cyw43-control-plane-sideband-command-timeout"
-            | "cyw43-control-plane-sideband-command-crc"
-            | "cyw43-control-plane-sideband-command-end-bit"
-            | "cyw43-control-plane-sideband-command-index"
-            | "cyw43-control-plane-sideband-command-error"
-            | "cyw43-control-plane-passive-startup-link-timeout"
-            | "cyw43-control-plane-startup-link-rescue-budget-exhausted"
-            | "cyw43-control-plane-startup-link-reply-timeout"
-            | "cyw43-control-plane-pure-f2-startup-link-no-reply"
-    )
+    reason.starts_with("cyw43-function2-enable-latched-not-ready")
+        || reason == "cyw43-control-plane-no-reply-linux-f2-armed"
+        || reason == "cyw43-control-plane-linux-interrupts-deferred"
+        || reason == "cyw43-control-plane-sideband-unreadable"
+        || reason.starts_with("cyw43-control-plane-sideband-")
+        || matches!(
+            reason,
+            "cyw43-control-plane-passive-startup-link-timeout"
+                | "cyw43-control-plane-startup-link-rescue-budget-exhausted"
+                | "cyw43-control-plane-startup-link-reply-timeout"
+                | "cyw43-control-plane-pure-f2-startup-link-no-reply"
+        )
 }
 
 #[must_use]
@@ -1036,6 +1024,15 @@ mod tests {
         ));
         assert!(cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-control-plane-startup-link-rescue-budget-exhausted"
+        ));
+        assert!(cyw43_control_plane_bootstrap_replay_reason(
+            "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
+        ));
+        assert!(cyw43_control_plane_bootstrap_replay_reason(
+            "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
+        ));
+        assert!(cyw43_control_plane_bootstrap_replay_reason(
+            "cyw43-control-plane-no-reply-linux-f2-armed"
         ));
     }
 

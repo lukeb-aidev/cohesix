@@ -2673,7 +2673,8 @@ fn strict_control_plane_reply_recovery_action(
     exact_error: &'static str,
 ) -> StrictControlPlaneReplyRecoveryAction {
     if exact_error == "cyw43-control-plane-sideband-unreadable"
-        || exact_error == "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
+        || exact_error.starts_with("cyw43-control-plane-sideband-")
+        || exact_error.starts_with("cyw43-function2-enable-latched-not-ready-sideband-")
     {
         StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
     } else {
@@ -13611,6 +13612,12 @@ mod tests {
         assert_eq!(
             strict_control_plane_reply_recovery_action(
                 "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+            ),
+            StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
+        );
+        assert_eq!(
+            strict_control_plane_reply_recovery_action(
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
             ),
             StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
         );
