@@ -297,6 +297,29 @@ const focusHiveCanvas = async (page) => {
   );
 };
 
+const fillField = async (page, selector, value) => {
+  const host = page.locator(selector);
+  const tagName = await host.evaluate((node) => node.tagName.toLowerCase());
+  if (tagName === "sp-textfield") {
+    await host.locator("input").fill(value);
+    return;
+  }
+  await host.fill(value);
+};
+
+const readFieldValue = async (page, selector) => {
+  const host = page.locator(selector);
+  return host.evaluate((node) => {
+    const value = "value" in node ? node.value : "";
+    return typeof value === "string" ? value : String(value || "");
+  });
+};
+
+const runConsoleCommand = async (page, command) => {
+  await fillField(page, "#console-input", command);
+  await page.locator("#console-send").click();
+};
+
 let serverHandle = null;
 let baseUrl = null;
 
@@ -321,8 +344,16 @@ test.beforeEach(async ({ page }) => {
 
 test("SwarmUI launches without error", async ({ page }) => {
   await expect(page).toHaveTitle(/SwarmUI/);
+  await expect(page.locator("sp-theme.app-theme")).toBeVisible();
   await expect(page.locator("header.cohesix-banner")).toBeVisible();
   await expect(page.locator("#hive-status")).not.toContainText("failed");
+});
+
+test("Spectrum shell controls are mounted", async ({ page }) => {
+  await expect(page.locator("#session-role")).toHaveJSProperty("tagName", "SP-PICKER");
+  await expect(page.locator("#session-ticket")).toHaveJSProperty("tagName", "SP-TEXTFIELD");
+  await expect(page.locator("#connect")).toHaveJSProperty("tagName", "SP-BUTTON");
+  await expect(page.locator("#console-send")).toHaveJSProperty("tagName", "SP-BUTTON");
 });
 
 test("Hive canvas renders in replay mode", async ({ page }) => {
@@ -377,12 +408,20 @@ test("Live Hive keeps rendering during scroll", async ({ page }) => {
 
 test("Live Hive dots are clickable", async ({ page }) => {
   await focusHiveCanvas(page);
+  const canvas = page.locator("#hive-canvas canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).toBeTruthy();
   const positions = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getAgentScreenPositions()
   );
   const target = positions.find((item) => item.id === "worker-gpu-1");
   expect(target).toBeTruthy();
-  await page.mouse.click(target.x, target.y);
+  await canvas.click({
+    position: {
+      x: target.x - bounds.x,
+      y: target.y - bounds.y
+    }
+  });
   await expect(page.locator("#hive-detail-title")).toContainText("worker-gpu-1");
 });
 
@@ -417,16 +456,12 @@ test("Live Hive performance harness stays responsive", async ({ page }) => {
 });
 
 test("Embedded coh prompt accepts input", async ({ page }) => {
-  const input = page.locator("#console-input");
-  await input.fill("help");
-  await input.press("Enter");
+  await runConsoleCommand(page, "help");
   await expect(page.locator("#console-output")).toContainText("coh> help");
 });
 
 test("Help command emits expected transcript lines", async ({ page }) => {
-  const input = page.locator("#console-input");
-  await input.fill("help");
-  await input.press("Enter");
+  await runConsoleCommand(page, "help");
 
   const output = page.locator("#console-output");
   await expect(output).toContainText("SwarmUI console commands:");
@@ -438,6 +473,15 @@ test("Help command emits expected transcript lines", async ({ page }) => {
     );
     return lines;
   }).toEqual(expected);
+});
+
+test("Mint ticket populates the session ticket field", async ({ page }) => {
+  await fillField(page, "#session-subject", "worker-gpu-1");
+  await page.locator("#mint-ticket").click();
+  await expect(page.locator("#mint-status")).toContainText("Ticket minted");
+  await expect.poll(async () => readFieldValue(page, "#session-ticket")).toBe(
+    "ticket-placeholder"
+  );
 });
 
 test("Replay header snapshot matches baseline", async ({ page }) => {

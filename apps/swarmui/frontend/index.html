@@ -1,3 +1,6 @@
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Render the SwarmUI desktop shell, Spectrum controls, and Live Hive panels. -->
+<!-- Copyright 2026 Lukas Bower -->
 <!doctype html>
 <html lang="en">
   <head>
@@ -10,326 +13,356 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <header class="cohesix-banner">
-        <div class="banner-brand">
-          <img
-            class="cohesix-banner__logo"
-            src="assets/icons/cohesix-header.svg"
-            alt="Cohesix"
-          />
-          <div class="brand">
-            <p class="eyebrow">SWARMUI</p>
-            <p class="lede">
-              Live Hive telemetry and activity.
-            </p>
+    <sp-theme class="app-theme" color="dark" scale="medium">
+      <main class="shell">
+        <header class="cohesix-banner">
+          <div class="banner-brand">
+            <img
+              class="cohesix-banner__logo"
+              src="assets/icons/cohesix-header.svg"
+              alt="Cohesix"
+            />
+            <div class="brand">
+              <p class="eyebrow">SWARMUI</p>
+              <p class="lede">
+                Live Hive telemetry, scheduling pressure, and read-only fleet observability.
+              </p>
+            </div>
           </div>
-        </div>
-        <div class="status-bar">
-          <div class="status-row summary">
-            <span class="badge" id="hive-status">Hive idle</span>
-            <span class="badge root ok" id="hive-root">ROOT OK</span>
-            <span class="badge ghost" id="hive-sessions">Sessions 0 · draining 0</span>
+          <div class="status-bar">
+            <div class="status-row summary">
+              <span class="badge" id="hive-status">Hive idle</span>
+              <span class="badge root ok" id="hive-root">ROOT OK</span>
+              <span class="badge ghost" id="hive-sessions">Sessions 0 · draining 0</span>
+            </div>
+            <div class="status-row pressure-summary">
+              <span class="badge ghost" id="hive-pressure">Pressure 0% · backlog 0 · dropped 0</span>
+            </div>
+            <div class="status-group" id="hive-pressure-strip">
+              <span class="status-label">Pressure</span>
+              <span class="chip" data-kind="busy">busy 0</span>
+              <span class="chip" data-kind="quota">quota 0</span>
+              <span class="chip" data-kind="cut">cut 0</span>
+              <span class="chip" data-kind="policy">policy 0</span>
+            </div>
+            <div class="status-group" id="hive-error-strip">
+              <span class="status-label">Errors</span>
+              <span class="chip" data-kind="busy">busy 0</span>
+              <span class="chip" data-kind="quota">quota 0</span>
+              <span class="chip" data-kind="cut">cut 0</span>
+              <span class="chip" data-kind="policy">policy 0</span>
+            </div>
           </div>
-          <div class="status-row pressure-summary">
-            <span class="badge ghost" id="hive-pressure">Pressure 0% · backlog 0 · dropped 0</span>
-          </div>
-          <div class="status-group" id="hive-pressure-strip">
-            <span class="status-label">Pressure</span>
-            <span class="chip" data-kind="busy">busy 0</span>
-            <span class="chip" data-kind="quota">quota 0</span>
-            <span class="chip" data-kind="cut">cut 0</span>
-            <span class="chip" data-kind="policy">policy 0</span>
-          </div>
-          <div class="status-group" id="hive-error-strip">
-            <span class="status-label">Errors</span>
-            <span class="chip" data-kind="busy">busy 0</span>
-            <span class="chip" data-kind="quota">quota 0</span>
-            <span class="chip" data-kind="cut">cut 0</span>
-            <span class="chip" data-kind="policy">policy 0</span>
-          </div>
-        </div>
-      </header>
-      <header class="topbar">
-        <div class="session-block">
-          <label class="label" for="session-role">Role</label>
-          <select id="session-role" class="select">
-            <option value="queen">queen</option>
-            <option value="worker-heartbeat">worker-heartbeat</option>
-            <option value="worker-gpu">worker-gpu</option>
-            <option value="worker-bus">worker-bus</option>
-            <option value="worker-lora">worker-lora</option>
-          </select>
-          <label class="label" for="session-subject">Subject</label>
-          <input
-            id="session-subject"
-            class="input"
-            type="text"
-            placeholder="subject (required for worker tickets)"
-          />
-          <label class="label" for="session-ticket">Ticket</label>
-          <input
-            id="session-ticket"
-            class="input"
-            type="text"
-            placeholder="ticket (optional)"
-          />
-        </div>
-        <div class="session-actions">
-          <button id="connect" class="action primary">
-            <span data-icon="plug"></span>
-            Connect
-          </button>
-          <button id="offline" class="action ghost">
-            <span data-icon="cloud-slash"></span>
-            Offline mode
-          </button>
-          <button id="mint-ticket" class="action">
-            <span data-icon="pulse"></span>
-            Mint ticket
-          </button>
-          <span class="badge ghost" id="mint-status">Ticket idle</span>
-        </div>
-      </header>
-
-      <section class="layout">
-        <aside class="sidebar">
-          <article class="panel">
-            <header>
-              <h2>Live Hive Controls</h2>
-              <p>Click "Start" to view telemetry streams or snapshots.</p>
-            </header>
-            <div class="panel-body">
+        </header>
+        <header class="topbar">
+          <section class="session-block">
+            <div class="session-copy">
+              <p class="eyebrow">Session</p>
+              <h2>Attach with scoped authority</h2>
+              <p class="lede">
+                Reuse the existing Cohesix transports and tickets without introducing any new UI-owned semantics.
+              </p>
+            </div>
+            <sp-divider size="m"></sp-divider>
+            <div class="session-grid">
               <div class="field">
-                <label class="label" for="hive-snapshot-key">Snapshot key</label>
-                <input
-                  id="hive-snapshot-key"
-                  class="input"
-                  type="text"
-                  value="demo"
-                />
+                <label class="label" for="session-role">Role</label>
+                <sp-picker id="session-role" class="select spectrum-field" value="queen" aria-label="Role">
+                  <sp-menu-item value="queen" selected>queen</sp-menu-item>
+                  <sp-menu-item value="worker-heartbeat">worker-heartbeat</sp-menu-item>
+                  <sp-menu-item value="worker-gpu">worker-gpu</sp-menu-item>
+                  <sp-menu-item value="worker-bus">worker-bus</sp-menu-item>
+                  <sp-menu-item value="worker-lora">worker-lora</sp-menu-item>
+                </sp-picker>
               </div>
-              <div class="field hint mono">
-                Click 'Offline mode' to read cached CBOR snapshots, after launching SwarmUI with
-                 `--replay-trace` or `--replay`
+              <div class="field">
+                <label class="label" for="session-subject">Subject</label>
+                  <sp-textfield
+                    id="session-subject"
+                    class="input spectrum-field"
+                    placeholder="subject (required for worker tickets)"
+                    aria-label="Subject"
+                  ></sp-textfield>
+              </div>
+              <div class="field">
+                <label class="label" for="session-ticket">Ticket</label>
+                  <sp-textfield
+                    id="session-ticket"
+                    class="input spectrum-field"
+                    placeholder="ticket (optional)"
+                    aria-label="Ticket"
+                  ></sp-textfield>
               </div>
             </div>
-            <footer class="panel-footer split">
-              <button id="hive-start" class="action primary">
-                <span data-icon="play"></span>
-                Start
-              </button>
-              <button id="hive-stop" class="action">
-                <span data-icon="stop"></span>
-                Stop
-              </button>
-            </footer>
-          </article>
+          </section>
+          <section class="session-actions-panel">
+            <div class="session-copy">
+              <p class="eyebrow">Transport</p>
+              <h2>Host-side control lens</h2>
+              <p class="lede">
+                Live mode reuses the shared console session, and offline mode stays replay-first from cached snapshots.
+              </p>
+            </div>
+            <sp-divider size="m"></sp-divider>
+            <div class="session-actions">
+              <sp-button id="connect" class="action" variant="accent">
+                <span slot="icon" data-icon="plug"></span>
+                <span data-button-label>Connect</span>
+              </sp-button>
+              <sp-button id="offline" class="action" variant="secondary">
+                <span slot="icon" data-icon="cloud-slash"></span>
+                <span data-button-label>Offline mode</span>
+              </sp-button>
+              <sp-button id="mint-ticket" class="action" variant="secondary">
+                <span slot="icon" data-icon="pulse"></span>
+                <span data-button-label>Mint ticket</span>
+              </sp-button>
+              <span class="badge ghost" id="mint-status">Ticket idle</span>
+            </div>
+          </section>
+        </header>
 
-          <article class="panel">
-            <header>
-              <h2>Telemetry Rings</h2>
-              <p>Tail worker telemetry streams on demand.</p>
-            </header>
-            <div class="panel-body mono" id="telemetry-output">
-              <p class="placeholder">No telemetry loaded.</p>
-            </div>
-            <footer class="panel-footer split">
-              <input
-                id="worker-id"
-                class="input"
-                type="text"
-                placeholder="worker-<id>"
-              />
-              <button id="load-telemetry" class="action">
-                <span data-icon="pulse"></span>
-                Load telemetry
-              </button>
-            </footer>
-          </article>
+        <section class="layout">
+          <aside class="sidebar">
+            <article class="panel">
+              <header>
+                <h2>Live Hive Controls</h2>
+                <p>Bootstrap snapshots and switch between live polling and replay-backed inspection.</p>
+              </header>
+              <div class="panel-body">
+                <div class="field">
+                  <label class="label" for="hive-snapshot-key">Snapshot key</label>
+                  <sp-textfield
+                    id="hive-snapshot-key"
+                    class="input spectrum-field"
+                    value="demo"
+                    aria-label="Snapshot key"
+                  ></sp-textfield>
+                </div>
+                <div class="field hint mono">
+                  Click 'Offline mode' to read cached CBOR snapshots, after launching SwarmUI with
+                   `--replay-trace` or `--replay`
+                </div>
+              </div>
+              <footer class="panel-footer split">
+                <sp-button id="hive-start" class="action" variant="accent">
+                  <span slot="icon" data-icon="play"></span>
+                  <span data-button-label>Start</span>
+                </sp-button>
+                <sp-button id="hive-stop" class="action" variant="secondary">
+                  <span slot="icon" data-icon="stop"></span>
+                  <span data-button-label>Stop</span>
+                </sp-button>
+              </footer>
+            </article>
 
-          <article class="panel">
-            <header>
-              <h2>Fleet Map</h2>
-              <p>Read-only ingest snapshots and worker presence.</p>
-            </header>
-            <div class="panel-body mono" id="fleet-output">
-              <p class="placeholder">Awaiting ingest snapshot.</p>
-            </div>
-            <footer class="panel-footer">
-              <button id="load-fleet" class="action">
-                <span data-icon="map-trifold"></span>
-                Load fleet
-              </button>
-            </footer>
-          </article>
-        </aside>
+            <article class="panel">
+              <header>
+                <h2>Telemetry Rings</h2>
+                <p>Tail worker telemetry streams on demand.</p>
+              </header>
+              <div class="panel-body mono" id="telemetry-output">
+                <p class="placeholder">No telemetry loaded.</p>
+              </div>
+              <footer class="panel-footer split">
+                <sp-textfield
+                  id="worker-id"
+                  class="input spectrum-field"
+                  placeholder="worker-<id>"
+                  aria-label="Worker ID"
+                ></sp-textfield>
+                <sp-button id="load-telemetry" class="action" variant="secondary">
+                  <span slot="icon" data-icon="pulse"></span>
+                  <span data-button-label>Load telemetry</span>
+                </sp-button>
+              </footer>
+            </article>
 
-        <section class="main">
-          <article class="panel hive-panel">
-            <header class="panel-header">
-              <div>
-                <h2>Live Hive Canvas</h2>
-                <p>Click a Worker below for Telemetry Scheduler, and Lease information.</p>
+            <article class="panel">
+              <header>
+                <h2>Fleet Map</h2>
+                <p>Read-only ingest snapshots and worker presence.</p>
+              </header>
+              <div class="panel-body mono" id="fleet-output">
+                <p class="placeholder">Awaiting ingest snapshot.</p>
               </div>
-              <button id="hive-reset-view" class="action ghost">
-                <span data-icon="crosshair"></span>
-                Reset view
-              </button>
-            </header>
-            <div class="panel-body hive-body">
-              <div class="hive-stage">
-                <div id="hive-canvas" class="hive-canvas">
-                  <div
-                    class="hive-fallback"
-                    id="hive-fallback"
-                    role="status"
-                    aria-live="polite"
-                  ></div>
-                </div>
-                <div class="hive-overlay mono">
-                  <span class="badge soft">Zoom with trackpad / scroll</span>
-                  <span class="badge soft">Drag to pan</span>
-                </div>
-              </div>
-              <aside class="hive-telemetry mono" id="hive-telemetry">
-                <header class="hive-telemetry__header">
-                  <div>
-                    <p class="eyebrow">Live Hive Text</p>
-                    <p class="lede">Bounded telemetry overlays per worker.</p>
-                  </div>
-                  <button id="hive-detail-clear" class="action ghost">
-                    Clear
-                  </button>
-                </header>
-                <div class="hive-telemetry__overlays" id="hive-overlays">
-                  <p class="placeholder">Awaiting telemetry.</p>
-                </div>
-                <div class="hive-telemetry__detail">
-                  <div class="hive-telemetry__detail-header">
-                    <span class="label" id="hive-detail-title">Select worker</span>
-                  </div>
-                  <div class="hive-telemetry__detail-lines" id="hive-detail-lines">
-                    <p class="placeholder">No telemetry loaded.</p>
-                  </div>
-                </div>
-              </aside>
-            </div>
-          </article>
+              <footer class="panel-footer">
+                <sp-button id="load-fleet" class="action" variant="secondary">
+                  <span slot="icon" data-icon="map-trifold"></span>
+                  <span data-button-label>Load fleet</span>
+                </sp-button>
+              </footer>
+            </article>
+          </aside>
 
-          <article class="panel wide hive-schedule-panel">
-            <header class="panel-header">
-              <div>
-                <h2>Scheduler &amp; Lease Observability</h2>
-                <p>Read-only queue and lease state from /proc.</p>
+          <section class="main">
+            <article class="panel hive-panel">
+              <header class="panel-header">
+                <div>
+                  <h2>Live Hive Canvas</h2>
+                  <p>Click a worker below for live telemetry details, scheduler visibility, and lease state.</p>
+                </div>
+                <sp-button id="hive-reset-view" class="action" variant="secondary">
+                  <span slot="icon" data-icon="crosshair"></span>
+                  <span data-button-label>Reset view</span>
+                </sp-button>
+              </header>
+              <div class="panel-body hive-body">
+                <div class="hive-stage">
+                  <div id="hive-canvas" class="hive-canvas">
+                    <div
+                      class="hive-fallback"
+                      id="hive-fallback"
+                      role="status"
+                      aria-live="polite"
+                    ></div>
+                  </div>
+                  <div class="hive-overlay mono">
+                    <span class="badge soft">Zoom with trackpad / scroll</span>
+                    <span class="badge soft">Drag to pan</span>
+                  </div>
+                </div>
+                <aside class="hive-telemetry mono" id="hive-telemetry">
+                  <header class="hive-telemetry__header">
+                    <div>
+                      <p class="eyebrow">Live Hive Text</p>
+                      <p class="lede">Bounded telemetry overlays per worker.</p>
+                    </div>
+                    <sp-button id="hive-detail-clear" class="action" variant="secondary">
+                      <span data-button-label>Clear</span>
+                    </sp-button>
+                  </header>
+                  <div class="hive-telemetry__overlays" id="hive-overlays">
+                    <p class="placeholder">Awaiting telemetry.</p>
+                  </div>
+                  <div class="hive-telemetry__detail">
+                    <div class="hive-telemetry__detail-header">
+                      <span class="label" id="hive-detail-title">Select worker</span>
+                    </div>
+                    <div class="hive-telemetry__detail-lines" id="hive-detail-lines">
+                      <p class="placeholder">No telemetry loaded.</p>
+                    </div>
+                  </div>
+                </aside>
               </div>
-              <span class="badge ghost" id="hive-schedule-summary">Scheduler idle</span>
-            </header>
-            <div class="panel-body hive-schedule mono">
-              <section class="hive-schedule__section">
-                <div class="hive-schedule__section-header">
-                  <div>
-                    <p class="eyebrow">Scheduler Queue</p>
-                    <p class="lede">Declarative queue ordering from /proc/schedule.</p>
-                  </div>
-                  <span class="badge ghost" id="hive-schedule-queue-summary">Queue empty</span>
-                </div>
-                <div class="hive-schedule__table" id="hive-schedule-queue">
-                  <p class="placeholder">Awaiting schedule queue.</p>
-                </div>
-              </section>
-              <section class="hive-schedule__section">
-                <div class="hive-schedule__section-header">
-                  <div>
-                    <p class="eyebrow">Lease Timeline</p>
-                    <p class="lede">Active leases and preemption history from /proc/lease.</p>
-                  </div>
-                  <span class="badge ghost" id="hive-lease-summary">Leases idle</span>
-                </div>
-                <div class="hive-lease__group">
-                  <div class="hive-lease__label">Active leases</div>
-                  <div class="hive-lease__list" id="hive-lease-active">
-                    <p class="placeholder">No active leases.</p>
-                  </div>
-                </div>
-                <div class="hive-lease__group">
-                  <div class="hive-lease__label">Preemptions</div>
-                  <div class="hive-lease__list" id="hive-lease-preemptions">
-                    <p class="placeholder">No preemptions yet.</p>
-                  </div>
-                </div>
-              </section>
-            </div>
-          </article>
+            </article>
 
-          <article class="panel wide">
-            <header>
-              <h2>Namespace Browser</h2>
-              <p>Browse /proc, /queen, /worker, /log, /gpu (read-only).</p>
-            </header>
-            <div class="panel-body mono" id="namespace-output">
-              <p class="placeholder">Select a root to list entries.</p>
-            </div>
-            <footer class="panel-footer split">
-              <select id="namespace-root" class="select">
-                <option value="/proc">/proc</option>
-                <option value="/queen">/queen</option>
-                <option value="/worker">/worker</option>
-                <option value="/log">/log</option>
-                <option value="/gpu">/gpu</option>
-              </select>
-              <button id="load-namespace" class="action">
-                <span data-icon="folder-open"></span>
-                List entries
-              </button>
-            </footer>
-          </article>
+            <article class="panel wide hive-schedule-panel">
+              <header class="panel-header">
+                <div>
+                  <h2>Scheduler &amp; Lease Observability</h2>
+                  <p>Read-only queue and lease state from /proc.</p>
+                </div>
+                <span class="badge ghost" id="hive-schedule-summary">Scheduler idle</span>
+              </header>
+              <div class="panel-body hive-schedule mono">
+                <section class="hive-schedule__section">
+                  <div class="hive-schedule__section-header">
+                    <div>
+                      <p class="eyebrow">Scheduler Queue</p>
+                      <p class="lede">Declarative queue ordering from /proc/schedule.</p>
+                    </div>
+                    <span class="badge ghost" id="hive-schedule-queue-summary">Queue empty</span>
+                  </div>
+                  <div class="hive-schedule__table" id="hive-schedule-queue">
+                    <p class="placeholder">Awaiting schedule queue.</p>
+                  </div>
+                </section>
+                <section class="hive-schedule__section">
+                  <div class="hive-schedule__section-header">
+                    <div>
+                      <p class="eyebrow">Lease Timeline</p>
+                      <p class="lede">Active leases and preemption history from /proc/lease.</p>
+                    </div>
+                    <span class="badge ghost" id="hive-lease-summary">Leases idle</span>
+                  </div>
+                  <div class="hive-lease__group">
+                    <div class="hive-lease__label">Active leases</div>
+                    <div class="hive-lease__list" id="hive-lease-active">
+                      <p class="placeholder">No active leases.</p>
+                    </div>
+                  </div>
+                  <div class="hive-lease__group">
+                    <div class="hive-lease__label">Preemptions</div>
+                    <div class="hive-lease__list" id="hive-lease-preemptions">
+                      <p class="placeholder">No preemptions yet.</p>
+                    </div>
+                  </div>
+              </div>
+            </article>
 
-          <article class="panel wide console-panel">
-            <header class="panel-header">
-              <div>
-                <h2>Console</h2>
-                <p>Interactive cohsh prompt over the shared TCP console session.</p>
+            <article class="panel wide">
+              <header>
+                <h2>Namespace Browser</h2>
+                <p>Browse /proc, /queen, /worker, /log, /gpu (read-only).</p>
+              </header>
+              <div class="panel-body mono" id="namespace-output">
+                <p class="placeholder">Select a root to list entries.</p>
               </div>
-              <div class="console-actions">
-                <button id="console-clear" class="action ghost">Clear</button>
-                <button id="console-stop" class="action">
-                  <span data-icon="stop"></span>
-                  Stop
-                </button>
+              <footer class="panel-footer split">
+                <sp-picker id="namespace-root" class="select spectrum-field" value="/proc" aria-label="Namespace root">
+                  <sp-menu-item value="/proc" selected>/proc</sp-menu-item>
+                  <sp-menu-item value="/queen">/queen</sp-menu-item>
+                  <sp-menu-item value="/worker">/worker</sp-menu-item>
+                  <sp-menu-item value="/log">/log</sp-menu-item>
+                  <sp-menu-item value="/gpu">/gpu</sp-menu-item>
+                </sp-picker>
+                <sp-button id="load-namespace" class="action" variant="secondary">
+                  <span slot="icon" data-icon="folder-open"></span>
+                  <span data-button-label>List entries</span>
+                </sp-button>
+              </footer>
+            </article>
+
+            <article class="panel wide console-panel">
+              <header class="panel-header">
+                <div>
+                  <h2>Console</h2>
+                  <p>Interactive cohsh prompt over the shared TCP console session.</p>
+                </div>
+                <div class="console-actions">
+                  <sp-button id="console-clear" class="action" variant="secondary">
+                    <span data-button-label>Clear</span>
+                  </sp-button>
+                  <sp-button id="console-stop" class="action" variant="secondary">
+                    <span slot="icon" data-icon="stop"></span>
+                    <span data-button-label>Stop</span>
+                  </sp-button>
+                </div>
+              </header>
+              <div class="panel-body console-body">
+                <div
+                  class="console-output mono"
+                  id="console-output"
+                  role="log"
+                  aria-live="polite"
+                >
+                  <p class="placeholder">Console idle.</p>
+                </div>
               </div>
-            </header>
-            <div class="panel-body console-body">
-              <div
-                class="console-output mono"
-                id="console-output"
-                role="log"
-                aria-live="polite"
-              >
-                <p class="placeholder">Console idle.</p>
-              </div>
-            </div>
-            <footer class="panel-footer console-footer">
-              <div class="console-input">
-                <span class="console-prompt">coh&gt;</span>
-                <input
-                  id="console-input"
-                  class="input mono"
-                  type="text"
-                  placeholder="help · attach queen · log · tail /log/queen.log"
-                />
-              </div>
-              <button id="console-send" class="action primary">
-                <span data-icon="play"></span>
-                Send
-              </button>
-            </footer>
-          </article>
+              <footer class="panel-footer console-footer">
+                <div class="console-input">
+                  <span class="console-prompt">coh&gt;</span>
+                  <sp-textfield
+                    id="console-input"
+                    class="input mono spectrum-field"
+                    placeholder="help · attach queen · log · tail /log/queen.log"
+                    aria-label="Console input"
+                  ></sp-textfield>
+                </div>
+                <sp-button id="console-send" class="action" variant="accent">
+                  <span slot="icon" data-icon="play"></span>
+                  <span data-button-label>Send</span>
+                </sp-button>
+              </footer>
+            </article>
+          </section>
         </section>
-      </section>
-    </main>
+      </main>
+    </sp-theme>
 
     <script src="vendor/pixi.min.js"></script>
+    <script type="module" src="vendor/spectrum.bundle.js"></script>
     <script type="module" src="app.js"></script>
   </body>
 </html>

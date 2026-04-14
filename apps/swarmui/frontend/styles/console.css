@@ -1,3 +1,7 @@
+/* Author: Lukas Bower */
+/* Purpose: Style the SwarmUI embedded console transcript and Spectrum-backed prompt. */
+/* Copyright 2026 Lukas Bower */
+
 .console-panel {
   position: relative;
 }
@@ -67,12 +71,13 @@
 
 .console-input .input {
   flex: 1;
-  background: var(--color-bg-soft);
+  min-width: 0;
 }
 
 .console-prompt {
   color: var(--color-accent);
   font-weight: 600;
+  flex: 0 0 auto;
 }
 
 .console-footer {

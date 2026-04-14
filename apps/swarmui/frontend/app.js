@@ -14,6 +14,39 @@ const output = (id, text) => {
   node.textContent = text;
 };
 
+const readControlValue = (id, fallback = "") => {
+  const node = document.getElementById(id);
+  if (!node || !("value" in node)) {
+    return fallback;
+  }
+  const raw = node.value ?? "";
+  const text = typeof raw === "string" ? raw : String(raw);
+  return text.trim();
+};
+
+const setControlValue = (id, value) => {
+  const node = document.getElementById(id);
+  if (!node || !("value" in node)) {
+    return;
+  }
+  node.value = value;
+  node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+  node.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+};
+
+const setButtonLabel = (id, text) => {
+  const node = document.getElementById(id);
+  if (!node) {
+    return;
+  }
+  const label = node.querySelector("[data-button-label]");
+  if (label) {
+    label.textContent = text;
+    return;
+  }
+  node.textContent = text;
+};
+
 const resolveInvoke = () => {
   if (window.__TAURI__?.tauri?.invoke) {
     return window.__TAURI__.tauri.invoke.bind(window.__TAURI__.tauri);
@@ -41,10 +74,8 @@ const invoke = async (cmd, payload) => {
 };
 
 const readSession = () => {
-  const role =
-    document.getElementById("session-role")?.value?.trim() || "queen";
-  const ticketRaw =
-    document.getElementById("session-ticket")?.value?.trim() || "";
+  const role = readControlValue("session-role", "queen") || "queen";
+  const ticketRaw = readControlValue("session-ticket");
   return {
     role,
     ticket: ticketRaw.length ? ticketRaw : null,
@@ -52,15 +83,12 @@ const readSession = () => {
 };
 
 const readSubject = () => {
-  const raw = document.getElementById("session-subject")?.value || "";
-  const trimmed = raw.trim();
-  return trimmed.length ? trimmed : null;
+  const value = readControlValue("session-subject");
+  return value.length ? value : null;
 };
 
 const readWorkerId = () => {
-  const raw = document.getElementById("worker-id")?.value || "";
-  const trimmed = raw.trim();
-  return trimmed.length ? trimmed : "";
+  return readControlValue("worker-id");
 };
 
 const renderTranscript = (id, transcript) => {
@@ -101,7 +129,7 @@ offlineButton?.addEventListener("click", async () => {
     return;
   }
   if (offlineButton) {
-    offlineButton.textContent = offlineEnabled ? "Online mode" : "Offline mode";
+    setButtonLabel("offline", offlineEnabled ? "Online mode" : "Offline mode");
   }
   output("telemetry-output", offlineEnabled ? "OK OFFLINE" : "OK ONLINE");
 });
@@ -128,7 +156,7 @@ document.getElementById("mint-ticket")?.addEventListener("click", async () => {
   }
   const ticketInput = document.getElementById("session-ticket");
   if (ticketInput) {
-    ticketInput.value = ticket;
+    setControlValue("session-ticket", ticket);
   }
   setStatus("mint-status", "Ticket minted");
 });
@@ -174,7 +202,7 @@ document
   .getElementById("load-namespace")
   ?.addEventListener("click", async () => {
     const session = readSession();
-    const root = document.getElementById("namespace-root")?.value || "/proc";
+    const root = readControlValue("namespace-root", "/proc") || "/proc";
     const res = await invoke("swarmui_list_namespace", {
       role: session.role,
       ticket: session.ticket,
@@ -446,7 +474,7 @@ const resetHiveDetail = () => {
     hiveDetailTitle.textContent = "Select worker";
   }
   if (hiveDetailLines) {
-    hiveDetailLines.innerHTML = '<p class="placeholder">No telemetry loaded.</p>';
+    renderPlaceholder(hiveDetailLines, "No telemetry loaded.");
   }
 };
 
@@ -629,9 +657,9 @@ const renderHiveDetail = (batch) => {
     }
   }
   if (!hiveDetailAgent) {
-    hiveDetailLines.innerHTML = '<p class="placeholder">Select a worker to view details.</p>';
+    renderPlaceholder(hiveDetailLines, "Select a worker to view details.");
   } else {
-    hiveDetailLines.innerHTML = '<p class="placeholder">No telemetry yet.</p>';
+    renderPlaceholder(hiveDetailLines, "No telemetry yet.");
   }
 };
 
@@ -1026,8 +1054,7 @@ const startHive = async () => {
   }
   setHiveFallback("");
   const session = readSession();
-  const snapshotKey =
-    document.getElementById("hive-snapshot-key")?.value?.trim() || "demo";
+  const snapshotKey = readControlValue("hive-snapshot-key", "demo") || "demo";
   const res = await invoke("swarmui_hive_bootstrap", {
     role: session.role,
     ticket: session.ticket,

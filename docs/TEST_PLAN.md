@@ -353,7 +353,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 **Additive UI-only layer.** Playwright tests **DO NOT** assert control-plane correctness and **MUST NOT** introduce new verbs, protocols, or semantics. They validate presentation (rendering, wiring, and transcript parity) using deterministic replay fixtures.
 
 #### 1) Scope
-- Covers: SwarmUI launch, DOM wiring, canvas presence, deterministic replay rendering, and embedded `>coh` console transcript output.
+- Covers: SwarmUI launch, Spectrum shell control wiring, canvas presence, deterministic replay rendering, mint-ticket UI wiring, and embedded `>coh` console transcript output.
 - Excludes: control-plane logic, NineDoor semantics, ticket validation correctness, and any non-UI behavior already covered by `.coh` scripts or regression pack.
 
 #### 2) Modes
@@ -362,8 +362,10 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 
 #### 3) Test Categories
 - Launch + smoke (UI loads and renders key panels).
-- Replay visual regression (screenshot baseline).
+- Replay visual regression (banner/shell screenshot baseline).
+- Spectrum shell controls (buttons, text fields, pickers mount and remain wired to existing IDs/flows).
 - Interactive `>coh` prompt (type commands, assert transcript lines).
+- Mint ticket flow (UI-only assertion that the host-returned token is surfaced back into the session field).
 - Live Hive UX (labels, role colors, and dot selection wiring).
 - Live Hive performance harness (bounded render cadence and backlog checks).
 - Failure UI (auth error, disconnected state) as UI-only states.
@@ -372,6 +374,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - Replay-first: all UI assertions are driven from replay fixtures.
 - Avoid unbounded timing-based assertions; use explicit replay fixtures and the Live Hive metrics harness for bounded render/backlog checks.
 - Transcript-based assertions only (match `OK`, `ERR`, `END` and static help lines).
+- Shell assertions must preserve the existing SwarmUI IDs and Tauri invoke contract even when the underlying controls are Spectrum Web Components.
 
 #### 5) CI Positioning
 - Runs **after** `.coh` scripts and the regression pack.
@@ -389,6 +392,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 **Notes**
 - The Playwright harness targets the **latest SwarmUI release bundle** UI assets under `releases/` unless `SWARMUI_UI_ROOT` is set.
 - The harness injects a deterministic Tauri `invoke` mock for UI-only replay and transcript assertions; it does not exercise control-plane behavior.
+- The current shell uses a vendored Spectrum Web Components layer for operator controls; Playwright interacts with the effective editable/button controls while keeping the canonical SwarmUI element IDs stable.
 - The Live Hive performance harness reads `window.__SWARMUI_HIVE_DEBUG.getMetrics()`; `pending` must stay ≤ `swarmui.hive.pending_event_cap` and `renders` should advance without UI stalls under replay fixtures.
 - Browser binaries are installed into the user Playwright cache (not committed).
 

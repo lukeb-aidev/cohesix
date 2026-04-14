@@ -6494,6 +6494,26 @@ Checks:
   - No new Cohesix protocol verbs, transports, or UI authority are introduced.
 Deliverables:
   - SwarmUI upgraded to the current Tauri 2 desktop line with host-tool packaging and test coverage kept in sync.
+
+Title/ID: m26b-swarmui-spectrum-shell
+Goal: Rebuild the SwarmUI desktop shell around Spectrum Web Components while preserving Cohesix transport semantics, replay behavior, and Live Hive rendering.
+Inputs: apps/swarmui/frontend/*, tools/swarmui-ui-tests/*, docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/swarmui/frontend/index.html + app.js + components/console.js + styles/* — adopt a vendored Spectrum-based shell (`sp-theme`, `sp-button`, `sp-textfield`, `sp-picker`, `sp-divider`) for operator controls while preserving all current IDs, panel outputs, and Pixi-backed Live Hive behavior.
+  - apps/swarmui/frontend/vendor/spectrum.bundle.js — self-host the exact Spectrum Web Components bundle needed by SwarmUI so Tauri/release builds remain offline-safe and CDN-free.
+  - tools/swarmui-ui-tests/tests/swarmui.spec.js + screenshots — update the Playwright harness for Spectrum-backed text fields/buttons, keep replay/canvas coverage intact, and add shell regression checks for ticket minting and control wiring.
+  - docs/USERLAND_AND_CLI.md — record that SwarmUI ships a vendored Spectrum shell while remaining a presentation-only frontend over existing Cohesix transports.
+Commands:
+  - cargo check -p swarmui --all-targets
+  - cargo clippy -p swarmui --all-targets -- -D warnings
+  - cargo test -p swarmui
+  - cd tools/swarmui-ui-tests && npm test
+Checks:
+  - SwarmUI keeps the same Tauri command surface, replay/bootstrap flow, and Live Hive polling semantics after the Spectrum shell migration.
+  - The shell remains self-hosted for Tauri/release bundles with no CDN requirement and no new transport authority.
+  - Playwright coverage exercises the Spectrum-backed controls without weakening existing Live Hive and transcript assertions.
+Deliverables:
+  - World-class SwarmUI shell using vendored Spectrum Web Components with replay-safe UI regression coverage and warning-free SwarmUI Rust builds.
 ```
 
 ---

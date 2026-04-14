@@ -1,3 +1,7 @@
+/* Author: Lukas Bower */
+/* Purpose: Define shared design tokens for the SwarmUI shell and Live Hive renderer. */
+/* Copyright 2026 Lukas Bower */
+
 :root {
   color-scheme: dark;
   --font-ui: "Inter", "Helvetica Neue", sans-serif;
@@ -23,6 +27,7 @@
   --motion-slow: 420ms;
   --color-bg: var(--palette-void);
   --color-bg-soft: var(--palette-void-soft);
+  --color-surface-1: var(--palette-surface);
   --color-surface: var(--palette-surface);
   --color-surface-2: var(--palette-surface-2);
   --color-ink: var(--palette-ink);
@@ -57,4 +62,10 @@
   --hive-drift: 10px;
   --hive-heat-decay: 0.22;
   --hive-flow-decay: 0.65;
+  --shadow-panel: 0 22px 40px rgba(4, 8, 14, 0.34);
+  --shadow-soft: 0 12px 24px rgba(4, 8, 14, 0.22);
+  --surface-strong:
+    linear-gradient(180deg, rgba(24, 32, 44, 0.98), rgba(16, 22, 31, 0.98));
+  --surface-glass:
+    linear-gradient(180deg, rgba(20, 27, 38, 0.94), rgba(13, 18, 27, 0.92));
 }

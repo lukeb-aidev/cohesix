@@ -1,3 +1,7 @@
+// Author: Lukas Bower
+// Purpose: Wire the embedded SwarmUI console prompt and transcript playback.
+// Copyright 2026 Lukas Bower
+
 const classifyLine = (line) => {
   if (line === "END") {
     return "end";
@@ -45,6 +49,23 @@ export const setupConsole = (invoke) => {
   if (stop) {
     stop.disabled = true;
   }
+
+  const readValue = () => {
+    if (!("value" in input)) {
+      return "";
+    }
+    const raw = input.value ?? "";
+    return typeof raw === "string" ? raw : String(raw);
+  };
+
+  const clearValue = () => {
+    if (!("value" in input)) {
+      return;
+    }
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  };
 
   const resetPlaceholder = () => {
     if (!output.querySelector(".placeholder")) {
@@ -121,15 +142,15 @@ export const setupConsole = (invoke) => {
   };
 
   send.addEventListener("click", async () => {
-    await runCommand(input.value);
-    input.value = "";
+    await runCommand(readValue());
+    clearValue();
   });
 
   input.addEventListener("keydown", async (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      await runCommand(input.value);
-      input.value = "";
+      await runCommand(readValue());
+      clearValue();
     }
   });
 
