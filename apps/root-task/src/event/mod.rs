@@ -2559,10 +2559,18 @@ where
     #[cfg(feature = "kernel")]
     fn wifi_capture_verdict(snapshot: &WifiDebugSnapshot) -> (&'static str, &'static str) {
         let exact_error = snapshot.control_plane_exact_error;
+        if exact_error.is_empty()
+            && snapshot.control_plane_no_ht_transport
+            && snapshot.control_plane_bootstrap_phase == "startup-link-recovery"
+            && snapshot.control_plane_f2_state.starts_with("latched-")
+        {
+            return ("function2-reply-edge", "first-function2-reply");
+        }
         if exact_error
             == "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
+            || exact_error == "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
         {
-            return ("function1-sideband-edge", "function1-sideband");
+            return ("function2-reply-edge", "first-function2-reply");
         }
         if exact_error.starts_with("cyw43-function2-disabled")
             || exact_error.starts_with("cyw43-function2-enable-latched-not-ready")
@@ -2623,6 +2631,19 @@ where
     #[cfg(feature = "kernel")]
     fn wifi_golden_path_current_step(snapshot: &WifiDebugSnapshot) -> &'static str {
         let exact_error = snapshot.control_plane_exact_error;
+        if exact_error.is_empty()
+            && snapshot.control_plane_no_ht_transport
+            && snapshot.control_plane_bootstrap_phase == "startup-link-recovery"
+            && snapshot.control_plane_f2_state.starts_with("latched-")
+        {
+            return "first-function2-reply";
+        }
+        if exact_error
+            == "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
+            || exact_error == "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
+        {
+            return "first-function2-reply";
+        }
         if exact_error.starts_with("cyw43-function2-disabled")
             || exact_error.starts_with("cyw43-function2-enable-latched-not-ready")
             || exact_error.starts_with("cyw43-function2-ready-hidden-from-cccr")
@@ -6218,7 +6239,65 @@ mod tests {
                 TestTimer,
                 NullIpc,
             >::wifi_capture_verdict(&snapshot),
-            ("function1-sideband-edge", "function1-sideband")
+            ("function2-reply-edge", "first-function2-reply")
+        );
+        assert_eq!(
+            EventPump::<
+                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
+                TestTimer,
+                NullIpc,
+            >::wifi_golden_path_current_step(&snapshot),
+            "first-function2-reply"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_capture_verdict_falls_back_to_first_reply_when_exact_error_is_blank() {
+        let snapshot = WifiDebugSnapshot {
+            power_state: WifiPowerState::On,
+            reset_state: WifiResetState::Deasserted,
+            current_clock_hz: 400_000,
+            preferred_data_clock_hz: 12_500_000,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0xb0ff_ff00,
+            io_enable: Some(0x06),
+            io_ready: Some(0x02),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            control_plane_bootstrap_phase: "startup-link-recovery",
+            control_plane_reply_mode: "startup-link-resume",
+            control_plane_reply_attempts: 2,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "",
+            control_plane_promoted_probe_pending: false,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "",
+        };
+        assert_eq!(
+            EventPump::<
+                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
+                TestTimer,
+                NullIpc,
+            >::wifi_capture_verdict(&snapshot),
+            ("function2-reply-edge", "first-function2-reply")
         );
     }
 

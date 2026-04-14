@@ -2247,11 +2247,10 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0261, current_erst_size as u64, current_erstba, 0);
             (current_erst_size, current_erstba)
         };
-        let current_erstsz_publish = if preserve_firmware_state {
-            self.read_reg::<u32>(int_base + reg::ERSTSZ)
-        } else {
-            staged_current_erst_size
-        };
+        // On the degraded preserve-state path, the trusted stopped snapshot is
+        // already the contract we are adopting. Another live ERSTSZ read has
+        // become the next IRQ27-sensitive edge, so reuse the staged seed here.
+        let current_erstsz_publish = staged_current_erst_size;
         let erst_size = compose_erst_size(
             if preserve_firmware_state || !live_post_reset_seed_reads {
                 0

@@ -786,6 +786,7 @@ fn startup_link_first_blocker_for_snapshot_stage(stage: &'static str) -> Option<
         | "control-plane-reply-sideband-unreadable-exhausted"
         | "control-plane-reply-speculative-read-empty"
         | "control-plane-reply-speculative-read-fail"
+        | "control-plane-reply-strict-recover-fail"
         | "control-plane-startup-link-rearm-stalled"
         | "control-plane-promoted-rearm-stalled" => Some("first-control-plane-reply"),
         _ => None,
@@ -931,7 +932,7 @@ const fn control_plane_startup_link_timeout_needs_slow_link_resume(
     experimental_no_ht_transport: bool,
     reply_rearm_mode: u8,
 ) -> bool {
-    experimental_no_ht_transport && reply_rearm_mode == control_plane_reply_rearm_startup_link()
+    experimental_no_ht_transport && control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
 }
 
 #[inline]
@@ -13740,6 +13741,11 @@ mod tests {
         ));
         assert!(control_plane_reply_rearm_can_resume_after_timeout(
             true,
+            control_plane_reply_rearm_startup_link_resume(),
+            &HalError::Unsupported("sdio-function2-ready-timeout"),
+        ));
+        assert!(control_plane_reply_rearm_can_resume_after_timeout(
+            true,
             control_plane_reply_rearm_startup_link(),
             &HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout"),
         ));
@@ -16923,6 +16929,12 @@ mod tests {
         assert_eq!(
             startup_link_first_blocker_for_snapshot_stage(
                 "control-plane-startup-link-rearm-stalled"
+            ),
+            Some("first-control-plane-reply")
+        );
+        assert_eq!(
+            startup_link_first_blocker_for_snapshot_stage(
+                "control-plane-reply-strict-recover-fail"
             ),
             Some("first-control-plane-reply")
         );
