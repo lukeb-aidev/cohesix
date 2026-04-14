@@ -1175,6 +1175,34 @@ fn emit_preserve_state_erstsz_skip_diag(int_base: usize, current: u32, desired: 
 }
 
 #[inline(always)]
+fn preserve_state_erstba_write_is_redundant(current: u64, desired: u64) -> bool {
+    current == desired
+}
+
+#[inline(always)]
+fn preserve_state_erstba_publish_seed(
+    preserve_firmware_state: bool,
+    staged_current_erstba: u64,
+    desired_erstba: u64,
+) -> u64 {
+    if preserve_firmware_state {
+        desired_erstba
+    } else {
+        staged_current_erstba
+    }
+}
+
+#[inline(always)]
+fn emit_preserve_state_erstba_skip_diag(int_base: usize, current: u64, desired: u64) {
+    emit_xhci_diag(
+        0x0310,
+        (int_base + reg::ERSTBA) as u64,
+        current,
+        desired,
+    );
+}
+
+#[inline(always)]
 fn compose_erst_base(current: u64, base: u64) -> u64 {
     (current & reg::ERST_PTR_MASK) | (base & !reg::ERST_PTR_MASK)
 }
@@ -2285,6 +2313,11 @@ impl<H: Dma> XhciCtrl<H> {
             },
             erst_phys,
         );
+        let current_erstba_publish = preserve_state_erstba_publish_seed(
+            preserve_firmware_state,
+            staged_current_erstba,
+            erstba,
+        );
         emit_xhci_diag(0x0265, (int_base + reg::ERSTBA) as u64, erstba, 0);
         if defer_erst_publish {
             emit_xhci_diag(
@@ -2297,7 +2330,7 @@ impl<H: Dma> XhciCtrl<H> {
                 0x02c1,
                 (int_base + reg::ERSTBA) as u64,
                 erstba,
-                staged_current_erstba,
+                current_erstba_publish,
             );
         } else {
             emit_xhci_diag(
@@ -2323,10 +2356,14 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(
                 0x02c5,
                 (int_base + reg::ERSTBA) as u64,
-                staged_current_erstba,
+                current_erstba_publish,
                 erstba,
             );
-            if atomic_runtime_ring_publish {
+            if preserve_firmware_state
+                && preserve_state_erstba_write_is_redundant(current_erstba_publish, erstba)
+            {
+                emit_preserve_state_erstba_skip_diag(int_base, current_erstba_publish, erstba);
+            } else if atomic_runtime_ring_publish {
                 emit_xhci_diag(0x0299, (int_base + reg::ERSTBA) as u64, erstba, 0);
                 Self::write_reg_u64_atomic_diag_at(
                     self.mmio,
@@ -2384,10 +2421,14 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(
                 0x02c5,
                 (int_base + reg::ERSTBA) as u64,
-                staged_current_erstba,
+                current_erstba_publish,
                 erstba,
             );
-            if atomic_erstba_publish {
+            if preserve_firmware_state
+                && preserve_state_erstba_write_is_redundant(current_erstba_publish, erstba)
+            {
+                emit_preserve_state_erstba_skip_diag(int_base, current_erstba_publish, erstba);
+            } else if atomic_erstba_publish {
                 Self::write_reg_u64_atomic_diag_at(
                     self.mmio,
                     int_base + reg::ERSTBA,
@@ -3591,7 +3632,8 @@ mod tests {
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, halt_revalidation_needed,
         masked_usbcmd, parse_controller_params, polling_iman_value, port_ready_for_enumeration,
-        preserve_firmware_handoff_config, preserve_state_erstsz_publish_seed,
+        preserve_firmware_handoff_config, preserve_state_erstba_publish_seed,
+        preserve_state_erstba_write_is_redundant, preserve_state_erstsz_publish_seed,
         preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot, run_usbcmd_needs_live_seed_read,
@@ -3932,6 +3974,19 @@ mod tests {
         assert!(preserve_state_erstsz_write_is_redundant(0, 0));
         assert!(!preserve_state_erstsz_write_is_redundant(0, 1));
         assert!(!preserve_state_erstsz_write_is_redundant(1, 0));
+    }
+
+    #[test]
+    fn preserve_state_erstba_skip_only_triggers_on_matching_trusted_seed_base() {
+        assert!(preserve_state_erstba_write_is_redundant(0x1000, 0x1000));
+        assert!(preserve_state_erstba_write_is_redundant(0, 0));
+        assert!(!preserve_state_erstba_write_is_redundant(0, 0x1000));
+        assert!(!preserve_state_erstba_write_is_redundant(0x1000, 0));
+        assert_eq!(
+            preserve_state_erstba_publish_seed(true, 0, 0x1234),
+            0x1234
+        );
+        assert_eq!(preserve_state_erstba_publish_seed(false, 0x5678, 0x1234), 0x5678);
     }
 
     #[test]

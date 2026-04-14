@@ -948,6 +948,7 @@ fn control_plane_reply_rearm_can_resume_after_timeout(
         err,
         HalError::Unsupported("sdio-function2-ready-timeout")
             | HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout")
+            | HalError::Unsupported("cyw43-control-plane-no-reply-linux-f2-armed")
     )
 }
 
@@ -2668,6 +2669,12 @@ enum StrictControlPlaneReplyRecoveryAction {
     ResumeBoundedNoHtReplyProbe,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PassiveStartupLinkTimeoutAction {
+    Fail(&'static str),
+    ResumeBoundedNoHtReplyProbe(&'static str),
+}
+
 #[inline]
 fn strict_control_plane_reply_recovery_action(
     exact_error: &'static str,
@@ -2675,6 +2682,7 @@ fn strict_control_plane_reply_recovery_action(
     if exact_error == "cyw43-control-plane-sideband-unreadable"
         || exact_error.starts_with("cyw43-control-plane-sideband-")
         || exact_error.starts_with("cyw43-function2-enable-latched-not-ready-sideband-")
+        || exact_error == "cyw43-control-plane-no-reply-linux-f2-armed"
     {
         StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
     } else {
@@ -2814,6 +2822,48 @@ fn strict_control_plane_reply_recovery_error(
         ))
     } else {
         None
+    }
+}
+
+#[inline]
+fn passive_startup_link_timeout_action(
+    ioex: Option<u8>,
+    iorx: Option<u8>,
+    ienx: Option<u8>,
+    corecontrol: Option<u32>,
+    watermark: Option<u8>,
+    devctl: Option<u8>,
+    mesbusy: Option<u8>,
+    sdhci_read_diag: &'static str,
+) -> PassiveStartupLinkTimeoutAction {
+    if let Some(exact_error) = strict_control_plane_reply_recovery_error(
+        ioex,
+        iorx,
+        ienx,
+        corecontrol,
+        watermark,
+        devctl,
+        mesbusy,
+        sdhci_read_diag,
+    ) {
+        if matches!(
+            strict_control_plane_reply_recovery_action(exact_error),
+            StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
+        ) {
+            PassiveStartupLinkTimeoutAction::ResumeBoundedNoHtReplyProbe(exact_error)
+        } else {
+            PassiveStartupLinkTimeoutAction::Fail(exact_error)
+        }
+    } else if control_plane_function2_latched_linux_configured_without_iorx(
+        ioex, iorx, ienx, watermark, devctl, mesbusy,
+    ) {
+        PassiveStartupLinkTimeoutAction::Fail("cyw43-control-plane-no-reply-linux-f2-armed")
+    } else {
+        PassiveStartupLinkTimeoutAction::Fail(passive_startup_link_timeout_error(
+            ioex,
+            iorx,
+            corecontrol,
+        ))
     }
 }
 
@@ -5360,24 +5410,46 @@ impl SdioHost {
                     self.experimental_control_plane_reply_rearm_attempts = 0;
                     self.experimental_control_plane_reply_rearm_empty_polls = 0;
                     self.experimental_control_plane_promoted_probe_pending = false;
-                    let exact_error =
-                        if control_plane_function2_latched_linux_configured_without_iorx(
-                            final_ioex,
-                            final_ready,
-                            final_ienx,
-                            final_watermark,
-                            final_devctl,
-                            final_mesbusy,
-                        ) {
-                            "cyw43-control-plane-no-reply-linux-f2-armed"
-                        } else {
-                            passive_startup_link_timeout_error(
-                                final_ioex,
-                                final_ready,
-                                final_corecontrol,
-                            )
-                        };
-                    Err(HalError::Unsupported(exact_error))
+                    let final_sdhci_read_diag = resolved_control_plane_sdhci_read_diag(
+                        self.last_data_wait_cmd,
+                        self.last_data_wait_arg,
+                        self.last_data_wait_present,
+                        self.last_data_wait_int_status,
+                        self.preserved_control_plane_data_wait_cmd,
+                        self.preserved_control_plane_data_wait_arg,
+                        self.preserved_control_plane_data_wait_present,
+                        self.preserved_control_plane_data_wait_int_status,
+                    );
+                    match passive_startup_link_timeout_action(
+                        final_ioex,
+                        final_ready,
+                        final_ienx,
+                        final_corecontrol,
+                        final_watermark,
+                        final_devctl,
+                        final_mesbusy,
+                        final_sdhci_read_diag,
+                    ) {
+                        PassiveStartupLinkTimeoutAction::ResumeBoundedNoHtReplyProbe(
+                            exact_error,
+                        ) => {
+                            let sideband_err = HalError::Unsupported(exact_error);
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-resume current_clock={}Hz width={} chunk_limit={} no_ht={} exact_error={exact_error} continue=bounded-no-ht-reply",
+                                self.current_clock_hz,
+                                sdio_bus_width_name(self.desired_bus_width),
+                                self.control_plane_chunk_limit(),
+                                self.experimental_no_ht_transport,
+                            ));
+                            self.resume_control_plane_after_post_write_rearm_timeout(
+                                &sideband_err,
+                            )?;
+                            Ok(0)
+                        }
+                        PassiveStartupLinkTimeoutAction::Fail(exact_error) => {
+                            Err(HalError::Unsupported(exact_error))
+                        }
+                    }
                 }
             }
             Err(err) => {
@@ -13622,6 +13694,12 @@ mod tests {
             StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
         );
         assert_eq!(
+            strict_control_plane_reply_recovery_action(
+                "cyw43-control-plane-no-reply-linux-f2-armed",
+            ),
+            StrictControlPlaneReplyRecoveryAction::ResumeBoundedNoHtReplyProbe
+        );
+        assert_eq!(
             strict_control_plane_reply_recovery_action("cyw43-function2-enable-latched-not-ready"),
             StrictControlPlaneReplyRecoveryAction::FailFast
         );
@@ -13755,6 +13833,11 @@ mod tests {
             true,
             control_plane_reply_rearm_startup_link(),
             &HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout"),
+        ));
+        assert!(control_plane_reply_rearm_can_resume_after_timeout(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            &HalError::Unsupported("cyw43-control-plane-no-reply-linux-f2-armed"),
         ));
         assert!(!control_plane_reply_rearm_can_resume_after_timeout(
             false,
@@ -14232,6 +14315,69 @@ mod tests {
                 "f1-reply-read-command-timeout",
             ),
             Some("cyw43-function2-enable-latched-not-ready-sideband-command-timeout")
+        );
+    }
+
+    #[test]
+    fn passive_startup_link_timeout_action_resumes_for_sideband_read_stall() {
+        let ioex = Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2);
+        let iorx = Some(SDIO_FUNC_READY_1);
+        let ienx = Some(SDIO_INTERRUPT_ENABLE_MASK);
+        let watermark = Some(CY_43455_F2_WATERMARK);
+        let devctl = Some(SBSDIO_DEVCTL_F2WM_ENAB);
+        let mesbusy = Some(CY_43455_MESBUSYCTRL);
+        assert_eq!(
+            passive_startup_link_timeout_action(
+                ioex,
+                iorx,
+                ienx,
+                None,
+                watermark,
+                devctl,
+                mesbusy,
+                "f1-reply-read-stalled-no-buffer-ready",
+            ),
+            PassiveStartupLinkTimeoutAction::ResumeBoundedNoHtReplyProbe(
+                "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+            )
+        );
+        assert_eq!(
+            passive_startup_link_timeout_action(
+                ioex,
+                iorx,
+                ienx,
+                Some(0),
+                watermark,
+                devctl,
+                mesbusy,
+                "f1-reply-read-stalled-no-buffer-ready",
+            ),
+            PassiveStartupLinkTimeoutAction::ResumeBoundedNoHtReplyProbe(
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+            )
+        );
+    }
+
+    #[test]
+    fn passive_startup_link_timeout_action_keeps_ready_hidden_fail_fast() {
+        let ioex = Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2);
+        let iorx = Some(SDIO_FUNC_READY_1);
+        let ienx = Some(SDIO_INTERRUPT_ENABLE_MASK);
+        let watermark = Some(CY_43455_F2_WATERMARK);
+        let devctl = Some(SBSDIO_DEVCTL_F2WM_ENAB);
+        let mesbusy = Some(CY_43455_MESBUSYCTRL);
+        assert_eq!(
+            passive_startup_link_timeout_action(
+                ioex,
+                iorx,
+                ienx,
+                Some(CC_F2RDY),
+                watermark,
+                devctl,
+                mesbusy,
+                "none",
+            ),
+            PassiveStartupLinkTimeoutAction::Fail("cyw43-function2-ready-hidden-from-cccr")
         );
     }
 

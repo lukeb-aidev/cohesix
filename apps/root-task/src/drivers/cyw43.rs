@@ -508,18 +508,42 @@ fn log_cyw43_init_failure(
     state: &mut Pi4WifiState,
     err: &DriverError,
     include_control_plane_snapshot: bool,
-) {
+) -> Option<&'static str> {
     warn!("[cyw43] init failure stage={stage} err={err}");
-    match state.debug_dump_state(stage) {
+    let snapshot_exact_error = match state.debug_dump_state(stage) {
         Ok(snapshot) => {
             warn!("[cyw43] init snapshot stage={stage} snapshot={snapshot:?}");
+            Some(snapshot.control_plane_exact_error)
         }
         Err(snapshot_err) => {
             warn!("[cyw43] init snapshot unavailable stage={stage} err={snapshot_err}");
+            None
         }
-    }
+    };
     if include_control_plane_snapshot {
         state.log_cyw43_control_plane_snapshot(stage);
+    }
+    snapshot_exact_error
+}
+
+fn preserve_cyw43_init_failure_exact_error(
+    retry_err: DriverError,
+    snapshot_exact_error: Option<&'static str>,
+) -> DriverError {
+    match retry_err {
+        DriverError::Hal(HalError::Unsupported("cyw43-control-plane-no-reply-linux-f2-armed")) => {
+            if let Some(snapshot_exact_error) = snapshot_exact_error {
+                if !snapshot_exact_error.is_empty()
+                    && snapshot_exact_error != "cyw43-control-plane-no-reply-linux-f2-armed"
+                {
+                    return DriverError::Hal(HalError::Unsupported(snapshot_exact_error));
+                }
+            }
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-no-reply-linux-f2-armed",
+            ))
+        }
+        other => other,
     }
 }
 
@@ -766,13 +790,16 @@ impl Cyw43NetDevice {
                 if let Err(retry_err) =
                     device.replay_control_plane_bootstrap(firmware, retry_credentials, &err)
                 {
-                    log_cyw43_init_failure(
+                    let snapshot_exact_error = log_cyw43_init_failure(
                         "cyw43-init-control-plane-hard-retry-fail",
                         &mut device.state,
                         &retry_err,
                         true,
                     );
-                    return Err(retry_err);
+                    return Err(preserve_cyw43_init_failure_exact_error(
+                        retry_err,
+                        snapshot_exact_error,
+                    ));
                 }
                 info!(
                     "[cyw43] init_control_plane hard-retry recovered action=replay-firmware-control-bootstrap"
@@ -2552,6 +2579,44 @@ mod tests {
                 )),
             ),
             SDIO_DATA_CLOCK_HZ
+        );
+    }
+
+    #[test]
+    fn hard_retry_failure_preserves_more_specific_snapshot_error() {
+        let retry_err = DriverError::Hal(HalError::Unsupported(
+            "cyw43-control-plane-no-reply-linux-f2-armed",
+        ));
+        assert_eq!(
+            preserve_cyw43_init_failure_exact_error(
+                retry_err,
+                Some(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                ),
+            ),
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+            ))
+        );
+        assert_eq!(
+            preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-no-reply-linux-f2-armed",
+                )),
+                Some(""),
+            ),
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-no-reply-linux-f2-armed",
+            ))
+        );
+        assert_eq!(
+            preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout")),
+                Some(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                ),
+            ),
+            DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout"))
         );
     }
 
