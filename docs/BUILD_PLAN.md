@@ -109,6 +109,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
+| [28c](#28c) | Host-Side AI Run Control: Delegated Agents, Durable Context, Attention Budgets | Pending |
 | [29](#29) | Edge Local Status (Pi 4 Host Tool) | Pending |
 | [29b](#29b) | AI-Native Namespace Surfaces (Control-Plane Only) | Pending |
 | [30](#30) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
@@ -1227,7 +1228,7 @@ Deliverables:
 ```
 ---
 
-## Milestone 14 — Sharded Namespaces & Provider Split <a id="13"></a> 
+## Milestone 14 — Sharded Namespaces & Provider Split <a id="14"></a> 
 [Milestones](#Milestones)
 
 **Why now (compiler):** Scaling beyond hundreds of workers will otherwise bottleneck on single-directory namespaces. Deterministic sharding keeps walk depth bounded and aligns provider routing with manifest entries.
