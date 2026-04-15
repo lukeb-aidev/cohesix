@@ -636,6 +636,21 @@ fn is_armcr4_postreset_fragile_read_error(err: &HalError) -> bool {
 }
 
 #[inline]
+fn control_plane_startup_link_rescue_exhausted_error(
+    snapshot_exact_error: &'static str,
+    cached_snapshot_exact_error: Option<&'static str>,
+) -> &'static str {
+    let exact_error = cached_snapshot_exact_error
+        .filter(|exact_error| !exact_error.is_empty())
+        .unwrap_or(snapshot_exact_error);
+    if exact_error.is_empty() {
+        "cyw43-control-plane-startup-link-rescue-budget-exhausted"
+    } else {
+        exact_error
+    }
+}
+
+#[inline]
 const fn io_direct_cmd53_byte_fallback_allowed(function: SdioFunction) -> bool {
     matches!(function, SdioFunction::Function1)
 }
@@ -933,6 +948,21 @@ const fn control_plane_startup_link_timeout_needs_slow_link_resume(
     reply_rearm_mode: u8,
 ) -> bool {
     experimental_no_ht_transport && control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+}
+
+#[inline]
+fn control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+    rescue_cycles: u8,
+    err: &HalError,
+) -> bool {
+    rescue_cycles > 0
+        && matches!(
+            err,
+            HalError::Unsupported(reason)
+                if reason.starts_with("cyw43-control-plane-sideband-")
+                    || reason.starts_with("cyw43-function2-enable-latched-not-ready")
+                    || *reason == "cyw43-control-plane-no-reply-linux-f2-armed"
+        )
 }
 
 #[inline]
@@ -3765,7 +3795,7 @@ impl Pi4WifiState {
 
     pub fn debug_dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
         self.host.log_transport_shadow(stage);
-        let snapshot = self.debug_snapshot()?;
+        let snapshot = self.debug_snapshot(stage)?;
         if let Some(cached) = cached_wifi_debug_snapshot() {
             if should_use_cached_wifi_debug_snapshot(&snapshot, &cached) {
                 emit_breadcrumb(format_args!(
@@ -3776,6 +3806,10 @@ impl Pi4WifiState {
                 return Ok(cached);
             }
         }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] debug snapshot stage={stage} source=live exact_error={} sdhci_read_diag={}",
+            snapshot.control_plane_exact_error, snapshot.control_plane_sdhci_read_diag,
+        ));
         Ok(snapshot)
     }
 
@@ -3917,7 +3951,7 @@ impl Pi4WifiState {
         self.host.log_control_plane_finish_snapshot(stage);
     }
 
-    fn debug_snapshot(&mut self) -> Result<WifiDebugSnapshot, HalError> {
+    fn debug_snapshot(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
         let (card_ready, card_rca, card_ocr) = match self.host.card {
             Some(card) => (true, card.rca, card.ocr),
             None => (false, 0, 0),
@@ -3969,6 +4003,15 @@ impl Pi4WifiState {
             control_plane_reply_empty_polls,
             control_plane_promoted_probe_pending,
         ) = self.cyw43_control_plane_reply_rearm_diag();
+        let control_plane_startup_link_rescue_cycles = self
+            .host
+            .experimental_control_plane_startup_link_rescue_cycles;
+        let control_plane_startup_link_rescue_limit =
+            super::control_plane_startup_link_rescue_limit();
+        let control_plane_passive_startup_link_empty_poll_limit =
+            passive_startup_link_wait_empty_poll_limit_for(
+                control_plane_startup_link_rescue_cycles,
+            );
         let control_plane_sdhci_read_diag = resolved_control_plane_sdhci_read_diag(
             self.host.last_data_wait_cmd,
             self.host.last_data_wait_arg,
@@ -4049,6 +4092,11 @@ impl Pi4WifiState {
                 .host
                 .experimental_control_plane_startup_profile_reason,
             control_plane_promoted_probe_pending,
+            debug_snapshot_source: "live",
+            debug_snapshot_stage: stage,
+            control_plane_startup_link_rescue_cycles,
+            control_plane_startup_link_rescue_limit,
+            control_plane_passive_startup_link_empty_poll_limit,
             control_plane_f2_state,
             control_plane_sdhci_read_diag,
             control_plane_exact_error,
@@ -5277,8 +5325,16 @@ impl SdioHost {
             self.experimental_no_ht_transport,
         ));
         if super::control_plane_startup_link_rescue_budget_exhausted(next_cycle) {
+            let snapshot_exact_error = self
+                .log_control_plane_finish_snapshot("control-plane-startup-link-rescue-exhausted");
+            let cached_snapshot_exact_error =
+                cached_wifi_debug_snapshot().map(|snapshot| snapshot.control_plane_exact_error);
+            let exhausted_error = control_plane_startup_link_rescue_exhausted_error(
+                snapshot_exact_error,
+                cached_snapshot_exact_error,
+            );
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} action=startup-link-rescue-exhausted cycle={}/{} err={err} current_clock={}Hz width={} chunk_limit={} no_ht={} exact_error=cyw43-control-plane-startup-link-rescue-budget-exhausted",
+                "[pi4-wifi] firmware stage={stage} action=startup-link-rescue-exhausted cycle={}/{} err={err} current_clock={}Hz width={} chunk_limit={} no_ht={} exact_error={exhausted_error}",
                 next_cycle,
                 CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
                 self.current_clock_hz,
@@ -5286,14 +5342,11 @@ impl SdioHost {
                 self.control_plane_chunk_limit(),
                 self.experimental_no_ht_transport,
             ));
-            self.log_control_plane_finish_snapshot("control-plane-startup-link-rescue-exhausted");
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
             self.experimental_control_plane_reply_rearm_attempts = 0;
             self.experimental_control_plane_reply_rearm_empty_polls = 0;
             self.experimental_control_plane_promoted_probe_pending = false;
-            return Err(HalError::Unsupported(
-                "cyw43-control-plane-startup-link-rescue-budget-exhausted",
-            ));
+            return Err(HalError::Unsupported(exhausted_error));
         }
         Ok(next_cycle)
     }
@@ -5636,6 +5689,26 @@ impl SdioHost {
         &mut self,
         err: &HalError,
     ) -> Result<(), HalError> {
+        let rescue_cycle = self.experimental_control_plane_startup_link_rescue_cycles;
+        if control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+            rescue_cycle,
+            err,
+        ) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=repeat-no-progress-cutover cycle={}/{} err={err} current={}Hz width={} target_clock={}Hz target_bus_width={} mode=bounded-no-ht-reply",
+                rescue_cycle.saturating_add(1),
+                CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                startup_link_reattach_target_profile().0,
+                sdio_bus_width_name(startup_link_reattach_target_profile().1),
+            ));
+            self.cutover_control_plane_reply_probe_to_bounded_no_ht(
+                "control-plane-post-write-rearm-resume",
+                "repeat-no-progress",
+            )?;
+            return Ok(());
+        }
         let rescue_cycle = self.begin_control_plane_startup_link_rescue(
             "control-plane-post-write-rearm-resume",
             err,
@@ -7520,6 +7593,15 @@ impl SdioHost {
                 .experimental_control_plane_startup_profile_reason,
             control_plane_promoted_probe_pending: self
                 .experimental_control_plane_promoted_probe_pending,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: stage,
+            control_plane_startup_link_rescue_cycles: self
+                .experimental_control_plane_startup_link_rescue_cycles,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                passive_startup_link_wait_empty_poll_limit_for(
+                    self.experimental_control_plane_startup_link_rescue_cycles,
+                ),
             control_plane_f2_state: control_plane_function2_linux_state_label(
                 ioex, iorx, ienx, watermark, devctl, mesbusy,
             ),
@@ -13912,6 +13994,28 @@ mod tests {
     }
 
     #[test]
+    fn startup_link_rescue_exhaustion_prefers_snapshot_exact_error() {
+        assert_eq!(
+            control_plane_startup_link_rescue_exhausted_error(
+                "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+                None,
+            ),
+            "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+        );
+        assert_eq!(
+            control_plane_startup_link_rescue_exhausted_error(
+                "state-visible-no-reply",
+                Some("cyw43-control-plane-sideband-read-stall-no-buffer-ready"),
+            ),
+            "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+        );
+        assert_eq!(
+            control_plane_startup_link_rescue_exhausted_error("", None),
+            "cyw43-control-plane-startup-link-rescue-budget-exhausted",
+        );
+    }
+
+    #[test]
     fn speculative_reply_read_fallback_demotes_when_link_is_still_stronger_than_startup() {
         assert!(
             control_plane_reply_speculative_read_needs_startup_link_retry(
@@ -14443,6 +14547,42 @@ mod tests {
             ),
             PassiveStartupLinkTimeoutAction::ResumeBoundedNoHtReplyProbe(
                 "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+            )
+        );
+    }
+
+    #[test]
+    fn repeat_startup_link_no_progress_short_circuits_to_bounded_no_ht() {
+        assert!(
+            !control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+                0,
+                &HalError::Unsupported("cyw43-control-plane-sideband-read-stall-no-buffer-ready",),
+            )
+        );
+        assert!(
+            control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+                1,
+                &HalError::Unsupported("cyw43-control-plane-sideband-read-stall-no-buffer-ready",),
+            )
+        );
+        assert!(
+            control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+                1,
+                &HalError::Unsupported(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                ),
+            )
+        );
+        assert!(
+            control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+                1,
+                &HalError::Unsupported("cyw43-control-plane-no-reply-linux-f2-armed"),
+            )
+        );
+        assert!(
+            !control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+                1,
+                &HalError::Unsupported("cyw43-control-plane-passive-startup-link-timeout"),
             )
         );
     }
@@ -16852,6 +16992,12 @@ mod tests {
             control_plane_startup_profile_locked: false,
             control_plane_startup_profile_reason: "none",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "live",
+            debug_snapshot_stage: "console-dump-state",
+            control_plane_startup_link_rescue_cycles: 0,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
             control_plane_f2_state: "unproven",
             control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
             control_plane_exact_error: "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
@@ -16889,6 +17035,11 @@ mod tests {
             control_plane_startup_profile_locked: true,
             control_plane_startup_profile_reason: "ht-not-ready",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "control-plane-startup-link-rearm-stalled",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit: 8,
             control_plane_f2_state: "latched-linux-configured-no-iorx",
             control_plane_sdhci_read_diag: "none",
             control_plane_exact_error: "cyw43-function2-enable-latched-not-ready",
@@ -16932,6 +17083,12 @@ mod tests {
             control_plane_startup_profile_locked: true,
             control_plane_startup_profile_reason: "ht-not-ready",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "live",
+            debug_snapshot_stage: "console-dump-state",
+            control_plane_startup_link_rescue_cycles: 0,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
             control_plane_f2_state: "latched-linux-configured-no-iorx",
             control_plane_sdhci_read_diag: "none",
             control_plane_exact_error: "cyw43-function2-enable-latched-not-ready",
@@ -16980,6 +17137,11 @@ mod tests {
             control_plane_startup_profile_locked: true,
             control_plane_startup_profile_reason: "ht-not-ready",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "live",
+            debug_snapshot_stage: "console-dump-state",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit: 8,
             control_plane_f2_state: "latched-linux-configured-no-iorx",
             control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
             control_plane_exact_error: "cyw43-control-plane-sideband-read-stall-no-buffer-ready",

@@ -519,6 +519,41 @@ const fn runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
 }
 
 #[inline(always)]
+const fn replay_staged_dcbaap_snapshot_before_publish_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    // The preserve-state bootloader-handoff lane has now proven the staged
+    // current-value replay to be the first live DCBAAP edge that still wedges
+    // under degraded IRQ27. Keep the replay on the other trusted snapshot
+    // paths, but let preserve-state go straight to the real publish.
+    !runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+fn preserve_state_dcbaap_write_is_redundant(current: u64, desired: u64) -> bool {
+    current == desired
+}
+
+#[inline(always)]
+fn preserve_state_dcbaap_publish_seed(
+    preserve_firmware_state: bool,
+    staged_current_dcbaap: u64,
+    desired_dcbaap: u64,
+) -> u64 {
+    if preserve_firmware_state {
+        desired_dcbaap
+    } else {
+        staged_current_dcbaap
+    }
+}
+
+#[inline(always)]
+fn emit_preserve_state_dcbaap_skip_diag(dcbaap_offset: usize, current: u64, desired: u64) {
+    emit_xhci_diag(0x0312, dcbaap_offset as u64, current, desired);
+}
+
+#[inline(always)]
 const fn runtime_handoff_needs_uboot_style_run_write(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
@@ -1194,12 +1229,7 @@ fn preserve_state_erstba_publish_seed(
 
 #[inline(always)]
 fn emit_preserve_state_erstba_skip_diag(int_base: usize, current: u64, desired: u64) {
-    emit_xhci_diag(
-        0x0310,
-        (int_base + reg::ERSTBA) as u64,
-        current,
-        desired,
-    );
+    emit_xhci_diag(0x0310, (int_base + reg::ERSTBA) as u64, current, desired);
 }
 
 #[inline(always)]
@@ -1222,12 +1252,7 @@ fn preserve_state_erdp_publish_seed(
 
 #[inline(always)]
 fn emit_preserve_state_erdp_skip_diag(int_base: usize, current: u64, desired: u64) {
-    emit_xhci_diag(
-        0x0311,
-        (int_base + reg::ERDP) as u64,
-        current,
-        desired,
-    );
+    emit_xhci_diag(0x0311, (int_base + reg::ERDP) as u64, current, desired);
 }
 
 #[inline(always)]
@@ -2062,6 +2087,13 @@ impl<H: Dma> XhciCtrl<H> {
                 self.firmware_handoff,
                 trusted_runtime_seed_snapshot,
             );
+        let current_dcbaap_publish = preserve_state_dcbaap_publish_seed(
+            preserve_firmware_state,
+            staged_current_dcbaap,
+            dcbaa_phys,
+        );
+        let preserve_state_dcbaap_publish_is_redundant = preserve_firmware_state
+            && preserve_state_dcbaap_write_is_redundant(current_dcbaap_publish, dcbaa_phys);
         let dcbaap_publish_policy_mask = u64::from(atomic_runtime_ring_publish)
             | (u64::from(release_only_dcbaap_publish) << 1)
             | (u64::from(preserve_firmware_state) << 2)
@@ -2089,6 +2121,20 @@ impl<H: Dma> XhciCtrl<H> {
             }
             if preserve_firmware_state {
                 emit_xhci_diag(0x0259, reg::DCBAAP as u64, dcbaa_phys, 1);
+            }
+            if preserve_state_dcbaap_publish_is_redundant {
+                emit_preserve_state_dcbaap_skip_diag(
+                    dcbaap_offset,
+                    current_dcbaap_publish,
+                    dcbaa_phys,
+                );
+                if preserve_firmware_state {
+                    emit_xhci_diag(0x0242, dcbaa_phys, 1, 0);
+                } else if !skip_post_reset_verification_readbacks {
+                    emit_xhci_diag(0x0247, reg::DCBAAP as u64, 0, 0);
+                    emit_xhci_diag(0x0242, this.read_op_u64(reg::DCBAAP), 0, 0);
+                }
+                return;
             }
             if atomic_runtime_ring_publish {
                 emit_xhci_diag(0x0290, reg::DCBAAP as u64, dcbaa_phys, 1);
@@ -2247,11 +2293,8 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Prime ERDP to the first event TRB without setting EHB during init.
         let erdp = compose_initial_erdp(event_ring_phys);
-        let current_erdp_publish = preserve_state_erdp_publish_seed(
-            preserve_firmware_state,
-            staged_current_erdp,
-            erdp,
-        );
+        let current_erdp_publish =
+            preserve_state_erdp_publish_seed(preserve_firmware_state, staged_current_erdp, erdp);
         emit_xhci_diag(0x0266, (int_base + reg::ERDP) as u64, erdp, 0);
         let publish_deferred_erdp_before_erst = defer_erdp_publish
             && !defer_event_ring_publish_until_after_run
@@ -2284,11 +2327,7 @@ impl<H: Dma> XhciCtrl<H> {
                 if preserve_firmware_state
                     && preserve_state_erdp_write_is_redundant(current_erdp_publish, erdp)
                 {
-                    emit_preserve_state_erdp_skip_diag(
-                        int_base,
-                        current_erdp_publish,
-                        erdp,
-                    );
+                    emit_preserve_state_erdp_skip_diag(int_base, current_erdp_publish, erdp);
                     return;
                 }
                 if include_staged_snapshot {
@@ -2548,8 +2587,7 @@ impl<H: Dma> XhciCtrl<H> {
             {
                 emit_preserve_state_erdp_skip_diag(int_base, current_erdp_publish, erdp);
             } else {
-                let [target_low, target_high] =
-                    split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
+                let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
                 emit_xhci_diag(
                     0x02bb,
                     target_low.0 as u64,
@@ -2595,44 +2633,58 @@ impl<H: Dma> XhciCtrl<H> {
             // hand DCBAAP to the controller before the final CRCR ownership
             // transfer so the next live edge stays isolated.
             emit_xhci_diag(0x025a, reg::DCBAAP as u64, dcbaa_phys, 1);
-            Self::write_reg_u64_done_diag_at(
-                self.mmio,
-                dcbaap_offset,
-                staged_current_dcbaap,
-                0x02a1,
-                0x02a2,
-                0x02a3,
-                0x02a4,
-            );
-            let [target_low, target_high] = split_u64_reg_write_ops(dcbaap_offset, dcbaa_phys);
-            emit_xhci_diag(
-                0x02a5,
-                target_low.0 as u64,
-                target_low.1 as u64,
-                staged_current_dcbaap,
-            );
-            Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
-            emit_xhci_diag(
-                0x02a6,
-                target_low.0 as u64,
-                target_low.1 as u64,
-                staged_current_dcbaap,
-            );
-            emit_xhci_diag(
-                0x02a7,
-                target_high.0 as u64,
-                target_high.1 as u64,
-                staged_current_dcbaap,
-            );
-            Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
-            emit_xhci_diag(
-                0x02a8,
-                target_high.0 as u64,
-                target_high.1 as u64,
-                staged_current_dcbaap,
-            );
-            emit_xhci_diag(0x02a9, reg::DCBAAP as u64, dcbaa_phys, 1);
-            publish_dcbaap(self);
+            if preserve_state_dcbaap_publish_is_redundant {
+                emit_preserve_state_dcbaap_skip_diag(
+                    dcbaap_offset,
+                    current_dcbaap_publish,
+                    dcbaa_phys,
+                );
+                emit_xhci_diag(0x0242, dcbaa_phys, 1, 0);
+            } else {
+                if replay_staged_dcbaap_snapshot_before_publish_with_snapshot(
+                    self.firmware_handoff,
+                    trusted_runtime_seed_snapshot,
+                ) {
+                    Self::write_reg_u64_done_diag_at(
+                        self.mmio,
+                        dcbaap_offset,
+                        staged_current_dcbaap,
+                        0x02a1,
+                        0x02a2,
+                        0x02a3,
+                        0x02a4,
+                    );
+                }
+                let [target_low, target_high] = split_u64_reg_write_ops(dcbaap_offset, dcbaa_phys);
+                emit_xhci_diag(
+                    0x02a5,
+                    target_low.0 as u64,
+                    target_low.1 as u64,
+                    staged_current_dcbaap,
+                );
+                Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
+                emit_xhci_diag(
+                    0x02a6,
+                    target_low.0 as u64,
+                    target_low.1 as u64,
+                    staged_current_dcbaap,
+                );
+                emit_xhci_diag(
+                    0x02a7,
+                    target_high.0 as u64,
+                    target_high.1 as u64,
+                    staged_current_dcbaap,
+                );
+                Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
+                emit_xhci_diag(
+                    0x02a8,
+                    target_high.0 as u64,
+                    target_high.1 as u64,
+                    staged_current_dcbaap,
+                );
+                emit_xhci_diag(0x02a9, reg::DCBAAP as u64, dcbaa_phys, 1);
+                publish_dcbaap(self);
+            }
         }
         if defer_crcr_publish && !defer_crcr_publish_until_after_run {
             publish_crcr(self);
@@ -2992,8 +3044,7 @@ impl<H: Dma> XhciCtrl<H> {
                     0x02b9,
                     0x02ba,
                 );
-                let [target_low, target_high] =
-                    split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
+                let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
                 emit_xhci_diag(
                     0x02bb,
                     target_low.0 as u64,
@@ -3704,15 +3755,17 @@ mod tests {
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, halt_revalidation_needed,
         masked_usbcmd, parse_controller_params, polling_iman_value, port_ready_for_enumeration,
-        preserve_firmware_handoff_config, preserve_state_erstba_publish_seed,
-        preserve_state_erstba_write_is_redundant, preserve_state_erdp_publish_seed,
-        preserve_state_erdp_write_is_redundant, preserve_state_erstsz_publish_seed,
-        preserve_state_erstsz_write_is_redundant,
+        preserve_firmware_handoff_config, preserve_state_dcbaap_publish_seed,
+        preserve_state_dcbaap_write_is_redundant,
+        preserve_state_erdp_publish_seed, preserve_state_erdp_write_is_redundant,
+        preserve_state_erstba_publish_seed, preserve_state_erstba_write_is_redundant,
+        preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
-        probe_live_dcbaap_before_staged_publish_with_snapshot, run_usbcmd_needs_live_seed_read,
-        run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed, run_wait_observable_usbsts,
-        run_wait_progress_due, runtime_handoff_needs_pre_run_settle,
-        runtime_handoff_needs_relaxed_run_write,
+        probe_live_dcbaap_before_staged_publish_with_snapshot,
+        replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
+        run_usbcmd_needs_live_seed_read, run_usbcmd_prefers_snapshot_seed,
+        run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
+        runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_relaxed_run_write,
         runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
         runtime_handoff_needs_release_only_run_write,
         runtime_handoff_needs_uboot_style_reset_write, runtime_handoff_needs_uboot_style_run_write,
@@ -4055,11 +4108,11 @@ mod tests {
         assert!(preserve_state_erstba_write_is_redundant(0, 0));
         assert!(!preserve_state_erstba_write_is_redundant(0, 0x1000));
         assert!(!preserve_state_erstba_write_is_redundant(0x1000, 0));
+        assert_eq!(preserve_state_erstba_publish_seed(true, 0, 0x1234), 0x1234);
         assert_eq!(
-            preserve_state_erstba_publish_seed(true, 0, 0x1234),
-            0x1234
+            preserve_state_erstba_publish_seed(false, 0x5678, 0x1234),
+            0x5678
         );
-        assert_eq!(preserve_state_erstba_publish_seed(false, 0x5678, 0x1234), 0x5678);
     }
 
     #[test]
@@ -4069,7 +4122,10 @@ mod tests {
         assert!(!preserve_state_erdp_write_is_redundant(0, 0x1000));
         assert!(!preserve_state_erdp_write_is_redundant(0x1000, 0));
         assert_eq!(preserve_state_erdp_publish_seed(true, 0, 0x1234), 0x1234);
-        assert_eq!(preserve_state_erdp_publish_seed(false, 0x5678, 0x1234), 0x5678);
+        assert_eq!(
+            preserve_state_erdp_publish_seed(false, 0x5678, 0x1234),
+            0x5678
+        );
     }
 
     #[test]
@@ -4249,6 +4305,27 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 runtime_ring_snapshot,
             )
+        );
+        assert!(replay_staged_dcbaap_snapshot_before_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            runtime_ring_snapshot,
+        ));
+        assert!(replay_staged_dcbaap_snapshot_before_publish_with_snapshot(
+            XhciFirmwareHandoff::ResetlessReinit,
+            stop_state_snapshot,
+        ));
+        assert!(!replay_staged_dcbaap_snapshot_before_publish_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            stop_state_snapshot,
+        ));
+        assert!(preserve_state_dcbaap_write_is_redundant(0, 0));
+        assert!(preserve_state_dcbaap_write_is_redundant(0x1000, 0x1000));
+        assert!(!preserve_state_dcbaap_write_is_redundant(0, 0x1000));
+        assert!(!preserve_state_dcbaap_write_is_redundant(0x1000, 0));
+        assert_eq!(preserve_state_dcbaap_publish_seed(true, 0, 0x1234), 0x1234);
+        assert_eq!(
+            preserve_state_dcbaap_publish_seed(false, 0x5678, 0x1234),
+            0x5678
         );
         assert!(!defer_dcbaap_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,

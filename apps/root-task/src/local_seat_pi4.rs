@@ -589,6 +589,7 @@ pub(crate) struct UsbProbeRouteStatus {
     pub connected_mask: u32,
     pub detect_passes: usize,
     pub slow_recheck: bool,
+    pub diag_fresh: bool,
     pub diag_stage: Option<u16>,
     pub diag_tag: Option<&'static str>,
     pub diag_exact: Option<&'static str>,
@@ -2298,6 +2299,7 @@ pub(crate) fn latest_usb_probe_route_status() -> Option<UsbProbeRouteStatus> {
         connected_mask: summary.connected_mask,
         detect_passes: summary.detect_passes,
         slow_recheck: summary.slow_recheck,
+        diag_fresh: summary.diag_fresh,
         diag_stage,
         diag_tag: diag_stage.and_then(xhci_diag_stage_label),
         diag_exact: diag_stage.and_then(xhci_diag_stage_exact_issue_label),
@@ -2764,6 +2766,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x02da => Some("erstsz-publish-skip-preserve"),
         0x0310 => Some("erstba-publish-skip-preserve"),
         0x0311 => Some("erdp-publish-skip-preserve"),
+        0x0312 => Some("dcbaap-publish-skip-preserve"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -11666,6 +11669,42 @@ mod tests {
     }
 
     #[test]
+    fn latest_usb_probe_route_status_preserves_pathway_and_diag_freshness() {
+        let summary = UsbProbePathwaySummary {
+            progress: UsbProbePathProgress::RuntimeRingsPrepared,
+            outcome: UsbProbePathOutcome::DeferredPublish,
+            diag: XhciDiagSnapshot {
+                line_count: 1,
+                stage: 0x0311,
+                a: 0,
+                b: 0,
+                c: 0,
+            },
+            diag_fresh: true,
+            ..UsbProbePathwaySummary::new(
+                1,
+                2,
+                3,
+                "preserve-state",
+                "stop-state-preserve",
+                "preserve-controller-state",
+                "stop-state",
+                "stop-state-seed",
+                true,
+                true,
+                true,
+            )
+        };
+        super::remember_latest_usb_probe_route(&summary);
+        let route = super::latest_usb_probe_route_status().expect("route status must exist");
+        assert_eq!(route.route, "stop-state-preserve-fallback");
+        assert_eq!(route.pathway_idx, 1);
+        assert!(route.diag_fresh);
+        assert_eq!(route.diag_stage, Some(0x0311));
+        assert_eq!(route.diag_tag, Some("erdp-publish-skip-preserve"));
+    }
+
+    #[test]
     fn usb_probe_next_step_uses_reset_post_settle_after_skip_stop_revalidation() {
         let summary = UsbProbePathwaySummary {
             diag: XhciDiagSnapshot {
@@ -12406,6 +12445,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_label(0x0311),
             Some("erdp-publish-skip-preserve")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0312),
+            Some("dcbaap-publish-skip-preserve")
         );
         assert_eq!(xhci_diag_stage_label(0x0300), Some("cmd-submit"));
         assert_eq!(xhci_diag_stage_label(0x0301), Some("cmd-completion"));

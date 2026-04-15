@@ -255,6 +255,7 @@ fn startup_link_reply_failure_reason(reason: &str) -> bool {
         || reason == "cyw43-control-plane-linux-interrupts-deferred"
         || reason == "cyw43-control-plane-sideband-unreadable"
         || reason.starts_with("cyw43-control-plane-sideband-")
+        || reason == "cyw43-control-plane-startup-link-reply-timeout"
         || reason == "cyw43-control-plane-passive-startup-link-timeout"
 }
 
@@ -531,17 +532,19 @@ fn preserve_cyw43_init_failure_exact_error(
     snapshot_exact_error: Option<&'static str>,
 ) -> DriverError {
     match retry_err {
-        DriverError::Hal(HalError::Unsupported("cyw43-control-plane-no-reply-linux-f2-armed")) => {
+        DriverError::Hal(HalError::Unsupported(reason))
+            if matches!(
+                reason,
+                "cyw43-control-plane-no-reply-linux-f2-armed"
+                    | "cyw43-control-plane-startup-link-rescue-budget-exhausted"
+            ) =>
+        {
             if let Some(snapshot_exact_error) = snapshot_exact_error {
-                if !snapshot_exact_error.is_empty()
-                    && snapshot_exact_error != "cyw43-control-plane-no-reply-linux-f2-armed"
-                {
+                if !snapshot_exact_error.is_empty() && snapshot_exact_error != reason {
                     return DriverError::Hal(HalError::Unsupported(snapshot_exact_error));
                 }
             }
-            DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-no-reply-linux-f2-armed",
-            ))
+            DriverError::Hal(HalError::Unsupported(reason))
         }
         other => other,
     }
@@ -805,13 +808,16 @@ impl Cyw43NetDevice {
                     "[cyw43] init_control_plane hard-retry recovered action=replay-firmware-control-bootstrap"
                 );
             } else {
-                log_cyw43_init_failure(
+                let snapshot_exact_error = log_cyw43_init_failure(
                     "cyw43-init-control-plane-fail",
                     &mut device.state,
                     &err,
                     true,
                 );
-                return Err(err);
+                return Err(preserve_cyw43_init_failure_exact_error(
+                    err,
+                    snapshot_exact_error,
+                ));
             }
         }
         if defer_join_completion {
@@ -2386,6 +2392,17 @@ mod tests {
         );
         assert_eq!(
             control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
+                true,
+                true,
+                SDIO_DATA_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-startup-link-reply-timeout"
+                )),
+            ),
+            Some(SDIO_STARTUP_CLOCK_HZ)
+        );
+        assert_eq!(
+            control_plane_retry_after_startup_link_reply_failure_target_clock_hz(
                 false,
                 true,
                 SDIO_DATA_CLOCK_HZ,
@@ -2617,6 +2634,19 @@ mod tests {
                 ),
             ),
             DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout"))
+        );
+        assert_eq!(
+            preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-startup-link-rescue-budget-exhausted",
+                )),
+                Some(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                ),
+            ),
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+            ))
         );
     }
 

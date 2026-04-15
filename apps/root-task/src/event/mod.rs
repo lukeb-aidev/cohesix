@@ -2088,6 +2088,8 @@ where
             Ok(snapshot) => {
                 if let Some(snapshot) = snapshot {
                     self.emit_wifi_snapshot(&snapshot);
+                    #[cfg(feature = "net-console")]
+                    self.emit_wifi_network_status();
                 }
                 self.emit_wifi_debug_status(subcommand, "complete", profile, Some("result=ok"));
                 self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
@@ -2322,8 +2324,9 @@ where
             ));
             self.emit_console_line(route_line.as_str());
             let mut progress_line = format_message(format_args!(
-                "usb: golden_path outcome={} progress={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} detect_passes={}",
+                "usb: golden_path outcome={} pathway={} progress={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} detect_passes={}",
                 route.outcome,
+                route.pathway_idx,
                 route.progress,
                 route.policy,
                 if route.prefer_high { "high" } else { "low" },
@@ -2344,6 +2347,11 @@ where
             }
             if let Some(stage) = route.diag_stage {
                 let _ = write!(progress_line, " diag_stage=0x{stage:04x}");
+                let _ = write!(
+                    progress_line,
+                    " diag_fresh={}",
+                    if route.diag_fresh { "yes" } else { "no" }
+                );
                 if let Some(tag) = route.diag_tag {
                     let _ = write!(progress_line, " diag_tag={tag}");
                 }
@@ -2523,6 +2531,25 @@ where
             },
         ));
         self.emit_console_line(bootstrap.as_str());
+        let replay_full_bootstrap = if snapshot.control_plane_exact_error.is_empty() {
+            "n/a"
+        } else if crate::net::cyw43_control_plane_bootstrap_replay_reason(
+            snapshot.control_plane_exact_error,
+        ) {
+            "yes"
+        } else {
+            "no"
+        };
+        let snapshot_meta = format_message(format_args!(
+            "wifi: snapshot source={} stage={} rescue={}/{} passive_limit={} replay_full_bootstrap={}",
+            snapshot.debug_snapshot_source,
+            snapshot.debug_snapshot_stage,
+            snapshot.control_plane_startup_link_rescue_cycles,
+            snapshot.control_plane_startup_link_rescue_limit,
+            snapshot.control_plane_passive_startup_link_empty_poll_limit,
+            replay_full_bootstrap,
+        ));
+        self.emit_console_line(snapshot_meta.as_str());
 
         let (verdict, focus) = Self::wifi_capture_verdict(snapshot);
         let golden_route = format_message(format_args!(
@@ -2554,6 +2581,32 @@ where
             snapshot.control_plane_bootstrap_phase,
         ));
         self.emit_console_line(verdict_line.as_str());
+    }
+
+    #[cfg(feature = "net-console")]
+    fn emit_wifi_network_status(&mut self) {
+        let Some(net) = self.net.as_ref() else {
+            return;
+        };
+        let status = net.status_report();
+        let wifi_relevant = matches!(status.interface_policy, "wifi" | "auto")
+            || status.active_interface == "wifi"
+            || status.standby_interface == "wifi"
+            || status.address_source.starts_with("wifi-");
+        if !wifi_relevant {
+            return;
+        }
+        let line = format_message(format_args!(
+            "wifi: net backend={} mode={} policy={} active={} standby={} address_source={} dhcp_phase={}",
+            status.backend,
+            status.mode,
+            status.interface_policy,
+            status.active_interface,
+            status.standby_interface,
+            status.address_source,
+            status.dhcp_phase,
+        ));
+        self.emit_console_line(line.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -5284,6 +5337,11 @@ mod tests {
                     control_plane_startup_profile_locked: true,
                     control_plane_startup_profile_reason: "promoted-io-unstable",
                     control_plane_promoted_probe_pending: false,
+                    debug_snapshot_source: "cached",
+                    debug_snapshot_stage: "control-plane-startup-link-rearm-stalled",
+                    control_plane_startup_link_rescue_cycles: 1,
+                    control_plane_startup_link_rescue_limit: 2,
+                    control_plane_passive_startup_link_empty_poll_limit: 8,
                     control_plane_f2_state: "latched-linux-configured-no-iorx",
                     control_plane_sdhci_read_diag: "f1-reply-read-command-phase-no-data-active",
                     control_plane_exact_error: "cyw43-control-plane-sideband-command-stall",
@@ -5903,6 +5961,12 @@ mod tests {
         );
         assert!(
             rendered.contains(
+                "wifi: snapshot source=cached stage=control-plane-startup-link-rearm-stalled rescue=1/2 passive_limit=8 replay_full_bootstrap=yes"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
                 "wifi: golden_path route=strict-then-bounded-no-ht state=fallback-no-ht transport=bounded-no-ht current=function1-sideband next=first-function2-reply focus=function1-sideband verdict=function1-sideband-edge"
             ),
             "{rendered}"
@@ -6070,6 +6134,11 @@ mod tests {
             control_plane_startup_profile_locked: true,
             control_plane_startup_profile_reason: "promoted-io-unstable",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "control-plane-passive-startup-link-timeout",
+            control_plane_startup_link_rescue_cycles: 0,
+            control_plane_startup_link_rescue_limit: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 16,
             control_plane_f2_state: "latched-linux-configured-no-iorx",
             control_plane_sdhci_read_diag: "f2-reply-read-data-wait",
             control_plane_exact_error: "cyw43-control-plane-pure-f2-startup-link-no-reply",
@@ -6120,6 +6189,11 @@ mod tests {
             control_plane_startup_profile_locked: true,
             control_plane_startup_profile_reason: "",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "control-plane-startup-link-rearm-stalled",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 8,
             control_plane_f2_state: "latched-no-iorx",
             control_plane_sdhci_read_diag: "f2-reply-read-stalled-no-buffer-ready",
             control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
@@ -6178,6 +6252,11 @@ mod tests {
             control_plane_startup_profile_locked: false,
             control_plane_startup_profile_reason: "none",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "live",
+            debug_snapshot_stage: "console-dump-state",
+            control_plane_startup_link_rescue_cycles: 0,
+            control_plane_startup_link_rescue_limit: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 16,
             control_plane_f2_state: "unproven",
             control_plane_sdhci_read_diag: "f1-reply-read-command-timeout",
             control_plane_exact_error: "cyw43-control-plane-sideband-command-timeout",
@@ -6228,6 +6307,11 @@ mod tests {
             control_plane_startup_profile_locked: true,
             control_plane_startup_profile_reason: "ht-not-ready",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "control-plane-startup-link-rearm-stalled",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 8,
             control_plane_f2_state: "latched-linux-configured-no-iorx",
             control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
             control_plane_exact_error:
@@ -6287,6 +6371,11 @@ mod tests {
             control_plane_startup_profile_locked: true,
             control_plane_startup_profile_reason: "",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "control-plane-startup-link-rearm-stalled",
+            control_plane_startup_link_rescue_cycles: 2,
+            control_plane_startup_link_rescue_limit: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 4,
             control_plane_f2_state: "latched-linux-configured-no-iorx",
             control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
             control_plane_exact_error: "",
@@ -6337,6 +6426,11 @@ mod tests {
             control_plane_startup_profile_locked: false,
             control_plane_startup_profile_reason: "none",
             control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "live",
+            debug_snapshot_stage: "console-dump-state",
+            control_plane_startup_link_rescue_cycles: 0,
+            control_plane_startup_link_rescue_limit: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 16,
             control_plane_f2_state: "unproven",
             control_plane_sdhci_read_diag: "f1-reply-read-command-timeout",
             control_plane_exact_error: "cyw43-control-plane-sideband-command-timeout",
@@ -6412,6 +6506,52 @@ mod tests {
             .iter()
             .any(|line| line.contains("OK WIFI detail=subcommand=probe-ht")));
         assert_eq!(wifi.calls.as_slice(), &["probe-ht", "dump-state"]);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_debug_command_reports_wifi_network_phase() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        let mut net = FakeNet::new();
+        net.status = NetStatusReport {
+            backend: "bcmgenet-v5",
+            mode: "dhcp",
+            interface_policy: "wifi",
+            active_interface: "wifi",
+            standby_interface: "wired",
+            address_source: "wifi-associating",
+            ip: HeaplessString::new(),
+            gateway: HeaplessString::new(),
+            dhcp_phase: "associating",
+        };
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_network(&mut net);
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi dump-state\n");
+        pump.poll();
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "wifi: net backend=bcmgenet-v5 mode=dhcp policy=wifi active=wifi standby=wired address_source=wifi-associating dhcp_phase=associating"
+            ),
+            "{rendered}"
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
