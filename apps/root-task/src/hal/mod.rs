@@ -427,9 +427,10 @@ impl From<seL4_Error> for HalError {
     }
 }
 
-/// Trait implemented by hardware providers used inside the VM.
+/// Core device-memory contract implemented by hardware providers used inside
+/// the VM.
 #[cfg(feature = "kernel")]
-pub trait Hardware {
+pub trait DeviceHal {
     /// Error type emitted by the hardware provider.
     type Error;
 
@@ -473,7 +474,11 @@ pub trait Hardware {
 
     /// Snapshot of allocator usage for debugging.
     fn snapshot(&self) -> KernelEnvSnapshot;
+}
 
+/// PCI capability layer for platforms that expose discoverable PCI/MMIO BARs.
+#[cfg(feature = "kernel")]
+pub trait PciHal: DeviceHal {
     /// Returns the discovered PCI topology for the platform when available.
     fn pci_topology(&self) -> Option<&PciTopology>;
 
@@ -483,15 +488,34 @@ pub trait Hardware {
         addr: PciAddress,
         bar_index: u8,
         perms: MapPerms,
-    ) -> Result<MappedRegion, Self::Error>;
+    ) -> Result<MappedRegion, Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        let _ = addr;
+        let _ = bar_index;
+        let _ = perms;
+        Err(HalError::NoPci.into())
+    }
 
     /// Configures the PCI command register for the supplied device.
     fn configure_pci_device(
         &mut self,
         addr: PciAddress,
         command_flags: PciCommandFlags,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<(), Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        let _ = addr;
+        let _ = command_flags;
+        Err(HalError::NoPci.into())
+    }
+}
 
+/// CYW43-over-SDIO capability layer used by the Pi 4 Wi-Fi transport.
+#[cfg(feature = "kernel")]
+pub trait Cyw43Hal: DeviceHal {
     /// Returns the firmware assets required for the Pi 4 Wi-Fi path.
     fn wifi_firmware_bundle(&self) -> Result<WifiFirmwareBundle<'static>, Self::Error>
     where
@@ -597,6 +621,16 @@ pub trait Hardware {
     }
 }
 
+/// Compatibility façade for callers that still need the current full HAL
+/// surface. New code should prefer the narrowest capability trait it needs:
+/// [`DeviceHal`] for generic MMIO/DMA access, [`PciHal`] for PCI-backed
+/// devices, and [`Cyw43Hal`] for the Pi 4 CYW43 transport path.
+#[cfg(feature = "kernel")]
+pub trait Hardware: PciHal + Cyw43Hal {}
+
+#[cfg(feature = "kernel")]
+impl<T> Hardware for T where T: PciHal + Cyw43Hal {}
+
 /// seL4-backed hardware provider that owns the [`KernelEnv`].
 #[cfg(feature = "kernel")]
 pub struct KernelHal<'a> {
@@ -697,7 +731,7 @@ impl WifiDebugOps for KernelWifiDebugHandle {
 }
 
 #[cfg(feature = "kernel")]
-impl<'a> Hardware for KernelHal<'a> {
+impl<'a> DeviceHal for KernelHal<'a> {
     type Error = HalError;
 
     fn map_device(&mut self, paddr: usize) -> Result<DeviceFrame, Self::Error> {
@@ -739,28 +773,17 @@ impl<'a> Hardware for KernelHal<'a> {
     fn snapshot(&self) -> KernelEnvSnapshot {
         self.env.snapshot()
     }
+}
 
+#[cfg(feature = "kernel")]
+impl<'a> PciHal for KernelHal<'a> {
     fn pci_topology(&self) -> Option<&PciTopology> {
         None
     }
+}
 
-    fn map_pci_bar(
-        &mut self,
-        _addr: PciAddress,
-        _bar_index: u8,
-        _perms: MapPerms,
-    ) -> Result<MappedRegion, Self::Error> {
-        Err(HalError::NoPci)
-    }
-
-    fn configure_pci_device(
-        &mut self,
-        _addr: PciAddress,
-        _command_flags: PciCommandFlags,
-    ) -> Result<(), Self::Error> {
-        Err(HalError::NoPci)
-    }
-
+#[cfg(feature = "kernel")]
+impl<'a> Cyw43Hal for KernelHal<'a> {
     fn wifi_firmware_bundle(&self) -> Result<WifiFirmwareBundle<'static>, Self::Error> {
         Ok(self
             .pi4_wifi

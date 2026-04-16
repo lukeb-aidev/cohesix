@@ -5961,7 +5961,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: snapshot source=cached stage=control-plane-startup-link-rearm-stalled rescue=1/2 passive_limit=8 replay_full_bootstrap=yes"
+                "wifi: snapshot source=cached stage=control-plane-startup-link-rearm-stalled rescue=1/2 passive_limit=4 replay_full_bootstrap=no"
             ),
             "{rendered}"
         );

@@ -42,7 +42,7 @@ use crate::debug::watched_write_bytes;
 use crate::guards;
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::dma::{self, PinnedDmaRange};
-use crate::hal::{HalError, Hardware};
+use crate::hal::{DeviceHal, HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetStage, CONSOLE_TCP_PORT,
     NET_DIAG, NET_STAGE,
@@ -2424,7 +2424,7 @@ impl VirtioNet {
     /// Create a new driver instance by probing the virtio MMIO slots.
     pub fn new<H>(hal: &mut H) -> Result<Self, DriverError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         Self::new_with_stage(hal, NET_STAGE)
     }
@@ -2432,7 +2432,7 @@ impl VirtioNet {
     /// Create a new driver instance for the requested bring-up stage.
     pub fn new_with_stage<H>(hal: &mut H, stage: NetStage) -> Result<Self, DriverError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         #[cfg(debug_assertions)]
         if !VIRTIO_NET_SIZE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
@@ -9271,7 +9271,7 @@ struct VirtioRegs {
 impl VirtioRegs {
     fn probe<H>(hal: &mut H) -> Result<Self, DriverError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         for slot in 0..VIRTIO_MMIO_SLOTS {
             let base = VIRTIO_MMIO_BASE + slot * VIRTIO_MMIO_STRIDE;

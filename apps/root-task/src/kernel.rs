@@ -58,7 +58,7 @@ use crate::event::{
 };
 use crate::generated;
 use crate::guards;
-use crate::hal::{HalError, Hardware, KernelHal};
+use crate::hal::{DeviceHal, HalError, KernelHal};
 use crate::local_seat::{self, LocalSeatInit};
 #[cfg(all(feature = "net-console", feature = "kernel"))]
 use crate::net::{DefaultNetStack as NetStack, CONSOLE_TCP_PORT};

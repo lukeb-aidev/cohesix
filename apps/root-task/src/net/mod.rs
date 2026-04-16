@@ -65,18 +65,12 @@ pub const AUTH_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 /// Number of console lines retained between pump cycles.
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;
 
-pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(reason: &str) -> bool {
-    reason.starts_with("cyw43-function2-enable-latched-not-ready")
-        || reason == "cyw43-control-plane-no-reply-linux-f2-armed"
-        || reason == "cyw43-control-plane-linux-interrupts-deferred"
-        || reason == "cyw43-control-plane-sideband-unreadable"
-        || reason.starts_with("cyw43-control-plane-sideband-")
-        || matches!(
-            reason,
-            "cyw43-control-plane-passive-startup-link-timeout"
-                | "cyw43-control-plane-startup-link-reply-timeout"
-                | "cyw43-control-plane-pure-f2-startup-link-no-reply"
-        )
+pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(_reason: &str) -> bool {
+    // The bounded startup-link / sideband recovery ladder already retries
+    // the current first-reply family in HAL and the driver. Replaying the full
+    // firmware/bootstrap path here only repeats the same slow failure while
+    // hiding the preserved blocker, so keep the bootstrap replay gate closed.
+    false
 }
 
 #[must_use]
@@ -1017,18 +1011,24 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn cyw43_control_plane_bootstrap_replay_reason_excludes_rescue_budget_exhaustion() {
-        assert!(cyw43_control_plane_bootstrap_replay_reason(
+    fn cyw43_control_plane_bootstrap_replay_reason_stays_closed_for_first_reply_failures() {
+        assert!(!cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-control-plane-pure-f2-startup-link-no-reply"
         ));
-        assert!(cyw43_control_plane_bootstrap_replay_reason(
+        assert!(!cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
         ));
-        assert!(cyw43_control_plane_bootstrap_replay_reason(
+        assert!(!cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
         ));
-        assert!(cyw43_control_plane_bootstrap_replay_reason(
+        assert!(!cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-control-plane-no-reply-linux-f2-armed"
+        ));
+        assert!(!cyw43_control_plane_bootstrap_replay_reason(
+            "cyw43-control-plane-startup-link-reply-timeout"
+        ));
+        assert!(!cyw43_control_plane_bootstrap_replay_reason(
+            "cyw43-control-plane-passive-startup-link-timeout"
         ));
         assert!(!cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-control-plane-startup-link-rescue-budget-exhausted"

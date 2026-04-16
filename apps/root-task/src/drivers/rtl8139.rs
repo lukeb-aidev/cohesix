@@ -21,7 +21,7 @@ use smoltcp::wire::EthernetAddress;
 
 use crate::debug::{watched_copy_nonoverlapping, watched_write_bytes};
 use crate::hal::pci::{PciBarKind, PciDeviceInfo};
-use crate::hal::{HalError, Hardware, MapPerms, MappedRegion, PciCommandFlags};
+use crate::hal::{HalError, Hardware, MapPerms, MappedRegion, PciCommandFlags, PciHal};
 use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError};
 use crate::sel4::RamFrame;
 
@@ -96,7 +96,7 @@ pub struct TxToken<'a> {
 impl Rtl8139Device {
     pub fn new<H>(hal: &mut H) -> Result<Self, DriverError>
     where
-        H: Hardware<Error = HalError>,
+        H: PciHal<Error = HalError>,
     {
         info!("[rtl8139] probing HAL PCI topology for RTL8139");
         let device_info = Self::locate_pci_device(hal)?;
@@ -158,7 +158,7 @@ impl Rtl8139Device {
 
     fn locate_pci_device<H>(hal: &mut H) -> Result<PciDeviceInfo, DriverError>
     where
-        H: Hardware<Error = HalError>,
+        H: PciHal<Error = HalError>,
     {
         let topology = hal.pci_topology().ok_or(HalError::NoPci)?;
         topology

@@ -26,6 +26,7 @@ Non-goals:
 - Host tooling (`cohsh`, `coh`, `swarmui`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`) is outside the TCB and interacts only through Secure9P or the console.
 - The only in-VM TCP listener is the root-task console; all other TCP services remain host-only.
 - Device access (MMIO, DMA, cache ops) goes through the HAL; no direct MMIO outside HAL.
+- The HAL is capability-layered rather than board-layered: generic MMIO/DMA access lives in `DeviceHal`, PCI-backed discovery/configuration lives in `PciHal`, and the Pi 4 CYW43-over-SDIO bring-up path lives in `Cyw43Hal`. The compatibility `Hardware` façade remains for call sites that still span multiple backends, but drivers are expected to depend on the narrowest HAL layer they actually need.
 
 ## 2.1 SMP Execution Model (Task Isolation)
 - SMP is enabled only when the seL4 kernel is built with `SMP=ON` and `KernelMaxNumNodes >= 2`.

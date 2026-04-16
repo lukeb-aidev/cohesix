@@ -27,7 +27,7 @@ use usb_oxide::{
 };
 
 use crate::bootstrap::log as boot_log;
-use crate::hal::{dma, pi4_wifi, HalError, Hardware, KernelHal};
+use crate::hal::{dma, pi4_wifi, DeviceHal, HalError, KernelHal};
 use crate::local_seat::{LocalSeatXhciCapabilitySnapshot, LocalSeatXhciStopStateSnapshot};
 
 const PAGE_SIZE: usize = 4096;
@@ -2488,6 +2488,11 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x02c3 => Some("pre-run-erstsz-store-wedged"),
         0x02c6 => Some("pre-run-erstba-low-store-wedged"),
         0x02c8 => Some("pre-run-erstba-high-store-wedged"),
+        0x0269 => Some("pre-run-usbsts-clear-write-wedged"),
+        0x0267 => Some("post-ready-imod-write-wedged"),
+        0x0268 => Some("post-ready-iman-write-wedged"),
+        0x0256 => Some("pre-run-dnctrl-write-wedged"),
+        0x02d8 => Some("post-run-dnctrl-write-wedged"),
         0x02eb => Some("usbcmd-run-barrier-wedged"),
         0x02e9 => Some("usbcmd-run-store-wedged"),
         _ => None,
@@ -2767,6 +2772,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0310 => Some("erstba-publish-skip-preserve"),
         0x0311 => Some("erdp-publish-skip-preserve"),
         0x0312 => Some("dcbaap-publish-skip-preserve"),
+        0x0313 => Some("crcr-publish-skip-preserve"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -12450,6 +12456,10 @@ mod tests {
             xhci_diag_stage_label(0x0312),
             Some("dcbaap-publish-skip-preserve")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x0313),
+            Some("crcr-publish-skip-preserve")
+        );
         assert_eq!(xhci_diag_stage_label(0x0300), Some("cmd-submit"));
         assert_eq!(xhci_diag_stage_label(0x0301), Some("cmd-completion"));
         assert_eq!(xhci_diag_stage_label(0x0302), Some("cmd-fail"));
@@ -12540,6 +12550,26 @@ mod tests {
         assert_eq!(
             super::xhci_diag_stage_exact_issue_label(0x02c8),
             Some("pre-run-erstba-high-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0269),
+            Some("pre-run-usbsts-clear-write-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0267),
+            Some("post-ready-imod-write-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0268),
+            Some("post-ready-iman-write-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0256),
+            Some("pre-run-dnctrl-write-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x02d8),
+            Some("post-run-dnctrl-write-wedged")
         );
         assert_eq!(super::xhci_diag_stage_exact_issue_label(0x0214), None);
     }

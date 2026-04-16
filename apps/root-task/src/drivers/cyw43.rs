@@ -16,7 +16,7 @@ use smoltcp::wire::EthernetAddress;
 
 use crate::hal::pi4_wifi::Pi4WifiState;
 use crate::hal::{
-    HalError, Hardware, SdioBusWidth, SdioFunction, WifiFirmwareBundle, WifiPowerState,
+    Cyw43Hal, HalError, Hardware, SdioBusWidth, SdioFunction, WifiFirmwareBundle, WifiPowerState,
     WifiResetState,
 };
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -43,14 +43,14 @@ const FRAME_BUF_LEN: usize = 2048;
 const CONTROL_RESPONSE_BUF_LEN: usize = 512;
 const CLM_CHUNK_SIZE: usize = 1024;
 const IOCTL_WAIT_LOOPS: usize = 8_000;
-// Linux brcmfmac waits up to 2500 ms for an SDIO control response.
-// Keep that full grace window only for the first passive startup-link wait.
-// If recovery has already bounced through one or more startup-link rescue
-// cycles without reply progress, ratchet the wait budget down sharply so boot
-// no longer burns the same Linux-sized timeout on every no-progress retry.
-const IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED: usize = 2_500_000;
-const IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE: usize = 250_000;
-const IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT: usize = 64_000;
+// The bounded startup-link lane now preserves the exact blocker end-to-end, so
+// long ioctl waits only stretch a known failure. Keep one short startup-link
+// window, then collapse rescue, repeat-no-progress, and the final bounded
+// probe aggressively.
+const IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED: usize = 32_000;
+const IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE: usize = 8_000;
+const IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT: usize = 2_000;
+const IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED: usize = 1_000;
 const JOIN_WAIT_LOOPS: usize = 64_000;
 const DEFERRED_JOIN_FRAME_BUDGET: usize = 8;
 const DEFERRED_JOIN_POLL_LIMIT: u16 = 1_200;
@@ -257,6 +257,19 @@ fn startup_link_reply_failure_reason(reason: &str) -> bool {
         || reason.starts_with("cyw43-control-plane-sideband-")
         || reason == "cyw43-control-plane-startup-link-reply-timeout"
         || reason == "cyw43-control-plane-passive-startup-link-timeout"
+}
+
+#[inline]
+fn startup_link_ioctl_timeout_preserved_exact_error(
+    startup_link_stabilized: bool,
+    _control_plane_probe_pending: bool,
+    preserved_exact_error: Option<&'static str>,
+) -> Option<&'static str> {
+    if startup_link_stabilized {
+        preserved_exact_error.filter(|reason| startup_link_reply_failure_reason(reason))
+    } else {
+        None
+    }
 }
 
 #[inline]
@@ -644,7 +657,7 @@ pub struct TxToken<'a> {
 impl Cyw43NetDevice {
     pub fn new<H>(hal: &mut H, config: &ConsoleNetConfig) -> Result<Self, DriverError>
     where
-        H: Hardware<Error = HalError>,
+        H: Cyw43Hal<Error = HalError>,
     {
         let credentials = config
             .wifi_credentials
@@ -1515,7 +1528,12 @@ impl Cyw43NetDevice {
         let startup_link_stabilized = self.state.cyw43_control_plane_startup_link_stabilized();
         let startup_link_rescue_cycles =
             self.state.cyw43_control_plane_startup_link_rescue_cycles();
-        let wait_budget = ioctl_wait_loops(startup_link_stabilized, startup_link_rescue_cycles);
+        let control_plane_probe_pending = self.state.cyw43_control_plane_probe_pending();
+        let wait_budget = ioctl_wait_loops(
+            startup_link_stabilized,
+            startup_link_rescue_cycles,
+            control_plane_probe_pending,
+        );
         for _ in 0..wait_budget {
             match self.process_next_frame(false) {
                 Err(err) => {
@@ -1561,11 +1579,16 @@ impl Cyw43NetDevice {
             }
             spin_loop();
         }
+        let preserved_exact_error = startup_link_ioctl_timeout_preserved_exact_error(
+            startup_link_stabilized,
+            control_plane_probe_pending,
+            self.state.cyw43_cached_control_plane_exact_error(),
+        );
         let (reply_mode, reply_attempts, reply_empty_polls, promoted_probe_pending) =
             self.state.cyw43_control_plane_reply_rearm_diag();
         let credit_ready = self.has_credit();
         warn!(
-            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} startup_link_stabilized={} startup_link_rescue_cycles={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={}",
+            "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} startup_link_stabilized={} startup_link_rescue_cycles={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={} preserved_exact_error={}",
             cmd,
             expected_id,
             self.sdpcm_seq,
@@ -1581,10 +1604,13 @@ impl Cyw43NetDevice {
             self.state.cyw43_experimental_no_ht_transport(),
             self.state.cyw43_control_plane_write_chunk_limit(),
             self.state.cyw43_control_plane_reply_chunk_limit(),
+            preserved_exact_error.unwrap_or("none"),
         );
         self.log_pending_ioctl_frame("ioctl-timeout");
         self.state.log_cyw43_control_plane_snapshot("ioctl-timeout");
-        Err(DriverError::Protocol("ioctl-timeout"))
+        Err(DriverError::Protocol(
+            preserved_exact_error.unwrap_or("ioctl-timeout"),
+        ))
     }
 
     fn log_pending_ioctl_frame(&self, stage: &'static str) {
@@ -2076,8 +2102,14 @@ const fn initial_control_plane_bootstrap_policy_label(
 }
 
 #[inline]
-const fn ioctl_wait_loops(startup_link_stabilized: bool, startup_link_rescue_cycles: u8) -> usize {
-    if startup_link_stabilized {
+const fn ioctl_wait_loops(
+    startup_link_stabilized: bool,
+    startup_link_rescue_cycles: u8,
+    control_plane_probe_pending: bool,
+) -> usize {
+    if startup_link_stabilized && !control_plane_probe_pending {
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED
+    } else if startup_link_stabilized {
         startup_link_rescue_wait_loops(startup_link_rescue_cycles)
     } else {
         IOCTL_WAIT_LOOPS
@@ -2415,15 +2447,30 @@ mod tests {
     }
 
     #[test]
-    fn control_plane_bootstrap_replay_retry_only_triggers_for_bootstrap_failures() {
-        assert!(control_plane_bootstrap_needs_full_replay_retry(
+    fn control_plane_bootstrap_replay_retry_stays_closed_for_first_reply_failures() {
+        assert!(!control_plane_bootstrap_needs_full_replay_retry(
             &DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-pure-f2-startup-link-no-reply"
             ))
         ));
-        assert!(control_plane_bootstrap_needs_full_replay_retry(
+        assert!(!control_plane_bootstrap_needs_full_replay_retry(
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
+            ))
+        ));
+        assert!(!control_plane_bootstrap_needs_full_replay_retry(
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
+            ))
+        ));
+        assert!(!control_plane_bootstrap_needs_full_replay_retry(
             &DriverError::Hal(HalError::Unsupported(
                 "cyw43-control-plane-startup-link-reply-timeout"
+            ))
+        ));
+        assert!(!control_plane_bootstrap_needs_full_replay_retry(
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-passive-startup-link-timeout"
             ))
         ));
         assert!(!control_plane_bootstrap_needs_full_replay_retry(
@@ -2735,31 +2782,87 @@ mod tests {
 
     #[test]
     fn ioctl_wait_budget_is_fixed_for_strict_path() {
-        assert_eq!(ioctl_wait_loops(false, 0), IOCTL_WAIT_LOOPS);
-        assert_eq!(ioctl_wait_loops(false, 3), IOCTL_WAIT_LOOPS);
+        assert_eq!(ioctl_wait_loops(false, 0, true), IOCTL_WAIT_LOOPS);
+        assert_eq!(ioctl_wait_loops(false, 3, false), IOCTL_WAIT_LOOPS);
     }
 
     #[test]
-    fn ioctl_wait_budget_keeps_linux_sized_first_startup_link_window() {
+    fn ioctl_wait_budget_keeps_short_first_startup_link_window() {
         assert_eq!(
-            ioctl_wait_loops(true, 0),
+            ioctl_wait_loops(true, 0, true),
             IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED
         );
+        assert_eq!(IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, 32_000);
     }
 
     #[test]
     fn ioctl_wait_budget_ratchets_down_after_startup_link_rescues() {
         assert_eq!(
-            ioctl_wait_loops(true, 1),
+            ioctl_wait_loops(true, 1, true),
             IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE
         );
         assert_eq!(
-            ioctl_wait_loops(true, 2),
+            ioctl_wait_loops(true, 2, true),
             IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT
         );
         assert_eq!(
-            ioctl_wait_loops(true, u8::MAX),
+            ioctl_wait_loops(true, u8::MAX, true),
             IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT
+        );
+        assert_eq!(IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE, 8_000);
+        assert_eq!(IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, 2_000);
+    }
+
+    #[test]
+    fn ioctl_wait_budget_collapses_once_the_final_bounded_probe_is_armed() {
+        assert_eq!(
+            ioctl_wait_loops(true, 0, false),
+            IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED
+        );
+        assert_eq!(
+            ioctl_wait_loops(true, 2, false),
+            IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED
+        );
+        assert_eq!(IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, 1_000);
+    }
+
+    #[test]
+    fn startup_link_ioctl_timeout_preserves_cached_exact_error_only_for_known_blockers() {
+        assert_eq!(
+            startup_link_ioctl_timeout_preserved_exact_error(
+                true,
+                true,
+                Some("cyw43-control-plane-sideband-read-stall-no-buffer-ready"),
+            ),
+            Some("cyw43-control-plane-sideband-read-stall-no-buffer-ready")
+        );
+        assert_eq!(
+            startup_link_ioctl_timeout_preserved_exact_error(
+                true,
+                true,
+                Some("cyw43-function2-enable-latched-not-ready"),
+            ),
+            Some("cyw43-function2-enable-latched-not-ready")
+        );
+        assert_eq!(
+            startup_link_ioctl_timeout_preserved_exact_error(true, true, Some("ioctl-timeout")),
+            None
+        );
+        assert_eq!(
+            startup_link_ioctl_timeout_preserved_exact_error(
+                true,
+                false,
+                Some("cyw43-control-plane-sideband-read-stall-no-buffer-ready"),
+            ),
+            None
+        );
+        assert_eq!(
+            startup_link_ioctl_timeout_preserved_exact_error(
+                false,
+                true,
+                Some("cyw43-control-plane-sideband-read-stall-no-buffer-ready"),
+            ),
+            None
         );
     }
 }

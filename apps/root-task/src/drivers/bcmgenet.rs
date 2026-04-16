@@ -29,7 +29,7 @@ use smoltcp::wire::EthernetAddress;
     feature = "cache-maintenance"
 ))]
 use crate::hal::cache::{cache_clean, cache_invalidate};
-use crate::hal::{HalError, Hardware};
+use crate::hal::{DeviceHal, HalError};
 use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError};
 #[cfg(any(
     all(feature = "kernel", target_os = "none"),
@@ -320,7 +320,7 @@ pub struct TxToken<'a> {
 impl BcmGenetDevice {
     pub fn new<H>(hal: &mut H) -> Result<Self, DriverError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         let (mmio_base, regs) = Self::map_registers(hal)?;
         let dma_attr = if BCMGENET_DMA_UNCACHED {
@@ -484,7 +484,7 @@ impl BcmGenetDevice {
         hal: &mut H,
     ) -> Result<(usize, HeaplessVec<DeviceFrame, MMIO_PAGE_COUNT>), DriverError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         for candidate in GENET_MMIO_CANDIDATES {
             if !Self::candidate_covered(hal, candidate) {
@@ -538,7 +538,7 @@ impl BcmGenetDevice {
 
     fn candidate_covered<H>(hal: &H, base: usize) -> bool
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         for page in 0..MMIO_PAGE_COUNT {
             let Some(offset) = page.checked_mul(PAGE_SIZE) else {

@@ -12,7 +12,7 @@ use core::ptr;
 use core::sync::atomic::{fence, Ordering};
 
 use super::{
-    HalError, Hardware, SdioBusWidth, SdioFunction, WifiDebugSnapshot, WifiFirmwareBundle,
+    DeviceHal, HalError, SdioBusWidth, SdioFunction, WifiDebugSnapshot, WifiFirmwareBundle,
     WifiPowerState, WifiResetState,
 };
 use crate::bootstrap::log as boot_log;
@@ -134,7 +134,7 @@ fn pinned_mailbox_request_page<H>(
     alloc_action: &str,
 ) -> Result<MappedRegs, HalError>
 where
-    H: Hardware<Error = HalError>,
+    H: DeviceHal<Error = HalError>,
 {
     let mut shared_request = slot.lock();
     if let Some(frame) = shared_request.as_ref() {
@@ -168,7 +168,7 @@ struct GpioBank {
 impl GpioBank {
     fn new<H>(hal: &mut H) -> Result<Self, HalError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         let regs = if let Some(regs) = cloned_pinned_regs(&PINNED_GPIO_REGS) {
             regs
@@ -951,18 +951,51 @@ const fn control_plane_startup_link_timeout_needs_slow_link_resume(
 }
 
 #[inline]
+fn startup_link_known_first_reply_blocker(reason: &str) -> bool {
+    reason.starts_with("cyw43-control-plane-sideband-")
+        || reason.starts_with("cyw43-function2-enable-latched-not-ready")
+        || reason == "cyw43-control-plane-no-reply-linux-f2-armed"
+}
+
+#[inline]
 fn control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
     rescue_cycles: u8,
     err: &HalError,
+    preserved_exact_error: Option<&'static str>,
 ) -> bool {
     rescue_cycles > 0
-        && matches!(
-            err,
-            HalError::Unsupported(reason)
-                if reason.starts_with("cyw43-control-plane-sideband-")
-                    || reason.starts_with("cyw43-function2-enable-latched-not-ready")
-                    || *reason == "cyw43-control-plane-no-reply-linux-f2-armed"
-        )
+        && match err {
+            HalError::Unsupported(reason) if startup_link_known_first_reply_blocker(reason) => true,
+            HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout")
+            | HalError::Unsupported("sdio-function2-ready-timeout")
+            | HalError::Unsupported("cyw43-control-plane-passive-startup-link-timeout") => {
+                preserved_exact_error.is_some_and(startup_link_known_first_reply_blocker)
+            }
+            _ => false,
+        }
+}
+
+#[inline]
+fn repeat_no_progress_cutover_prefers_passive_startup_link(
+    reason: &'static str,
+    rescue_cycles: u8,
+) -> bool {
+    reason == "repeat-no-progress"
+        && super::control_plane_startup_link_rescue_budget_exhausted(rescue_cycles)
+}
+
+#[inline]
+const fn repeat_no_progress_cutover_cycle(rescue_cycles: u8) -> u8 {
+    rescue_cycles.saturating_add(1)
+}
+
+#[inline]
+fn passive_startup_link_timeout_should_fail_after_final_bounded_probe(
+    rescue_cycles: u8,
+    exact_error: &'static str,
+) -> bool {
+    super::control_plane_startup_link_rescue_budget_exhausted(rescue_cycles)
+        && startup_link_known_first_reply_blocker(exact_error)
 }
 
 #[inline]
@@ -989,7 +1022,7 @@ const fn experimental_control_plane_reply_rearm_default_attempt_limit() -> usize
 
 #[inline]
 const fn experimental_control_plane_reply_rearm_resume_attempt_limit() -> usize {
-    2
+    1
 }
 
 #[inline]
@@ -1004,7 +1037,7 @@ const fn experimental_control_plane_reply_rearm_default_empty_poll_limit() -> u8
 
 #[inline]
 const fn experimental_control_plane_reply_rearm_resume_empty_poll_limit() -> u8 {
-    16
+    4
 }
 
 #[inline]
@@ -1098,6 +1131,11 @@ const fn control_plane_reply_rearm_state_for_startup_link_resume() -> (u8, u8, b
 }
 
 #[inline]
+const fn control_plane_reply_rearm_state_for_repeat_no_progress_cutover() -> (u8, u8, bool) {
+    control_plane_reply_rearm_state_for_startup_link_post_write()
+}
+
+#[inline]
 const fn control_plane_zero_frame_needs_reply_rearm(
     reply_rearm_mode: u8,
     function2_ready: bool,
@@ -1157,8 +1195,8 @@ const fn control_plane_reply_should_log_empty_snapshot(empty_polls: u8) -> bool 
 const fn passive_startup_link_wait_empty_poll_limit_for(rescue_cycles: u8) -> u8 {
     match rescue_cycles {
         0 => CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
-        1 => 8,
-        _ => 4,
+        1 => 2,
+        _ => 1,
     }
 }
 
@@ -1180,6 +1218,15 @@ const fn passive_startup_link_wait_should_probe_reply(
 #[inline]
 const fn passive_startup_link_wait_timed_out(empty_polls: u8, empty_poll_limit: u8) -> bool {
     empty_polls >= empty_poll_limit
+}
+
+#[inline]
+fn startup_link_resume_empty_poll_seed(reason: &'static str, rescue_cycles: u8) -> u8 {
+    if reason == "repeat-no-progress" && rescue_cycles > 0 {
+        passive_startup_link_wait_empty_poll_limit_for(rescue_cycles).saturating_sub(1)
+    } else {
+        0
+    }
 }
 
 #[inline]
@@ -2215,7 +2262,7 @@ fn preseed_register_block<H>(
     pinned: &Mutex<Option<MappedRegs>>,
 ) -> bool
 where
-    H: Hardware<Error = HalError>,
+    H: DeviceHal<Error = HalError>,
 {
     if pinned.lock().is_some() {
         return true;
@@ -2236,7 +2283,7 @@ where
 
 pub fn preseed_mailbox_mmio<H>(hal: &mut H) -> bool
 where
-    H: Hardware<Error = HalError>,
+    H: DeviceHal<Error = HalError>,
 {
     let mailbox = preseed_register_block(hal, &MAILBOX_PAGE_PADDR_CANDIDATES, &PINNED_MAILBOX_REGS);
     boot_log::force_uart_line(if mailbox {
@@ -2249,7 +2296,7 @@ where
 
 pub fn preseed_gpio_mmio<H>(hal: &mut H) -> bool
 where
-    H: Hardware<Error = HalError>,
+    H: DeviceHal<Error = HalError>,
 {
     let gpio = preseed_register_block(hal, &GPIO_PAGE_PADDR_CANDIDATES, &PINNED_GPIO_REGS);
     boot_log::force_uart_line(if gpio {
@@ -2262,7 +2309,7 @@ where
 
 pub fn preseed_sdhci_mmio<H>(hal: &mut H) -> bool
 where
-    H: Hardware<Error = HalError>,
+    H: DeviceHal<Error = HalError>,
 {
     let sdhci = preseed_register_block(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &PINNED_SDHCI_REGS);
     boot_log::force_uart_line(if sdhci {
@@ -2275,7 +2322,7 @@ where
 
 pub fn preseed_mmio<H>(hal: &mut H)
 where
-    H: Hardware<Error = HalError>,
+    H: DeviceHal<Error = HalError>,
 {
     let mailbox = preseed_mailbox_mmio(hal);
     let gpio = preseed_gpio_mmio(hal);
@@ -2425,8 +2472,7 @@ const SDIO_FUNCTION_READY_POLLS_FUNCTION2_EXTENDED: usize = 256;
 const SDIO_FUNCTION_READY_POLLS_FUNCTION2_EXTENDED_STRICT: usize = 1024;
 const SDIO_FUNCTION_READY_SETTLE_LOOPS: usize = 200_000;
 const SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2: usize = 50_000;
-const SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE: usize =
-    SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2;
+const SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE: usize = 5_000;
 const SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_EXTENDED: usize = 200_000;
 const SDIO_FUNCTION2_READY_RETRY_LIMIT: usize = 1;
 const SDIO_CCCR_IEN_FUNC0: u8 = 1 << 0;
@@ -3338,7 +3384,7 @@ const CYW43_FIRMWARE_PROGRESS_INTERVAL: usize = 16 * 1024;
 const CYW43_FIRMWARE_BULK_CLOCK_HZ: u32 = 12_500_000;
 const CYW43_STARTUP_CLOCK_HZ: u32 = 400_000;
 const CYW43_CONTROL_PLANE_CLOCK_HZ: u32 = 12_500_000;
-const CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT: u8 = 16;
+const CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT: u8 = 4;
 const CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT: u8 = 2;
 const CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT: u8 =
     super::control_plane_startup_link_rescue_limit();
@@ -3523,8 +3569,8 @@ const fn sdio_function_ready_uses_force_reenable_budget(
     // Pi 4 recovery now has two paths that must force a real Function 2
     // clear+re-enable instead of trusting the stale Linux-shaped latch:
     // the strict reply-recovery path and the bounded reply-probe-bypass path
-    // used on startup-link resume. Both paths still differ in what they do
-    // after the bounded ready poll expires.
+    // used on startup-link resume. The bypass path is deliberately shorter
+    // so repeated first-reply failures do not keep burning long settle loops.
     matches!(step.function, SdioFunction::Function2)
         && matches!(
             budget,
@@ -3709,7 +3755,7 @@ pub struct Pi4WifiState {
 impl Pi4WifiState {
     pub fn new<H>(hal: &mut H) -> Result<Self, HalError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         log::info!("[pi4-wifi] hal init: begin");
         let mailbox = Mailbox::new(hal).map_err(|err| {
@@ -3903,6 +3949,17 @@ impl Pi4WifiState {
             self.host.experimental_control_plane_reply_rearm_empty_polls,
             self.host.experimental_control_plane_promoted_probe_pending,
         )
+    }
+
+    #[must_use]
+    pub fn cyw43_cached_control_plane_exact_error(&self) -> Option<&'static str> {
+        cached_wifi_debug_snapshot().and_then(|snapshot| {
+            if snapshot.control_plane_exact_error.is_empty() {
+                None
+            } else {
+                Some(snapshot.control_plane_exact_error)
+            }
+        })
     }
 
     #[must_use]
@@ -4148,7 +4205,7 @@ impl Mailbox {
         alloc_action: &str,
     ) -> Result<Self, HalError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         let regs = if let Some(regs) = cloned_pinned_regs(&PINNED_MAILBOX_REGS) {
             regs
@@ -4166,7 +4223,7 @@ impl Mailbox {
 
     fn new<H>(hal: &mut H) -> Result<Self, HalError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         let (reuse_action, alloc_action) = mailbox_request_page_actions();
         Self::new_with_request_slot(hal, &PINNED_MAILBOX_REQUEST, reuse_action, alloc_action)
@@ -4174,7 +4231,7 @@ impl Mailbox {
 
     fn new_xhci_reset<H>(hal: &mut H) -> Result<Self, HalError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         // Reset-notify is serialized through the global mailbox lock and already
         // has a dedicated posted fallback path, so reuse the long-lived
@@ -4516,7 +4573,7 @@ impl Mailbox {
 
 pub fn notify_vl805_reset<H>(hal: &mut H) -> Result<Vl805ResetNotifyResult, HalError>
 where
-    H: Hardware<Error = HalError>,
+    H: DeviceHal<Error = HalError>,
 {
     emit_breadcrumb(format_args!(
         "[pi4-wifi] mailbox xhci-reset-notify device=0x{VL805_MAILBOX_RESET_DEV_ADDR:08x}"
@@ -4618,7 +4675,7 @@ struct SdioHost {
 impl SdioHost {
     fn new<H>(hal: &mut H, mailbox: &Mailbox) -> Result<Self, HalError>
     where
-        H: Hardware<Error = HalError>,
+        H: DeviceHal<Error = HalError>,
     {
         let regs = if let Some(regs) = cloned_pinned_regs(&PINNED_SDHCI_REGS) {
             regs
@@ -5181,6 +5238,10 @@ impl SdioHost {
         stage: &'static str,
         reason: &'static str,
     ) -> Result<(), HalError> {
+        let rescue_cycles = self.experimental_control_plane_startup_link_rescue_cycles;
+        let reply_wait_seed = startup_link_resume_empty_poll_seed(reason, rescue_cycles);
+        let prefer_passive_startup_link =
+            repeat_no_progress_cutover_prefers_passive_startup_link(reason, rescue_cycles);
         if !self.experimental_no_ht_transport {
             self.enter_bounded_no_ht_transport(stage)?;
         } else {
@@ -5188,15 +5249,56 @@ impl SdioHost {
         }
         self.experimental_control_plane_write_probe_pending = false;
         self.experimental_control_plane_startup_profile_reason = reason;
-        self.rearm_firmware_channel_on_startup_link()?;
-        self.resume_control_plane_reply_probe_on_startup_link(stage);
+        if prefer_passive_startup_link {
+            self.keep_control_plane_on_startup_link_after_first_write(stage);
+            let (reply_rearm_mode, reply_rearm_attempts, promoted_probe_pending) =
+                control_plane_reply_rearm_state_for_repeat_no_progress_cutover();
+            self.experimental_control_plane_reply_rearm_mode = reply_rearm_mode;
+            self.experimental_control_plane_reply_rearm_attempts = reply_rearm_attempts;
+            self.experimental_control_plane_promoted_probe_pending = promoted_probe_pending;
+            self.clear_control_plane_speculative_reply_frame();
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=reply-probe-cutover-state mode={} current={}Hz width={} chunk_limit={} no_ht={} reason={reason} reply_mode={} attempt={} empty_poll_seed={}",
+                cyw43_transport_mode_name(self.experimental_no_ht_transport),
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.control_plane_chunk_limit(),
+                self.experimental_no_ht_transport,
+                control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                reply_rearm_attempts,
+                reply_wait_seed,
+            ));
+        } else {
+            self.rearm_firmware_channel_on_startup_link()?;
+            let (reply_rearm_mode, reply_rearm_attempts, promoted_probe_pending) =
+                control_plane_reply_rearm_state_for_startup_link_resume();
+            self.clear_control_plane_startup_link_stabilization();
+            self.experimental_control_plane_reply_rearm_mode = reply_rearm_mode;
+            self.experimental_control_plane_reply_rearm_attempts = reply_rearm_attempts;
+            self.experimental_control_plane_promoted_probe_pending = promoted_probe_pending;
+            self.clear_control_plane_speculative_reply_frame();
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=reply-probe-cutover-state mode={} current={}Hz width={} chunk_limit={} no_ht={} reason={reason} reply_mode={} attempt={} empty_poll_seed={}",
+                cyw43_transport_mode_name(self.experimental_no_ht_transport),
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.control_plane_chunk_limit(),
+                self.experimental_no_ht_transport,
+                control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                reply_rearm_attempts,
+                reply_wait_seed,
+            ));
+        }
+        self.experimental_control_plane_reply_rearm_empty_polls = reply_wait_seed;
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=reply-probe-cutover mode={} current={}Hz width={} chunk_limit={} no_ht={} reason={reason}",
+            "[pi4-wifi] firmware stage={stage} action=reply-probe-cutover mode={} current={}Hz width={} chunk_limit={} no_ht={} reason={reason} empty_poll_seed={} passive_wait={}",
             cyw43_transport_mode_name(self.experimental_no_ht_transport),
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
             self.control_plane_chunk_limit(),
             self.experimental_no_ht_transport,
+            self.experimental_control_plane_reply_rearm_empty_polls,
+            yn(self.experimental_control_plane_startup_link_stabilized),
         ));
         self.log_transport_shadow("control-plane-reply-bounded-no-ht-cutover");
         Ok(())
@@ -5498,6 +5600,19 @@ impl SdioHost {
                         PassiveStartupLinkTimeoutAction::ResumeBoundedNoHtReplyProbe(
                             exact_error,
                         ) => {
+                            if passive_startup_link_timeout_should_fail_after_final_bounded_probe(
+                                self.experimental_control_plane_startup_link_rescue_cycles,
+                                exact_error,
+                            ) {
+                                emit_breadcrumb(format_args!(
+                                    "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-final-fail current_clock={}Hz width={} chunk_limit={} no_ht={} exact_error={exact_error}",
+                                    self.current_clock_hz,
+                                    sdio_bus_width_name(self.desired_bus_width),
+                                    self.control_plane_chunk_limit(),
+                                    self.experimental_no_ht_transport,
+                                ));
+                                return Err(HalError::Unsupported(exact_error));
+                            }
                             let sideband_err = HalError::Unsupported(exact_error);
                             emit_breadcrumb(format_args!(
                                 "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-resume current_clock={}Hz width={} chunk_limit={} no_ht={} exact_error={exact_error} continue=bounded-no-ht-reply",
@@ -5690,13 +5805,18 @@ impl SdioHost {
         err: &HalError,
     ) -> Result<(), HalError> {
         let rescue_cycle = self.experimental_control_plane_startup_link_rescue_cycles;
+        let preserved_exact_error =
+            cached_wifi_debug_snapshot().map(|snapshot| snapshot.control_plane_exact_error);
         if control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
             rescue_cycle,
             err,
+            preserved_exact_error,
         ) {
+            let cutover_cycle = repeat_no_progress_cutover_cycle(rescue_cycle);
+            self.experimental_control_plane_startup_link_rescue_cycles = cutover_cycle;
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=control-plane-post-write-rearm action=repeat-no-progress-cutover cycle={}/{} err={err} current={}Hz width={} target_clock={}Hz target_bus_width={} mode=bounded-no-ht-reply",
-                rescue_cycle.saturating_add(1),
+                cutover_cycle,
                 CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
                 self.current_clock_hz,
                 sdio_bus_width_name(self.desired_bus_width),
@@ -12951,7 +13071,7 @@ fn map_exact<H>(
     prefix_maps: &mut Vec<DeviceFrame>,
 ) -> Result<DeviceFrame, HalError>
 where
-    H: Hardware<Error = HalError>,
+    H: DeviceHal<Error = HalError>,
 {
     for &candidate in candidates {
         if let Ok(frame) = map_device_exact(hal, candidate, prefix_maps) {
@@ -12967,7 +13087,7 @@ fn map_device_exact<H>(
     prefix_maps: &mut Vec<DeviceFrame>,
 ) -> Result<DeviceFrame, HalError>
 where
-    H: Hardware<Error = HalError>,
+    H: DeviceHal<Error = HalError>,
 {
     let Some(coverage) = hal.device_coverage(paddr, PAGE_BITS) else {
         return Err(HalError::Unsupported("device-coverage"));
@@ -13145,6 +13265,7 @@ mod tests {
         control_plane_reply_rearm_none, control_plane_reply_rearm_pending,
         control_plane_reply_rearm_promoted_link, control_plane_reply_rearm_should_log_empty_poll,
         control_plane_reply_rearm_startup_link, control_plane_reply_rearm_startup_link_resume,
+        control_plane_reply_rearm_state_for_repeat_no_progress_cutover,
         control_plane_reply_rearm_state_for_startup_link_resume,
         control_plane_reply_rearm_supports_speculative_read,
         control_plane_reply_rearm_uses_promoted_link,
@@ -13202,7 +13323,8 @@ mod tests {
         setup_firmware_channel_can_assume_write_committed,
         setup_firmware_channel_uses_experimental_order, should_log_firmware_upload_progress,
         should_log_sdio_transfer_chunk, startup_link_reattach_target_profile,
-        transport_phase_chipclk_value, update_bcm2711_gpio_function, update_bcm2711_gpio_pull,
+        startup_link_resume_empty_poll_seed, transport_phase_chipclk_value,
+        update_bcm2711_gpio_function, update_bcm2711_gpio_pull,
         wait_for_firmware_ready_restore_clock_hz, HalError, ResponseType, SdioFunction,
         SdioFunctionReadyBudget, AI_CORE_POSTRESET_IOCTRL, AI_CORE_PRERESET_IOCTRL,
         AI_IOCTRL_BIT_CLOCK_EN, AI_IOCTRL_BIT_FGC, AI_IOCTRL_OFFSET, AI_RESETCTRL_BIT_RESET,
@@ -14254,6 +14376,9 @@ mod tests {
 
     #[test]
     fn control_plane_reply_rearm_empty_poll_budget_is_mode_specific() {
+        let resume_attempt_limit = experimental_control_plane_reply_rearm_attempt_limit(
+            control_plane_reply_rearm_startup_link_resume(),
+        );
         let startup_limit = experimental_control_plane_reply_rearm_empty_poll_limit(
             control_plane_reply_rearm_startup_link(),
         );
@@ -14263,9 +14388,10 @@ mod tests {
         let resume_limit = experimental_control_plane_reply_rearm_empty_poll_limit(
             control_plane_reply_rearm_startup_link_resume(),
         );
+        assert_eq!(resume_attempt_limit, 1);
         assert_eq!(startup_limit, 8);
         assert_eq!(promoted_limit, 32);
-        assert_eq!(resume_limit, 16);
+        assert_eq!(resume_limit, 4);
         assert!(control_plane_reply_rearm_waits_for_empty_polls(
             control_plane_reply_rearm_startup_link(),
             startup_limit - 1,
@@ -14343,8 +14469,8 @@ mod tests {
             limit,
             CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT
         );
-        assert_eq!(rescue_limit, 8);
-        assert_eq!(repeat_limit, 4);
+        assert_eq!(rescue_limit, 2);
+        assert_eq!(repeat_limit, 1);
         assert!(passive_startup_link_wait_should_log_empty_poll(1, limit));
         assert!(!passive_startup_link_wait_should_log_empty_poll(2, limit));
         assert!(!passive_startup_link_wait_should_log_empty_poll(
@@ -14557,12 +14683,14 @@ mod tests {
             !control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
                 0,
                 &HalError::Unsupported("cyw43-control-plane-sideband-read-stall-no-buffer-ready",),
+                None,
             )
         );
         assert!(
             control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
                 1,
                 &HalError::Unsupported("cyw43-control-plane-sideband-read-stall-no-buffer-ready",),
+                None,
             )
         );
         assert!(
@@ -14571,18 +14699,98 @@ mod tests {
                 &HalError::Unsupported(
                     "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
                 ),
+                None,
             )
         );
         assert!(
             control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
                 1,
                 &HalError::Unsupported("cyw43-control-plane-no-reply-linux-f2-armed"),
+                None,
             )
         );
         assert!(
             !control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
                 1,
                 &HalError::Unsupported("cyw43-control-plane-passive-startup-link-timeout"),
+                None,
+            )
+        );
+        assert!(
+            control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+                1,
+                &HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout"),
+                Some("cyw43-control-plane-sideband-read-stall-no-buffer-ready"),
+            )
+        );
+        assert!(
+            control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+                1,
+                &HalError::Unsupported("sdio-function2-ready-timeout"),
+                Some(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                ),
+            )
+        );
+        assert!(
+            !control_plane_startup_link_repeat_no_progress_should_cutover_to_bounded_no_ht(
+                1,
+                &HalError::Unsupported("cyw43-control-plane-startup-link-reply-timeout"),
+                Some("cyw43-control-plane-startup-link-rescue-budget-exhausted"),
+            )
+        );
+    }
+
+    #[test]
+    fn repeat_no_progress_cutover_preseeds_final_startup_link_probe() {
+        assert_eq!(
+            startup_link_resume_empty_poll_seed("post-write-timeout", 0),
+            0
+        );
+        assert_eq!(
+            startup_link_resume_empty_poll_seed("repeat-no-progress", 0),
+            0
+        );
+        assert_eq!(
+            startup_link_resume_empty_poll_seed("repeat-no-progress", 1),
+            1
+        );
+        assert_eq!(
+            startup_link_resume_empty_poll_seed("repeat-no-progress", 2),
+            0
+        );
+    }
+
+    #[test]
+    fn final_bounded_probe_timeout_fails_with_preserved_first_reply_blocker() {
+        assert!(
+            !passive_startup_link_timeout_should_fail_after_final_bounded_probe(
+                1,
+                "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+            )
+        );
+        assert!(
+            passive_startup_link_timeout_should_fail_after_final_bounded_probe(
+                2,
+                "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+            )
+        );
+        assert!(
+            passive_startup_link_timeout_should_fail_after_final_bounded_probe(
+                2,
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+            )
+        );
+        assert!(
+            passive_startup_link_timeout_should_fail_after_final_bounded_probe(
+                2,
+                "cyw43-control-plane-no-reply-linux-f2-armed",
+            )
+        );
+        assert!(
+            !passive_startup_link_timeout_should_fail_after_final_bounded_probe(
+                2,
+                "cyw43-control-plane-passive-startup-link-timeout",
             )
         );
     }
@@ -14867,6 +15075,46 @@ mod tests {
         );
         assert_eq!(reply_rearm_attempts, 0);
         assert!(!promoted_probe_pending);
+    }
+
+    #[test]
+    fn repeat_no_progress_cutover_seeds_plain_startup_link_mode() {
+        let (reply_rearm_mode, reply_rearm_attempts, promoted_probe_pending) =
+            control_plane_reply_rearm_state_for_repeat_no_progress_cutover();
+        assert_eq!(reply_rearm_mode, control_plane_reply_rearm_startup_link());
+        assert_eq!(reply_rearm_attempts, 0);
+        assert!(!promoted_probe_pending);
+    }
+
+    #[test]
+    fn repeat_no_progress_cutover_prefers_passive_startup_link_only_at_final_cycle() {
+        assert!(!repeat_no_progress_cutover_prefers_passive_startup_link(
+            "post-write-timeout",
+            2
+        ));
+        assert!(!repeat_no_progress_cutover_prefers_passive_startup_link(
+            "repeat-no-progress",
+            1
+        ));
+        assert!(repeat_no_progress_cutover_prefers_passive_startup_link(
+            "repeat-no-progress",
+            2
+        ));
+    }
+
+    #[test]
+    fn repeat_no_progress_cutover_advances_cycle_before_passive_preference() {
+        let rescue_cycle = 1;
+        let cutover_cycle = repeat_no_progress_cutover_cycle(rescue_cycle);
+        assert_eq!(cutover_cycle, 2);
+        assert!(!repeat_no_progress_cutover_prefers_passive_startup_link(
+            "repeat-no-progress",
+            rescue_cycle
+        ));
+        assert!(repeat_no_progress_cutover_prefers_passive_startup_link(
+            "repeat-no-progress",
+            cutover_cycle
+        ));
     }
 
     #[test]
@@ -15906,6 +16154,10 @@ mod tests {
                 SdioFunctionReadyBudget::ControlPlaneReplyBypass
             ),
             Some(SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE)
+        );
+        assert_eq!(
+            SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE,
+            5_000
         );
         assert_eq!(
             sdio_function_ready_retry_limit_for(
