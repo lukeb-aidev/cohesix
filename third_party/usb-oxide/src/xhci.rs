@@ -620,8 +620,28 @@ const fn skip_post_run_interrupter_zeroing_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
+    snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn runtime_needs_post_run_polling_irq_quiesce_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
     runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
-        || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn runtime_needs_post_init_polling_irq_quiesce_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    // The trusted Pi 4 preserve-state lane still returns on the
+    // bootloader-owned IRQ27 edge. Keep the post-init polling quiesce only on
+    // that stop-state handoff so constructor return drains ERDP/IMAN/USBSTS
+    // without reintroducing the more fragile post-ready direct register
+    // zeroing path.
+    runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -743,6 +763,18 @@ const fn defer_dnctrl_write_until_after_run_with_snapshot(
     // cleanup ladder.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn skip_dnctrl_write_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    // The trusted preserve-state Pi 4 lane now consistently reaches DNCTRL as
+    // the first remaining controller-visible ownership edge. Preserve that
+    // bootloader-owned notification state as-is instead of replaying another
+    // redundant zero on the degraded IRQ27 path.
+    runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -1422,17 +1454,6 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     #[inline(always)]
-    fn write_reg_u64_at(mmio: usize, offset: usize, val: u64) {
-        // xHCI 64-bit register pairs must be programmed low dword first, then
-        // high dword. Replaying the low dword after the high dword is not part
-        // of the xHCI-defined sequence and has proven unsafe on Pi 4 VL805
-        // during the first post-handoff ownership transfer.
-        let [low, high] = split_u64_reg_write_ops(offset, val);
-        Self::write_reg_at::<u32>(mmio, low.0, low.1);
-        Self::write_reg_at::<u32>(mmio, high.0, high.1);
-    }
-
-    #[inline(always)]
     fn write_reg_u64_diag_at(
         mmio: usize,
         offset: usize,
@@ -1516,6 +1537,22 @@ impl<H: Dma> XhciCtrl<H> {
             );
             Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
         }
+    }
+
+    #[inline(always)]
+    fn write_polling_interrupt_quiesce_at(
+        mmio: usize,
+        op_offset: usize,
+        int_base: usize,
+        erdp: u64,
+        diag_stage: Option<u16>,
+    ) {
+        if let Some(stage) = diag_stage {
+            emit_xhci_diag(stage, erdp | 0x8, polling_iman_value() as u64, reg::USBSTS_EINT as u64);
+        }
+        Self::write_reg_at::<u64>(mmio, int_base + reg::ERDP, erdp | 0x8);
+        Self::write_reg_at::<u32>(mmio, int_base + reg::IMAN, polling_iman_value());
+        Self::write_reg_at::<u32>(mmio, op_offset + reg::USBSTS, reg::USBSTS_EINT);
     }
 
     /// Create and initialize a new xHCI controller
@@ -1670,6 +1707,12 @@ impl<H: Dma> XhciCtrl<H> {
 
         emit_xhci_diag(0x010f, mmio as u64, op_base as u64, rt_base as u64);
         ctrl.init()?;
+        if runtime_needs_post_init_polling_irq_quiesce_with_snapshot(
+            ctrl.firmware_handoff,
+            ctrl.runtime_seed_snapshot,
+        ) {
+            ctrl.quiesce_polling_interrupts_post_init();
+        }
         emit_xhci_diag(0x0110, 0, 0, 0);
         Ok(ctrl)
     }
@@ -1755,6 +1798,8 @@ impl<H: Dma> XhciCtrl<H> {
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
         );
+        let skip_dnctrl_write =
+            skip_dnctrl_write_with_snapshot(self.firmware_handoff, trusted_runtime_seed_snapshot);
         let atomic_erstba_publish = use_atomic_erstba_publish_with_snapshot(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -2319,6 +2364,7 @@ impl<H: Dma> XhciCtrl<H> {
         let event_ring = self.event_ring.lock();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         let (event_ring_phys, erst_phys) = event_ring.share_for_device(&*self.host)?;
+        let event_ring_dequeue = event_ring.dequeue_ptr(&*self.host);
         let staged_current_erst_size = trusted_runtime_seed_snapshot
             .and_then(|snapshot| snapshot.erstsz0)
             .unwrap_or(0);
@@ -2749,7 +2795,9 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Disable device notifications before the first command can observe
         // any stale firmware-originated notification state.
-        if !defer_dnctrl_write_until_after_run {
+        if skip_dnctrl_write {
+            emit_xhci_diag(0x0314, reg::DNCTRL as u64, 0, 1);
+        } else if !defer_dnctrl_write_until_after_run {
             emit_xhci_diag(0x0256, reg::DNCTRL as u64, 0, 0);
             self.write_op(reg::DNCTRL, 0u32);
         }
@@ -3031,7 +3079,18 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Match U-Boot's post-start ordering for interrupter state: zero
         // moderation and pending after the controller is running.
-        if skip_post_run_interrupter_zeroing_with_snapshot(
+        if runtime_needs_post_run_polling_irq_quiesce_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        ) {
+            Self::write_polling_interrupt_quiesce_at(
+                self.mmio,
+                self.op_base - self.mmio,
+                int_base,
+                event_ring_dequeue,
+                Some(0x0316),
+            );
+        } else if skip_post_run_interrupter_zeroing_with_snapshot(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
         ) {
@@ -3177,11 +3236,6 @@ impl<H: Dma> XhciCtrl<H> {
 
     fn write_reg<T: Copy>(&self, offset: usize, val: T) {
         Self::write_reg_at(self.mmio, offset, val);
-    }
-
-    #[inline(always)]
-    fn write_reg_u64(&self, offset: usize, val: u64) {
-        Self::write_reg_u64_at(self.mmio, offset, val);
     }
 
     #[inline(always)]
@@ -3334,14 +3388,26 @@ impl<H: Dma> XhciCtrl<H> {
     fn update_erdp(&self) {
         let event_ring = self.event_ring.lock();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
-        self.write_reg_u64(
-            int_base + reg::ERDP,
-            event_ring.dequeue_ptr(&*self.host) | 0x8,
+        Self::write_polling_interrupt_quiesce_at(
+            self.mmio,
+            self.op_base - self.mmio,
+            int_base,
+            event_ring.dequeue_ptr(&*self.host),
+            None,
         );
-        // Polling mode must leave the xHCI interrupter disabled while
-        // acknowledging Event Handler Busy / pending state.
-        self.write_reg(int_base + reg::IMAN, polling_iman_value());
-        self.write_op(reg::USBSTS, reg::USBSTS_EINT);
+    }
+
+    /// Drain inherited pending interrupter state on the polling runtime path.
+    pub fn quiesce_polling_interrupts_post_init(&self) {
+        let event_ring = self.event_ring.lock();
+        let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        Self::write_polling_interrupt_quiesce_at(
+            self.mmio,
+            self.op_base - self.mmio,
+            int_base,
+            event_ring.dequeue_ptr(&*self.host),
+            Some(0x0315),
+        );
     }
 
     /// Wait for command completion.
@@ -3808,6 +3874,7 @@ mod tests {
         preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
+        skip_dnctrl_write_with_snapshot,
         replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
         run_usbcmd_needs_live_seed_read, run_usbcmd_prefers_snapshot_seed,
         run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
@@ -3817,6 +3884,8 @@ mod tests {
         runtime_handoff_needs_uboot_style_reset_write, runtime_handoff_needs_uboot_style_run_write,
         runtime_handoff_skips_live_run_write, runtime_mailbox_reset_handoff,
         runtime_mailbox_reset_needs_blind_settle, runtime_mailbox_reset_stop_state_handoff,
+        runtime_needs_post_init_polling_irq_quiesce_with_snapshot,
+        runtime_needs_post_run_polling_irq_quiesce_with_snapshot,
         runtime_preserve_stop_state_handoff, runtime_seed_snapshot_flag_bits,
         runtime_stop_state_needs_post_run_settle, skip_config_write_during_init,
         skip_config_write_during_init_with_snapshot,
@@ -4308,7 +4377,15 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
-        assert!(skip_post_run_interrupter_zeroing_with_snapshot(
+        assert!(!skip_post_run_interrupter_zeroing_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            stop_state_snapshot,
+        ));
+        assert!(runtime_needs_post_run_polling_irq_quiesce_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            stop_state_snapshot,
+        ));
+        assert!(runtime_needs_post_init_polling_irq_quiesce_with_snapshot(
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
@@ -4317,6 +4394,10 @@ mod tests {
             stop_state_snapshot,
         ));
         assert!(skip_post_run_interrupter_zeroing_with_snapshot(
+            XhciFirmwareHandoff::ResetlessReinit,
+            stop_state_snapshot,
+        ));
+        assert!(!runtime_needs_post_run_polling_irq_quiesce_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
             stop_state_snapshot,
         ));
@@ -4419,6 +4500,18 @@ mod tests {
             stop_state_snapshot,
         ));
         assert!(defer_dnctrl_write_until_after_run_with_snapshot(
+            XhciFirmwareHandoff::ResetlessReinit,
+            stop_state_snapshot,
+        ));
+        assert!(!skip_dnctrl_write_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            stop_state_snapshot,
+        ));
+        assert!(skip_dnctrl_write_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            stop_state_snapshot,
+        ));
+        assert!(!skip_dnctrl_write_with_snapshot(
             XhciFirmwareHandoff::ResetlessReinit,
             stop_state_snapshot,
         ));
@@ -5142,6 +5235,39 @@ mod tests {
         assert_eq!(
             XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMAN),
             polling_iman_value()
+        );
+    }
+
+    #[test]
+    fn polling_interrupt_quiesce_writes_erdp_iman_and_usbsts() {
+        let mut mmio = vec![0u8; 0x400];
+        let mmio_base = mmio.as_mut_ptr() as usize;
+        let op_offset = 0x40;
+        let int_base = 0x180;
+
+        XhciCtrl::<MockDma>::write_reg_at::<u64>(mmio_base, int_base + reg::ERDP, 0);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMAN, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS, 0);
+
+        XhciCtrl::<MockDma>::write_polling_interrupt_quiesce_at(
+            mmio_base,
+            op_offset,
+            int_base,
+            0x1234_5000,
+            None,
+        );
+
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u64>(mmio_base, int_base + reg::ERDP),
+            0x1234_5008
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMAN),
+            polling_iman_value()
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS),
+            reg::USBSTS_EINT
         );
     }
 

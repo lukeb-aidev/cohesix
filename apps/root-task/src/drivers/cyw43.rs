@@ -76,7 +76,11 @@ const EVENT_AUTH: u8 = 3;
 const EVENT_DEAUTH: u8 = 5;
 const EVENT_DISASSOC: u8 = 11;
 const EVENT_LINK: u8 = 16;
+const EVENT_IF: u8 = 54;
 const STATUS_SUCCESS: u32 = 0;
+const EVENT_MASK_LEN: usize = 24;
+const DEFAULT_SCAN_CHANNEL_TIME_MS: u32 = 40;
+const DEFAULT_SCAN_UNASSOC_TIME_MS: u32 = 40;
 
 const BDC_VERSION: u8 = 2;
 const BDC_VERSION_SHIFT: u8 = 4;
@@ -137,6 +141,8 @@ enum Ioctl {
     SetWsec = 134,
     SetBand = 142,
     SetWpaAuth = 165,
+    SetScanChannelTime = 185,
+    SetScanUnassocTime = 187,
     GetVar = 262,
     SetVar = 263,
     SetWsecPmk = 268,
@@ -252,6 +258,7 @@ fn first_control_plane_retry_after_startup_link_reply_failure(
 fn startup_link_reply_failure_reason(reason: &str) -> bool {
     reason.starts_with("cyw43-function2-enable-latched-not-ready")
         || reason == "cyw43-control-plane-no-reply-linux-f2-armed"
+        || reason == "cyw43-control-plane-pure-f2-startup-link-no-reply"
         || reason == "cyw43-control-plane-linux-interrupts-deferred"
         || reason == "cyw43-control-plane-sideband-unreadable"
         || reason.starts_with("cyw43-control-plane-sideband-")
@@ -276,6 +283,7 @@ fn startup_link_ioctl_timeout_preserved_exact_error(
 fn reply_wait_resend_prefers_promoted_clock_reason(reason: &str) -> bool {
     reason.starts_with("cyw43-function2-enable-latched-not-ready")
         || reason == "cyw43-control-plane-no-reply-linux-f2-armed"
+        || reason == "cyw43-control-plane-pure-f2-startup-link-no-reply"
         || reason == "cyw43-control-plane-linux-interrupts-deferred"
         || reason == "cyw43-control-plane-sideband-unreadable"
         || reason.starts_with("cyw43-control-plane-sideband-")
@@ -549,6 +557,7 @@ fn preserve_cyw43_init_failure_exact_error(
             if matches!(
                 reason,
                 "cyw43-control-plane-no-reply-linux-f2-armed"
+                    | "cyw43-control-plane-pure-f2-startup-link-no-reply"
                     | "cyw43-control-plane-startup-link-rescue-budget-exhausted"
             ) =>
         {
@@ -935,10 +944,17 @@ impl Cyw43NetDevice {
         self.set_iovar_u32("bus:txglom", 0)?;
         self.set_iovar_u32("apsta", 1)?;
         self.set_country_worldwide()?;
+        self.apply_linux_preinit_defaults()?;
         self.ioctl_set_u32(Ioctl::SetAntdiv, 0, 0)?;
         self.set_iovar_u32("ampdu_ba_wsize", 8)?;
         self.set_iovar_u32("ampdu_mpdu", 4)?;
-        self.set_event_mask(&[EVENT_SET_SSID, EVENT_AUTH, EVENT_LINK])?;
+        self.set_event_mask(&[
+            EVENT_SET_SSID,
+            EVENT_AUTH,
+            EVENT_LINK,
+            EVENT_DEAUTH,
+            EVENT_DISASSOC,
+        ])?;
         self.ioctl_raw(IoctlType::Set, Ioctl::Up, 0, &[])?;
         self.ioctl_set_u32(Ioctl::SetGmode, 0, 1)?;
         self.ioctl_set_u32(Ioctl::SetBand, 0, 0)?;
@@ -991,18 +1007,34 @@ impl Cyw43NetDevice {
         self.set_iovar_from_payload("country", payload_len)
     }
 
+    fn apply_linux_preinit_defaults(&mut self) -> Result<(), DriverError> {
+        self.set_iovar_u32("mpc", 1)?;
+        self.enable_linux_if_event_message()?;
+        self.ioctl_set_u32(Ioctl::SetScanChannelTime, 0, DEFAULT_SCAN_CHANNEL_TIME_MS)?;
+        self.ioctl_set_u32(Ioctl::SetScanUnassocTime, 0, DEFAULT_SCAN_UNASSOC_TIME_MS)?;
+        let _ = self.set_iovar_u32("txbf", 1);
+        Ok(())
+    }
+
+    fn enable_linux_if_event_message(&mut self) -> Result<(), DriverError> {
+        let mut mask = [0u8; EVENT_MASK_LEN];
+        let response_len = self.get_iovar("event_msgs", &mut mask)?;
+        set_event_mask_bit(&mut mask, EVENT_IF)?;
+        let required_len = usize::from(EVENT_IF / 8).saturating_add(1);
+        self.set_iovar_bytes(
+            "event_msgs",
+            &mask[..core::cmp::max(response_len, required_len)],
+        )
+    }
+
     fn set_event_mask(&mut self, events: &[u8]) -> Result<(), DriverError> {
-        let payload_len = 4 + 24;
+        let payload_len = 4 + EVENT_MASK_LEN;
         {
             let payload = self.payload_mut(payload_len)?;
             payload.fill(0);
             put_u32_le(payload, 0, 0);
             for &event in events {
-                let index = usize::from(event / 8);
-                let bit = event % 8;
-                if let Some(slot) = payload.get_mut(4 + index) {
-                    *slot |= 1 << bit;
-                }
+                set_event_mask_bit(&mut payload[4..], event)?;
             }
         }
         self.set_iovar_from_payload("bsscfg:event_msgs", payload_len)
@@ -1197,6 +1229,14 @@ impl Cyw43NetDevice {
             put_u32_le(payload, 4, second);
         }
         self.set_iovar_from_payload(name, 8)
+    }
+
+    fn set_iovar_bytes(&mut self, name: &str, value: &[u8]) -> Result<(), DriverError> {
+        {
+            let payload = self.payload_mut(value.len())?;
+            payload[..value.len()].copy_from_slice(value);
+        }
+        self.set_iovar_from_payload(name, value.len())
     }
 
     fn set_iovar_from_payload(&mut self, name: &str, value_len: usize) -> Result<(), DriverError> {
@@ -2061,6 +2101,16 @@ fn bdc_payload(payload: &[u8]) -> Option<&[u8]> {
     payload.get(start..)
 }
 
+fn set_event_mask_bit(mask: &mut [u8], event: u8) -> Result<(), DriverError> {
+    let index = usize::from(event / 8);
+    let bit = event % 8;
+    let Some(slot) = mask.get_mut(index) else {
+        return Err(DriverError::Config("wifi-event-mask-too-short"));
+    };
+    *slot |= 1 << bit;
+    Ok(())
+}
+
 fn is_zeroed_mac(mac: &[u8; 6]) -> bool {
     mac.iter().all(|byte| *byte == 0)
 }
@@ -2181,10 +2231,10 @@ mod tests {
         control_plane_retry_after_startup_link_reply_failure_target_clock_hz,
         first_control_plane_retry_after_promoted_timeout, has_sdpcm_credit,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
-        ioctl_wait_loops, is_transport_retryable, put_u16_le,
+        ioctl_wait_loops, is_transport_retryable, put_u16_le, set_event_mask_bit,
         speculative_credit_window_after_promoted_timeout_retry,
         startup_transport_recovery_should_reset_experimental_state, DriverError, EVENT_AUTH,
-        EVENT_SET_SSID, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
+        EVENT_IF, EVENT_SET_SSID, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
         SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
     };
@@ -2209,6 +2259,23 @@ mod tests {
     fn event_constants_match_expected_values() {
         assert_eq!(EVENT_SET_SSID, 0);
         assert_eq!(EVENT_AUTH, 3);
+        assert_eq!(EVENT_IF, 54);
+    }
+
+    #[test]
+    fn set_event_mask_bit_sets_expected_if_bit() {
+        let mut mask = [0u8; 8];
+        set_event_mask_bit(&mut mask, EVENT_IF).expect("event bit should fit");
+        assert_eq!(mask[usize::from(EVENT_IF / 8)], 1 << (EVENT_IF % 8));
+    }
+
+    #[test]
+    fn set_event_mask_bit_rejects_short_mask() {
+        let mut mask = [0u8; 1];
+        assert!(matches!(
+            set_event_mask_bit(&mut mask, EVENT_IF),
+            Err(DriverError::Config("wifi-event-mask-too-short"))
+        ));
     }
 
     #[test]
@@ -2609,6 +2676,16 @@ mod tests {
                 true,
                 SDIO_STARTUP_CLOCK_HZ,
                 &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-pure-f2-startup-link-no-reply"
+                )),
+            ),
+            SDIO_DATA_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_retry_after_reply_wait_resend_target_clock_hz(
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
                     "cyw43-control-plane-no-reply-linux-f2-armed"
                 )),
             ),
@@ -2681,6 +2758,19 @@ mod tests {
                 ),
             ),
             DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout"))
+        );
+        assert_eq!(
+            preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-pure-f2-startup-link-no-reply",
+                )),
+                Some(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                ),
+            ),
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+            ))
         );
         assert_eq!(
             preserve_cyw43_init_failure_exact_error(

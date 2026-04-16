@@ -29,6 +29,7 @@ use usb_oxide::{
 use crate::bootstrap::log as boot_log;
 use crate::hal::{dma, pi4_wifi, DeviceHal, HalError, KernelHal};
 use crate::local_seat::{LocalSeatXhciCapabilitySnapshot, LocalSeatXhciStopStateSnapshot};
+use crate::sel4::BootInfoExt;
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_MASK: usize = PAGE_SIZE - 1;
@@ -2773,6 +2774,9 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0311 => Some("erdp-publish-skip-preserve"),
         0x0312 => Some("dcbaap-publish-skip-preserve"),
         0x0313 => Some("crcr-publish-skip-preserve"),
+        0x0314 => Some("dnctrl-write-skip-preserve"),
+        0x0315 => Some("post-init-polling-irq-quiesce"),
+        0x0316 => Some("post-run-polling-irq-quiesce"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -5646,8 +5650,10 @@ fn xhci_irq_handler_scan_summary(env: &crate::sel4::KernelEnv<'_>) -> XhciIrqHan
     let mut first = None;
     let mut second = None;
     let mut count = 0usize;
-    let scan_end = env.bootinfo().empty.end;
-    let mut slot = 0;
+    let scan_end = 1usize
+        .checked_shl(env.bootinfo().init_cnode_bits() as u32)
+        .unwrap_or(env.bootinfo().empty.end as usize) as sel4_sys::seL4_CPtr;
+    let mut slot: sel4_sys::seL4_CPtr = 0;
     while slot < scan_end {
         let tag = crate::sel4::CapTag::from_raw(crate::sel4::debug_cap_identify(slot));
         if matches!(tag, Some(crate::sel4::CapTag::IrqHandler)) {
@@ -5778,6 +5784,35 @@ fn xhci_trusted_irq_soft_ignore_reason(irq: u32, reason: &'static str) -> bool {
             reason,
             "irq-get-revoke-first-owned" | "irq-get-revoke-first-no-handler"
         )
+}
+
+#[inline]
+fn xhci_irq_guard_satisfies_phase(
+    guard: &XhciIrqGuard,
+    mmio: usize,
+    firmware_handoff: XhciFirmwareHandoff,
+    phase: XhciIrqInstallPhase,
+) -> bool {
+    match xhci_irq_sink_mode(mmio, firmware_handoff, phase) {
+        XhciIrqSinkMode::Disabled => true,
+        XhciIrqSinkMode::TrustedPcieSinks => {
+            if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+                && firmware_handoff == XhciFirmwareHandoff::PreserveControllerState
+                && phase == XhciIrqInstallPhase::ControllerReady
+            {
+                // The trusted preserve-state path stays poll-driven on the
+                // bootloader-owned IRQ27 edge. Once the bounded bridge/child
+                // INTx sinks are armed, controller-ready should not try to
+                // reacquire the primary legacy PCIe IRQ again.
+                guard.covers_irq(PI4_PCIE_BRIDGE_IRQ) && guard.covers_irq(PI4_VL805_XHCI_INTX_IRQ)
+            } else {
+                TRUSTED_XHCI_PCIE_SINK_IRQS
+                    .iter()
+                    .copied()
+                    .all(|irq| guard.covers_irq(irq))
+            }
+        }
+    }
 }
 
 #[inline]
@@ -6885,20 +6920,42 @@ impl UsbKeyboard {
                                 continue;
                             }
                         };
-                        if xhci_irq_guard.is_none()
-                            && xhci_irq_sink_needed(
+                        if xhci_irq_sink_needed(
+                            effective_mmio,
+                            strategy.firmware_handoff,
+                            XhciIrqInstallPhase::ControllerReady,
+                        ) && xhci_irq_guard.as_ref().map_or(true, |guard| {
+                            !xhci_irq_guard_satisfies_phase(
+                                guard,
                                 effective_mmio,
                                 strategy.firmware_handoff,
                                 XhciIrqInstallPhase::ControllerReady,
                             )
-                        {
-                            xhci_irq_guard = match XhciIrqGuard::install(
+                        }) {
+                            if let Some(existing_guard) = xhci_irq_guard.as_ref() {
+                                let mut line = heapless::String::<288>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] xhci irq sink retry mmio=0x{mmio:016x} stage={} action=reinstall-bounded-sinks has_irq27={} has_bridge={} has_intx={}",
+                                        xhci_irq_phase_label(XhciIrqInstallPhase::ControllerReady),
+                                        existing_guard.covers_irq(PI4_PCIE_ECAM_SAFE_READ_IRQ)
+                                            as u8,
+                                        existing_guard.covers_irq(PI4_PCIE_BRIDGE_IRQ) as u8,
+                                        existing_guard.covers_irq(PI4_VL805_XHCI_INTX_IRQ) as u8,
+                                        mmio = effective_mmio,
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                            }
+                            match XhciIrqGuard::install(
                                 hal,
                                 effective_mmio,
                                 strategy.firmware_handoff,
                                 XhciIrqInstallPhase::ControllerReady,
                             ) {
-                                Ok(guard) => guard,
+                                Ok(Some(guard)) => xhci_irq_guard = Some(guard),
+                                Ok(None) => {}
                                 Err(reason) => {
                                     let mut line = heapless::String::<224>::new();
                                     let _ = core::fmt::Write::write_fmt(
@@ -6910,9 +6967,8 @@ impl UsbKeyboard {
                                         ),
                                     );
                                     boot_log::force_uart_line(line.as_str());
-                                    None
                                 }
-                            };
+                            }
                         }
 
                         let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
@@ -12441,6 +12497,18 @@ mod tests {
         assert_eq!(xhci_diag_stage_label(0x02d8), Some("dnctrl-post-run-begin"));
         assert_eq!(xhci_diag_stage_label(0x02d9), Some("dnctrl-post-run-done"));
         assert_eq!(
+            xhci_diag_stage_label(0x0314),
+            Some("dnctrl-write-skip-preserve")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0315),
+            Some("post-init-polling-irq-quiesce")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0316),
+            Some("post-run-polling-irq-quiesce")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x02da),
             Some("erstsz-publish-skip-preserve")
         );
@@ -12826,6 +12894,75 @@ mod tests {
         assert!(!xhci_trusted_irq_soft_ignore_reason(
             PI4_PCIE_ECAM_SAFE_READ_IRQ,
             "irq-handler-ambiguous",
+        ));
+    }
+
+    #[test]
+    fn trusted_xhci_irq_guard_must_cover_full_bounded_sink_set() {
+        let partial = XhciIrqGuard {
+            root_cnode: 0,
+            bindings: [
+                Some(XhciIrqBinding {
+                    handler_slot: 0,
+                    notification_slot: 0,
+                    irq: PI4_PCIE_BRIDGE_IRQ,
+                    owns_handler: false,
+                    shadow: false,
+                }),
+                Some(XhciIrqBinding {
+                    handler_slot: 0,
+                    notification_slot: 0,
+                    irq: PI4_VL805_XHCI_INTX_IRQ,
+                    owns_handler: false,
+                    shadow: false,
+                }),
+                None,
+            ],
+        };
+        assert!(xhci_irq_guard_satisfies_phase(
+            &partial,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::PreserveControllerState,
+            XhciIrqInstallPhase::ControllerReady,
+        ));
+        assert!(!xhci_irq_guard_satisfies_phase(
+            &partial,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            XhciIrqInstallPhase::ControllerReady,
+        ));
+
+        let full = XhciIrqGuard {
+            root_cnode: 0,
+            bindings: [
+                Some(XhciIrqBinding {
+                    handler_slot: 0,
+                    notification_slot: 0,
+                    irq: PI4_PCIE_ECAM_SAFE_READ_IRQ,
+                    owns_handler: false,
+                    shadow: false,
+                }),
+                Some(XhciIrqBinding {
+                    handler_slot: 0,
+                    notification_slot: 0,
+                    irq: PI4_PCIE_BRIDGE_IRQ,
+                    owns_handler: false,
+                    shadow: false,
+                }),
+                Some(XhciIrqBinding {
+                    handler_slot: 0,
+                    notification_slot: 0,
+                    irq: PI4_VL805_XHCI_INTX_IRQ,
+                    owns_handler: false,
+                    shadow: false,
+                }),
+            ],
+        };
+        assert!(xhci_irq_guard_satisfies_phase(
+            &full,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::PreserveControllerState,
+            XhciIrqInstallPhase::ControllerReady,
         ));
     }
 

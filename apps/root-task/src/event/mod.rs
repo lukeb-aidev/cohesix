@@ -142,7 +142,7 @@ use sel4_sys::seL4_CPtr;
 #[cfg(not(feature = "kernel"))]
 fn debug_uart_str(_message: &str) {}
 
-fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<128> {
+fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
     let mut buf = HeaplessString::new();
     if FmtWrite::write_fmt(&mut buf, args).is_err() {
         // Truncated diagnostic; best-effort only.
@@ -5980,7 +5980,9 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: f2_state=latched-linux-configured-no-iorx exact_error=cyw43-control-plane-sideband-command-stall"),
+            rendered.contains(
+                "wifi: f2_state=latched-linux-configured-no-iorx exact_error=cyw43-control-plane-sideband-command-stall sdhci_read_diag=f1-reply-read-command-phase-no-data-active"
+            ),
             "{rendered}"
         );
         assert!(
@@ -6000,6 +6002,42 @@ mod tests {
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_wifi_debug_command_preserves_long_exact_error_lines() {
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        wifi.snapshot.control_plane_exact_error =
+            "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready";
+        wifi.snapshot.control_plane_sdhci_read_diag = "f2-reply-read-stalled-no-buffer-ready";
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_wifi_debug(&mut wifi);
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi dump-state\n");
+        pump.poll();
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "wifi: f2_state=latched-linux-configured-no-iorx exact_error=cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready sdhci_read_diag=f2-reply-read-stalled-no-buffer-ready"
+            ),
+            "{rendered}"
+        );
     }
 
     #[cfg(feature = "kernel")]
