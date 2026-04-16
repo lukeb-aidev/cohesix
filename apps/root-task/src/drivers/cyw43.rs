@@ -257,6 +257,7 @@ fn first_control_plane_retry_after_startup_link_reply_failure(
 #[inline]
 fn startup_link_reply_failure_reason(reason: &str) -> bool {
     reason.starts_with("cyw43-function2-enable-latched-not-ready")
+        || reason.starts_with("cyw43-function2-reply-")
         || reason == "cyw43-control-plane-no-reply-linux-f2-armed"
         || reason == "cyw43-control-plane-pure-f2-startup-link-no-reply"
         || reason == "cyw43-control-plane-linux-interrupts-deferred"
@@ -282,6 +283,7 @@ fn startup_link_ioctl_timeout_preserved_exact_error(
 #[inline]
 fn reply_wait_resend_prefers_promoted_clock_reason(reason: &str) -> bool {
     reason.starts_with("cyw43-function2-enable-latched-not-ready")
+        || reason.starts_with("cyw43-function2-reply-")
         || reason == "cyw43-control-plane-no-reply-linux-f2-armed"
         || reason == "cyw43-control-plane-pure-f2-startup-link-no-reply"
         || reason == "cyw43-control-plane-linux-interrupts-deferred"
@@ -545,6 +547,9 @@ fn log_cyw43_init_failure(
     if include_control_plane_snapshot {
         state.log_cyw43_control_plane_snapshot(stage);
     }
+    if let DriverError::Hal(HalError::Unsupported(reason)) = err {
+        state.promote_cached_control_plane_exact_error(reason);
+    }
     snapshot_exact_error
 }
 
@@ -559,8 +564,11 @@ fn preserve_cyw43_init_failure_exact_error(
                 "cyw43-control-plane-no-reply-linux-f2-armed"
                     | "cyw43-control-plane-pure-f2-startup-link-no-reply"
                     | "cyw43-control-plane-startup-link-rescue-budget-exhausted"
-            ) =>
+            ) || reason.starts_with("cyw43-function2-reply-") =>
         {
+            if reason.starts_with("cyw43-function2-reply-") {
+                return DriverError::Hal(HalError::Unsupported(reason));
+            }
             if let Some(snapshot_exact_error) = snapshot_exact_error {
                 if !snapshot_exact_error.is_empty() && snapshot_exact_error != reason {
                     return DriverError::Hal(HalError::Unsupported(snapshot_exact_error));
@@ -2676,6 +2684,16 @@ mod tests {
                 true,
                 SDIO_STARTUP_CLOCK_HZ,
                 &DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-reply-read-stall-no-buffer-ready"
+                )),
+            ),
+            SDIO_DATA_CLOCK_HZ
+        );
+        assert_eq!(
+            control_plane_retry_after_reply_wait_resend_target_clock_hz(
+                true,
+                SDIO_STARTUP_CLOCK_HZ,
+                &DriverError::Hal(HalError::Unsupported(
                     "cyw43-control-plane-pure-f2-startup-link-no-reply"
                 )),
             ),
@@ -2758,6 +2776,30 @@ mod tests {
                 ),
             ),
             DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout"))
+        );
+        assert_eq!(
+            preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-reply-read-stall-no-buffer-ready",
+                )),
+                Some(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                ),
+            ),
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-reply-read-stall-no-buffer-ready",
+            ))
+        );
+        assert_eq!(
+            preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-reply-read-stall-no-buffer-ready",
+                )),
+                Some("cyw43-function2-reply-read-stall-no-buffer-ready",),
+            ),
+            DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-reply-read-stall-no-buffer-ready",
+            ))
         );
         assert_eq!(
             preserve_cyw43_init_failure_exact_error(

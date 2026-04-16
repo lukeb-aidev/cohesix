@@ -1555,6 +1555,26 @@ impl<H: Dma> XhciCtrl<H> {
         Self::write_reg_at::<u32>(mmio, op_offset + reg::USBSTS, reg::USBSTS_EINT);
     }
 
+    #[inline(always)]
+    fn write_post_start_polling_interrupt_quiesce_at(
+        mmio: usize,
+        op_offset: usize,
+        int_base: usize,
+        erdp: u64,
+        diag_stage: Option<u16>,
+    ) {
+        if let Some(stage) = diag_stage {
+            emit_xhci_diag(stage, erdp | 0x8, polling_iman_value() as u64, reg::USBSTS_EINT as u64);
+        }
+        // Mirror U-Boot's post-start interrupter cleanup on the trusted
+        // preserve-state lane: clear moderation first, then acknowledge the
+        // event dequeue pointer, interrupt pending bit, and host interrupt.
+        Self::write_reg_at::<u32>(mmio, int_base + reg::IMOD, 0);
+        Self::write_reg_at::<u64>(mmio, int_base + reg::ERDP, erdp | 0x8);
+        Self::write_reg_at::<u32>(mmio, int_base + reg::IMAN, polling_iman_value());
+        Self::write_reg_at::<u32>(mmio, op_offset + reg::USBSTS, reg::USBSTS_EINT);
+    }
+
     /// Create and initialize a new xHCI controller
     pub fn new(mmio_phys: usize, host: H) -> Result<Self> {
         emit_xhci_diag(0x0100, mmio_phys as u64, 0, 0);
@@ -3083,7 +3103,7 @@ impl<H: Dma> XhciCtrl<H> {
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
         ) {
-            Self::write_polling_interrupt_quiesce_at(
+            Self::write_post_start_polling_interrupt_quiesce_at(
                 self.mmio,
                 self.op_base - self.mmio,
                 int_base,
@@ -3401,7 +3421,7 @@ impl<H: Dma> XhciCtrl<H> {
     pub fn quiesce_polling_interrupts_post_init(&self) {
         let event_ring = self.event_ring.lock();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
-        Self::write_polling_interrupt_quiesce_at(
+        Self::write_post_start_polling_interrupt_quiesce_at(
             self.mmio,
             self.op_base - self.mmio,
             int_base,
@@ -5257,6 +5277,44 @@ mod tests {
             None,
         );
 
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u64>(mmio_base, int_base + reg::ERDP),
+            0x1234_5008
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMAN),
+            polling_iman_value()
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS),
+            reg::USBSTS_EINT
+        );
+    }
+
+    #[test]
+    fn post_start_polling_interrupt_quiesce_also_zeros_imod() {
+        let mut mmio = vec![0u8; 0x400];
+        let mmio_base = mmio.as_mut_ptr() as usize;
+        let op_offset = 0x40;
+        let int_base = 0x180;
+
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMOD, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u64>(mmio_base, int_base + reg::ERDP, 0);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMAN, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS, 0);
+
+        XhciCtrl::<MockDma>::write_post_start_polling_interrupt_quiesce_at(
+            mmio_base,
+            op_offset,
+            int_base,
+            0x1234_5000,
+            None,
+        );
+
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMOD),
+            0
+        );
         assert_eq!(
             XhciCtrl::<MockDma>::read_reg_at::<u64>(mmio_base, int_base + reg::ERDP),
             0x1234_5008
