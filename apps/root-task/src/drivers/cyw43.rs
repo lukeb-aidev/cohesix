@@ -2246,14 +2246,23 @@ mod tests {
         control_plane_retry_after_startup_link_reply_failure_target_clock_hz,
         first_control_plane_retry_after_promoted_timeout, has_sdpcm_credit,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
-        ioctl_wait_loops, is_transport_retryable, put_u16_le, set_event_mask_bit,
+        ioctl_wait_loops, is_transport_retryable, preserve_cyw43_init_failure_exact_error,
+        promoted_cyw43_init_failure_exact_error, put_u16_le, set_event_mask_bit,
         speculative_credit_window_after_promoted_timeout_retry,
+        startup_link_ioctl_timeout_preserved_exact_error,
         startup_transport_recovery_should_reset_experimental_state, DriverError, EVENT_AUTH,
-        EVENT_IF, EVENT_SET_SSID, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
-        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
+        EVENT_IF, EVENT_SET_SSID, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
     };
     use crate::hal::HalError;
+
+    fn unsupported_reason(err: &DriverError) -> Option<&'static str> {
+        match err {
+            DriverError::Hal(HalError::Unsupported(reason)) => Some(*reason),
+            _ => None,
+        }
+    }
 
     #[test]
     fn align4_rounds_up() {
@@ -2754,85 +2763,73 @@ mod tests {
             "cyw43-control-plane-no-reply-linux-f2-armed",
         ));
         assert_eq!(
-            preserve_cyw43_init_failure_exact_error(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
                 retry_err,
                 Some(
                     "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
                 ),
-            ),
-            DriverError::Hal(HalError::Unsupported(
-                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
-            ))
+            )),
+            Some("cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",)
         );
         assert_eq!(
-            preserve_cyw43_init_failure_exact_error(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
                 DriverError::Hal(HalError::Unsupported(
                     "cyw43-control-plane-no-reply-linux-f2-armed",
                 )),
                 Some(""),
-            ),
-            DriverError::Hal(HalError::Unsupported(
-                "cyw43-control-plane-no-reply-linux-f2-armed",
-            ))
+            )),
+            Some("cyw43-control-plane-no-reply-linux-f2-armed")
         );
         assert_eq!(
-            preserve_cyw43_init_failure_exact_error(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
                 DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout")),
                 Some(
                     "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
                 ),
-            ),
-            DriverError::Hal(HalError::Unsupported("sdio-function2-ready-timeout"))
+            )),
+            Some("sdio-function2-ready-timeout")
         );
         assert_eq!(
-            preserve_cyw43_init_failure_exact_error(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
                 DriverError::Hal(HalError::Unsupported(
                     "cyw43-function2-reply-read-stall-no-buffer-ready",
                 )),
                 Some(
                     "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
                 ),
-            ),
-            DriverError::Hal(HalError::Unsupported(
-                "cyw43-function2-reply-read-stall-no-buffer-ready",
-            ))
+            )),
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready")
         );
         assert_eq!(
-            preserve_cyw43_init_failure_exact_error(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
                 DriverError::Hal(HalError::Unsupported(
                     "cyw43-function2-reply-read-stall-no-buffer-ready",
                 )),
                 Some("cyw43-function2-reply-read-stall-no-buffer-ready",),
-            ),
-            DriverError::Hal(HalError::Unsupported(
-                "cyw43-function2-reply-read-stall-no-buffer-ready",
-            ))
+            )),
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready")
         );
         assert_eq!(
-            preserve_cyw43_init_failure_exact_error(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
                 DriverError::Hal(HalError::Unsupported(
                     "cyw43-control-plane-pure-f2-startup-link-no-reply",
                 )),
                 Some(
                     "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
                 ),
-            ),
-            DriverError::Hal(HalError::Unsupported(
-                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
-            ))
+            )),
+            Some("cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",)
         );
         assert_eq!(
-            preserve_cyw43_init_failure_exact_error(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
                 DriverError::Hal(HalError::Unsupported(
                     "cyw43-control-plane-startup-link-rescue-budget-exhausted",
                 )),
                 Some(
                     "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
                 ),
-            ),
-            DriverError::Hal(HalError::Unsupported(
-                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
-            ))
+            )),
+            Some("cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",)
         );
     }
 
@@ -2855,7 +2852,7 @@ mod tests {
     #[test]
     fn promoted_cyw43_init_failure_exact_error_ignores_non_unsupported_errors() {
         assert_eq!(
-            promoted_cyw43_init_failure_exact_error(&DriverError::Hal(HalError::Timeout)),
+            promoted_cyw43_init_failure_exact_error(&DriverError::Hal(HalError::NoPci)),
             None
         );
     }

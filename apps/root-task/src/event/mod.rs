@@ -2201,12 +2201,15 @@ where
             }
             UsbDebugCommand::ProbeKeyboard => {
                 self.emit_console_line("usb: probing local-seat keyboard now");
-                if let Some(preflight) = self
-                    .local_seat
-                    .as_ref()
-                    .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
+                #[cfg(all(target_arch = "aarch64", target_os = "none"))]
                 {
-                    self.emit_usb_probe_preflight(preflight);
+                    if let Some(preflight) = self
+                        .local_seat
+                        .as_ref()
+                        .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
+                    {
+                        self.emit_usb_probe_preflight(preflight);
+                    }
                 }
                 let (backend_attached, polling_enabled) = {
                     let local_seat = match self.local_seat.as_mut() {
@@ -2236,7 +2239,7 @@ where
         self.emit_ack_ok(USB_DEBUG_ACK_LABEL, Some(detail.as_str()));
     }
 
-    #[cfg(feature = "kernel")]
+    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
     fn emit_usb_probe_preflight(&mut self, status: crate::local_seat_pi4::UsbProbePreflightStatus) {
         let route_line = format_message(format_args!(
             "usb: golden_path preflight route={} attempt={}/{} current={} next={} origin={} handoff={} seed={} halt_guard={}",
@@ -2303,12 +2306,15 @@ where
             let _ = write!(line, " {action_detail}");
         }
         self.emit_console_line(line.as_str());
-        let diag = crate::local_seat_pi4::latest_xhci_diag_status();
-        let (verdict, focus) = Self::usb_capture_verdict(
-            backend_attached,
-            polling_enabled,
-            diag.as_ref().and_then(|status| status.exact_issue),
-        );
+        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        let diag_exact_issue = crate::local_seat_pi4::latest_xhci_diag_status()
+            .as_ref()
+            .and_then(|status| status.exact_issue);
+        #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
+        let diag_exact_issue = None;
+        let (mut verdict, mut focus) =
+            Self::usb_capture_verdict(backend_attached, polling_enabled, diag_exact_issue);
+        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
         if let Some(route) = crate::local_seat_pi4::latest_usb_probe_route_status() {
             let route_line = format_message(format_args!(
                 "usb: golden_path route={} attempt={}/{} current={} next={} origin={} handoff={} seed={} halt_guard={}",
@@ -2360,10 +2366,23 @@ where
                 }
             }
             self.emit_console_line(progress_line.as_str());
+            let irq_line = format_message(format_args!(
+                "usb: irq_contract irq27={} bridge={} intx={} controller_gate={}",
+                if route.irq27_bound { "yes" } else { "no" },
+                if route.bridge_irq_bound { "yes" } else { "no" },
+                if route.intx_irq_bound { "yes" } else { "no" },
+                route.controller_gate,
+            ));
+            self.emit_console_line(irq_line.as_str());
+            if let Some((route_verdict, route_focus)) = Self::usb_route_capture_verdict(&route) {
+                verdict = route_verdict;
+                focus = route_focus;
+            }
         }
         let verdict_line = format_message(format_args!("usb: verdict={verdict} focus={focus}"));
         self.emit_console_line(verdict_line.as_str());
-        if let Some(diag) = diag {
+        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        if let Some(diag) = crate::local_seat_pi4::latest_xhci_diag_status() {
             let mut diag_line =
                 format_message(format_args!("usb: xhci stage=0x{:04x}", diag.stage));
             if let Some(tag) = diag.tag {
@@ -2414,6 +2433,33 @@ where
             None if !backend_attached => ("backend-not-attached", "probe-controller"),
             None if polling_enabled => ("probe-in-progress", "poll-keyboard"),
             None => ("no-controller-edge-yet", "probe-keyboard"),
+        }
+    }
+
+    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    fn usb_route_capture_verdict(
+        route: &crate::local_seat_pi4::UsbProbeRouteStatus,
+    ) -> Option<(&'static str, &'static str)> {
+        if route.controller_gate != "none" {
+            Some(("policy-skip-before-run", "controller-gate"))
+        } else if route.outcome == "controller-init-failed" {
+            Some(("controller-init-edge", "controller-init"))
+        } else if route.progress == "controller-ready" && route.connected_mask == 0 {
+            Some(("controller-ready-no-port", "root-port-detect"))
+        } else if matches!(
+            route.outcome,
+            "address-failed"
+                | "device-desc-failed"
+                | "config-desc-failed"
+                | "config-parse-failed"
+                | "invalid-config-value"
+                | "set-config-failed"
+                | "hid-init-failed"
+                | "no-keyboard-found"
+        ) {
+            Some(("enum-failure", route.current_step))
+        } else {
+            None
         }
     }
 
@@ -2478,7 +2524,7 @@ where
         self.emit_console_line(shadow.as_str());
 
         let recovery = format_message(format_args!(
-            "wifi: f2_recover stage={} policy={} op={} drained={} count={}",
+            "wifi: f2_recover stage={} policy={} op={} drained={} count={} nak_sent={} rearm_budget={} rearm_action={}",
             snapshot.control_plane_frame_recovery_stage.unwrap_or("n/a"),
             snapshot
                 .control_plane_frame_recovery_policy
@@ -2494,6 +2540,9 @@ where
                 None => "n/a",
             },
             Self::format_optional_u16(snapshot.control_plane_frame_recovery_count),
+            Self::wifi_reply_recovery_nak_sent(snapshot),
+            Self::wifi_reply_rearm_budget(snapshot),
+            Self::wifi_reply_rearm_action(snapshot),
         ));
         self.emit_console_line(recovery.as_str());
 
@@ -2531,6 +2580,12 @@ where
             },
         ));
         self.emit_console_line(bootstrap.as_str());
+        let reply_probe = format_message(format_args!(
+            "wifi: reply_probe lane={} effective_clock={}Hz",
+            Self::wifi_reply_probe_lane(snapshot),
+            Self::wifi_reply_probe_effective_clock_hz(snapshot),
+        ));
+        self.emit_console_line(reply_probe.as_str());
         let replay_full_bootstrap = if snapshot.control_plane_exact_error.is_empty() {
             "n/a"
         } else if crate::net::cyw43_control_plane_bootstrap_replay_reason(
@@ -2567,6 +2622,13 @@ where
             verdict,
         ));
         self.emit_console_line(golden_route.as_str());
+        let reply_contract = format_message(format_args!(
+            "wifi: reply_contract path={} strict_recovery_f2={} blocker_class={}",
+            Self::wifi_reply_contract_path(snapshot),
+            Self::wifi_reply_contract_strict_recovery_f2(snapshot),
+            Self::wifi_reply_contract_blocker_class(snapshot),
+        ));
+        self.emit_console_line(reply_contract.as_str());
 
         let control = format_message(format_args!(
             "wifi: f2_state={} exact_error={} sdhci_read_diag={}",
@@ -2752,6 +2814,144 @@ where
             "function1-sideband" => "first-function2-reply",
             "first-function2-reply" => "promote-link",
             _ => "wait-firmware-ready",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_contract_path(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if snapshot.control_plane_no_ht_transport
+            && (snapshot.control_plane_startup_link_stable
+                || matches!(
+                    snapshot.control_plane_reply_mode,
+                    "startup-link" | "startup-link-resume"
+                ))
+        {
+            "startup-link-f2"
+        } else if snapshot
+            .control_plane_exact_error
+            .starts_with("cyw43-control-plane-sideband-")
+            || snapshot.control_plane_exact_error == "cyw43-control-plane-sideband-unreadable"
+        {
+            "function1-sideband"
+        } else if snapshot
+            .control_plane_exact_error
+            .starts_with("cyw43-function2-enable-latched-not-ready")
+            || snapshot
+                .control_plane_exact_error
+                .starts_with("cyw43-function2-ready-")
+        {
+            "function2-ready"
+        } else {
+            "strict-control-plane"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_contract_strict_recovery_f2(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if snapshot.control_plane_no_ht_transport
+            && snapshot.control_plane_f2_state == "latched-linux-configured-no-iorx"
+            && matches!(
+                snapshot.control_plane_reply_mode,
+                "startup-link" | "startup-link-resume"
+            )
+        {
+            "preserve-latch"
+        } else {
+            "repoll"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_contract_blocker_class(snapshot: &WifiDebugSnapshot) -> &'static str {
+        let exact_error = snapshot.control_plane_exact_error;
+        if exact_error.starts_with("cyw43-function2-reply-") {
+            "direct-f2-reply"
+        } else if exact_error.starts_with("cyw43-control-plane-sideband-")
+            || exact_error == "cyw43-control-plane-sideband-unreadable"
+        {
+            "f1-sideband"
+        } else if exact_error.starts_with("cyw43-function2-enable-latched-not-ready")
+            || exact_error.starts_with("cyw43-function2-ready-")
+        {
+            "f2-ready"
+        } else if exact_error.starts_with("cyw43-function2-interrupt")
+            || exact_error == "cyw43-control-plane-linux-interrupts-deferred"
+        {
+            "f2-interrupts"
+        } else if exact_error.is_empty() {
+            "none"
+        } else {
+            "transport"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_probe_lane(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if snapshot.control_plane_no_ht_transport
+            && matches!(
+                snapshot.control_plane_reply_mode,
+                "startup-link" | "startup-link-resume"
+            )
+        {
+            "startup-link"
+        } else if snapshot.control_plane_no_ht_transport
+            && snapshot.control_plane_startup_link_stable
+        {
+            "passive-startup-link"
+        } else if snapshot.control_plane_no_ht_transport {
+            "bounded-no-ht"
+        } else {
+            "strict"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_probe_effective_clock_hz(snapshot: &WifiDebugSnapshot) -> u32 {
+        if snapshot.control_plane_no_ht_transport
+            && matches!(
+                snapshot.control_plane_reply_mode,
+                "startup-link" | "startup-link-resume"
+            )
+        {
+            snapshot.preferred_data_clock_hz
+        } else {
+            snapshot.current_clock_hz
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_recovery_nak_sent(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if snapshot.control_plane_frame_recovery_policy == Some("linux-rxfail")
+            && snapshot.control_plane_frame_recovery_write == Some(false)
+        {
+            "yes"
+        } else {
+            "no"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_rearm_budget(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if snapshot.control_plane_no_ht_transport
+            && matches!(
+                snapshot.control_plane_reply_mode,
+                "startup-link" | "startup-link-resume"
+            )
+        {
+            "reply-strict-recovery"
+        } else if snapshot.control_plane_no_ht_transport {
+            "reply-probe-bypass"
+        } else {
+            "strict"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_rearm_action(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if Self::wifi_reply_contract_strict_recovery_f2(snapshot) == "preserve-latch" {
+            "skip-function2-ready-repoll"
+        } else {
+            "force-function2-ready-repoll"
         }
     }
 
@@ -5113,6 +5313,10 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    type KernelConsoleTestPump =
+        EventPump<'static, LoopbackSerial<32>, TestTimer, NullIpc, TicketTable<4>, 32, 32, 32>;
+
+    #[cfg(feature = "kernel")]
     struct StubIpc {
         dispatched: bool,
         message: Option<BootstrapMessage>,
@@ -5926,8 +6130,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_wifi_debug_command_uses_attached_debug_ops() {
-        let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -5938,6 +6142,7 @@ mod tests {
             EventPump::new(serial, timer, ipc, store, &mut audit).with_wifi_debug(&mut wifi);
 
         pump.serial_mut().driver_mut().push_rx(b"wifi dump-state\n");
+        pump.poll();
         pump.poll();
 
         let transcript: Vec<u8> = pump
@@ -5961,7 +6166,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: snapshot source=cached stage=control-plane-startup-link-rearm-stalled rescue=1/2 passive_limit=4 replay_full_bootstrap=no"
+                "wifi: snapshot source=cached stage=control-plane-startup-link-rearm-stalled rescue=1/2 passive_limit=8 replay_full_bootstrap=no"
             ),
             "{rendered}"
         );
@@ -5972,11 +6177,21 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered.contains(
+                "wifi: reply_contract path=startup-link-f2 strict_recovery_f2=preserve-latch blocker_class=f1-sideband"
+            ),
+            "{rendered}"
+        );
+        assert!(
             rendered.contains("safe_profile_locked=yes safe_reason=promoted-io-unstable"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: f2_recover stage=control-plane-reply-full-block-read policy=linux-rxfail op=read drained=no count=0x0040"),
+            rendered.contains("wifi: f2_recover stage=control-plane-reply-full-block-read policy=linux-rxfail op=read drained=no count=0x0040 nak_sent=yes rearm_budget=reply-strict-recovery rearm_action=skip-function2-ready-repoll"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: reply_probe lane=startup-link effective_clock=3125000Hz"),
             "{rendered}"
         );
         assert!(
@@ -6007,8 +6222,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_wifi_debug_command_preserves_long_exact_error_lines() {
-        let driver = LoopbackSerial::<512>::new();
-        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -6022,6 +6237,7 @@ mod tests {
             EventPump::new(serial, timer, ipc, store, &mut audit).with_wifi_debug(&mut wifi);
 
         pump.serial_mut().driver_mut().push_rx(b"wifi dump-state\n");
+        pump.poll();
         pump.poll();
 
         let transcript: Vec<u8> = pump
@@ -6106,6 +6322,7 @@ mod tests {
 
         pump.serial_mut().driver_mut().push_rx(b"usb probe-kbd\n");
         pump.poll();
+        pump.poll();
 
         let transcript: Vec<u8> = pump
             .serial_mut()
@@ -6182,11 +6399,7 @@ mod tests {
             control_plane_exact_error: "cyw43-control-plane-pure-f2-startup-link-no-reply",
         };
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::wifi_capture_verdict(&snapshot),
+            KernelConsoleTestPump::wifi_capture_verdict(&snapshot),
             ("function2-reply-edge", "first-function2-reply")
         );
     }
@@ -6237,20 +6450,71 @@ mod tests {
             control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
         };
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::wifi_capture_verdict(&snapshot),
+            KernelConsoleTestPump::wifi_capture_verdict(&snapshot),
             ("function2-reply-edge", "first-function2-reply")
         );
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::wifi_golden_path_current_step(&snapshot),
+            KernelConsoleTestPump::wifi_golden_path_current_step(&snapshot),
             "first-function2-reply"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_reply_contract_prefers_preserve_latch_on_startup_link() {
+        let snapshot = WifiDebugSnapshot {
+            power_state: WifiPowerState::On,
+            reset_state: WifiResetState::Deasserted,
+            current_clock_hz: 400_000,
+            preferred_data_clock_hz: 12_500_000,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0xb0ff_ff00,
+            io_enable: Some(0x06),
+            io_ready: Some(0x02),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: None,
+            shadow_backplane_window: None,
+            shadow_backplane_fn_addr: None,
+            control_plane_frame_recovery_stage: Some("control-plane-reply-speculative-read"),
+            control_plane_frame_recovery_policy: Some("linux-rxfail"),
+            control_plane_frame_recovery_write: Some(false),
+            control_plane_frame_recovery_drained: Some(true),
+            control_plane_frame_recovery_count: Some(0),
+            control_plane_bootstrap_phase: "startup-link-passive-wait",
+            control_plane_reply_mode: "startup-link",
+            control_plane_reply_attempts: 0,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: true,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "promoted-io-unstable",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "cyw43-init-control-plane-fail",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 2,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f2-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
+        };
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_contract_path(&snapshot),
+            "startup-link-f2"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_contract_strict_recovery_f2(&snapshot),
+            "preserve-latch"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_contract_blocker_class(&snapshot),
+            "direct-f2-reply"
         );
     }
 
@@ -6300,11 +6564,7 @@ mod tests {
             control_plane_exact_error: "cyw43-control-plane-sideband-command-timeout",
         };
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::wifi_capture_verdict(&snapshot),
+            KernelConsoleTestPump::wifi_capture_verdict(&snapshot),
             ("function1-sideband-edge", "function1-sideband")
         );
     }
@@ -6356,19 +6616,11 @@ mod tests {
                 "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
         };
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::wifi_capture_verdict(&snapshot),
+            KernelConsoleTestPump::wifi_capture_verdict(&snapshot),
             ("function2-reply-edge", "first-function2-reply")
         );
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::wifi_golden_path_current_step(&snapshot),
+            KernelConsoleTestPump::wifi_golden_path_current_step(&snapshot),
             "first-function2-reply"
         );
     }
@@ -6419,11 +6671,7 @@ mod tests {
             control_plane_exact_error: "",
         };
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::wifi_capture_verdict(&snapshot),
+            KernelConsoleTestPump::wifi_capture_verdict(&snapshot),
             ("function2-reply-edge", "first-function2-reply")
         );
     }
@@ -6474,19 +6722,11 @@ mod tests {
             control_plane_exact_error: "cyw43-control-plane-sideband-command-timeout",
         };
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::wifi_golden_path_current_step(&snapshot),
+            KernelConsoleTestPump::wifi_golden_path_current_step(&snapshot),
             "function1-sideband"
         );
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::wifi_golden_path_next_step(&snapshot),
+            KernelConsoleTestPump::wifi_golden_path_next_step(&snapshot),
             "first-function2-reply"
         );
     }
@@ -6495,11 +6735,7 @@ mod tests {
     #[test]
     fn usb_capture_verdict_classifies_run_transition_edge() {
         assert_eq!(
-            EventPump::<
-                SerialPort<LoopbackSerial<32>, 32, 32, 32>,
-                TestTimer,
-                NullIpc,
-            >::usb_capture_verdict(true, true, Some("usbcmd-run-store-wedged")),
+            KernelConsoleTestPump::usb_capture_verdict(true, true, Some("usbcmd-run-store-wedged"),),
             ("run-transition-edge", "usbcmd-run")
         );
     }
@@ -6549,8 +6785,8 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_debug_command_reports_wifi_network_phase() {
-        let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -6574,6 +6810,7 @@ mod tests {
             .with_network(&mut net);
 
         pump.serial_mut().driver_mut().push_rx(b"wifi dump-state\n");
+        pump.poll();
         pump.poll();
 
         let transcript: Vec<u8> = pump

@@ -99,8 +99,9 @@ const SEL4_TCB_OBJECT_WORD: seL4_Word = sel4_sys::seL4_TCBObject as seL4_Word;
 const SEL4_ENDPOINT_OBJECT_WORD: seL4_Word = sel4_sys::seL4_EndpointObject as seL4_Word;
 const SEL4_NOTIFICATION_OBJECT_WORD: seL4_Word = sel4_sys::seL4_NotificationObject as seL4_Word;
 const SEL4_CAP_TABLE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_CapTableObject as seL4_Word;
-const SEL4_ARM_PAGE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_Page as seL4_Word;
-const SEL4_ARM_LARGE_PAGE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_LargePage as seL4_Word;
+const SEL4_ARM_PAGE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_SmallPageObject as seL4_Word;
+const SEL4_ARM_LARGE_PAGE_OBJECT_WORD: seL4_Word =
+    sel4_sys::seL4_ARM_LargePageObjectType as seL4_Word;
 const SEL4_ARM_PAGE_TABLE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_PageTableObject as seL4_Word;
 // Local-seat DMA frame trace can generate thousands of UART lines during USB
 // enumeration; keep it opt-in for targeted diagnostics.
