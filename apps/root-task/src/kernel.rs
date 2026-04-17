@@ -735,6 +735,22 @@ const fn dtb_rejected_net_policy_reason(source: Pi4BootNetPolicySource) -> Optio
     }
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn format_net_console_init_detail<DE: fmt::Display>(
+    err: &crate::net::NetConsoleError<DE>,
+) -> HeaplessString<192> {
+    const UNSUPPORTED_PREFIX: &str = "unsupported operation: ";
+
+    let mut rendered = HeaplessString::<192>::new();
+    let _ = write!(rendered, "{err}");
+    let normalized = rendered
+        .strip_prefix(UNSUPPORTED_PREFIX)
+        .unwrap_or(rendered.as_str());
+    let mut detail = HeaplessString::<192>::new();
+    let _ = write!(detail, "{normalized}");
+    detail
+}
+
 fn dtb_prop_cstr<'a>(value: &'a [u8]) -> Option<&'a str> {
     let end = value
         .iter()
@@ -4650,15 +4666,15 @@ fn bootstrap<P: Platform>(
                             "[net-console] disabled reason={reason} err={err_code}"
                         );
                         boot_log::force_uart_line(fail_line.as_str());
+                        let detail = format_net_console_init_detail(&err);
                         let mut detail_line = heapless::String::<192>::new();
-                        let _ = write!(detail_line, "[net-console] init detail={err}");
+                        let _ =
+                            write!(detail_line, "[net-console] init detail={}", detail.as_str());
                         boot_log::force_uart_line(detail_line.as_str());
-                        log::warn!("{} detail={err}", fail_line.as_str());
+                        log::warn!("{} detail={}", fail_line.as_str(), detail.as_str());
                         let virtio_present = cfg!(feature = "net-backend-virtio")
                             && net_backend_label == "virtio-net"
                             && !matches!(err, NetConsoleError::NoDevice);
-                        let mut detail = heapless::String::<192>::new();
-                        let _ = write!(detail, "{err}");
                         (None, virtio_present, Some(detail), net_backend_label)
                     }
                 }
@@ -6726,10 +6742,10 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
 mod tests {
     use super::{
         bounded_message_words, copy_message_words, dtb_rejected_net_policy_reason,
-        fault_ep_poll_budget_exhausted, preview_payload, ControlEndpoint, FaultEndpoint, KernelIpc,
-        PayloadPreview, Pi4BootNetPolicySource, StagedMessage, StrayTracker,
-        FAULT_EP_POLL_BUDGET_PER_DISPATCH, HEX_CHUNK_BYTES, MAX_HEX_LINES, MAX_MESSAGE_WORDS,
-        MAX_PAYLOAD_LOG_BYTES,
+        fault_ep_poll_budget_exhausted, format_net_console_init_detail, preview_payload,
+        ControlEndpoint, FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource,
+        StagedMessage, StrayTracker, FAULT_EP_POLL_BUDGET_PER_DISPATCH, HEX_CHUNK_BYTES,
+        MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
     };
     use crate::event::IpcDispatcher;
     use crate::rust_alloc::vec::Vec;
@@ -6869,6 +6885,37 @@ mod tests {
                 "wifi-psk-too-short",
             )),
             Some("wifi-psk-too-short")
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn format_net_console_init_detail_strips_unsupported_operation_prefix() {
+        struct MockErr(&'static str);
+
+        impl core::fmt::Display for MockErr {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+
+        let err = crate::net::NetConsoleError::Init(crate::net::NetStackError::Driver(MockErr(
+            "unsupported operation: cyw43-function2-reply-read-stall-no-buffer-ready",
+        )));
+        assert_eq!(
+            format_net_console_init_detail(&err).as_str(),
+            "cyw43-function2-reply-read-stall-no-buffer-ready",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn format_net_console_init_detail_preserves_other_text() {
+        let err =
+            crate::net::NetConsoleError::<&'static str>::InvalidConfig("wifi-credentials-missing");
+        assert_eq!(
+            format_net_console_init_detail(&err).as_str(),
+            "invalid net config: wifi-credentials-missing",
         );
     }
 

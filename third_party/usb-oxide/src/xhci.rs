@@ -80,6 +80,7 @@ const PORT_CHANGE_BITS: u32 = reg::PORTSC_CSC
     | reg::PORTSC_PRC
     | reg::PORTSC_PLC
     | reg::PORTSC_CEC;
+const POST_START_POLLING_IRQ_QUIESCE_RETRY_SPINS: usize = 32;
 // Keep only bits that are safe to mirror back across maintenance writes.
 // PORTSC_PED must not be mirrored: on some USB2 paths it is RW1CS and writing
 // a sampled 1 can clear the enabled state immediately after reset/ACK.
@@ -110,6 +111,13 @@ const fn polling_iman_value() -> u32 {
 #[inline(always)]
 const fn masked_usbcmd(usbcmd: u32) -> u32 {
     usbcmd & !(reg::USBCMD_INTE | reg::USBCMD_HSEE)
+}
+
+#[inline(always)]
+const fn post_start_polling_irq_quiesce_pending_bits(usbcmd: u32, usbsts: u32, iman: u32) -> u32 {
+    (usbcmd & (reg::USBCMD_INTE | reg::USBCMD_HSEE))
+        | (usbsts & USBSTS_CLEAR_MASK)
+        | (iman & reg::IMAN_IE)
 }
 
 #[inline(always)]
@@ -1548,7 +1556,12 @@ impl<H: Dma> XhciCtrl<H> {
         diag_stage: Option<u16>,
     ) {
         if let Some(stage) = diag_stage {
-            emit_xhci_diag(stage, erdp | 0x8, polling_iman_value() as u64, reg::USBSTS_EINT as u64);
+            emit_xhci_diag(
+                stage,
+                erdp | 0x8,
+                polling_iman_value() as u64,
+                reg::USBSTS_EINT as u64,
+            );
         }
         Self::write_reg_at::<u64>(mmio, int_base + reg::ERDP, erdp | 0x8);
         Self::write_reg_at::<u32>(mmio, int_base + reg::IMAN, polling_iman_value());
@@ -1561,18 +1574,88 @@ impl<H: Dma> XhciCtrl<H> {
         op_offset: usize,
         int_base: usize,
         erdp: u64,
+        seed_usbcmd: Option<u32>,
+        skip_imod_write: bool,
         diag_stage: Option<u16>,
     ) {
         if let Some(stage) = diag_stage {
-            emit_xhci_diag(stage, erdp | 0x8, polling_iman_value() as u64, reg::USBSTS_EINT as u64);
+            emit_xhci_diag(
+                stage,
+                erdp | 0x8,
+                polling_iman_value() as u64,
+                USBSTS_CLEAR_MASK as u64,
+            );
         }
         // Mirror U-Boot's post-start interrupter cleanup on the trusted
-        // preserve-state lane: clear moderation first, then acknowledge the
-        // event dequeue pointer, interrupt pending bit, and host interrupt.
-        Self::write_reg_at::<u32>(mmio, int_base + reg::IMOD, 0);
-        Self::write_reg_at::<u64>(mmio, int_base + reg::ERDP, erdp | 0x8);
-        Self::write_reg_at::<u32>(mmio, int_base + reg::IMAN, polling_iman_value());
-        Self::write_reg_at::<u32>(mmio, op_offset + reg::USBSTS, reg::USBSTS_EINT);
+        // preserve-state lane: keep the controller in poll-only mode by masking
+        // command IRQ enables, preserve firmware-owned moderation, then
+        // acknowledge the event dequeue pointer, interrupt pending bit, and any
+        // safe RW1C USBSTS interrupt causes inherited from firmware.
+        let usbcmd =
+            seed_usbcmd.unwrap_or_else(|| Self::read_reg_at::<u32>(mmio, op_offset + reg::USBCMD));
+        let masked = masked_usbcmd(usbcmd);
+        if diag_stage.is_some() {
+            emit_xhci_diag(
+                0x0320,
+                usbcmd as u64,
+                masked as u64,
+                (usbcmd ^ masked) as u64,
+            );
+        }
+        if usbcmd != masked {
+            if diag_stage.is_some() {
+                Self::write_reg_u32_store_diag_at(
+                    mmio,
+                    op_offset + reg::USBCMD,
+                    masked,
+                    0x0321,
+                    0x0322,
+                    0,
+                );
+            } else {
+                Self::write_reg_at::<u32>(mmio, op_offset + reg::USBCMD, masked);
+            }
+        } else if diag_stage.is_some() {
+            emit_xhci_diag(0x0323, reg::USBCMD as u64, masked as u64, 0);
+        }
+        if !skip_imod_write {
+            if diag_stage.is_some() {
+                Self::write_reg_u32_store_diag_at(mmio, int_base + reg::IMOD, 0, 0x0324, 0x0325, 0);
+            } else {
+                Self::write_reg_at::<u32>(mmio, int_base + reg::IMOD, 0);
+            }
+        }
+        if diag_stage.is_some() {
+            Self::write_reg_u64_done_diag_at(
+                mmio,
+                int_base + reg::ERDP,
+                erdp | 0x8,
+                0x0326,
+                0x0327,
+                0x0328,
+                0x0329,
+            );
+            Self::write_reg_u32_store_diag_at(
+                mmio,
+                int_base + reg::IMAN,
+                polling_iman_value(),
+                0x032a,
+                0x032b,
+                0,
+            );
+            Self::write_reg_u32_store_diag_at(
+                mmio,
+                op_offset + reg::USBSTS,
+                USBSTS_CLEAR_MASK,
+                0x032c,
+                0x032d,
+                0,
+            );
+        } else {
+            Self::write_reg_at::<u64>(mmio, int_base + reg::ERDP, erdp | 0x8);
+            Self::write_reg_at::<u32>(mmio, int_base + reg::IMAN, polling_iman_value());
+            Self::write_reg_at::<u32>(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
+        }
     }
 
     /// Create and initialize a new xHCI controller
@@ -3097,8 +3180,9 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x0273, usbsts_after_run as u64, 0, 0);
         }
 
-        // Match U-Boot's post-start ordering for interrupter state: zero
-        // moderation and pending after the controller is running.
+        // Match U-Boot's post-start ordering for interrupter state: preserve
+        // firmware-owned moderation while clearing poll-visible pending state
+        // after the controller is running.
         if runtime_needs_post_run_polling_irq_quiesce_with_snapshot(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -3108,7 +3192,18 @@ impl<H: Dma> XhciCtrl<H> {
                 self.op_base - self.mmio,
                 int_base,
                 event_ring_dequeue,
+                run_usbcmd_snapshot_seed(trusted_runtime_seed_snapshot)
+                    .filter(|_| preserve_firmware_state),
+                preserve_firmware_state,
                 Some(0x0316),
+            );
+            self.settle_post_start_polling_interrupt_quiesce(
+                int_base,
+                event_ring_dequeue,
+                preserve_firmware_state,
+                0x0317,
+                0x0318,
+                0x0319,
             );
         } else if skip_post_run_interrupter_zeroing_with_snapshot(
             self.firmware_handoff,
@@ -3426,7 +3521,61 @@ impl<H: Dma> XhciCtrl<H> {
             self.op_base - self.mmio,
             int_base,
             event_ring.dequeue_ptr(&*self.host),
+            run_usbcmd_snapshot_seed(self.runtime_seed_snapshot)
+                .filter(|_| preserve_firmware_handoff_config(self.firmware_handoff)),
+            preserve_firmware_handoff_config(self.firmware_handoff),
             Some(0x0315),
+        );
+        self.settle_post_start_polling_interrupt_quiesce(
+            int_base,
+            event_ring.dequeue_ptr(&*self.host),
+            preserve_firmware_handoff_config(self.firmware_handoff),
+            0x0317,
+            0x0318,
+            0x0319,
+        );
+    }
+
+    fn settle_post_start_polling_interrupt_quiesce(
+        &self,
+        int_base: usize,
+        erdp: u64,
+        skip_imod_write: bool,
+        pending_stage: u16,
+        settled_stage: u16,
+        timeout_stage: u16,
+    ) {
+        for attempt in 0..POST_START_POLLING_IRQ_QUIESCE_RETRY_SPINS {
+            let usbcmd = self.read_op::<u32>(reg::USBCMD);
+            let usbsts = self.read_op::<u32>(reg::USBSTS);
+            let iman = self.read_reg::<u32>(int_base + reg::IMAN);
+            let pending = post_start_polling_irq_quiesce_pending_bits(usbcmd, usbsts, iman);
+            let packed_state = ((usbsts as u64) << 32) | iman as u64;
+            if pending == 0 {
+                emit_xhci_diag(settled_stage, attempt as u64, usbcmd as u64, packed_state);
+                return;
+            }
+            emit_xhci_diag(pending_stage, attempt as u64, usbcmd as u64, packed_state);
+            Self::write_post_start_polling_interrupt_quiesce_at(
+                self.mmio,
+                self.op_base - self.mmio,
+                int_base,
+                erdp,
+                None,
+                skip_imod_write,
+                None,
+            );
+            spin_loop();
+        }
+
+        let usbcmd = self.read_op::<u32>(reg::USBCMD);
+        let usbsts = self.read_op::<u32>(reg::USBSTS);
+        let iman = self.read_reg::<u32>(int_base + reg::IMAN);
+        emit_xhci_diag(
+            timeout_stage,
+            POST_START_POLLING_IRQ_QUIESCE_RETRY_SPINS as u64,
+            usbcmd as u64,
+            ((usbsts as u64) << 32) | iman as u64,
         );
     }
 
@@ -3886,15 +4035,14 @@ mod tests {
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, halt_revalidation_needed,
         masked_usbcmd, parse_controller_params, polling_iman_value, port_ready_for_enumeration,
-        preserve_firmware_handoff_config, preserve_state_crcr_publish_seed,
-        preserve_state_crcr_write_is_redundant, preserve_state_dcbaap_publish_seed,
-        preserve_state_dcbaap_write_is_redundant, preserve_state_erdp_publish_seed,
-        preserve_state_erdp_write_is_redundant, preserve_state_erstba_publish_seed,
-        preserve_state_erstba_write_is_redundant, preserve_state_erstsz_publish_seed,
-        preserve_state_erstsz_write_is_redundant,
+        post_start_polling_irq_quiesce_pending_bits, preserve_firmware_handoff_config,
+        preserve_state_crcr_publish_seed, preserve_state_crcr_write_is_redundant,
+        preserve_state_dcbaap_publish_seed, preserve_state_dcbaap_write_is_redundant,
+        preserve_state_erdp_publish_seed, preserve_state_erdp_write_is_redundant,
+        preserve_state_erstba_publish_seed, preserve_state_erstba_write_is_redundant,
+        preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
-        skip_dnctrl_write_with_snapshot,
         replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
         run_usbcmd_needs_live_seed_read, run_usbcmd_prefers_snapshot_seed,
         run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
@@ -3909,9 +4057,9 @@ mod tests {
         runtime_preserve_stop_state_handoff, runtime_seed_snapshot_flag_bits,
         runtime_stop_state_needs_post_run_settle, skip_config_write_during_init,
         skip_config_write_during_init_with_snapshot,
-        skip_constructor_polling_scrub_writes_with_snapshot, skip_doorbell_readback_after_ring,
-        skip_init_pre_reset_scrub_writes, skip_init_pre_reset_scrub_writes_with_snapshot,
-        skip_legacy_ownership_claim_for_handoff,
+        skip_constructor_polling_scrub_writes_with_snapshot, skip_dnctrl_write_with_snapshot,
+        skip_doorbell_readback_after_ring, skip_init_pre_reset_scrub_writes,
+        skip_init_pre_reset_scrub_writes_with_snapshot, skip_legacy_ownership_claim_for_handoff,
         skip_legacy_ownership_claim_for_handoff_with_snapshot, skip_live_halt_revalidation,
         skip_live_halt_revalidation_with_snapshot, skip_live_post_reset_verification_readbacks,
         skip_live_post_reset_verification_readbacks_with_snapshot,
@@ -5298,6 +5446,11 @@ mod tests {
         let op_offset = 0x40;
         let int_base = 0x180;
 
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(
+            mmio_base,
+            op_offset + reg::USBCMD,
+            reg::USBCMD_INTE | reg::USBCMD_HSEE | reg::USBCMD_RUN,
+        );
         XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMOD, 0xffff_ffff);
         XhciCtrl::<MockDma>::write_reg_at::<u64>(mmio_base, int_base + reg::ERDP, 0);
         XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMAN, 0xffff_ffff);
@@ -5309,11 +5462,17 @@ mod tests {
             int_base,
             0x1234_5000,
             None,
+            false,
+            None,
         );
 
         assert_eq!(
             XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMOD),
             0
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD),
+            reg::USBCMD_RUN
         );
         assert_eq!(
             XhciCtrl::<MockDma>::read_reg_at::<u64>(mmio_base, int_base + reg::ERDP),
@@ -5325,7 +5484,105 @@ mod tests {
         );
         assert_eq!(
             XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS),
-            reg::USBSTS_EINT
+            USBSTS_CLEAR_MASK
+        );
+    }
+
+    #[test]
+    fn post_start_polling_interrupt_quiesce_uses_snapshot_seeded_usbcmd_when_available() {
+        let mut mmio = vec![0u8; 0x400];
+        let mmio_base = mmio.as_mut_ptr() as usize;
+        let op_offset = 0x40;
+        let int_base = 0x180;
+
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(
+            mmio_base,
+            op_offset + reg::USBCMD,
+            reg::USBCMD_RUN | reg::USBCMD_EWE | reg::USBCMD_INTE | reg::USBCMD_HSEE,
+        );
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMOD, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u64>(mmio_base, int_base + reg::ERDP, 0);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMAN, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS, 0);
+
+        XhciCtrl::<MockDma>::write_post_start_polling_interrupt_quiesce_at(
+            mmio_base,
+            op_offset,
+            int_base,
+            0x1234_5000,
+            Some(reg::USBCMD_RUN | reg::USBCMD_INTE | reg::USBCMD_HSEE),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD),
+            reg::USBCMD_RUN
+        );
+    }
+
+    #[test]
+    fn post_start_polling_irq_quiesce_pending_bits_tracks_irq_enables_and_pending_status() {
+        assert_eq!(
+            post_start_polling_irq_quiesce_pending_bits(
+                reg::USBCMD_INTE | reg::USBCMD_RUN,
+                reg::USBSTS_PCD | reg::USBSTS_HCH,
+                reg::IMAN_IE | reg::IMAN_IP,
+            ),
+            reg::USBCMD_INTE | reg::USBSTS_PCD | reg::IMAN_IE
+        );
+        assert_eq!(
+            post_start_polling_irq_quiesce_pending_bits(reg::USBCMD_RUN, reg::USBSTS_HCH, 0),
+            0
+        );
+    }
+
+    #[test]
+    fn post_start_polling_interrupt_quiesce_preserve_state_skips_imod_write() {
+        let mut mmio = vec![0u8; 0x400];
+        let mmio_base = mmio.as_mut_ptr() as usize;
+        let op_offset = 0x40;
+        let int_base = 0x180;
+
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(
+            mmio_base,
+            op_offset + reg::USBCMD,
+            reg::USBCMD_INTE | reg::USBCMD_HSEE | reg::USBCMD_RUN,
+        );
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMOD, 0x1234_5678);
+        XhciCtrl::<MockDma>::write_reg_at::<u64>(mmio_base, int_base + reg::ERDP, 0);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMAN, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS, 0);
+
+        XhciCtrl::<MockDma>::write_post_start_polling_interrupt_quiesce_at(
+            mmio_base,
+            op_offset,
+            int_base,
+            0x1234_5000,
+            Some(reg::USBCMD_RUN | reg::USBCMD_INTE | reg::USBCMD_HSEE),
+            true,
+            None,
+        );
+
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMOD),
+            0x1234_5678
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD),
+            reg::USBCMD_RUN
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u64>(mmio_base, int_base + reg::ERDP),
+            0x1234_5008
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMAN),
+            polling_iman_value()
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS),
+            USBSTS_CLEAR_MASK
         );
     }
 

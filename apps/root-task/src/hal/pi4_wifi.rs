@@ -3109,6 +3109,16 @@ fn preserve_cached_first_reply_blocker_in_snapshot(
                         || reason.starts_with("cyw43-control-plane-sideband-")
                         || reason.starts_with("cyw43-function2-enable-latched-not-ready-")
             ));
+    let snapshot_f2_state_degraded_from_cached_linux_configured = cached.control_plane_f2_state
+        == "latched-linux-configured-no-iorx"
+        && snapshot.control_plane_f2_state == "latched-no-iorx";
+    let same_first_reply_blocker_family =
+        control_plane_exact_error_is_first_reply_blocker(cached.control_plane_exact_error)
+            && control_plane_exact_error_is_first_reply_blocker(snapshot.control_plane_exact_error);
+    let same_direct_reply_blocker = cached
+        .control_plane_exact_error
+        .starts_with("cyw43-function2-reply-")
+        && snapshot.control_plane_exact_error == cached.control_plane_exact_error;
 
     if control_plane_exact_error_is_first_reply_blocker(cached.control_plane_exact_error)
         && (control_plane_exact_error_is_generic_no_reply(snapshot.control_plane_exact_error)
@@ -3120,8 +3130,77 @@ fn preserve_cached_first_reply_blocker_in_snapshot(
         if cached.control_plane_sdhci_read_diag != "none" {
             snapshot.control_plane_sdhci_read_diag = cached.control_plane_sdhci_read_diag;
         }
+        if snapshot_f2_state_degraded_from_cached_linux_configured
+            && (snapshot_is_same_first_reply_recovery || same_direct_reply_blocker)
+        {
+            snapshot.control_plane_f2_state = cached.control_plane_f2_state;
+        }
+    }
+    if snapshot_f2_state_degraded_from_cached_linux_configured
+        && (same_direct_reply_blocker
+            || (snapshot_is_same_first_reply_recovery && same_first_reply_blocker_family))
+    {
+        snapshot.control_plane_f2_state = cached.control_plane_f2_state;
+        if same_direct_reply_blocker && cached.control_plane_sdhci_read_diag != "none" {
+            snapshot.control_plane_sdhci_read_diag = cached.control_plane_sdhci_read_diag;
+        }
     }
     snapshot
+}
+
+#[inline]
+fn cached_first_reply_blocker_preserves_linux_configured_f2_state(
+    cached: &WifiDebugSnapshot,
+) -> bool {
+    cached.control_plane_no_ht_transport
+        && cached.control_plane_bootstrap_phase == "startup-link-recovery"
+        && cached.control_plane_f2_state == "latched-linux-configured-no-iorx"
+        && control_plane_exact_error_is_first_reply_blocker(cached.control_plane_exact_error)
+}
+
+#[inline]
+fn should_preserve_function2_enable_latch_from_cached_first_reply_blocker(
+    ioex: Option<u8>,
+    iorx: Option<u8>,
+    hint_reads_unstable: bool,
+    cached: Option<&WifiDebugSnapshot>,
+) -> bool {
+    hint_reads_unstable
+        && control_plane_function2_enable_latched_not_ready(ioex, iorx)
+        && cached.is_some_and(cached_first_reply_blocker_preserves_linux_configured_f2_state)
+}
+
+#[inline]
+fn effective_control_plane_snapshot_f2_linux_state(
+    ioex: Option<u8>,
+    iorx: Option<u8>,
+    ienx: Option<u8>,
+    watermark: Option<u8>,
+    devctl: Option<u8>,
+    mesbusy: Option<u8>,
+    hint_reads_unstable: bool,
+    cached: Option<&WifiDebugSnapshot>,
+) -> (&'static str, bool, bool) {
+    if watermark.is_none()
+        && devctl.is_none()
+        && mesbusy.is_none()
+        && should_preserve_function2_enable_latch_from_cached_first_reply_blocker(
+            ioex,
+            iorx,
+            hint_reads_unstable,
+            cached,
+        )
+    {
+        return ("latched-linux-configured-no-iorx", true, true);
+    }
+
+    (
+        control_plane_function2_linux_state_label(ioex, iorx, ienx, watermark, devctl, mesbusy),
+        control_plane_function2_linux_transport_configured(watermark, devctl, mesbusy),
+        control_plane_function2_latched_linux_configured_without_iorx(
+            ioex, iorx, ienx, watermark, devctl, mesbusy,
+        ),
+    )
 }
 
 #[inline]
@@ -3155,6 +3234,25 @@ fn promote_cached_wifi_debug_snapshot_exact_error(exact_error: &'static str) {
     let promoted_diag = control_plane_direct_reply_exact_error_sdhci_read_diag(exact_error);
     if promoted_diag != "none" {
         snapshot.control_plane_sdhci_read_diag = promoted_diag;
+    }
+    if snapshot.control_plane_no_ht_transport
+        && snapshot.control_plane_bootstrap_phase == "startup-link-recovery"
+        && snapshot.control_plane_f2_state == "latched-no-iorx"
+        && matches!(
+            snapshot.control_plane_frame_recovery_stage,
+            Some("control-plane-reply-prefix-read")
+                | Some("control-plane-reply-prefix-remainder-read")
+                | Some("control-plane-reply-read")
+        )
+        && matches!(
+            snapshot.control_plane_exact_error,
+            reason
+                if reason.starts_with("cyw43-function2-reply-")
+                    || reason.starts_with("cyw43-control-plane-sideband-")
+                    || reason.starts_with("cyw43-function2-enable-latched-not-ready")
+        )
+    {
+        snapshot.control_plane_f2_state = "latched-linux-configured-no-iorx";
     }
 }
 
@@ -4023,19 +4121,27 @@ impl Pi4WifiState {
     pub fn debug_dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
         self.host.log_transport_shadow(stage);
         let snapshot = self.debug_snapshot(stage)?;
+        let snapshot = if let Some(cached) = cached_wifi_debug_snapshot() {
+            preserve_cached_first_reply_blocker_in_snapshot(snapshot, &cached)
+        } else {
+            snapshot
+        };
         if let Some(cached) = cached_wifi_debug_snapshot() {
             if should_use_cached_wifi_debug_snapshot(&snapshot, &cached) {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] debug snapshot stage={stage} source=cached exact_error={} sdhci_read_diag={}",
+                    "[pi4-wifi] debug snapshot stage={stage} source=cached exact_error={} sdhci_read_diag={} f2_state={}",
                     cached.control_plane_exact_error,
                     cached.control_plane_sdhci_read_diag,
+                    cached.control_plane_f2_state,
                 ));
                 return Ok(cached);
             }
         }
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] debug snapshot stage={stage} source=live exact_error={} sdhci_read_diag={}",
-            snapshot.control_plane_exact_error, snapshot.control_plane_sdhci_read_diag,
+            "[pi4-wifi] debug snapshot stage={stage} source=live exact_error={} sdhci_read_diag={} f2_state={}",
+            snapshot.control_plane_exact_error,
+            snapshot.control_plane_sdhci_read_diag,
+            snapshot.control_plane_f2_state,
         ));
         Ok(snapshot)
     }
@@ -5243,10 +5349,18 @@ impl SdioHost {
         let mesbusy = self
             .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
             .ok();
-        let preserve = control_plane_function2_latched_linux_configured_without_iorx(
+        let preserve_from_live = control_plane_function2_latched_linux_configured_without_iorx(
             ioex, iorx, ienx, watermark, devctl, mesbusy,
         );
-        if preserve {
+        let cached_snapshot = cached_wifi_debug_snapshot();
+        let preserve_from_cached = !preserve_from_live
+            && should_preserve_function2_enable_latch_from_cached_first_reply_blocker(
+                ioex,
+                iorx,
+                self.experimental_control_plane_hint_reads_unstable,
+                cached_snapshot.as_ref(),
+            );
+        if preserve_from_live {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage={stage} action=preserve-function2-enable-latch budget={} ioex=0x{ioex:02x}/{} iorx=0x{iorx:02x}/{} ienx=0x{ienx:02x}/{} watermark=0x{watermark:02x}/{} devctl=0x{devctl:02x}/{} mesbusy=0x{mesbusy:02x}/{} f2_state={} current_clock={}Hz width={} no_ht={}",
                 sdio_function_ready_budget_name(function2_ready_budget),
@@ -5275,7 +5389,32 @@ impl SdioHost {
                 mesbusy = mesbusy.unwrap_or(0),
             ));
         }
-        preserve
+        if let Some(cached) = cached_snapshot.filter(|_| preserve_from_cached) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=preserve-function2-enable-latch-from-cached budget={} ioex=0x{ioex:02x}/{} iorx=0x{iorx:02x}/{} ienx=0x{ienx:02x}/{} watermark=0x{watermark:02x}/{} devctl=0x{devctl:02x}/{} mesbusy=0x{mesbusy:02x}/{} cached_stage={} cached_f2_state={} cached_exact_error={} current_clock={}Hz width={} no_ht={} hint_reads_unstable={}",
+                sdio_function_ready_budget_name(function2_ready_budget),
+                yn(ioex.is_some()),
+                yn(iorx.is_some()),
+                yn(ienx.is_some()),
+                yn(watermark.is_some()),
+                yn(devctl.is_some()),
+                yn(mesbusy.is_some()),
+                cached.debug_snapshot_stage,
+                cached.control_plane_f2_state,
+                cached.control_plane_exact_error,
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                self.experimental_no_ht_transport,
+                self.experimental_control_plane_hint_reads_unstable,
+                ioex = ioex.unwrap_or(0),
+                iorx = iorx.unwrap_or(0),
+                ienx = ienx.unwrap_or(0),
+                watermark = watermark.unwrap_or(0),
+                devctl = devctl.unwrap_or(0),
+                mesbusy = mesbusy.unwrap_or(0),
+            ));
+        }
+        preserve_from_live || preserve_from_cached
     }
 
     fn mark_control_plane_hint_reads_unstable(
@@ -7757,28 +7896,24 @@ impl SdioHost {
             devctl = devctl.unwrap_or(0),
             mesbusy = mesbusy.unwrap_or(0),
         ));
+        let cached_snapshot = cached_wifi_debug_snapshot();
+        let (control_plane_f2_state, control_plane_f2_linux_transport, control_plane_f2_latched) =
+            effective_control_plane_snapshot_f2_linux_state(
+                ioex,
+                iorx,
+                ienx,
+                watermark,
+                devctl,
+                mesbusy,
+                self.experimental_control_plane_hint_reads_unstable,
+                cached_snapshot.as_ref(),
+            );
         emit_breadcrumb(format_args!(
             "[pi4-wifi] control-plane snapshot {stage} f2-linux-state={} f2-linux-transport={} f2-linux-interrupts={} f2-latched-no-iorx={}",
-            control_plane_function2_linux_state_label(
-                ioex,
-                iorx,
-                ienx,
-                watermark,
-                devctl,
-                mesbusy,
-            ),
-            yn(control_plane_function2_linux_transport_configured(
-                watermark, devctl, mesbusy,
-            )),
+            control_plane_f2_state,
+            yn(control_plane_f2_linux_transport),
             yn(control_plane_function2_interrupts_armed(ienx)),
-            yn(control_plane_function2_latched_linux_configured_without_iorx(
-                ioex,
-                iorx,
-                ienx,
-                watermark,
-                devctl,
-                mesbusy,
-            )),
+            yn(control_plane_f2_latched),
         ));
         let sdhci_read_diag_current = control_plane_snapshot_sdhci_read_diag_label(
             self.last_data_wait_cmd,
@@ -7939,9 +8074,7 @@ impl SdioHost {
                 passive_startup_link_wait_empty_poll_limit_for(
                     self.experimental_control_plane_startup_link_rescue_cycles,
                 ),
-            control_plane_f2_state: control_plane_function2_linux_state_label(
-                ioex, iorx, ienx, watermark, devctl, mesbusy,
-            ),
+            control_plane_f2_state,
             control_plane_sdhci_read_diag: sdhci_read_diag_resolved,
             control_plane_exact_error: exact_error,
         });
@@ -17617,7 +17750,7 @@ mod tests {
             control_plane_startup_link_rescue_cycles: 1,
             control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
             control_plane_passive_startup_link_empty_poll_limit: 8,
-            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_f2_state: "latched-no-iorx",
             control_plane_sdhci_read_diag: "none",
             control_plane_exact_error: "cyw43-function2-enable-latched-not-ready",
         };
@@ -18031,6 +18164,7 @@ mod tests {
         let follow_on = WifiDebugSnapshot {
             debug_snapshot_source: "live",
             debug_snapshot_stage: "console-dump-state",
+            control_plane_f2_state: "latched-no-iorx",
             control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
             control_plane_exact_error:
                 "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
@@ -18045,6 +18179,377 @@ mod tests {
         assert_eq!(
             preserved.control_plane_sdhci_read_diag,
             "f2-reply-read-stalled-no-buffer-ready",
+        );
+        assert_eq!(
+            preserved.control_plane_f2_state,
+            "latched-linux-configured-no-iorx",
+        );
+    }
+
+    #[test]
+    fn preserve_cached_first_reply_blocker_in_snapshot_keeps_linux_configured_f2_state_when_direct_reply_blocker_is_unchanged(
+    ) {
+        let cached = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: Some("control-plane-reply-prefix-read"),
+            control_plane_frame_recovery_policy: Some("linux-rxfail"),
+            control_plane_frame_recovery_write: Some(false),
+            control_plane_frame_recovery_drained: Some(true),
+            control_plane_frame_recovery_count: Some(0),
+            control_plane_bootstrap_phase: "startup-link-recovery",
+            control_plane_reply_mode: "startup-link-resume",
+            control_plane_reply_attempts: 1,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "ht-not-ready",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "control-plane-passive-startup-link-timeout",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f2-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
+        };
+        let follow_on = WifiDebugSnapshot {
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "cyw43-init-control-plane-fail",
+            control_plane_f2_state: "latched-no-iorx",
+            control_plane_sdhci_read_diag: "f2-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
+            ..cached
+        };
+
+        let preserved = preserve_cached_first_reply_blocker_in_snapshot(follow_on, &cached);
+        assert_eq!(
+            preserved.control_plane_exact_error,
+            "cyw43-function2-reply-read-stall-no-buffer-ready",
+        );
+        assert_eq!(
+            preserved.control_plane_f2_state,
+            "latched-linux-configured-no-iorx",
+        );
+    }
+
+    #[test]
+    fn cached_first_reply_blocker_can_preserve_function2_latch_when_hint_reads_are_unstable() {
+        let cached = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: Some("control-plane-reply-prefix-read"),
+            control_plane_frame_recovery_policy: Some("linux-rxfail"),
+            control_plane_frame_recovery_write: Some(false),
+            control_plane_frame_recovery_drained: Some(true),
+            control_plane_frame_recovery_count: Some(0),
+            control_plane_bootstrap_phase: "startup-link-recovery",
+            control_plane_reply_mode: "startup-link-resume",
+            control_plane_reply_attempts: 1,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "ht-not-ready",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "control-plane-passive-startup-link-timeout",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f2-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
+        };
+
+        assert!(
+            should_preserve_function2_enable_latch_from_cached_first_reply_blocker(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                true,
+                Some(&cached),
+            )
+        );
+        assert!(
+            !should_preserve_function2_enable_latch_from_cached_first_reply_blocker(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                false,
+                Some(&cached),
+            )
+        );
+        assert!(
+            !should_preserve_function2_enable_latch_from_cached_first_reply_blocker(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                true,
+                Some(&cached),
+            )
+        );
+        assert!(
+            !should_preserve_function2_enable_latch_from_cached_first_reply_blocker(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                true,
+                None,
+            )
+        );
+    }
+
+    #[test]
+    fn effective_control_plane_snapshot_f2_linux_state_preserves_cached_linux_configured_state_for_pure_f2_follow_on(
+    ) {
+        let cached = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: Some("control-plane-reply-prefix-read"),
+            control_plane_frame_recovery_policy: Some("linux-rxfail"),
+            control_plane_frame_recovery_write: Some(false),
+            control_plane_frame_recovery_drained: Some(true),
+            control_plane_frame_recovery_count: Some(0),
+            control_plane_bootstrap_phase: "startup-link-recovery",
+            control_plane_reply_mode: "startup-link-resume",
+            control_plane_reply_attempts: 1,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "ht-not-ready",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "slow-link-channel-rearm-ready",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error:
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+        };
+
+        let (state, transport_configured, latched_no_iorx) =
+            effective_control_plane_snapshot_f2_linux_state(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                Some(SDIO_CCCR_IEN_FUNC1 | SDIO_CCCR_IEN_FUNC2),
+                None,
+                None,
+                None,
+                true,
+                Some(&cached),
+            );
+
+        assert_eq!(state, "latched-linux-configured-no-iorx");
+        assert!(transport_configured);
+        assert!(latched_no_iorx);
+    }
+
+    #[test]
+    fn preserve_cached_first_reply_blocker_in_snapshot_keeps_linux_configured_f2_state_for_console_dump_with_same_direct_reply_blocker(
+    ) {
+        let cached = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: Some("control-plane-reply-read"),
+            control_plane_frame_recovery_policy: Some("linux-rxfail"),
+            control_plane_frame_recovery_write: Some(false),
+            control_plane_frame_recovery_drained: Some(true),
+            control_plane_frame_recovery_count: Some(0),
+            control_plane_bootstrap_phase: "startup-link-recovery",
+            control_plane_reply_mode: "startup-link-resume",
+            control_plane_reply_attempts: 1,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "ht-not-ready",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "control-plane-passive-startup-link-timeout",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f2-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
+        };
+        let follow_on = WifiDebugSnapshot {
+            control_plane_bootstrap_phase: "steady-state",
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            debug_snapshot_source: "live",
+            debug_snapshot_stage: "console-dump-state",
+            control_plane_startup_link_rescue_cycles: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 1,
+            control_plane_f2_state: "latched-no-iorx",
+            control_plane_sdhci_read_diag: "none",
+            control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
+            ..cached
+        };
+
+        let preserved = preserve_cached_first_reply_blocker_in_snapshot(follow_on, &cached);
+        assert_eq!(
+            preserved.control_plane_exact_error,
+            "cyw43-function2-reply-read-stall-no-buffer-ready",
+        );
+        assert_eq!(
+            preserved.control_plane_f2_state,
+            "latched-linux-configured-no-iorx",
+        );
+        assert_eq!(
+            preserved.control_plane_sdhci_read_diag,
+            "f2-reply-read-stalled-no-buffer-ready",
+        );
+        assert_eq!(preserved.debug_snapshot_stage, "console-dump-state");
+        assert_eq!(preserved.control_plane_startup_link_rescue_cycles, 2);
+    }
+
+    #[test]
+    fn preserve_cached_first_reply_blocker_in_snapshot_keeps_console_dump_f2_state_live_when_direct_reply_blocker_changed(
+    ) {
+        let cached = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: Some("control-plane-reply-read"),
+            control_plane_frame_recovery_policy: Some("linux-rxfail"),
+            control_plane_frame_recovery_write: Some(false),
+            control_plane_frame_recovery_drained: Some(true),
+            control_plane_frame_recovery_count: Some(0),
+            control_plane_bootstrap_phase: "startup-link-recovery",
+            control_plane_reply_mode: "startup-link-resume",
+            control_plane_reply_attempts: 1,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "ht-not-ready",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "control-plane-passive-startup-link-timeout",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f2-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
+        };
+        let follow_on = WifiDebugSnapshot {
+            control_plane_bootstrap_phase: "steady-state",
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            debug_snapshot_source: "live",
+            debug_snapshot_stage: "console-dump-state",
+            control_plane_startup_link_rescue_cycles: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 1,
+            control_plane_f2_state: "latched-no-iorx",
+            control_plane_sdhci_read_diag: "f1-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error:
+                "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+            ..cached
+        };
+
+        let preserved = preserve_cached_first_reply_blocker_in_snapshot(follow_on, &cached);
+        assert_eq!(
+            preserved.control_plane_exact_error,
+            "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+        );
+        assert_eq!(preserved.control_plane_f2_state, "latched-no-iorx");
+        assert_eq!(
+            preserved.control_plane_sdhci_read_diag,
+            "f1-reply-read-stalled-no-buffer-ready",
         );
     }
 
@@ -18111,6 +18616,10 @@ mod tests {
         assert_eq!(
             snapshot.control_plane_sdhci_read_diag,
             "f2-reply-read-stalled-no-buffer-ready",
+        );
+        assert_eq!(
+            snapshot.control_plane_f2_state,
+            "latched-linux-configured-no-iorx",
         );
     }
 

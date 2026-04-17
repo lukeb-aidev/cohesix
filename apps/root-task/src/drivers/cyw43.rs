@@ -534,6 +534,9 @@ fn log_cyw43_init_failure(
     include_control_plane_snapshot: bool,
 ) -> Option<&'static str> {
     warn!("[cyw43] init failure stage={stage} err={err}");
+    if let Some(reason) = promoted_cyw43_init_failure_exact_error(err) {
+        state.promote_cached_control_plane_exact_error(reason);
+    }
     let snapshot_exact_error = match state.debug_dump_state(stage) {
         Ok(snapshot) => {
             warn!("[cyw43] init snapshot stage={stage} snapshot={snapshot:?}");
@@ -547,10 +550,14 @@ fn log_cyw43_init_failure(
     if include_control_plane_snapshot {
         state.log_cyw43_control_plane_snapshot(stage);
     }
-    if let DriverError::Hal(HalError::Unsupported(reason)) = err {
-        state.promote_cached_control_plane_exact_error(reason);
-    }
     snapshot_exact_error
+}
+
+fn promoted_cyw43_init_failure_exact_error(err: &DriverError) -> Option<&'static str> {
+    match err {
+        DriverError::Hal(HalError::Unsupported(reason)) => Some(*reason),
+        _ => None,
+    }
 }
 
 fn preserve_cyw43_init_failure_exact_error(
@@ -2826,6 +2833,30 @@ mod tests {
             DriverError::Hal(HalError::Unsupported(
                 "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
             ))
+        );
+    }
+
+    #[test]
+    fn promoted_cyw43_init_failure_exact_error_returns_unsupported_reason() {
+        assert_eq!(
+            promoted_cyw43_init_failure_exact_error(&DriverError::Hal(HalError::Unsupported(
+                "cyw43-function2-reply-read-stall-no-buffer-ready",
+            ))),
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready")
+        );
+        assert_eq!(
+            promoted_cyw43_init_failure_exact_error(&DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-pure-f2-startup-link-no-reply",
+            ))),
+            Some("cyw43-control-plane-pure-f2-startup-link-no-reply")
+        );
+    }
+
+    #[test]
+    fn promoted_cyw43_init_failure_exact_error_ignores_non_unsupported_errors() {
+        assert_eq!(
+            promoted_cyw43_init_failure_exact_error(&DriverError::Hal(HalError::Timeout)),
+            None
         );
     }
 

@@ -2494,6 +2494,13 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x0268 => Some("post-ready-iman-write-wedged"),
         0x0256 => Some("pre-run-dnctrl-write-wedged"),
         0x02d8 => Some("post-run-dnctrl-write-wedged"),
+        0x0319 => Some("post-start-polling-irq-quiesce-timeout"),
+        0x0321 => Some("post-start-usbcmd-mask-write-wedged"),
+        0x0324 => Some("post-start-imod-write-wedged"),
+        0x0326 => Some("post-start-erdp-low-store-wedged"),
+        0x0328 => Some("post-start-erdp-high-store-wedged"),
+        0x032a => Some("post-start-iman-write-wedged"),
+        0x032c => Some("post-start-usbsts-clear-write-wedged"),
         0x02eb => Some("usbcmd-run-barrier-wedged"),
         0x02e9 => Some("usbcmd-run-store-wedged"),
         _ => None,
@@ -2502,7 +2509,10 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
 
 #[inline]
 const fn xhci_diag_stage_after_run(stage: u16) -> bool {
-    matches!(stage, 0x02a5 | 0x02a7 | 0x02cb..=0x02d9 | 0x02e9 | 0x02eb)
+    matches!(
+        stage,
+        0x02a5 | 0x02a7 | 0x02cb..=0x02d9 | 0x02e9 | 0x02eb | 0x0315..=0x0319 | 0x0320..=0x032d
+    )
 }
 
 #[inline]
@@ -2584,6 +2594,9 @@ const fn xhci_diag_stage_value_labels(
         0x02f4 => Some(("publish_mask", "run_usbcmd", "run_mode")),
         0x02f5 => Some(("dcbaap_off", "crcr_off", "int_base")),
         0x02f7 => Some(("policy_mask", "handoff", "seed_flags")),
+        0x0316 => Some(("erdp_ack", "iman_ip", "usbsts_clear")),
+        0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
+        0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
         _ => None,
     }
 }
@@ -2777,6 +2790,23 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0314 => Some("dnctrl-write-skip-preserve"),
         0x0315 => Some("post-init-polling-irq-quiesce"),
         0x0316 => Some("post-run-polling-irq-quiesce"),
+        0x0317 => Some("post-start-polling-irq-state"),
+        0x0318 => Some("post-start-polling-irq-settled"),
+        0x0319 => Some("post-start-polling-irq-timeout"),
+        0x0320 => Some("post-start-usbcmd-mask-state"),
+        0x0321 => Some("post-start-usbcmd-mask-write"),
+        0x0322 => Some("post-start-usbcmd-mask-write-done"),
+        0x0323 => Some("post-start-usbcmd-mask-skip"),
+        0x0324 => Some("post-start-imod-write"),
+        0x0325 => Some("post-start-imod-write-done"),
+        0x0326 => Some("post-start-erdp-write-low"),
+        0x0327 => Some("post-start-erdp-write-low-done"),
+        0x0328 => Some("post-start-erdp-write-high"),
+        0x0329 => Some("post-start-erdp-write-high-done"),
+        0x032a => Some("post-start-iman-write"),
+        0x032b => Some("post-start-iman-write-done"),
+        0x032c => Some("post-start-usbsts-clear-write"),
+        0x032d => Some("post-start-usbsts-clear-write-done"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -3373,6 +3403,11 @@ const fn xhci_runtime_init_strategy_post_ready_irq_label(
         XhciFirmwareHandoff::ResetlessReinit
     ) {
         "irq-skip"
+    } else if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::PreserveControllerState
+    ) {
+        "irq-polling-quiesce"
     } else {
         "irq-zero"
     }
@@ -11650,6 +11685,31 @@ mod tests {
     }
 
     #[test]
+    fn xhci_runtime_init_strategy_post_ready_irq_labels_cover_preserve_polling_quiesce() {
+        assert_eq!(
+            super::xhci_runtime_init_strategy_post_ready_irq_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                false,
+            )),
+            "irq-zero"
+        );
+        assert_eq!(
+            super::xhci_runtime_init_strategy_post_ready_irq_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::PreserveControllerState,
+                true,
+            )),
+            "irq-polling-quiesce"
+        );
+        assert_eq!(
+            super::xhci_runtime_init_strategy_post_ready_irq_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ResetlessReinit,
+                true,
+            )),
+            "irq-skip"
+        );
+    }
+
+    #[test]
     fn xhci_runtime_init_strategy_publish_labels_match_actual_pi4_publish_order() {
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
@@ -12509,6 +12569,68 @@ mod tests {
             Some("post-run-polling-irq-quiesce")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x0317),
+            Some("post-start-polling-irq-state")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0318),
+            Some("post-start-polling-irq-settled")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0319),
+            Some("post-start-polling-irq-timeout")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0320),
+            Some("post-start-usbcmd-mask-state")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0321),
+            Some("post-start-usbcmd-mask-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0322),
+            Some("post-start-usbcmd-mask-write-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0323),
+            Some("post-start-usbcmd-mask-skip")
+        );
+        assert_eq!(xhci_diag_stage_label(0x0324), Some("post-start-imod-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0325),
+            Some("post-start-imod-write-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0326),
+            Some("post-start-erdp-write-low")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0327),
+            Some("post-start-erdp-write-low-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0328),
+            Some("post-start-erdp-write-high")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0329),
+            Some("post-start-erdp-write-high-done")
+        );
+        assert_eq!(xhci_diag_stage_label(0x032a), Some("post-start-iman-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x032b),
+            Some("post-start-iman-write-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x032c),
+            Some("post-start-usbsts-clear-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x032d),
+            Some("post-start-usbsts-clear-write-done")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x02da),
             Some("erstsz-publish-skip-preserve")
         );
@@ -12639,6 +12761,34 @@ mod tests {
             super::xhci_diag_stage_exact_issue_label(0x02d8),
             Some("post-run-dnctrl-write-wedged")
         );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0319),
+            Some("post-start-polling-irq-quiesce-timeout")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0321),
+            Some("post-start-usbcmd-mask-write-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0324),
+            Some("post-start-imod-write-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0326),
+            Some("post-start-erdp-low-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0328),
+            Some("post-start-erdp-high-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x032a),
+            Some("post-start-iman-write-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x032c),
+            Some("post-start-usbsts-clear-write-wedged")
+        );
         assert_eq!(super::xhci_diag_stage_exact_issue_label(0x0214), None);
     }
 
@@ -12646,6 +12796,8 @@ mod tests {
     fn xhci_diag_stage_after_run_distinguishes_post_run_and_pre_run_edges() {
         assert!(super::xhci_diag_stage_after_run(0x02d4));
         assert!(super::xhci_diag_stage_after_run(0x02e9));
+        assert!(super::xhci_diag_stage_after_run(0x0316));
+        assert!(super::xhci_diag_stage_after_run(0x032c));
         assert!(!super::xhci_diag_stage_after_run(0x0248));
         assert!(!super::xhci_diag_stage_after_run(0x0213));
     }
@@ -12756,6 +12908,18 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x02f7),
             Some(("policy_mask", "handoff", "seed_flags"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0316),
+            Some(("erdp_ack", "iman_ip", "usbsts_clear"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0317),
+            Some(("attempt", "usbcmd", "usbsts_iman"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0320),
+            Some(("usbcmd", "masked_usbcmd", "masked_bits"))
         );
         assert_eq!(xhci_diag_stage_value_labels(0x02e9), None);
     }
