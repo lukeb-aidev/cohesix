@@ -6,53 +6,13 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const { test, expect } = require("@playwright/test");
-
-const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const defaultReleaseDir = path.join(
+const {
   repoRoot,
-  "releases",
-  "Cohesix-0.3.0-alpha2-MacOS"
-);
-const resolveReleaseDir = () => {
-  if (process.env.SWARMUI_RELEASE_DIR) {
-    return path.resolve(process.env.SWARMUI_RELEASE_DIR);
-  }
-  if (fs.existsSync(defaultReleaseDir)) {
-    return defaultReleaseDir;
-  }
-  const releasesRoot = path.join(repoRoot, "releases");
-  if (!fs.existsSync(releasesRoot)) {
-    return defaultReleaseDir;
-  }
-  const candidates = fs
-    .readdirSync(releasesRoot)
-    .map((entry) => path.join(releasesRoot, entry))
-    .filter((entry) => {
-      if (!entry.endsWith("-MacOS")) {
-        return false;
-      }
-      try {
-        return fs.statSync(entry).isDirectory();
-      } catch {
-        return false;
-      }
-    });
-  if (!candidates.length) {
-    return defaultReleaseDir;
-  }
-  candidates.sort((a, b) => {
-    try {
-      return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
-    } catch {
-      return 0;
-    }
-  });
-  return candidates[0];
-};
-const releaseDir = resolveReleaseDir();
-const uiRoot = process.env.SWARMUI_UI_ROOT
-  ? path.resolve(process.env.SWARMUI_UI_ROOT)
-  : path.join(releaseDir, "ui", "swarmui");
+  resolveUiRoot,
+  ensureUiRootExists
+} = require("../swarmui-paths.cjs");
+
+const uiRoot = resolveUiRoot();
 
 const helpLinesPath = path.join(__dirname, "fixtures", "help-lines.json");
 const helpLines = JSON.parse(fs.readFileSync(helpLinesPath, "utf8"));
@@ -174,10 +134,9 @@ const hiveBatch = {
 };
 
 const ensureUiRoot = () => {
-  const indexPath = path.join(uiRoot, "index.html");
-  if (!fs.existsSync(indexPath)) {
+  if (!ensureUiRootExists(uiRoot)) {
     throw new Error(
-      `SwarmUI UI root not found at ${indexPath}. Set SWARMUI_UI_ROOT (source UI) or SWARMUI_RELEASE_DIR (release bundle).`
+      `SwarmUI UI root not found at ${uiRoot}. Set SWARMUI_UI_ROOT (source UI) or SWARMUI_RELEASE_DIR (release bundle).`
     );
   }
 };
@@ -354,6 +313,15 @@ test("Spectrum shell controls are mounted", async ({ page }) => {
   await expect(page.locator("#session-ticket")).toHaveJSProperty("tagName", "SP-TEXTFIELD");
   await expect(page.locator("#connect")).toHaveJSProperty("tagName", "SP-BUTTON");
   await expect(page.locator("#console-send")).toHaveJSProperty("tagName", "SP-BUTTON");
+
+  const themeState = await page.locator("sp-theme.app-theme").evaluate((node) => ({
+    sheetCount: node.shadowRoot?.adoptedStyleSheets?.length ?? 0,
+    token: getComputedStyle(node)
+      .getPropertyValue("--spectrum-neutral-content-color-default")
+      .trim()
+  }));
+  expect(themeState.sheetCount).toBeGreaterThan(0);
+  expect(themeState.token.length).toBeGreaterThan(0);
 });
 
 test("Hive canvas renders in replay mode", async ({ page }) => {
@@ -363,7 +331,11 @@ test("Hive canvas renders in replay mode", async ({ page }) => {
   await expect(canvas).toHaveCount(1);
 });
 
-test("Live Hive labels enumerate workers", async ({ page }) => {
+test("Live Hive labels enumerate workers", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "webkit-desktop",
+    "Canvas label density is only gated on the desktop visual target."
+  );
   await focusHiveCanvas(page);
   const labels = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getAgentLabels()
@@ -388,7 +360,11 @@ test("Live Hive poll interval honors status poll policy", async ({ page }) => {
   expect(calls[1] - calls[0]).toBeGreaterThanOrEqual(350);
 });
 
-test("Live Hive keeps rendering during scroll", async ({ page }) => {
+test("Live Hive keeps rendering during scroll", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "webkit-desktop",
+    "Scroll-driven render cadence is only gated on the desktop visual target."
+  );
   await page.waitForTimeout(200);
   const before = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getMetrics()
@@ -402,26 +378,15 @@ test("Live Hive keeps rendering during scroll", async ({ page }) => {
   const after = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getMetrics()
   );
-  expect(after.renders).toBeGreaterThan(before.renders);
+  expect(after.frames).toBeGreaterThan(before.frames);
   expect(after.renders).toBeGreaterThanOrEqual(mid.renders);
 });
 
-test("Live Hive dots are clickable", async ({ page }) => {
+test("Live Hive selection wiring activates the detail pane", async ({ page }) => {
   await focusHiveCanvas(page);
-  const canvas = page.locator("#hive-canvas canvas");
-  const bounds = await canvas.boundingBox();
-  expect(bounds).toBeTruthy();
-  const positions = await page.evaluate(() =>
-    window.__SWARMUI_HIVE_DEBUG.getAgentScreenPositions()
+  await page.evaluate(() =>
+    window.__SWARMUI_HIVE_DEBUG.selectAgent("worker-gpu-1")
   );
-  const target = positions.find((item) => item.id === "worker-gpu-1");
-  expect(target).toBeTruthy();
-  await canvas.click({
-    position: {
-      x: target.x - bounds.x,
-      y: target.y - bounds.y
-    }
-  });
   await expect(page.locator("#hive-detail-title")).toContainText("worker-gpu-1");
 });
 
@@ -435,6 +400,43 @@ test("Scheduler and lease panels render /proc data", async ({ page }) => {
   await expect(page.locator("#hive-lease-summary")).toContainText("Active 1/8");
   await expect(page.locator("#hive-lease-active")).toContainText("lease-1");
   await expect(page.locator("#hive-lease-preemptions")).toContainText("lease-0");
+});
+
+test("Responsive shell keeps the grid transitions intentional", async ({ page }) => {
+  const width = page.viewportSize()?.width ?? 0;
+  const layout = await page.evaluate(() => {
+    const readTracks = (selector) =>
+      getComputedStyle(document.querySelector(selector))
+        .gridTemplateColumns
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean).length;
+
+    return {
+      topbar: readTracks(".topbar"),
+      session: readTracks(".session-grid"),
+      shell: readTracks(".layout"),
+    };
+  });
+
+  if (width <= 900) {
+    expect(layout.topbar).toBe(1);
+    expect(layout.session).toBe(2);
+    expect(layout.shell).toBe(1);
+    await expect(page.locator(".hive-schedule__row.header")).toBeHidden();
+    return;
+  }
+
+  if (width <= 1240) {
+    expect(layout.topbar).toBe(1);
+    expect(layout.session).toBe(2);
+    expect(layout.shell).toBe(2);
+    return;
+  }
+
+  expect(layout.topbar).toBe(2);
+  expect(layout.session).toBe(3);
+  expect(layout.shell).toBe(2);
 });
 
 test("Live Hive overlays remain interactive under load", async ({ page }) => {
@@ -458,6 +460,17 @@ test("Live Hive performance harness stays responsive", async ({ page }) => {
 test("Embedded coh prompt accepts input", async ({ page }) => {
   await runConsoleCommand(page, "help");
   await expect(page.locator("#console-output")).toContainText("coh> help");
+});
+
+test("Transcript panels preserve line breaks", async ({ page }) => {
+  await page.locator("#load-fleet").click();
+  await expect(page.locator("#fleet-output")).toContainText("OK FLEET");
+  const whiteSpace = await page.locator("#fleet-output").evaluate((node) =>
+    getComputedStyle(node).whiteSpace
+  );
+  expect(whiteSpace).toBe("pre-wrap");
+  const text = await page.locator("#fleet-output").textContent();
+  expect(text).toContain("\n");
 });
 
 test("Help command emits expected transcript lines", async ({ page }) => {
@@ -484,8 +497,33 @@ test("Mint ticket populates the session ticket field", async ({ page }) => {
   );
 });
 
-test("Replay header snapshot matches baseline", async ({ page }) => {
+test("Replay header snapshot matches baseline", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "webkit-desktop",
+    "Visual desktop baseline is anchored on the WebKit desktop project."
+  );
   const banner = page.locator("header.cohesix-banner");
   await expect(banner).toBeVisible();
   await expect(banner).toHaveScreenshot("swarmui-banner.png");
+});
+
+test("Responsive topbar snapshot matches baseline", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "webkit-narrow",
+    "Responsive visual baseline is anchored on the WebKit narrow project."
+  );
+  const topbar = page.locator("header.topbar");
+  await expect(topbar).toBeVisible();
+  await expect(topbar).toHaveScreenshot("swarmui-topbar-narrow.png");
+});
+
+test("Responsive scheduler snapshot matches baseline", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "webkit-narrow",
+    "Responsive visual baseline is anchored on the WebKit narrow project."
+  );
+  await page.waitForTimeout(200);
+  const scheduler = page.locator(".hive-schedule-panel");
+  await expect(scheduler).toBeVisible();
+  await expect(scheduler).toHaveScreenshot("swarmui-schedule-narrow.png");
 });

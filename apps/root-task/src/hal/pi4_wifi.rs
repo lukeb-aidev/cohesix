@@ -736,6 +736,30 @@ const fn firmware_channel_write_restore_clock_hz(
 }
 
 #[inline]
+const fn rearm_firmware_channel_restore_clock_hz(
+    experimental_no_ht_transport: bool,
+    current_clock_hz: u32,
+    function2_ready_budget: SdioFunctionReadyBudget,
+) -> Option<u32> {
+    // The Pi 4 startup-link strict-recovery lane still needs the immediate
+    // Function 2 retry to happen on the promoted first-reply clock, but the
+    // preceding F1/mailbox rearm writes have proven fragile at 12.5 MHz. Ask
+    // the caller to temporarily drop to startup clock for those writes, then
+    // restore the promoted clock before the next Function 2 read.
+    if experimental_no_ht_transport
+        && matches!(
+            function2_ready_budget,
+            SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
+        )
+        && current_clock_hz > CYW43_STARTUP_CLOCK_HZ
+    {
+        Some(current_clock_hz)
+    } else {
+        firmware_channel_write_restore_clock_hz(experimental_no_ht_transport, current_clock_hz)
+    }
+}
+
+#[inline]
 fn firmware_channel_write_needs_low_clock_retry(
     experimental_no_ht_transport: bool,
     current_clock_hz: u32,
@@ -948,6 +972,36 @@ const fn control_plane_startup_link_timeout_needs_slow_link_resume(
     reply_rearm_mode: u8,
 ) -> bool {
     experimental_no_ht_transport && control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+}
+
+#[inline]
+fn control_plane_reply_fail_fast_after_promoted_startup_link_retry(
+    experimental_no_ht_transport: bool,
+    reply_rearm_mode: u8,
+    preferred_data_clock_hz: u32,
+    exact_error: Option<&'static str>,
+) -> bool {
+    experimental_no_ht_transport
+        && control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+        && preferred_data_clock_hz > CYW43_STARTUP_CLOCK_HZ
+        && exact_error.is_some_and(startup_link_known_first_reply_blocker)
+}
+
+#[inline]
+fn control_plane_reply_fail_fast_after_linux_rxskip_wait(
+    experimental_no_ht_transport: bool,
+    reply_rearm_mode: u8,
+    preferred_data_clock_hz: u32,
+    linux_rxskip_pending: bool,
+    exact_error: Option<&'static str>,
+) -> bool {
+    linux_rxskip_pending
+        && control_plane_reply_fail_fast_after_promoted_startup_link_retry(
+            experimental_no_ht_transport,
+            reply_rearm_mode,
+            preferred_data_clock_hz,
+            exact_error,
+        )
 }
 
 #[inline]
@@ -1384,12 +1438,30 @@ const fn control_plane_reply_int_status_has_frame_indication(int_status: u32) ->
 }
 
 #[inline]
-const fn control_plane_reply_mailbox_has_frame_indication(_mailbox_data: u32) -> bool {
-    // Linux only folds NAKHANDLED into a frame indication when the driver is
-    // already in rxskip recovery. Our Pi4 startup-link bring-up does not use
-    // that path yet, so mailbox data alone must not trigger a blind Function 2
-    // read.
-    false
+const fn control_plane_reply_mailbox_has_frame_indication(
+    mailbox_data: u32,
+    linux_rxskip_pending: bool,
+) -> bool {
+    linux_rxskip_pending && (mailbox_data & HMB_DATA_NAKHANDLED) != 0
+}
+
+#[inline]
+const fn control_plane_reply_waits_for_linux_rxskip_retransmit(
+    experimental_no_ht_transport: bool,
+    reply_rearm_mode: u8,
+    linux_rxskip_pending: bool,
+) -> bool {
+    experimental_no_ht_transport
+        && linux_rxskip_pending
+        && control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+}
+
+#[inline]
+fn control_plane_reply_error_is_linux_rxskip_wait(err: &HalError) -> bool {
+    matches!(
+        err,
+        HalError::Unsupported("cyw43-function2-reply-linux-rxskip-wait")
+    )
 }
 
 #[inline]
@@ -1405,11 +1477,11 @@ const fn control_plane_reply_mailbox_requires_ack(mailbox_data: u32) -> bool {
 #[inline]
 fn control_plane_reply_should_attempt_speculative_read(
     int_status: Option<u32>,
-    mailbox_data: Option<u32>,
+    mailbox_frame_indicated: bool,
     frame_len_hint: Option<usize>,
 ) -> bool {
     int_status.is_some_and(control_plane_reply_int_status_has_frame_indication)
-        || mailbox_data.is_some_and(control_plane_reply_mailbox_has_frame_indication)
+        || mailbox_frame_indicated
         || frame_len_hint.is_some_and(|frame_len| frame_len != 0)
 }
 
@@ -1503,15 +1575,26 @@ const fn control_plane_diagnostic_prefix_probe_lens_for_state(
     startup_link_stabilized: bool,
     current_clock_hz: u32,
 ) -> &'static [usize] {
-    control_plane_diagnostic_prefix_probe_lens(
-        control_plane_reply_uses_low_touch_pure_f2_diagnostics(
-            experimental_no_ht_transport,
-            hint_reads_unstable,
-            reply_rearm_mode,
-            startup_link_stabilized,
-            current_clock_hz,
-        ),
-    )
+    if experimental_no_ht_transport
+        && control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+        && current_clock_hz > CYW43_STARTUP_CLOCK_HZ
+    {
+        // On the promoted startup-link lane, mirror Linux's single
+        // BRCMF_FIRSTREAD probe before either reading the remainder or failing
+        // directly. Walking 32/16/12-byte prefixes after a promoted timeout
+        // only burns boot time on the same fixed-address Function 2 edge.
+        &CYW43_CONTROL_PLANE_STARTUP_LINK_PROMOTED_DIAGNOSTIC_PREFIX_PROBE_LENS
+    } else {
+        control_plane_diagnostic_prefix_probe_lens(
+            control_plane_reply_uses_low_touch_pure_f2_diagnostics(
+                experimental_no_ht_transport,
+                hint_reads_unstable,
+                reply_rearm_mode,
+                startup_link_stabilized,
+                current_clock_hz,
+            ),
+        )
+    }
 }
 
 #[inline]
@@ -3197,7 +3280,10 @@ fn cached_first_reply_blocker_preserves_linux_configured_f2_state(
     cached: &WifiDebugSnapshot,
 ) -> bool {
     cached.control_plane_no_ht_transport
-        && cached.control_plane_bootstrap_phase == "startup-link-recovery"
+        && matches!(
+            cached.control_plane_bootstrap_phase,
+            "startup-link-recovery" | "startup-link-passive-wait"
+        )
         && cached.control_plane_f2_state == "latched-linux-configured-no-iorx"
         && control_plane_exact_error_is_first_reply_blocker(cached.control_plane_exact_error)
 }
@@ -3798,6 +3884,8 @@ const CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS: [usize; 4] = [
     16,
     CYW43_SDPCM_HEADER_LEN,
 ];
+const CYW43_CONTROL_PLANE_STARTUP_LINK_PROMOTED_DIAGNOSTIC_PREFIX_PROBE_LENS: [usize; 1] =
+    [CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN];
 // Once the low-touch startup-link lane proves the first fixed-address Function 2
 // read is stalling, escalating to larger diagnostic prefixes only repeats the
 // same failure more slowly. The minimal SDPCM prefix is enough to validate a
@@ -4987,6 +5075,7 @@ struct SdioHost {
     experimental_control_plane_reply_rearm_attempts: u8,
     experimental_control_plane_reply_rearm_empty_polls: u8,
     experimental_control_plane_promoted_probe_pending: bool,
+    experimental_control_plane_linux_rxskip_pending: bool,
     experimental_control_plane_speculative_frame_len: usize,
     experimental_control_plane_speculative_frame:
         [u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY],
@@ -5072,6 +5161,7 @@ impl SdioHost {
             experimental_control_plane_reply_rearm_attempts: 0,
             experimental_control_plane_reply_rearm_empty_polls: 0,
             experimental_control_plane_promoted_probe_pending: false,
+            experimental_control_plane_linux_rxskip_pending: false,
             experimental_control_plane_speculative_frame_len: 0,
             experimental_control_plane_speculative_frame: [0;
                 CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY],
@@ -5108,6 +5198,7 @@ impl SdioHost {
         self.experimental_control_plane_reply_rearm_attempts = 0;
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
         self.experimental_control_plane_promoted_probe_pending = false;
+        self.experimental_control_plane_linux_rxskip_pending = false;
         self.clear_control_plane_speculative_reply_frame();
         self.block_size_count_shadow = 0;
         self.transfer_mode_shadow = 0;
@@ -5298,6 +5389,7 @@ impl SdioHost {
         self.experimental_control_plane_reply_rearm_attempts = 0;
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
         self.experimental_control_plane_promoted_probe_pending = false;
+        self.experimental_control_plane_linux_rxskip_pending = false;
     }
 
     fn clear_control_plane_speculative_reply_frame(&mut self) {
@@ -6978,7 +7070,12 @@ impl SdioHost {
                 Err(err) => return Err(err),
             }
         };
+        let mut mailbox_frame_indicated = false;
         if let Some(mailbox_data) = mailbox_data {
+            mailbox_frame_indicated = control_plane_reply_mailbox_has_frame_indication(
+                mailbox_data,
+                self.experimental_control_plane_linux_rxskip_pending,
+            );
             if control_plane_reply_mailbox_has_firmware_halt(mailbox_data) {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=control-plane-reply action=hint-mailbox-fwhalt mode={} attempt={} mailbox=0x{mailbox_data:08x}",
@@ -7012,11 +7109,20 @@ impl SdioHost {
                 }
             }
             if (mailbox_data & HMB_DATA_NAKHANDLED) != 0 {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-reply action=hostmail-nakhandled mode={} attempt={} mailbox=0x{mailbox_data:08x} frame-read=defer reason=linux-rxskip-only",
-                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
-                    attempt,
-                ));
+                if mailbox_frame_indicated {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=hostmail-nakhandled mode={} attempt={} mailbox=0x{mailbox_data:08x} frame-read=allow reason=linux-rxskip-pending",
+                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                        attempt,
+                    ));
+                    self.experimental_control_plane_linux_rxskip_pending = false;
+                } else {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=hostmail-nakhandled mode={} attempt={} mailbox=0x{mailbox_data:08x} frame-read=defer reason=linux-rxskip-only",
+                        control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                        attempt,
+                    ));
+                }
             }
         }
         let frame_len_hint = if skip_backplane_hints {
@@ -7037,7 +7143,7 @@ impl SdioHost {
         };
         let frame_hint = int_status
             .is_some_and(control_plane_reply_int_status_has_frame_indication)
-            || mailbox_data.is_some_and(control_plane_reply_mailbox_has_frame_indication)
+            || mailbox_frame_indicated
             || frame_len_hint.is_some_and(|frame_len| frame_len != 0);
         let forced_hintless_probe = control_plane_reply_forces_startup_link_hintless_firstread(
             self.experimental_no_ht_transport,
@@ -7067,7 +7173,7 @@ impl SdioHost {
         }
         if !control_plane_reply_should_attempt_speculative_read(
             int_status,
-            mailbox_data,
+            mailbox_frame_indicated,
             frame_len_hint,
         ) && !hintless_probe
         {
@@ -7151,6 +7257,19 @@ impl SdioHost {
                 ));
                 self.log_transport_shadow("control-plane-reply-speculative-read-ready");
                 Ok(frame_len)
+            }
+            Err(err) if control_plane_reply_error_is_linux_rxskip_wait(&err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=speculative-read-retransmit-wait mode={} attempt={} current_clock={}Hz width={} reply_chunk_limit={} no_ht={} reason=linux-rxskip-pending",
+                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                    attempt,
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.control_plane_reply_chunk_limit(),
+                    self.experimental_no_ht_transport,
+                ));
+                self.log_transport_shadow("control-plane-reply-speculative-read-retransmit-wait");
+                Ok(0)
             }
             Err(err)
                 if self.experimental_no_ht_transport
@@ -7270,6 +7389,23 @@ impl SdioHost {
                         Ok(frame_len)
                     }
                     Err(retry_err)
+                        if control_plane_reply_error_is_linux_rxskip_wait(&retry_err) =>
+                    {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage=control-plane-reply action=fallback-startup-link-retransmit-wait mode={} attempt={} current_clock={}Hz width={} chunk_limit={} no_ht={} reason=linux-rxskip-pending",
+                            control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                            attempt,
+                            self.current_clock_hz,
+                            sdio_bus_width_name(self.desired_bus_width),
+                            self.control_plane_chunk_limit(),
+                            self.experimental_no_ht_transport,
+                        ));
+                        self.log_transport_shadow(
+                            "control-plane-reply-fallback-startup-link-retransmit-wait",
+                        );
+                        Ok(0)
+                    }
+                    Err(retry_err)
                         if control_plane_reply_speculative_read_can_continue(&retry_err)
                             && self.experimental_no_ht_transport =>
                     {
@@ -7303,6 +7439,32 @@ impl SdioHost {
                             self.log_transport_shadow(
                                 "control-plane-reply-fallback-startup-link-empty",
                             );
+                        }
+                        let exact_error = cached_wifi_debug_snapshot()
+                            .map(|snapshot| snapshot.control_plane_exact_error)
+                            .filter(|exact_error| !exact_error.is_empty());
+                        if control_plane_reply_fail_fast_after_promoted_startup_link_retry(
+                            self.experimental_no_ht_transport,
+                            reply_rearm_mode,
+                            self.preferred_data_clock_hz,
+                            exact_error,
+                        ) {
+                            let exact_error = exact_error
+                                .unwrap_or("cyw43-control-plane-startup-link-reply-timeout");
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware stage=control-plane-reply action=fallback-startup-link-terminal-fail mode={} attempt={} retry_clock={}Hz current_clock={}Hz width={} chunk_limit={} no_ht={} reason=linux-rxfail-retry-exhausted exact_error={exact_error}",
+                                control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                                attempt,
+                                self.preferred_data_clock_hz,
+                                self.current_clock_hz,
+                                sdio_bus_width_name(self.desired_bus_width),
+                                self.control_plane_chunk_limit(),
+                                self.experimental_no_ht_transport,
+                            ));
+                            self.log_control_plane_finish_snapshot(
+                                "control-plane-reply-fallback-startup-link-terminal-fail",
+                            );
+                            return Err(HalError::Unsupported(exact_error));
                         }
                         Ok(0)
                     }
@@ -7664,9 +7826,10 @@ impl SdioHost {
         let defer_interrupts =
             firmware_channel_defers_function2_interrupts(self.experimental_no_ht_transport);
         let watermark = firmware_channel_watermark(self.experimental_no_ht_transport);
-        let restore_clock_hz = firmware_channel_write_restore_clock_hz(
+        let restore_clock_hz = rearm_firmware_channel_restore_clock_hz(
             self.experimental_no_ht_transport,
             self.current_clock_hz,
+            function2_ready_budget,
         );
         if let Some(clock_hz) = restore_clock_hz {
             emit_breadcrumb(format_args!(
@@ -7687,10 +7850,7 @@ impl SdioHost {
                 self.experimental_no_ht_transport,
             ));
         }
-        let preserve_function2_enable_latch = !matches!(
-            function2_ready_budget,
-            SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
-        ) && self
+        let preserve_function2_enable_latch = self
             .should_preserve_function2_enable_latch_for_channel_rearm(
                 "slow-link-channel-rearm-preserve-f2",
                 function2_ready_budget,
@@ -8770,6 +8930,23 @@ impl SdioHost {
         self.recover_failed_function2_frame_transfer(stage, false, "linux-rxfail");
         self.recover_command_path_and_refresh_transport(stage)?;
         if self.experimental_no_ht_transport {
+            if control_plane_reply_waits_for_linux_rxskip_retransmit(
+                self.experimental_no_ht_transport,
+                reply_rearm_mode,
+                self.experimental_control_plane_linux_rxskip_pending,
+            ) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=function2-read-rearm-skip budget={} mode={} current_clock={}Hz width={} no_ht={} reason=linux-rxskip-retransmit-wait",
+                    sdio_function_ready_budget_name(
+                        SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery
+                    ),
+                    control_plane_reply_rearm_mode_name(reply_rearm_mode),
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.experimental_no_ht_transport,
+                ));
+                return Ok(());
+            }
             if control_plane_reply_skips_strict_function2_rearm_after_read_recover(
                 low_touch_pure_f2_mode,
                 reply_rearm_mode,
@@ -8837,6 +9014,45 @@ impl SdioHost {
                         self.experimental_no_ht_transport,
                     ));
                     self.recover_control_plane_function2_read_path(stage)?;
+                    if control_plane_reply_waits_for_linux_rxskip_retransmit(
+                        self.experimental_no_ht_transport,
+                        self.experimental_control_plane_reply_rearm_mode,
+                        self.experimental_control_plane_linux_rxskip_pending,
+                    ) {
+                        let exact_error = cached_wifi_debug_snapshot()
+                            .map(|snapshot| snapshot.control_plane_exact_error)
+                            .filter(|exact_error| !exact_error.is_empty());
+                        if control_plane_reply_fail_fast_after_linux_rxskip_wait(
+                            self.experimental_no_ht_transport,
+                            self.experimental_control_plane_reply_rearm_mode,
+                            self.preferred_data_clock_hz,
+                            self.experimental_control_plane_linux_rxskip_pending,
+                            exact_error,
+                        ) {
+                            let exact_error = exact_error
+                                .unwrap_or("cyw43-function2-reply-read-stall-no-buffer-ready");
+                            self.experimental_control_plane_linux_rxskip_pending = false;
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware stage={stage} action=function2-read-retry-fail-fast len={} retry_clock={}Hz current_clock={}Hz width={} no_ht={} reason=linux-rxskip-wait-terminal exact_error={exact_error}",
+                                len,
+                                self.preferred_data_clock_hz,
+                                self.current_clock_hz,
+                                sdio_bus_width_name(self.desired_bus_width),
+                                self.experimental_no_ht_transport,
+                            ));
+                            return Err(HalError::Unsupported(exact_error));
+                        }
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} action=function2-read-retry-defer len={} current_clock={}Hz width={} no_ht={} reason=linux-rxskip-retransmit-wait",
+                            len,
+                            self.current_clock_hz,
+                            sdio_bus_width_name(self.desired_bus_width),
+                            self.experimental_no_ht_transport,
+                        ));
+                        return Err(HalError::Unsupported(
+                            "cyw43-function2-reply-linux-rxskip-wait",
+                        ));
+                    }
                     recovered = true;
                 }
                 Err(err) => {
@@ -10839,6 +11055,7 @@ impl SdioHost {
         frame: &mut [u8],
         stage: &'static str,
     ) -> Result<(), HalError> {
+        self.experimental_control_plane_linux_rxskip_pending = false;
         let request_len = control_plane_frame_request_len(frame.len());
         if request_len == frame.len() {
             emit_breadcrumb(format_args!(
@@ -11000,15 +11217,23 @@ impl SdioHost {
                 SMB_NAK,
                 self.experimental_no_ht_transport,
             ) {
-                Ok(()) => emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} action=function2-frame-recover linux-nak-retransmit status=ok mailbox=0x{mailbox:08x}",
-                    mailbox = SMB_NAK,
-                )),
-                Err(err) => emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} action=function2-frame-recover linux-nak-retransmit status=err mailbox=0x{mailbox:08x} err={err}",
-                    mailbox = SMB_NAK,
-                )),
+                Ok(()) => {
+                    self.experimental_control_plane_linux_rxskip_pending = true;
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=function2-frame-recover linux-nak-retransmit status=ok mailbox=0x{mailbox:08x}",
+                        mailbox = SMB_NAK,
+                    ))
+                }
+                Err(err) => {
+                    self.experimental_control_plane_linux_rxskip_pending = false;
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=function2-frame-recover linux-nak-retransmit status=err mailbox=0x{mailbox:08x} err={err}",
+                        mailbox = SMB_NAK,
+                    ))
+                }
             }
+        } else {
+            self.experimental_control_plane_linux_rxskip_pending = false;
         }
         self.log_transport_shadow(stage);
     }
@@ -13734,6 +13959,7 @@ mod tests {
         control_plane_reply_speculative_frame_len,
         control_plane_reply_speculative_read_needs_startup_link_retry,
         control_plane_reply_uses_low_touch_pure_f2_diagnostics,
+        control_plane_reply_waits_for_linux_rxskip_retransmit,
         control_plane_snapshot_bit_state_label, control_plane_snapshot_bootstrap_phase_label,
         control_plane_snapshot_exact_blocker_label, control_plane_snapshot_exact_error_label,
         control_plane_snapshot_hint_visibility_label, control_plane_snapshot_match_label,
@@ -15637,6 +15863,85 @@ mod tests {
             )[0],
             CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
         );
+        assert_eq!(
+            control_plane_diagnostic_prefix_probe_lens_for_state(
+                true,
+                true,
+                control_plane_reply_rearm_startup_link(),
+                false,
+                effective_reply_clock_hz,
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn promoted_startup_link_retry_fail_fast_prefers_direct_first_reply_blocker() {
+        assert!(
+            control_plane_reply_fail_fast_after_promoted_startup_link_retry(
+                true,
+                control_plane_reply_rearm_startup_link(),
+                CYW43_CONTROL_PLANE_CLOCK_HZ,
+                Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+            )
+        );
+        assert!(
+            !control_plane_reply_fail_fast_after_promoted_startup_link_retry(
+                true,
+                control_plane_reply_rearm_startup_link(),
+                CYW43_STARTUP_CLOCK_HZ,
+                Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+            )
+        );
+        assert!(
+            !control_plane_reply_fail_fast_after_promoted_startup_link_retry(
+                true,
+                control_plane_reply_rearm_promoted_link(),
+                CYW43_CONTROL_PLANE_CLOCK_HZ,
+                Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+            )
+        );
+        assert!(
+            !control_plane_reply_fail_fast_after_promoted_startup_link_retry(
+                true,
+                control_plane_reply_rearm_startup_link(),
+                CYW43_CONTROL_PLANE_CLOCK_HZ,
+                Some("sdio-function2-ready-timeout"),
+            )
+        );
+    }
+
+    #[test]
+    fn linux_rxskip_wait_fail_fast_matches_startup_link_terminal_policy() {
+        assert!(control_plane_reply_fail_fast_after_linux_rxskip_wait(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            true,
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+        ));
+        assert!(!control_plane_reply_fail_fast_after_linux_rxskip_wait(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            false,
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+        ));
+        assert!(!control_plane_reply_fail_fast_after_linux_rxskip_wait(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            CYW43_STARTUP_CLOCK_HZ,
+            true,
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+        ));
+        assert!(!control_plane_reply_fail_fast_after_linux_rxskip_wait(
+            true,
+            control_plane_reply_rearm_promoted_link(),
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            true,
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+        ));
     }
 
     #[test]
@@ -17073,10 +17378,16 @@ mod tests {
         ));
         assert!(!control_plane_reply_int_status_has_frame_indication(0));
         assert!(!control_plane_reply_mailbox_has_frame_indication(
-            HMB_DATA_NAKHANDLED
+            HMB_DATA_NAKHANDLED,
+            false,
+        ));
+        assert!(control_plane_reply_mailbox_has_frame_indication(
+            HMB_DATA_NAKHANDLED,
+            true,
         ));
         assert!(!control_plane_reply_mailbox_has_frame_indication(
-            HMB_DATA_DEVREADY | HMB_DATA_FWREADY
+            HMB_DATA_DEVREADY | HMB_DATA_FWREADY,
+            true,
         ));
         assert!(control_plane_reply_mailbox_requires_ack(
             HMB_DATA_NAKHANDLED
@@ -17094,36 +17405,34 @@ mod tests {
         ));
         assert!(control_plane_reply_should_attempt_speculative_read(
             Some(I_HMB_FRAME_IND),
-            None,
+            false,
             None,
         ));
         assert!(control_plane_reply_should_attempt_speculative_read(
             Some(0),
-            Some(HMB_DATA_DEVREADY | HMB_DATA_FWREADY),
+            false,
             Some(64),
         ));
         assert!(control_plane_reply_should_attempt_speculative_read(
             None,
-            None,
+            true,
             Some(64),
         ));
         assert!(!control_plane_reply_should_attempt_speculative_read(
             Some(0),
-            Some(HMB_DATA_DEVREADY | HMB_DATA_FWREADY),
+            false,
             None,
         ));
         assert!(!control_plane_reply_should_attempt_speculative_read(
             Some(0),
-            None,
+            false,
             Some(0),
         ));
         assert!(!control_plane_reply_should_attempt_speculative_read(
-            None,
-            Some(HMB_DATA_DEVREADY),
-            None,
+            None, false, None,
         ));
         assert!(!control_plane_reply_should_attempt_speculative_read(
-            None, None, None,
+            None, false, None,
         ));
         assert!(
             control_plane_reply_should_attempt_hintless_speculative_read(
@@ -17816,6 +18125,42 @@ mod tests {
         );
         assert_eq!(
             firmware_channel_write_restore_clock_hz(false, CYW43_CONTROL_PLANE_CLOCK_HZ),
+            None
+        );
+    }
+
+    #[test]
+    fn strict_reply_recovery_rearm_restores_startup_clock_for_f1_writes() {
+        assert_eq!(
+            rearm_firmware_channel_restore_clock_hz(
+                true,
+                CYW43_CONTROL_PLANE_CLOCK_HZ,
+                SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
+            ),
+            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
+        );
+        assert_eq!(
+            rearm_firmware_channel_restore_clock_hz(
+                true,
+                CYW43_STARTUP_CLOCK_HZ,
+                SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
+            ),
+            None
+        );
+        assert_eq!(
+            rearm_firmware_channel_restore_clock_hz(
+                true,
+                CYW43_CONTROL_PLANE_CLOCK_HZ,
+                SdioFunctionReadyBudget::ControlPlaneReplyProbe,
+            ),
+            None
+        );
+        assert_eq!(
+            rearm_firmware_channel_restore_clock_hz(
+                false,
+                CYW43_CONTROL_PLANE_CLOCK_HZ,
+                SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery,
+            ),
             None
         );
     }
@@ -18602,6 +18947,92 @@ mod tests {
                 Some(SDIO_FUNC_READY_1),
                 true,
                 None,
+            )
+        );
+    }
+
+    #[test]
+    fn startup_link_reply_waits_for_linux_rxskip_retransmit_only_on_active_wait_lane() {
+        assert!(control_plane_reply_waits_for_linux_rxskip_retransmit(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            true,
+        ));
+        assert!(control_plane_reply_waits_for_linux_rxskip_retransmit(
+            true,
+            control_plane_reply_rearm_startup_link_resume(),
+            true,
+        ));
+        assert!(!control_plane_reply_waits_for_linux_rxskip_retransmit(
+            true,
+            control_plane_reply_rearm_promoted_link(),
+            true,
+        ));
+        assert!(!control_plane_reply_waits_for_linux_rxskip_retransmit(
+            false,
+            control_plane_reply_rearm_startup_link(),
+            true,
+        ));
+        assert!(!control_plane_reply_waits_for_linux_rxskip_retransmit(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            false,
+        ));
+    }
+
+    #[test]
+    fn passive_startup_link_cached_first_reply_blocker_preserves_linux_configured_f2_state() {
+        let cached = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: Some("control-plane-reply-speculative-read"),
+            control_plane_frame_recovery_policy: Some("linux-rxfail"),
+            control_plane_frame_recovery_write: Some(false),
+            control_plane_frame_recovery_drained: Some(true),
+            control_plane_frame_recovery_count: Some(0),
+            control_plane_bootstrap_phase: "startup-link-passive-wait",
+            control_plane_reply_mode: "startup-link-resume",
+            control_plane_reply_attempts: 1,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: true,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "ht-not-ready",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "cyw43-init-control-plane-fail",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f2-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
+        };
+
+        assert!(cached_first_reply_blocker_preserves_linux_configured_f2_state(&cached));
+        assert!(
+            should_preserve_function2_enable_latch_from_cached_first_reply_blocker(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                true,
+                Some(&cached),
             )
         );
     }

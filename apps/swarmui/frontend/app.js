@@ -450,6 +450,7 @@ let hiveActive = false;
 let hivePollTimer = null;
 let hivePollInFlight = false;
 let hivePollInterval = 300;
+let hivePollGeneration = 0;
 let hiveDetailAgent = null;
 let hiveScheduleSignature = "";
 let hiveLeaseSignature = "";
@@ -821,9 +822,18 @@ const updateHiveSchedule = (batch) => {
     return;
   }
 
+  const columns = [
+    { label: "ID", value: (entry) => entry?.id ?? "?" },
+    { label: "ROLE", value: (entry) => entry?.role ?? "?" },
+    { label: "PRIORITY", value: (entry) => formatCount(entry?.priority) },
+    { label: "TICKS", value: (entry) => formatCount(entry?.ticks) },
+    { label: "BUDGET", value: (entry) => `${formatCount(entry?.budget_ms)}ms` },
+    { label: "SEQ", value: (entry) => formatCount(entry?.seq) },
+  ];
+
   const header = document.createElement("div");
   header.className = "hive-schedule__row header";
-  ["ID", "ROLE", "PRIORITY", "TICKS", "BUDGET", "SEQ"].forEach((label) => {
+  columns.forEach(({ label }) => {
     const cell = document.createElement("div");
     cell.textContent = label;
     header.appendChild(cell);
@@ -833,17 +843,11 @@ const updateHiveSchedule = (batch) => {
   queue.forEach((entry) => {
     const row = document.createElement("div");
     row.className = "hive-schedule__row";
-    const cells = [
-      entry?.id ?? "?",
-      entry?.role ?? "?",
-      formatCount(entry?.priority),
-      formatCount(entry?.ticks),
-      `${formatCount(entry?.budget_ms)}ms`,
-      formatCount(entry?.seq)
-    ];
-    cells.forEach((value) => {
+    columns.forEach(({ label, value }) => {
       const cell = document.createElement("div");
-      cell.textContent = value;
+      cell.className = "hive-schedule__cell";
+      cell.dataset.label = label;
+      cell.textContent = value(entry);
       row.appendChild(cell);
     });
     hiveScheduleQueue.appendChild(row);
@@ -1010,8 +1014,8 @@ const stopHivePolling = () => {
   }
 };
 
-const pollHive = async () => {
-  if (!hiveActive || hivePollInFlight) {
+const pollHive = async (generation = hivePollGeneration) => {
+  if (!hiveActive || hivePollInFlight || generation !== hivePollGeneration) {
     return;
   }
   hivePollInFlight = true;
@@ -1022,9 +1026,13 @@ const pollHive = async () => {
     detail_agent: hiveDetailAgent,
   });
   hivePollInFlight = false;
+  if (!hiveActive || generation !== hivePollGeneration) {
+    return;
+  }
   if (!res.ok) {
     setStatus("hive-status", `Hive halted (${res.error})`);
     hiveActive = false;
+    hivePollGeneration += 1;
     stopHivePolling();
     updateHiveRenderActive();
     return;
@@ -1037,10 +1045,13 @@ const pollHive = async () => {
   }
   if (res.result.done) {
     hiveActive = false;
+    hivePollGeneration += 1;
     stopHivePolling();
     return;
   }
-  hivePollTimer = setTimeout(pollHive, hivePollInterval);
+  hivePollTimer = setTimeout(() => {
+    pollHive(generation);
+  }, hivePollInterval);
 };
 
 const startHive = async () => {
@@ -1076,11 +1087,12 @@ const startHive = async () => {
   renderHiveOverlays({ overlays: [] });
   lastHiveBatch = null;
   hiveActive = true;
+  hivePollGeneration += 1;
   updateHiveRenderActive();
   const statusPollMs = res.result.hive?.status_poll_ms || 500;
   hivePollInterval = Math.max(250, Math.floor(statusPollMs));
   stopHivePolling();
-  pollHive();
+  pollHive(hivePollGeneration);
 };
 
 const stopHive = async () => {
@@ -1088,6 +1100,7 @@ const stopHive = async () => {
     return;
   }
   hiveActive = false;
+  hivePollGeneration += 1;
   stopHivePolling();
   hiveController.stop();
   setHiveScrollActive(false);

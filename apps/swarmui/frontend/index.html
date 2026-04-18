@@ -13,7 +13,7 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <sp-theme class="app-theme" color="dark" scale="medium">
+    <sp-theme class="app-theme" system="spectrum" color="dark" scale="medium">
       <main class="shell">
         <header class="cohesix-banner">
           <div class="banner-brand">
@@ -161,7 +161,7 @@
                 <h2>Telemetry Rings</h2>
                 <p>Tail worker telemetry streams on demand.</p>
               </header>
-              <div class="panel-body mono" id="telemetry-output">
+              <div class="panel-body panel-transcript mono" id="telemetry-output">
                 <p class="placeholder">No telemetry loaded.</p>
               </div>
               <footer class="panel-footer split">
@@ -183,7 +183,7 @@
                 <h2>Fleet Map</h2>
                 <p>Read-only ingest snapshots and worker presence.</p>
               </header>
-              <div class="panel-body mono" id="fleet-output">
+              <div class="panel-body panel-transcript mono" id="fleet-output">
                 <p class="placeholder">Awaiting ingest snapshot.</p>
               </div>
               <footer class="panel-footer">
@@ -296,7 +296,7 @@
                 <h2>Namespace Browser</h2>
                 <p>Browse /proc, /queen, /worker, /log, /gpu (read-only).</p>
               </header>
-              <div class="panel-body mono" id="namespace-output">
+              <div class="panel-body panel-transcript mono" id="namespace-output">
                 <p class="placeholder">Select a root to list entries.</p>
               </div>
               <footer class="panel-footer split">

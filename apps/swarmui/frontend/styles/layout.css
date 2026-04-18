@@ -387,6 +387,10 @@ body {
   overflow: auto;
 }
 
+.panel-transcript {
+  white-space: pre-wrap;
+}
+
 .panel-footer {
   display: flex;
   align-items: center;
@@ -421,6 +425,7 @@ sp-picker.select {
 }
 
 .session-actions sp-button.action,
+.panel-header sp-button.action,
 .panel-footer sp-button.action,
 .console-actions sp-button.action {
   width: auto;
@@ -481,16 +486,32 @@ select optgroup {
   color: currentColor;
 }
 
+@media (max-width: 1240px) {
+  .topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .session-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1120px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 980px) {
   .cohesix-banner {
     grid-template-columns: 1fr;
-    justify-items: center;
-    text-align: center;
+    justify-items: start;
+    text-align: left;
   }
 
   .banner-brand {
-    align-items: center;
-    text-align: center;
+    align-items: flex-start;
+    text-align: left;
   }
 
   .cohesix-banner .status-bar {
@@ -500,32 +521,37 @@ select optgroup {
       "pressure-summary"
       "pressure"
       "errors";
-    align-items: center;
-    justify-items: center;
-    justify-self: center;
+    align-items: start;
+    justify-items: start;
+    justify-self: stretch;
   }
 
   .status-row,
   .status-group {
-    justify-content: center;
+    justify-content: flex-start;
+  }
+
+  .status-label {
+    flex-basis: auto;
+    min-width: 88px;
+    margin-right: var(--space-2);
+  }
+}
+
+@media (max-width: 780px) {
+  .session-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .status-label {
     flex-basis: 100%;
     min-width: 0;
     margin-right: 0;
-  }
-
-  .topbar {
-    grid-template-columns: 1fr;
-  }
-
-  .session-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .layout {
-    grid-template-columns: 1fr;
   }
 }
 

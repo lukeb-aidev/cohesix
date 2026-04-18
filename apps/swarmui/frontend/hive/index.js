@@ -57,9 +57,12 @@ export const createHiveController = (container, status, options = {}) => {
       handleRenderError("WebGL context lost");
     },
     () => {
-      if (!renderActive) {
+      renderActive = true;
+      if (!running) {
+        updateStatus("Hive render restored");
         return;
       }
+      updateStatus("Hive render restored");
       lastFrame = performance.now();
       scheduleFrame();
     }

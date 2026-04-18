@@ -202,6 +202,7 @@ const fn skip_constructor_polling_scrub_writes(firmware_handoff: XhciFirmwareHan
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ConstructorPollingScrubMode {
     Full,
+    SkipUsbcmdOnly,
     TrustedQuiesceOnly,
 }
 
@@ -221,8 +222,21 @@ const fn constructor_polling_scrub_mode(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> ConstructorPollingScrubMode {
-    if skip_constructor_polling_scrub_writes_with_snapshot(firmware_handoff, runtime_seed_snapshot)
-    {
+    if matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot) {
+        if runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+            || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        {
+            // Once Pi 4 bootloader state proves the controller is already
+            // halted and the interrupter is quiesced, stay completely
+            // write-free until reset ownership is re-established.
+            ConstructorPollingScrubMode::TrustedQuiesceOnly
+        } else {
+            ConstructorPollingScrubMode::SkipUsbcmdOnly
+        }
+    } else if skip_constructor_polling_scrub_writes_with_snapshot(
+        firmware_handoff,
+        runtime_seed_snapshot,
+    ) {
         ConstructorPollingScrubMode::TrustedQuiesceOnly
     } else {
         ConstructorPollingScrubMode::Full
@@ -859,7 +873,6 @@ const fn skip_live_halt_revalidation_with_snapshot(
 ) -> bool {
     skip_live_halt_revalidation(firmware_handoff)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -1517,11 +1530,11 @@ impl<H: Dma> XhciCtrl<H> {
     ) {
         if matches!(mode, ConstructorPollingScrubMode::TrustedQuiesceOnly) {
             emit_xhci_diag(0x0209, reg::USBCMD as u64, 0, 1);
-            // Only the snapshot-backed trusted handoff paths still keep the
-            // constructor scrub completely write-free. The unseeded Pi 4
-            // `uboot-fresh-init` path now rejoins the ordinary USBSTS / IMOD /
-            // IMAN quiesce so runtime drains pending IRQ27 state before the
-            // first reset edge.
+            // Only the snapshot-backed trusted preserve/resetless lanes keep
+            // constructor scrub completely write-free. The Pi 4
+            // `uboot-fresh-init` cold-start path now rejoins the ordinary
+            // USBSTS / IMOD / IMAN quiesce while still skipping the first
+            // pre-reset USBCMD write.
             emit_xhci_diag(0x020d, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 1);
             emit_xhci_diag(0x020e, (int_base + reg::IMOD) as u64, 0, 1);
             emit_xhci_diag(
@@ -1530,6 +1543,19 @@ impl<H: Dma> XhciCtrl<H> {
                 polling_iman_value() as u64,
                 1,
             );
+        } else if matches!(mode, ConstructorPollingScrubMode::SkipUsbcmdOnly) {
+            emit_xhci_diag(0x0209, reg::USBCMD as u64, 0, 1);
+            emit_xhci_diag(0x0206, reg::USBSTS as u64, USBSTS_CLEAR_MASK as u64, 0);
+            Self::write_reg_at(mmio, op_offset + reg::USBSTS, USBSTS_CLEAR_MASK);
+            emit_xhci_diag(0x0207, (int_base + reg::IMOD) as u64, 0, 0);
+            Self::write_reg_at(mmio, int_base + reg::IMOD, 0u32);
+            emit_xhci_diag(
+                0x0208,
+                (int_base + reg::IMAN) as u64,
+                polling_iman_value() as u64,
+                0,
+            );
+            Self::write_reg_at(mmio, int_base + reg::IMAN, polling_iman_value());
         } else {
             emit_xhci_diag(0x0205, reg::USBCMD as u64, 0, 1);
             Self::write_reg_at(mmio, op_offset + reg::USBCMD, 0u32);
@@ -2036,11 +2062,11 @@ impl<H: Dma> XhciCtrl<H> {
             );
         }
 
-        // Firmware-owned handoff modes that already exported a safe post-stop
-        // boundary can skip the extra live halt-state reads and jump straight
-        // to the reset gate. On Pi 4 the trusted U-Boot cold-start contract is
-        // already post-`usb stop`, and the first live USBSTS read can still
-        // trigger IRQ 27 before runtime has owned the controller.
+        // Only the stronger trusted runtime-ring paths keep the live halt
+        // revalidation suppressed. The stop-state-only seeded cold-start lane
+        // now rejoins the normal U-Boot/Linux halt confirmation before HCRST
+        // so the first live reset edge is gated by the same `USBSTS.HCH`
+        // contract as the known-good reset flow.
         if skip_live_halt_revalidation_with_snapshot(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -4243,7 +4269,7 @@ mod tests {
             erdp0: None,
             erstsz0: None,
         });
-        assert!(skip_live_halt_revalidation_with_snapshot(
+        assert!(!skip_live_halt_revalidation_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
         ));
@@ -5328,7 +5354,7 @@ mod tests {
     fn constructor_scrub_only_stays_trusted_for_snapshot_backed_handoffs() {
         assert_eq!(
             constructor_polling_scrub_mode(XhciFirmwareHandoff::ColdStartFromSnapshot, None),
-            ConstructorPollingScrubMode::Full
+            ConstructorPollingScrubMode::SkipUsbcmdOnly
         );
         assert_eq!(
             constructor_polling_scrub_mode(XhciFirmwareHandoff::PreserveControllerState, None),
@@ -5354,6 +5380,22 @@ mod tests {
                     erstba0: None,
                     erdp0: None,
                     erstsz0: None,
+                }),
+            ),
+            ConstructorPollingScrubMode::TrustedQuiesceOnly
+        );
+        assert_eq!(
+            constructor_polling_scrub_mode(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                Some(XhciRuntimeSeedSnapshot {
+                    usbcmd: Some(0),
+                    usbsts: Some(reg::USBSTS_HCH),
+                    iman0: Some(0),
+                    dcbaap: Some(0x4003_000),
+                    crcr: Some(0x4024_001),
+                    erstba0: Some(0x4020_000),
+                    erdp0: Some(0x4023_000),
+                    erstsz0: Some(1),
                 }),
             ),
             ConstructorPollingScrubMode::TrustedQuiesceOnly
@@ -5409,6 +5451,42 @@ mod tests {
         assert_eq!(
             XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMAN),
             0
+        );
+    }
+
+    #[test]
+    fn skip_usbcmd_constructor_scrub_only_preserves_command_register() {
+        let mut mmio = vec![0u8; 0x400];
+        let mmio_base = mmio.as_mut_ptr() as usize;
+        let op_offset = 0x40;
+        let int_base = 0x180;
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD, 0xa5a5_5a5a);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS, 0);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMOD, 0xffff_ffff);
+        XhciCtrl::<MockDma>::write_reg_at::<u32>(mmio_base, int_base + reg::IMAN, 0);
+
+        XhciCtrl::<MockDma>::write_only_polling_scrub(
+            mmio_base,
+            op_offset,
+            int_base,
+            ConstructorPollingScrubMode::SkipUsbcmdOnly,
+        );
+
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD),
+            0xa5a5_5a5a
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBSTS),
+            USBSTS_CLEAR_MASK
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMOD),
+            0
+        );
+        assert_eq!(
+            XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, int_base + reg::IMAN),
+            polling_iman_value()
         );
     }
 

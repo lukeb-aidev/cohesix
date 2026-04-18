@@ -329,11 +329,10 @@ static WIFI_PROGRESS_TICKS: AtomicUsize = AtomicUsize::new(0);
 #[inline]
 const fn xhci_runtime_init_strategy_prompt_safe(strategy: XhciRuntimeInitStrategy) -> bool {
     match strategy.firmware_handoff {
-        // The trusted cold-start-from-snapshot path still stays inside the
-        // bootloader/U-Boot handoff contract; only the pure runtime-owned
-        // `None` path requires the live-reset sequence that prompt-safe manual
-        // keyboard probes must avoid.
-        XhciFirmwareHandoff::ColdStartFromSnapshot => true,
+        // Prompt-safe probes must stay on a seed-backed stop-state handoff.
+        // The unseeded cold-start variant still relies on the live reset/halt
+        // path that manual keyboard probing is explicitly trying to avoid.
+        XhciFirmwareHandoff::ColdStartFromSnapshot => strategy.seed_stop_state,
         XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState => true,
         XhciFirmwareHandoff::None => false,
     }
@@ -3338,6 +3337,11 @@ const fn xhci_runtime_init_strategy_constructor_label(
         )
     {
         "trusted-quiesce"
+    } else if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::ColdStartFromSnapshot
+    ) {
+        "skip-usbcmd-quiesce"
     } else {
         "full-quiesce"
     }
@@ -11426,7 +11430,7 @@ mod tests {
         assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
         ));
-        assert!(xhci_runtime_init_strategy_prompt_safe(
+        assert!(!xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));
         assert!(xhci_runtime_init_strategy_prompt_safe(
@@ -11892,21 +11896,21 @@ mod tests {
         )
         .expect("trusted prompt-safe path should be classified");
         assert_eq!(status.route, "trusted-high-bar-primary");
-        assert_eq!(status.strategy_idx, 1);
+        assert_eq!(status.strategy_idx, 2);
         assert_eq!(status.strategy_count, 2);
-        assert_eq!(status.policy, "full-reset-start");
-        assert_eq!(status.origin, "uboot-fresh-init");
+        assert_eq!(status.policy, "runtime-owned-fresh-rings");
+        assert_eq!(status.origin, "seeded-cold-start");
         assert_eq!(status.handoff, "cold-start-from-snapshot");
-        assert_eq!(status.seed, "none");
-        assert_eq!(status.halt_guard, "live-halt-read");
-        assert_eq!(status.constructor, "full-quiesce");
-        assert_eq!(status.pre_reset, "full-pre-reset");
-        assert_eq!(status.legacy, "claim-legacy");
+        assert_eq!(status.seed, "stop-state");
+        assert_eq!(status.halt_guard, "skip-live-halt-read");
+        assert_eq!(status.constructor, "trusted-quiesce");
+        assert_eq!(status.pre_reset, "skip-pre-reset");
+        assert_eq!(status.legacy, "skip-legacy");
         assert_eq!(status.run, "run-uboot");
         assert_eq!(status.publish, "rings-pre-run");
         assert_eq!(status.post_ready_irq, "irq-zero");
         assert_eq!(status.current_step, "pre-controller-ready");
-        assert_eq!(status.next_step, "live-stop-revalidation");
+        assert_eq!(status.next_step, "skip-stop-revalidation");
         assert_eq!(status.followup_step, "reset-post-settle");
         assert!(!status.prefer_high);
         assert!(status.pcie_dma_window);

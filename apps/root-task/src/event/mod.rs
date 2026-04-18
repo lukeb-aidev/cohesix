@@ -2586,6 +2586,12 @@ where
             Self::wifi_reply_probe_effective_clock_hz(snapshot),
         ));
         self.emit_console_line(reply_probe.as_str());
+        let reply_terminal = format_message(format_args!(
+            "wifi: reply_terminal action={} retry_clock={}Hz",
+            Self::wifi_reply_terminal_action(snapshot),
+            Self::wifi_reply_retry_clock_hz(snapshot),
+        ));
+        self.emit_console_line(reply_terminal.as_str());
         let replay_full_bootstrap = if snapshot.control_plane_exact_error.is_empty() {
             "n/a"
         } else if crate::net::cyw43_control_plane_bootstrap_replay_reason(
@@ -2850,10 +2856,10 @@ where
     fn wifi_reply_contract_strict_recovery_f2(snapshot: &WifiDebugSnapshot) -> &'static str {
         if snapshot.control_plane_no_ht_transport
             && snapshot.control_plane_f2_state == "latched-linux-configured-no-iorx"
-            && matches!(
+            && (matches!(
                 snapshot.control_plane_reply_mode,
                 "startup-link" | "startup-link-resume"
-            )
+            ) || snapshot.control_plane_startup_link_stable)
         {
             "preserve-latch"
         } else {
@@ -2914,8 +2920,41 @@ where
             )
         {
             snapshot.preferred_data_clock_hz
+        } else if snapshot.control_plane_no_ht_transport
+            && snapshot.control_plane_startup_link_stable
+        {
+            snapshot.preferred_data_clock_hz
         } else {
             snapshot.current_clock_hz
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_terminal_action(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if Self::wifi_reply_probe_lane(snapshot) == "startup-link"
+            && Self::wifi_reply_contract_strict_recovery_f2(snapshot) == "preserve-latch"
+            && Self::wifi_reply_contract_blocker_class(snapshot) == "direct-f2-reply"
+        {
+            "fail-fast"
+        } else if snapshot.control_plane_startup_link_stable {
+            "passive-wait"
+        } else if snapshot.control_plane_probe_pending
+            || snapshot.control_plane_promoted_probe_pending
+        {
+            "resume-bounded-probe"
+        } else if snapshot.control_plane_reply_attempts != 0 {
+            "rearm"
+        } else {
+            "none"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_reply_retry_clock_hz(snapshot: &WifiDebugSnapshot) -> u32 {
+        if Self::wifi_reply_terminal_action(snapshot) == "fail-fast" {
+            snapshot.preferred_data_clock_hz
+        } else {
+            Self::wifi_reply_probe_effective_clock_hz(snapshot)
         }
     }
 
@@ -6515,6 +6554,78 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_reply_contract_blocker_class(&snapshot),
             "direct-f2-reply"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_terminal_action(&snapshot),
+            "fail-fast"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_retry_clock_hz(&snapshot),
+            12_500_000
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_passive_startup_link_reply_probe_reports_bulk_clock_and_preserve_latch() {
+        let snapshot = WifiDebugSnapshot {
+            power_state: WifiPowerState::On,
+            reset_state: WifiResetState::Deasserted,
+            current_clock_hz: 400_000,
+            preferred_data_clock_hz: 12_500_000,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0xb0ff_ff00,
+            io_enable: Some(0x06),
+            io_ready: Some(0x02),
+            chipclkcsr: Some(0x3a),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            programmed_backplane_window: None,
+            shadow_backplane_window: None,
+            shadow_backplane_fn_addr: None,
+            control_plane_frame_recovery_stage: Some("control-plane-reply-speculative-read"),
+            control_plane_frame_recovery_policy: Some("linux-rxfail"),
+            control_plane_frame_recovery_write: Some(false),
+            control_plane_frame_recovery_drained: Some(true),
+            control_plane_frame_recovery_count: Some(0),
+            control_plane_bootstrap_phase: "startup-link-passive-wait",
+            control_plane_reply_mode: "none",
+            control_plane_reply_attempts: 0,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: true,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "promoted-io-unstable",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "cyw43-init-control-plane-fail",
+            control_plane_startup_link_rescue_cycles: 1,
+            control_plane_startup_link_rescue_limit: 2,
+            control_plane_passive_startup_link_empty_poll_limit: 2,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "f2-reply-read-stalled-no-buffer-ready",
+            control_plane_exact_error: "cyw43-function2-reply-read-stall-no-buffer-ready",
+        };
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_probe_lane(&snapshot),
+            "passive-startup-link"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_probe_effective_clock_hz(&snapshot),
+            12_500_000
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_contract_strict_recovery_f2(&snapshot),
+            "preserve-latch"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_terminal_action(&snapshot),
+            "passive-wait"
         );
     }
 

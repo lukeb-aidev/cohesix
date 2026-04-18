@@ -384,17 +384,20 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 **Playwright commands (macOS ARM64):**
 - `cd tools/swarmui-ui-tests`
 - `npm ci`
-- `npx playwright install webkit`
-- `SWARMUI_RELEASE_DIR=../releases/<latest> npm test`
-- Source UI (if release bundle not updated): `SWARMUI_UI_ROOT=../../apps/swarmui/frontend npm test`
+- `npx playwright install webkit chromium`
+- Source UI (default harness target): `npm test`
+- Explicit source UI override: `SWARMUI_UI_ROOT=../../apps/swarmui/frontend npm test`
+- Release bundle verification: `SWARMUI_RELEASE_DIR=../releases/<latest> npm test`
 - Update snapshots only when UI changes are intended: `npm run test:update`
 
 **Notes**
-- The Playwright harness targets the **latest SwarmUI release bundle** UI assets under `releases/` unless `SWARMUI_UI_ROOT` is set.
+- The Playwright harness targets the **source SwarmUI frontend** by default so UI regressions are measured against the current shell, not a stale release bundle.
+- Set `SWARMUI_RELEASE_DIR` to verify a packaged release bundle; set `SWARMUI_UI_ROOT` only when overriding the default source path.
 - The harness injects a deterministic Tauri `invoke` mock for UI-only replay and transcript assertions; it does not exercise control-plane behavior.
 - The current shell uses a vendored Spectrum Web Components layer for operator controls; Playwright interacts with the effective editable/button controls while keeping the canonical SwarmUI element IDs stable.
 - The Live Hive performance harness reads `window.__SWARMUI_HIVE_DEBUG.getMetrics()`; `pending` must stay ≤ `swarmui.hive.pending_event_cap` and `renders` should advance without UI stalls under replay fixtures.
 - Browser binaries are installed into the user Playwright cache (not committed).
+- Snapshot coverage runs against the current browser matrix: `webkit-desktop` (baseline shell), `webkit-narrow` (responsive shell and scheduler), and `chromium-tablet` (interaction parity without snapshot gating).
 
 ### 6) Regression pack (full-stack, recommended before release)
 - `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires `COHESIX_GATEWAY_URL` or equivalent gateway env var)

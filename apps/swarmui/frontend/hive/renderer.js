@@ -115,6 +115,7 @@ export class HiveRenderer {
       this.style.flowBlobRadius,
       this.style.flowBlobInnerAlpha,
     );
+    this.agentHitRadius = Math.max(this.style.agentRadius * 2.4, 18);
     this.clusterTextureRadius = this.style.clusterRadiusMax;
     this.clusterTexture = this.buildClusterTexture(this.clusterTextureRadius);
     this.needsResize = true;
@@ -393,6 +394,7 @@ export class HiveRenderer {
           s.anchor.set(0.5);
           s.eventMode = "static";
           s.cursor = "pointer";
+          s.hitArea = new PIXI.Circle(0, 0, this.agentHitRadius);
           s.on("pointertap", () => {
             if (this.onAgentSelect) {
               this.onAgentSelect(id);
@@ -458,8 +460,8 @@ export class HiveRenderer {
           },
           this.labelLayer,
         );
-        label.visible = true;
         const labelText = agent.labelIndex ? String(agent.labelIndex) : "";
+        label.visible = labelText.length > 0;
         if (label.text !== labelText) {
           label.text = labelText;
         }
