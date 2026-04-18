@@ -946,7 +946,14 @@ const fn usb_probe_preflight_followup_step() -> &'static str {
 
 #[inline]
 const fn usb_probe_preflight_expected_diag_stage(strategy: XhciRuntimeInitStrategy) -> u16 {
-    if xhci_runtime_init_strategy_skips_live_halt_read(strategy) {
+    if strategy.seed_stop_state
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        )
+    {
+        0x0219
+    } else if xhci_runtime_init_strategy_skips_live_halt_read(strategy) {
         0x0224
     } else {
         0x0213
@@ -2640,6 +2647,10 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0210 => Some("legacy-ownership-claim-begin"),
         0x0211 => Some("legacy-ownership-claim-done"),
         0x0212 => Some("fw-handoff-skip-legacy-ownership"),
+        0x0219 => Some("pre-halt-usbcmd-quiesce-begin"),
+        0x021a => Some("pre-halt-usbcmd-write-begin"),
+        0x021b => Some("pre-halt-usbcmd-write-done"),
+        0x021c => Some("pre-halt-usbcmd-write-skip"),
         0x0217 => Some("stop-revalidation-decision"),
         0x0218 => Some("stop-revalidation-skip-branch"),
         0x0213 => Some("stop-revalidation-usbsts-read-begin"),
@@ -3323,7 +3334,10 @@ const fn xhci_runtime_init_strategy_skips_live_halt_read(
         strategy.firmware_handoff,
         XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
     ) || (strategy.seed_stop_state
-        && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None))
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::None | XhciFirmwareHandoff::ColdStartFromSnapshot
+        ))
 }
 
 #[inline]
@@ -3331,6 +3345,13 @@ const fn xhci_runtime_init_strategy_constructor_label(
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
     if strategy.seed_stop_state
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        )
+    {
+        "pre-halt-usbcmd-quiesce"
+    } else if strategy.seed_stop_state
         || matches!(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
@@ -3367,11 +3388,11 @@ const fn xhci_runtime_init_strategy_pre_reset_label(
 const fn xhci_runtime_init_strategy_legacy_label(
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
-    if strategy.seed_stop_state
-        || matches!(
-            strategy.firmware_handoff,
-            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
-        )
+    if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+    ) || (strategy.seed_stop_state
+        && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None))
     {
         "skip-legacy"
     } else {
@@ -5788,19 +5809,15 @@ enum XhciIrqSinkMode {
 const fn xhci_irq_sink_mode(
     mmio: usize,
     firmware_handoff: XhciFirmwareHandoff,
-    phase: XhciIrqInstallPhase,
+    _phase: XhciIrqInstallPhase,
 ) -> XhciIrqSinkMode {
     if xhci_polling_only_runtime(mmio, firmware_handoff) {
         if TRUSTED_XHCI_PCIE_SINKS_ENABLED {
-            // The trusted Pi4 handoff stays polling-driven, but the first live
-            // ownership transition can still surface either the child INTx line
-            // from the bcm2711 interrupt-map, the parent PCIe bridge IRQ, or
-            // the observed legacy PCIe-side IRQ 27 that still surfaces on the
-            // trusted high-BAR path. Install only that bounded Pi 4 sink set
-            // across both the pre-controller-ready and controller-ready
-            // windows, and leave primary xHCI IRQ ownership out of the runtime
-            // path.
-            let _ = phase;
+            // Keep ownership logic poll-driven, but arm the bounded trusted
+            // sink set before the first live halt revalidation so the seeded
+            // cold-start path follows the documented Pi 4 high-BAR contract.
+            // IRQ27 may still degrade when firmware retains ownership; the
+            // bounded bridge/child INTx sinks stay useful on that path.
             XhciIrqSinkMode::TrustedPcieSinks
         } else {
             XhciIrqSinkMode::Disabled
@@ -11902,23 +11919,23 @@ mod tests {
         assert_eq!(status.origin, "seeded-cold-start");
         assert_eq!(status.handoff, "cold-start-from-snapshot");
         assert_eq!(status.seed, "stop-state");
-        assert_eq!(status.halt_guard, "live-halt-read");
-        assert_eq!(status.constructor, "trusted-quiesce");
+        assert_eq!(status.halt_guard, "skip-live-halt-read");
+        assert_eq!(status.constructor, "pre-halt-usbcmd-quiesce");
         assert_eq!(status.pre_reset, "skip-pre-reset");
-        assert_eq!(status.legacy, "skip-legacy");
+        assert_eq!(status.legacy, "claim-legacy");
         assert_eq!(status.run, "run-uboot");
         assert_eq!(status.publish, "rings-pre-run");
         assert_eq!(status.post_ready_irq, "irq-zero");
         assert_eq!(status.current_step, "pre-controller-ready");
-        assert_eq!(status.next_step, "live-stop-revalidation");
+        assert_eq!(status.next_step, "skip-stop-revalidation");
         assert_eq!(status.followup_step, "reset-post-settle");
         assert!(!status.prefer_high);
         assert!(status.pcie_dma_window);
         assert!(status.poll_only);
-        assert_eq!(status.expected_diag_stage, 0x0213);
+        assert_eq!(status.expected_diag_stage, 0x0219);
         assert_eq!(
             status.expected_diag_tag,
-            Some("stop-revalidation-usbsts-read-begin")
+            Some("pre-halt-usbcmd-quiesce-begin")
         );
         assert_eq!(status.expected_diag_exact, None);
     }
@@ -11944,7 +11961,7 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 true,
             )),
-            "live-halt-read"
+            "skip-live-halt-read"
         );
         assert_eq!(
             super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(
@@ -13030,7 +13047,17 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_sink_mode_uses_bounded_pcie_sinks_across_trusted_high_handoff_probe() {
+    fn xhci_irq_sink_mode_arms_trusted_sinks_before_controller_ready() {
+        assert_eq!(
+            xhci_irq_sink_mode(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                super::xhci_preferred_trusted_handoff_mode(
+                    super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
+                ),
+                XhciIrqInstallPhase::PreControllerReady,
+            ),
+            XhciIrqSinkMode::TrustedPcieSinks
+        );
         assert_eq!(
             xhci_irq_sink_mode(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,

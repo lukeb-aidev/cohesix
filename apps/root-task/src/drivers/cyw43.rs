@@ -537,6 +537,9 @@ fn log_cyw43_init_failure(
     if let Some(reason) = promoted_cyw43_init_failure_exact_error(err) {
         state.promote_cached_control_plane_exact_error(reason);
     }
+    if include_control_plane_snapshot {
+        state.log_cyw43_control_plane_snapshot(stage);
+    }
     let snapshot_exact_error = match state.debug_dump_state(stage) {
         Ok(snapshot) => {
             warn!("[cyw43] init snapshot stage={stage} snapshot={snapshot:?}");
@@ -547,9 +550,6 @@ fn log_cyw43_init_failure(
             None
         }
     };
-    if include_control_plane_snapshot {
-        state.log_cyw43_control_plane_snapshot(stage);
-    }
     snapshot_exact_error
 }
 
@@ -583,8 +583,26 @@ fn preserve_cyw43_init_failure_exact_error(
             }
             DriverError::Hal(HalError::Unsupported(reason))
         }
+        DriverError::Hal(HalError::Unsupported(reason))
+            if (reason.starts_with("cyw43-control-plane-sideband-")
+                || reason.starts_with("cyw43-function2-enable-latched-not-ready-sideband-"))
+                && snapshot_exact_error.is_some_and(|snapshot_exact_error| {
+                    !snapshot_exact_error.is_empty()
+                        && preserved_cyw43_init_failure_snapshot_is_stronger(snapshot_exact_error)
+                }) =>
+        {
+            DriverError::Hal(HalError::Unsupported(
+                snapshot_exact_error.unwrap_or(reason),
+            ))
+        }
         other => other,
     }
+}
+
+#[inline]
+fn preserved_cyw43_init_failure_snapshot_is_stronger(snapshot_exact_error: &str) -> bool {
+    snapshot_exact_error.starts_with("cyw43-function2-reply-")
+        || snapshot_exact_error.starts_with("cyw43-function2-enable-latched-not-ready")
 }
 
 pub(crate) fn debug_load_firmware_from_transport(
@@ -2830,6 +2848,53 @@ mod tests {
                 ),
             )),
             Some("cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",)
+        );
+        assert_eq!(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+                )),
+                Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+            )),
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready")
+        );
+        assert_eq!(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                )),
+                Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+            )),
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready")
+        );
+        assert_eq!(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+                )),
+                Some(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                ),
+            )),
+            Some("cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",)
+        );
+        assert_eq!(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-control-plane-sideband-read-stall-no-buffer-ready",
+                )),
+                Some("cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"),
+            )),
+            Some("cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready")
+        );
+        assert_eq!(
+            unsupported_reason(&preserve_cyw43_init_failure_exact_error(
+                DriverError::Hal(HalError::Unsupported(
+                    "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+                )),
+                Some("cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready"),
+            )),
+            Some("cyw43-function2-enable-latched-not-ready-read-stall-no-buffer-ready")
         );
     }
 
