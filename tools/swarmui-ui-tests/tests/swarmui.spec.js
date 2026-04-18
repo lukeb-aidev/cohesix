@@ -193,15 +193,21 @@ const startStaticServer = () =>
     });
   });
 
-const installTauriMock = async (page) => {
+const installTauriMock = async (page, options = {}) => {
+  const mode = {
+    trace_replay: true,
+    hive_replay: true,
+    offline: false,
+    ...(options.mode || {})
+  };
   await page.addInitScript(
-    ({ helpLines, hiveBootstrap, hiveBatch }) => {
+    ({ helpLines, hiveBootstrap, hiveBatch, mode }) => {
       const pollCalls = [];
       window.__SWARMUI_TEST = { hivePollCalls: pollCalls };
       const respond = async (cmd, payload) => {
         switch (cmd) {
           case "swarmui_mode":
-            return { trace_replay: true, hive_replay: true };
+            return mode;
           case "swarmui_hive_bootstrap":
             return hiveBootstrap;
           case "swarmui_hive_poll":
@@ -237,10 +243,12 @@ const installTauriMock = async (page) => {
       };
 
       window.__TAURI__ = {
-        invoke: async (cmd, payload) => respond(cmd, payload)
+        core: {
+          invoke: async (cmd, payload) => respond(cmd, payload)
+        }
       };
     },
-    { helpLines, hiveBootstrap, hiveBatch }
+    { helpLines, hiveBootstrap, hiveBatch, mode }
   );
 };
 
@@ -306,6 +314,12 @@ test("SwarmUI launches without error", async ({ page }) => {
   await expect(page.locator("sp-theme.app-theme")).toBeVisible();
   await expect(page.locator("header.cohesix-banner")).toBeVisible();
   await expect(page.locator("#hive-status")).not.toContainText("failed");
+});
+
+test("Tauri core invoke bridge powers namespace actions", async ({ page }) => {
+  await page.locator("#load-namespace").click();
+  await expect(page.locator("#namespace-output")).toContainText("OK LS");
+  await expect(page.locator("#namespace-output")).not.toContainText("Tauri API unavailable");
 });
 
 test("Spectrum shell controls are mounted", async ({ page }) => {
@@ -460,6 +474,23 @@ test("Live Hive performance harness stays responsive", async ({ page }) => {
 test("Embedded coh prompt accepts input", async ({ page }) => {
   await runConsoleCommand(page, "help");
   await expect(page.locator("#console-output")).toContainText("coh> help");
+});
+
+test("Offline snapshot replay disables the console prompt", async ({ page }) => {
+  await installTauriMock(page, {
+    mode: { trace_replay: false, hive_replay: true, offline: true }
+  });
+  await page.goto(`${baseUrl}/index.html`, { waitUntil: "load" });
+
+  await expect(page.locator(".console-panel")).toHaveAttribute(
+    "aria-disabled",
+    "true"
+  );
+  await expect(page.locator("#console-send")).toBeDisabled();
+  await expect(page.locator("#console-input")).toHaveAttribute("disabled", "");
+  await expect(page.locator("#console-output")).toContainText(
+    "Console unavailable in offline snapshot replay mode."
+  );
 });
 
 test("Transcript panels preserve line breaks", async ({ page }) => {

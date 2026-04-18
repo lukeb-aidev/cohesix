@@ -996,12 +996,47 @@ fn control_plane_reply_fail_fast_after_linux_rxskip_wait(
     exact_error: Option<&'static str>,
 ) -> bool {
     linux_rxskip_pending
-        && control_plane_reply_fail_fast_after_promoted_startup_link_retry(
-            experimental_no_ht_transport,
-            reply_rearm_mode,
-            preferred_data_clock_hz,
-            exact_error,
-        )
+        && experimental_no_ht_transport
+        && control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+        && preferred_data_clock_hz > CYW43_STARTUP_CLOCK_HZ
+        && exact_error.map_or(true, startup_link_known_first_reply_blocker)
+}
+
+#[inline]
+fn control_plane_reply_fail_fast_exact_error_after_linux_rxskip_wait(
+    experimental_no_ht_transport: bool,
+    reply_rearm_mode: u8,
+    preferred_data_clock_hz: u32,
+    linux_rxskip_pending: bool,
+    exact_error: Option<&'static str>,
+    sdhci_read_diag: Option<&'static str>,
+) -> Option<&'static str> {
+    if !linux_rxskip_pending
+        || !experimental_no_ht_transport
+        || !control_plane_reply_rearm_uses_startup_link(reply_rearm_mode)
+        || preferred_data_clock_hz <= CYW43_STARTUP_CLOCK_HZ
+    {
+        return None;
+    }
+
+    if let Some(exact_error) =
+        exact_error.filter(|reason| startup_link_known_first_reply_blocker(reason))
+    {
+        return Some(exact_error);
+    }
+
+    if let Some(sdhci_read_diag) = sdhci_read_diag.filter(|diag| diag.starts_with("f2-reply-read-"))
+    {
+        let exact_error = control_plane_snapshot_exact_error_label_with_sdhci_diag(
+            "sdio-core-hints-unreadable",
+            sdhci_read_diag,
+        );
+        if startup_link_known_first_reply_blocker(exact_error) {
+            return Some(exact_error);
+        }
+    }
+
+    None
 }
 
 #[inline]
@@ -9019,9 +9054,16 @@ impl SdioHost {
                         self.experimental_control_plane_reply_rearm_mode,
                         self.experimental_control_plane_linux_rxskip_pending,
                     ) {
-                        let exact_error = cached_wifi_debug_snapshot()
-                            .map(|snapshot| snapshot.control_plane_exact_error)
-                            .filter(|exact_error| !exact_error.is_empty());
+                        let (exact_error, sdhci_read_diag) = cached_wifi_debug_snapshot()
+                            .map(|snapshot| {
+                                let exact_error = (!snapshot.control_plane_exact_error.is_empty())
+                                    .then_some(snapshot.control_plane_exact_error);
+                                let sdhci_read_diag = (snapshot.control_plane_sdhci_read_diag
+                                    != "none")
+                                    .then_some(snapshot.control_plane_sdhci_read_diag);
+                                (exact_error, sdhci_read_diag)
+                            })
+                            .unwrap_or((None, None));
                         if control_plane_reply_fail_fast_after_linux_rxskip_wait(
                             self.experimental_no_ht_transport,
                             self.experimental_control_plane_reply_rearm_mode,
@@ -9029,8 +9071,17 @@ impl SdioHost {
                             self.experimental_control_plane_linux_rxskip_pending,
                             exact_error,
                         ) {
-                            let exact_error = exact_error
+                            let exact_error =
+                                control_plane_reply_fail_fast_exact_error_after_linux_rxskip_wait(
+                                    self.experimental_no_ht_transport,
+                                    self.experimental_control_plane_reply_rearm_mode,
+                                    self.preferred_data_clock_hz,
+                                    self.experimental_control_plane_linux_rxskip_pending,
+                                    exact_error,
+                                    sdhci_read_diag,
+                                )
                                 .unwrap_or("cyw43-function2-reply-read-stall-no-buffer-ready");
+                            promote_cached_wifi_debug_snapshot_exact_error(exact_error);
                             self.experimental_control_plane_linux_rxskip_pending = false;
                             emit_breadcrumb(format_args!(
                                 "[pi4-wifi] firmware stage={stage} action=function2-read-retry-fail-fast len={} retry_clock={}Hz current_clock={}Hz width={} no_ht={} reason=linux-rxskip-wait-terminal exact_error={exact_error}",
@@ -15942,6 +15993,57 @@ mod tests {
             true,
             Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
         ));
+        assert!(control_plane_reply_fail_fast_after_linux_rxskip_wait(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            true,
+            None,
+        ));
+        assert!(!control_plane_reply_fail_fast_after_linux_rxskip_wait(
+            true,
+            control_plane_reply_rearm_startup_link(),
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+            true,
+            Some("sdio-function2-ready-timeout"),
+        ));
+    }
+
+    #[test]
+    fn linux_rxskip_wait_fail_fast_promotes_direct_function2_reply_exact_error_from_sdhci_diag() {
+        assert_eq!(
+            control_plane_reply_fail_fast_exact_error_after_linux_rxskip_wait(
+                true,
+                control_plane_reply_rearm_startup_link(),
+                CYW43_CONTROL_PLANE_CLOCK_HZ,
+                true,
+                Some("cyw43-control-plane-startup-link-reply-timeout"),
+                Some("f2-reply-read-stalled-no-buffer-ready"),
+            ),
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready")
+        );
+        assert_eq!(
+            control_plane_reply_fail_fast_exact_error_after_linux_rxskip_wait(
+                true,
+                control_plane_reply_rearm_startup_link(),
+                CYW43_CONTROL_PLANE_CLOCK_HZ,
+                true,
+                Some("cyw43-function2-reply-read-stall-no-buffer-ready"),
+                Some("f1-reply-read-stalled-no-buffer-ready"),
+            ),
+            Some("cyw43-function2-reply-read-stall-no-buffer-ready")
+        );
+        assert_eq!(
+            control_plane_reply_fail_fast_exact_error_after_linux_rxskip_wait(
+                true,
+                control_plane_reply_rearm_startup_link(),
+                CYW43_CONTROL_PLANE_CLOCK_HZ,
+                true,
+                Some("cyw43-control-plane-startup-link-reply-timeout"),
+                Some("none"),
+            ),
+            None
+        );
     }
 
     #[test]

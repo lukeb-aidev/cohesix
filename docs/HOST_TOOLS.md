@@ -341,10 +341,10 @@ SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarm
 - `SWARMUI_REST_URL` (fallback `COH_REST_URL`) supplies the hive-gateway base URL for `rest|gateway`.
 - REST request-auth uses `SWARMUI_REST_AUTH_TOKEN` (fallback `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`).
 - `SWARMUI_TRANSPORT=rest|gateway` is enabled by default. Use `--no-default-features` to strip REST support and rebuild with `--features rest` when needed.
-- `SWARMUI_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`) supplies the console auth token.
+- SwarmUI console auth resolution order is `SWARMUI_AUTH_TOKEN`, `COHSH_AUTH_TOKEN`, `COH_AUTH_TOKEN`, then the queen ticket secret from `SWARMUI_TICKET_CONFIG` / `COHSH_TICKET_CONFIG` (default `configs/root_task.toml`). If the resolved token is the placeholder `changeme`, SwarmUI warns in the attach transcript, but listeners that reject insecure console auth will still refuse the session.
 - Ticket minting uses `SWARMUI_TICKET_CONFIG`/`SWARMUI_TICKET_SECRET` (fallback to `COHSH_*`).
-- `--replay` resolves relative paths first against the current working directory, then the app data directory under `snapshots/`, and forces offline mode.
-- `--replay-trace` resolves relative paths under `traces/` and auto-loads a sibling `*.hive.cbor` if present.
+- `--replay` resolves relative paths first against the current working directory, then the app data directory under `snapshots/`, forces offline mode, and disables the interactive console prompt because snapshot replay only carries Hive state.
+- `--replay-trace` resolves relative paths under `traces/`, auto-loads a sibling `*.hive.cbor` if present, and keeps the embedded console available through the trace-backed shell transport.
 - Linux builds and runtime now assume the Tauri 2 WebKitGTK 4.1 package line; use `scripts/setup_environment.sh` and `scripts/linux_host_tools_sync.sh` to install the required packages.
 
 ## cas-tool

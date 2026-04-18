@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate SwarmUI trace replay fixtures.
 // Author: Lukas Bower
@@ -73,6 +73,42 @@ fn trace_replay_matches_fixture() -> Result<()> {
         "swarmui",
         SCENARIO,
         "trace-replay",
+        start.elapsed().as_millis() as u64,
+    );
+    Ok(())
+}
+
+#[test]
+fn trace_replay_console_matches_fixture() -> Result<()> {
+    let start = Instant::now();
+    let payload = load_trace_fixture()?;
+    let data_dir = std::env::temp_dir();
+    let config = SwarmUiConfig::from_generated(data_dir);
+    let policy = TracePolicy::new(
+        config.trace_max_bytes as u32,
+        swarmui::SECURE9P_MSIZE,
+        MAX_LINE_LEN as u32,
+    );
+    let trace = TraceLog::decode(&payload, policy).context("decode trace fixture")?;
+    let factory = TraceTransportFactory::new(trace.frames);
+    let mut backend = SwarmUiBackend::new(config, factory);
+
+    let mut transcript = Vec::new();
+    for command in [
+        "attach queen".to_owned(),
+        "ls /worker".to_owned(),
+        format!("tail /worker/{WORKER_ID}/telemetry"),
+    ] {
+        let result = backend.console_command(command.as_str());
+        transcript.extend(result.lines);
+    }
+    assert_eq!(backend.active_tails(), 0);
+
+    transcript_support::compare_transcript("swarmui", SCENARIO, "swarmui.txt", &transcript);
+    transcript_support::write_timing(
+        "swarmui",
+        SCENARIO,
+        "trace-replay-console",
         start.elapsed().as_millis() as u64,
     );
     Ok(())

@@ -48,6 +48,9 @@ const setButtonLabel = (id, text) => {
 };
 
 const resolveInvoke = () => {
+  if (window.__TAURI__?.core?.invoke) {
+    return window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
+  }
   if (window.__TAURI__?.tauri?.invoke) {
     return window.__TAURI__.tauri.invoke.bind(window.__TAURI__.tauri);
   }
@@ -71,6 +74,17 @@ const invoke = async (cmd, payload) => {
   } catch (err) {
     return { ok: false, error: String(err) };
   }
+};
+
+let swarmUiMode = null;
+
+const readSwarmUiMode = async () => {
+  if (swarmUiMode) {
+    return swarmUiMode;
+  }
+  const res = await invoke("swarmui_mode");
+  swarmUiMode = res.ok ? res.result || {} : {};
+  return swarmUiMode;
 };
 
 const readSession = () => {
@@ -106,6 +120,31 @@ const setStatus = (id, text) => {
   }
 };
 
+const setConsoleAvailability = (enabled, reason) => {
+  const panel = document.querySelector(".console-panel");
+  const outputNode = document.getElementById("console-output");
+  const inputNode = document.getElementById("console-input");
+  const sendNode = document.getElementById("console-send");
+  const clearNode = document.getElementById("console-clear");
+  const stopNode = document.getElementById("console-stop");
+
+  panel?.classList.toggle("is-disabled", !enabled);
+  panel?.setAttribute("aria-disabled", enabled ? "false" : "true");
+
+  [inputNode, sendNode, clearNode].forEach((node) => {
+    if (node) {
+      node.disabled = !enabled;
+    }
+  });
+  if (stopNode) {
+    stopNode.disabled = true;
+  }
+
+  if (!enabled && outputNode) {
+    outputNode.textContent = reason;
+  }
+};
+
 hydrateIcons();
 
 document.getElementById("connect")?.addEventListener("click", async () => {
@@ -122,15 +161,27 @@ let offlineEnabled = false;
 const offlineButton = document.getElementById("offline");
 offlineButton?.addEventListener("click", async () => {
   offlineEnabled = !offlineEnabled;
+  swarmUiMode = {
+    ...(swarmUiMode || {}),
+    offline: offlineEnabled
+  };
   const res = await invoke("swarmui_offline", { offline: offlineEnabled });
   if (!res.ok) {
     offlineEnabled = !offlineEnabled;
+    swarmUiMode = {
+      ...(swarmUiMode || {}),
+      offline: offlineEnabled
+    };
     output("telemetry-output", `ERR OFFLINE ${res.error}`);
     return;
   }
   if (offlineButton) {
     setButtonLabel("offline", offlineEnabled ? "Online mode" : "Offline mode");
   }
+  setConsoleAvailability(
+    !offlineEnabled,
+    "Console unavailable while offline mode is enabled.",
+  );
   output("telemetry-output", offlineEnabled ? "OK OFFLINE" : "OK ONLINE");
 });
 
@@ -1126,16 +1177,21 @@ document
   .getElementById("hive-reset-view")
   ?.addEventListener("click", () => hiveController?.resetView());
 
-const autoStartHiveReplay = async () => {
-  const res = await invoke("swarmui_mode");
-  if (!res.ok) {
-    return;
+const initializeMode = async () => {
+  const mode = await readSwarmUiMode();
+  offlineEnabled = Boolean(mode.offline);
+  if (offlineButton) {
+    setButtonLabel("offline", offlineEnabled ? "Online mode" : "Offline mode");
   }
-  if (res.result?.hive_replay) {
+  setConsoleAvailability(
+    !offlineEnabled,
+    "Console unavailable in offline snapshot replay mode.",
+  );
+  if (mode.hive_replay) {
     setStatus("hive-status", "Hive replay booting...");
     await startHive();
   }
 };
 
-autoStartHiveReplay();
 setupConsole(invoke);
+initializeMode();

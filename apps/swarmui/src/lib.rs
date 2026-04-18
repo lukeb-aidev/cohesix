@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 use cohesix_ticket::{Role, TicketClaims};
 use cohsh::client::{CohClient, TailEvent};
 use cohsh::queen;
+use cohsh::transport::tcp::is_insecure_placeholder_token;
 #[cfg(feature = "rest")]
 use cohsh::RestTransport as CohshRestTransport;
 use cohsh::{
@@ -286,6 +287,8 @@ where
 {
     config: SwarmUiConfig,
     factory: F,
+    console_role: Option<Role>,
+    console_ticket: Option<String>,
     sessions: HashMap<SessionKey, SwarmUiSession<F::Transport>>,
     hive_states: HashMap<SessionKey, hive::HiveSessionState>,
     hive_status_cache: HashMap<SessionKey, HiveStatusCache>,
@@ -315,6 +318,8 @@ where
         Self {
             config,
             factory,
+            console_role: None,
+            console_ticket: None,
             sessions: HashMap::new(),
             hive_states: HashMap::new(),
             hive_status_cache: HashMap::new(),
@@ -339,6 +344,88 @@ where
     /// Return the number of active tails (used to verify no background polling).
     pub fn active_tails(&self) -> usize {
         self.active_tails
+    }
+
+    /// Execute a read-only console prompt command against the shared Secure9P session.
+    pub fn console_command(&mut self, line: &str) -> SwarmUiTranscript {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return SwarmUiTranscript::ok(Vec::new());
+        }
+        if trimmed.len() > MAX_LINE_LEN {
+            return SwarmUiTranscript::err(vec![render_parse_error(ConsoleError::LineTooLong)]);
+        }
+
+        let mut tokens = trimmed.split_whitespace();
+        let Some(verb) = tokens.next() else {
+            return SwarmUiTranscript::ok(Vec::new());
+        };
+
+        if verb.eq_ignore_ascii_case("login") {
+            let remainder = trimmed.strip_prefix(verb).unwrap_or_default().trim_start();
+            let attach_line = if remainder.is_empty() {
+                "attach".to_owned()
+            } else {
+                format!("attach {remainder}")
+            };
+            return self.console_command(attach_line.as_str());
+        }
+
+        if verb.eq_ignore_ascii_case("detach") {
+            return self.console_detach();
+        }
+
+        let command = match CommandParser::parse_line_str(trimmed) {
+            Ok(command) => command,
+            Err(err) => {
+                return SwarmUiTranscript::err(vec![render_parse_error(err)]);
+            }
+        };
+
+        let verb_label = command.verb().ack_label();
+        match command {
+            ConsoleCommand::Help => SwarmUiTranscript::ok(console_help_lines()),
+            ConsoleCommand::Attach { role, ticket } => {
+                let role = match parse_role_label(role.as_str()) {
+                    Ok(role) => role,
+                    Err(_) => {
+                        let detail = format!("reason=unknown role '{}'", role.as_str());
+                        return SwarmUiTranscript::err(vec![render_ack_line(
+                            AckStatus::Err,
+                            ConsoleVerb::Attach.ack_label(),
+                            Some(detail.as_str()),
+                        )]);
+                    }
+                };
+                let transcript = self.attach(role, ticket.as_deref());
+                if transcript.ok {
+                    self.console_role = Some(role);
+                    self.console_ticket = ticket.as_ref().map(|value| value.as_str().to_owned());
+                }
+                transcript
+            }
+            ConsoleCommand::Tail { path } => self.console_tail(path.as_str()),
+            ConsoleCommand::Log => self.console_tail(QUEEN_LOG_PATH),
+            ConsoleCommand::Cat { path } => self.console_cat(path.as_str()),
+            ConsoleCommand::Ls { path } => self.console_ls(path.as_str()),
+            ConsoleCommand::Ping => self.console_ping(),
+            ConsoleCommand::Quit => self.console_quit(),
+            ConsoleCommand::Echo { .. }
+            | ConsoleCommand::Spawn(_)
+            | ConsoleCommand::Kill(_)
+            | ConsoleCommand::BootInfo
+            | ConsoleCommand::Caps
+            | ConsoleCommand::Smp
+            | ConsoleCommand::Mem
+            | ConsoleCommand::Test
+            | ConsoleCommand::NetTest
+            | ConsoleCommand::NetStats
+            | ConsoleCommand::CacheLog { .. } => SwarmUiTranscript::err(vec![render_ack_line(
+                AckStatus::Err,
+                verb_label,
+                Some("reason=unsupported"),
+            )]),
+        }
     }
 
     /// Attach a session for the supplied role and ticket.
@@ -368,6 +455,167 @@ where
                 SwarmUiTranscript::err(vec![render_ack_line(
                     AckStatus::Err,
                     ConsoleVerb::Attach.ack_label(),
+                    Some(detail.as_str()),
+                )])
+            }
+        }
+    }
+
+    fn console_detach(&mut self) -> SwarmUiTranscript {
+        self.clear_console_session();
+        SwarmUiTranscript::ok(vec!["OK DETACH".to_owned()])
+    }
+
+    fn console_quit(&mut self) -> SwarmUiTranscript {
+        self.clear_console_session();
+        SwarmUiTranscript::ok(vec![render_ack_line(
+            AckStatus::Ok,
+            ConsoleVerb::Quit.ack_label(),
+            None,
+        )])
+    }
+
+    fn console_ping(&mut self) -> SwarmUiTranscript {
+        if self.config.offline {
+            return SwarmUiTranscript::err(vec![render_ack_line(
+                AckStatus::Err,
+                ConsoleVerb::Ping.ack_label(),
+                Some("reason=offline"),
+            )]);
+        }
+        let (role, ticket) = match self.current_console_session() {
+            Ok(context) => context,
+            Err(err) => {
+                let detail = format!("reason={err}");
+                return SwarmUiTranscript::err(vec![render_ack_line(
+                    AckStatus::Err,
+                    ConsoleVerb::Ping.ack_label(),
+                    Some(detail.as_str()),
+                )]);
+            }
+        };
+        let session = match self.session_for(role, ticket.as_deref()) {
+            Ok(session) => session,
+            Err(err) => {
+                let detail = format!("reason={err}");
+                return SwarmUiTranscript::err(vec![render_ack_line(
+                    AckStatus::Err,
+                    ConsoleVerb::Ping.ack_label(),
+                    Some(detail.as_str()),
+                )]);
+            }
+        };
+        SwarmUiTranscript::ok(vec![
+            render_ack_line(AckStatus::Ok, ConsoleVerb::Ping.ack_label(), None),
+            format!(
+                "ping: attached as {} via secure9p",
+                role_label(session.role)
+            ),
+        ])
+    }
+
+    fn console_tail(&mut self, path: &str) -> SwarmUiTranscript {
+        if self.config.offline {
+            return SwarmUiTranscript::err(vec![render_ack_line(
+                AckStatus::Err,
+                ConsoleVerb::Tail.ack_label(),
+                Some("reason=offline"),
+            )]);
+        }
+        self.active_tails = self.active_tails.saturating_add(1);
+        let transcript = (|| {
+            let (role, ticket) = self.current_console_session()?;
+            let session = self.session_for(role, ticket.as_deref())?;
+            ensure_role_allowed(session.role, session.claims.as_ref(), path)?;
+            let detail = format!("path={path}");
+            let mut lines = vec![render_ack_line(
+                AckStatus::Ok,
+                ConsoleVerb::Tail.ack_label(),
+                Some(detail.as_str()),
+            )];
+            let mut payload_lines = tail_lines(&mut session.client, path)?;
+            let has_end = payload_lines
+                .last()
+                .map(|line| line == END_LINE)
+                .unwrap_or(false);
+            lines.append(&mut payload_lines);
+            if !has_end {
+                lines.push(END_LINE.to_owned());
+            }
+            Ok::<SwarmUiTranscript, SwarmUiError>(SwarmUiTranscript::ok(lines))
+        })();
+        self.active_tails = self.active_tails.saturating_sub(1);
+        match transcript {
+            Ok(transcript) => transcript,
+            Err(err) => {
+                let detail = format!("path={path} reason={err}");
+                SwarmUiTranscript::err(vec![render_ack_line(
+                    AckStatus::Err,
+                    ConsoleVerb::Tail.ack_label(),
+                    Some(detail.as_str()),
+                )])
+            }
+        }
+    }
+
+    fn console_cat(&mut self, path: &str) -> SwarmUiTranscript {
+        self.console_read_path(path, ConsoleVerb::Cat.ack_label())
+    }
+
+    fn console_ls(&mut self, path: &str) -> SwarmUiTranscript {
+        self.console_read_path(path, ConsoleVerb::Ls.ack_label())
+    }
+
+    fn console_read_path(&mut self, path: &str, verb: &str) -> SwarmUiTranscript {
+        if self.config.offline {
+            return SwarmUiTranscript::err(vec![render_ack_line(
+                AckStatus::Err,
+                verb,
+                Some("reason=offline"),
+            )]);
+        }
+        let (role, ticket) = match self.current_console_session() {
+            Ok(context) => context,
+            Err(err) => {
+                let detail = format!("reason={err}");
+                return SwarmUiTranscript::err(vec![render_ack_line(
+                    AckStatus::Err,
+                    verb,
+                    Some(detail.as_str()),
+                )]);
+            }
+        };
+        let session = match self.session_for(role, ticket.as_deref()) {
+            Ok(session) => session,
+            Err(err) => {
+                let detail = format!("reason={err}");
+                return SwarmUiTranscript::err(vec![render_ack_line(
+                    AckStatus::Err,
+                    verb,
+                    Some(detail.as_str()),
+                )]);
+            }
+        };
+        if let Err(err) = ensure_role_allowed(session.role, session.claims.as_ref(), path) {
+            let detail = format!("reason={err}");
+            return SwarmUiTranscript::err(vec![render_ack_line(
+                AckStatus::Err,
+                verb,
+                Some(detail.as_str()),
+            )]);
+        }
+        match read_lines(&mut session.client, path) {
+            Ok(entries) => {
+                let detail = format!("path={path}");
+                let mut lines = vec![render_ack_line(AckStatus::Ok, verb, Some(detail.as_str()))];
+                lines.extend(entries);
+                SwarmUiTranscript::ok(lines)
+            }
+            Err(err) => {
+                let detail = format!("path={path} reason={err}");
+                SwarmUiTranscript::err(vec![render_ack_line(
+                    AckStatus::Err,
+                    verb,
                     Some(detail.as_str()),
                 )])
             }
@@ -1119,6 +1367,18 @@ where
         }
     }
 
+    fn current_console_session(&self) -> Result<(Role, Option<String>), SwarmUiError> {
+        let role = self.console_role.ok_or_else(|| {
+            SwarmUiError::Transport("detached shell: run 'attach <role>' to connect".to_owned())
+        })?;
+        Ok((role, self.console_ticket.clone()))
+    }
+
+    fn clear_console_session(&mut self) {
+        self.console_role = None;
+        self.console_ticket = None;
+    }
+
     fn record_audit(&mut self, entry: String) {
         log::info!("{entry}");
         if self.audit.len() >= MAX_AUDIT_LOG {
@@ -1229,6 +1489,7 @@ pub struct SwarmUiConsoleBackend<T: CohshTransport> {
     tail_policy: TailPollPolicy,
     cache: Option<SnapshotCache>,
     rest_parallel: Option<RestParallelConfig>,
+    transport_warning: Option<String>,
 }
 
 impl SwarmUiConsoleBackend<CohshTcpTransport> {
@@ -1239,13 +1500,22 @@ impl SwarmUiConsoleBackend<CohshTcpTransport> {
         port: u16,
         auth_token: impl Into<String>,
     ) -> Self {
+        let auth_token = auth_token.into();
         let policy = CohshPolicy::from_generated();
         let transport = CohshTcpTransport::new(host.into(), port)
             .with_retry_policy(policy.retry)
             .with_heartbeat_interval(Duration::from_millis(policy.heartbeat.interval_ms))
-            .with_auth_token(auth_token)
+            .with_auth_token(auth_token.as_str())
+            .allow_insecure_placeholder_token(true)
             .with_tcp_debug(tcp_debug_enabled());
-        Self::with_transport(config, transport)
+        let mut backend = Self::with_transport(config, transport);
+        if is_insecure_placeholder_token(auth_token.as_str()) {
+            backend.transport_warning = Some(
+                "WARN ATTACH reason=tcp auth token uses insecure placeholder token; set a real secret"
+                    .to_owned(),
+            );
+        }
+        backend
     }
 }
 
@@ -1277,6 +1547,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             tail_policy,
             cache,
             rest_parallel: None,
+            transport_warning: None,
         }
     }
 
@@ -1324,11 +1595,19 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         match self.ensure_session(role, ticket) {
             Ok(_) => {
                 let detail = format!("role={}", role_label(role));
-                SwarmUiTranscript::ok(vec![render_ack_line(
+                let mut lines = vec![render_ack_line(
                     AckStatus::Ok,
                     ConsoleVerb::Attach.ack_label(),
                     Some(detail.as_str()),
-                )])
+                )];
+                if let Some(warning) = self.transport_warning.as_deref() {
+                    lines.push(warning.to_owned());
+                    self.record_audit(format!(
+                        "audit swarmui.attach outcome=warn role={} reason={warning}",
+                        role_label(role)
+                    ));
+                }
+                SwarmUiTranscript::ok(lines)
             }
             Err(err) => {
                 let detail = format!("reason={err}");
@@ -3091,6 +3370,23 @@ fn read_lines<T: cohsh_core::Secure9pTransport>(
     let text = String::from_utf8(buffer)
         .map_err(|_| SwarmUiError::Transport("payload is not valid UTF-8".to_owned()))?;
     Ok(text.lines().map(|line| line.to_owned()).collect())
+}
+
+fn tail_lines<T: cohsh_core::Secure9pTransport>(
+    client: &mut CohClient<T>,
+    path: &str,
+) -> Result<Vec<String>, SwarmUiError> {
+    let stream = client
+        .tail(path)
+        .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
+    let mut lines = Vec::new();
+    for event in stream {
+        match event.map_err(|err| SwarmUiError::Transport(err.to_string()))? {
+            TailEvent::Line(line) => lines.push(line),
+            TailEvent::End => lines.push(END_LINE.to_owned()),
+        }
+    }
+    Ok(lines)
 }
 
 fn read_single_line<T: cohsh_core::Secure9pTransport>(

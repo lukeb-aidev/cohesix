@@ -188,10 +188,11 @@ impl SwarmUiService {
 
     fn console_command(&mut self, line: &str) -> Result<SwarmUiTranscript, String> {
         match self {
+            SwarmUiService::Secure9p(backend) => Ok(backend.console_command(line)),
+            SwarmUiService::Trace(backend) => Ok(backend.console_command(line)),
             SwarmUiService::Console(backend) => Ok(backend.console_command(line)),
             #[cfg(feature = "rest")]
             SwarmUiService::Rest(backend) => Ok(backend.console_command(line)),
-            _ => Err("console prompt requires console or REST transport".to_owned()),
         }
     }
 }
@@ -212,6 +213,18 @@ struct MintArgs {
     role: Option<String>,
     subject: Option<String>,
     config: Option<PathBuf>,
+    secret: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct TicketConfigFile {
+    #[serde(default)]
+    tickets: Vec<TicketConfigEntry>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct TicketConfigEntry {
+    role: Option<String>,
     secret: Option<String>,
 }
 
@@ -464,6 +477,66 @@ fn resolve_ticket_secret(cli_secret: Option<String>) -> Result<Option<String>, S
     }
 }
 
+fn resolve_ticket_secret_from_config(config_path: &Path) -> Result<Option<String>, String> {
+    let contents = fs::read_to_string(config_path)
+        .map_err(|err| format!("failed to read {}: {err}", config_path.display()))?;
+    let parsed: TicketConfigFile = toml::from_str(&contents)
+        .map_err(|err| format!("failed to parse {}: {err}", config_path.display()))?;
+    for ticket in parsed.tickets {
+        let Some(role) = ticket.role.as_deref() else {
+            continue;
+        };
+        if role.trim() != "queen" {
+            continue;
+        }
+        let Some(secret) = ticket.secret.as_deref() else {
+            continue;
+        };
+        let trimmed = secret.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn resolve_console_auth_token_from_sources(
+    swarmui_auth_token: Option<&str>,
+    cohsh_auth_token: Option<&str>,
+    coh_auth_token: Option<&str>,
+    config_path: &Path,
+) -> Result<String, String> {
+    for candidate in [swarmui_auth_token, cohsh_auth_token, coh_auth_token] {
+        let Some(value) = candidate else {
+            continue;
+        };
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_owned());
+        }
+    }
+    if let Some(secret) = resolve_ticket_secret_from_config(config_path)? {
+        return Ok(secret);
+    }
+    Err(format!(
+        "console auth token is not configured; set SWARMUI_AUTH_TOKEN/COHSH_AUTH_TOKEN/COH_AUTH_TOKEN or define a queen ticket secret in {}",
+        config_path.display()
+    ))
+}
+
+fn resolve_console_auth_token() -> Result<String, String> {
+    let config_path = resolve_ticket_config(None)?;
+    let swarmui_auth_token = env::var("SWARMUI_AUTH_TOKEN").ok();
+    let cohsh_auth_token = env::var("COHSH_AUTH_TOKEN").ok();
+    let coh_auth_token = env::var("COH_AUTH_TOKEN").ok();
+    resolve_console_auth_token_from_sources(
+        swarmui_auth_token.as_deref(),
+        cohsh_auth_token.as_deref(),
+        coh_auth_token.as_deref(),
+        config_path.as_path(),
+    )
+}
+
 fn resolve_rest_auth_token() -> Option<String> {
     for key in [
         "SWARMUI_REST_AUTH_TOKEN",
@@ -575,9 +648,9 @@ fn main() {
                         SwarmUiService::Secure9p(SwarmUiBackend::new(config, factory))
                     }
                     "console" | "tcp" => {
-                        let auth_token = env::var("SWARMUI_AUTH_TOKEN")
-                            .or_else(|_| env::var("COHSH_AUTH_TOKEN"))
-                            .unwrap_or_else(|_| "changeme".to_owned());
+                        let auth_token = resolve_console_auth_token().unwrap_or_else(|err| {
+                            panic!("failed to resolve SwarmUI console auth token: {err}")
+                        });
                         SwarmUiService::Console(SwarmUiConsoleBackend::new(
                             config, host, port, auth_token,
                         ))
@@ -658,4 +731,63 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run SwarmUI");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_console_auth_token_prefers_explicit_env_sources() {
+        let config_dir = tempfile::tempdir().expect("tempdir");
+        let config_path = config_dir.path().join("root_task.toml");
+        fs::write(
+            &config_path,
+            "[[tickets]]\nrole = \"queen\"\nsecret = \"bootstrap\"\n",
+        )
+        .expect("write config");
+
+        let token = resolve_console_auth_token_from_sources(
+            Some("swarmui-token"),
+            Some("cohsh-token"),
+            Some("coh-token"),
+            config_path.as_path(),
+        )
+        .expect("resolve auth token");
+
+        assert_eq!(token, "swarmui-token");
+    }
+
+    #[test]
+    fn resolve_console_auth_token_falls_back_to_queen_ticket_secret() {
+        let config_dir = tempfile::tempdir().expect("tempdir");
+        let config_path = config_dir.path().join("root_task.toml");
+        fs::write(
+            &config_path,
+            "[[tickets]]\nrole = \"queen\"\nsecret = \"bootstrap\"\n",
+        )
+        .expect("write config");
+
+        let token =
+            resolve_console_auth_token_from_sources(None, None, None, config_path.as_path())
+                .expect("resolve auth token");
+
+        assert_eq!(token, "bootstrap");
+    }
+
+    #[test]
+    fn resolve_console_auth_token_errors_without_env_or_ticket_secret() {
+        let config_dir = tempfile::tempdir().expect("tempdir");
+        let config_path = config_dir.path().join("root_task.toml");
+        fs::write(
+            &config_path,
+            "[[tickets]]\nrole = \"worker-heartbeat\"\nsecret = \"x\"\n",
+        )
+        .expect("write config");
+
+        let err = resolve_console_auth_token_from_sources(None, None, None, config_path.as_path())
+            .expect_err("missing auth token should fail");
+
+        assert!(err.contains("console auth token is not configured"));
+    }
 }

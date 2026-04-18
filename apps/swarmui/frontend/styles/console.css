@@ -6,6 +6,10 @@
   position: relative;
 }
 
+.console-panel.is-disabled {
+  opacity: 0.72;
+}
+
 .console-actions {
   display: flex;
   gap: var(--space-2);

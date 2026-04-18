@@ -44,6 +44,11 @@ const CONSOLE_LOCK_ENV: &str = "COHSH_CONSOLE_LOCK";
 const CONSOLE_LOCK_DISABLE_VALUES: &[&str] = &["0", "false", "off", "no"];
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 
+/// Return true when the supplied token is the documented insecure placeholder.
+pub fn is_insecure_placeholder_token(token: &str) -> bool {
+    token.trim() == INSECURE_PLACEHOLDER_TOKEN
+}
+
 /// Return true when verbose TCP debugging is enabled via the environment.
 pub fn tcp_debug_enabled() -> bool {
     env::var("COHSH_TCP_DEBUG")
@@ -312,6 +317,7 @@ pub struct TcpTransport {
     retry_ceiling: Duration,
     max_retries: usize,
     auth_token: String,
+    allow_insecure_placeholder_token: bool,
     tcp_debug: bool,
     stream: Option<TcpStream>,
     reader: Option<BufReader<TcpStream>>,
@@ -352,6 +358,7 @@ impl TcpTransport {
             retry_ceiling: DEFAULT_RETRY_CEILING,
             max_retries: DEFAULT_MAX_RETRIES,
             auth_token: DEFAULT_AUTH_TOKEN.to_owned(),
+            allow_insecure_placeholder_token: false,
             tcp_debug: tcp_debug_enabled(),
             stream: None,
             reader: None,
@@ -408,6 +415,13 @@ impl TcpTransport {
     #[must_use]
     pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
         self.auth_token = token.into();
+        self
+    }
+
+    /// Allow the documented placeholder token for local/dev callers.
+    #[must_use]
+    pub fn allow_insecure_placeholder_token(mut self, allow: bool) -> Self {
+        self.allow_insecure_placeholder_token = allow;
         self
     }
 
@@ -519,6 +533,10 @@ impl TcpTransport {
             ));
         }
         if token == INSECURE_PLACEHOLDER_TOKEN {
+            if self.allow_insecure_placeholder_token {
+                warn!("tcp auth token uses insecure placeholder token; set a real secret");
+                return Ok(());
+            }
             return Err(anyhow!(
                 "tcp auth token uses insecure placeholder token; set a real secret"
             ));
@@ -2143,6 +2161,46 @@ mod tests {
             .attach(Role::Queen, None)
             .expect_err("placeholder token must fail");
         assert!(err.to_string().contains("insecure placeholder"));
+    }
+
+    #[test]
+    fn placeholder_auth_token_allowed_when_explicitly_enabled() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut stream = stream.unwrap();
+                write_frame(&mut stream, "OK AUTH detail=present-token");
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                while let Some(line) = read_frame(&mut reader) {
+                    let trimmed = line.trim();
+                    if trimmed == format!("AUTH {INSECURE_PLACEHOLDER_TOKEN}") {
+                        write_frame(&mut stream, "OK AUTH");
+                    } else if trimmed.starts_with("ATTACH") {
+                        write_frame(&mut stream, "OK ATTACH role=queen");
+                        write_frame(&mut stream, "END");
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(100))
+            .with_max_retries(1)
+            .with_auth_token(INSECURE_PLACEHOLDER_TOKEN)
+            .allow_insecure_placeholder_token(true);
+        let session = transport
+            .attach(Role::Queen, None)
+            .expect("placeholder token should attach when explicitly allowed");
+        assert_eq!(session.role, Role::Queen);
+        let attach_ack = transport.drain_acknowledgements();
+        assert!(attach_ack
+            .iter()
+            .any(|ack| ack.eq_ignore_ascii_case("OK AUTH")));
+        assert!(attach_ack
+            .iter()
+            .any(|ack| ack.starts_with("OK ATTACH role=queen")));
     }
 
     #[test]

@@ -3319,11 +3319,11 @@ const fn xhci_runtime_init_strategy_halt_guard_label(
 const fn xhci_runtime_init_strategy_skips_live_halt_read(
     strategy: XhciRuntimeInitStrategy,
 ) -> bool {
-    strategy.seed_stop_state
-        || matches!(
-            strategy.firmware_handoff,
-            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
-        )
+    matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+    ) || (strategy.seed_stop_state
+        && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None))
 }
 
 #[inline]
@@ -11902,7 +11902,7 @@ mod tests {
         assert_eq!(status.origin, "seeded-cold-start");
         assert_eq!(status.handoff, "cold-start-from-snapshot");
         assert_eq!(status.seed, "stop-state");
-        assert_eq!(status.halt_guard, "skip-live-halt-read");
+        assert_eq!(status.halt_guard, "live-halt-read");
         assert_eq!(status.constructor, "trusted-quiesce");
         assert_eq!(status.pre_reset, "skip-pre-reset");
         assert_eq!(status.legacy, "skip-legacy");
@@ -11910,7 +11910,7 @@ mod tests {
         assert_eq!(status.publish, "rings-pre-run");
         assert_eq!(status.post_ready_irq, "irq-zero");
         assert_eq!(status.current_step, "pre-controller-ready");
-        assert_eq!(status.next_step, "skip-stop-revalidation");
+        assert_eq!(status.next_step, "live-stop-revalidation");
         assert_eq!(status.followup_step, "reset-post-settle");
         assert!(!status.prefer_high);
         assert!(status.pcie_dma_window);
@@ -11938,6 +11938,13 @@ mod tests {
                 true,
             )),
             "skip-live-halt-read"
+        );
+        assert_eq!(
+            super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                true,
+            )),
+            "live-halt-read"
         );
         assert_eq!(
             super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(

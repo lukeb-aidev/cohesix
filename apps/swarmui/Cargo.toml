@@ -25,6 +25,7 @@ cohesix-ticket = { workspace = true }
 secure9p-codec = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_cbor = "0.11"
+toml = "0.8"
 log = "0.4"
 tauri = { version = "2.10.3", features = ["custom-protocol"] }
 
