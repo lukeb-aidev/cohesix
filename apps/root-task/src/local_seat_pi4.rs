@@ -178,19 +178,13 @@ const WIFI_PROGRESS_EMIT_INTERVAL_TICKS: usize = 64;
 const WIFI_PROGRESS_MAX_DOTS: usize = 3;
 const PI4_VL805_XHCI_INTX_IRQ: u32 = 143;
 const PI4_PCIE_BRIDGE_IRQ: u32 = 148;
-const PI4_PCIE_ECAM_SAFE_READ_IRQ: u32 = 27;
-const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 3] = [
-    PI4_PCIE_ECAM_SAFE_READ_IRQ,
-    PI4_PCIE_BRIDGE_IRQ,
-    PI4_VL805_XHCI_INTX_IRQ,
-];
-// The trusted Pi 4 handoff stays polling-driven, but once runtime has a live
-// controller the first ownership transition can still surface either the child
-// INTx line, the parent PCIe bridge interrupt, or the bcm2711 PCIe-side IRQ 27
-// that also shows up on safe-mode ECAM reads even after U-Boot exported an
-// interrupt-quiesced handoff contract. Keep early bring-up poll-based, then
-// bind only that bounded Pi 4 PCIe sink set so a posted bridge-side or legacy
-// PCIe interrupt cannot derail steady-state ownership.
+const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 2] = [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ];
+// The trusted Pi 4 handoff stays polling-driven at the controller level, but
+// runtime can still receive either the child INTx line or the parent PCIe
+// bridge interrupt around ownership transfer. The seeded diagnostic lanes keep
+// those bounded sinks deferred until controller-ready, while the unseeded
+// high-BAR fresh-init lane requires that bounded sink set before the first live
+// xHCI operational read.
 const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = true;
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
@@ -329,10 +323,9 @@ static WIFI_PROGRESS_TICKS: AtomicUsize = AtomicUsize::new(0);
 #[inline]
 const fn xhci_runtime_init_strategy_prompt_safe(strategy: XhciRuntimeInitStrategy) -> bool {
     match strategy.firmware_handoff {
-        // Prompt-safe probes must stay on a seed-backed stop-state handoff.
-        // The unseeded cold-start variant still relies on the live reset/halt
-        // path that manual keyboard probing is explicitly trying to avoid.
-        XhciFirmwareHandoff::ColdStartFromSnapshot => strategy.seed_stop_state,
+        // Prompt-safe manual probes now try the bootloader-shaped cold-start
+        // path first and keep the seeded stop-state lane as the bounded retry.
+        XhciFirmwareHandoff::ColdStartFromSnapshot => true,
         XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState => true,
         XhciFirmwareHandoff::None => false,
     }
@@ -2539,7 +2532,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x02e9
             | 0x02eb
             | 0x0315..=0x0319
-            | 0x0320..=0x032f
+            | 0x0320..=0x0330
     )
 }
 
@@ -2651,6 +2644,8 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x021a => Some("pre-halt-usbcmd-write-begin"),
         0x021b => Some("pre-halt-usbcmd-write-done"),
         0x021c => Some("pre-halt-usbcmd-write-skip"),
+        0x022a => Some("legacy-control-clear-begin"),
+        0x022b => Some("legacy-control-clear-done"),
         0x0217 => Some("stop-revalidation-decision"),
         0x0218 => Some("stop-revalidation-skip-branch"),
         0x0213 => Some("stop-revalidation-usbsts-read-begin"),
@@ -2841,6 +2836,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x032d => Some("post-start-usbsts-clear-write-done"),
         0x032e => Some("post-start-erdp-skip-preserve"),
         0x032f => Some("post-start-iman-skip-preserve"),
+        0x0330 => Some("post-start-usbsts-clear-skip-preserve"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -3228,21 +3224,11 @@ fn xhci_runtime_init_strategies(
                 &mut count,
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
             );
-            xhci_runtime_init_strategy_push(
-                &mut strategies,
-                &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
-            );
         } else {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
-            );
-            xhci_runtime_init_strategy_push(
-                &mut strategies,
-                &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, false),
             );
         }
         return (strategies, count);
@@ -3336,7 +3322,7 @@ const fn xhci_runtime_init_strategy_skips_live_halt_read(
     ) || (strategy.seed_stop_state
         && matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::None | XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         ))
 }
 
@@ -3351,18 +3337,15 @@ const fn xhci_runtime_init_strategy_constructor_label(
         )
     {
         "pre-halt-usbcmd-quiesce"
-    } else if strategy.seed_stop_state
-        || matches!(
-            strategy.firmware_handoff,
-            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
-        )
-    {
-        "trusted-quiesce"
     } else if matches!(
         strategy.firmware_handoff,
         XhciFirmwareHandoff::ColdStartFromSnapshot
+            | XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PreserveControllerState
     ) {
-        "skip-usbcmd-quiesce"
+        "trusted-quiesce"
+    } else if strategy.seed_stop_state {
+        "trusted-quiesce"
     } else {
         "full-quiesce"
     }
@@ -3388,11 +3371,15 @@ const fn xhci_runtime_init_strategy_pre_reset_label(
 const fn xhci_runtime_init_strategy_legacy_label(
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
-    if matches!(
-        strategy.firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
-    ) || (strategy.seed_stop_state
-        && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None))
+    if (strategy.seed_stop_state
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        ))
+        || matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        )
     {
         "skip-legacy"
     } else {
@@ -3404,7 +3391,8 @@ const fn xhci_runtime_init_strategy_legacy_label(
 const fn xhci_runtime_init_strategy_run_label(strategy: XhciRuntimeInitStrategy) -> &'static str {
     match (strategy.firmware_handoff, strategy.seed_stop_state) {
         (XhciFirmwareHandoff::PreserveControllerState, _) => "run-skip",
-        (XhciFirmwareHandoff::ColdStartFromSnapshot, _) | (XhciFirmwareHandoff::None, true) => {
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "run-skip",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, false) | (XhciFirmwareHandoff::None, true) => {
             "run-uboot"
         }
         _ => "run-default",
@@ -3418,7 +3406,12 @@ const fn xhci_runtime_init_strategy_publish_label(
     if matches!(
         strategy.firmware_handoff,
         XhciFirmwareHandoff::ResetlessReinit
-    ) {
+    ) || (strategy.seed_stop_state
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        ))
+    {
         "rings-post-run"
     } else {
         "rings-pre-run"
@@ -5403,8 +5396,13 @@ impl XhciIrqGuard {
             .any(|binding| binding.irq == irq)
     }
 
-    fn log_policy(mmio: usize, firmware_handoff: XhciFirmwareHandoff, phase: XhciIrqInstallPhase) {
-        let sink_mode = xhci_irq_sink_mode(mmio, firmware_handoff, phase);
+    fn log_policy(
+        mmio: usize,
+        firmware_handoff: XhciFirmwareHandoff,
+        phase: XhciIrqInstallPhase,
+        require_primary_pcie_irq: bool,
+    ) {
+        let sink_mode = xhci_irq_sink_mode(mmio, firmware_handoff, phase, require_primary_pcie_irq);
         let mut line = heapless::String::<256>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -5414,7 +5412,7 @@ impl XhciIrqGuard {
                 match sink_mode {
                     XhciIrqSinkMode::Disabled => "poll-only",
                     XhciIrqSinkMode::TrustedPcieSinks => {
-                        "poll-only+pcie-irq27+bridge+intx-sink"
+                        "poll-only+pcie-bridge+intx-sink"
                     }
                 },
                 xhci_irq_policy_reason(firmware_handoff),
@@ -5609,9 +5607,10 @@ impl XhciIrqGuard {
         mmio: usize,
         firmware_handoff: XhciFirmwareHandoff,
         phase: XhciIrqInstallPhase,
+        require_primary_pcie_irq: bool,
     ) -> Result<Option<Self>, &'static str> {
-        Self::log_policy(mmio, firmware_handoff, phase);
-        let sink_mode = xhci_irq_sink_mode(mmio, firmware_handoff, phase);
+        Self::log_policy(mmio, firmware_handoff, phase, require_primary_pcie_irq);
+        let sink_mode = xhci_irq_sink_mode(mmio, firmware_handoff, phase, require_primary_pcie_irq);
 
         if matches!(sink_mode, XhciIrqSinkMode::Disabled) {
             return Ok(None);
@@ -5809,18 +5808,24 @@ enum XhciIrqSinkMode {
 const fn xhci_irq_sink_mode(
     mmio: usize,
     firmware_handoff: XhciFirmwareHandoff,
-    _phase: XhciIrqInstallPhase,
+    phase: XhciIrqInstallPhase,
+    require_primary_pcie_irq: bool,
 ) -> XhciIrqSinkMode {
-    if xhci_polling_only_runtime(mmio, firmware_handoff) {
-        if TRUSTED_XHCI_PCIE_SINKS_ENABLED {
-            // Keep ownership logic poll-driven, but arm the bounded trusted
-            // sink set before the first live halt revalidation so the seeded
-            // cold-start path follows the documented Pi 4 high-BAR contract.
-            // IRQ27 may still degrade when firmware retains ownership; the
-            // bounded bridge/child INTx sinks stay useful on that path.
-            XhciIrqSinkMode::TrustedPcieSinks
-        } else {
-            XhciIrqSinkMode::Disabled
+    if xhci_polling_only_runtime(mmio, firmware_handoff) && TRUSTED_XHCI_PCIE_SINKS_ENABLED {
+        match phase {
+            XhciIrqInstallPhase::PreControllerReady if require_primary_pcie_irq => {
+                XhciIrqSinkMode::TrustedPcieSinks
+            }
+            XhciIrqInstallPhase::ControllerReady => {
+                // Keep the seeded cold-start retry and reset strictly poll-driven.
+                // The bounded trusted sink set is only armed once the controller
+                // reaches the documented controller-ready phase, except for the
+                // unseeded trusted fresh-init lane where the IRQ27/bridge/INTx
+                // sink contract must already be in place before the first live
+                // operational register read.
+                XhciIrqSinkMode::TrustedPcieSinks
+            }
+            XhciIrqInstallPhase::PreControllerReady => XhciIrqSinkMode::Disabled,
         }
     } else {
         XhciIrqSinkMode::Disabled
@@ -5832,20 +5837,17 @@ const fn xhci_irq_sink_needed(
     mmio: usize,
     firmware_handoff: XhciFirmwareHandoff,
     phase: XhciIrqInstallPhase,
+    require_primary_pcie_irq: bool,
 ) -> bool {
     !matches!(
-        xhci_irq_sink_mode(mmio, firmware_handoff, phase),
+        xhci_irq_sink_mode(mmio, firmware_handoff, phase, require_primary_pcie_irq),
         XhciIrqSinkMode::Disabled
     )
 }
 
 #[inline]
-fn xhci_trusted_irq_soft_ignore_reason(irq: u32, reason: &'static str) -> bool {
-    irq == PI4_PCIE_ECAM_SAFE_READ_IRQ
-        && matches!(
-            reason,
-            "irq-get-revoke-first-owned" | "irq-get-revoke-first-no-handler"
-        )
+fn xhci_trusted_irq_soft_ignore_reason(_irq: u32, _reason: &'static str) -> bool {
+    false
 }
 
 #[inline]
@@ -5854,38 +5856,36 @@ fn xhci_irq_guard_satisfies_phase(
     mmio: usize,
     firmware_handoff: XhciFirmwareHandoff,
     phase: XhciIrqInstallPhase,
+    require_primary_pcie_irq: bool,
 ) -> bool {
-    match xhci_irq_sink_mode(mmio, firmware_handoff, phase) {
+    match xhci_irq_sink_mode(mmio, firmware_handoff, phase, require_primary_pcie_irq) {
         XhciIrqSinkMode::Disabled => true,
         XhciIrqSinkMode::TrustedPcieSinks => {
-            if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
-                && firmware_handoff == XhciFirmwareHandoff::PreserveControllerState
-                && phase == XhciIrqInstallPhase::ControllerReady
-            {
-                // The trusted preserve-state path stays poll-driven on the
-                // bootloader-owned IRQ27 edge. Once the bounded bridge/child
-                // INTx sinks are armed, controller-ready should not try to
-                // reacquire the primary legacy PCIe IRQ again.
-                guard.covers_irq(PI4_PCIE_BRIDGE_IRQ) && guard.covers_irq(PI4_VL805_XHCI_INTX_IRQ)
-            } else {
-                TRUSTED_XHCI_PCIE_SINK_IRQS
-                    .iter()
-                    .copied()
-                    .all(|irq| guard.covers_irq(irq))
-            }
+            let _ = mmio;
+            let _ = firmware_handoff;
+            let _ = phase;
+            TRUSTED_XHCI_PCIE_SINK_IRQS
+                .iter()
+                .copied()
+                .all(|irq| guard.covers_irq(irq))
         }
     }
 }
 
-// The trusted high-BAR runtime stays poll-driven. U-Boot/Linux do not require
-// rebinding the bcm2711 PCIe-side legacy IRQ27 edge before reset/start, so a
-// degraded IRQ27 contract no longer blocks the runtime-owned cold-start lanes.
 #[inline]
 const fn xhci_runtime_init_strategy_requires_primary_pcie_irq(
-    _mmio: usize,
-    _strategy: XhciRuntimeInitStrategy,
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
 ) -> bool {
-    false
+    mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && matches!(
+            strategy,
+            XhciRuntimeInitStrategy {
+                firmware_handoff: XhciFirmwareHandoff::ColdStartFromSnapshot,
+                seed_stop_state: false,
+                ..
+            }
+        )
 }
 
 #[derive(Clone, Copy)]
@@ -6777,11 +6777,14 @@ impl UsbKeyboard {
                     ),
                 );
                 boot_log::force_uart_line(params_line.as_str());
+                let requires_primary_pcie_irq =
+                    xhci_runtime_init_strategy_requires_primary_pcie_irq(effective_mmio, strategy);
                 let mut xhci_irq_guard = match XhciIrqGuard::install(
                     hal,
                     effective_mmio,
                     strategy.firmware_handoff,
                     XhciIrqInstallPhase::PreControllerReady,
+                    requires_primary_pcie_irq,
                 ) {
                     Ok(guard) => guard,
                     Err(reason) => {
@@ -6798,23 +6801,20 @@ impl UsbKeyboard {
                         None
                     }
                 };
-                let irq27_bound = xhci_irq_guard
-                    .as_ref()
-                    .is_some_and(|guard| guard.covers_irq(PI4_PCIE_ECAM_SAFE_READ_IRQ));
+                let irq27_bound = false;
                 let bridge_irq_bound = xhci_irq_guard
                     .as_ref()
                     .is_some_and(|guard| guard.covers_irq(PI4_PCIE_BRIDGE_IRQ));
                 let intx_irq_bound = xhci_irq_guard
                     .as_ref()
                     .is_some_and(|guard| guard.covers_irq(PI4_VL805_XHCI_INTX_IRQ));
-                let requires_primary_pcie_irq =
-                    xhci_runtime_init_strategy_requires_primary_pcie_irq(effective_mmio, strategy);
-                let controller_gate = if requires_primary_pcie_irq && !irq27_bound {
-                    "primary-pcie-irq-unbound"
+                let bounded_pcie_sinks_bound = bridge_irq_bound && intx_irq_bound;
+                let controller_gate = if requires_primary_pcie_irq && !bounded_pcie_sinks_bound {
+                    "pcie-sinks-unbound"
                 } else {
                     "none"
                 };
-                if requires_primary_pcie_irq && !irq27_bound {
+                if requires_primary_pcie_irq && !bounded_pcie_sinks_bound {
                     let next_origin = if strategy_idx + 1 < init_strategy_count {
                         xhci_runtime_init_strategy_origin_label(init_strategies[strategy_idx + 1])
                     } else {
@@ -6824,7 +6824,7 @@ impl UsbKeyboard {
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] xhci trusted fresh-init skip mmio=0x{mmio:016x} attempt={}/{} origin={} reason=primary-pcie-irq-unbound fallback={next_origin}",
+                            "[local-seat] xhci trusted fresh-init skip mmio=0x{mmio:016x} attempt={}/{} origin={} reason=pcie-sinks-unbound fallback={next_origin}",
                             strategy_idx + 1,
                             init_strategy_count,
                             xhci_runtime_init_strategy_origin_label(strategy),
@@ -7001,12 +7001,14 @@ impl UsbKeyboard {
                             effective_mmio,
                             strategy.firmware_handoff,
                             XhciIrqInstallPhase::ControllerReady,
+                            requires_primary_pcie_irq,
                         ) && xhci_irq_guard.as_ref().map_or(true, |guard| {
                             !xhci_irq_guard_satisfies_phase(
                                 guard,
                                 effective_mmio,
                                 strategy.firmware_handoff,
                                 XhciIrqInstallPhase::ControllerReady,
+                                requires_primary_pcie_irq,
                             )
                         }) {
                             if let Some(existing_guard) = xhci_irq_guard.as_ref() {
@@ -7014,10 +7016,8 @@ impl UsbKeyboard {
                                 let _ = core::fmt::Write::write_fmt(
                                     &mut line,
                                     format_args!(
-                                        "[local-seat] xhci irq sink retry mmio=0x{mmio:016x} stage={} action=reinstall-bounded-sinks has_irq27={} has_bridge={} has_intx={}",
+                                        "[local-seat] xhci irq sink retry mmio=0x{mmio:016x} stage={} action=reinstall-bounded-sinks has_bridge={} has_intx={}",
                                         xhci_irq_phase_label(XhciIrqInstallPhase::ControllerReady),
-                                        existing_guard.covers_irq(PI4_PCIE_ECAM_SAFE_READ_IRQ)
-                                            as u8,
                                         existing_guard.covers_irq(PI4_PCIE_BRIDGE_IRQ) as u8,
                                         existing_guard.covers_irq(PI4_VL805_XHCI_INTX_IRQ) as u8,
                                         mmio = effective_mmio,
@@ -7030,6 +7030,7 @@ impl UsbKeyboard {
                                 effective_mmio,
                                 strategy.firmware_handoff,
                                 XhciIrqInstallPhase::ControllerReady,
+                                requires_primary_pcie_irq,
                             ) {
                                 Ok(Some(guard)) => xhci_irq_guard = Some(guard),
                                 Ok(None) => {}
@@ -11447,7 +11448,7 @@ mod tests {
         assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
         ));
-        assert!(!xhci_runtime_init_strategy_prompt_safe(
+        assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));
         assert!(xhci_runtime_init_strategy_prompt_safe(
@@ -11748,7 +11749,7 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 true,
             )),
-            "rings-pre-run"
+            "rings-post-run"
         );
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
@@ -11763,6 +11764,31 @@ mod tests {
                 true,
             )),
             "rings-post-run"
+        );
+    }
+
+    #[test]
+    fn xhci_runtime_init_strategy_run_labels_match_actual_pi4_run_policy() {
+        assert_eq!(
+            xhci_runtime_init_strategy_run_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                true,
+            )),
+            "run-skip"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_run_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                false,
+            )),
+            "run-uboot"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_run_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::PreserveControllerState,
+                true,
+            )),
+            "run-skip"
         );
     }
 
@@ -11913,31 +11939,34 @@ mod tests {
         )
         .expect("trusted prompt-safe path should be classified");
         assert_eq!(status.route, "trusted-high-bar-primary");
-        assert_eq!(status.strategy_idx, 2);
+        assert_eq!(status.strategy_idx, 1);
         assert_eq!(status.strategy_count, 2);
-        assert_eq!(status.policy, "runtime-owned-fresh-rings");
-        assert_eq!(status.origin, "seeded-cold-start");
+        assert_eq!(status.policy, "full-reset-start");
+        assert_eq!(status.origin, "uboot-fresh-init");
         assert_eq!(status.handoff, "cold-start-from-snapshot");
-        assert_eq!(status.seed, "stop-state");
-        assert_eq!(status.halt_guard, "skip-live-halt-read");
-        assert_eq!(status.constructor, "pre-halt-usbcmd-quiesce");
-        assert_eq!(status.pre_reset, "skip-pre-reset");
+        assert_eq!(status.seed, "none");
+        assert_eq!(status.halt_guard, "live-halt-read");
+        assert_eq!(status.constructor, "trusted-quiesce");
+        assert_eq!(status.pre_reset, "full-pre-reset");
         assert_eq!(status.legacy, "claim-legacy");
         assert_eq!(status.run, "run-uboot");
         assert_eq!(status.publish, "rings-pre-run");
         assert_eq!(status.post_ready_irq, "irq-zero");
         assert_eq!(status.current_step, "pre-controller-ready");
-        assert_eq!(status.next_step, "skip-stop-revalidation");
+        assert_eq!(status.next_step, "live-stop-revalidation");
         assert_eq!(status.followup_step, "reset-post-settle");
         assert!(!status.prefer_high);
         assert!(status.pcie_dma_window);
         assert!(status.poll_only);
-        assert_eq!(status.expected_diag_stage, 0x0219);
+        assert_eq!(status.expected_diag_stage, 0x0213);
         assert_eq!(
             status.expected_diag_tag,
-            Some("pre-halt-usbcmd-quiesce-begin")
+            Some("stop-revalidation-usbsts-read-begin")
         );
-        assert_eq!(status.expected_diag_exact, None);
+        assert_eq!(
+            status.expected_diag_exact,
+            Some("live-usbsts-read-before-run")
+        );
     }
 
     #[test]
@@ -11954,7 +11983,7 @@ mod tests {
                 XhciFirmwareHandoff::None,
                 true,
             )),
-            "skip-live-halt-read"
+            "live-halt-read"
         );
         assert_eq!(
             super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(
@@ -11969,6 +11998,53 @@ mod tests {
                 false,
             )),
             "skip-live-halt-read"
+        );
+    }
+
+    #[test]
+    fn xhci_runtime_init_strategy_legacy_labels_keep_seeded_retry_poll_only() {
+        assert_eq!(
+            super::xhci_runtime_init_strategy_legacy_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                false,
+            )),
+            "claim-legacy"
+        );
+        assert_eq!(
+            super::xhci_runtime_init_strategy_legacy_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                true,
+            )),
+            "skip-legacy"
+        );
+    }
+
+    #[test]
+    fn usb_probe_preflight_status_keeps_seeded_retry_on_skip_stop_revalidation() {
+        let summary = UsbProbePathwaySummary::new(
+            0,
+            2,
+            2,
+            "runtime-owned-fresh-rings",
+            "seeded-cold-start",
+            "cold-start-from-snapshot",
+            "stop-state",
+            super::xhci_runtime_init_strategy_halt_guard_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                true,
+            )),
+            true,
+            true,
+            true,
+        );
+        assert_eq!(summary.halt_guard, "skip-live-halt-read");
+        assert_eq!(
+            super::usb_probe_current_step(summary),
+            "pre-controller-ready"
+        );
+        assert_eq!(
+            super::usb_probe_next_step(summary),
+            "skip-stop-revalidation"
         );
     }
 
@@ -12686,6 +12762,10 @@ mod tests {
             Some("post-start-iman-skip-preserve")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x0330),
+            Some("post-start-usbsts-clear-skip-preserve")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x02da),
             Some("erstsz-publish-skip-preserve")
         );
@@ -13006,7 +13086,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_keep_preserve_only_as_explicit_late_fallback() {
+    fn xhci_runtime_init_strategies_keep_preserve_diagnostic_only_on_trusted_stop_state_path() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::PreserveControllerState,
             super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
@@ -13016,7 +13096,7 @@ mod tests {
                 iman0: Some(0),
             }),
         );
-        assert_eq!(count, 3);
+        assert_eq!(count, 2);
         assert_eq!(
             strategies[0],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
@@ -13025,9 +13105,27 @@ mod tests {
             strategies[1],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
+    }
+
+    #[test]
+    fn cold_start_trusted_strategies_retry_seeded_cold_start_before_preserve() {
+        let (strategies, count) = xhci_runtime_init_strategies(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+        );
+        assert_eq!(count, 2);
         assert_eq!(
-            strategies[2],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true)
+            strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+        );
+        assert_eq!(
+            strategies[1],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
     }
 
@@ -13047,7 +13145,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_sink_mode_arms_trusted_sinks_before_controller_ready() {
+    fn xhci_irq_sink_mode_requires_pre_controller_ready_sinks_for_trusted_fresh_init() {
         assert_eq!(
             xhci_irq_sink_mode(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -13055,6 +13153,16 @@ mod tests {
                     super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
                 ),
                 XhciIrqInstallPhase::PreControllerReady,
+                false,
+            ),
+            XhciIrqSinkMode::Disabled
+        );
+        assert_eq!(
+            xhci_irq_sink_mode(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                XhciIrqInstallPhase::PreControllerReady,
+                true,
             ),
             XhciIrqSinkMode::TrustedPcieSinks
         );
@@ -13065,15 +13173,23 @@ mod tests {
                     super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
                 ),
                 XhciIrqInstallPhase::ControllerReady,
+                false,
             ),
             XhciIrqSinkMode::TrustedPcieSinks
         );
-        assert!(xhci_irq_sink_needed(
+        assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
             ),
             XhciIrqInstallPhase::PreControllerReady,
+            false,
+        ));
+        assert!(xhci_irq_sink_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            XhciIrqInstallPhase::PreControllerReady,
+            true,
         ));
         assert!(xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -13081,16 +13197,19 @@ mod tests {
                 super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
             ),
             XhciIrqInstallPhase::ControllerReady,
+            false,
         ));
         assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::None,
             XhciIrqInstallPhase::ControllerReady,
+            false,
         ));
         assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             XhciFirmwareHandoff::PreserveControllerState,
             XhciIrqInstallPhase::ControllerReady,
+            false,
         ));
     }
 
@@ -13098,30 +13217,22 @@ mod tests {
     fn trusted_xhci_irq_sink_set_covers_ecam_bridge_and_child_intx_lines() {
         assert_eq!(
             TRUSTED_XHCI_PCIE_SINK_IRQS,
-            [
-                PI4_PCIE_ECAM_SAFE_READ_IRQ,
-                PI4_PCIE_BRIDGE_IRQ,
-                PI4_VL805_XHCI_INTX_IRQ
-            ]
+            [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ]
         );
     }
 
     #[test]
-    fn trusted_primary_pcie_irq_soft_ignore_is_limited_to_revoke_first_owner_cases() {
-        assert!(xhci_trusted_irq_soft_ignore_reason(
-            PI4_PCIE_ECAM_SAFE_READ_IRQ,
-            "irq-get-revoke-first-no-handler",
-        ));
-        assert!(xhci_trusted_irq_soft_ignore_reason(
-            PI4_PCIE_ECAM_SAFE_READ_IRQ,
-            "irq-get-revoke-first-owned",
-        ));
+    fn trusted_pcie_irq_sink_failures_do_not_soft_ignore_missing_handlers() {
         assert!(!xhci_trusted_irq_soft_ignore_reason(
             PI4_PCIE_BRIDGE_IRQ,
             "irq-get-revoke-first-no-handler",
         ));
         assert!(!xhci_trusted_irq_soft_ignore_reason(
-            PI4_PCIE_ECAM_SAFE_READ_IRQ,
+            PI4_VL805_XHCI_INTX_IRQ,
+            "irq-get-revoke-first-owned",
+        ));
+        assert!(!xhci_trusted_irq_soft_ignore_reason(
+            27,
             "irq-handler-ambiguous",
         ));
     }
@@ -13138,39 +13249,27 @@ mod tests {
                     owns_handler: false,
                     shadow: false,
                 }),
-                Some(XhciIrqBinding {
-                    handler_slot: 0,
-                    notification_slot: 0,
-                    irq: PI4_VL805_XHCI_INTX_IRQ,
-                    owns_handler: false,
-                    shadow: false,
-                }),
                 None,
             ],
         };
-        assert!(xhci_irq_guard_satisfies_phase(
+        assert!(!xhci_irq_guard_satisfies_phase(
             &partial,
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::PreserveControllerState,
             XhciIrqInstallPhase::ControllerReady,
+            false,
         ));
         assert!(!xhci_irq_guard_satisfies_phase(
             &partial,
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             XhciIrqInstallPhase::ControllerReady,
+            false,
         ));
 
         let full = XhciIrqGuard {
             root_cnode: 0,
             bindings: [
-                Some(XhciIrqBinding {
-                    handler_slot: 0,
-                    notification_slot: 0,
-                    irq: PI4_PCIE_ECAM_SAFE_READ_IRQ,
-                    owns_handler: false,
-                    shadow: false,
-                }),
                 Some(XhciIrqBinding {
                     handler_slot: 0,
                     notification_slot: 0,
@@ -13192,12 +13291,13 @@ mod tests {
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::PreserveControllerState,
             XhciIrqInstallPhase::ControllerReady,
+            false,
         ));
     }
 
     #[test]
-    fn trusted_fresh_init_no_longer_requires_primary_pcie_irq_contract() {
-        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
+    fn seeded_cold_start_retry_does_not_require_primary_pcie_irq_contract() {
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));
@@ -13893,16 +13993,19 @@ mod tests {
                 super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
             ),
             XhciIrqInstallPhase::ControllerReady,
+            false,
         ));
         assert!(!super::xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::None,
             XhciIrqInstallPhase::ControllerReady,
+            false,
         ));
         assert!(!super::xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             XhciFirmwareHandoff::PreserveControllerState,
             XhciIrqInstallPhase::ControllerReady,
+            false,
         ));
     }
 
