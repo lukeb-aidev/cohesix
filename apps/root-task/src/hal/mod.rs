@@ -148,10 +148,57 @@ pub struct WifiDebugSnapshot {
     pub control_plane_exact_error: &'static str,
 }
 
+/// Raw SDHCI contract evidence for the current Wi-Fi control-plane frontier.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WifiSdhciContractTrace {
+    pub current_diag: &'static str,
+    pub preserved_diag: &'static str,
+    pub resolved_diag: &'static str,
+    pub current_cmd: Option<u16>,
+    pub current_arg: Option<u32>,
+    pub current_present: Option<u32>,
+    pub current_int_status: Option<u32>,
+    pub preserved_cmd: Option<u16>,
+    pub preserved_arg: Option<u32>,
+    pub preserved_present: Option<u32>,
+    pub preserved_int_status: Option<u32>,
+}
+
+/// Raw Wi-Fi control-plane register and cache evidence for console traces.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WifiControlPlaneTrace {
+    pub cccr_io_enable: Option<u8>,
+    pub cccr_io_ready: Option<u8>,
+    pub cccr_int_enable: Option<u8>,
+    pub f1_rframe_lo: Option<u8>,
+    pub f1_rframe_hi: Option<u8>,
+    pub f1_watermark: Option<u8>,
+    pub f1_device_ctl: Option<u8>,
+    pub f1_mesbusyctl: Option<u8>,
+    pub block_size_shadow: u32,
+    pub transfer_mode_shadow: u32,
+    pub backplane_window_low: u8,
+    pub backplane_window_mid: u8,
+    pub backplane_window_high: u8,
+    pub cached_source: &'static str,
+    pub cached_stage: &'static str,
+    pub cached_exact_error: &'static str,
+    pub cached_sdhci_read_diag: &'static str,
+    pub cached_f2_state: &'static str,
+}
+
 /// Root-console Wi-Fi debug hooks backed by the kernel HAL.
 #[cfg(feature = "kernel")]
 pub trait WifiDebugOps {
     fn dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError>;
+    fn sdhci_contract_trace(&mut self) -> Option<WifiSdhciContractTrace> {
+        None
+    }
+    fn control_plane_trace(&mut self) -> Option<WifiControlPlaneTrace> {
+        None
+    }
     fn probe_ht_clock(&mut self) -> Result<bool, HalError>;
     fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError>;
     fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError>;
@@ -711,6 +758,20 @@ impl KernelWifiDebugHandle {
 impl WifiDebugOps for KernelWifiDebugHandle {
     fn dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
         self.hal_mut()?.pi4_wifi_state()?.debug_dump_state(stage)
+    }
+
+    fn sdhci_contract_trace(&mut self) -> Option<WifiSdhciContractTrace> {
+        self.hal_mut()
+            .ok()
+            .and_then(|hal| hal.pi4_wifi_state().ok())
+            .map(|state| state.debug_sdhci_contract_trace())
+    }
+
+    fn control_plane_trace(&mut self) -> Option<WifiControlPlaneTrace> {
+        self.hal_mut()
+            .ok()
+            .and_then(|hal| hal.pi4_wifi_state().ok())
+            .map(|state| state.debug_control_plane_trace())
     }
 
     fn probe_ht_clock(&mut self) -> Result<bool, HalError> {

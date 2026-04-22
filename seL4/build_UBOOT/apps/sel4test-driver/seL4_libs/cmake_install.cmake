@@ -12,7 +12,7 @@ if(NOT DEFINED CMAKE_INSTALL_CONFIG_NAME)
     string(REGEX REPLACE "^[^A-Za-z0-9_]+" ""
            CMAKE_INSTALL_CONFIG_NAME "${BUILD_TYPE}")
   else()
-    set(CMAKE_INSTALL_CONFIG_NAME "Release")
+    set(CMAKE_INSTALL_CONFIG_NAME "Debug")
   endif()
   message(STATUS "Install configuration: \"${CMAKE_INSTALL_CONFIG_NAME}\"")
 endif()
@@ -39,72 +39,72 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4debug/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4debug/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4allocman/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4allocman/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4vka/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4vka/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4utils/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4utils/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4vspace/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4vspace/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4platsupport/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4platsupport/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4serialserver/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4serialserver/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4simple/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4simple/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4simple-default/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4simple-default/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4test/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4test/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4sync/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4sync/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4muslcsys/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4muslcsys/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4bench/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4bench/cmake_install.cmake")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/install_local_manifest.txt"
+  file(WRITE "/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

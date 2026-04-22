@@ -1983,6 +1983,34 @@ pte_pte_page_new(uint64_t UXN, uint64_t page_base_address, uint64_t nG, uint64_t
     return pte;
 }
 
+static inline uint64_t PURE
+pte_pte_page_ptr_get_UXN(pte_t *pte_ptr) {
+    uint64_t ret;
+    /* fail if union does not have the expected tag */
+    assert(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */);
+
+    ret = (pte_ptr->words[0] & 0x40000000000000ull) >> 54;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+static inline uint64_t PURE
+pte_pte_page_ptr_get_SH(pte_t *pte_ptr) {
+    uint64_t ret;
+    /* fail if union does not have the expected tag */
+    assert(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */);
+
+    ret = (pte_ptr->words[0] & 0x300ull) >> 8;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
 static inline uint64_t CONST
 pte_pte_page_get_AP(pte_t pte) {
     uint64_t ret;
@@ -1990,6 +2018,20 @@ pte_pte_page_get_AP(pte_t pte) {
     assert(((pte.words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */);
 
     ret = (pte.words[0] & 0xc0ull) >> 6;
+    /* Possibly sign extend */
+    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
+        ret |= 0x0;
+    }
+    return ret;
+}
+
+static inline uint64_t PURE
+pte_pte_page_ptr_get_AP(pte_t *pte_ptr) {
+    uint64_t ret;
+    /* fail if union does not have the expected tag */
+    assert(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */);
+
+    ret = (pte_ptr->words[0] & 0xc0ull) >> 6;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;

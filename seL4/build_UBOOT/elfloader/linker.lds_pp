@@ -41,7 +41,7 @@ SECTIONS
     {
         . = ALIGN(0x1000);
         core_stack_alloc = .;
-        . = . + 1 * 1 << 12;
+        . = . + 4 * 1 << 12;
         core_stack_alloc_end = .;
         _bss = .;
         *(.sbss*)

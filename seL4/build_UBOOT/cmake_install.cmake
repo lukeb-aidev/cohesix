@@ -12,7 +12,7 @@ if(NOT DEFINED CMAKE_INSTALL_CONFIG_NAME)
     string(REGEX REPLACE "^[^A-Za-z0-9_]+" ""
            CMAKE_INSTALL_CONFIG_NAME "${BUILD_TYPE}")
   else()
-    set(CMAKE_INSTALL_CONFIG_NAME "Release")
+    set(CMAKE_INSTALL_CONFIG_NAME "Debug")
   endif()
   message(STATUS "Install configuration: \"${CMAKE_INSTALL_CONFIG_NAME}\"")
 endif()
@@ -39,23 +39,23 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/kernel/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/kernel/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/elfloader/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/elfloader/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/seL4/build_UBOOT/apps/sel4test-driver/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/cmake_install.cmake")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/lukasbower/seL4/build_UBOOT/install_local_manifest.txt"
+  file(WRITE "/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()
 if(CMAKE_INSTALL_COMPONENT)
@@ -71,6 +71,6 @@ else()
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/lukasbower/seL4/build_UBOOT/${CMAKE_INSTALL_MANIFEST}"
+  file(WRITE "/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()
