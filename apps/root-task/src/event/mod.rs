@@ -6650,7 +6650,9 @@ mod tests {
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
 
         pump.serial_mut().driver_mut().push_rx(b"usb enable-kbd\n");
-        pump.poll();
+        for _ in 0..8 {
+            pump.poll();
+        }
 
         let transcript: Vec<u8> = pump
             .serial_mut()
@@ -7316,8 +7318,8 @@ mod tests {
         let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",
-            line_bytes: 64,
-            buffer_lines: 8,
+            line_bytes: 128,
+            buffer_lines: 128,
         });
         let mut wifi = FakeWifiDebug::new();
         local_seat.enqueue_keyboard_bytes(b"wifi probe-ht\n");
@@ -7330,18 +7332,27 @@ mod tests {
         drop(pump);
 
         let mirrored = local_seat.mirrored_lines_snapshot();
-        assert!(mirrored.iter().any(|line| line.contains(
-            "wifi: debug subcommand=probe-ht action=begin profile=bounded mode=one-shot"
-        )));
-        assert!(mirrored
-            .iter()
-            .any(|line| line.contains("wifi ht: ready=yes")));
+        assert!(
+            mirrored.iter().any(|line| line.contains(
+                "wifi: debug subcommand=probe-ht action=begin profile=bounded mode=one-shot"
+            )),
+            "{mirrored:?}"
+        );
+        assert!(
+            mirrored
+                .iter()
+                .any(|line| line.contains("wifi ht: ready=yes")),
+            "{mirrored:?}"
+        );
         assert!(mirrored.iter().any(|line| line.contains(
             "wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=ok"
-        )));
-        assert!(mirrored
-            .iter()
-            .any(|line| line.contains("OK WIFI detail=subcommand=probe-ht")));
+        )), "{mirrored:?}");
+        assert!(
+            mirrored
+                .iter()
+                .any(|line| line.contains("OK WIFI detail=subcommand=probe-ht")),
+            "{mirrored:?}"
+        );
         assert_eq!(wifi.calls.as_slice(), &["probe-ht", "dump-state"]);
     }
 

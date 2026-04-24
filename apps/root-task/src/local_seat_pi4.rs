@@ -322,9 +322,11 @@ static WIFI_PROGRESS_TICKS: AtomicUsize = AtomicUsize::new(0);
 #[inline]
 const fn xhci_runtime_init_strategy_prompt_safe(strategy: XhciRuntimeInitStrategy) -> bool {
     match strategy.firmware_handoff {
-        // Prompt-safe manual probes now try the bootloader-shaped cold-start
-        // path first and keep the seeded stop-state lane as the bounded retry.
-        XhciFirmwareHandoff::ColdStartFromSnapshot => true,
+        // Manual probes must not take the unseeded cold-start path first. The
+        // bounded retry still uses the bootloader stop-state seed, but the
+        // xHCI driver now trusts that seed for halt/reset authority before
+        // fresh runtime rings are published.
+        XhciFirmwareHandoff::ColdStartFromSnapshot => strategy.seed_stop_state,
         XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState => true,
         XhciFirmwareHandoff::None => false,
     }
@@ -936,8 +938,17 @@ const fn usb_probe_preflight_next_step(strategy: XhciRuntimeInitStrategy) -> &'s
 }
 
 #[inline]
-const fn usb_probe_preflight_followup_step() -> &'static str {
-    "reset-post-settle"
+const fn usb_probe_preflight_followup_step(strategy: XhciRuntimeInitStrategy) -> &'static str {
+    if strategy.seed_stop_state
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        )
+    {
+        "skip-reset"
+    } else {
+        "reset-post-settle"
+    }
 }
 
 #[inline]
@@ -1021,7 +1032,7 @@ fn usb_probe_preflight_status(
         post_ready_irq: xhci_runtime_init_strategy_post_ready_irq_label(strategy),
         current_step: usb_probe_preflight_current_step(),
         next_step: usb_probe_preflight_next_step(strategy),
-        followup_step: usb_probe_preflight_followup_step(),
+        followup_step: usb_probe_preflight_followup_step(strategy),
         prefer_high: summary.prefer_high,
         pcie_dma_window: summary.pcie_dma_window,
         poll_only: summary.poll_only,
@@ -1827,9 +1838,10 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
-    // The Pi 4 trace shows preserve-state still trips on bootloader-owned
-    // runtime state before enumeration. Treat the trusted bootloader snapshot
-    // like U-Boot/Linux do: rebuild fresh rings and enumerate by polling.
+    // The Pi 4 preserve-state lane now reaches controller-ready but wedges on
+    // the first live PORTSC read. Treat the U-Boot handoff as a capability and
+    // stop-state seed only: rebuild runtime-owned rings and enumerate by
+    // polling like the known-good U-Boot xHCI path.
     let _ = runtime_vl805_reset_state;
     XhciFirmwareHandoff::ColdStartFromSnapshot
 }
@@ -2497,6 +2509,7 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x0215 => Some("live-usbcmd-read-before-run"),
         0x0222 => Some("halt-revalidation-timeout"),
         0x0238 => Some("pre-run-config-store-wedged"),
+        0x023b => Some("fresh-rings-reset-required"),
         0x0248 | 0x029e => Some("pre-run-dcbaap-low-store-wedged"),
         0x02a5 => Some("post-run-dcbaap-low-store-wedged"),
         0x0249 | 0x02f6 => Some("pre-run-dcbaap-high-store-wedged"),
@@ -2520,6 +2533,7 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x0328 => Some("post-start-erdp-high-store-wedged"),
         0x032a => Some("post-start-iman-write-wedged"),
         0x032c => Some("post-start-usbsts-clear-write-wedged"),
+        0x0332 => Some("pre-dcbaap-iman-write-wedged"),
         0x02eb => Some("usbcmd-run-barrier-wedged"),
         0x02e9 => Some("usbcmd-run-store-wedged"),
         _ => None,
@@ -2612,6 +2626,7 @@ const fn xhci_diag_stage_value_labels(
         0x020f => Some(("iman", "polling", "trusted")),
         0x0212 => Some(("handoff", "seed_flags", "skip")),
         0x0217 | 0x0218 => Some(("handoff", "seed_flags", "skip")),
+        0x023b => Some(("handoff", "seed_flags", "reset_done")),
         0x02f0 => Some(("dcbaa", "cmd_ring", "event_ring")),
         0x02f1 => Some(("erstba", "crcr", "erdp")),
         0x02f2 => Some(("staged_dcbaap", "current_crcr", "staged_erdp")),
@@ -2622,6 +2637,7 @@ const fn xhci_diag_stage_value_labels(
         0x0316 => Some(("erdp_ack", "iman_ip", "usbsts_clear")),
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
         0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
+        0x0332 | 0x0333 => Some(("iman", "polling", "seed_flags")),
         _ => None,
     }
 }
@@ -2671,6 +2687,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0237 => Some("reset-write-pre-store"),
         0x0235 => Some("reset-write-issued"),
         0x0236 => Some("reset-first-readback"),
+        0x023b => Some("fresh-rings-reset-required"),
         0x0238 => Some("config-write-pre-store"),
         0x0239 => Some("config-write-issued"),
         0x0231 => Some("reset-hcrst-timeout"),
@@ -2841,6 +2858,9 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x032e => Some("post-start-erdp-skip-preserve"),
         0x032f => Some("post-start-iman-skip-preserve"),
         0x0330 => Some("post-start-usbsts-clear-skip-preserve"),
+        0x0331 => Some("drop-skip-uninitialized"),
+        0x0332 => Some("pre-dcbaap-iman-quiesce"),
+        0x0333 => Some("pre-dcbaap-iman-quiesce-done"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -2883,7 +2903,30 @@ fn xhci_sample_root_ports(
     }
     let sample_ports = cmp::min(max_ports, port_statuses.len());
     for (port, status) in port_statuses.iter_mut().take(sample_ports).enumerate() {
+        let xhci_port = port.saturating_add(1);
+        {
+            let mut line = heapless::String::<160>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci root-port read-begin index={} port={} sample_ports={}",
+                    port, xhci_port, sample_ports,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         *status = ctrl.port_status(port as u8);
+        {
+            let mut line = heapless::String::<160>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci root-port read-done index={} port={} portsc=0x{:08x}",
+                    port, xhci_port, *status,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
     }
     xhci_connected_mask_from_portsc(&port_statuses[..sample_ports])
 }
@@ -3093,7 +3136,10 @@ fn validate_xhci_capability_window(probe: &XhciCapProbe) -> Result<(), &'static 
 const fn xhci_controller_should_apply_brcm_axi_setup(
     firmware_handoff: XhciFirmwareHandoff,
 ) -> bool {
-    matches!(firmware_handoff, XhciFirmwareHandoff::None)
+    matches!(
+        firmware_handoff,
+        XhciFirmwareHandoff::None | XhciFirmwareHandoff::ColdStartFromSnapshot
+    )
 }
 
 #[inline]
@@ -3157,7 +3203,7 @@ fn xhci_controller_params_from_probe_with_strategy(
         runtime_seed_snapshot,
         apply_brcm_axi_setup: xhci_controller_should_apply_brcm_axi_setup(
             strategy.firmware_handoff,
-        ),
+        ) && !strategy.seed_stop_state,
     }
 }
 
@@ -3335,6 +3381,16 @@ const fn xhci_runtime_init_strategy_skips_live_halt_read(
 }
 
 #[inline]
+const fn xhci_runtime_init_strategy_skips_root_port_reads(
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::PreserveControllerState
+    )
+}
+
+#[inline]
 const fn xhci_runtime_init_strategy_constructor_label(
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
@@ -3399,8 +3455,7 @@ const fn xhci_runtime_init_strategy_legacy_label(
 const fn xhci_runtime_init_strategy_run_label(strategy: XhciRuntimeInitStrategy) -> &'static str {
     match (strategy.firmware_handoff, strategy.seed_stop_state) {
         (XhciFirmwareHandoff::PreserveControllerState, _) => "run-skip",
-        (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "run-skip",
-        (XhciFirmwareHandoff::ColdStartFromSnapshot, false) | (XhciFirmwareHandoff::None, true) => {
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, _) | (XhciFirmwareHandoff::None, true) => {
             "run-uboot"
         }
         _ => "run-default",
@@ -5870,8 +5925,12 @@ const fn xhci_runtime_init_strategy_requires_primary_pcie_irq(
     mmio: usize,
     strategy: XhciRuntimeInitStrategy,
 ) -> bool {
-    let _ = (mmio, strategy);
-    false
+    mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::None
+        )
+        && !strategy.seed_stop_state
 }
 
 #[derive(Clone, Copy)]
@@ -7039,22 +7098,42 @@ impl UsbKeyboard {
                         let mut connected_mask = 0u32;
                         let mut port_statuses = [0u32; XHCI_MAX_PROBE_PORTS];
                         let mut detect_passes_used = 1usize;
-                        for pass in 0..XHCI_PORT_DETECT_PASSES {
-                            detect_passes_used = pass.saturating_add(1);
-                            connected_mask = xhci_sample_root_ports(
-                                ctrl.as_ref(),
-                                max_ports,
-                                &mut port_statuses,
+                        let preserve_state_port_reads_toxic =
+                            xhci_runtime_init_strategy_skips_root_port_reads(strategy);
+                        if preserve_state_port_reads_toxic {
+                            boot_log::force_uart_line(
+                                "[local-seat] xhci root-port sample skipped reason=preserve-state-portsc-toxic",
                             );
-                            if connected_mask != 0 || pass + 1 >= XHCI_PORT_DETECT_PASSES {
-                                break;
+                        } else {
+                            {
+                                let mut line = heapless::String::<160>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] xhci root-port sample begin ports={} passes={}",
+                                        max_ports, XHCI_PORT_DETECT_PASSES,
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
                             }
-                            for _ in 0..XHCI_PORT_DETECT_SETTLE_SPINS {
-                                spin_loop();
+                            for pass in 0..XHCI_PORT_DETECT_PASSES {
+                                detect_passes_used = pass.saturating_add(1);
+                                connected_mask = xhci_sample_root_ports(
+                                    ctrl.as_ref(),
+                                    max_ports,
+                                    &mut port_statuses,
+                                );
+                                if connected_mask != 0 || pass + 1 >= XHCI_PORT_DETECT_PASSES {
+                                    break;
+                                }
+                                for _ in 0..XHCI_PORT_DETECT_SETTLE_SPINS {
+                                    spin_loop();
+                                }
                             }
                         }
                         let mut slow_recheck_used = false;
-                        if connected_mask == 0 && max_ports != 0 {
+                        if connected_mask == 0 && max_ports != 0 && !preserve_state_port_reads_toxic
+                        {
                             log_xhci_root_port_statuses(&port_statuses[..max_ports], "detect-zero");
                             wait_ms(XHCI_PORT_DETECT_FINAL_WAIT_MS);
                             slow_recheck_used = true;
@@ -11434,7 +11513,7 @@ mod tests {
         assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
         ));
-        assert!(xhci_runtime_init_strategy_prompt_safe(
+        assert!(!xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));
         assert!(xhci_runtime_init_strategy_prompt_safe(
@@ -11767,7 +11846,7 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 true,
             )),
-            "run-skip"
+            "run-uboot"
         );
         assert_eq!(
             xhci_runtime_init_strategy_run_label(XhciRuntimeInitStrategy::new(
@@ -11844,8 +11923,8 @@ mod tests {
     #[test]
     fn latest_usb_probe_route_status_preserves_pathway_and_diag_freshness() {
         let summary = UsbProbePathwaySummary {
-            progress: UsbProbePathProgress::RuntimeRingsPrepared,
-            outcome: UsbProbePathOutcome::DeferredPublish,
+            progress: UsbProbePathProgress::ControllerReady,
+            outcome: UsbProbePathOutcome::NoConnectedPorts,
             irq27_bound: false,
             bridge_irq_bound: true,
             intx_irq_bound: true,
@@ -11921,7 +12000,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_probe_preflight_status_prefers_compact_trusted_high_bar_prompt_safe_path() {
+    fn usb_probe_preflight_status_prefers_seeded_trusted_cold_start_prompt_safe_path() {
         let status = super::usb_probe_preflight_status(
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             Some(0x0546),
@@ -11935,35 +12014,32 @@ mod tests {
             true,
         )
         .expect("trusted prompt-safe path should be classified");
-        assert_eq!(status.route, "trusted-high-bar-primary");
-        assert_eq!(status.strategy_idx, 1);
+        assert_eq!(status.route, "trusted-high-bar-seeded-retry");
+        assert_eq!(status.strategy_idx, 2);
         assert_eq!(status.strategy_count, 2);
-        assert_eq!(status.policy, "full-reset-start");
-        assert_eq!(status.origin, "uboot-fresh-init");
+        assert_eq!(status.policy, "runtime-owned-fresh-rings");
+        assert_eq!(status.origin, "seeded-cold-start");
         assert_eq!(status.handoff, "cold-start-from-snapshot");
-        assert_eq!(status.seed, "none");
-        assert_eq!(status.halt_guard, "live-halt-read");
-        assert_eq!(status.constructor, "trusted-quiesce");
-        assert_eq!(status.pre_reset, "full-pre-reset");
-        assert_eq!(status.legacy, "claim-legacy");
+        assert_eq!(status.seed, "stop-state");
+        assert_eq!(status.halt_guard, "skip-live-halt-read");
+        assert_eq!(status.constructor, "pre-halt-usbcmd-quiesce");
+        assert_eq!(status.pre_reset, "skip-pre-reset");
+        assert_eq!(status.legacy, "skip-legacy");
         assert_eq!(status.run, "run-uboot");
         assert_eq!(status.publish, "rings-pre-run");
         assert_eq!(status.post_ready_irq, "irq-skip");
         assert_eq!(status.current_step, "pre-controller-ready");
-        assert_eq!(status.next_step, "live-stop-revalidation");
-        assert_eq!(status.followup_step, "reset-post-settle");
+        assert_eq!(status.next_step, "skip-stop-revalidation");
+        assert_eq!(status.followup_step, "skip-reset");
         assert!(!status.prefer_high);
         assert!(status.pcie_dma_window);
         assert!(status.poll_only);
-        assert_eq!(status.expected_diag_stage, 0x0213);
+        assert_eq!(status.expected_diag_stage, 0x0219);
         assert_eq!(
             status.expected_diag_tag,
-            Some("stop-revalidation-usbsts-read-begin")
+            Some("pre-halt-usbcmd-quiesce-begin")
         );
-        assert_eq!(
-            status.expected_diag_exact,
-            Some("live-usbsts-read-before-run")
-        );
+        assert_eq!(status.expected_diag_exact, None);
     }
 
     #[test]
@@ -12037,12 +12113,9 @@ mod tests {
         assert_eq!(summary.halt_guard, "skip-live-halt-read");
         assert_eq!(
             super::usb_probe_current_step(summary),
-            "pre-controller-ready"
-        );
-        assert_eq!(
-            super::usb_probe_next_step(summary),
             "skip-stop-revalidation"
         );
+        assert_eq!(super::usb_probe_next_step(summary), "reset-post-settle");
     }
 
     #[test]
@@ -12509,6 +12582,14 @@ mod tests {
             Some("dcbaap-release-only-high-pre-store")
         );
         assert_eq!(xhci_diag_stage_label(0x02f7), Some("dcbaap-publish-policy"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0332),
+            Some("pre-dcbaap-iman-quiesce")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0333),
+            Some("pre-dcbaap-iman-quiesce-done")
+        );
         assert_eq!(xhci_diag_stage_label(0x0270), Some("usbsts-run-read"));
         assert_eq!(xhci_diag_stage_label(0x0271), Some("usbcmd-run-read"));
         assert_eq!(
@@ -13042,6 +13123,10 @@ mod tests {
             Some(("policy_mask", "handoff", "seed_flags"))
         );
         assert_eq!(
+            xhci_diag_stage_value_labels(0x0332),
+            Some(("iman", "polling", "seed_flags"))
+        );
+        assert_eq!(
             xhci_diag_stage_value_labels(0x0316),
             Some(("erdp_ack", "iman_ip", "usbsts_clear"))
         );
@@ -13057,7 +13142,7 @@ mod tests {
     }
 
     #[test]
-    fn preferred_trusted_handoff_mode_prefers_cold_start_on_every_trusted_path() {
+    fn preferred_trusted_handoff_mode_uses_runtime_owned_rings_on_trusted_paths() {
         assert_eq!(
             super::xhci_preferred_trusted_handoff_mode(
                 super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED
@@ -13083,7 +13168,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_try_preserve_state_first_on_trusted_stop_state_path() {
+    fn manual_preserve_state_strategies_keep_preserve_before_cold_start_fallbacks() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::PreserveControllerState,
             super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
@@ -13106,6 +13191,19 @@ mod tests {
             strategies[2],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
         );
+    }
+
+    #[test]
+    fn preserve_state_strategy_skips_root_port_reads() {
+        assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
+        ));
+        assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+        ));
+        assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        ));
     }
 
     #[test]
