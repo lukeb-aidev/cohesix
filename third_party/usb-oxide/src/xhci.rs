@@ -434,10 +434,9 @@ const fn skip_reset_during_init_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     // U-Boot's generic flow asserts HCRST after proving the controller halted.
-    // On Pi 4 high-BAR handoff the latest trace proves that exact HCRST store
-    // wedges VL805 after the bootloader has already exported a halted stop
-    // state. Treat that trusted stop-state seed as the reset authority and keep
-    // the live HCRST edge only on unseeded fresh-init/full-reset paths.
+    // On Pi 4, a mailbox ACK is the reset authority. The stop-state seed only
+    // replaces fragile pre-reset reads; the reset-owned lane must still assert
+    // HCRST before it publishes fresh Cohesix rings and enumerates ports.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -476,10 +475,9 @@ const fn runtime_bootloader_owned_pollsafe_handoff(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The Pi 4 stop-state-only seed has now proven that fresh runtime ERDP
-    // publication can wedge VL805 even before RUN. Without a trusted runtime-ring
-    // seed, treat the lane as bootloader-owned and keep runtime poll-safe instead
-    // of publishing Cohesix-owned command/event rings into unknown hardware state.
+    // ColdStartFromSnapshot + stop-state-only is the diagnostic
+    // bootloader-owned lane. None + stop-state-only is reset-owned after a
+    // mailbox ACK and must publish fresh Cohesix rings.
     runtime_stop_state_only_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -732,10 +730,8 @@ const fn runtime_handoff_skips_live_run_write(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     // Preserve-state handoff adopts firmware-owned runtime state and avoids a
-    // redundant RUN store. The weaker Pi 4 stop-state-only cold-start lane has
-    // now proven live RUN and fresh ERDP writes can wedge VL805. Trust the
-    // bootloader-exported stop-state authority there too rather than replaying
-    // another toxic RUN write.
+    // redundant RUN store. ColdStartFromSnapshot + stop-state-only stays
+    // bootloader-owned; reset-owned None + stop-state-only must run.
     runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_stop_state_only_handoff(firmware_handoff, runtime_seed_snapshot)
 }
@@ -4490,8 +4486,8 @@ mod tests {
         runtime_needs_post_init_polling_irq_quiesce_with_snapshot,
         runtime_needs_post_run_polling_irq_quiesce_with_snapshot,
         runtime_bootloader_owned_pollsafe_handoff, runtime_owned_fresh_rings_handoff,
-        runtime_preserve_stop_state_handoff,
-        runtime_seed_snapshot_flag_bits,
+        runtime_preserve_stop_state_handoff, runtime_seed_snapshot_flag_bits,
+        runtime_seeded_full_reset_start_handoff,
         runtime_stop_state_needs_post_run_settle, skip_config_write_during_init,
         skip_config_write_during_init_with_snapshot,
         skip_constructor_polling_scrub_writes_with_snapshot, skip_dnctrl_write_with_snapshot,
@@ -6510,6 +6506,44 @@ mod tests {
         ));
         assert!(skip_init_pre_reset_scrub_writes_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
+            stop_state_seed,
+        ));
+    }
+
+    #[test]
+    fn runtime_seeded_full_reset_start_is_reset_owned() {
+        let stop_state_seed = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+        assert!(runtime_seeded_full_reset_start_handoff(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
+        assert!(!skip_reset_during_init_with_snapshot(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
+        assert!(!runtime_bootloader_owned_pollsafe_handoff(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
+        assert!(!runtime_handoff_skips_live_run_write(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
+        assert!(!skip_fresh_runtime_ownership_publish_with_snapshot(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
+        assert!(!skip_usbsts_clear_before_run_with_snapshot(
+            XhciFirmwareHandoff::None,
             stop_state_seed,
         ));
     }

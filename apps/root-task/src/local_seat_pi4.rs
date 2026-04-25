@@ -1109,12 +1109,7 @@ const fn runtime_vl805_mailbox_reset_completed(state: u8) -> bool {
 
 #[inline]
 const fn runtime_vl805_mailbox_reset_authorizes_hcrst(state: u8) -> bool {
-    matches!(
-        state,
-        VL805_RUNTIME_RESET_STATE_UNATTEMPTED
-            | VL805_RUNTIME_RESET_STATE_NOTIFIED
-            | VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
-    )
+    matches!(state, VL805_RUNTIME_RESET_STATE_NOTIFIED)
 }
 
 #[inline]
@@ -3319,7 +3314,7 @@ fn xhci_runtime_init_strategies(
     ) {
         let reset_authorizes_hcrst =
             runtime_vl805_mailbox_reset_authorizes_hcrst(runtime_vl805_reset_state);
-        if stop_state_seed_available && reset_authorizes_hcrst {
+        if reset_authorizes_hcrst && stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
@@ -11716,7 +11711,10 @@ mod tests {
         assert!(runtime_vl805_mailbox_reset_authorizes_hcrst(
             VL805_RUNTIME_RESET_STATE_NOTIFIED
         ));
-        assert!(runtime_vl805_mailbox_reset_authorizes_hcrst(
+        assert!(!runtime_vl805_mailbox_reset_authorizes_hcrst(
+            VL805_RUNTIME_RESET_STATE_UNATTEMPTED
+        ));
+        assert!(!runtime_vl805_mailbox_reset_authorizes_hcrst(
             VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
         ));
         assert!(!runtime_vl805_mailbox_reset_authorizes_hcrst(
@@ -11771,7 +11769,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_lead_with_seeded_full_reset_start() {
+    fn xhci_runtime_init_strategies_lead_with_reset_owned_stop_seed_after_mailbox_ack() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_NOTIFIED,
@@ -11797,7 +11795,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_do_not_auto_add_preserve_retry_after_weak_reset_outcomes() {
+    fn xhci_runtime_init_strategies_suppress_hcrst_after_posted_mailbox_fallback() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
@@ -11807,17 +11805,9 @@ mod tests {
                 iman0: Some(0),
             }),
         );
-        assert_eq!(count, 3);
+        assert_eq!(count, 1);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
-        );
-        assert_eq!(
-            strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
-        );
-        assert_eq!(
-            strategies[2],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
     }
@@ -13391,7 +13381,7 @@ mod tests {
     }
 
     #[test]
-    fn cold_start_trusted_strategies_try_seeded_full_reset_before_unseeded() {
+    fn cold_start_trusted_strategies_without_mailbox_reset_stay_bootloader_owned() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
@@ -13401,17 +13391,9 @@ mod tests {
                 iman0: Some(0),
             }),
         );
-        assert_eq!(count, 3);
+        assert_eq!(count, 1);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
-        );
-        assert_eq!(
-            strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
-        );
-        assert_eq!(
-            strategies[2],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
     }
@@ -14150,7 +14132,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_vl805_mailbox_reset_tracks_trusted_high_bar_handoff() {
+    fn xhci_runtime_vl805_mailbox_reset_requires_trusted_high_bar_handoff() {
         let safe_cmd = Some(
             super::PCI_COMMAND_MEMORY_SPACE
                 | super::PCI_COMMAND_BUS_MASTER
