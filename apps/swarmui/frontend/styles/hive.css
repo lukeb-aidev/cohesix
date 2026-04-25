@@ -21,7 +21,12 @@
   position: relative;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
-  background: linear-gradient(140deg, rgba(11, 16, 25, 0.92), rgba(20, 27, 39, 0.92));
+  background:
+    radial-gradient(circle at 62% 18%, rgba(240, 162, 87, 0.08), transparent 28%),
+    linear-gradient(rgba(231, 237, 245, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(231, 237, 245, 0.025) 1px, transparent 1px),
+    linear-gradient(140deg, rgba(11, 16, 25, 0.92), rgba(20, 27, 39, 0.92));
+  background-size: auto, 42px 42px, 42px 42px, auto;
   overflow: hidden;
   min-height: calc(var(--space-6) * 13);
 }
@@ -118,7 +123,10 @@
   padding: var(--space-2) var(--space-3);
   color: var(--color-ink);
   cursor: pointer;
-  transition: border-color var(--motion-fast) ease, transform var(--motion-fast) ease;
+  transition:
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    transform var(--motion-fast) ease;
 }
 
 .hive-telemetry__card:hover {
@@ -128,7 +136,8 @@
 
 .hive-telemetry__card.selected {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 1px rgba(90, 255, 215, 0.2);
+  background: linear-gradient(180deg, rgba(240, 162, 87, 0.14), rgba(26, 35, 50, 0.98));
+  box-shadow: 0 0 0 1px rgba(240, 162, 87, 0.22);
 }
 
 .hive-telemetry__agent {
@@ -210,9 +219,15 @@
 
 .hive-schedule__row {
   display: grid;
-  grid-template-columns: 1.2fr 1fr 0.7fr 0.7fr 0.9fr 0.7fr;
+  grid-template-columns:
+    minmax(0, 1.15fr)
+    minmax(0, 1.05fr)
+    minmax(64px, 0.7fr)
+    minmax(48px, 0.55fr)
+    minmax(58px, 0.65fr)
+    minmax(36px, 0.45fr);
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
   background: var(--color-surface-2);
@@ -221,14 +236,30 @@
   align-items: start;
 }
 
-.hive-schedule__row.header {
-  background: transparent;
-  border: none;
-  color: var(--color-ink-soft);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+.hive-schedule__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.hive-schedule__cell::before {
+  content: attr(data-label);
   font-size: 10px;
-  padding-left: 0;
+  line-height: 1.2;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-soft);
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+.hive-schedule__row.header {
+  display: none;
 }
 
 .hive-lease__group {
@@ -280,9 +311,22 @@
   color: var(--color-ink-soft);
 }
 
+.hive-lease__item-meta span {
+  white-space: nowrap;
+}
+
 @media (max-width: 1240px) {
   .hive-body {
     grid-template-columns: 1fr;
+  }
+
+  .hive-panel .panel-body {
+    min-height: auto;
+  }
+
+  .hive-stage,
+  .hive-canvas {
+    min-height: clamp(360px, 62vw, 520px);
   }
 }
 
@@ -323,6 +367,9 @@
     flex-direction: column;
     gap: var(--space-1);
     min-width: 0;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
   }
 
   .hive-schedule__row > div::before {

@@ -64,6 +64,9 @@
   --hive-flow-decay: 0.65;
   --shadow-panel: 0 22px 40px rgba(4, 8, 14, 0.34);
   --shadow-soft: 0 12px 24px rgba(4, 8, 14, 0.22);
+  --shadow-focus: 0 0 0 3px rgba(95, 211, 199, 0.2);
+  --surface-hairline:
+    linear-gradient(90deg, transparent, rgba(231, 237, 245, 0.28), transparent);
   --surface-strong:
     linear-gradient(180deg, rgba(24, 32, 44, 0.98), rgba(16, 22, 31, 0.98));
   --surface-glass:

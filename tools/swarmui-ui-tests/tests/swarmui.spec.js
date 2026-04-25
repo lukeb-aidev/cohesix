@@ -406,11 +406,18 @@ test("Live Hive selection wiring activates the detail pane", async ({ page }) =>
 
 test("Scheduler and lease panels render /proc data", async ({ page }) => {
   await page.waitForTimeout(200);
+  await expect(
+    page.locator(".hive-schedule > .hive-schedule__section")
+  ).toHaveCount(2);
   await expect(page.locator("#hive-schedule-summary")).toContainText(
     "Queue 2/64"
   );
   await expect(page.locator("#hive-schedule-queue")).toContainText("sched-1");
   await expect(page.locator("#hive-schedule-queue")).toContainText("sched-2");
+  const scheduleOverflow = await page.locator("#hive-schedule-queue").evaluate(
+    (node) => node.scrollWidth - node.clientWidth
+  );
+  expect(scheduleOverflow).toBeLessThanOrEqual(1);
   await expect(page.locator("#hive-lease-summary")).toContainText("Active 1/8");
   await expect(page.locator("#hive-lease-active")).toContainText("lease-1");
   await expect(page.locator("#hive-lease-preemptions")).toContainText("lease-0");
@@ -433,10 +440,33 @@ test("Responsive shell keeps the grid transitions intentional", async ({ page })
     };
   });
 
+  if (width <= 780) {
+    expect(layout.topbar).toBe(1);
+    expect(layout.session).toBe(1);
+    expect(layout.shell).toBe(1);
+    await expect(page.locator(".hive-schedule__row.header")).toBeHidden();
+    return;
+  }
+
   if (width <= 900) {
     expect(layout.topbar).toBe(1);
     expect(layout.session).toBe(2);
     expect(layout.shell).toBe(1);
+    const ticketMetrics = await page.evaluate(() => {
+      const subject = document
+        .querySelector("#session-subject")
+        ?.getBoundingClientRect();
+      const ticket = document
+        .querySelector("#session-ticket")
+        ?.getBoundingClientRect();
+      return {
+        subjectWidth: subject?.width ?? 0,
+        ticketWidth: ticket?.width ?? 0,
+      };
+    });
+    expect(ticketMetrics.ticketWidth).toBeGreaterThan(
+      ticketMetrics.subjectWidth * 1.7
+    );
     await expect(page.locator(".hive-schedule__row.header")).toBeHidden();
     return;
   }
@@ -457,7 +487,9 @@ test("Live Hive overlays remain interactive under load", async ({ page }) => {
   await page.waitForTimeout(200);
   const cards = page.locator("#hive-overlays .hive-telemetry__card");
   await expect(cards).toHaveCount(2);
+  await expect(cards.nth(1)).toHaveAttribute("aria-pressed", "false");
   await cards.nth(1).click();
+  await expect(cards.nth(1)).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#hive-detail-title")).toContainText("worker-gpu-1");
 });
 

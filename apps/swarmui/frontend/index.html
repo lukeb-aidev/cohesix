@@ -139,9 +139,14 @@
                     aria-label="Snapshot key"
                   ></sp-textfield>
                 </div>
-                <div class="field hint mono">
-                  Click 'Offline mode' to read cached CBOR snapshots, after launching SwarmUI with
-                   `--replay-trace` or `--replay`
+                <div class="field hint replay-hint">
+                  <span>
+                    Click <strong>Offline mode</strong> after launching SwarmUI with a cached CBOR replay source.
+                  </span>
+                  <span class="hint-actions mono" aria-label="Supported replay flags">
+                    <span class="hint-token">--replay-trace</span>
+                    <span class="hint-token">--replay</span>
+                  </span>
                 </div>
               </div>
               <footer class="panel-footer split">
@@ -288,6 +293,7 @@
                       <p class="placeholder">No preemptions yet.</p>
                     </div>
                   </div>
+                </section>
               </div>
             </article>
 

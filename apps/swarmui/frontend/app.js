@@ -588,6 +588,8 @@ const buildOverlayCard = (agentId) => {
   card.type = "button";
   card.className = "hive-telemetry__card";
   card.dataset.agent = agentId;
+  card.setAttribute("aria-label", `Show telemetry for ${agentId}`);
+  card.setAttribute("aria-pressed", "false");
   const header = document.createElement("div");
   header.className = "hive-telemetry__agent";
   header.textContent = agentId;
@@ -660,7 +662,9 @@ const renderHiveOverlays = (batch) => {
       hiveOverlayCards.set(agentId, card);
       hiveOverlays.appendChild(card);
     }
-    card.classList.toggle("selected", agentId === hiveDetailAgent);
+    const selected = agentId === hiveDetailAgent;
+    card.classList.toggle("selected", selected);
+    card.setAttribute("aria-pressed", selected ? "true" : "false");
     const linesArray = Array.isArray(overlay.lines) ? overlay.lines : [];
     const nextHash = hashLines(linesArray);
     if (card.__cohHash !== nextHash) {
