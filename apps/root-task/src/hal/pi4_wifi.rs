@@ -768,6 +768,18 @@ const fn pre_ht_control_plane_clock_target_hz(current_clock_hz: u32) -> u32 {
 }
 
 #[inline]
+const fn post_download_ht_clock_target_hz(
+    current_clock_hz: u32,
+    selected_bulk_clock_hz: u32,
+) -> u32 {
+    if selected_bulk_clock_hz > current_clock_hz {
+        selected_bulk_clock_hz
+    } else {
+        current_clock_hz
+    }
+}
+
+#[inline]
 fn firmware_phase_can_retry(err: &HalError, attempt: usize) -> bool {
     attempt == 0
         && (is_sdhci_io_path_error(err)
@@ -881,9 +893,9 @@ const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transpo
 #[inline]
 const fn firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout() -> bool {
     // Linux/brcmfmac downloads firmware with ALP available, then requires HT
-    // before forcing the backplane clock and enabling Function 2. The hardware
-    // trace with CHIPCLKCSR=0x12 and IORX stuck at 0x02 proves that continuing
-    // no-HT only burns boot time and never makes F2 operational.
+    // before forcing the backplane clock and enabling Function 2. If HT is not
+    // visible after the bounded active transition, Function 2 readiness is not
+    // a meaningful next contract.
     false
 }
 
@@ -1442,6 +1454,8 @@ fn control_plane_exact_error_is_more_informative(reason: &str) -> bool {
             "cyw43-control-plane-state-visible-no-reply"
                 | "cyw43-control-plane-pure-f2-startup-link-no-reply"
                 | "cyw43-ht-clock-timeout"
+                | "cyw43-ht-clock-timeout-before-function2"
+                | "cyw43-device-on-timeout-before-ht"
         )
 }
 
@@ -2670,16 +2684,17 @@ fn wifi_reset_state_name(state: WifiResetState) -> &'static str {
 }
 
 #[inline]
-const fn wifi_gpio_line_enabled(power_state: WifiPowerState) -> bool {
-    matches!(power_state, WifiPowerState::On)
+const fn wifi_gpio_line_enabled(power_state: WifiPowerState, reset_state: WifiResetState) -> bool {
+    matches!(power_state, WifiPowerState::On) && matches!(reset_state, WifiResetState::Deasserted)
 }
 
 #[inline]
 const fn wifi_gpio_transition_target(
     was_enabled: bool,
     power_state: WifiPowerState,
+    reset_state: WifiResetState,
 ) -> Option<bool> {
-    let enabled = wifi_gpio_line_enabled(power_state);
+    let enabled = wifi_gpio_line_enabled(power_state, reset_state);
     if was_enabled == enabled {
         None
     } else {
@@ -2737,7 +2752,7 @@ const fn backplane_alp_request_value() -> u8 {
 
 #[inline]
 const fn backplane_alp_hold_value() -> u8 {
-    SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_FORCE_ALP
+    SBSDIO_FORCE_HW_CLKREQ_OFF
 }
 
 #[inline]
@@ -2851,13 +2866,11 @@ const fn transport_phase_chipclk_value(last_chipclkcsr: Option<u8>) -> u8 {
 #[inline]
 const fn function2_ready_phase_chipclk_value(last_chipclkcsr: Option<u8>) -> u8 {
     match last_chipclkcsr {
-        Some(value) => {
-            let mut chipclk = transport_phase_chipclk_value(Some(value));
-            if (value & SBSDIO_FORCE_HT) != 0 {
-                chipclk |= SBSDIO_FORCE_HT;
-            }
-            chipclk
+        Some(value) if (value & (SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL)) != 0 => {
+            value | SBSDIO_FORCE_HT
         }
+        Some(value) if (value & SBSDIO_HT_AVAIL_REQ) != 0 => value | SBSDIO_FORCE_HT,
+        Some(_) => SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT,
         None => SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT,
     }
 }
@@ -3510,6 +3523,11 @@ const fn sleepcsr_kso_acknowledged(sleep: u8) -> bool {
 #[inline]
 const fn sleepcsr_devon_observed(sleep: u8) -> bool {
     (sleep & SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK) != 0
+}
+
+#[inline]
+const fn sleepcsr_device_on_awake(sleep: u8) -> bool {
+    sleepcsr_kso_acknowledged(sleep) && sleepcsr_devon_observed(sleep)
 }
 
 const SDIO_CORECONTROL: u32 = 0x00;
@@ -5123,6 +5141,7 @@ pub struct Pi4WifiState {
     host: SdioHost,
     power_state: WifiPowerState,
     reset_state: WifiResetState,
+    wifi_line_programmed: bool,
 }
 
 impl Pi4WifiState {
@@ -5155,6 +5174,7 @@ impl Pi4WifiState {
             host,
             power_state: WifiPowerState::Off,
             reset_state: WifiResetState::Asserted,
+            wifi_line_programmed: false,
         })
     }
 
@@ -5173,7 +5193,7 @@ impl Pi4WifiState {
             "[pi4-wifi] power state={}",
             wifi_power_state_name(state)
         ));
-        let was_enabled = wifi_gpio_line_enabled(self.power_state);
+        let was_enabled = wifi_gpio_line_enabled(self.power_state, self.reset_state);
         self.power_state = state;
         self.host.power_state = state;
         self.apply_wifi_line(was_enabled)
@@ -5184,11 +5204,13 @@ impl Pi4WifiState {
             "[pi4-wifi] reset state={}",
             wifi_reset_state_name(state)
         ));
+        let was_enabled = wifi_gpio_line_enabled(self.power_state, self.reset_state);
         self.reset_state = state;
         self.host.reset_state = state;
+        self.apply_wifi_line(was_enabled)?;
         if matches!(state, WifiResetState::Deasserted) {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] reset state=deasserted action=logical-only settle=skipped"
+                "[pi4-wifi] reset state=deasserted action=wl-on-released"
             ));
         }
         Ok(())
@@ -5665,15 +5687,29 @@ impl Pi4WifiState {
     }
 
     fn apply_wifi_line(&mut self, was_enabled: bool) -> Result<(), HalError> {
-        let enabled = wifi_gpio_line_enabled(self.power_state);
+        let enabled = wifi_gpio_line_enabled(self.power_state, self.reset_state);
         emit_breadcrumb(format_args!(
             "[pi4-wifi] gpio wl-on={} power={} reset={}",
             enabled as u8,
             wifi_power_state_name(self.power_state),
             wifi_reset_state_name(self.reset_state),
         ));
-        let Some(target_enabled) = wifi_gpio_transition_target(was_enabled, self.power_state)
-        else {
+        let target = wifi_gpio_transition_target(was_enabled, self.power_state, self.reset_state);
+        let Some(target_enabled) = target else {
+            if !self.wifi_line_programmed {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] gpio wl-on unchanged={} action=program-initial-level",
+                    enabled as u8
+                ));
+                self.mailbox
+                    .configure_gpio_output(PI4_WIFI_GPIO, enabled as u32)?;
+                self.wifi_line_programmed = true;
+                if !enabled {
+                    bounded_spin_settle("wifi-power-off", WIFI_POWER_DROP_SETTLE_LOOPS);
+                    self.host.mark_power_cycled();
+                }
+                return Ok(());
+            }
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] gpio wl-on unchanged={} action=skip-mailbox",
                 enabled as u8
@@ -5686,6 +5722,7 @@ impl Pi4WifiState {
         ));
         self.mailbox
             .configure_gpio_output(PI4_WIFI_GPIO, target_enabled as u32)?;
+        self.wifi_line_programmed = true;
         if !was_enabled && target_enabled {
             bounded_spin_settle("wifi-power-on", WIFI_POWER_SETTLE_LOOPS);
         } else if was_enabled && !target_enabled {
@@ -11122,10 +11159,12 @@ impl SdioHost {
             ));
         }
 
-        let action = if requires_ht_available {
-            "force-f2-clock"
+        let action = if function2_has_required_ht_clock(after) {
+            "force-f2-clock-ht-avail"
+        } else if (forced & SBSDIO_FORCE_HT) != 0 {
+            "force-f2-clock-linux-force-ht"
         } else {
-            "force-f2-clock-no-ht"
+            "force-f2-clock-linux-ht-request"
         };
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} action={action} before=0x{before:02x} forced=0x{forced:02x} after=0x{after:02x}"
@@ -12220,6 +12259,58 @@ impl SdioHost {
             SBSDIO_FUNC1_SLEEPCSR_REQUIRED_WAKE_MASK,
         ));
         Err(HalError::Unsupported("cyw43-kso-timeout"))
+    }
+
+    fn ensure_kso_device_on_for(&mut self, stage: &'static str) -> Result<u8, HalError> {
+        let sleep_before = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_SLEEPCSR)?;
+        if sleepcsr_device_on_awake(sleep_before) {
+            self.remember_sleepcsr(sleep_before);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=kso-devon-ready sleep=0x{sleep_before:02x} loops=0"
+            ));
+            return Ok(sleep_before);
+        }
+
+        let sleep_request = SBSDIO_FUNC1_SLEEPCSR_KSO_EN;
+        self.io_direct_write(
+            SdioFunction::Function1,
+            SBSDIO_FUNC1_SLEEPCSR,
+            sleep_request,
+        )?;
+        self.remember_sleepcsr(sleep_request);
+
+        let mut last_sleep = sleep_request;
+        for loop_index in 0..CYW43_KSO_AWAKE_WAIT_LOOPS {
+            let sleep = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_SLEEPCSR)?;
+            self.remember_sleepcsr(sleep);
+            last_sleep = sleep;
+            if sleepcsr_device_on_awake(sleep) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=kso-devon-ready sleep=0x{sleep_before:02x}->0x{sleep:02x} loops={loop_index}"
+                ));
+                return Ok(sleep);
+            }
+            if loop_index != 0 && loop_index % CYW43_KSO_REWRITE_INTERVAL_LOOPS == 0 {
+                self.io_direct_write(
+                    SdioFunction::Function1,
+                    SBSDIO_FUNC1_SLEEPCSR,
+                    sleep_request,
+                )?;
+                self.remember_sleepcsr(sleep_request);
+            }
+            spin_loop();
+        }
+
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=kso-devon-timeout sleep=0x{sleep_before:02x}->0x{last_sleep:02x} expected=0x{:02x}",
+            SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK,
+        ));
+        self.cache_ht_clock_timeout_snapshot(
+            stage,
+            self.last_chipclkcsr.unwrap_or(0),
+            "cyw43-device-on-timeout-before-ht",
+        );
+        Err(HalError::Unsupported("cyw43-device-on-timeout-before-ht"))
     }
 
     fn configure_linux_probe_attach_state(&mut self) -> Result<(), HalError> {
@@ -13802,7 +13893,7 @@ impl SdioHost {
             "[pi4-wifi] firmware stage=armcr4-core-up action=skip-readback reason=linux-release-path"
         ));
         self.prepare_linux_post_download_ht_transition("armcr4-post-download-clock")?;
-        self.ensure_pre_ht_startup_clock("wait-ht-clock-prep")?;
+        self.ensure_post_download_ht_clock("wait-ht-clock-prep", selected_bulk_clock_hz)?;
         let strict_ht_ready =
             self.require_ht_clock_ready("wait-ht-clock", "wait-ht-clock assist")?;
         if strict_ht_ready {
@@ -13823,7 +13914,10 @@ impl SdioHost {
                 "continue",
                 "linux-f2-before-no-ht-cutover",
             );
-            self.ensure_pre_ht_startup_clock("setup-firmware-channel-clock")?;
+            self.ensure_post_download_ht_clock(
+                "setup-firmware-channel-clock",
+                selected_bulk_clock_hz,
+            )?;
         }
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=setup-firmware-channel mode={} chunk_limit={}",
@@ -14456,12 +14550,13 @@ impl SdioHost {
         assist_stage: &'static str,
     ) -> Result<bool, HalError> {
         self.refresh_ht_clock_sideband_from_shadow_for(assist_stage)?;
+        let sleep_csr = self.ensure_kso_device_on_for(stage)?;
         if required_ht_clock_linux_active_transition_resets_chipclk() {
             self.prepare_linux_post_download_ht_transition(stage)?;
         }
         let request = required_ht_clock_request_value(self.last_chipclkcsr);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} active-ht-request=0x{request:02x} force_ht={} sdonly_fence={} wait_loops={}",
+            "[pi4-wifi] firmware stage={stage} active-ht-request=0x{request:02x} sleep=0x{sleep_csr:02x} force_ht={} sdonly_fence={} wait_loops={}",
             yn(required_ht_clock_linux_active_transition_uses_force_ht()),
             yn(required_ht_clock_linux_active_transition_resets_chipclk()),
             required_ht_clock_linux_active_wait_loops(),
@@ -14513,6 +14608,7 @@ impl SdioHost {
                 required_ht_clock_linux_active_wait_loops(),
             ));
             self.refresh_ht_clock_sideband_from_shadow_for(stage)?;
+            self.ensure_kso_device_on_for(stage)?;
             if required_ht_clock_linux_active_transition_resets_chipclk() {
                 self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, 0)?;
                 self.remember_chipclkcsr(0);
@@ -14525,6 +14621,15 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} timeout csr=0x{last_chipclk:02x} action=fail-before-function2 reason=linux-chip-active-ht-timeout"
         ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] ht_contract current=wait-ht expected=HT_AVAIL observed=chipclk=0x{last_chipclk:02x} wake=0x{wake:02x}/{wake_set} sleep=0x{sleep:02x}/{sleep_set} cardcap=0x{cardcap:02x}/{cardcap_set} blocker=ht-clock-before-function2",
+            wake = self.last_wakeupctrl.unwrap_or(0),
+            wake_set = yn(self.last_wakeupctrl.is_some()),
+            sleep = self.last_sleepcsr.unwrap_or(0),
+            sleep_set = yn(self.last_sleepcsr.is_some()),
+            cardcap = self.last_cardcap.unwrap_or(0),
+            cardcap_set = yn(self.last_cardcap.is_some()),
+        ));
         log_ht_clock_status(
             stage,
             "active-ht-timeout",
@@ -14534,8 +14639,14 @@ impl SdioHost {
             self.last_cardcap,
         );
         self.log_transport_shadow("wait-ht-clock-active-timeout");
-        self.cache_ht_clock_timeout_snapshot(stage, last_chipclk, "cyw43-ht-clock-timeout");
-        Err(HalError::Unsupported("cyw43-ht-clock-timeout"))
+        self.cache_ht_clock_timeout_snapshot(
+            stage,
+            last_chipclk,
+            "cyw43-ht-clock-timeout-before-function2",
+        );
+        Err(HalError::Unsupported(
+            "cyw43-ht-clock-timeout-before-function2",
+        ))
     }
 
     fn ensure_control_plane_clock(&mut self, stage: &'static str) -> Result<(), HalError> {
@@ -14580,6 +14691,34 @@ impl SdioHost {
         let effective_hz = self.set_clock_hz(target_clock_hz)?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} action=lower-pre-ht-ready effective={}Hz",
+            effective_hz
+        ));
+        Ok(())
+    }
+
+    fn ensure_post_download_ht_clock(
+        &mut self,
+        stage: &'static str,
+        selected_bulk_clock_hz: u32,
+    ) -> Result<(), HalError> {
+        let target_clock_hz =
+            post_download_ht_clock_target_hz(self.current_clock_hz, selected_bulk_clock_hz);
+        if target_clock_hz <= self.current_clock_hz {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=skip-post-download-ht-clock current={}Hz selected={}Hz preferred={}Hz",
+                self.current_clock_hz, selected_bulk_clock_hz, self.preferred_data_clock_hz
+            ));
+            return Ok(());
+        }
+
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=restore-post-download-ht-clock request={}Hz from={}Hz preferred={}Hz",
+            target_clock_hz, self.current_clock_hz, self.preferred_data_clock_hz
+        ));
+        let effective_hz = self.set_clock_hz(target_clock_hz)?;
+        self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(effective_hz);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=restore-post-download-ht-clock-ready effective={}Hz",
             effective_hz
         ));
         Ok(())
@@ -15524,10 +15663,6 @@ impl SdioHost {
         &mut self,
         stage: &'static str,
     ) -> Result<(), HalError> {
-        if !self.experimental_no_ht_transport {
-            return self.refresh_transport_phase_for(stage);
-        }
-
         let chipclk = function2_ready_phase_chipclk_value(self.last_chipclkcsr);
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} action=phase-f2-forced-clock chipclk=0x{chipclk:02x}"
@@ -24550,7 +24685,21 @@ mod tests {
             function2_ready_phase_chipclk_value(Some(
                 SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL
             )),
-            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL
+        );
+        assert_eq!(
+            function2_ready_phase_chipclk_value(Some(
+                SBSDIO_HT_AVAIL_REQ
+                    | SBSDIO_FORCE_HT
+                    | SBSDIO_ALP_AVAIL
+                    | SBSDIO_FORCE_ALP
+                    | SBSDIO_FORCE_HW_CLKREQ_OFF
+            )),
+            SBSDIO_HT_AVAIL_REQ
+                | SBSDIO_FORCE_HT
+                | SBSDIO_ALP_AVAIL
+                | SBSDIO_FORCE_ALP
+                | SBSDIO_FORCE_HW_CLKREQ_OFF
         );
         assert_eq!(
             function2_ready_phase_chipclk_value(None),
@@ -24631,6 +24780,10 @@ mod tests {
         assert!(sleepcsr_devon_observed(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
         ));
+        assert!(!sleepcsr_device_on_awake(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK));
+        assert!(sleepcsr_device_on_awake(
+            SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
+        ));
     }
 
     #[test]
@@ -24672,6 +24825,14 @@ mod tests {
         assert_eq!(
             pre_ht_control_plane_clock_target_hz(CYW43_STARTUP_CLOCK_HZ),
             CYW43_STARTUP_CLOCK_HZ
+        );
+        assert_eq!(
+            post_download_ht_clock_target_hz(400_000, CYW43_FIRMWARE_BULK_CLOCK_HZ / 8),
+            CYW43_FIRMWARE_BULK_CLOCK_HZ / 8
+        );
+        assert_eq!(
+            post_download_ht_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ / 4, 800_000),
+            CYW43_FIRMWARE_BULK_CLOCK_HZ / 4
         );
     }
 
@@ -24852,10 +25013,7 @@ mod tests {
             backplane_alp_request_value(),
             SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_ALP_AVAIL_REQ
         );
-        assert_eq!(
-            backplane_alp_hold_value(),
-            SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_FORCE_ALP
-        );
+        assert_eq!(backplane_alp_hold_value(), SBSDIO_FORCE_HW_CLKREQ_OFF);
     }
 
     #[test]
@@ -24888,7 +25046,7 @@ mod tests {
         );
         assert_eq!(
             function2_force_ht_clock_value(SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL),
-            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL | SBSDIO_FORCE_HT
         );
         assert!(function2_has_required_ht_clock(SBSDIO_HT_AVAIL));
         assert!(!function2_has_required_ht_clock(
@@ -24903,6 +25061,9 @@ mod tests {
     fn ht_clock_timeout_is_preserved_as_informative_failure() {
         assert!(control_plane_exact_error_is_more_informative(
             "cyw43-ht-clock-timeout"
+        ));
+        assert!(control_plane_exact_error_is_more_informative(
+            "cyw43-ht-clock-timeout-before-function2"
         ));
     }
 
@@ -25196,18 +25357,29 @@ mod tests {
     }
 
     #[test]
-    fn wifi_gpio_transition_target_only_requests_real_power_changes() {
+    fn wifi_gpio_transition_target_only_requests_real_wl_on_changes() {
         assert_eq!(
-            wifi_gpio_transition_target(false, WifiPowerState::Off),
+            wifi_gpio_transition_target(false, WifiPowerState::Off, WifiResetState::Asserted),
             None
         );
         assert_eq!(
-            wifi_gpio_transition_target(false, WifiPowerState::On),
+            wifi_gpio_transition_target(false, WifiPowerState::On, WifiResetState::Asserted),
+            None
+        );
+        assert_eq!(
+            wifi_gpio_transition_target(false, WifiPowerState::On, WifiResetState::Deasserted),
             Some(true)
         );
-        assert_eq!(wifi_gpio_transition_target(true, WifiPowerState::On), None);
         assert_eq!(
-            wifi_gpio_transition_target(true, WifiPowerState::Off),
+            wifi_gpio_transition_target(true, WifiPowerState::On, WifiResetState::Deasserted),
+            None
+        );
+        assert_eq!(
+            wifi_gpio_transition_target(true, WifiPowerState::On, WifiResetState::Asserted),
+            Some(false)
+        );
+        assert_eq!(
+            wifi_gpio_transition_target(true, WifiPowerState::Off, WifiResetState::Deasserted),
             Some(false)
         );
     }
@@ -25263,9 +25435,19 @@ mod tests {
     }
 
     #[test]
-    fn wifi_gpio_line_follows_power_state() {
-        assert!(!wifi_gpio_line_enabled(WifiPowerState::Off));
-        assert!(wifi_gpio_line_enabled(WifiPowerState::On));
+    fn wifi_gpio_line_follows_power_and_reset_state() {
+        assert!(!wifi_gpio_line_enabled(
+            WifiPowerState::Off,
+            WifiResetState::Asserted
+        ));
+        assert!(!wifi_gpio_line_enabled(
+            WifiPowerState::On,
+            WifiResetState::Asserted
+        ));
+        assert!(wifi_gpio_line_enabled(
+            WifiPowerState::On,
+            WifiResetState::Deasserted
+        ));
     }
 
     #[test]

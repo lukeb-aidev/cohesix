@@ -260,6 +260,8 @@ const XHCI_MMIO_ALIAS_SCAN_STEPS: usize =
     XHCI_MMIO_PRESEED_BYTES_MAX / XHCI_MMIO_ALIAS_SCAN_STRIDE_BYTES;
 const XHCI_HCI_VERSION_MIN: u16 = 0x0090;
 const XHCI_HCI_VERSION_MAX: u16 = 0x0200;
+const XHCI_DBOFF_MASK: u32 = !0x3;
+const XHCI_RTSOFF_MASK: u32 = !0x1f;
 // High-address DMA allocation has repeatedly stalled during Pi4 runtime xHCI
 // bring-up. Force low DMA pool probing until high-path allocator faults are
 // fully resolved.
@@ -322,14 +324,23 @@ static WIFI_PROGRESS_TICKS: AtomicUsize = AtomicUsize::new(0);
 #[inline]
 const fn xhci_runtime_init_strategy_prompt_safe(strategy: XhciRuntimeInitStrategy) -> bool {
     match strategy.firmware_handoff {
-        // Manual probes must not take the unseeded cold-start path first. The
-        // bounded retry still uses the bootloader stop-state seed, but the
-        // xHCI driver now trusts that seed for halt/reset authority before
-        // fresh runtime rings are published.
-        XhciFirmwareHandoff::ColdStartFromSnapshot => strategy.seed_stop_state,
+        // Manual probes may take the reset-owned U-Boot-shaped path, but that
+        // lane is gated by the bounded PCIe bridge + VL805 INTx sinks before
+        // any runtime ownership touch.
+        XhciFirmwareHandoff::ColdStartFromSnapshot => true,
         XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState => true,
         XhciFirmwareHandoff::None => false,
     }
+}
+
+#[inline]
+const fn xhci_dboff_offset(raw: u32) -> u32 {
+    raw & XHCI_DBOFF_MASK
+}
+
+#[inline]
+const fn xhci_rtsoff_offset(raw: u32) -> u32 {
+    raw & XHCI_RTSOFF_MASK
 }
 
 const XHCI_DIAG_MAX_LINES: u32 = 160;
@@ -658,6 +669,7 @@ impl UsbProbePathProgress {
 enum UsbProbePathOutcome {
     Pending,
     ControllerInitFailed,
+    EnumerationDisabledBootloaderOwned,
     NoConnectedPorts,
     AddressFailed,
     DeviceDescFailed,
@@ -676,6 +688,7 @@ impl UsbProbePathOutcome {
         match self {
             Self::Pending => "pending",
             Self::ControllerInitFailed => "controller-init-failed",
+            Self::EnumerationDisabledBootloaderOwned => "enumeration-disabled-bootloader-owned",
             Self::NoConnectedPorts => "no-connected-ports",
             Self::AddressFailed => "address-failed",
             Self::DeviceDescFailed => "device-desc-failed",
@@ -693,17 +706,18 @@ impl UsbProbePathOutcome {
     const fn tie_priority(self) -> u8 {
         match self {
             Self::Pending => 0,
-            Self::NoConnectedPorts => 1,
-            Self::AddressFailed => 2,
-            Self::DeviceDescFailed => 3,
-            Self::ConfigDescFailed => 4,
-            Self::ConfigParseFailed => 5,
-            Self::InvalidConfigValue => 6,
-            Self::SetConfigFailed => 7,
-            Self::NoKeyboardFound => 8,
-            Self::HidInitFailed => 9,
-            Self::ControllerInitFailed => 10,
-            Self::KeyboardReady => 11,
+            Self::EnumerationDisabledBootloaderOwned => 1,
+            Self::NoConnectedPorts => 2,
+            Self::AddressFailed => 3,
+            Self::DeviceDescFailed => 4,
+            Self::ConfigDescFailed => 5,
+            Self::ConfigParseFailed => 6,
+            Self::InvalidConfigValue => 7,
+            Self::SetConfigFailed => 8,
+            Self::NoKeyboardFound => 9,
+            Self::HidInitFailed => 10,
+            Self::ControllerInitFailed => 11,
+            Self::KeyboardReady => 12,
         }
     }
 }
@@ -1838,10 +1852,10 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
-    // The Pi 4 preserve-state lane now reaches controller-ready but wedges on
-    // the first live PORTSC read. Treat the U-Boot handoff as a capability and
-    // stop-state seed only: rebuild runtime-owned rings and enumerate by
-    // polling like the known-good U-Boot xHCI path.
+    // The Pi 4 stop-state-only fallback reaches controller-ready but cannot
+    // safely sample PORTSC. Treat the U-Boot handoff as a capability source:
+    // rebuild runtime-owned rings on the fresh-init lane and keep the
+    // stop-state seed diagnostic-only.
     let _ = runtime_vl805_reset_state;
     XhciFirmwareHandoff::ColdStartFromSnapshot
 }
@@ -3062,22 +3076,26 @@ fn probe_xhci_capability_window(
     let hccparams1 = unsafe { ptr::read_volatile((init_mmio + regs::HCCPARAMS1) as *const u32) };
     log_xhci_cap_probe_read(mmio_base, "dboff", regs::DBOFF);
     // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
-    let db_offset = unsafe { ptr::read_volatile((init_mmio + regs::DBOFF) as *const u32) };
+    let db_offset_raw = unsafe { ptr::read_volatile((init_mmio + regs::DBOFF) as *const u32) };
+    let db_offset = xhci_dboff_offset(db_offset_raw);
     log_xhci_cap_probe_read(mmio_base, "rtsoff", regs::RTSOFF);
     // SAFETY: `init_mmio` points to a mapped MMIO page for volatile reads.
-    let rts_offset = unsafe { ptr::read_volatile((init_mmio + regs::RTSOFF) as *const u32) };
+    let rts_offset_raw = unsafe { ptr::read_volatile((init_mmio + regs::RTSOFF) as *const u32) };
+    let rts_offset = xhci_rtsoff_offset(rts_offset_raw);
     let mut topo_line = heapless::String::<320>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut topo_line,
         format_args!(
-            "[local-seat] xhci cap probe regs-ok mmio=0x{mmio:016x} hciver=0x{hciver:04x} hcs1=0x{hcs1:08x} hcs2=0x{hcs2:08x} hcc1=0x{hccparams1:08x} dboff=0x{dboff:08x} rtsoff=0x{rtsoff:08x}",
+            "[local-seat] xhci cap probe regs-ok mmio=0x{mmio:016x} hciver=0x{hciver:04x} hcs1=0x{hcs1:08x} hcs2=0x{hcs2:08x} hcc1=0x{hccparams1:08x} dboff=0x{dboff:08x}/raw=0x{dboff_raw:08x} rtsoff=0x{rtsoff:08x}/raw=0x{rtsoff_raw:08x}",
             mmio = mmio_base,
             hciver = hci_version,
             hcs1 = hcs1,
             hcs2 = hcs2,
             hccparams1 = hccparams1,
             dboff = db_offset,
+            dboff_raw = db_offset_raw,
             rtsoff = rts_offset,
+            rtsoff_raw = rts_offset_raw,
         ),
     );
     boot_log::force_uart_line(topo_line.as_str());
@@ -3134,17 +3152,19 @@ fn validate_xhci_capability_window(probe: &XhciCapProbe) -> Result<(), &'static 
 
 #[inline]
 const fn xhci_controller_should_apply_brcm_axi_setup(
+    mmio: usize,
     firmware_handoff: XhciFirmwareHandoff,
 ) -> bool {
-    matches!(
-        firmware_handoff,
-        XhciFirmwareHandoff::None | XhciFirmwareHandoff::ColdStartFromSnapshot
-    )
+    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
+        return false;
+    }
+    matches!(firmware_handoff, XhciFirmwareHandoff::None)
 }
 
 #[inline]
 fn xhci_controller_params_from_probe(
     probe: XhciCapProbe,
+    mmio: usize,
     firmware_handoff: XhciFirmwareHandoff,
     stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
 ) -> XhciControllerParams {
@@ -3161,7 +3181,7 @@ fn xhci_controller_params_from_probe(
         rts_offset: probe.rts_offset,
         firmware_handoff,
         runtime_seed_snapshot,
-        apply_brcm_axi_setup: xhci_controller_should_apply_brcm_axi_setup(firmware_handoff),
+        apply_brcm_axi_setup: xhci_controller_should_apply_brcm_axi_setup(mmio, firmware_handoff),
     }
 }
 
@@ -3184,6 +3204,7 @@ impl XhciRuntimeInitStrategy {
 #[inline]
 fn xhci_controller_params_from_probe_with_strategy(
     probe: XhciCapProbe,
+    mmio: usize,
     strategy: XhciRuntimeInitStrategy,
     stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
 ) -> XhciControllerParams {
@@ -3202,6 +3223,7 @@ fn xhci_controller_params_from_probe_with_strategy(
         firmware_handoff: strategy.firmware_handoff,
         runtime_seed_snapshot,
         apply_brcm_axi_setup: xhci_controller_should_apply_brcm_axi_setup(
+            mmio,
             strategy.firmware_handoff,
         ) && !strategy.seed_stop_state,
     }
@@ -3387,7 +3409,11 @@ const fn xhci_runtime_init_strategy_skips_root_port_reads(
     matches!(
         strategy.firmware_handoff,
         XhciFirmwareHandoff::PreserveControllerState
-    )
+    ) || (strategy.seed_stop_state
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        ))
 }
 
 #[inline]
@@ -3435,16 +3461,12 @@ const fn xhci_runtime_init_strategy_pre_reset_label(
 const fn xhci_runtime_init_strategy_legacy_label(
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
-    if (strategy.seed_stop_state
-        && matches!(
-            strategy.firmware_handoff,
-            XhciFirmwareHandoff::ColdStartFromSnapshot
-        ))
-        || matches!(
-            strategy.firmware_handoff,
-            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
-        )
-    {
+    if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::ColdStartFromSnapshot
+            | XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PreserveControllerState
+    ) {
         "skip-legacy"
     } else {
         "claim-legacy"
@@ -3544,8 +3566,10 @@ fn xhci_cap_probe_from_snapshot(snapshot: LocalSeatXhciCapabilitySnapshot) -> Xh
     let max_ports = ((snapshot.hcs1 >> 24) & 0xff) as u8;
     let max_scratchpad =
         (((snapshot.hcs2 >> 27) & 0x1f) | (((snapshot.hcs2 >> 21) & 0x1f) << 5)) as u16;
-    let mmio_size = (snapshot.rts_offset as usize + 0x20 + 0x20)
-        .max(snapshot.db_offset as usize + (max_slots as usize + 1) * 4)
+    let db_offset = xhci_dboff_offset(snapshot.db_offset);
+    let rts_offset = xhci_rtsoff_offset(snapshot.rts_offset);
+    let mmio_size = (rts_offset as usize + 0x20 + 0x20)
+        .max(db_offset as usize + (max_slots as usize + 1) * 4)
         .max(0x10000);
     XhciCapProbe {
         cap_length: snapshot.cap_length,
@@ -3553,8 +3577,8 @@ fn xhci_cap_probe_from_snapshot(snapshot: LocalSeatXhciCapabilitySnapshot) -> Xh
         hcs1: snapshot.hcs1,
         hcs2: snapshot.hcs2,
         hccparams1: snapshot.hccparams1,
-        db_offset: snapshot.db_offset,
-        rts_offset: snapshot.rts_offset,
+        db_offset,
+        rts_offset,
         max_slots,
         max_ports,
         max_scratchpad,
@@ -6796,6 +6820,7 @@ impl UsbKeyboard {
                 }
                 let controller_params = xhci_controller_params_from_probe_with_strategy(
                     cap_probe,
+                    effective_mmio,
                     strategy,
                     xhci_stop_state_snapshot,
                 );
@@ -6840,7 +6865,7 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} stage={} detail={reason} action=fallback-poll-only",
+                                "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} stage={} detail={reason} action=defer-to-controller-gate",
                                 xhci_irq_phase_label(XhciIrqInstallPhase::PreControllerReady),
                                 mmio = effective_mmio
                             ),
@@ -7106,11 +7131,11 @@ impl UsbKeyboard {
                         let mut connected_mask = 0u32;
                         let mut port_statuses = [0u32; XHCI_MAX_PROBE_PORTS];
                         let mut detect_passes_used = 1usize;
-                        let preserve_state_port_reads_toxic =
+                        let bootloader_port_reads_toxic =
                             xhci_runtime_init_strategy_skips_root_port_reads(strategy);
-                        if preserve_state_port_reads_toxic {
+                        if bootloader_port_reads_toxic {
                             boot_log::force_uart_line(
-                                "[local-seat] xhci root-port sample skipped reason=preserve-state-portsc-toxic",
+                                "[local-seat] xhci root-port sample skipped reason=bootloader-owned-portsc-toxic",
                             );
                         } else {
                             {
@@ -7140,8 +7165,7 @@ impl UsbKeyboard {
                             }
                         }
                         let mut slow_recheck_used = false;
-                        if connected_mask == 0 && max_ports != 0 && !preserve_state_port_reads_toxic
-                        {
+                        if connected_mask == 0 && max_ports != 0 && !bootloader_port_reads_toxic {
                             log_xhci_root_port_statuses(&port_statuses[..max_ports], "detect-zero");
                             wait_ms(XHCI_PORT_DETECT_FINAL_WAIT_MS);
                             slow_recheck_used = true;
@@ -7506,10 +7530,15 @@ impl UsbKeyboard {
                         }
                         if !attempt_recorded {
                             let diag_after = read_latest_xhci_diag_snapshot();
+                            let outcome = if bootloader_port_reads_toxic {
+                                UsbProbePathOutcome::EnumerationDisabledBootloaderOwned
+                            } else {
+                                UsbProbePathOutcome::NoConnectedPorts
+                            };
                             usb_probe_pathway_record(
                                 &mut pathway_summary,
                                 UsbProbePathProgress::ControllerReady,
-                                UsbProbePathOutcome::NoConnectedPorts,
+                                outcome,
                                 None,
                                 connected_mask,
                                 detect_passes_used,
@@ -11514,14 +11543,14 @@ mod tests {
     }
 
     #[test]
-    fn prompt_safe_runtime_init_strategy_skips_full_reset_start() {
+    fn prompt_safe_runtime_init_strategy_allows_trusted_cold_start() {
         assert!(!xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
         assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
         ));
-        assert!(!xhci_runtime_init_strategy_prompt_safe(
+        assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));
         assert!(xhci_runtime_init_strategy_prompt_safe(
@@ -12008,7 +12037,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_probe_preflight_status_prefers_seeded_trusted_cold_start_prompt_safe_path() {
+    fn usb_probe_preflight_status_prefers_unseeded_trusted_cold_start_prompt_safe_path() {
         let status = super::usb_probe_preflight_status(
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             Some(0x0546),
@@ -12022,30 +12051,30 @@ mod tests {
             true,
         )
         .expect("trusted prompt-safe path should be classified");
-        assert_eq!(status.route, "trusted-high-bar-seeded-retry");
-        assert_eq!(status.strategy_idx, 2);
+        assert_eq!(status.route, "trusted-high-bar-primary");
+        assert_eq!(status.strategy_idx, 1);
         assert_eq!(status.strategy_count, 2);
-        assert_eq!(status.policy, "bootloader-owned-pollsafe");
-        assert_eq!(status.origin, "seeded-cold-start");
+        assert_eq!(status.policy, "full-reset-start");
+        assert_eq!(status.origin, "uboot-fresh-init");
         assert_eq!(status.handoff, "cold-start-from-snapshot");
-        assert_eq!(status.seed, "stop-state");
-        assert_eq!(status.halt_guard, "skip-live-halt-read");
-        assert_eq!(status.constructor, "pre-halt-usbcmd-quiesce");
-        assert_eq!(status.pre_reset, "skip-pre-reset");
+        assert_eq!(status.seed, "none");
+        assert_eq!(status.halt_guard, "live-halt-read");
+        assert_eq!(status.constructor, "trusted-quiesce");
+        assert_eq!(status.pre_reset, "full-pre-reset");
         assert_eq!(status.legacy, "skip-legacy");
-        assert_eq!(status.run, "run-skip");
-        assert_eq!(status.publish, "rings-skip");
+        assert_eq!(status.run, "run-uboot");
+        assert_eq!(status.publish, "rings-pre-run");
         assert_eq!(status.post_ready_irq, "irq-skip");
         assert_eq!(status.current_step, "pre-controller-ready");
-        assert_eq!(status.next_step, "skip-stop-revalidation");
-        assert_eq!(status.followup_step, "skip-reset");
+        assert_eq!(status.next_step, "live-stop-revalidation");
+        assert_eq!(status.followup_step, "reset-post-settle");
         assert!(!status.prefer_high);
         assert!(status.pcie_dma_window);
         assert!(status.poll_only);
-        assert_eq!(status.expected_diag_stage, 0x0219);
+        assert_eq!(status.expected_diag_stage, 0x0213);
         assert_eq!(
             status.expected_diag_tag,
-            Some("pre-halt-usbcmd-quiesce-begin")
+            Some("stop-revalidation-usbsts-read-begin")
         );
         assert_eq!(status.expected_diag_exact, None);
     }
@@ -12089,7 +12118,7 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 false,
             )),
-            "claim-legacy"
+            "skip-legacy"
         );
         assert_eq!(
             super::xhci_runtime_init_strategy_legacy_label(XhciRuntimeInitStrategy::new(
@@ -12142,6 +12171,7 @@ mod tests {
                 max_scratchpad: 0,
                 mmio_size: 0x10000,
             },
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::PreserveControllerState,
             None,
         );
@@ -12171,6 +12201,7 @@ mod tests {
                 max_scratchpad: 0,
                 mmio_size: 0x10000,
             },
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
             Some(LocalSeatXhciStopStateSnapshot {
                 usbcmd: Some(0),
@@ -12201,12 +12232,37 @@ mod tests {
                 max_scratchpad: 0,
                 mmio_size: 0x10000,
             },
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             XhciFirmwareHandoff::None,
             None,
         );
         assert_eq!(params.firmware_handoff, XhciFirmwareHandoff::None);
         assert!(params.runtime_seed_snapshot.is_none());
         assert!(params.apply_brcm_axi_setup);
+    }
+
+    #[test]
+    fn xhci_controller_params_disable_axi_setup_for_high_bar_none_retry() {
+        let params = xhci_controller_params_from_probe(
+            XhciCapProbe {
+                cap_length: 0x40,
+                hci_version: 0x0100,
+                hcs1: 32u32 | (8u32 << 24),
+                hcs2: 0,
+                hccparams1: 1 << 2,
+                db_offset: 0x1000,
+                rts_offset: 0x2000,
+                max_slots: 32,
+                max_ports: 8,
+                max_scratchpad: 0,
+                mmio_size: 0x10000,
+            },
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::None,
+            None,
+        );
+        assert_eq!(params.firmware_handoff, XhciFirmwareHandoff::None);
+        assert!(!params.apply_brcm_axi_setup);
     }
 
     #[test]
@@ -12225,6 +12281,7 @@ mod tests {
                 max_scratchpad: 0,
                 mmio_size: 0x10000,
             },
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             None,
         );
@@ -12252,6 +12309,7 @@ mod tests {
                 max_scratchpad: 0,
                 mmio_size: 0x10000,
             },
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             Some(LocalSeatXhciStopStateSnapshot {
                 usbcmd: Some(0),
@@ -12288,6 +12346,7 @@ mod tests {
                 max_scratchpad: 0,
                 mmio_size: 0x10000,
             },
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::PreserveControllerState,
             Some(LocalSeatXhciStopStateSnapshot {
                 usbcmd: Some(0),
@@ -12326,6 +12385,7 @@ mod tests {
         };
         let live = xhci_controller_params_from_probe_with_strategy(
             probe,
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
             None,
         );
@@ -12333,6 +12393,7 @@ mod tests {
 
         let trusted = xhci_controller_params_from_probe_with_strategy(
             probe,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
             Some(LocalSeatXhciStopStateSnapshot {
                 usbcmd: Some(0),
@@ -12351,14 +12412,16 @@ mod tests {
             hcs1: 32u32 | (8u32 << 24),
             hcs2: 0,
             hccparams1: 1 << 2,
-            db_offset: 0x1000,
-            rts_offset: 0x2000,
+            db_offset: 0x1003,
+            rts_offset: 0x201f,
         });
         assert_eq!(probe.cap_length, 0x40);
         assert_eq!(probe.hci_version, 0x0100);
         assert_eq!(probe.hccparams1, 1 << 2);
         assert_eq!(probe.max_slots, 32);
         assert_eq!(probe.max_ports, 8);
+        assert_eq!(probe.db_offset, 0x1000);
+        assert_eq!(probe.rts_offset, 0x2000);
         assert_eq!(probe.mmio_size, 0x10000);
     }
 
@@ -13202,16 +13265,28 @@ mod tests {
     }
 
     #[test]
-    fn preserve_state_strategy_skips_root_port_reads() {
+    fn bootloader_owned_stop_state_strategies_skip_root_port_reads() {
         assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
         ));
-        assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
+        assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
         ));
         assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));
+    }
+
+    #[test]
+    fn bootloader_owned_disabled_enumeration_is_not_no_connected_ports() {
+        assert_eq!(
+            UsbProbePathOutcome::EnumerationDisabledBootloaderOwned.as_str(),
+            "enumeration-disabled-bootloader-owned"
+        );
+        assert!(
+            UsbProbePathOutcome::NoConnectedPorts.tie_priority()
+                > UsbProbePathOutcome::EnumerationDisabledBootloaderOwned.tie_priority()
+        );
     }
 
     #[test]
@@ -13326,6 +13401,7 @@ mod tests {
             TRUSTED_XHCI_PCIE_SINK_IRQS,
             [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ]
         );
+        assert!(!TRUSTED_XHCI_PCIE_SINK_IRQS.contains(&PI4_GENERIC_VTIMER_IRQ));
     }
 
     #[test]
@@ -13403,8 +13479,8 @@ mod tests {
     }
 
     #[test]
-    fn seeded_cold_start_retry_does_not_require_primary_pcie_irq_contract() {
-        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
+    fn trusted_unseeded_cold_start_requires_primary_pcie_irq_contract() {
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));

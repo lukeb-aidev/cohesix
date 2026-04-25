@@ -35,6 +35,8 @@ const PORT_POST_ACK_WAIT_SPINS: usize = 1_000_000;
 const PORT_POST_ACK_TRANSITION_LOGS: usize = 8;
 const DROP_HALT_WAIT_SPINS: usize = 1_000_000;
 const CONFIG_MAX_SLOTS_MASK: u32 = 0xff;
+const XHCI_DBOFF_MASK: u32 = !0x3;
+const XHCI_RTSOFF_MASK: u32 = !0x1f;
 // Pi 4 now reliably reaches trusted-handoff ring programming. At that point the
 // DCBAAP prewrite read and zero rewrite are just ownership probes, and the
 // board-freezing edge was the experimental atomic write64 publish. Keep the
@@ -279,7 +281,9 @@ const fn skip_init_pre_reset_scrub_writes_with_snapshot(
 const fn skip_legacy_ownership_claim_for_handoff(firmware_handoff: XhciFirmwareHandoff) -> bool {
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::ColdStartFromSnapshot
+            | XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PreserveControllerState
     )
 }
 
@@ -1175,6 +1179,16 @@ const fn encode_port_diag(portsc: u32) -> u64 {
     (speed << 56) | (pls << 48) | (ped << 40) | (ccs << 32) | portsc as u64
 }
 
+#[inline]
+const fn xhci_dboff_offset(raw: u32) -> u32 {
+    raw & XHCI_DBOFF_MASK
+}
+
+#[inline]
+const fn xhci_rtsoff_offset(raw: u32) -> u32 {
+    raw & XHCI_RTSOFF_MASK
+}
+
 fn parse_controller_params(
     cap_length: u8,
     hcs1: u32,
@@ -1199,9 +1213,8 @@ fn parse_controller_params(
         return None;
     }
 
-    if (db_offset & 0x3) != 0 || (rts_offset & 0x1f) != 0 {
-        return None;
-    }
+    let db_offset = xhci_dboff_offset(db_offset);
+    let rts_offset = xhci_rtsoff_offset(rts_offset);
     if db_offset < cap_length as u32 || rts_offset < cap_length as u32 {
         return None;
     }
@@ -1275,7 +1288,7 @@ pub struct XhciControllerParams {
     pub firmware_handoff: XhciFirmwareHandoff,
     /// Optional bootloader stop/ring seed snapshot for trusted handoff.
     pub runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
-    /// Apply the Broadcom/VL805 AXI attribute quirk used by Pi 4 U-Boot.
+    /// Apply the Broadcom generic xHCI-wrapper AXI attribute quirk.
     pub apply_brcm_axi_setup: bool,
 }
 
@@ -1896,8 +1909,12 @@ impl<H: Dma> XhciCtrl<H> {
         let hcs2: u32 = unsafe { ((init_mmio + reg::HCSPARAMS2) as *const u32).read_volatile() };
         let hccparams1: u32 =
             unsafe { ((init_mmio + reg::HCCPARAMS1) as *const u32).read_volatile() };
-        let db_offset: u32 = unsafe { ((init_mmio + reg::DBOFF) as *const u32).read_volatile() };
-        let rts_offset: u32 = unsafe { ((init_mmio + reg::RTSOFF) as *const u32).read_volatile() };
+        let db_offset_raw: u32 =
+            unsafe { ((init_mmio + reg::DBOFF) as *const u32).read_volatile() };
+        let rts_offset_raw: u32 =
+            unsafe { ((init_mmio + reg::RTSOFF) as *const u32).read_volatile() };
+        let db_offset = xhci_dboff_offset(db_offset_raw);
+        let rts_offset = xhci_rtsoff_offset(rts_offset_raw);
         emit_xhci_diag(
             0x0102,
             cap_length as u64,
@@ -1956,8 +1973,10 @@ impl<H: Dma> XhciCtrl<H> {
         emit_xhci_diag(0x0105, mmio as u64, mmio_size as u64, 0);
         Self::apply_brcm_axi_setup(mmio, params.apply_brcm_axi_setup);
 
+        let db_offset = xhci_dboff_offset(params.db_offset);
+        let rts_offset = xhci_rtsoff_offset(params.rts_offset);
         let op_base = mmio + params.cap_length as usize;
-        let rt_base = mmio + params.rts_offset as usize;
+        let rt_base = mmio + rts_offset as usize;
         let op_offset = op_base - mmio;
         let int_base = rt_base + 0x20;
 
@@ -2018,7 +2037,7 @@ impl<H: Dma> XhciCtrl<H> {
             cap_length: params.cap_length,
             op_base,
             rt_base,
-            db_offset: params.db_offset,
+            db_offset,
             ctx_size_bytes,
             max_slots,
             max_ports,
@@ -4531,6 +4550,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_controller_params_masks_reserved_dboff_and_rtsoff_bits() {
+        let hcs1 = 32u32 | (8u32 << 24);
+        let parsed = parse_controller_params(0x40, hcs1, 0, 0x1003, 0x201f)
+            .expect("reserved DBOFF/RTSOFF bits should be masked like U-Boot");
+        assert_eq!(parsed.3, 0x10000);
+    }
+
+    #[test]
     fn controller_params_derive_context_size_from_hccparams1() {
         let params = XhciControllerParams {
             cap_length: 0x40,
@@ -6489,8 +6516,8 @@ mod tests {
     }
 
     #[test]
-    fn resetless_and_preserve_handoffs_skip_legacy_ownership_claim() {
-        assert!(!skip_legacy_ownership_claim_for_handoff(
+    fn trusted_handoffs_skip_legacy_ownership_claim() {
+        assert!(skip_legacy_ownership_claim_for_handoff(
             XhciFirmwareHandoff::ColdStartFromSnapshot
         ));
         assert!(skip_legacy_ownership_claim_for_handoff(
