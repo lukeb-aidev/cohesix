@@ -2637,7 +2637,7 @@ const fn xhci_diag_stage_value_labels(
         0x0316 => Some(("erdp_ack", "iman_ip", "usbsts_clear")),
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
         0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
-        0x0332 | 0x0333 => Some(("iman", "polling", "seed_flags")),
+        0x0332 | 0x0333 => Some(("iman", "masked_iman", "seed_flags")),
         _ => None,
     }
 }
@@ -3215,7 +3215,7 @@ const fn xhci_runtime_init_strategy_policy_label(
 ) -> &'static str {
     match (strategy.firmware_handoff, strategy.seed_stop_state) {
         (XhciFirmwareHandoff::PreserveControllerState, _) => "preserve-state",
-        (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "runtime-owned-fresh-rings",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "bootloader-owned-pollsafe",
         (XhciFirmwareHandoff::ColdStartFromSnapshot, false)
         | (XhciFirmwareHandoff::None, false)
         | (XhciFirmwareHandoff::None, true) => "full-reset-start",
@@ -3455,6 +3455,7 @@ const fn xhci_runtime_init_strategy_legacy_label(
 const fn xhci_runtime_init_strategy_run_label(strategy: XhciRuntimeInitStrategy) -> &'static str {
     match (strategy.firmware_handoff, strategy.seed_stop_state) {
         (XhciFirmwareHandoff::PreserveControllerState, _) => "run-skip",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "run-skip",
         (XhciFirmwareHandoff::ColdStartFromSnapshot, _) | (XhciFirmwareHandoff::None, true) => {
             "run-uboot"
         }
@@ -3471,6 +3472,13 @@ const fn xhci_runtime_init_strategy_publish_label(
         XhciFirmwareHandoff::ResetlessReinit
     ) {
         "rings-post-run"
+    } else if strategy.seed_stop_state
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+        )
+    {
+        "rings-skip"
     } else {
         "rings-pre-run"
     }
@@ -11757,7 +11765,7 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 true,
             )),
-            "runtime-owned-fresh-rings"
+            "bootloader-owned-pollsafe"
         );
         assert_eq!(
             xhci_runtime_init_strategy_policy_label(XhciRuntimeInitStrategy::new(
@@ -11821,7 +11829,7 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 true,
             )),
-            "rings-pre-run"
+            "rings-skip"
         );
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
@@ -11846,7 +11854,7 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 true,
             )),
-            "run-uboot"
+            "run-skip"
         );
         assert_eq!(
             xhci_runtime_init_strategy_run_label(XhciRuntimeInitStrategy::new(
@@ -12017,7 +12025,7 @@ mod tests {
         assert_eq!(status.route, "trusted-high-bar-seeded-retry");
         assert_eq!(status.strategy_idx, 2);
         assert_eq!(status.strategy_count, 2);
-        assert_eq!(status.policy, "runtime-owned-fresh-rings");
+        assert_eq!(status.policy, "bootloader-owned-pollsafe");
         assert_eq!(status.origin, "seeded-cold-start");
         assert_eq!(status.handoff, "cold-start-from-snapshot");
         assert_eq!(status.seed, "stop-state");
@@ -12025,8 +12033,8 @@ mod tests {
         assert_eq!(status.constructor, "pre-halt-usbcmd-quiesce");
         assert_eq!(status.pre_reset, "skip-pre-reset");
         assert_eq!(status.legacy, "skip-legacy");
-        assert_eq!(status.run, "run-uboot");
-        assert_eq!(status.publish, "rings-pre-run");
+        assert_eq!(status.run, "run-skip");
+        assert_eq!(status.publish, "rings-skip");
         assert_eq!(status.post_ready_irq, "irq-skip");
         assert_eq!(status.current_step, "pre-controller-ready");
         assert_eq!(status.next_step, "skip-stop-revalidation");
@@ -12098,7 +12106,7 @@ mod tests {
             0,
             2,
             2,
-            "runtime-owned-fresh-rings",
+            "bootloader-owned-pollsafe",
             "seeded-cold-start",
             "cold-start-from-snapshot",
             "stop-state",
@@ -13124,7 +13132,7 @@ mod tests {
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),
-            Some(("iman", "polling", "seed_flags"))
+            Some(("iman", "masked_iman", "seed_flags"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0316),
