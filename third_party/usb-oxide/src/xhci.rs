@@ -623,10 +623,9 @@ const fn runtime_handoff_needs_uboot_style_reset_write(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Unseeded fresh rings use the same reset edge as U-Boot: halt the
-    // controller, assert HCRST, wait for CNR to clear, then publish rings. A
-    // seeded Pi 4 stop-state handoff has already proven the halted state and
-    // must not replay the toxic live HCRST store.
+    // Reset-owned fresh-ring paths use the same reset edge as U-Boot: avoid the
+    // first live pre-reset reads when a stop-state seed exists, then assert
+    // HCRST, wait for CNR to clear, and publish runtime-owned rings.
     (runtime_owned_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
         && !runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot))
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -2210,7 +2209,7 @@ impl<H: Dma> XhciCtrl<H> {
             | (u64::from(skip_fresh_event_ring_publish) << 8)
             | (u64::from(skip_fresh_runtime_ownership_publish) << 9);
         emit_xhci_diag(
-            0x0111,
+            0x0117,
             self.firmware_handoff as u64,
             runtime_handoff_mask,
             publish_policy_mask,

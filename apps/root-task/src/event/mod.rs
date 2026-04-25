@@ -2305,7 +2305,7 @@ where
         ));
         self.emit_console_line(plan_line.as_str());
         let irq_line = format_message(format_args!(
-            "usb: irq_contract preflight expected=irq27+bridge+intx post_ready={} poll_only={}",
+            "usb: irq_contract preflight expected=bridge+intx post_ready={} poll_only={}",
             status.post_ready_irq,
             if status.poll_only { "yes" } else { "no" },
         ));

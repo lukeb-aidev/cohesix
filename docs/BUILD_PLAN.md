@@ -104,7 +104,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | In Progress |
 | [26a](#26a) | Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) | Complete |
 | [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | In Progress |
-| [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Pending |
+| [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Blocked on 26b |
 | [26d](#26d) | seL4 15 Baseline Refresh + Reference Manual Realignment | Pending |
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -6525,6 +6525,8 @@ Deliverables:
 **Why now (reviewer trust):**
 Milestones 25-26b establish technical capability, transport breadth, and Pi 4 bring-up evidence, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
+**Current planning status:** 26c is blocked until Milestone 26b is marked complete with checked-in Pi 4 DHCP/Wi-Fi hardware evidence and QEMU compatibility evidence. While 26b remains `In Progress`, 26c tasks may be prepared as design/audit work only; they must not be treated as milestone closure or as proof that the as-built system already satisfies the 26b contract.
+
 **Non-negotiable constraints:**
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, console grammar, Secure9P, or release-behavior changes are permitted under a "refactor" or "humanizing" label.
 - Aggressive refactoring is allowed only as behavior-preserving extraction, decomposition, deduplication, typed-error cleanup, naming cleanup, or invariant documentation after characterization tests pin the current behavior.
@@ -6544,9 +6546,10 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Tracked vendored/reference Markdown under `third_party/**/*.md` and tracked in-repo seL4/reference Markdown under `seL4/**/*.md` are inventory-only unless provenance, licensing, or linkage is wrong. If a nested external checkout exists, 26c inventories only the files tracked by the main Cohesix repository.
 - Multi-agent execution is mandatory for 26c scope: evidence generation, CI/test-plan plumbing, parity auditing, and cleanup work must have disjoint ownership so boundary-sensitive edits are not mixed with prose-only cleanup.
 - Milestone closure is blocked until the full target-qualified Test Plan succeeds on QEMU and Pi 4 with no `INCOMPLETE` markers, and Stage 05 verifies that required target artifacts exist in the active state dir before writing `stage_05.done`.
+- Milestone closure is also blocked until the 26c as-built blocker ledger is empty or every remaining item is explicitly deferred to a named later milestone with a non-overlapping dependency boundary. The initial blocker set includes: 26b Pi 4 DHCP/Wi-Fi evidence, Pi 4 network IR/docs validation drift, target-qualified Test Plan runner implementation, Secure9P NUL and `..` path rejection, removal or reclassification of any non-console in-VM TCP listener, HAL ownership for driver MMIO/physical-address access, generated-snippet embedding drift in canonical docs, fixture/default secret handling in release/operator paths, placeholder auth defaults in host tools/docs, and the mismatch between worker documentation and current root-task worker task spawning.
 
 ### Prerequisite
-- Milestone **26b** completed (Pi 4 DHCP baseline + QEMU compatibility guardrails).
+- Milestone **26b** completed (Pi 4 DHCP baseline + QEMU compatibility guardrails), including checked-in Pi 4 join/DHCP evidence and regenerated profile-specific manifest evidence. If 26b is still marked `In Progress`, 26c remains blocked.
 
 ### Goal
 Refactor and humanize the authored Cohesix code and documentation surfaces without protocol or behavioral regression by:
@@ -6613,6 +6616,12 @@ For each inventory entry, 26c must record one of:
   - Record where documentation is sourced from compiler outputs, where it is manually maintained, and what exact commands prove alignment.
   - Record every docs/script mismatch found during 26c in a checked-in drift ledger and close or explicitly defer it before cleanup lands.
   - Reject any humanizing change that makes prose nicer but less faithful to the observed system.
+
+- **As-built blocker ledger before refactor**
+  - Produce a checked-in blocker ledger for current red-line and docs-as-built mismatches before any structural cleanup begins.
+  - Classify each blocker as fix-in-26c, fix-before-26d, or explicitly deferred with rationale and dependency impact.
+  - Required initial entries are: 26b hardware-evidence gap, Pi 4 network IR/docs validation drift, target-qualified Test Plan runner absence, Secure9P codec path-validation drift, non-console in-VM TCP listener exposure, direct driver MMIO outside HAL, generated canonical-doc snippet drift, fixture/default secret release path, placeholder auth defaults, and worker-task implementation/docs mismatch.
+  - Downstream milestones may not cite a deferred blocker as already solved.
 
 - **Runtime boundary + semantic parity audit**
   - Record the intentional split between the host `std` NineDoor server and the VM `no_std` NineDoor bridge, including what may be shared, what must remain separate, and which crates/capabilities are forbidden inside the VM TCB.
@@ -6683,6 +6692,7 @@ For each inventory entry, 26c must record one of:
 
 ### Checks (DoD)
 - Every tracked Markdown file returned by `git ls-files '*.md'` is present exactly once in the checked-in 26c inventory with an explicit disposition and update rule.
+- The 26c blocker ledger exists before cleanup starts, and every initial blocker is either fixed with evidence or explicitly deferred to a named later milestone without being used as a satisfied dependency.
 - The rendered Markdown inventory report is mechanically derived from the checked-in machine-readable inventory source.
 - A checked-in refactor map classifies every Cohesix-authored refactor candidate, names its owner, records preserved contracts, and states whether it is no-touch, low-risk cleanup, characterization-first refactor, boundary-sensitive refactor, or deferred.
 - Each structural refactor has before/after characterization evidence, a rollback-sized diff boundary, and a risk-ratchet review for non-test `unsafe`, `unwrap`, `expect`, and `panic!`.
@@ -6713,6 +6723,24 @@ For each inventory entry, 26c must record one of:
 
 ### Task Breakdown
 ```
+Title/ID: m26c-as-built-blocker-ledger
+Goal: Record and gate current as-built mismatches before 26c cleanup or downstream milestones claim alignment.
+Inputs: docs/BUILD_PLAN.md, AGENTS.md, docs/SECURE9P.md, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md, docs/SECURITY_NIST_800_53.md, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, configs/root_task_pi4_uboot_aarch64.toml, scripts/ci/test_plan_run.sh, apps/root-task/src/net/**, apps/root-task/src/drivers/**, apps/root-task/src/hal/**, apps/root-task/src/ninedoor.rs, apps/worker-heart/src/kernel.rs, apps/worker-gpu/src/kernel.rs, scripts/release_bundle.sh
+Changes:
+  - docs/audit/M26C_AS_BUILT_BLOCKERS.md — checked-in blocker ledger with owner, severity, dependency impact, evidence command, and closure/defer decision for each initial blocker.
+  - docs/BUILD_PLAN.md — keep 26c and later milestones synchronized with blocker disposition changes.
+  - docs/TEST_PLAN.md — reference target-qualified evidence expectations once the runner is implemented.
+Commands:
+  - rg -n "TCP_SMOKE_PORT|31339" apps/root-task scripts docs
+  - rg -n "read_volatile|write_volatile|from_exposed_addr|phys|MMIO" apps/root-task/src/drivers apps/root-task/src/serial
+  - cargo test -p secure9p-codec
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - Initial blocker entries cover 26b evidence, Pi 4 network IR/docs validation drift, target-qualified runner, Secure9P path validation, non-console in-VM TCP, HAL MMIO ownership, generated-doc drift, fixture/default secrets, placeholder auth defaults, and worker-task docs/implementation mismatch.
+  - No structural cleanup task starts until blockers are fixed or explicitly deferred with dependency impact.
+Deliverables:
+  - Auditable 26c blocker ledger that prevents downstream milestones from inheriting unresolved as-built drift silently.
+
 Title/ID: m26c-authoring-charter-and-header-rules
 Goal: Replace generic repository-wide authoring templates with explicit human-authored comment, header, and documentation rules.
 Inputs: AGENTS.md, CONTRIBUTING.md, README.md, docs/CODING_GUIDELINES.md, docs/API_GUIDELINES.md, docs/BUILD_PLAN.md
@@ -6979,6 +7007,7 @@ Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM
 - No new operator-visible protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a kernel-refresh label.
 - `rust-sel4` adoption is out of scope. Cohesix may audit upstream Rust support for compatibility reference, but 26d must preserve the current Cohesix-owned `sel4-sys` / `sel4-runtime` / root-task bootstrap stack unless a separate milestone authorizes replacement.
 - Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
+- Existing v13 manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 15 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
 - Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 15 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
 - QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
 
@@ -7101,9 +7130,10 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 - No POSIX VFS; no general filesystem.
 - Pure Rust userspace; no C‑FFI filesystems.
 - Persistence is exposed only through NineDoor nodes (file‑shaped, bounded).
+- `/proc` remains read-only observability. Milestone 27 must not introduce write-only or append-only controls under `/proc`; mutating spool/settings controls live under explicit role-scoped control roots.
 
 ### Prerequisite
-- Milestone **26** completed (Pi 4 U-Boot boot chain + device identity).
+- Milestones **26b**, **26c**, and **26d** completed where they are dependencies for the selected profile: Pi 4 DHCP/Wi-Fi evidence is available, the 26c blocker ledger is clear or scoped, and the seL4 baseline used by the persistence profile is current.
 
 ### Goal
 Provide **bounded, crash‑resilient on‑device persistence** for:
@@ -7111,7 +7141,7 @@ Provide **bounded, crash‑resilient on‑device persistence** for:
 2) minimal settings (A/B committed pages),
 exposed through NineDoor without expanding the TCB.
 
-This milestone is **not** an extension of the existing host-side sidecar spool mounted at `/bus/<adapter>/spool`. That spool remains an in-memory, nonpersistent sidecar facility. Milestone 27 introduces a distinct **VM-local persistent spool** under `/proc/spool/*`.
+This milestone is **not** an extension of the existing host-side sidecar spool mounted at `/bus/<adapter>/spool`. That spool remains an in-memory, nonpersistent sidecar facility. Milestone 27 introduces a distinct **VM-local persistent spool** with read-only observability under `/proc/spool/*` and mutating control files under role-scoped spool control roots.
 
 ### Deliverables
 
@@ -7137,10 +7167,11 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
   - max record size and deterministic scan budget.
   - explicit policy: **refuse when full** or **overwrite oldest only when acked**.
 - NineDoor exposure (names must align with `ARCHITECTURE.md`):
-  - `/proc/spool/status` (read‑only)
-  - `/proc/spool/append` (write‑only, one record per write)
-  - `/proc/spool/read` (bounded read stream)
-  - `/proc/spool/ack` (write‑only cursor advance)
+  - `/proc/spool/status` (read-only summary)
+  - `/proc/spool/read` (read-only bounded stream)
+  - `/queen/spool/append` (queen-only append control, one record per write)
+  - `/queen/spool/ack` (queen-only cursor-advance control)
+  - Worker-origin telemetry continues through existing role-scoped telemetry paths unless a later milestone explicitly adds a worker-owned spool append path.
 - Existing `/bus/<adapter>/spool` semantics remain unchanged and continue to describe host-side sidecar buffering only.
 
 #### D) Settings store (A/B committed pages)
@@ -7161,6 +7192,7 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 - Regression pack additions:
   - `scripts/cohsh/spool_roundtrip.coh`
   - `scripts/cohsh/settings_roundtrip.coh`
+- Security and compliance docs must update in the same change to describe VM-local data at rest, retention, erase/rekey behavior, manifest-fingerprint binding, and why persistence does not become a general filesystem.
 
 ### Commands
 - `cargo test -p root-task`
@@ -7174,6 +7206,7 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 - Settings updates are atomic across power loss (A/B semantics).
 - Runtime settings do not duplicate or override the Pi 4 U-Boot-owned network/Wi-Fi persistence contract.
 - No general filesystem or POSIX surface introduced.
+- `/proc` remains read-only; spool append/ack writes are accepted only through documented role-scoped control paths.
 - VM vs Pi 4 boot profile semantics remain byte‑stable unless explicitly profile‑gated.
 - Regression pack passes unchanged; new tests are additive.
 
@@ -7211,15 +7244,15 @@ Deliverables:
   - HAL storage plumbing for the persistent spool/settings layers.
 
 Title/ID: m27-root-spool-namespace
-Goal: Implement persistent spool semantics in root-task and expose `/proc/spool/*` via the in-VM NineDoor bridge.
+Goal: Implement persistent spool semantics in root-task and expose read-only `/proc/spool/*` plus role-scoped spool controls via the in-VM NineDoor bridge.
 Inputs: apps/root-task/src/ninedoor.rs, docs/ARCHITECTURE.md, docs/INTERFACES.md.
 Changes:
   - apps/root-task/src/storage/spool.rs — ring log + checksum validation.
-  - apps/root-task/src/ninedoor.rs — `/proc/spool/{status,append,read,ack}` provider and policy enforcement.
+  - apps/root-task/src/ninedoor.rs — `/proc/spool/{status,read}` provider plus `/queen/spool/{append,ack}` policy enforcement.
 Commands:
   - cargo test -p root-task --test spool
 Checks:
-  - Partial tail records are ignored; bounded scan time and ack semantics are enforced in the VM path.
+  - Partial tail records are ignored; bounded scan time and ack semantics are enforced in the VM path; `/proc` has no write endpoints.
 Deliverables:
   - Authoritative seL4/root-task persistent spool namespace.
 
@@ -7241,7 +7274,7 @@ Goal: Implement A/B settings persistence for runtime-owned local settings only.
 Inputs: HAL block traits, docs/ARCHITECTURE.md.
 Changes:
   - apps/root-task/src/storage/settings.rs — A/B pages + checksum.
-  - docs/ARCHITECTURE.md / docs/INTERFACES.md — explicit exclusion of U-Boot-owned network/Wi-Fi settings.
+  - docs/ARCHITECTURE.md / docs/INTERFACES.md / docs/SECURITY.md / docs/SECURITY_NIST_800_53.md — explicit data-at-rest posture plus exclusion of U-Boot-owned network/Wi-Fi settings.
 Commands:
   - cargo test -p root-task --test settings
 Checks:
@@ -7505,6 +7538,7 @@ Strengthen authority and failover guarantees while preserving current transport 
 - No active/active multi-queen writers for one logical hive.
 - No in-VM HTTP services or new RPC channels.
 - No changes to ACK/ERR/END grammar or Secure9P transport framing.
+- No silent replacement of the existing `/queen/ctl` raw-command schema. Any strict intent envelope is introduced through a versioned compatibility path or the full breaking-change process: manifest schema bump, regenerated snippets, updated CLI fixtures, updated docs, and migration notes.
 - No best-effort reconciliation loops or autonomous remediation behavior.
 
 ---
@@ -7518,9 +7552,9 @@ Implementation requirements:
 - Mutating REST routes (`/v1/fs/echo` and equivalent write paths) require:
   - gateway request-auth token, and
   - delegated capability ticket header (`x-cohesix-ticket`), validated using existing ticket claims rules.
-- Gateway maintains a bounded upstream session pool keyed by delegated ticket identity (hash), not a single shared writer session.
+- Gateway maintains caller identity and quota state keyed by delegated ticket identity (hash). If the VM console transport remains single-client or single-writer for the selected profile, the gateway must serialize writes over the existing authenticated console path rather than opening parallel VM console sessions.
 - Delegated ticket claims (`role`, `subject`, `mount scopes`, `budgets`) constrain what each REST caller can mutate.
-- Read-only REST routes may remain gateway-role scoped in compatibility mode, but production profile defaults require delegated tickets for all mutating paths.
+- Read-only REST routes may remain gateway-role scoped in compatibility mode. The delegated-ticket requirement for mutating REST paths is an authority-contract change and must update `docs/API_GUIDELINES.md`, `docs/HOST_API.md`, OpenAPI fixtures, CLI/REST tests, and release notes in the same milestone work.
 
 As-built leverage:
 - Reuse `cohsh-core` ticket parsing/validation and existing ticket quota semantics.
@@ -7529,11 +7563,12 @@ As-built leverage:
 ---
 
 ### 2) Idempotent Queen Control Grammar
-**Purpose:** Ensure retries/replays never duplicate side effects on `/queen/ctl`.
+**Purpose:** Ensure retries/replays never duplicate side effects for Queen control intents while preserving legacy `/queen/ctl` compatibility unless a breaking-change path is taken.
 
 Implementation requirements:
-- Introduce strict envelope schema for `/queen/ctl` writes:
+- Introduce strict envelope schema for idempotent Queen intents:
   - required: `schema`, `id`, `idempotency_key`, `issued_unix_ms`, `cmd`.
+- Preserve existing `/queen/ctl` raw-command behavior in compatibility profiles, or introduce a new versioned path such as `/queen/intents/ctl` for strict envelopes. Production profiles may require strict envelopes only after the generated manifest schema and fixtures record that breaking authority posture.
 - Add bounded dedupe table in root-task authority path keyed by `id + idempotency_key`.
 - Duplicate intent behavior is deterministic:
   - no side effects repeated,
@@ -7609,19 +7644,20 @@ As-built leverage:
 ## Checks (Definition of Done)
 - Mutating REST request without delegated ticket is denied deterministically and audited.
 - Delegated caller cannot exceed ticket scopes/quotas even when gateway is multiplexing many clients.
-- Duplicate `/queen/ctl` intent (`id + idempotency_key`) never repeats side effects.
+- Duplicate strict Queen intent (`id + idempotency_key`) never repeats side effects.
+- Legacy `/queen/ctl` fixtures either continue to pass through compatibility mode or are updated under the full breaking-change process with schema-version evidence.
 - Stale writer epoch is rejected deterministically across local and relayed host tickets.
 - Production manifest/profile fails validation if fixture/default secrets are present.
 - Production profile surfaces `/audit/*` and `/replay/*`; evidence packs include epoch and dedupe state.
 - Milestone 28c host-side AI control cannot be enabled in target profiles unless delegated REST identity, writer-epoch fencing, and audit/replay requirements are all active.
-- Regression pack passes unchanged; only additive fixtures are introduced.
+- Regression pack passes unchanged in compatibility mode; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
 
 ---
 
 ## Compiler touchpoints
 - `coh-rtc` schema/version update for:
   - delegated-ticket enforcement policy on REST mutating paths,
-  - `/queen/ctl` envelope schema and dedupe bounds,
+  - idempotent Queen intent envelope schema, compatibility mode, and dedupe bounds,
   - writer-epoch fencing policy and relay requirements,
   - production secret references,
   - audit/replay required defaults for release profiles,
@@ -7644,20 +7680,21 @@ Changes:
   - apps/hive-gateway/src/auth.rs — delegated ticket validation + bounded cache keyed by ticket hash.
   - apps/coh/src/rest.rs — pass delegated ticket header for mutating REST calls.
   - apps/cohsh/src/transport/rest.rs — propagate delegated ticket on write paths.
+  - docs/HOST_API.md + docs/API_GUIDELINES.md + resources/openapi/hive-gateway.yaml — version and document the delegated REST authority contract.
 Commands: cargo test -p hive-gateway && cargo test -p coh && cargo test -p cohsh
 Checks: Writes without delegated ticket fail deterministically; writes with scoped ticket succeed only within claims.
 Deliverables: Gateway no longer executes all writes as an undifferentiated shared Queen principal.
 
 Title/ID: m28b-queen-ctl-idempotency
-Goal: Add deterministic idempotency for /queen/ctl intents.
+Goal: Add deterministic idempotency for Queen intents without silently breaking legacy /queen/ctl fixtures.
 Inputs: apps/root-task, apps/nine-door, docs/INTERFACES.md
 Changes:
-  - apps/root-task/src/control/queen_ctl.rs — strict envelope parser with required id/idempotency_key and dedupe guard.
+  - apps/root-task/src/control/queen_ctl.rs — strict envelope parser with required id/idempotency_key and dedupe guard for the versioned intent path or compatibility-gated /queen/ctl mode.
   - apps/root-task/src/control/dedupe.rs — bounded dedupe table with deterministic eviction and audit lines.
   - apps/nine-door/src/host/proc.rs — read-only dedupe status surface for operators.
 Commands: cargo test -p root-task && cargo test -p nine-door
-Checks: Duplicate intent never repeats side effects; deterministic audit and /proc visibility prove dedupe behavior.
-Deliverables: Replay-safe Queen control grammar with bounded dedupe state.
+Checks: Duplicate intent never repeats side effects; deterministic audit and /proc visibility prove dedupe behavior; legacy raw /queen/ctl behavior is either preserved or changed only with schema-bump fixtures.
+Deliverables: Replay-safe Queen intent grammar with bounded dedupe state and explicit compatibility posture.
 
 Title/ID: m28b-failover-epoch-fencing
 Goal: Enforce monotonic writer-epoch fencing across local and federated host ticket flows.
@@ -8231,7 +8268,13 @@ Cohesix is ready to operate as the operating system. To make EC2 a first-class, 
 **Goal**  
 Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
 
-Milestone 30 builds on the **existing generic UEFI ESP/QEMU baseline** already present in the repo. Its job is to add the **AWS-specific delta**: AWS profile admission, ENA, outbound bootstrap, optional IMDSv2, and AMI registration.
+Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently described by the repo with the newer Pi 4 U-Boot path, then adds the **AWS-specific delta**: AWS profile admission, ENA, outbound bootstrap, optional IMDSv2, and AMI registration.
+
+**Non-negotiable constraints**
+- Milestone 30 may not assume the UEFI/ESP baseline is authoritative until the first AWS task reconciles it against the current Pi 4 U-Boot pivot, `scripts/uefi/esp-build.sh`, `docs/BOOT_REFERENCE.md`, `docs/HARDWARE_BRINGUP.md`, and the charter rule for UEFI tooling. If the baseline is stale, AWS work starts by refreshing or reintroducing it under this milestone with docs and tests.
+- In-VM TLS, HTTP, and IMDSv2 are a deliberate TCB expansion, not a routine AWS delta. They are disabled by default until `docs/ARCHITECTURE.md`, `docs/NETWORK_CONFIG.md`, `docs/SECURITY.md`, `docs/SECURITY_NIST_800_53.md`, and `docs/AWS_AMI.md` explicitly approve the bounded client-only threat model and generated manifest gates.
+- No listener is introduced in the VM. AWS networking is outbound-only after seL4, and any Secure9P fabric mount must preserve existing frame bounds, role-scoped authority, and deterministic error behavior.
+- If the security review rejects in-VM TLS/HTTP, the milestone must use a signed bootstrap manifest and a host/fabric-side termination design instead of importing a web/TLS stack into the root-task closure.
 
 **Deliverables**
 #### A) AWS compiler + profile admission
@@ -8258,12 +8301,12 @@ Milestone 30 builds on the **existing generic UEFI ESP/QEMU baseline** already p
 #### D) Outbound bootstrap core after seL4
 - Reuse the Milestone 26b `no_std` DHCP core and add ENA binding
 - Add bounded **outbound** TCP connection management
-- Add bounded TLS client support
+- Add bounded TLS client support only after the AWS security/TCB expansion gate accepts it for the selected profile
 - Add a minimal outbound Secure9P/9door mount client
-- Diskless bootstrap path **after seL4**: ENA → DHCP (26b core) → outbound TCP → TLS → 9door mount
+- Diskless bootstrap path **after seL4**: ENA -> DHCP (26b core) -> outbound TCP -> approved security/session layer -> 9door mount
 
 #### E) Optional IMDSv2 bootstrap
-- Optional IMDSv2 bootstrap (instance identity + config) using a bounded, allowlisted HTTP client over the outbound TCP stack
+- Optional IMDSv2 bootstrap (instance identity + config) is deferred until the bounded HTTP client threat model is approved; the default AWS path uses manifest-authored or signed-bootstrap inputs without IMDS.
 - No listeners; no background refresh loop
 
 #### F) AMI registration tooling
@@ -8281,9 +8324,10 @@ Milestone 30 builds on the **existing generic UEFI ESP/QEMU baseline** already p
 - EC2 instance boots directly into Cohesix with no intermediate OS.
 - ENA link comes up deterministically; DHCP lease acquired within bounded time.
 - 9door namespace mounts successfully and control plane is reachable.
-- IMDSv2 metadata fetch is optional and bounded; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
+- IMDSv2 metadata fetch is absent by default or optional and bounded after approval; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
 - Power cycle returns to identical clean state (no persistence).
 - Failure cases (no fabric, auth failure, link down) halt safely with explicit console diagnostics.
+- AWS security docs record the accepted posture for any root-task TLS/HTTP code, or explicitly state that TLS/HTTP termination remains outside the VM.
 
 **Compiler touchpoints**
 - `coh-rtc` emits:
@@ -8295,6 +8339,21 @@ Milestone 30 builds on the **existing generic UEFI ESP/QEMU baseline** already p
 
 **Task Breakdown**
 ```
+Title/ID: m30-uefi-and-tcb-reconciliation
+Goal: Reconcile AWS boot/security assumptions with the current Cohesix UEFI baseline and tiny-TCB networking posture before runtime work starts.
+Inputs: scripts/uefi/esp-build.sh, docs/BOOT_REFERENCE.md, docs/HARDWARE_BRINGUP.md, docs/NETWORK_CONFIG.md, docs/SECURITY.md, docs/SECURITY_NIST_800_53.md, docs/AWS_AMI.md, AGENTS.md.
+Changes:
+- docs/AWS_AMI.md — state the accepted AWS boot chain, whether the UEFI/ESP builder is current, and what evidence proves it.
+- docs/NETWORK_CONFIG.md + docs/SECURITY.md + docs/SECURITY_NIST_800_53.md — record whether root-task TLS/HTTP/IMDS is accepted, rejected, or deferred for AWS.
+- docs/BUILD_PLAN.md — keep Milestone 30 subtasks synchronized with the accepted TCB posture.
+Commands:
+- scripts/uefi/esp-build.sh --help
+- scripts/ci/check_test_plan.sh
+Checks:
+- AWS work has an explicit boot-chain baseline and a security-approved plan for TLS/HTTP/IMDS before ENA bootstrap code depends on those assumptions.
+Deliverables:
+- UEFI/ESP and AWS TCB reconciliation note that blocks accidental import of web/TLS stacks into the VM.
+
 Title/ID: m30-aws-profile
 Goal: Admit AWS/ENA/IMDS bootstrap in compiler IR and profile selection before runtime implementation.
 Inputs: tools/coh-rtc, configs/, docs/AWS_AMI.md.
@@ -8312,7 +8371,7 @@ Title/ID: m30-uefi-esp
 Goal: Reuse the existing deterministic ESP builder for AWS Arm64 packaging.
 Inputs: upstream elfloader EFI build, `scripts/uefi/esp-build.sh`, manifest outputs.
 Changes:
-- `scripts/uefi/esp-build.sh` — remain the canonical ESP builder for Cohesix.
+- `scripts/uefi/esp-build.sh` — remain the canonical ESP builder for Cohesix only if `m30-uefi-and-tcb-reconciliation` accepts it as current; otherwise refresh or replace it under the same documented contract.
 - `scripts/aws/build-esp.sh` — thin AWS wrapper producing an AMI-ready ESP image from the canonical builder output.
 Commands:
 - cmake --build seL4/build --target elfloader.efi
@@ -8351,12 +8410,12 @@ Deliverables:
 - Deterministic dataplane invariants documented.
 
 Title/ID: m30-outbound-bootstrap-core
-Goal: Add bounded outbound TCP/TLS/session primitives required before fabric mount.
-Inputs: apps/root-task net stack, TLS helpers, docs/AWS_AMI.md.
+Goal: Add bounded outbound TCP/session primitives and only the approved security primitive required before fabric mount.
+Inputs: apps/root-task net stack, approved TLS or fabric-termination helpers, docs/AWS_AMI.md.
 Changes:
 - apps/root-task/src/net/dhcp.rs — adapt/reuse Milestone 26b DHCP core for ENA link and AWS-specific bounds.
 - apps/root-task/src/net/tcp.rs — outbound TCP session support for long-lived sessions.
-- apps/root-task/src/net/tls.rs — fabric-auth TLS handshake.
+- apps/root-task/src/net/tls.rs — fabric-auth TLS handshake only if `m30-uefi-and-tcb-reconciliation` approves root-task TLS; otherwise this task wires the approved host/fabric-side termination alternative.
 - apps/root-task/src/net/bootstrap.rs — deterministic sequencing and retries.
 Commands:
 - cargo test -p root-task --test net_bootstrap
@@ -8366,11 +8425,11 @@ Deliverables:
 - Bootstrap timing guarantees recorded.
 
 Title/ID: m30-imdsv2-bootstrap
-Goal: Read bounded instance metadata (IMDSv2) and feed boot policy inputs.
+Goal: If approved by the AWS TCB gate, read bounded instance metadata (IMDSv2) and feed boot policy inputs.
 Inputs: apps/root-task net stack, docs/AWS_AMI.md.
 Changes:
-- apps/root-task/src/net/http.rs — minimal HTTP request/response parsing (bounded, no chunked).
-- apps/root-task/src/net/imdsv2.rs — token fetch + allowlisted metadata queries.
+- apps/root-task/src/net/http.rs — minimal HTTP request/response parsing (bounded, no chunked), only if the AWS TCB gate approves root-task HTTP.
+- apps/root-task/src/net/imdsv2.rs — token fetch + allowlisted metadata queries, disabled by default and profile-gated.
 - apps/root-task/src/boot/policy.rs — consume optional IMDS fields (instance-id, region, az, tags if enabled).
 Commands:
 - cargo test -p root-task --test imdsv2

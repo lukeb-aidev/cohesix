@@ -2752,7 +2752,7 @@ const fn backplane_alp_request_value() -> u8 {
 
 #[inline]
 const fn backplane_alp_hold_value() -> u8 {
-    SBSDIO_FORCE_HW_CLKREQ_OFF
+    SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_FORCE_ALP
 }
 
 #[inline]
@@ -3507,8 +3507,11 @@ const SBSDIO_ALP_AVAIL: u8 = 0x40;
 const SBSDIO_HT_AVAIL: u8 = 0x80;
 const SFC_RF_TERM: u8 = 1 << 0;
 const SFC_WF_TERM: u8 = 1 << 1;
-const SBSDIO_CHIPCLKCSR_WRITABLE_MASK: u8 =
-    SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_FORCE_HW_CLKREQ_OFF;
+const SBSDIO_CHIPCLKCSR_WRITABLE_MASK: u8 = SBSDIO_ALP_AVAIL_REQ
+    | SBSDIO_HT_AVAIL_REQ
+    | SBSDIO_FORCE_ALP
+    | SBSDIO_FORCE_HT
+    | SBSDIO_FORCE_HW_CLKREQ_OFF;
 const SBSDIO_WAKE_TILL_HT_AVAIL: u8 = 0x02;
 const SBSDIO_FUNC1_SLEEPCSR_KSO_EN: u8 = 1;
 const SBSDIO_FUNC1_SLEEPCSR_KSO_MASK: u8 = 0x01;
@@ -3528,6 +3531,11 @@ const fn sleepcsr_devon_observed(sleep: u8) -> bool {
 #[inline]
 const fn sleepcsr_device_on_awake(sleep: u8) -> bool {
     sleepcsr_kso_acknowledged(sleep) && sleepcsr_devon_observed(sleep)
+}
+
+#[inline]
+const fn post_download_devon_before_ht_is_diagnostic() -> bool {
+    true
 }
 
 const SDIO_CORECONTROL: u32 = 0x00;
@@ -4742,6 +4750,7 @@ const CYW43_ARMCR4_CONTROL_SETTLE_LOOPS: usize = 50_000;
 const CYW43_CORE_CONTROL_SETTLE_LOOPS: usize = 500_000;
 const CYW43_SOCRAM_CLEAR_RESET_PREWRITE_SETTLE_LOOPS: usize = 20_000_000;
 const CYW43_SOCRAM_CLEAR_RESET_KEEPALIVE_CHUNK_LOOPS: usize = CYW43_CORE_CONTROL_SETTLE_LOOPS;
+const CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS: usize = 4_000;
 const CYW43_CORE_RESET_RETRY_LIMIT: usize = 50;
 const SDHCI_WRITE_DELAY_LOOPS: usize = 256;
 const SDHCI_WRITE_GAP_SPIN_LOOPS: usize = SDHCI_WRITE_DELAY_LOOPS * 32;
@@ -4766,6 +4775,15 @@ const CYW43_HT_CLOCK_SOFT_WAIT_LOOPS: usize = 8_192;
 const CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_LOOPS: usize = SDIO_INIT_WAIT_LOOPS;
 const CYW43_KSO_AWAKE_WAIT_LOOPS: usize = SDIO_INIT_WAIT_LOOPS;
 const CYW43_KSO_REWRITE_INTERVAL_LOOPS: usize = 512;
+const CYW43_KSO_INITIAL_SETTLE_LOOPS: usize = CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS;
+
+#[inline]
+fn spin_wifi_progress_loops(loops: usize) {
+    for _ in 0..loops {
+        spin_loop();
+    }
+    wifi_progress_advance_loops(loops);
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResponseType {
@@ -11556,6 +11574,10 @@ impl SdioHost {
         ));
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, alp_hold)?;
         self.remember_chipclkcsr(alp_hold);
+        bounded_spin_settle(
+            "cyw43-backplane-force-alp",
+            CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS,
+        );
         if defer_backplane_sdio_pullup_clear() {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] cyw43 backplane stage=pullup-clear deferred reason=pi4-cmd52-crc"
@@ -12226,6 +12248,7 @@ impl SdioHost {
             sleep_request,
         )?;
         self.remember_sleepcsr(sleep_request);
+        spin_wifi_progress_loops(CYW43_KSO_INITIAL_SETTLE_LOOPS);
 
         let mut last_sleep = sleep_request;
         for loop_index in 0..CYW43_KSO_AWAKE_WAIT_LOOPS {
@@ -12270,6 +12293,14 @@ impl SdioHost {
             ));
             return Ok(sleep_before);
         }
+        if post_download_devon_before_ht_is_diagnostic() && sleepcsr_kso_acknowledged(sleep_before)
+        {
+            self.remember_sleepcsr(sleep_before);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=kso-devon-observe sleep=0x{sleep_before:02x} devon=pending policy=diagnostic-before-ht loops=0"
+            ));
+            return Ok(sleep_before);
+        }
 
         let sleep_request = SBSDIO_FUNC1_SLEEPCSR_KSO_EN;
         self.io_direct_write(
@@ -12278,6 +12309,7 @@ impl SdioHost {
             sleep_request,
         )?;
         self.remember_sleepcsr(sleep_request);
+        spin_wifi_progress_loops(CYW43_KSO_INITIAL_SETTLE_LOOPS);
 
         let mut last_sleep = sleep_request;
         for loop_index in 0..CYW43_KSO_AWAKE_WAIT_LOOPS {
@@ -12287,6 +12319,12 @@ impl SdioHost {
             if sleepcsr_device_on_awake(sleep) {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} action=kso-devon-ready sleep=0x{sleep_before:02x}->0x{sleep:02x} loops={loop_index}"
+                ));
+                return Ok(sleep);
+            }
+            if post_download_devon_before_ht_is_diagnostic() && sleepcsr_kso_acknowledged(sleep) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=kso-devon-observe sleep=0x{sleep_before:02x}->0x{sleep:02x} devon=pending policy=diagnostic-before-ht loops={loop_index}"
                 ));
                 return Ok(sleep);
             }
@@ -12305,6 +12343,12 @@ impl SdioHost {
             "[pi4-wifi] firmware stage={stage} action=kso-devon-timeout sleep=0x{sleep_before:02x}->0x{last_sleep:02x} expected=0x{:02x}",
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK,
         ));
+        if post_download_devon_before_ht_is_diagnostic() && sleepcsr_kso_acknowledged(last_sleep) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=kso-devon-deferred sleep=0x{last_sleep:02x} policy=diagnostic-before-ht"
+            ));
+            return Ok(last_sleep);
+        }
         self.cache_ht_clock_timeout_snapshot(
             stage,
             self.last_chipclkcsr.unwrap_or(0),
@@ -14242,6 +14286,10 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} alp-hold=0x{alp_hold:02x}"
         ));
+        bounded_spin_settle(
+            "cyw43-backplane-force-alp",
+            CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS,
+        );
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} ht-rerequest request=0x{request:02x}"
         ));
@@ -15594,7 +15642,7 @@ impl SdioHost {
 
         let wake_ctrl = self.last_wakeupctrl.unwrap_or(0) | SBSDIO_WAKE_TILL_HT_AVAIL;
         let cardcap = cyw43455_cardcap_command_decode_value();
-        let sleep_csr = SBSDIO_FUNC1_SLEEPCSR_KSO_EN;
+        let sleep_csr = self.last_sleepcsr.unwrap_or(0) | SBSDIO_FUNC1_SLEEPCSR_KSO_EN;
 
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL, wake_ctrl)?;
         self.remember_wakeupctrl(wake_ctrl);
@@ -24784,6 +24832,8 @@ mod tests {
         assert!(sleepcsr_device_on_awake(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
         ));
+        assert!(post_download_devon_before_ht_is_diagnostic());
+        assert!(CYW43_KSO_INITIAL_SETTLE_LOOPS > 0);
     }
 
     #[test]
@@ -25013,7 +25063,15 @@ mod tests {
             backplane_alp_request_value(),
             SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_ALP_AVAIL_REQ
         );
-        assert_eq!(backplane_alp_hold_value(), SBSDIO_FORCE_HW_CLKREQ_OFF);
+        assert_eq!(
+            backplane_alp_hold_value(),
+            SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_FORCE_ALP
+        );
+        assert_eq!(
+            backplane_alp_hold_value() & SBSDIO_CHIPCLKCSR_WRITABLE_MASK,
+            backplane_alp_hold_value()
+        );
+        assert!(CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS < SDIO_INIT_WAIT_LOOPS);
     }
 
     #[test]
