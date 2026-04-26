@@ -19,10 +19,10 @@ preparing and executing tasks.
 
 Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
 
-## seL4 Reference Manual Alignment (v13.0.0)
+## seL4 Reference Manual Alignment (v15.0.0)
 
-We treat the seL4 Reference Manual v13.0.0 (`seL4/seL4-manual-latest.pdf`) as the authoritative description of kernel semantics. This plan
-cross-checks each milestone against the relevant chapters to ensure we remain within the manual’s constraints:
+We treat the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)) as the authoritative description of kernel semantics. This plan
+cross-checks each milestone against the relevant chapters to ensure we remain within the manual's constraints:
 - **Chapters 2 & 3 (Kernel Services, Objects, and Capability Spaces)** drive the capability discipline, retype requirements, and CSpace
   layout described in Milestones 0–4.
 - **Chapters 4 & 5 (Message Passing and Notifications)** inform the NineDoor 9P transport, IPC patterns, and event/endpoint handling
@@ -6429,20 +6429,24 @@ Deliverables:
 
 Title/ID: m26b-pi4-wifi-hardware-validation
 Goal: Capture Pi 4 on-device evidence for CYW43455 join, DHCP, and deterministic `auto` fallback before marking 26b complete.
-Inputs: flashed Pi 4 SD image, serial capture, Wi-Fi credentials, direct-link/wired fallback host setup, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
+Inputs: flashed Pi 4 SD image, serial capture, Linux known-good brcmfmac/MMC/SDHCI capture, U-Boot USB handoff trace, Wi-Fi credentials, direct-link/wired fallback host setup, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
 Changes:
+  - scripts/pi4_trace_normalize.py — normalize Pi 4 USB/Wi-Fi serial traces into JSONL/summary artifacts for boot-to-boot comparison.
   - docs/HARDWARE_BRINGUP.md — record the exact serial breadcrumbs, host commands, and observed IP/console evidence for a successful Wi-Fi boot.
   - docs/TEST_PLAN.md — add the final Pi 4 Wi-Fi validation transcript and `auto` fallback proof.
 Commands:
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
   - minicom -D /dev/cu.usbserial-0001 -b 115200 -o -C pi4-serial.log
+  - python3 scripts/pi4_trace_normalize.py pi4-serial.log --summary
+  - python3 scripts/pi4_trace_normalize.py pi4-linux-known-good.log --domain wifi --summary
   - cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <wifi-lease-ip> --tcp-port 31337 --auth-token bootstrap
 Checks:
+  - Normalized Cohesix, U-Boot, and Linux comparison traces preserve USB/Wi-Fi stages, blockers, and latest verdicts as machine-readable evidence.
   - Serial shows CYW43455 attach/join breadcrumbs followed by `[dhcp] lease bound ...`.
   - `netstats` / `netstatus` report the Wi-Fi lease on `policy=wifi`.
   - `auto` proves single-active-interface behavior by using Wi-Fi when healthy and falling back to wired only after explicit Wi-Fi failure.
 Deliverables:
-  - Pi 4 hardware validation evidence required to mark Milestone 26b complete.
+  - Pi 4 hardware validation evidence, normalized trace summaries, and known-good Linux/U-Boot comparison artifacts required to mark Milestone 26b complete.
 
 Title/ID: m26b-qemu-compat-gate
 Goal: Prove 26/26a/26b changes do not break macOS/Linux QEMU backward compatibility.
@@ -7000,14 +7004,14 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (kernel truth):**
-Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Cohesix still pins its reference-manual alignment to seL4 v13.0.0 even though upstream seL4 15.0.0 changes direct API expectations relevant to custom root-task integrations. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 15.0.0, proves the current direct root-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions.
+Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 15.0.0, anchors manual alignment to the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)), proves the current direct root-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions.
 
 **Non-negotiable constraints:**
 - No system-model change. Cohesix remains an upstream seL4, pure-Rust root-task system; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26d.
 - No new operator-visible protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a kernel-refresh label.
 - `rust-sel4` adoption is out of scope. Cohesix may audit upstream Rust support for compatibility reference, but 26d must preserve the current Cohesix-owned `sel4-sys` / `sel4-runtime` / root-task bootstrap stack unless a separate milestone authorizes replacement.
 - Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
-- Existing v13 manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 15 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
+- Older manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 15 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
 - Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 15 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
 - QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
 
@@ -7023,7 +7027,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
   - Record the exact upstream seL4 version/commit accepted for Cohesix in canonical docs and test evidence.
 
 - **Reference-manual and docs realignment**
-  - Update `docs/BUILD_PLAN.md`, `docs/TOOLCHAIN_MAC_ARM64.md`, `README.md`, and other canonical docs that currently describe the normative seL4 manual/baseline so they align with seL4 15.0.0 as built.
+  - Update `docs/BUILD_PLAN.md`, `docs/TOOLCHAIN_MAC_ARM64.md`, `README.md`, and other canonical docs that currently describe the normative seL4 manual/baseline so they align with seL4 15.0.0 as built and link the official seL4 Reference Manual v15.0.0 PDF (`https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf`).
   - Refresh the carried seL4 manual mirror under `seL4/` if the repo continues to store it as a tracked reference artifact.
   - Record any seL4 15 changes that are intentionally irrelevant to Cohesix today, especially domain-schedule features tied to Microkit/CAmkES/capDL workflows.
 
@@ -7056,7 +7060,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4`
 
 ### Checks (DoD)
-- Canonical docs no longer pin Cohesix to seL4 Reference Manual v13.0.0; they explicitly align to the accepted seL4 15.0.0 baseline and remain consistent with the refreshed as-built evidence.
+- Canonical docs link the official seL4 Reference Manual v15.0.0 PDF and explicitly align to the accepted seL4 15.0.0 baseline, remaining consistent with the refreshed as-built evidence.
 - `crates/sel4-sys`, `crates/sel4-runtime`, and root-task bootstrap code build cleanly against seL4 15 generated headers/artifacts for the QEMU baseline, SMP baseline, and Pi 4 U-Boot baseline used by Cohesix.
 - QEMU and Pi 4 target-qualified Test Plan runs pass on the refreshed kernel baseline with no `*.incomplete` markers and no undocumented operator-visible output drift.
 - Secure9P bounds, console grammar, manifest outputs, release semantics, and host/VM runtime boundaries remain unchanged unless separately documented as defects fixed in the same change.
@@ -7071,13 +7075,13 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 ```
 Title/ID: m26d-kernel-provenance-refresh
 Goal: Refresh Cohesix seL4 baseline inputs and record accepted seL4 15.0.0 provenance.
-Inputs: external seL4 source/build trees, seL4 15.0.0 release notes/manual, docs/TOOLCHAIN_MAC_ARM64.md, README.md.
+Inputs: external seL4 source/build trees, seL4 15.0.0 release notes, official seL4 Reference Manual v15.0.0 PDF (`https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf`), docs/TOOLCHAIN_MAC_ARM64.md, README.md.
 Changes:
   - docs/TOOLCHAIN_MAC_ARM64.md — record the accepted seL4 15.0.0 baseline and external-build expectations.
   - README.md — update high-level kernel/manual baseline references if they mention stale versions or assumptions.
   - seL4/ — refresh tracked manual/reference artifacts only if the repo continues carrying them as canonical mirrors.
 Commands: cargo check --workspace
-Checks: canonical docs and carried references identify the accepted seL4 15.0.0 baseline with no stale v13 pin left in normative guidance.
+Checks: canonical docs and carried references identify the accepted seL4 15.0.0 baseline with no stale older-manual pin left in normative guidance.
 Deliverables: updated docs/reference provenance and a checked-in note of the accepted upstream version/commit.
 ```
 

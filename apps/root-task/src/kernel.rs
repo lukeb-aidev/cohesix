@@ -2580,11 +2580,21 @@ fn init_local_seat_runtime<P: Platform>(
         } else {
             None
         };
+    let xhci_bootloader_reset_authorized = xhci_handoff_ready
+        && xhci_irq_quiesced
+        && xhci_handoff_halted
+        && xhci_handoff_safe
+        && xhci_poststop_ready_info.value
+        && xhci_poststop_irq_info.value
+        && xhci_poststop_halted_info.value
+        && xhci_poststop_safe_info.value
+        && xhci_stop_state_snapshot.is_some();
     let local_seat_hints = local_seat::LocalSeatPlatformHints {
         xhci_mmio_hint,
         xhci_pci_cmd,
         xhci_handoff_ready,
         xhci_irq_quiesced,
+        xhci_bootloader_reset_authorized,
         xhci_capability_snapshot,
         xhci_stop_state_snapshot,
         display_hint,

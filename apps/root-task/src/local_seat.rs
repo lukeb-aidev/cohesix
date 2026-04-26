@@ -129,6 +129,8 @@ pub struct LocalSeatPlatformHints {
     pub xhci_handoff_ready: bool,
     /// Whether the bootloader quiesced xHCI interrupt delivery before handoff.
     pub xhci_irq_quiesced: bool,
+    /// Whether bootloader post-stop evidence authorizes Cohesix to take reset ownership.
+    pub xhci_bootloader_reset_authorized: bool,
     /// Optional validated capability snapshot exported by the bootloader.
     pub xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
     /// Optional stop-state snapshot exported by the bootloader.
@@ -404,6 +406,7 @@ pub fn attach_platform_backend(
         xhci_pci_cmd: hints.xhci_pci_cmd,
         xhci_handoff_ready: hints.xhci_handoff_ready,
         xhci_irq_quiesced: hints.xhci_irq_quiesced,
+        xhci_bootloader_reset_authorized: hints.xhci_bootloader_reset_authorized,
         xhci_capability_snapshot: hints.xhci_capability_snapshot,
         xhci_stop_state_snapshot: hints.xhci_stop_state_snapshot,
         framebuffer_hint: hints.display_hint.map(|hint| Pi4FramebufferHint {

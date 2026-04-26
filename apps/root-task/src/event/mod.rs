@@ -2349,7 +2349,7 @@ where
             let route_line = format_message(format_args!(
                 "usb: golden_path route={} attempt={}/{} current={} next={} origin={} handoff={} seed={} halt_guard={}",
                 route.route,
-                route.strategy_idx + 1,
+                route.strategy_idx,
                 route.strategy_count,
                 route.current_step,
                 route.next_step,
@@ -2510,6 +2510,8 @@ where
     ) -> Option<(&'static str, &'static str)> {
         if route.controller_gate != "none" {
             Some(("policy-skip-before-run", "controller-gate"))
+        } else if route.outcome == "enumeration-disabled-bootloader-owned" {
+            Some(("policy-skip-before-run", "fresh-ownership"))
         } else if route.outcome == "controller-init-failed" {
             Some(("controller-init-edge", "controller-init"))
         } else if route.progress == "controller-ready" && route.connected_mask == 0 {
@@ -2548,7 +2550,7 @@ where
     ) -> &'static str {
         match route.origin {
             "stop-state-preserve" => "no-touch-after-ready",
-            "seeded-cold-start" => "fresh-rings-before-run",
+            "seeded-cold-start" => "no-fresh-ownership",
             "uboot-fresh-init" => "fresh-init-before-run",
             "stop-state-resetless-reinit" => "resetless-reinit",
             _ => "diagnostic-fallback",

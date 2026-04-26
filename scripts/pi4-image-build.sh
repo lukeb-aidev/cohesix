@@ -21,6 +21,8 @@ COHESIX_IMAGE_NAME="cohesix-image-arm-bcm2711"
 COHESIX_LOGO_SOURCE="${ROOT_DIR}/docs/COHESIX_LOGO.png"
 COHESIX_LOGO_STAGE_NAME="cohesix-logo.bmp"
 BOOTSTD_LOGO_STAGE_NAME="boot.bmp"
+BRCMFMAC_CMDLINE_STAGE_NAME="brcmfmac-dyndbg.cmdline"
+BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME="brcmfmac-dyndbg.sh"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net-console"
@@ -41,6 +43,7 @@ Builds and stages a Pi 4 SD payload with:
   - seL4 image (upstream output copied as cohesix-image-arm-bcm2711)
   - Cohesix autoboot script (boot.scr.uimg)
   - Optional Cohesix HDMI logo (cohesix-logo.bmp for U-Boot video)
+  - Linux brcmfmac dynamic-debug helpers for known-good Wi-Fi trace capture
 
 By default this script only builds/stages files under out/pi4-sd.
 To erase and flash an SD card, pass --flash-disk /dev/diskN explicitly.
@@ -170,6 +173,9 @@ verify_boot_cmd_handoff() {
     grep -q 'cohesix,xhci-hccparams1' "$path" || fail "boot.cmd is missing xHCI HCCPARAMS1 DT handoff"
     grep -q 'run coh_clear_xhci_handoff_live' "$path" || fail "boot.cmd is missing xHCI stale-token clearing before usb stop"
     grep -q 'reprobe-usb-stop-failed' "$path" || fail "boot.cmd is missing xHCI usb-stop failure source tagging"
+    grep -q '\[cohesix:usb-trace\]' "$path" || fail "boot.cmd is missing USB trace breadcrumbs"
+    grep -q 'handoff-usb-reset-begin' "$path" || fail "boot.cmd is missing USB reset trace stage"
+    grep -q 'handoff-usb-stop-begin' "$path" || fail "boot.cmd is missing USB stop trace stage"
 }
 
 resolve_sel4_source_dir() {
@@ -828,6 +834,9 @@ setenv coh_logo_delay 0
 setenv coh_logo_x 20
 setenv coh_logo_y 20
 setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""'
+setenv coh_usb_trace 1
+setenv coh_usb_trace_tree 0
+setenv coh_usb_trace_emit 'if test "${coh_usb_trace}" = "1"; then echo "[cohesix:usb-trace] stage=${coh_usb_trace_stage} input=${coh_usb_input_ready} reprobe=${coh_xhci_reprobe_result}"; if env exists coh_xhci_mmio; then echo "[cohesix:usb-trace] xhci-mmio=${coh_xhci_mmio}"; else echo "[cohesix:usb-trace] xhci-mmio=absent"; fi; if env exists coh_xhci_handoff_ready; then echo "[cohesix:usb-trace] ready=${coh_xhci_handoff_ready}"; else echo "[cohesix:usb-trace] ready=absent"; fi; if env exists coh_xhci_irq_quiesced; then echo "[cohesix:usb-trace] irq=${coh_xhci_irq_quiesced}"; else echo "[cohesix:usb-trace] irq=absent"; fi; if env exists coh_xhci_halted; then echo "[cohesix:usb-trace] halted=${coh_xhci_halted}"; else echo "[cohesix:usb-trace] halted=absent"; fi; if env exists coh_xhci_handoff_safe; then echo "[cohesix:usb-trace] safe=${coh_xhci_handoff_safe}"; else echo "[cohesix:usb-trace] safe=absent"; fi; if env exists coh_xhci_usbcmd; then echo "[cohesix:usb-trace] usbcmd=${coh_xhci_usbcmd}"; fi; if env exists coh_xhci_usbsts; then echo "[cohesix:usb-trace] usbsts=${coh_xhci_usbsts}"; fi; if env exists coh_xhci_iman0; then echo "[cohesix:usb-trace] iman0=${coh_xhci_iman0}"; fi; if test "${coh_usb_trace_tree}" = "1"; then if usb tree; then true; else echo "[cohesix:usb-trace] usb-tree=unavailable"; fi; if usb info; then true; else echo "[cohesix:usb-trace] usb-info=unavailable"; fi; fi; fi'
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
 setenv coh_bootstrap_usb_session 'if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi'
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
@@ -861,6 +870,59 @@ EOF
     sed -i '' "s/__COH_IMAGE_FALLBACK__/${fallback_image}/g" "$out"
     sed -i '' "s/__COH_LOGO_FILE__/${COHESIX_LOGO_STAGE_NAME}/g" "$out"
     sed -i '' "s/__COH_BOOTSTD_LOGO_FILE__/${BOOTSTD_LOGO_STAGE_NAME}/g" "$out"
+    sed -i '' 's|pci enum; if usb start;|setenv coh_usb_trace_stage menu-pci-enum-begin; run coh_usb_trace_emit; pci enum; setenv coh_usb_trace_stage menu-usb-start-begin; run coh_usb_trace_emit; if usb start;|' "$out"
+    sed -i '' 's|setenv coh_usb_input_ready 1; echo "\[cohesix\] USB host session active"|setenv coh_usb_input_ready 1; setenv coh_usb_trace_stage menu-usb-start-ok; run coh_usb_trace_emit; echo "[cohesix] USB host session active"|' "$out"
+    sed -i '' 's|else setenv coh_usb_input_ready 0; echo "\[cohesix\] WARNING: usb start failed before menu/input"|else setenv coh_usb_input_ready 0; setenv coh_usb_trace_stage menu-usb-start-failed; run coh_usb_trace_emit; echo "[cohesix] WARNING: usb start failed before menu/input"|' "$out"
+    sed -i '' 's|pci enum; if usb reset;|setenv coh_usb_trace_stage handoff-pci-enum-begin; run coh_usb_trace_emit; pci enum; setenv coh_usb_trace_stage handoff-usb-reset-begin; run coh_usb_trace_emit; if usb reset;|' "$out"
+    sed -i '' 's|setenv coh_xhci_reprobe_result success; echo "\[cohesix\] USB host reprobe command completed"|setenv coh_xhci_reprobe_result success; setenv coh_usb_trace_stage handoff-usb-reset-ok; run coh_usb_trace_emit; echo "[cohesix] USB host reprobe command completed"|' "$out"
+    sed -i '' 's|else echo "\[cohesix\] WARNING: usb reset failed before handoff capture"|else setenv coh_usb_trace_stage handoff-usb-reset-failed; run coh_usb_trace_emit; echo "[cohesix] WARNING: usb reset failed before handoff capture"|' "$out"
+    sed -i '' 's|run coh_clear_xhci_handoff_live; if usb stop; then|run coh_clear_xhci_handoff_live; setenv coh_usb_trace_stage handoff-usb-stop-begin; run coh_usb_trace_emit; if usb stop; then|' "$out"
+    sed -i '' 's|echo "\[cohesix\] USB host quiesced before handoff"; run coh_finalize_xhci_handoff;|setenv coh_usb_trace_stage handoff-usb-stop-ok; run coh_usb_trace_emit; echo "[cohesix] USB host quiesced before handoff"; run coh_finalize_xhci_handoff; setenv coh_usb_trace_stage handoff-final; run coh_usb_trace_emit;|' "$out"
+    sed -i '' 's|echo "\[cohesix\] WARNING: usb stop failed before handoff"|setenv coh_usb_trace_stage handoff-usb-stop-failed; run coh_usb_trace_emit; echo "[cohesix] WARNING: usb stop failed before handoff"|' "$out"
+}
+
+write_linux_wifi_debug_helpers() {
+    local cmdline_path="${STAGE_DIR}/${BRCMFMAC_CMDLINE_STAGE_NAME}"
+    local script_path="${STAGE_DIR}/${BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME}"
+
+    cat >"${cmdline_path}" <<'EOF'
+ignore_loglevel loglevel=8 initcall_debug brcmfmac.debug=0x001fffff dyndbg="file drivers/net/wireless/broadcom/brcm80211/brcmfmac/* +p; file drivers/net/wireless/broadcom/brcm80211/brcmutil/* +p; file drivers/mmc/core/* +p; file drivers/mmc/host/sdhci* +p"
+EOF
+
+    cat >"${script_path}" <<'EOF'
+#!/bin/sh
+# Author: Lukas Bower
+# Purpose: Enable Linux brcmfmac dynamic debug for Pi 4 known-good Wi-Fi boot captures.
+# Copyright 2026 Lukas Bower
+
+set -eu
+
+mount -t debugfs none /sys/kernel/debug 2>/dev/null || true
+
+control=/sys/kernel/debug/dynamic_debug/control
+if [ ! -w "$control" ]; then
+    echo "brcmfmac dynamic debug unavailable: $control is not writable" >&2
+    exit 1
+fi
+
+printf '%s\n' 'file drivers/net/wireless/broadcom/brcm80211/brcmfmac/* +p' >"$control"
+printf '%s\n' 'file drivers/net/wireless/broadcom/brcm80211/brcmutil/* +p' >"$control"
+printf '%s\n' 'file drivers/mmc/core/* +p' >"$control"
+printf '%s\n' 'file drivers/mmc/host/sdhci* +p' >"$control"
+
+dmesg -n 8 2>/dev/null || true
+
+if command -v modprobe >/dev/null 2>&1; then
+    modprobe -r brcmfmac brcmutil 2>/dev/null || true
+    modprobe brcmfmac debug=0x001fffff || modprobe brcmfmac
+fi
+
+echo "brcmfmac dynamic debug enabled; capture with: dmesg -w"
+EOF
+    chmod +x "${script_path}"
+
+    grep -q 'brcmfmac.debug=0x001fffff' "${cmdline_path}" || fail "brcmfmac command line helper missing debug mask"
+    grep -q 'dynamic_debug/control' "${script_path}" || fail "brcmfmac dynamic debug helper missing debugfs control path"
 }
 
 stage_sd_payload() {
@@ -890,6 +952,7 @@ stage_sd_payload() {
     if [[ -f "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}" ]]; then
         cp -f "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}" "${STAGE_DIR}/${BOOTSTD_LOGO_STAGE_NAME}"
     fi
+    write_linux_wifi_debug_helpers
 
     cat > "${STAGE_DIR}/config.txt" <<EOF
 arm_64bit=1

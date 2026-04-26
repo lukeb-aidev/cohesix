@@ -110,6 +110,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p host-ticket-agent`
 - `cargo test -p nine-door --test ui_security`
 - `cargo test -p nine-door --test session_state`
+- `pytest tests/test_pi4_trace_normalize.py`
 - `cargo test -p nine-door --test pressure_counters`
 - `cargo test -p nine-door --test schedule_create`
 - `cargo test -p nine-door --test schedule_bounds`
@@ -136,6 +137,8 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - Fixture regen (only when needed):
   - `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
   - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
+
+Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` directly and do not require a flashed SD card or serial log.
 
 ### 3) QEMU boot + TCP console baseline
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
