@@ -2,14 +2,15 @@
 // Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
 // Copyright 2026 Lukas Bower
 use crate::{
-    Dma, Result, UsbError, reg,
-    ring::{EventRing, PhysMem, Ring, Trb, completion, trb_type},
+    reg,
+    ring::{completion, trb_type, EventRing, PhysMem, Ring, Trb},
+    Dma, Result, UsbError,
 };
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
-    sync::atomic::{AtomicUsize, Ordering, compiler_fence},
+    sync::atomic::{compiler_fence, AtomicUsize, Ordering},
 };
 use spin::Mutex;
 
@@ -436,7 +437,8 @@ const fn skip_reset_during_init_with_snapshot(
 ) -> bool {
     // Pi 4 has two distinct stop-state lanes: bootloader-owned
     // ColdStartFromSnapshot stays no-touch, while local-seat may select the
-    // None+stop-state lane only after a firmware mailbox reset ACK.
+    // None+stop-state lane after a firmware mailbox reset ACK or a trusted
+    // bootloader post-stop authority token.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -477,8 +479,8 @@ const fn runtime_bootloader_owned_pollsafe_handoff(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     // ColdStartFromSnapshot + stop-state-only is the diagnostic
-    // bootloader-owned lane. None + stop-state-only is reset-owned after a
-    // mailbox ACK and must publish fresh Cohesix rings.
+    // bootloader-owned lane. None + stop-state-only is runtime-owned after an
+    // explicit Pi 4 authority boundary and must publish fresh Cohesix rings.
     runtime_stop_state_only_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -2384,9 +2386,11 @@ impl<H: Dma> XhciCtrl<H> {
                 0,
             );
         } else {
-            let usbcmd_before_reset =
-                reset_usbcmd_seed_before_hcrst(self.firmware_handoff, trusted_runtime_seed_snapshot)
-                    .unwrap_or_else(|| self.read_op::<u32>(reg::USBCMD));
+            let usbcmd_before_reset = reset_usbcmd_seed_before_hcrst(
+                self.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+            )
+            .unwrap_or_else(|| self.read_op::<u32>(reg::USBCMD));
             emit_xhci_diag(
                 0x0226,
                 usbcmd_before_reset as u64,
@@ -4450,27 +4454,22 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, ConstructorPollingScrubMode,
-        READY_WAIT_PROGRESS_SPINS, SKIP_HCRST_DURING_INIT,
-        TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
-        USBSTS_CLEAR_MASK, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS, XhciControllerParams,
-        XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
         blind_settle_precedes_live_stop_revalidation,
         claim_legacy_ownership_before_reset_with_snapshot, compose_brcm_usbaxi_attr,
         compose_config, compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
-        compose_run_usbcmd, constructor_polling_scrub_mode, disable_interrupter_iman_value,
+        compose_run_usbcmd, constructor_polling_scrub_mode,
         defer_crcr_publish_until_after_run_with_snapshot, defer_crcr_publish_with_snapshot,
         defer_dcbaap_publish_until_after_run_with_snapshot, defer_dcbaap_publish_with_snapshot,
         defer_dnctrl_write_until_after_run_with_snapshot, defer_erdp_publish_with_snapshot,
         defer_erst_publish_with_snapshot, defer_event_ring_publish_until_after_run_with_snapshot,
         defer_scratchpad_array_publish_with_snapshot,
         deferred_erdp_publish_precedes_erst_with_snapshot,
-        deferred_erst_publish_uses_size_first_with_snapshot, disable_legacy_smi_control_bits,
-        halt_revalidation_needed, masked_usbcmd, parse_controller_params, polling_iman_value,
-        port_ready_for_enumeration, post_start_polling_irq_quiesce_pending_bits,
+        deferred_erst_publish_uses_size_first_with_snapshot, disable_interrupter_iman_value,
+        disable_legacy_smi_control_bits, halt_revalidation_needed, masked_usbcmd,
+        parse_controller_params, polling_iman_value, port_ready_for_enumeration,
+        post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear,
-        pre_dcbaap_iman_disable_value_with_snapshot,
-        pre_dcbaap_polling_irq_quiesce_with_snapshot,
+        pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
         pre_halt_source_quiesce_before_live_stop_revalidation, preserve_firmware_handoff_config,
         preserve_state_crcr_publish_seed, preserve_state_crcr_write_is_redundant,
         preserve_state_dcbaap_publish_seed, preserve_state_dcbaap_write_is_redundant,
@@ -4479,11 +4478,11 @@ mod tests {
         preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
-        replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
-        reset_usbcmd_seed_before_hcrst,
+        replay_staged_dcbaap_snapshot_before_publish_with_snapshot, reset_usbcmd_seed_before_hcrst,
         run_usbcmd_needs_live_seed_read, run_usbcmd_prefers_snapshot_seed,
         run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
-        runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_relaxed_run_write,
+        runtime_bootloader_owned_pollsafe_handoff, runtime_handoff_needs_pre_run_settle,
+        runtime_handoff_needs_relaxed_run_write,
         runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
         runtime_handoff_needs_release_only_run_write,
         runtime_handoff_needs_uboot_style_reset_write, runtime_handoff_needs_uboot_style_run_write,
@@ -4491,15 +4490,13 @@ mod tests {
         runtime_mailbox_reset_needs_blind_settle, runtime_mailbox_reset_stop_state_handoff,
         runtime_needs_post_init_polling_irq_quiesce_with_snapshot,
         runtime_needs_post_run_polling_irq_quiesce_with_snapshot,
-        runtime_bootloader_owned_pollsafe_handoff, runtime_owned_fresh_rings_handoff,
-        runtime_preserve_stop_state_handoff, runtime_seed_snapshot_flag_bits,
-        runtime_seeded_full_reset_start_handoff,
+        runtime_owned_fresh_rings_handoff, runtime_preserve_stop_state_handoff,
+        runtime_seed_snapshot_flag_bits, runtime_seeded_full_reset_start_handoff,
         runtime_stop_state_needs_post_run_settle, skip_config_write_during_init,
         skip_config_write_during_init_with_snapshot,
         skip_constructor_polling_scrub_writes_with_snapshot, skip_dnctrl_write_with_snapshot,
-        skip_fresh_event_ring_publish_with_snapshot,
-        skip_fresh_runtime_ownership_publish_with_snapshot,
-        skip_doorbell_readback_after_ring, skip_init_pre_reset_scrub_writes,
+        skip_doorbell_readback_after_ring, skip_fresh_event_ring_publish_with_snapshot,
+        skip_fresh_runtime_ownership_publish_with_snapshot, skip_init_pre_reset_scrub_writes,
         skip_init_pre_reset_scrub_writes_with_snapshot, skip_legacy_ownership_claim_for_handoff,
         skip_legacy_ownership_claim_for_handoff_with_snapshot, skip_live_halt_revalidation,
         skip_live_halt_revalidation_with_snapshot, skip_live_post_reset_verification_readbacks,
@@ -4510,9 +4507,14 @@ mod tests {
         u64_register_change_mask, use_atomic_erstba_publish_with_snapshot,
         use_atomic_runtime_ring_publish_with_snapshot, use_live_config_seed_reads,
         use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
-        use_live_post_reset_seed_reads_with_snapshot,
+        use_live_post_reset_seed_reads_with_snapshot, ConstructorPollingScrubMode,
+        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
+        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, READY_WAIT_PROGRESS_SPINS,
+        SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
+        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, USBSTS_CLEAR_MASK, XHCI_LEGACY_DISABLE_SMI,
+        XHCI_LEGACY_SMI_EVENTS,
     };
-    use crate::{Dma, reg};
+    use crate::{reg, Dma};
     use alloc::vec;
 
     struct MockDma;
@@ -6450,8 +6452,8 @@ mod tests {
     }
 
     #[test]
-    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped()
-     {
+    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped(
+    ) {
         assert_eq!(
             post_start_polling_irq_quiesce_pending_bits(reg::USBCMD_RUN, reg::USBSTS_PCD, 0, true),
             0

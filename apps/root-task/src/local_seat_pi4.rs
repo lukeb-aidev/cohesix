@@ -180,11 +180,12 @@ const PI4_VL805_XHCI_INTX_IRQ: u32 = 143;
 const PI4_PCIE_BRIDGE_IRQ: u32 = 147;
 const PI4_GENERIC_VTIMER_IRQ: u32 = 27;
 const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 2] = [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ];
-// The trusted Pi 4 handoff stays polling-driven at the controller level, but
-// runtime can still receive PCIe bridge or child INTx delivery around ownership
-// transfer. IRQ 27 is the kernel's ARM generic virtual timer PPI on this seL4
-// build, not an xHCI/PCIe line, so it must remain diagnostic-only for USB.
-const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = true;
+// Linux routes the Pi 4 VL805 through MSI IRQ 30. Cohesix does not publish an
+// MSI doorbell yet, and raw bridge/INTx sink binding has correlated with fatal
+// prompt-side halts, so keep the runtime path polling-only until MSI exists.
+// IRQ 27 is the kernel's ARM generic virtual timer PPI on this seL4 build, not
+// an xHCI/PCIe line, so it remains diagnostic-only for USB.
+const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = false;
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
@@ -266,11 +267,11 @@ const XHCI_RTSOFF_MASK: u32 = !0x1f;
 // bring-up. Force low DMA pool probing until high-path allocator faults are
 // fully resolved.
 const XHCI_FORCE_LOW_DMA_PROBE: bool = true;
-// VL805 on Pi4 expects xHCI DMA pointers in the PCIe outbound DMA window
-// address space. On bcm2711 that window is identity-mapped for the first 3 GiB
-// described by `pcie0 dma-ranges`, so device-visible DMA pointers must stay in
-// that low range instead of synthesizing a high `0x4_...` bus alias.
+// VL805 on Pi4 expects xHCI DMA pointers in the PCIe DMA bus address space.
+// Linux proves the same low RAM pages appear to the endpoint as `0x4_XXXXXXXX`
+// (`/proc/device-tree/.../dma-ranges` and xHCI debugfs DCBAAP/ERSTBA dumps).
 const XHCI_PCIE_DMA_WINDOW_ENABLED: bool = true;
+const RPI4_PCIE_DMA_BUS_ALIAS_BASE: usize = 0x4_0000_0000;
 // Per-allocation DMA tracing is useful for bring-up debugging but can add
 // heavy UART latency during normal keyboard enumeration.
 const XHCI_DMA_VERBOSE_LOGS: bool = false;
@@ -324,13 +325,29 @@ static WIFI_PROGRESS_TICKS: AtomicUsize = AtomicUsize::new(0);
 #[inline]
 const fn xhci_runtime_init_strategy_prompt_safe(strategy: XhciRuntimeInitStrategy) -> bool {
     match strategy.firmware_handoff {
-        // Manual probes may take the reset-owned U-Boot-shaped path, but that
-        // lane is gated by the bounded PCIe bridge + VL805 INTx sinks before
-        // any runtime ownership touch.
+        // Manual probes may take the reset-owned U-Boot-shaped path when the
+        // source-specific policy proves the trusted high-BAR route. Bare
+        // runtime-default aliases remain unsafe as generic prompt-safe probes.
         XhciFirmwareHandoff::ColdStartFromSnapshot => true,
         XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState => true,
         XhciFirmwareHandoff::None => strategy.seed_stop_state,
     }
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_prompt_safe_for_source(
+    mmio: usize,
+    preferred_handoff: XhciFirmwareHandoff,
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    xhci_runtime_init_strategy_prompt_safe(strategy)
+        || (mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+            && matches!(
+                preferred_handoff,
+                XhciFirmwareHandoff::ColdStartFromSnapshot
+            )
+            && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None)
+            && !strategy.seed_stop_state)
 }
 
 #[inline]
@@ -898,6 +915,7 @@ fn remember_latest_usb_probe_route(summary: &UsbProbePathwaySummary) {
 #[inline]
 fn usb_probe_route_label(summary: UsbProbePathwaySummary) -> &'static str {
     match (summary.handoff, summary.origin) {
+        ("none", "live-runtime-default") => "trusted-high-bar-primary",
         ("none", "resetless-stop-seed") => "trusted-high-bar-stop-seed-primary",
         ("cold-start-from-snapshot", "uboot-fresh-init") => "trusted-high-bar-primary",
         ("cold-start-from-snapshot", "seeded-cold-start") => "trusted-high-bar-seeded-retry",
@@ -1048,7 +1066,12 @@ fn usb_probe_preflight_status(
         .copied()
         .enumerate()
         .find(|(_, strategy)| {
-            !prompt_safe_probe || xhci_runtime_init_strategy_prompt_safe(*strategy)
+            !prompt_safe_probe
+                || xhci_runtime_init_strategy_prompt_safe_for_source(
+                    effective_mmio,
+                    preferred_handoff,
+                    *strategy,
+                )
         })?;
     let summary = UsbProbePathwaySummary::new(
         1,
@@ -1149,8 +1172,11 @@ const fn runtime_vl805_mailbox_reset_completed(state: u8) -> bool {
 }
 
 #[inline]
-const fn runtime_vl805_mailbox_reset_authorizes_hcrst(state: u8) -> bool {
-    matches!(state, VL805_RUNTIME_RESET_STATE_NOTIFIED)
+const fn runtime_vl805_reset_authorizes_stop_seed_ownership(state: u8) -> bool {
+    matches!(
+        state,
+        VL805_RUNTIME_RESET_STATE_NOTIFIED | VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED
+    )
 }
 
 #[inline]
@@ -1166,7 +1192,7 @@ const fn runtime_vl805_mailbox_reset_trusted_cold_init_detail(state: u8) -> &'st
     match state {
         VL805_RUNTIME_RESET_STATE_NOTIFIED => "mailbox-reset+trusted-cap-snapshot",
         VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED => {
-            "bootloader-reset-authorized+no-touch-cap-snapshot"
+            "bootloader-reset-authorized+runtime-stop-seed"
         }
         VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK => "mailbox-posted-fallback+no-runtime-ownership",
         VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE => "mailbox-soft-continue+no-runtime-ownership",
@@ -1194,7 +1220,7 @@ const fn runtime_vl805_mailbox_reset_state_label(state: u8) -> &'static str {
 const fn runtime_vl805_mailbox_reset_handoff_label(state: u8) -> &'static str {
     match state {
         VL805_RUNTIME_RESET_STATE_NOTIFIED => "runtime-owned",
-        VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED => "bootloader-owned",
+        VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED => "runtime-owned-stop-seed",
         _ => "runtime-unconfirmed",
     }
 }
@@ -1963,7 +1989,7 @@ const fn xhci_runtime_handoff_source_label(
     bootloader_reset_authorized: bool,
 ) -> &'static str {
     if bootloader_reset_authorized && using_handoff_snapshot {
-        "fw-handoff-bootloader-owned-snapshot"
+        "fw-handoff-bootloader-authorized-stop-seed"
     } else if runtime_vl805_reset && using_handoff_snapshot {
         "fw-handoff-runtime-reset-pending-snapshot"
     } else if using_handoff_snapshot {
@@ -3410,16 +3436,21 @@ fn xhci_runtime_init_strategies(
         preferred_handoff,
         XhciFirmwareHandoff::ColdStartFromSnapshot
     ) {
-        let reset_authorizes_hcrst =
-            runtime_vl805_mailbox_reset_authorizes_hcrst(runtime_vl805_reset_state);
-        if reset_authorizes_hcrst && stop_state_seed_available {
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
+        );
+        let reset_authorizes_stop_seed =
+            runtime_vl805_reset_authorizes_stop_seed_ownership(runtime_vl805_reset_state);
+        if reset_authorizes_stop_seed && stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
             );
         }
-        if reset_authorizes_hcrst {
+        if runtime_vl805_mailbox_reset_completed(runtime_vl805_reset_state) {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
                 &mut count,
@@ -4571,7 +4602,7 @@ fn ensure_runtime_vl805_mailbox_reset(hal: &mut KernelHal<'_>) -> Result<(), Pi4
         }
         VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED => {
             boot_log::force_uart_line(
-                "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=post-stop-reset-authorized action=attempt-runtime-mailbox-notify",
+                "[local-seat] vl805 reset handoff=bootloader-authorized stage=runtime detail=post-stop-reset-authorized action=attempt-runtime-mailbox-notify",
             );
         }
         VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE => {
@@ -4658,7 +4689,7 @@ fn authorize_bootloader_vl805_reset(mmio: usize, reason: &'static str) {
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=post-stop-reset-authorized action=no-touch-fallback reason={reason} mmio=0x{mmio:016x}",
+            "[local-seat] vl805 reset handoff=bootloader-authorized stage=runtime detail=post-stop-reset-authorized action=enable-stop-seed-runtime reason={reason} mmio=0x{mmio:016x}",
         ),
     );
     boot_log::force_uart_line(line.as_str());
@@ -6101,13 +6132,13 @@ const fn xhci_runtime_init_strategy_requires_primary_pcie_irq(
     mmio: usize,
     strategy: XhciRuntimeInitStrategy,
 ) -> bool {
-    mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+    TRUSTED_XHCI_PCIE_SINKS_ENABLED
+        && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
         && matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::None
+            XhciFirmwareHandoff::ColdStartFromSnapshot
         )
-        && (!strategy.seed_stop_state
-            || matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None))
+        && !strategy.seed_stop_state
 }
 
 #[derive(Clone, Copy)]
@@ -6769,7 +6800,7 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] xhci handoff={} stage=runtime detail={} action=no-touch-cap-snapshot mode={}",
+                                "[local-seat] xhci handoff={} stage=runtime detail={} action=select-stop-seed-runtime mode={}",
                                 runtime_vl805_mailbox_reset_handoff_label(
                                     runtime_vl805_reset_state
                                 ),
@@ -6785,7 +6816,7 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime detail=mailbox-not-required action=no-touch-cap-snapshot mode={}",
+                                "[local-seat] vl805 reset handoff=bootloader-authorized stage=runtime detail=mailbox-not-required action=select-stop-seed-runtime mode={}",
                                 xhci_firmware_handoff_mode_label(handoff_mode),
                             ),
                         );
@@ -6794,7 +6825,7 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] xhci handoff=bootloader-owned stage=runtime detail=trusted-post-stop-cap-snapshot action=no-touch-cap-snapshot mode={}",
+                                "[local-seat] xhci handoff=bootloader-authorized stage=runtime detail=trusted-post-stop-cap-snapshot action=select-stop-seed-runtime mode={}",
                                 xhci_firmware_handoff_mode_label(handoff_mode),
                             ),
                         );
@@ -6976,12 +7007,18 @@ impl UsbKeyboard {
                 .copied()
                 .enumerate()
             {
-                if prompt_safe_probe && !xhci_runtime_init_strategy_prompt_safe(strategy) {
+                if prompt_safe_probe
+                    && !xhci_runtime_init_strategy_prompt_safe_for_source(
+                        effective_mmio,
+                        firmware_handoff,
+                        strategy,
+                    )
+                {
                     let mut line = heapless::String::<320>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] xhci prompt-safe skip attempt={}/{} policy={} origin={} handoff={} seed={} reason=requires-live-reset-path",
+                            "[local-seat] xhci prompt-safe skip attempt={}/{} policy={} origin={} handoff={} seed={} reason=source-not-prompt-safe",
                             strategy_idx + 1,
                             init_strategy_count,
                             xhci_runtime_init_strategy_policy_label(strategy),
@@ -11409,7 +11446,7 @@ fn pcie_dma_bus_addr(phys: usize) -> Option<usize> {
     if phys >= RPI4_PCIE_DMA_LIMIT {
         return None;
     }
-    Some(phys)
+    RPI4_PCIE_DMA_BUS_ALIAS_BASE.checked_add(phys)
 }
 
 #[inline]
@@ -11699,13 +11736,13 @@ mod tests {
         xhci_irq_sink_needed, xhci_preseed_allows_static_legacy_fallbacks,
         xhci_preseed_pin_only_reason, xhci_root_port_connected, xhci_runtime_init_strategies,
         xhci_runtime_init_strategy_policy_label, xhci_runtime_init_strategy_prompt_safe,
-        xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
-        xhci_safe_mode_skip_command, ConfigDesc, LocalSeatXhciStopStateSnapshot, Pi4SeatError,
-        UsbKeyboard, UsbProbePathOutcome, UsbProbePathProgress, UsbProbePathwaySummary,
-        Vl805CfgPreseedMode, XhciCapProbe, XhciDiagSnapshot, XhciFirmwareHandoff,
-        XhciIrqInstallPhase, XhciRuntimeInitStrategy, HUB_PORT_IFACE_FALLBACK_MAX,
-        RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-        XHCI_MMIO_ALIAS_SCAN_STEPS,
+        xhci_runtime_init_strategy_prompt_safe_for_source, xhci_runtime_mmio_candidate_allowed,
+        xhci_runtime_mmio_has_accessible_window, xhci_safe_mode_skip_command, ConfigDesc,
+        LocalSeatXhciStopStateSnapshot, Pi4SeatError, UsbKeyboard, UsbProbePathOutcome,
+        UsbProbePathProgress, UsbProbePathwaySummary, Vl805CfgPreseedMode, XhciCapProbe,
+        XhciDiagSnapshot, XhciFirmwareHandoff, XhciIrqInstallPhase, XhciRuntimeInitStrategy,
+        HUB_PORT_IFACE_FALLBACK_MAX, RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        RPI4_XHCI_MMIO_PRIMARY_CANDIDATE, XHCI_MMIO_ALIAS_SCAN_STEPS,
     };
     use super::{
         hid_protocol, hid_subclass, scancode, CHAR_HEIGHT, HUB_CLASS_CONTROL_WAIT_SPINS,
@@ -11769,7 +11806,20 @@ mod tests {
     }
 
     #[test]
-    fn prompt_safe_runtime_init_strategy_allows_resetless_stop_seed_start() {
+    fn prompt_safe_runtime_init_strategy_allows_linux_shaped_live_start() {
+        assert!(!xhci_runtime_init_strategy_prompt_safe(
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
+        ));
+        assert!(xhci_runtime_init_strategy_prompt_safe_for_source(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
+        ));
+        assert!(!xhci_runtime_init_strategy_prompt_safe_for_source(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            XhciFirmwareHandoff::None,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
+        ));
         assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
@@ -11781,9 +11831,6 @@ mod tests {
         ));
         assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
-        ));
-        assert!(!xhci_runtime_init_strategy_prompt_safe(
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
         ));
     }
 
@@ -11901,7 +11948,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_vl805_mailbox_reset_ack_is_only_runtime_ownership_boundary() {
+    fn runtime_vl805_stop_seed_ownership_accepts_bootloader_authority() {
         assert_eq!(
             runtime_vl805_mailbox_reset_success_state(pi4_wifi::Vl805ResetNotifyResult::Acked),
             VL805_RUNTIME_RESET_STATE_NOTIFIED
@@ -11924,19 +11971,19 @@ mod tests {
         assert!(!runtime_vl805_mailbox_reset_completed(
             VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
         ));
-        assert!(runtime_vl805_mailbox_reset_authorizes_hcrst(
+        assert!(runtime_vl805_reset_authorizes_stop_seed_ownership(
             VL805_RUNTIME_RESET_STATE_NOTIFIED
         ));
-        assert!(!runtime_vl805_mailbox_reset_authorizes_hcrst(
+        assert!(runtime_vl805_reset_authorizes_stop_seed_ownership(
             VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED
         ));
-        assert!(!runtime_vl805_mailbox_reset_authorizes_hcrst(
+        assert!(!runtime_vl805_reset_authorizes_stop_seed_ownership(
             VL805_RUNTIME_RESET_STATE_UNATTEMPTED
         ));
-        assert!(!runtime_vl805_mailbox_reset_authorizes_hcrst(
+        assert!(!runtime_vl805_reset_authorizes_stop_seed_ownership(
             VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK
         ));
-        assert!(!runtime_vl805_mailbox_reset_authorizes_hcrst(
+        assert!(!runtime_vl805_reset_authorizes_stop_seed_ownership(
             VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE
         ));
         assert!(runtime_vl805_mailbox_reset_allows_trusted_cold_init(
@@ -11959,7 +12006,7 @@ mod tests {
             runtime_vl805_mailbox_reset_handoff_label(
                 VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED
             ),
-            "bootloader-owned"
+            "runtime-owned-stop-seed"
         );
         assert_eq!(
             runtime_vl805_mailbox_reset_handoff_label(VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK),
@@ -12015,23 +12062,27 @@ mod tests {
                 iman0: Some(0),
             }),
         );
-        assert_eq!(count, 3);
+        assert_eq!(count, 4);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
         );
         assert_eq!(
             strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
         );
         assert_eq!(
             strategies[2],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+        );
+        assert_eq!(
+            strategies[3],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_keep_bootloader_auth_pollsafe() {
+    fn xhci_runtime_init_strategies_keep_stop_seed_after_live_bootloader_auth() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED,
@@ -12041,15 +12092,23 @@ mod tests {
                 iman0: Some(0),
             }),
         );
-        assert_eq!(count, 1);
+        assert_eq!(count, 3);
         assert_eq!(
             strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
+        );
+        assert_eq!(
+            strategies[1],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
+        );
+        assert_eq!(
+            strategies[2],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_suppress_hcrst_after_posted_mailbox_fallback() {
+    fn xhci_runtime_init_strategies_try_live_reset_before_posted_fallback() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_POSTED_FALLBACK,
@@ -12059,15 +12118,19 @@ mod tests {
                 iman0: Some(0),
             }),
         );
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
         assert_eq!(
             strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
+        );
+        assert_eq!(
+            strategies[1],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_suppress_hcrst_after_soft_mailbox_failure() {
+    fn xhci_runtime_init_strategies_try_live_reset_before_soft_fallback() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE,
@@ -12077,9 +12140,13 @@ mod tests {
                 iman0: Some(0),
             }),
         );
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
         assert_eq!(
             strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
+        );
+        assert_eq!(
+            strategies[1],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
     }
@@ -12251,6 +12318,19 @@ mod tests {
             true,
             true,
         );
+        let live_primary = UsbProbePathwaySummary::new(
+            1,
+            1,
+            3,
+            "full-reset-start",
+            "live-runtime-default",
+            "none",
+            "none",
+            "live-halt-read",
+            true,
+            true,
+            true,
+        );
         let preserve = UsbProbePathwaySummary::new(
             2,
             2,
@@ -12270,6 +12350,10 @@ mod tests {
         );
         assert_eq!(
             super::usb_probe_route_label(uboot_primary),
+            "trusted-high-bar-primary"
+        );
+        assert_eq!(
+            super::usb_probe_route_label(live_primary),
             "trusted-high-bar-primary"
         );
         assert_eq!(
@@ -12358,7 +12442,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_probe_preflight_status_keeps_bootloader_auth_pollsafe() {
+    fn usb_probe_preflight_status_uses_linux_primary_with_bootloader_auth_fallback() {
         let status = super::usb_probe_preflight_status(
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             Some(0x0546),
@@ -12373,29 +12457,35 @@ mod tests {
             true,
         )
         .expect("trusted prompt-safe path should be classified");
-        assert_eq!(status.route, "trusted-high-bar-seeded-retry");
+        assert_eq!(status.route, "trusted-high-bar-primary");
         assert_eq!(status.strategy_idx, 1);
-        assert_eq!(status.strategy_count, 1);
-        assert_eq!(status.policy, "bootloader-owned-pollsafe");
-        assert_eq!(status.origin, "seeded-cold-start");
-        assert_eq!(status.handoff, "cold-start-from-snapshot");
-        assert_eq!(status.seed, "stop-state");
-        assert_eq!(status.halt_guard, "skip-live-halt-read");
-        assert_eq!(status.constructor, "pre-halt-usbcmd-quiesce");
-        assert_eq!(status.pre_reset, "skip-pre-reset");
-        assert_eq!(status.legacy, "skip-legacy");
-        assert_eq!(status.run, "run-skip");
-        assert_eq!(status.publish, "rings-skip");
-        assert_eq!(status.post_ready_irq, "irq-skip");
+        assert_eq!(status.strategy_count, 3);
+        assert_eq!(status.policy, "full-reset-start");
+        assert_eq!(status.origin, "live-runtime-default");
+        assert_eq!(status.handoff, "none");
+        assert_eq!(status.seed, "none");
+        assert_eq!(status.halt_guard, "live-halt-read");
+        assert_eq!(status.constructor, "full-quiesce");
+        assert_eq!(status.pre_reset, "full-pre-reset");
+        assert_eq!(status.legacy, "claim-legacy");
+        assert_eq!(status.run, "run-default");
+        assert_eq!(status.publish, "rings-pre-run");
+        assert_eq!(status.post_ready_irq, "irq-zero");
         assert_eq!(status.current_step, "pre-controller-ready");
-        assert_eq!(status.next_step, "policy-return");
-        assert_eq!(status.followup_step, "return-to-shell");
+        assert_eq!(status.next_step, "pre-reset-scrub");
+        assert_eq!(status.followup_step, "reset-post-settle");
         assert!(!status.prefer_high);
         assert!(status.pcie_dma_window);
         assert!(status.poll_only);
-        assert_eq!(status.expected_diag_stage, 0);
-        assert_eq!(status.expected_diag_tag, None);
-        assert_eq!(status.expected_diag_exact, None);
+        assert_eq!(status.expected_diag_stage, 0x0200);
+        assert_eq!(
+            status.expected_diag_tag,
+            Some("pre-reset-usbcmd-usbsts-read")
+        );
+        assert_eq!(
+            status.expected_diag_exact,
+            Some("pre-reset-usbcmd-usbsts-read")
+        );
     }
 
     #[test]
@@ -13649,7 +13739,7 @@ mod tests {
     }
 
     #[test]
-    fn cold_start_trusted_strategies_without_mailbox_reset_stay_bootloader_owned() {
+    fn cold_start_trusted_strategies_without_mailbox_reset_try_live_then_seeded_fallback() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
@@ -13659,9 +13749,13 @@ mod tests {
                 iman0: Some(0),
             }),
         );
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
         assert_eq!(
             strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
+        );
+        assert_eq!(
+            strategies[1],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
         );
     }
@@ -13682,7 +13776,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_sink_mode_requires_pre_controller_ready_sinks_for_trusted_fresh_init() {
+    fn xhci_irq_sink_mode_stays_disabled_until_pi4_msi_support_exists() {
         assert_eq!(
             xhci_irq_sink_mode(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -13701,7 +13795,7 @@ mod tests {
                 XhciIrqInstallPhase::PreControllerReady,
                 true,
             ),
-            XhciIrqSinkMode::TrustedPcieSinks
+            XhciIrqSinkMode::Disabled
         );
         assert_eq!(
             xhci_irq_sink_mode(
@@ -13722,13 +13816,13 @@ mod tests {
             XhciIrqInstallPhase::PreControllerReady,
             false,
         ));
-        assert!(xhci_irq_sink_needed(
+        assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             XhciIrqInstallPhase::PreControllerReady,
             true,
         ));
-        assert!(xhci_irq_sink_needed(
+        assert!(!xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::None,
             XhciIrqInstallPhase::PreControllerReady,
@@ -13782,7 +13876,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_xhci_irq_guard_must_cover_full_bounded_sink_set() {
+    fn disabled_trusted_xhci_irq_guard_does_not_gate_polling_path() {
         let partial = XhciIrqGuard {
             root_cnode: 0,
             bindings: [
@@ -13796,7 +13890,7 @@ mod tests {
                 None,
             ],
         };
-        assert!(!xhci_irq_guard_satisfies_phase(
+        assert!(xhci_irq_guard_satisfies_phase(
             &partial,
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::PreserveControllerState,
@@ -13840,8 +13934,8 @@ mod tests {
     }
 
     #[test]
-    fn trusted_unseeded_cold_start_requires_primary_pcie_irq_contract() {
-        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+    fn trusted_unseeded_cold_start_does_not_require_raw_irq_before_msi() {
+        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));
@@ -13849,7 +13943,7 @@ mod tests {
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
         ));
-        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
@@ -14535,7 +14629,7 @@ mod tests {
         );
         assert_eq!(
             super::xhci_runtime_handoff_source_label(true, true, true),
-            "fw-handoff-bootloader-owned-snapshot"
+            "fw-handoff-bootloader-authorized-stop-seed"
         );
     }
 
@@ -14872,11 +14966,11 @@ mod tests {
     }
 
     #[test]
-    fn pi4_pcie_dma_window_keeps_low_phys_identity_mapped() {
-        assert_eq!(pcie_dma_bus_addr(0x0400_3000), Some(0x0400_3000));
+    fn pi4_pcie_dma_window_uses_linux_observed_bus_alias() {
+        assert_eq!(pcie_dma_bus_addr(0x0400_3000), Some(0x4_0400_3000));
         assert_eq!(
             pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT - PAGE_SIZE),
-            Some(RPI4_PCIE_DMA_LIMIT - PAGE_SIZE)
+            Some(0x4_BFFF_F000)
         );
         assert_eq!(pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT), None);
     }
