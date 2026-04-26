@@ -28,9 +28,9 @@ use crate::net::{
 use crate::net_consts::MAX_FRAME_LEN;
 
 const SDIO_STARTUP_CLOCK_HZ: u32 = 400_000;
-// Pi 4 bring-up is currently stable at 12.5 MHz; 25 MHz consistently trips
-// the first high-speed SDIO block transfer with data CRC/end-bit faults.
-const SDIO_DATA_CLOCK_HZ: u32 = 12_500_000;
+// Match Linux brcmfmac on Pi 4: request 50 MHz high-speed SDIO and let the
+// HAL/SDHCI divider report the effective board clock.
+const SDIO_DATA_CLOCK_HZ: u32 = 50_000_000;
 const SDIO_CCCR_IOEX: u32 = 0x02;
 const DEFAULT_WIFI_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x55];
 
@@ -2334,6 +2334,7 @@ mod tests {
 
     #[test]
     fn control_plane_data_clock_target_respects_runtime_cap() {
+        assert_eq!(SDIO_DATA_CLOCK_HZ, 50_000_000);
         assert_eq!(control_plane_data_clock_target_hz(400_000), 400_000);
         assert_eq!(
             control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ),

@@ -115,10 +115,10 @@ const RPI4_XHCI_MMIO_PRESEED_CANDIDATES: [usize; 2] = [
     RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
     RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
 ];
-// Pi4 UEFI + seL4 can raise a fatal asynchronous external abort if we touch
-// some legacy ECAM aliases during early boot. Restrict probing to the
-// firmware-observed high ECAM aperture used by the working xHCI path.
-const VL805_ECAM_BASE_CANDIDATES: [usize; 1] = [0x0000_0006_0000_0000];
+// Linux proves 0x600000000 is VL805 BAR0, not an ECAM/config-space aperture.
+// Keep config-space probing disabled until a separate, verified PCIe config
+// window is supplied; deriving one from BAR0 can pin an unrelated device page.
+const VL805_ECAM_BASE_CANDIDATES: [usize; 0] = [];
 const XHCI_MMIO_CANDIDATE_LIMIT: usize = 8;
 const VL805_PCI_CFG_ATTEMPT_CAP: usize = 512;
 const XHCI_MAX_PROBE_PORTS: usize = 16;
@@ -198,19 +198,16 @@ const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = false;
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
 const KEYBOARD_RETRY_SPINS: usize = 200_000;
 const VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
-// Pin the handed-off xHCI BAR before touching the VL805 ECAM page: seL4 device
-// retype is monotonic within a device-untyped, and the Pi 4 ECAM page sits
-// above the handed-off BAR in the same PCIe aperture. Live VL805 ECAM reads on
-// the safe-mode Pi 4 path still correlate with fatal Pi 4 halts, so keep
-// preseed on the map-only path and surface handoff coverage from the
-// bootloader BAR contract instead of touching config space directly.
+// Config-space access remains disabled on the Pi 4 local-seat path. The Linux
+// capture identifies the high address as the xHCI BAR, so root-task relies on
+// the bootloader BAR/command/stop-state handoff instead of pinning a fabricated
+// config page from that BAR.
 const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
 // Local-seat should rediscover the active xHCI MMIO source itself instead of
 // trusting a bootloader-exported BAR, but live VL805 config-space reads are
 // still unsafe on the current Pi4/seL4 handoff and correlate with the same
-// fatal Pi 4 halts. Keep the ECAM window pinned for bounded diagnostics and
-// future use, while runtime discovery falls back to the preseeded legacy xHCI
-// aliases when the bootloader handoff token is absent.
+// fatal Pi 4 halts. Runtime config replay stays disabled unless a future HAL
+// supplies a real config-space aperture.
 const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = false;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -230,12 +227,13 @@ const fn vl805_cfg_preseed_mode(preseed_touch_enabled: bool) -> Vl805CfgPreseedM
 
 #[inline]
 const fn vl805_cfg_preseed_needed(
-    _preseed_touch_enabled: bool,
-    _runtime_touch_enabled: bool,
+    preseed_touch_enabled: bool,
+    runtime_touch_enabled: bool,
 ) -> bool {
-    // Even in safe mode, keep the ECAM page pinned so runtime can replay the
-    // bootloader's verified PCI command bits before touching the handed-off BAR.
-    true
+    // Map config space only when an enabled path can actually consume it. With
+    // both config-touch gates closed, a map-only preseed just consumes seL4
+    // device window state and is not part of the Linux-proven VL805 contract.
+    preseed_touch_enabled || runtime_touch_enabled
 }
 
 const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
@@ -1322,10 +1320,9 @@ impl Pi4LocalSeat {
         if first_preseed {
             boot_log::force_uart_line("[local-seat] pi4 xhci preseed begin");
         }
-        // Reserve the handed-off xHCI BAR first. The VL805 ECAM page lives at a
-        // higher physical address inside the same device-untyped aperture, so
-        // pinning config space first can advance the device cursor past the BAR
-        // and make the lower handed-off page appear uncovered.
+        // Reserve the handed-off xHCI BAR before any optional config-space
+        // preseed. Current Pi 4 evidence validates BAR0 only, so config-space
+        // probing stays disabled until HAL provides a real PCIe config aperture.
         prime_pinned_xhci_window(
             hal,
             self.xhci_mmio_hint,
@@ -1338,7 +1335,7 @@ impl Pi4LocalSeat {
             prime_pinned_vl805_cfg_window(hal, cfg_preseed_mode);
         } else if first_preseed {
             boot_log::force_uart_line(
-                "[local-seat] vl805 pci cfg preseed deferred reason=safe-mode-runtime-discovery-disabled",
+                "[local-seat] vl805 pci cfg preseed deferred reason=config-touch-disabled-no-ecam",
             );
         }
         if cfg_preseed_needed && matches!(cfg_preseed_mode, Vl805CfgPreseedMode::MapOnly) {
@@ -14159,8 +14156,9 @@ mod tests {
     }
 
     #[test]
-    fn vl805_cfg_preseed_needed_keeps_safe_mode_ecam_window_pinned() {
-        assert!(vl805_cfg_preseed_needed(false, false));
+    fn vl805_cfg_preseed_needed_skips_map_only_when_config_touch_is_disabled() {
+        assert!(VL805_ECAM_BASE_CANDIDATES.is_empty());
+        assert!(!vl805_cfg_preseed_needed(false, false));
         assert!(vl805_cfg_preseed_needed(true, false));
         assert!(vl805_cfg_preseed_needed(false, true));
     }

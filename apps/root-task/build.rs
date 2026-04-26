@@ -251,7 +251,7 @@ fn emit_pi4_wifi_firmware() -> io::Result<()> {
             firmware: bundle.firmware,
             nvram: bundle.nvram,
             clm_blob: bundle.clm_blob,
-            board_type: "cyw43455-rpi4b",
+            board_type: PI4_WIFI_BOARD_TYPE,
         });
 
     let mut contents = String::from(
@@ -286,7 +286,7 @@ pub(crate) const PI4_WIFI_BOARD_TYPE: &str = {:?};\n",
                 "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = &[];\n\
 pub(crate) static PI4_WIFI_NVRAM: &[u8] = &[];\n\
 pub(crate) static PI4_WIFI_CLM_BLOB: &[u8] = &[];\n\
-pub(crate) const PI4_WIFI_BOARD_TYPE: &str = \"cyw43455-rpi4b\";\n",
+pub(crate) const PI4_WIFI_BOARD_TYPE: &str = \"raspberrypi,4-model-b\";\n",
             );
         }
     }
@@ -317,6 +317,7 @@ struct Pi4WifiKnownArtifact {
 const PI4_WIFI_FIRMWARE_DIR_ENV: &str = "COHESIX_PI4_WIFI_FIRMWARE_DIR";
 const PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR: &str =
     "out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/firmware-resolved";
+const PI4_WIFI_BOARD_TYPE: &str = "raspberrypi,4-model-b";
 const PI4_WIFI_KNOWN_FIRMWARE: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "cyfmac43455-sdio.bin",
     expected_len: 609_309,

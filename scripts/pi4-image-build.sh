@@ -170,8 +170,11 @@ verify_boot_cmd_handoff() {
     grep -q 'cohesix,xhci-iman0' "$path" || fail "boot.cmd is missing xHCI IMAN0 DT handoff"
     grep -q 'cohesix,xhci-pci-cmd' "$path" || fail "boot.cmd is missing xHCI PCI command DT handoff"
     grep -q 'run coh_clear_xhci_handoff_live' "$path" || fail "boot.cmd is missing xHCI stale-token clearing before usb stop"
+    grep -q 'run coh_export_xhci_handoff' "$path" || fail "boot.cmd is missing xHCI post-stop handoff export"
     grep -q 'setenv coh_xhci_mmio;' "$path" || fail "boot.cmd does not clear stale xHCI MMIO before usb stop"
     grep -q 'setenv coh_xhci_pci_cmd;' "$path" || fail "boot.cmd does not clear stale xHCI PCI command before usb stop"
+    grep -q 'setenv coh_xhci_mmio 0x0000000600000000' "$path" || fail "boot.cmd does not export the Pi4 VL805 BAR0 handoff"
+    grep -q 'setenv coh_xhci_pci_cmd 0x0406' "$path" || fail "boot.cmd does not export the Pi4 VL805 PCI command handoff"
     ! grep -q '\[cohesix:usb-trace\]' "$path" || fail "boot.cmd still contains obsolete USB trace breadcrumbs"
     ! grep -q 'coh_force_xhci_handoff_reprobe' "$path" || fail "boot.cmd still contains obsolete forced xHCI reprobe logic"
     ! grep -q 'cohesix,xhci-cap-length' "$path" || fail "boot.cmd still mirrors obsolete xHCI capability snapshots"
@@ -838,7 +841,8 @@ setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
 setenv coh_bootstrap_usb_session 'if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi'
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
 setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_mmio; setenv coh_xhci_pci_cmd; setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
-setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if usb stop; then echo "[cohesix] USB host quiesced before handoff"; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed before handoff"; fi'
+setenv coh_export_xhci_handoff 'setenv coh_xhci_mmio 0x0000000600000000; setenv coh_xhci_pci_cmd 0x0406; setenv coh_xhci_handoff_ready 1; setenv coh_xhci_irq_quiesced 1; setenv coh_xhci_halted 1; setenv coh_xhci_handoff_safe 1; setenv coh_xhci_usbcmd 0x00000000; setenv coh_xhci_usbsts 0x00000001; setenv coh_xhci_iman0 0x00000000'
+setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if test "${coh_usb_input_ready}" = "1"; then if usb stop; then run coh_export_xhci_handoff; echo "[cohesix] USB host quiesced before handoff"; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed before handoff"; fi; else echo "[cohesix] USB host session was not active before handoff"; fi'
 setenv coh_toggle_logo 'if test "${coh_show_logo}" = "1"; then setenv coh_show_logo 0; echo "[cohesix] HDMI logo disabled"; else setenv coh_show_logo 1; echo "[cohesix] HDMI logo enabled"; fi'
 setenv coh_detect_saved_config 'setenv coh_has_saved_config 0; if test -n "${coh_net_mode}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_net_interface}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_ip}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_prefix_len}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_gateway}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_ssid}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_psk}"; then setenv coh_has_saved_config 1; fi'
 setenv coh_load_saved_policy 'run coh_clear_saved_policy; if fatload mmc 0:1 ${coh_policy_addr} ${coh_policy_file}; then if env import -d -t ${coh_policy_addr} ${filesize} coh_net_mode coh_net_interface coh_static_ip coh_static_prefix_len coh_static_gateway coh_wifi_ssid coh_wifi_psk coh_show_logo; then echo "[cohesix] loaded saved settings from ${coh_policy_file}"; else echo "[cohesix] WARNING: failed to import ${coh_policy_file}; ignoring saved settings"; run coh_clear_saved_policy; fi; fi; if test -z "${coh_show_logo}"; then setenv coh_show_logo 1; fi'
@@ -1001,14 +1005,17 @@ flash_sd_card() {
     if [[ ! -d "$volume" ]]; then
         diskutil mount "$part" >/dev/null
     fi
+    disable_spotlight_for_flash_volume "$volume"
 
     COPYFILE_DISABLE=1 rsync -a --delete \
       --exclude=".Spotlight-V100" \
       --exclude=".fseventsd" \
       --exclude=".Trashes" \
+      --exclude=".metadata_never_index" \
       --exclude="._*" \
       "${STAGE_DIR}/" "${volume}/"
 
+    disable_spotlight_for_flash_volume "$volume"
     find "${volume}" -xdev -name '._*' -type f -delete 2>/dev/null || true
 
     sync
@@ -1022,8 +1029,52 @@ flash_sd_card() {
     sd_fallback_hash="$(shasum -a 256 "${volume}/${SEL4_UPSTREAM_IMAGE_NAME}" | awk '{print $1}')"
     [[ "$stage_fallback_hash" == "$sd_fallback_hash" ]] || fail "fallback image hash mismatch after flash"
 
-    diskutil unmount "$volume" >/dev/null
+    unmount_flashed_disk "$disk" "$volume"
     log "Flash complete and unmounted: ${disk}"
+}
+
+disable_spotlight_for_flash_volume() {
+    local volume="$1"
+
+    # macOS can start Spotlight metadata sync on a freshly erased FAT volume
+    # before the final unmount, which makes diskutil report an mdsync dissenter.
+    # The marker is the documented non-root opt-out for removable volumes.
+    touch "${volume}/.metadata_never_index" 2>/dev/null || true
+    mkdir -p "${volume}/.fseventsd" 2>/dev/null || true
+    touch "${volume}/.fseventsd/no_log" 2>/dev/null || true
+}
+
+stop_spotlight_unmount_dissenter() {
+    local unmount_output="$1"
+    local pid
+
+    pid="$(printf "%s\n" "$unmount_output" \
+      | sed -n 's/.*dissented by PID \([0-9][0-9]*\).*mdsync.*/\1/p' \
+      | head -n 1)"
+    if [[ -n "$pid" ]]; then
+        log "Stopping Spotlight metadata sync pid=${pid} before final unmount"
+        kill "$pid" 2>/dev/null || true
+    fi
+}
+
+unmount_flashed_disk() {
+    local disk="$1"
+    local volume="$2"
+    local output=""
+    local attempt
+
+    for attempt in $(seq 1 5); do
+        if output="$(diskutil unmount "$volume" 2>&1)"; then
+            return 0
+        fi
+        stop_spotlight_unmount_dissenter "$output"
+        sleep 1
+    done
+
+    log "Final volume unmount was blocked; forcing whole-disk unmount for ${disk}"
+    if ! output="$(diskutil unmountDisk force "$disk" 2>&1)"; then
+        fail "failed to unmount flashed disk ${disk}: ${output}"
+    fi
 }
 
 main() {
