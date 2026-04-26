@@ -278,6 +278,10 @@ pub(crate) const PI4_WIFI_BOARD_TYPE: &str = {:?};\n",
             ));
         }
         None => {
+            println!(
+                "cargo:warning=Pi 4 WiFi firmware bundle not found at {}; generated CYW43455 assets are empty",
+                repo_root.join(PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR).display(),
+            );
             contents.push_str(
                 "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = &[];\n\
 pub(crate) static PI4_WIFI_NVRAM: &[u8] = &[];\n\
@@ -304,42 +308,128 @@ struct Pi4WifiFirmwareSearch {
     clm_blob: PathBuf,
 }
 
-fn find_pi4_wifi_firmware(repo_root: &Path) -> Result<Option<Pi4WifiFirmwareSearch>, String> {
-    let firmware = find_artifact_with(
-        repo_root,
-        "brcmfmac43455-sdio.bin",
-        &["out/uefi/pi4-followup/firmware/v1.50/firmware/brcm/brcmfmac43455-sdio.bin"],
-        |_| Ok(ArtifactDecision::Accept),
-    );
-    let clm_blob = find_artifact_with(
-        repo_root,
-        "brcmfmac43455-sdio.clm_blob",
-        &["out/uefi/pi4-followup/firmware/v1.50/firmware/brcm/brcmfmac43455-sdio.clm_blob"],
-        |_| Ok(ArtifactDecision::Accept),
-    );
-    let nvram = find_artifact_with(
-        repo_root,
-        "brcmfmac43455-sdio.Raspberry",
-        &["out/uefi/pi4-followup/firmware/v1.50/firmware/brcm/brcmfmac43455-sdio.Raspberry"],
-        |_| Ok(ArtifactDecision::Accept),
-    )
-    .or_else(|_| {
-        find_artifact_with(
-            repo_root,
-            "brcmfmac43455-sdio.txt",
-            &["out/uefi/pi4-followup/firmware/v1.50/firmware/brcm/brcmfmac43455-sdio.txt"],
-            |_| Ok(ArtifactDecision::Accept),
-        )
-    });
+struct Pi4WifiKnownArtifact {
+    file_name: &'static str,
+    expected_len: u64,
+    expected_sha256: &'static str,
+}
 
-    match (firmware, nvram, clm_blob) {
-        (Ok(firmware), Ok(nvram), Ok(clm_blob)) => Ok(Some(Pi4WifiFirmwareSearch {
-            firmware,
-            nvram,
-            clm_blob,
-        })),
-        _ => Ok(None),
+const PI4_WIFI_FIRMWARE_DIR_ENV: &str = "COHESIX_PI4_WIFI_FIRMWARE_DIR";
+const PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR: &str =
+    "out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/firmware-resolved";
+const PI4_WIFI_KNOWN_FIRMWARE: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
+    file_name: "cyfmac43455-sdio.bin",
+    expected_len: 609_309,
+    expected_sha256: "d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3",
+};
+const PI4_WIFI_KNOWN_NVRAM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
+    file_name: "brcmfmac43455-sdio.raspberrypi,4-model-b.txt",
+    expected_len: 2_074,
+    expected_sha256: "ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d",
+};
+const PI4_WIFI_KNOWN_CLM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
+    file_name: "cyfmac43455-sdio.clm_blob",
+    expected_len: 2_676,
+    expected_sha256: "9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1",
+};
+
+fn find_pi4_wifi_firmware(repo_root: &Path) -> Result<Option<Pi4WifiFirmwareSearch>, String> {
+    println!("cargo:rerun-if-env-changed={PI4_WIFI_FIRMWARE_DIR_ENV}");
+    let (firmware_dir, explicit_dir) = match env::var(PI4_WIFI_FIRMWARE_DIR_ENV) {
+        Ok(value) if !value.trim().is_empty() => {
+            let configured = PathBuf::from(value);
+            let resolved = if configured.is_absolute() {
+                configured
+            } else {
+                repo_root.join(configured)
+            };
+            (resolved, true)
+        }
+        _ => (repo_root.join(PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR), false),
+    };
+    if !firmware_dir.is_dir() {
+        if explicit_dir {
+            return Err(format!(
+                "{}={} is not a directory",
+                PI4_WIFI_FIRMWARE_DIR_ENV,
+                firmware_dir.display(),
+            ));
+        }
+        return Ok(None);
     }
+    let firmware = validate_pi4_wifi_known_artifact(&firmware_dir, &PI4_WIFI_KNOWN_FIRMWARE)?;
+    let nvram = validate_pi4_wifi_known_artifact(&firmware_dir, &PI4_WIFI_KNOWN_NVRAM)?;
+    let clm_blob = validate_pi4_wifi_known_artifact(&firmware_dir, &PI4_WIFI_KNOWN_CLM)?;
+    Ok(Some(Pi4WifiFirmwareSearch {
+        firmware,
+        nvram,
+        clm_blob,
+    }))
+}
+
+fn validate_pi4_wifi_known_artifact(
+    firmware_dir: &Path,
+    artifact: &Pi4WifiKnownArtifact,
+) -> Result<PathBuf, String> {
+    let path = firmware_dir.join(artifact.file_name);
+    let meta = fs::metadata(&path).map_err(|err| format!("{} missing: {err}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{} is not a file", path.display()));
+    }
+    if meta.len() != artifact.expected_len {
+        return Err(format!(
+            "{} length mismatch: got {} expected {}",
+            path.display(),
+            meta.len(),
+            artifact.expected_len,
+        ));
+    }
+    let actual_sha256 = sha256_hex(&path)?;
+    if actual_sha256 != artifact.expected_sha256 {
+        return Err(format!(
+            "{} sha256 mismatch: got {} expected {}",
+            path.display(),
+            actual_sha256,
+            artifact.expected_sha256,
+        ));
+    }
+    Ok(path)
+}
+
+fn sha256_hex(path: &Path) -> Result<String, String> {
+    let shasum = Command::new("shasum")
+        .arg("-a")
+        .arg("256")
+        .arg(path)
+        .output();
+    if let Ok(output) = shasum {
+        if output.status.success() {
+            return parse_sha256_output(path, &output.stdout);
+        }
+    }
+
+    let sha256sum = Command::new("sha256sum").arg(path).output();
+    if let Ok(output) = sha256sum {
+        if output.status.success() {
+            return parse_sha256_output(path, &output.stdout);
+        }
+    }
+
+    Err(format!(
+        "unable to compute sha256 for {}; install shasum or sha256sum",
+        path.display()
+    ))
+}
+
+fn parse_sha256_output(path: &Path, stdout: &[u8]) -> Result<String, String> {
+    let output = std::str::from_utf8(stdout)
+        .map_err(|err| format!("invalid sha256 output for {}: {err}", path.display()))?;
+    output
+        .split_whitespace()
+        .next()
+        .filter(|hash| hash.len() == 64 && hash.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .map(|hash| hash.to_ascii_lowercase())
+        .ok_or_else(|| format!("malformed sha256 output for {}", path.display()))
 }
 
 fn find_artifact_with<F>(

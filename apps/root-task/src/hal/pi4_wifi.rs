@@ -766,11 +766,7 @@ const fn control_plane_clock_target_hz(current_clock_hz: u32, preferred_data_clo
 
 #[inline]
 const fn pre_ht_control_plane_clock_target_hz(current_clock_hz: u32) -> u32 {
-    if current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
-        CYW43_STARTUP_CLOCK_HZ
-    } else {
-        current_clock_hz
-    }
+    current_clock_hz
 }
 
 #[inline]
@@ -824,19 +820,14 @@ const fn setup_firmware_channel_pref2_write_restore_clock_hz(
     startup_link_stabilized: bool,
     current_clock_hz: u32,
 ) -> Option<u32> {
-    // On the strict Pi 4 startup-link, the first mailbox write and the
-    // immediate Function 2 ready dwell are both still part of the fragile
-    // pre-channel edge. Keep that combined window on the startup clock until
-    // Function 2 is genuinely ready, then restore the promoted transport for
-    // the remaining hostintmask / watermark / devctl programming.
-    if !experimental_no_ht_transport
-        && !startup_link_stabilized
-        && current_clock_hz > CYW43_STARTUP_CLOCK_HZ
-    {
-        Some(current_clock_hz)
-    } else {
-        None
-    }
+    let _ = experimental_no_ht_transport;
+    let _ = startup_link_stabilized;
+    let _ = current_clock_hz;
+    // Linux keeps the BCM43455 control path on the promoted SDIO clock while
+    // it brings Function 2 and firmware mailboxes online. Dropping this window
+    // back to 400 kHz leaves the chip with ALP/force-HT state but no observed
+    // HT availability, which then latches Function 2 without IORX.
+    None
 }
 
 #[inline]
@@ -951,11 +942,8 @@ const fn wait_for_firmware_ready_restore_clock_hz(
     current_clock_hz: u32,
 ) -> Option<u32> {
     let _ = allow_function2_ready_bypass;
-    if current_clock_hz > CYW43_STARTUP_CLOCK_HZ {
-        Some(current_clock_hz)
-    } else {
-        None
-    }
+    let _ = current_clock_hz;
+    None
 }
 
 #[inline]
@@ -2802,7 +2790,10 @@ const fn required_ht_clock_linux_active_transition_resets_chipclk() -> bool {
 
 #[inline]
 const fn cyw43455_uses_linux_sr_kso_clock() -> bool {
-    true
+    // brcmfmac initializes sleep-retention after Function 2 is live. Before
+    // Function 2, SLEEPCSR.KSO is wake evidence only and must not substitute
+    // for CHIPCLKCSR.HT_AVAIL.
+    false
 }
 
 #[inline]
@@ -2902,7 +2893,7 @@ const fn firmware_bulk_clock_candidates(restore_clock_hz: u32, ht_ready: bool) -
         ]
     } else {
         [
-            CYW43_FIRMWARE_BULK_CLOCK_HZ / 8,
+            CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ,
             800_000,
             restore_clock_hz,
             0,
@@ -3571,12 +3562,20 @@ const fn sleepcsr_device_on_awake(sleep: u8) -> bool {
 
 #[inline]
 const fn linux_sr_kso_clock_ready_from_sleepcsr(sleep: u8) -> bool {
-    cyw43455_uses_linux_sr_kso_clock() && sleepcsr_kso_acknowledged(sleep)
+    let _ = sleep;
+    // KSO only proves that the sleep-retention sideband is awake. The HT clock
+    // contract must still be proven from CHIPCLKCSR before Function 2 is
+    // enabled.
+    false
 }
 
 #[inline]
 const fn post_download_devon_before_ht_is_diagnostic() -> bool {
-    cyw43455_uses_linux_sr_kso_clock()
+    // Linux brcmfmac's KSO-on path waits for both SLEEPCSR.KSO and
+    // SLEEPCSR.DEVON before it requests HT. The Pi 4 timeout capture had
+    // KSO-only sleep state (0x01) and CHIPCLKCSR stuck at 0x50, so do not
+    // request HT while DEVON is still pending.
+    false
 }
 
 #[inline]
@@ -4816,9 +4815,13 @@ const CYW43_TRANSFER_CHUNK: usize = 256;
 // while keeping generic backplane transfers on their smaller established chunk.
 const CYW43_FIRMWARE_TRANSFER_CHUNK: usize = SDIO_MAX_BYTE_MODE;
 const CYW43_FIRMWARE_PROGRESS_INTERVAL: usize = 16 * 1024;
-const CYW43_FIRMWARE_BULK_CLOCK_HZ: u32 = 12_500_000;
+// Linux on the same Pi 4 requests 50 MHz for mmc1 high-speed 4-bit SDIO and
+// reports an actual 41.666667 MHz link. Request the same high-speed target;
+// the SDHCI divider and mailbox base clock determine the exact delivered rate.
+const CYW43_FIRMWARE_BULK_CLOCK_HZ: u32 = 50_000_000;
+const CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ: u32 = 1_562_500;
 const CYW43_STARTUP_CLOCK_HZ: u32 = 400_000;
-const CYW43_CONTROL_PLANE_CLOCK_HZ: u32 = 12_500_000;
+const CYW43_CONTROL_PLANE_CLOCK_HZ: u32 = 50_000_000;
 const CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT: u8 = 4;
 const CYW43_CONTROL_PLANE_SIDEBAND_UNREADABLE_RECOVERY_LIMIT: u8 = 2;
 const CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT: u8 =
@@ -11262,8 +11265,7 @@ impl SdioHost {
             Err(err) => return Err(err),
         };
         let requires_ht_available =
-            function2_requires_ht_available_for_forced_clock(self.experimental_no_ht_transport)
-                && !linux_sr_kso_clock;
+            function2_requires_ht_available_for_forced_clock(self.experimental_no_ht_transport);
         if requires_ht_available && !function2_has_required_ht_clock(before) {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage={stage} action=force-f2-clock-fail-fast before=0x{before:02x} reason=ht-not-available"
@@ -14629,7 +14631,7 @@ impl SdioHost {
         stage: &'static str,
     ) -> Result<bool, HalError> {
         let sleep_csr = self.ensure_kso_device_on_for(stage)?;
-        if linux_sr_kso_clock_ready_from_sleepcsr(sleep_csr) {
+        if cyw43455_uses_linux_sr_kso_clock() && sleepcsr_kso_acknowledged(sleep_csr) {
             let chipclk_snapshot = match self
                 .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)
             {
@@ -14644,14 +14646,23 @@ impl SdioHost {
                     None
                 }
             };
-            self.sr_kso_clock_ready = true;
+            if let Some(chipclk) = chipclk_snapshot {
+                if function2_has_required_ht_clock(chipclk) {
+                    self.sr_kso_clock_ready = true;
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=active-sr-kso-ht-ready sleep=0x{sleep_csr:02x} devon={} chipclk=0x{chipclk:02x} mode=linux-sr-kso reason=chipclk-ht-avail",
+                        yn(sleepcsr_devon_observed(sleep_csr)),
+                    ));
+                    return Ok(true);
+                }
+            }
+            self.sr_kso_clock_ready = false;
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} action=active-sr-kso-ready sleep=0x{sleep_csr:02x} devon={} chipclk=0x{chipclk:02x}/{} mode=linux-sr-kso reason=skip-chipclk-ht-poll",
+                "[pi4-wifi] firmware stage={stage} action=active-sr-kso-needs-ht-request sleep=0x{sleep_csr:02x} devon={} chipclk=0x{chipclk:02x}/{} mode=linux-sr-kso reason=chipclk-no-ht",
                 yn(sleepcsr_devon_observed(sleep_csr)),
                 yn(chipclk_snapshot.is_some()),
                 chipclk = chipclk_snapshot.unwrap_or(0),
             ));
-            return Ok(true);
         }
         if required_ht_clock_linux_active_transition_resets_chipclk() {
             self.prepare_linux_post_download_ht_transition(stage)?;
@@ -22273,7 +22284,12 @@ mod tests {
             "first-write-startup-link"
         );
         assert_eq!(
-            control_plane_snapshot_bootstrap_phase_label(true, true, false, 12_500_000),
+            control_plane_snapshot_bootstrap_phase_label(
+                true,
+                true,
+                false,
+                CYW43_CONTROL_PLANE_CLOCK_HZ
+            ),
             "first-write-promoted-link"
         );
         assert_eq!(
@@ -22290,7 +22306,12 @@ mod tests {
             "startup-link-recovery"
         );
         assert_eq!(
-            control_plane_snapshot_bootstrap_phase_label(false, false, false, 12_500_000),
+            control_plane_snapshot_bootstrap_phase_label(
+                false,
+                false,
+                false,
+                CYW43_CONTROL_PLANE_CLOCK_HZ
+            ),
             "steady-state"
         );
     }
@@ -22492,7 +22513,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_startup_link_pref2_and_f2_ready_temporarily_drop_to_startup_clock() {
+    fn strict_startup_link_pref2_and_f2_ready_stay_on_promoted_clock() {
         assert_eq!(
             firmware_channel_write_restore_clock_hz(true, CYW43_CONTROL_PLANE_CLOCK_HZ),
             None
@@ -22511,7 +22532,7 @@ mod tests {
                 false,
                 CYW43_CONTROL_PLANE_CLOCK_HZ,
             ),
-            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
+            None
         );
         assert_eq!(
             setup_firmware_channel_pref2_write_restore_clock_hz(
@@ -22653,10 +22674,10 @@ mod tests {
     }
 
     #[test]
-    fn wait_for_firmware_ready_restores_promoted_clock_after_startup_mailbox_poll() {
+    fn wait_for_firmware_ready_preserves_promoted_mailbox_clock() {
         assert_eq!(
             wait_for_firmware_ready_restore_clock_hz(true, CYW43_CONTROL_PLANE_CLOCK_HZ),
-            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
+            None
         );
         assert_eq!(
             wait_for_firmware_ready_restore_clock_hz(true, CYW43_STARTUP_CLOCK_HZ),
@@ -22664,7 +22685,7 @@ mod tests {
         );
         assert_eq!(
             wait_for_firmware_ready_restore_clock_hz(false, CYW43_CONTROL_PLANE_CLOCK_HZ),
-            Some(CYW43_CONTROL_PLANE_CLOCK_HZ)
+            None
         );
     }
 
@@ -25105,7 +25126,12 @@ mod tests {
     fn firmware_bulk_clock_candidates_step_down_and_append_restore_clock() {
         assert_eq!(
             firmware_bulk_clock_candidates(400_000, true),
-            [CYW43_FIRMWARE_BULK_CLOCK_HZ, 6_250_000, 3_125_000, 400_000]
+            [
+                CYW43_FIRMWARE_BULK_CLOCK_HZ,
+                CYW43_FIRMWARE_BULK_CLOCK_HZ / 2,
+                CYW43_FIRMWARE_BULK_CLOCK_HZ / 4,
+                400_000,
+            ]
         );
     }
 
@@ -25113,7 +25139,7 @@ mod tests {
     fn firmware_bulk_clock_candidates_use_fast_alp_only_upload_without_ht() {
         assert_eq!(
             firmware_bulk_clock_candidates(400_000, false),
-            [CYW43_FIRMWARE_BULK_CLOCK_HZ / 8, 800_000, 400_000, 0]
+            [CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ, 800_000, 400_000, 0,]
         );
     }
 
@@ -25133,12 +25159,12 @@ mod tests {
     }
 
     #[test]
-    fn linux_sr_kso_attach_contract_defers_devon_before_chipclk_ht() {
+    fn pre_function2_sr_kso_does_not_replace_chipclk_ht_avail() {
         assert_eq!(
             SBSDIO_FUNC1_SLEEPCSR_REQUIRED_WAKE_MASK,
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK
         );
-        assert!(cyw43455_uses_linux_sr_kso_clock());
+        assert!(!cyw43455_uses_linux_sr_kso_clock());
         assert_eq!(SBSDIO_FUNC1_SLEEPCSR_KSO_EN, 0x01);
         assert_eq!(SBSDIO_FUNC1_SLEEPCSR_REQUIRED_WAKE_MASK, 0x01);
         assert_eq!(SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK, 0x02);
@@ -25155,14 +25181,14 @@ mod tests {
         assert!(sleepcsr_device_on_awake(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
         ));
-        assert!(linux_sr_kso_clock_ready_from_sleepcsr(
+        assert!(!linux_sr_kso_clock_ready_from_sleepcsr(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK
         ));
-        assert!(linux_sr_kso_clock_ready_from_sleepcsr(
+        assert!(!linux_sr_kso_clock_ready_from_sleepcsr(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
         ));
         assert!(!linux_sr_kso_clock_ready_from_sleepcsr(0));
-        assert!(post_download_devon_before_ht_is_diagnostic());
+        assert!(!post_download_devon_before_ht_is_diagnostic());
         assert!(CYW43_KSO_DEVICE_ON_WAIT_LOOPS <= CYW43_KSO_AWAKE_WAIT_LOOPS);
         assert!(CYW43_KSO_DEVICE_ON_PROGRESS_INTERVAL_LOOPS > 0);
         assert!(CYW43_KSO_INITIAL_SETTLE_LOOPS > 0);
@@ -25175,7 +25201,10 @@ mod tests {
             CYW43_FIRMWARE_BULK_CLOCK_HZ,
             true
         ));
-        assert!(firmware_upload_prefers_byte_mode(6_250_000, false));
+        assert!(firmware_upload_prefers_byte_mode(
+            CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ,
+            false
+        ));
     }
 
     #[test]
@@ -25195,22 +25224,22 @@ mod tests {
     }
 
     #[test]
-    fn pre_ht_control_plane_clock_target_keeps_armcr4_release_on_startup_lane() {
+    fn pre_ht_control_plane_clock_target_preserves_linux_high_speed_lane() {
         assert_eq!(
             pre_ht_control_plane_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ),
-            CYW43_STARTUP_CLOCK_HZ
+            CYW43_FIRMWARE_BULK_CLOCK_HZ
         );
         assert_eq!(
             pre_ht_control_plane_clock_target_hz(CYW43_CONTROL_PLANE_CLOCK_HZ),
-            CYW43_STARTUP_CLOCK_HZ
+            CYW43_CONTROL_PLANE_CLOCK_HZ
         );
         assert_eq!(
             pre_ht_control_plane_clock_target_hz(CYW43_STARTUP_CLOCK_HZ),
             CYW43_STARTUP_CLOCK_HZ
         );
         assert_eq!(
-            post_download_ht_clock_target_hz(400_000, CYW43_FIRMWARE_BULK_CLOCK_HZ / 8),
-            CYW43_FIRMWARE_BULK_CLOCK_HZ / 8
+            post_download_ht_clock_target_hz(400_000, CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ),
+            CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ
         );
         assert_eq!(
             post_download_ht_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ / 4, 800_000),
@@ -25336,11 +25365,12 @@ mod tests {
     }
 
     #[test]
-    fn required_ht_wait_is_single_short_linux_request_before_function2() {
+    fn required_ht_wait_requires_linux_device_on_before_function2() {
         assert!(!required_ht_clock_uses_force_ht_timeout_retry());
         assert!(!required_ht_clock_linux_active_transition_uses_force_ht());
         assert!(!required_ht_clock_linux_active_transition_resets_chipclk());
-        assert!(cyw43455_uses_linux_sr_kso_clock());
+        assert!(!cyw43455_uses_linux_sr_kso_clock());
+        assert!(!post_download_devon_before_ht_is_diagnostic());
         assert_eq!(required_ht_clock_request_value(None), SBSDIO_HT_AVAIL_REQ);
         assert_eq!(
             required_ht_clock_linux_active_wait_loops(),
@@ -25530,11 +25560,11 @@ mod tests {
         let unique_restore = firmware_bulk_clock_candidates(400_000, true);
         assert_eq!(
             next_distinct_firmware_bulk_clock_candidate(&unique_restore, 0),
-            Some(6_250_000)
+            Some(CYW43_FIRMWARE_BULK_CLOCK_HZ / 2)
         );
         assert_eq!(
             next_distinct_firmware_bulk_clock_candidate(&unique_restore, 1),
-            Some(3_125_000)
+            Some(CYW43_FIRMWARE_BULK_CLOCK_HZ / 4)
         );
         assert_eq!(
             next_distinct_firmware_bulk_clock_candidate(&unique_restore, 2),
@@ -25549,11 +25579,11 @@ mod tests {
             firmware_bulk_clock_candidates(CYW43_FIRMWARE_BULK_CLOCK_HZ / 2, true);
         assert_eq!(
             next_distinct_firmware_bulk_clock_candidate(&duplicate_restore, 0),
-            Some(6_250_000)
+            Some(CYW43_FIRMWARE_BULK_CLOCK_HZ / 2)
         );
         assert_eq!(
             next_distinct_firmware_bulk_clock_candidate(&duplicate_restore, 1),
-            Some(3_125_000)
+            Some(CYW43_FIRMWARE_BULK_CLOCK_HZ / 4)
         );
         assert_eq!(
             next_distinct_firmware_bulk_clock_candidate(&duplicate_restore, 2),

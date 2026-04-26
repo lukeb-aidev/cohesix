@@ -99,6 +99,7 @@ verify_u_boot_pi4_target() {
         "${u_boot_source_dir}/configs/rpi_4_defconfig"
         "${u_boot_source_dir}/board/raspberrypi/rpi/rpi.env"
         "${u_boot_source_dir}/common/usb_hub.c"
+        "${u_boot_source_dir}/drivers/usb/host/xhci-pci.c"
         "${u_boot_source_dir}/drivers/usb/host/xhci-ring.c"
     )
     local input=""
@@ -169,6 +170,8 @@ verify_boot_cmd_handoff() {
     grep -q 'cohesix,xhci-iman0' "$path" || fail "boot.cmd is missing xHCI IMAN0 DT handoff"
     grep -q 'cohesix,xhci-pci-cmd' "$path" || fail "boot.cmd is missing xHCI PCI command DT handoff"
     grep -q 'run coh_clear_xhci_handoff_live' "$path" || fail "boot.cmd is missing xHCI stale-token clearing before usb stop"
+    grep -q 'setenv coh_xhci_mmio;' "$path" || fail "boot.cmd does not clear stale xHCI MMIO before usb stop"
+    grep -q 'setenv coh_xhci_pci_cmd;' "$path" || fail "boot.cmd does not clear stale xHCI PCI command before usb stop"
     ! grep -q '\[cohesix:usb-trace\]' "$path" || fail "boot.cmd still contains obsolete USB trace breadcrumbs"
     ! grep -q 'coh_force_xhci_handoff_reprobe' "$path" || fail "boot.cmd still contains obsolete forced xHCI reprobe logic"
     ! grep -q 'cohesix,xhci-cap-length' "$path" || fail "boot.cmd still mirrors obsolete xHCI capability snapshots"
@@ -834,7 +837,7 @@ setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; se
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
 setenv coh_bootstrap_usb_session 'if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi'
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
-setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
+setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_mmio; setenv coh_xhci_pci_cmd; setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
 setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if usb stop; then echo "[cohesix] USB host quiesced before handoff"; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed before handoff"; fi'
 setenv coh_toggle_logo 'if test "${coh_show_logo}" = "1"; then setenv coh_show_logo 0; echo "[cohesix] HDMI logo disabled"; else setenv coh_show_logo 1; echo "[cohesix] HDMI logo enabled"; fi'
 setenv coh_detect_saved_config 'setenv coh_has_saved_config 0; if test -n "${coh_net_mode}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_net_interface}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_ip}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_prefix_len}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_gateway}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_ssid}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_psk}"; then setenv coh_has_saved_config 1; fi'
