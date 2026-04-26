@@ -2764,9 +2764,9 @@ const fn xhci_diag_stage_value_labels(
         0x0117 => Some(("handoff", "runtime_mask", "publish_mask")),
         0x0200 => Some(("usbcmd", "usbsts", "mmio")),
         0x0204 => Some(("mmio", "handoff", "seed_flags")),
-        0x020d => Some(("usbsts", "imod", "iman")),
-        0x020e => Some(("imod", "polling", "trusted")),
-        0x020f => Some(("iman", "polling", "trusted")),
+        0x020d => Some(("usbsts_off", "clear_mask", "trusted")),
+        0x020e => Some(("imod_off", "value", "trusted")),
+        0x020f => Some(("iman_off", "value", "trusted")),
         0x0212 => Some(("handoff", "seed_flags", "skip")),
         0x0217 | 0x0218 => Some(("handoff", "seed_flags", "skip")),
         0x023b => Some(("handoff", "seed_flags", "reset_done")),
@@ -2870,7 +2870,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0263 => Some("usbsts-clear-ack"),
         0x0264 => Some("erstsz-write"),
         0x0265 => Some("erstba-write"),
-        0x0266 => Some("erdp-write"),
+        0x0266 => Some("erdp-plan"),
         0x0267 => Some("imod-write"),
         0x0268 => Some("iman-write"),
         0x0269 => Some("usbsts-clear-write"),
@@ -13163,7 +13163,7 @@ mod tests {
         );
         assert_eq!(xhci_diag_stage_label(0x026e), Some("erstba-write-low"));
         assert_eq!(xhci_diag_stage_label(0x026f), Some("erstba-write-high"));
-        assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-write"));
+        assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-plan"));
         assert_eq!(xhci_diag_stage_label(0x026a), Some("usbcmd-run-write"));
         assert_eq!(
             xhci_diag_stage_label(0x02e8),
@@ -13692,6 +13692,18 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0204),
             Some(("mmio", "handoff", "seed_flags"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x020d),
+            Some(("usbsts_off", "clear_mask", "trusted"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x020e),
+            Some(("imod_off", "value", "trusted"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x020f),
+            Some(("iman_off", "value", "trusted"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0212),

@@ -333,12 +333,13 @@ const fn use_live_post_reset_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The weaker stop-state snapshot now replays the U-Boot-style reset/config
-    // sequence again, but it still keeps post-reset ring seed reads
+    // The weaker stop-state snapshots now replay the U-Boot-style reset/config
+    // sequence again, but they still keep post-reset ring seed reads
     // suppressed. Use zero/snapshot seeds there instead of touching live
     // runtime ring registers before ownership has been rebuilt.
     use_live_post_reset_seed_reads(firmware_handoff)
         && !runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        && !runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
         && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
@@ -851,12 +852,14 @@ const fn deferred_erst_publish_uses_size_first_with_snapshot(
 ) -> bool {
     (snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot))
+        || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot))
         && runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
         && (!runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
             || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
             || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
-            || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot))
+            || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+            || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot))
 }
 
 #[inline(always)]
@@ -951,12 +954,13 @@ const fn use_atomic_erstba_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The fully confirmed mailbox-reset path still needs the single 64-bit
-    // ERSTBA publish on Pi 4. The resetless snapshot path has now reached the
-    // deferred ERSTBA edge and wedges on that atomic store itself, so fall
-    // back to the ordered low/high xHCI register write there and keep the next
-    // live ownership edge visible.
+    // Pi 4 ERSTBA uses the 0x4_0000_0000 PCIe DMA alias. Avoid exposing a
+    // transient low-dword-only table base on lanes where Cohesix is publishing
+    // a fresh event ring from a stop-state seed. The resetless snapshot path has
+    // wedged on the atomic store itself, so keep that diagnostic lane on the
+    // ordered low/high path.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -6539,6 +6543,18 @@ mod tests {
             stop_state_seed,
         ));
         assert!(skip_config_write_during_init_with_snapshot(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
+        assert!(!use_live_post_reset_seed_reads_with_snapshot(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
+        assert!(deferred_erst_publish_uses_size_first_with_snapshot(
+            XhciFirmwareHandoff::None,
+            stop_state_seed,
+        ));
+        assert!(use_atomic_erstba_publish_with_snapshot(
             XhciFirmwareHandoff::None,
             stop_state_seed,
         ));
