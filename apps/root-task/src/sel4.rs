@@ -1809,10 +1809,7 @@ pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error
     unsafe { seL4_CNode_Delete(root, index, depth_word) }
 }
 
-/// Creates an IRQ handler capability in the supplied init-root slot.
-///
-/// On Pi 4 the kernel does not expose `HAVE_SET_TRIGGER`, so the plain
-/// `IRQControl Get` path is the stable option for runtime IRQ sinks.
+/// Creates a level-triggered IRQ handler capability in the supplied init-root slot.
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn irq_control_get_level_handler(
@@ -1821,19 +1818,85 @@ pub fn irq_control_get_level_handler(
     dest_index: seL4_CPtr,
     dest_depth: u8,
 ) -> seL4_Error {
+    #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+    {
+        let trigger_result =
+            irq_control_get_trigger_handler(irq, 0, dest_root, dest_index, dest_depth);
+        if trigger_result != sel4_sys::seL4_IllegalOperation {
+            return trigger_result;
+        }
+    }
+
     #[cfg(target_os = "none")]
-    unsafe {
+    {
         let mut mr0 = irq;
         let mut mr1 = dest_index;
         let mut mr2 = seL4_Word::from(dest_depth);
         let mut mr3 = 0;
 
+        // SAFETY: The destination CNode/depth come from kernel bootinfo-derived
+        // slots, and the call shape mirrors libsel4's IRQControl_Get wrapper.
+        unsafe {
+            sel4_sys::seL4_SetCap(0, dest_root);
+            let tag = sel4_sys::seL4_MessageInfo::new(
+                sel4_sys::invocation_label_IRQIssueIRQHandler as seL4_Word,
+                0,
+                1,
+                3,
+            );
+            let output = sel4_sys::seL4_CallWithMRs(
+                sel4_sys::seL4_CapIRQControl,
+                tag,
+                &mut mr0,
+                &mut mr1,
+                &mut mr2,
+                &mut mr3,
+            );
+            let result = sel4_sys::seL4_MessageInfo_get_label(output) as seL4_Error;
+            if result != seL4_NoError {
+                sel4_sys::seL4_SetMR(0, mr0);
+                sel4_sys::seL4_SetMR(1, mr1);
+                sel4_sys::seL4_SetMR(2, mr2);
+                sel4_sys::seL4_SetMR(3, mr3);
+            }
+            result
+        }
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (irq, dest_root, dest_index, dest_depth);
+        seL4_NoError
+    }
+}
+
+/// Creates an IRQ handler capability with an explicit ARM trigger type.
+///
+/// The seL4 ARM API uses `trigger = 1` for edge-triggered and `trigger = 0` for
+/// level-triggered IRQs. Pi 4 PCIe INTx-style lines must be level-triggered.
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[inline(always)]
+pub fn irq_control_get_trigger_handler(
+    irq: seL4_Word,
+    trigger: seL4_Word,
+    dest_root: seL4_CNode,
+    dest_index: seL4_CPtr,
+    dest_depth: u8,
+) -> seL4_Error {
+    let mut mr0 = irq;
+    let mut mr1 = trigger;
+    let mut mr2 = dest_index;
+    let mut mr3 = seL4_Word::from(dest_depth);
+
+    // SAFETY: The message register layout and capability slot match libsel4's
+    // generated seL4_IRQControl_GetTrigger wrapper for ARM.
+    unsafe {
         sel4_sys::seL4_SetCap(0, dest_root);
         let tag = sel4_sys::seL4_MessageInfo::new(
-            sel4_sys::invocation_label_IRQIssueIRQHandler as seL4_Word,
+            sel4_sys::arch_invocation_label_ARMIRQIssueIRQHandlerTrigger as seL4_Word,
             0,
             1,
-            3,
+            4,
         );
         let output = sel4_sys::seL4_CallWithMRs(
             sel4_sys::seL4_CapIRQControl,
@@ -1851,12 +1914,6 @@ pub fn irq_control_get_level_handler(
             sel4_sys::seL4_SetMR(3, mr3);
         }
         result
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (irq, dest_root, dest_index, dest_depth);
-        seL4_NoError
     }
 }
 
@@ -1892,6 +1949,45 @@ pub fn irq_handler_set_notification(handler: seL4_CPtr, notification: seL4_CPtr)
     #[cfg(not(target_os = "none"))]
     {
         let _ = (handler, notification);
+        seL4_NoError
+    }
+}
+
+/// Acknowledges a serviced interrupt and re-enables delivery for its handler.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn irq_handler_ack(handler: seL4_CPtr) -> seL4_Error {
+    #[cfg(target_os = "none")]
+    {
+        let mut mr0 = 0;
+        let mut mr1 = 0;
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+        // SAFETY: The call shape mirrors libsel4's IRQHandler_Ack wrapper and
+        // uses the caller-provided IRQHandler cap as the invocation target.
+        unsafe {
+            let tag = sel4_sys::seL4_MessageInfo::new(
+                sel4_sys::invocation_label_IRQAckIRQ as seL4_Word,
+                0,
+                0,
+                0,
+            );
+            let output =
+                sel4_sys::seL4_CallWithMRs(handler, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+            let result = sel4_sys::seL4_MessageInfo_get_label(output) as seL4_Error;
+            if result != seL4_NoError {
+                sel4_sys::seL4_SetMR(0, mr0);
+                sel4_sys::seL4_SetMR(1, mr1);
+                sel4_sys::seL4_SetMR(2, mr2);
+                sel4_sys::seL4_SetMR(3, mr3);
+            }
+            result
+        }
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = handler;
         seL4_NoError
     }
 }

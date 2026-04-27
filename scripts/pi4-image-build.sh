@@ -978,7 +978,7 @@ EOF
 
 flash_sd_card() {
     local disk="$1"
-    local wait_attempts=30
+    local wait_attempts=45
 
     command -v diskutil >/dev/null 2>&1 || fail "diskutil not found"
     command -v rsync >/dev/null 2>&1 || fail "rsync not found"
@@ -991,20 +991,11 @@ flash_sd_card() {
     diskutil eraseDisk FAT32 "$DISK_LABEL" MBRFormat "$disk" >/dev/null
 
     local part=""
-    local volume="/Volumes/${DISK_LABEL}"
-    local attempt
-    for attempt in $(seq 1 "$wait_attempts"); do
-        if diskutil info "${disk}s1" >/dev/null 2>&1; then
-            part="${disk}s1"
-            break
-        fi
-        sleep 1
-    done
-    [[ -n "$part" ]] || fail "failed to find FAT partition after erasing ${disk}"
-
-    if [[ ! -d "$volume" ]]; then
-        diskutil mount "$part" >/dev/null
-    fi
+    local volume=""
+    resolve_flash_partition_after_erase "$disk" "$DISK_LABEL" "$wait_attempts"
+    part="$FLASH_PARTITION_DEVICE"
+    volume="$FLASH_PARTITION_MOUNT"
+    [[ -n "$part" && -d "$volume" ]] || fail "failed to find mounted FAT partition after erasing ${disk}"
     disable_spotlight_for_flash_volume "$volume"
 
     COPYFILE_DISABLE=1 rsync -a --delete \
@@ -1031,6 +1022,70 @@ flash_sd_card() {
 
     unmount_flashed_disk "$disk" "$volume"
     log "Flash complete and unmounted: ${disk}"
+}
+
+diskutil_info_value() {
+    local target="$1"
+    local key="$2"
+    diskutil info "$target" 2>/dev/null | awk -F: -v key="$key" '
+        $1 ~ "^[[:space:]]*" key "$" {
+            value=$2
+            sub(/^[[:space:]]+/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            print value
+            exit
+        }
+    '
+}
+
+FLASH_PARTITION_DEVICE=""
+FLASH_PARTITION_MOUNT=""
+resolve_flash_partition_after_erase() {
+    local disk="$1"
+    local label="$2"
+    local wait_attempts="$3"
+    local attempt
+    local candidate
+    local part
+    local volume
+
+    FLASH_PARTITION_DEVICE=""
+    FLASH_PARTITION_MOUNT=""
+    for attempt in $(seq 1 "$wait_attempts"); do
+        for candidate in "${disk}s1" "/Volumes/${label}" /Volumes/"${label}"\ *; do
+            [[ -e "$candidate" || -d "$candidate" ]] || continue
+            part="$(diskutil_info_value "$candidate" "Device Node")"
+            volume="$(diskutil_info_value "$candidate" "Mount Point")"
+            if [[ -n "$part" ]]; then
+                if [[ -z "$volume" || "$volume" == "Not mounted" ]]; then
+                    diskutil mount "$part" >/dev/null 2>&1 || true
+                    volume="$(diskutil_info_value "$part" "Mount Point")"
+                fi
+                if [[ -d "$volume" ]]; then
+                    FLASH_PARTITION_DEVICE="$part"
+                    FLASH_PARTITION_MOUNT="$volume"
+                    return 0
+                fi
+            fi
+        done
+
+        part="$(diskutil list | awk -v label="$label" '$0 ~ label { print "/dev/" $NF; exit }')"
+        if [[ -n "$part" && "$part" == /dev/disk*s* ]]; then
+            diskutil mount "$part" >/dev/null 2>&1 || true
+            volume="$(diskutil_info_value "$part" "Mount Point")"
+            if [[ -d "$volume" ]]; then
+                FLASH_PARTITION_DEVICE="$part"
+                FLASH_PARTITION_MOUNT="$volume"
+                return 0
+            fi
+        fi
+
+        if diskutil info "$disk" >/dev/null 2>&1; then
+            diskutil mountDisk "$disk" >/dev/null 2>&1 || true
+        fi
+        sleep 1
+    done
+    return 1
 }
 
 disable_spotlight_for_flash_volume() {
