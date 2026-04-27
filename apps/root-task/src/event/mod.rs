@@ -973,6 +973,7 @@ enum WifiDebugCommand {
     Help,
     DumpState,
     ProbeHt,
+    Diag,
     LoadFirmware,
     Retry,
 }
@@ -982,6 +983,7 @@ enum WifiDebugCommand {
 enum UsbDebugCommand {
     Help,
     Status,
+    Diag,
     EnableKeyboard,
     ProbeKeyboard,
 }
@@ -1077,6 +1079,8 @@ where
     #[cfg(feature = "kernel")]
     wifi_debug: Option<&'a mut dyn WifiDebugOps>,
     local_seat: Option<&'a mut LocalSeatRuntime>,
+    #[cfg(test)]
+    test_pi4_debug_commands: bool,
     banner_emitted: bool,
 }
 
@@ -1155,6 +1159,8 @@ where
             #[cfg(feature = "kernel")]
             wifi_debug: None,
             local_seat: None,
+            #[cfg(test)]
+            test_pi4_debug_commands: false,
             banner_emitted: false,
         }
     }
@@ -1215,6 +1221,12 @@ where
     /// Attach a serial/local-seat Wi-Fi bring-up debug surface.
     pub fn with_wifi_debug(mut self, wifi_debug: &'a mut dyn WifiDebugOps) -> Self {
         self.wifi_debug = Some(wifi_debug);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_test_pi4_debug_commands(mut self) -> Self {
+        self.test_pi4_debug_commands = true;
         self
     }
 
@@ -1663,10 +1675,10 @@ where
 
     #[cfg(feature = "kernel")]
     fn emit_usb_debug_help(&mut self, serial_only: bool) {
-        if self.local_seat.is_none() || self.last_input_source == ConsoleInputSource::Net {
+        if !self.usb_debug_commands_enabled() || self.last_input_source == ConsoleInputSource::Net {
             return;
         }
-        let line = "  usb <help|status|enable-kbd|probe-kbd> - USB local-seat diagnostics (serial/local only)";
+        let line = "  usb <help|status|dump-state|diag|enable-kbd|probe-kbd> - USB local-seat diagnostics (serial/local only)";
         if serial_only {
             self.emit_serial_line(line);
         } else {
@@ -1676,10 +1688,11 @@ where
 
     #[cfg(feature = "kernel")]
     fn emit_wifi_debug_help(&mut self, serial_only: bool) {
-        if self.wifi_debug.is_none() || self.last_input_source == ConsoleInputSource::Net {
+        if !self.wifi_debug_commands_enabled() || self.last_input_source == ConsoleInputSource::Net
+        {
             return;
         }
-        let line = "  wifi <help|dump-state|probe-ht|load-fw|retry> - WiFi bring-up diagnostics (serial/local only)";
+        let line = "  wifi <help|dump-state|probe-ht|diag|load-fw|retry> - WiFi bring-up diagnostics (serial/local only)";
         if serial_only {
             self.emit_serial_line(line);
         } else {
@@ -1919,6 +1932,34 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn hardware_has_device_kind(kind: crate::generated::HardwareDeviceKind) -> bool {
+        crate::generated::hardware_config()
+            .devices
+            .iter()
+            .any(|device| device.kind == kind)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn usb_debug_commands_enabled(&self) -> bool {
+        #[cfg(test)]
+        if self.test_pi4_debug_commands {
+            return true;
+        }
+
+        crate::generated::hardware_config().local_seat.enabled
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_debug_commands_enabled(&self) -> bool {
+        #[cfg(test)]
+        if self.test_pi4_debug_commands {
+            return true;
+        }
+
+        Self::hardware_has_device_kind(crate::generated::HardwareDeviceKind::Wifi)
+    }
+
+    #[cfg(feature = "kernel")]
     fn maybe_handle_wifi_debug_line(&mut self, line: &str) -> bool {
         if self.last_input_source == ConsoleInputSource::Net {
             return false;
@@ -1931,6 +1972,9 @@ where
         if !head.eq_ignore_ascii_case("wifi") {
             return false;
         }
+        if !self.wifi_debug_commands_enabled() {
+            return false;
+        }
 
         let command = match parts.next() {
             None => WifiDebugCommand::Help,
@@ -1940,6 +1984,12 @@ where
             }
             Some(subcommand) if subcommand.eq_ignore_ascii_case("probe-ht") => {
                 WifiDebugCommand::ProbeHt
+            }
+            Some(subcommand)
+                if subcommand.eq_ignore_ascii_case("diag")
+                    || subcommand.eq_ignore_ascii_case("triage") =>
+            {
+                WifiDebugCommand::Diag
             }
             Some(subcommand) if subcommand.eq_ignore_ascii_case("load-fw") => {
                 WifiDebugCommand::LoadFirmware
@@ -1983,12 +2033,24 @@ where
         if !head.eq_ignore_ascii_case("usb") {
             return false;
         }
+        if !self.usb_debug_commands_enabled() {
+            return false;
+        }
 
         let command = match parts.next() {
             None => UsbDebugCommand::Help,
             Some(subcommand) if subcommand.eq_ignore_ascii_case("help") => UsbDebugCommand::Help,
-            Some(subcommand) if subcommand.eq_ignore_ascii_case("status") => {
+            Some(subcommand)
+                if subcommand.eq_ignore_ascii_case("status")
+                    || subcommand.eq_ignore_ascii_case("dump-state") =>
+            {
                 UsbDebugCommand::Status
+            }
+            Some(subcommand)
+                if subcommand.eq_ignore_ascii_case("diag")
+                    || subcommand.eq_ignore_ascii_case("triage") =>
+            {
+                UsbDebugCommand::Diag
             }
             Some(subcommand) if subcommand.eq_ignore_ascii_case("enable-kbd") => {
                 UsbDebugCommand::EnableKeyboard
@@ -2027,6 +2089,7 @@ where
             WifiDebugCommand::Help => "help",
             WifiDebugCommand::DumpState => "dump-state",
             WifiDebugCommand::ProbeHt => "probe-ht",
+            WifiDebugCommand::Diag => "diag",
             WifiDebugCommand::LoadFirmware => "load-fw",
             WifiDebugCommand::Retry => "retry",
         };
@@ -2038,6 +2101,9 @@ where
                 "  wifi dump-state - Show cached SDIO, clock, and contract trace state",
             );
             self.emit_console_line("  wifi probe-ht   - Probe HT clock readiness without reboot");
+            self.emit_console_line(
+                "  wifi diag       - Dump, probe HT, then dump post-probe state",
+            );
             self.emit_console_line(
                 "  wifi load-fw    - Retry firmware load from current transport",
             );
@@ -2052,7 +2118,7 @@ where
 
         self.emit_wifi_debug_status(subcommand, "begin", profile, None);
         let result = match command {
-            WifiDebugCommand::Help => unreachable!(),
+            WifiDebugCommand::Help => Ok(None),
             WifiDebugCommand::DumpState => match self.wifi_debug.as_mut() {
                 Some(wifi_debug) => wifi_debug.dump_state("console-dump-state").map(Some),
                 None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
@@ -2079,6 +2145,34 @@ where
                     Err(err) => Err(err),
                 }
             }
+            WifiDebugCommand::Diag => {
+                (|| -> Result<Option<WifiDebugSnapshot>, crate::hal::HalError> {
+                    let before = match self.wifi_debug.as_mut() {
+                        Some(wifi_debug) => wifi_debug.dump_state("console-diag-before"),
+                        None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
+                    }?;
+                    self.emit_console_line("wifi: diag stage=before-ht-probe");
+                    self.emit_wifi_snapshot_with_traces(&before);
+
+                    let ready = match self.wifi_debug.as_mut() {
+                        Some(wifi_debug) => wifi_debug.probe_ht_clock(),
+                        None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
+                    }?;
+                    let detail = format_message(format_args!(
+                        "wifi: diag ht_probe ready={}",
+                        if ready { "yes" } else { "no" }
+                    ));
+                    self.emit_console_line(detail.as_str());
+
+                    let after = match self.wifi_debug.as_mut() {
+                        Some(wifi_debug) => wifi_debug.dump_state("console-diag-after-ht"),
+                        None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
+                    }?;
+                    self.emit_console_line("wifi: diag stage=after-ht-probe");
+                    self.emit_wifi_snapshot_with_traces(&after);
+                    Ok(None)
+                })()
+            }
             WifiDebugCommand::LoadFirmware => match self.wifi_debug.as_mut() {
                 Some(wifi_debug) => wifi_debug.load_firmware().map(Some),
                 None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
@@ -2092,24 +2186,7 @@ where
         match result {
             Ok(snapshot) => {
                 if let Some(snapshot) = snapshot {
-                    self.emit_wifi_snapshot(&snapshot);
-                    let (sdhci_trace, control_plane_trace) =
-                        if let Some(wifi_debug) = self.wifi_debug.as_mut() {
-                            (
-                                wifi_debug.sdhci_contract_trace(),
-                                wifi_debug.control_plane_trace(),
-                            )
-                        } else {
-                            (None, None)
-                        };
-                    if let Some(trace) = sdhci_trace {
-                        self.emit_wifi_sdhci_contract(&trace);
-                    }
-                    if let Some(trace) = control_plane_trace {
-                        self.emit_wifi_control_plane_trace(&trace);
-                    }
-                    #[cfg(feature = "net-console")]
-                    self.emit_wifi_network_status();
+                    self.emit_wifi_snapshot_with_traces(&snapshot);
                 }
                 self.emit_wifi_debug_status(subcommand, "complete", profile, Some("result=ok"));
                 self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
@@ -2123,6 +2200,7 @@ where
                     WifiDebugCommand::Help => None,
                     WifiDebugCommand::DumpState => None,
                     WifiDebugCommand::ProbeHt => Some("console-probe-ht-error"),
+                    WifiDebugCommand::Diag => Some("console-diag-error"),
                     WifiDebugCommand::LoadFirmware => Some("console-load-fw-error"),
                     WifiDebugCommand::Retry => Some("console-retry-error"),
                 };
@@ -2152,6 +2230,7 @@ where
         let subcommand = match command {
             UsbDebugCommand::Help => "help",
             UsbDebugCommand::Status => "status",
+            UsbDebugCommand::Diag => "diag",
             UsbDebugCommand::EnableKeyboard => "enable-kbd",
             UsbDebugCommand::ProbeKeyboard => "probe-kbd",
         };
@@ -2160,6 +2239,10 @@ where
             self.emit_console_line("USB local-seat debug commands:");
             self.emit_console_line(
                 "  usb status      - Show local-seat runtime attach, polling, and contract trace",
+            );
+            self.emit_console_line("  usb dump-state  - Alias for usb status");
+            self.emit_console_line(
+                "  usb diag        - Show status and preflight without live xHCI probing",
             );
             self.emit_console_line(
                 "  usb enable-kbd  - Arm runtime USB keyboard probing after boot",
@@ -2176,21 +2259,19 @@ where
         }
 
         if self.local_seat.is_none() {
-            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
-            self.emit_refusal(
-                USB_DEBUG_ACK_LABEL,
-                RefusalReason::Policy,
-                Some("detail=local-seat-unavailable"),
-            );
+            self.emit_usb_debug_unavailable(subcommand, "local-seat-unavailable");
             return;
         }
         match command {
-            UsbDebugCommand::Help => unreachable!(),
+            UsbDebugCommand::Help => {}
             UsbDebugCommand::Status => {
                 let (backend_attached, polling_enabled) = {
                     let local_seat = match self.local_seat.as_mut() {
                         Some(local_seat) => local_seat,
-                        None => unreachable!("local-seat checked present before USB debug status"),
+                        None => {
+                            self.emit_usb_debug_unavailable(subcommand, "local-seat-unavailable");
+                            return;
+                        }
                     };
                     (
                         local_seat.backend_attached(),
@@ -2199,13 +2280,65 @@ where
                 };
                 self.emit_usb_status(backend_attached, polling_enabled, None);
             }
+            UsbDebugCommand::Diag => {
+                let (backend_attached, polling_enabled) = {
+                    let local_seat = match self.local_seat.as_mut() {
+                        Some(local_seat) => local_seat,
+                        None => {
+                            self.emit_usb_debug_unavailable(subcommand, "local-seat-unavailable");
+                            return;
+                        }
+                    };
+                    (
+                        local_seat.backend_attached(),
+                        local_seat.backend_keyboard_polling_enabled(),
+                    )
+                };
+                self.emit_usb_status(
+                    backend_attached,
+                    polling_enabled,
+                    Some("action=diag-before-probe"),
+                );
+                #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+                {
+                    if let Some(preflight) = self
+                        .local_seat
+                        .as_ref()
+                        .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
+                    {
+                        self.emit_usb_probe_preflight(preflight);
+                    }
+                }
+                self.emit_console_line(
+                    "usb: diag action=probe-skipped reason=no-live-mmio use=usb-probe-kbd",
+                );
+                let (backend_attached, polling_enabled) = {
+                    let local_seat = match self.local_seat.as_mut() {
+                        Some(local_seat) => local_seat,
+                        None => {
+                            self.emit_usb_debug_unavailable(subcommand, "local-seat-unavailable");
+                            return;
+                        }
+                    };
+                    (
+                        local_seat.backend_attached(),
+                        local_seat.backend_keyboard_polling_enabled(),
+                    )
+                };
+                self.emit_usb_status(
+                    backend_attached,
+                    polling_enabled,
+                    Some("action=diag-after-probe"),
+                );
+            }
             UsbDebugCommand::EnableKeyboard => {
                 let (backend_attached, polling_enabled) = {
                     let local_seat = match self.local_seat.as_mut() {
                         Some(local_seat) => local_seat,
-                        None => unreachable!(
-                            "local-seat checked present before USB keyboard poll enable"
-                        ),
+                        None => {
+                            self.emit_usb_debug_unavailable(subcommand, "local-seat-unavailable");
+                            return;
+                        }
                     };
                     local_seat.enable_backend_keyboard_polling();
                     (
@@ -2235,7 +2368,8 @@ where
                     let local_seat = match self.local_seat.as_mut() {
                         Some(local_seat) => local_seat,
                         None => {
-                            unreachable!("local-seat checked present before USB keyboard probe")
+                            self.emit_usb_debug_unavailable(subcommand, "local-seat-unavailable");
+                            return;
                         }
                     };
                     local_seat.probe_backend_keyboard_once();
@@ -2257,6 +2391,17 @@ where
             "detail=subcommand={subcommand} scope=serial-local"
         ));
         self.emit_ack_ok(USB_DEBUG_ACK_LABEL, Some(detail.as_str()));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_usb_debug_unavailable(&mut self, subcommand: &str, error: &str) {
+        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+        let detail = format_message(format_args!("detail=subcommand={subcommand} error={error}"));
+        self.emit_refusal(
+            USB_DEBUG_ACK_LABEL,
+            RefusalReason::Policy,
+            Some(detail.as_str()),
+        );
     }
 
     #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -2576,7 +2721,9 @@ where
     const fn wifi_debug_command_profile(command: WifiDebugCommand) -> &'static str {
         match command {
             WifiDebugCommand::Help => "help",
-            WifiDebugCommand::DumpState | WifiDebugCommand::ProbeHt => "bounded",
+            WifiDebugCommand::DumpState | WifiDebugCommand::ProbeHt | WifiDebugCommand::Diag => {
+                "bounded"
+            }
             WifiDebugCommand::LoadFirmware | WifiDebugCommand::Retry => "stateful",
         }
     }
@@ -2596,6 +2743,28 @@ where
             let _ = write!(line, " {detail}");
         }
         self.emit_console_line(line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_snapshot_with_traces(&mut self, snapshot: &WifiDebugSnapshot) {
+        self.emit_wifi_snapshot(snapshot);
+        let (sdhci_trace, control_plane_trace) = if let Some(wifi_debug) = self.wifi_debug.as_mut()
+        {
+            (
+                wifi_debug.sdhci_contract_trace(),
+                wifi_debug.control_plane_trace(),
+            )
+        } else {
+            (None, None)
+        };
+        if let Some(trace) = sdhci_trace {
+            self.emit_wifi_sdhci_contract(&trace);
+        }
+        if let Some(trace) = control_plane_trace {
+            self.emit_wifi_control_plane_trace(&trace);
+        }
+        #[cfg(feature = "net-console")]
+        self.emit_wifi_network_status();
     }
 
     #[cfg(feature = "kernel")]
@@ -6471,8 +6640,9 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut wifi = FakeWifiDebug::new();
-        let mut pump =
-            EventPump::new(serial, timer, ipc, store, &mut audit).with_wifi_debug(&mut wifi);
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"wifi dump-state\n");
         for _ in 0..8 {
@@ -6597,6 +6767,166 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn qemu_manifest_hides_usb_wifi_debug_surface() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_local_seat(&mut local_seat);
+
+        pump.serial_mut().driver_mut().push_rx(b"help\n");
+        for _ in 0..4 {
+            pump.poll();
+        }
+        let help_transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        let help_rendered = String::from_utf8(help_transcript).expect("serial output must be utf8");
+        assert!(!help_rendered.contains("usb <"), "{help_rendered}");
+        assert!(!help_rendered.contains("wifi <"), "{help_rendered}");
+
+        pump.serial_mut()
+            .driver_mut()
+            .push_rx(b"wifi dump-state\nusb status\n");
+        for _ in 0..8 {
+            pump.poll();
+        }
+        let command_transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let command_rendered =
+            String::from_utf8(command_transcript).expect("serial output must be utf8");
+        assert!(!command_rendered.contains("OK WIFI"), "{command_rendered}");
+        assert!(!command_rendered.contains("ERR WIFI"), "{command_rendered}");
+        assert!(!command_rendered.contains("OK USB"), "{command_rendered}");
+        assert!(!command_rendered.contains("ERR USB"), "{command_rendered}");
+        assert!(wifi.calls.is_empty());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_wifi_diag_command_runs_dump_probe_dump() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        for _ in 0..8 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered
+                .contains("wifi: debug subcommand=diag action=begin profile=bounded mode=one-shot"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: diag stage=before-ht-probe"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: diag ht_probe ready=yes"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: diag stage=after-ht-probe"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=diag"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("cohesix> "), "{rendered}");
+        assert_eq!(
+            wifi.calls.as_slice(),
+            &["dump-state", "probe-ht", "dump-state"]
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_wifi_diag_unavailable_returns_error_and_prompt() {
+        let driver = LoopbackSerial::<1024>::new();
+        let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        for _ in 0..4 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered
+                .contains("wifi: debug subcommand=diag action=begin profile=bounded mode=one-shot"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=error error=unsupported operation: wifi-debug-unavailable"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=diag error=unsupported operation: wifi-debug-unavailable"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("cohesix> "), "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn serial_wifi_debug_command_preserves_long_exact_error_lines() {
         let driver = LoopbackSerial::<2048>::new();
         let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -6609,8 +6939,9 @@ mod tests {
         wifi.snapshot.control_plane_exact_error =
             "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready";
         wifi.snapshot.control_plane_sdhci_read_diag = "f2-reply-read-stalled-no-buffer-ready";
-        let mut pump =
-            EventPump::new(serial, timer, ipc, store, &mut audit).with_wifi_debug(&mut wifi);
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"wifi dump-state\n");
         pump.poll();
@@ -6648,8 +6979,9 @@ mod tests {
             line_bytes: 64,
             buffer_lines: 8,
         });
-        let mut pump =
-            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"usb enable-kbd\n");
         for _ in 0..8 {
@@ -6695,8 +7027,9 @@ mod tests {
             line_bytes: 64,
             buffer_lines: 8,
         });
-        let mut pump =
-            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"usb probe-kbd\n");
         pump.poll();
@@ -6729,6 +7062,96 @@ mod tests {
             "{rendered}"
         );
         assert!(!local_seat.backend_keyboard_polling_enabled());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_usb_diag_command_skips_live_probe_without_arming_background_polling() {
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"usb diag\n");
+        for _ in 0..4 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered
+                .contains("usb: local-seat attached=no polling=deferred action=diag-before-probe"),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .contains("usb: diag action=probe-skipped reason=no-live-mmio use=usb-probe-kbd"),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .contains("usb: local-seat attached=no polling=deferred action=diag-after-probe"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK USB detail=subcommand=diag"),
+            "{rendered}"
+        );
+        assert!(!local_seat.backend_keyboard_polling_enabled());
+        assert!(rendered.contains("cohesix> "), "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_usb_diag_unavailable_returns_error_and_prompt() {
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"usb diag\n");
+        for _ in 0..4 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "ERR USB reason=policy detail=subcommand=diag error=local-seat-unavailable"
+            ),
+            "{rendered}"
+        );
+        assert!(rendered.contains("cohesix> "), "{rendered}");
     }
 
     #[cfg(feature = "kernel")]
@@ -7328,7 +7751,8 @@ mod tests {
 
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
             .with_wifi_debug(&mut wifi)
-            .with_local_seat(&mut local_seat);
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
         pump.session = Some(SessionRole::Queen);
         pump.poll();
         drop(pump);
@@ -7361,8 +7785,8 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_debug_command_reports_wifi_network_phase() {
-        let driver = LoopbackSerial::<2048>::new();
-        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -7383,7 +7807,8 @@ mod tests {
         };
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
             .with_wifi_debug(&mut wifi)
-            .with_network(&mut net);
+            .with_network(&mut net)
+            .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"wifi dump-state\n");
         pump.poll();

@@ -28,7 +28,7 @@ DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net-console"
 SKIP_BUILD=0
 CLEAN_BUILD=0
-PI4_UBOOT_XHCI_HANDOFF="${COHESIX_PI4_UBOOT_XHCI_HANDOFF:-0}"
+PI4_UBOOT_XHCI_HANDOFF="${COHESIX_PI4_UBOOT_XHCI_HANDOFF:-1}"
 PI4_TOTAL_MEM_MB=2048
 RESTORE_CANONICAL_CODEGEN=0
 PI4_DTB_PADDED_SIZE=$((128 * 1024))
@@ -70,9 +70,10 @@ Options:
   -h, --help                Show this help
 
 Environment:
-  COHESIX_PI4_UBOOT_XHCI_HANDOFF=1
-                            Opt into U-Boot xHCI handoff DTB export.
-                            Default is 0: Cohesix owns VL805/xHCI bring-up.
+  COHESIX_PI4_UBOOT_XHCI_HANDOFF=0|1
+                            Controls U-Boot xHCI handoff DTB export.
+                            Default is 1: export the halted U-Boot stop-state
+                            after usb stop. Set 0 for no-handoff diagnostics.
 USAGE
 }
 
@@ -184,7 +185,7 @@ verify_boot_cmd_handoff() {
         grep -q 'setenv coh_xhci_mmio 0x0000000600000000' "$path" || fail "boot.cmd does not export the Pi4 VL805 BAR0 handoff"
         grep -q 'setenv coh_xhci_pci_cmd 0x0406' "$path" || fail "boot.cmd does not export the Pi4 VL805 PCI command handoff"
     else
-        grep -q 'Cohesix owns xHCI fresh' "$path" || fail "boot.cmd does not keep xHCI handoff export disabled by default"
+        grep -q 'Cohesix owns xHCI fresh' "$path" || fail "boot.cmd does not keep xHCI handoff export disabled when requested"
     fi
     ! grep -q '\[cohesix:usb-trace\]' "$path" || fail "boot.cmd still contains obsolete USB trace breadcrumbs"
     ! grep -q 'coh_force_xhci_handoff_reprobe' "$path" || fail "boot.cmd still contains obsolete forced xHCI reprobe logic"
@@ -854,7 +855,7 @@ setenv coh_bootstrap_usb_session 'if test "${coh_usb_input_ready}" != "1"; then 
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
 setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_mmio; setenv coh_xhci_pci_cmd; setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
 setenv coh_export_xhci_handoff 'setenv coh_xhci_mmio 0x0000000600000000; setenv coh_xhci_pci_cmd 0x0406; setenv coh_xhci_handoff_ready 1; setenv coh_xhci_irq_quiesced 1; setenv coh_xhci_halted 1; setenv coh_xhci_handoff_safe 1; setenv coh_xhci_usbcmd 0x00000000; setenv coh_xhci_usbsts 0x00000001; setenv coh_xhci_iman0 0x00000000'
-setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if test "${coh_usb_input_ready}" = "1"; then if usb stop; then if test "${coh_xhci_handoff_opt_in}" = "1"; then run coh_export_xhci_handoff; echo "[cohesix] USB host quiesced before opt-in handoff"; else run coh_clear_xhci_handoff_live; echo "[cohesix] USB host stopped; Cohesix owns xHCI fresh"; fi; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed before Cohesix xHCI ownership"; fi; else echo "[cohesix] USB host session was not active before kernel handoff"; fi'
+setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if test "${coh_usb_input_ready}" = "1"; then if usb stop; then if test "${coh_xhci_handoff_opt_in}" = "1"; then run coh_export_xhci_handoff; echo "[cohesix] USB host quiesced before trusted handoff"; else run coh_clear_xhci_handoff_live; echo "[cohesix] USB host stopped; Cohesix owns xHCI fresh"; fi; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed before Cohesix xHCI ownership"; fi; else echo "[cohesix] USB host session was not active before kernel handoff"; fi'
 setenv coh_toggle_logo 'if test "${coh_show_logo}" = "1"; then setenv coh_show_logo 0; echo "[cohesix] HDMI logo disabled"; else setenv coh_show_logo 1; echo "[cohesix] HDMI logo enabled"; fi'
 setenv coh_detect_saved_config 'setenv coh_has_saved_config 0; if test -n "${coh_net_mode}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_net_interface}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_ip}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_prefix_len}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_gateway}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_ssid}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_psk}"; then setenv coh_has_saved_config 1; fi'
 setenv coh_load_saved_policy 'run coh_clear_saved_policy; if fatload mmc 0:1 ${coh_policy_addr} ${coh_policy_file}; then if env import -d -t ${coh_policy_addr} ${filesize} coh_net_mode coh_net_interface coh_static_ip coh_static_prefix_len coh_static_gateway coh_wifi_ssid coh_wifi_psk coh_show_logo; then echo "[cohesix] loaded saved settings from ${coh_policy_file}"; else echo "[cohesix] WARNING: failed to import ${coh_policy_file}; ignoring saved settings"; run coh_clear_saved_policy; fi; fi; if test -z "${coh_show_logo}"; then setenv coh_show_logo 1; fi'
