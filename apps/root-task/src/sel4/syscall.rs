@@ -158,6 +158,23 @@ pub(super) unsafe fn nb_recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_Mes
     }
 }
 
+#[track_caller]
+pub(super) unsafe fn poll(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
+    if ipc_bootstrap_trap(IpcSyscallKind::NbRecv, dest, Location::caller()) {
+        return seL4_MessageInfo::new(0, 0, 0, 0);
+    }
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        seL4_NBRecv(dest, badge)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    unsafe {
+        seL4_Poll(dest, badge)
+    }
+}
+
 pub(super) unsafe fn yield_now() {
     unsafe {
         seL4_Yield();

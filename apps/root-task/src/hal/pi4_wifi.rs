@@ -12,8 +12,9 @@ use core::ptr;
 use core::sync::atomic::{fence, Ordering};
 
 use super::{
-    DeviceHal, HalError, SdioBusWidth, SdioFunction, WifiControlPlaneTrace, WifiDebugSnapshot,
-    WifiFirmwareBundle, WifiPowerState, WifiResetState, WifiSdhciContractTrace,
+    DeviceHal, HalError, Irq, IrqServiceOutcome, IrqTrigger, KernelIrqBinding, SdioBusWidth,
+    SdioFunction, WifiControlPlaneTrace, WifiDebugSnapshot, WifiFirmwareBundle, WifiPowerState,
+    WifiResetState, WifiSdhciContractTrace,
 };
 use crate::bootstrap::log as boot_log;
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -35,6 +36,7 @@ include!(concat!(env!("OUT_DIR"), "/pi4_wifi_firmware.rs"));
 const MAILBOX_PAGE_PADDR_CANDIDATES: [usize; 2] = [0xFE00_B000, 0x7E00_B000];
 const GPIO_PAGE_PADDR_CANDIDATES: [usize; 2] = [0xFE20_0000, 0x7E20_0000];
 const SDHCI_PAGE_PADDR_CANDIDATES: [usize; 2] = [0xFE30_0000, 0x7E30_0000];
+const PI4_WIFI_SDIO_HOST_IRQ: u32 = 158;
 const VC_BUS_ALIAS_BASES: [u32; 2] = [0xC000_0000, 0x4000_0000];
 const VC_BUS_MASK: u32 = 0x3FFF_FFFF;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
@@ -991,13 +993,11 @@ const fn firmware_channel_uses_linux_minimal_setup(experimental_no_ht_transport:
 #[inline]
 const fn firmware_channel_defers_function2_interrupts(experimental_no_ht_transport: bool) -> bool {
     // Linux arms the dongle-side interrupt path because brcmfmac has an MMC
-    // IRQ/DPC service loop. Cohesix is currently closer to the U-Boot model:
-    // transfer completion and the F2 mailbox are polled, and there is no seL4
-    // IRQHandler notification loop that clears the device-side source before
-    // IRQHandler_Ack. Keep Linux's register order, but do not enable
-    // CCCR/F2 interrupt delivery until that service loop exists.
+    // IRQ/DPC service loop. Cohesix now owns the equivalent seL4 IRQHandler
+    // binding in HAL and arms the CYW43 interrupt registers only when that
+    // binding exists; callers still dynamically defer if the binding fails.
     let _ = experimental_no_ht_transport;
-    true
+    false
 }
 
 #[inline]
@@ -5346,10 +5346,11 @@ impl Pi4WifiState {
         })?;
         gpio.configure_wifi_sdio_pins();
         log::info!(
-            "[pi4-wifi] hal init: mailbox=0x{:08x} sdhci=0x{:08x} base_clock={}Hz",
+            "[pi4-wifi] hal init: mailbox=0x{:08x} sdhci=0x{:08x} base_clock={}Hz irq_bound={}",
             mailbox.regs.paddr(),
             host.regs_paddr,
             host.base_clock_hz,
+            host.sdio_irq_binding.is_some(),
         );
         Ok(Self {
             mailbox,
@@ -6373,6 +6374,7 @@ where
 struct SdioHost {
     regs: MappedRegs,
     regs_paddr: usize,
+    sdio_irq_binding: Option<KernelIrqBinding>,
     base_clock_hz: u32,
     current_clock_hz: u32,
     preferred_data_clock_hz: u32,
@@ -6462,9 +6464,32 @@ impl SdioHost {
             "[pi4-wifi] sdhci access mode=bcm2835-shadow gap=spin delay_loops={}",
             SDHCI_WRITE_GAP_SPIN_LOOPS
         ));
+        let sdio_irq_binding = match hal
+            .bind_irq_notification(Irq(PI4_WIFI_SDIO_HOST_IRQ), IrqTrigger::Level)
+        {
+            Ok(binding) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdio irq bind irq={} trigger={:?} handler={} notification={} badge={}",
+                    binding.irq().0,
+                    binding.trigger(),
+                    binding.handler_slot_for_diagnostics(),
+                    binding.notification_slot_for_diagnostics(),
+                    binding.badge(),
+                ));
+                Some(binding)
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdio irq bind irq={} action=defer-interrupt-arm err={err}",
+                    PI4_WIFI_SDIO_HOST_IRQ,
+                ));
+                None
+            }
+        };
         Ok(Self {
             regs,
             regs_paddr,
+            sdio_irq_binding,
             base_clock_hz,
             current_clock_hz: 0,
             preferred_data_clock_hz: CYW43_FIRMWARE_BULK_CLOCK_HZ,
@@ -9646,7 +9671,8 @@ impl SdioHost {
         let linux_minimal_setup =
             firmware_channel_uses_linux_minimal_setup(self.experimental_no_ht_transport);
         let defer_interrupts =
-            firmware_channel_defers_function2_interrupts(self.experimental_no_ht_transport);
+            firmware_channel_defers_function2_interrupts(self.experimental_no_ht_transport)
+                || self.sdio_irq_binding.is_none();
         let watermark = firmware_channel_watermark(self.experimental_no_ht_transport);
         let restore_clock_hz = rearm_firmware_channel_restore_clock_hz(
             self.experimental_no_ht_transport,
@@ -9721,8 +9747,13 @@ impl SdioHost {
                 CY_43455_MESBUSYCTRL,
             )?;
             if defer_interrupts {
+                let reason = if self.sdio_irq_binding.is_some() {
+                    "policy"
+                } else {
+                    "sel4-irq-unbound"
+                };
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=slow-link-channel-rearm action=poll-only-defer-interrupt-arm reason=sel4-no-irq-ack-loop hostintmask=0x{hostintmask:08x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
+                    "[pi4-wifi] firmware stage=slow-link-channel-rearm action=poll-only-defer-interrupt-arm reason={reason} hostintmask=0x{hostintmask:08x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
                     hostintmask = HOSTINTMASK,
                     devctl = devctl_programmed,
                     mesbusy = CY_43455_MESBUSYCTRL,
@@ -11454,6 +11485,7 @@ impl SdioHost {
         stage: &'static str,
         allow_function2_ready_bypass: bool,
     ) -> Result<(), HalError> {
+        self.clear_and_ack_sdio_irq_for_firmware_channel(stage, allow_function2_ready_bypass)?;
         self.write_sdio_core_u32_for_firmware_channel(
             stage,
             SDPCMD_REG_FUNCTIONINTMASK,
@@ -11466,17 +11498,26 @@ impl SdioHost {
             SDIO_INTERRUPT_ENABLE_MASK,
         )?;
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=interrupts-armed fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x}",
+            "[pi4-wifi] firmware stage={stage} action=interrupts-armed path=sel4-irq fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x}",
             fn_int_mask = FUNCTIONINTMASK,
             ien = SDIO_INTERRUPT_ENABLE_MASK,
         ));
+        let outcome =
+            self.service_sdio_irq_once_for_firmware_channel(stage, allow_function2_ready_bypass)?;
+        if let IrqServiceOutcome::Serviced { badge } = outcome {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=interrupts-post-arm-serviced badge=0x{badge:x}"
+            ));
+        }
         Ok(())
     }
 
     fn prearm_function2_cccr_interrupts_for_ready(
         &mut self,
         stage: &'static str,
+        allow_function2_ready_bypass: bool,
     ) -> Result<(), HalError> {
+        self.clear_and_ack_sdio_irq_for_firmware_channel(stage, allow_function2_ready_bypass)?;
         self.io_direct_write(
             SdioFunction::Function0,
             SDIO_CCCR_IENX,
@@ -11485,6 +11526,55 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} action=cccr-inten-prearm ien=0x{ien:02x}",
             ien = SDIO_INTERRUPT_ENABLE_MASK,
+        ));
+        Ok(())
+    }
+
+    fn clear_and_ack_sdio_irq_for_firmware_channel(
+        &mut self,
+        stage: &'static str,
+        allow_function2_ready_bypass: bool,
+    ) -> Result<(), HalError> {
+        let binding = self
+            .sdio_irq_binding
+            .ok_or(HalError::Unsupported("wifi-sdio-irq-unbound"))?;
+        self.clear_sdio_irq_source_for_firmware_channel(stage, allow_function2_ready_bypass)?;
+        binding.ack_from_hal()?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=sel4-irq-clear-ack irq={} trigger={:?} badge=0x{:x}",
+            binding.irq().0,
+            binding.trigger(),
+            binding.badge(),
+        ));
+        Ok(())
+    }
+
+    fn service_sdio_irq_once_for_firmware_channel(
+        &mut self,
+        stage: &'static str,
+        allow_function2_ready_bypass: bool,
+    ) -> Result<IrqServiceOutcome, HalError> {
+        let Some(binding) = self.sdio_irq_binding else {
+            return Ok(IrqServiceOutcome::Idle);
+        };
+        binding.poll_and_service_from_hal(|| {
+            self.clear_sdio_irq_source_for_firmware_channel(stage, allow_function2_ready_bypass)
+        })
+    }
+
+    fn clear_sdio_irq_source_for_firmware_channel(
+        &mut self,
+        stage: &'static str,
+        allow_function2_ready_bypass: bool,
+    ) -> Result<(), HalError> {
+        self.write_sdio_core_u32_for_firmware_channel(
+            stage,
+            SDIO_INT_STATUS,
+            u32::MAX,
+            allow_function2_ready_bypass,
+        )?;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=sdio-irq-device-clear intstatus=0xffffffff"
         ));
         Ok(())
     }
@@ -11884,7 +11974,8 @@ impl SdioHost {
         let linux_minimal_setup =
             firmware_channel_uses_linux_minimal_setup(self.experimental_no_ht_transport);
         let defer_interrupts =
-            firmware_channel_defers_function2_interrupts(self.experimental_no_ht_transport);
+            firmware_channel_defers_function2_interrupts(self.experimental_no_ht_transport)
+                || self.sdio_irq_binding.is_none();
         let prearm_cccr_interrupts =
             firmware_channel_prearms_function2_cccr_interrupts(self.experimental_no_ht_transport);
         let watermark = firmware_channel_watermark(self.experimental_no_ht_transport);
@@ -11927,6 +12018,7 @@ impl SdioHost {
                 if prearm_cccr_interrupts {
                     self.prearm_function2_cccr_interrupts_for_ready(
                         "setup-firmware-channel-f2-ready-prearm",
+                        allow_function2_ready_bypass,
                     )?;
                 }
                 self.enable_function2(sdio_function_ready_budget_for_bypass(
@@ -11965,6 +12057,7 @@ impl SdioHost {
                 if prearm_cccr_interrupts {
                     self.prearm_function2_cccr_interrupts_for_ready(
                         "setup-firmware-channel-f2-ready-prearm",
+                        allow_function2_ready_bypass,
                     )?;
                 }
                 self.enable_function2(sdio_function_ready_budget_for_bypass(
@@ -12013,8 +12106,13 @@ impl SdioHost {
                 CY_43455_MESBUSYCTRL,
             )?;
             if defer_interrupts {
+                let reason = if self.sdio_irq_binding.is_some() {
+                    "policy"
+                } else {
+                    "sel4-irq-unbound"
+                };
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=setup-firmware-channel action=poll-only-defer-interrupt-arm reason=sel4-no-irq-ack-loop hostintmask=0x{hostintmask:08x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
+                    "[pi4-wifi] firmware stage=setup-firmware-channel action=poll-only-defer-interrupt-arm reason={reason} hostintmask=0x{hostintmask:08x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
                     hostintmask = HOSTINTMASK,
                     devctl = devctl_programmed,
                     mesbusy = CY_43455_MESBUSYCTRL,
@@ -17869,9 +17967,9 @@ mod tests {
     }
 
     #[test]
-    fn firmware_channel_linux_minimal_setup_defers_interrupt_delivery_for_sel4_polling() {
-        assert!(firmware_channel_defers_function2_interrupts(true));
-        assert!(firmware_channel_defers_function2_interrupts(false));
+    fn firmware_channel_linux_minimal_setup_arms_interrupt_delivery_when_irq_bound() {
+        assert!(!firmware_channel_defers_function2_interrupts(true));
+        assert!(!firmware_channel_defers_function2_interrupts(false));
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(true));
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(false));
     }
@@ -21969,6 +22067,7 @@ mod tests {
         assert_eq!(SMB_NAK, 1 << 0);
         assert_eq!(SMB_INT_ACK, 1 << 1);
         assert_eq!(HOSTINTMASK, I_HMB_SW_MASK | I_CHIPACTIVE);
+        assert_eq!(PI4_WIFI_SDIO_HOST_IRQ, 158);
         assert_eq!(SDPCMD_REG_FUNCTIONINTMASK, 0x34);
         assert_eq!(FUNCTIONINTMASK, u32::from(SDIO_FUNC_ENABLE_2));
         assert_eq!(SDIO_INTERRUPT_ENABLE_MASK, 0x07);

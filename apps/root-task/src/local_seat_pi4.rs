@@ -190,12 +190,12 @@ const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 2] = [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XH
 // Linux routes the Pi 4 VL805 through MSI IRQ 30. Cohesix does not publish an
 // MSI doorbell yet, and raw bridge/INTx sink binding has correlated with fatal
 // prompt-side halts, so keep the runtime path polling-only until MSI exists.
-// The seL4 IRQ contract also requires a notification wait/poll path that clears
-// the device-side source before calling IRQHandler_Ack. Local-seat USB does not
-// have that service loop yet, so binding a handler cap would be an incomplete
-// IRQ sink even if the raw line number were correct. IRQ 27 is the kernel's ARM
-// generic virtual timer PPI on this seL4 build, not an xHCI/PCIe line, so it
-// remains diagnostic-only for USB.
+// The HAL owns the seL4 notification wait/poll path that clears device state
+// before IRQHandler_Ack, but local-seat USB still lacks the Pi 4 VL805 MSI route
+// and xHCI event-source drain integration. Binding a raw handler cap here would
+// still be an incomplete IRQ sink even if the raw line number were correct.
+// IRQ 27 is the kernel's ARM generic virtual timer PPI on this seL4 build, not
+// an xHCI/PCIe line, so it remains diagnostic-only for USB.
 const XHCI_IRQ_SERVICE_ACK_LOOP_ENABLED: bool = false;
 const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = false;
 // Device untyped retype on seL4 is monotonic; retries can only consume more

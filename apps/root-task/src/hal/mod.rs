@@ -28,13 +28,11 @@ pub mod pi4_wifi;
 #[cfg(feature = "kernel")]
 use crate::drivers::cyw43;
 #[cfg(feature = "kernel")]
-use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame};
+use crate::sel4::{self, DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame};
 #[cfg(feature = "kernel")]
 use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
-use sel4_sys::seL4_ARM_VMAttributes;
-#[cfg(feature = "kernel")]
-use sel4_sys::seL4_Error;
+use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
 
 /// Timebase exists to unify timing for event pump + smoltcp; wiring will follow.
 pub trait Timebase {
@@ -250,6 +248,130 @@ impl<'a> WifiFirmwareBundle<'a> {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Irq(pub u32);
 
+/// Trigger mode requested when deriving an IRQHandler capability.
+#[cfg(feature = "kernel")]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum IrqTrigger {
+    /// Level-triggered interrupt line. This is the correct mode for Pi 4 SDIO
+    /// and PCIe INTx-style lines.
+    Level,
+    /// Edge-triggered interrupt line.
+    Edge,
+}
+
+#[cfg(feature = "kernel")]
+impl IrqTrigger {
+    #[must_use]
+    const fn arm_trigger_word(self) -> seL4_Word {
+        match self {
+            Self::Level => 0,
+            Self::Edge => 1,
+        }
+    }
+}
+
+/// HAL-owned seL4 IRQ binding.
+///
+/// Drivers may inspect this for diagnostics, but acquisition and release stay
+/// behind [`KernelHal`] / [`DeviceHal`]. Device-specific clearing stays in the
+/// driver because xHCI, SDIO, GENET, and future devices all clear different
+/// source registers.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelIrqBinding {
+    irq: Irq,
+    trigger: IrqTrigger,
+    handler_slot: seL4_CPtr,
+    notification_slot: seL4_CPtr,
+    badged_notification_slot: seL4_CPtr,
+    badge: seL4_Word,
+}
+
+#[cfg(feature = "kernel")]
+impl KernelIrqBinding {
+    /// Returns the IRQ number covered by this binding.
+    #[must_use]
+    pub const fn irq(self) -> Irq {
+        self.irq
+    }
+
+    /// Returns the seL4 trigger mode used when deriving the IRQHandler cap.
+    #[must_use]
+    pub const fn trigger(self) -> IrqTrigger {
+        self.trigger
+    }
+
+    /// Returns the HAL-minted notification badge for diagnostics.
+    #[must_use]
+    pub const fn badge(self) -> seL4_Word {
+        self.badge
+    }
+
+    /// Returns the IRQHandler cap slot for diagnostics only.
+    #[must_use]
+    pub const fn handler_slot_for_diagnostics(self) -> seL4_CPtr {
+        self.handler_slot
+    }
+
+    /// Returns the notification object cap slot for diagnostics only.
+    #[must_use]
+    pub const fn notification_slot_for_diagnostics(self) -> seL4_CPtr {
+        self.notification_slot
+    }
+
+    pub(crate) fn ack_from_hal(&self) -> Result<(), HalError> {
+        let err = sel4::irq_handler_ack(self.handler_slot);
+        if err == seL4_NoError {
+            Ok(())
+        } else {
+            Err(HalError::Sel4(err))
+        }
+    }
+
+    pub(crate) fn poll_and_service_from_hal<F>(
+        &self,
+        clear_device_source: F,
+    ) -> Result<IrqServiceOutcome, HalError>
+    where
+        F: FnOnce() -> Result<(), HalError>,
+    {
+        let mut badge = 0;
+        let _ = sel4::poll(self.notification_slot, &mut badge);
+        if badge == 0 {
+            return Ok(IrqServiceOutcome::Idle);
+        }
+
+        clear_device_source()?;
+        self.ack_from_hal()?;
+        Ok(IrqServiceOutcome::Serviced { badge })
+    }
+
+    pub(crate) fn wait_and_service_from_hal<F>(
+        &self,
+        clear_device_source: F,
+    ) -> Result<seL4_Word, HalError>
+    where
+        F: FnOnce() -> Result<(), HalError>,
+    {
+        let mut badge = 0;
+        let _ = sel4::wait(self.notification_slot, &mut badge);
+        clear_device_source()?;
+        self.ack_from_hal()?;
+        Ok(badge)
+    }
+}
+
+/// Result from a non-blocking IRQ service attempt.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IrqServiceOutcome {
+    /// No notification was pending.
+    Idle,
+    /// A notification was observed, the device source was cleared, and the
+    /// IRQHandler was acknowledged.
+    Serviced { badge: seL4_Word },
+}
+
 /// Abstraction over IRQ controller behaviour.
 #[cfg(feature = "kernel")]
 pub trait IrqCtl {
@@ -258,6 +380,12 @@ pub trait IrqCtl {
 
     /// Acknowledges a previously observed IRQ.
     fn ack(&self, irq: Irq);
+}
+
+#[cfg(feature = "kernel")]
+#[must_use]
+const fn irq_notification_badge(irq: Irq) -> seL4_Word {
+    irq.0 as seL4_Word + 1
 }
 
 /// Deterministic, pump-driven timebase suitable for dev-virt.
@@ -521,6 +649,30 @@ pub trait DeviceHal {
 
     /// Snapshot of allocator usage for debugging.
     fn snapshot(&self) -> KernelEnvSnapshot;
+
+    /// Creates a HAL-owned IRQHandler notification binding for a device IRQ.
+    #[cfg(feature = "kernel")]
+    fn bind_irq_notification(
+        &mut self,
+        irq: Irq,
+        trigger: IrqTrigger,
+    ) -> Result<KernelIrqBinding, Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        let _ = irq;
+        let _ = trigger;
+        Err(HalError::Unsupported("irq-notification").into())
+    }
+
+    /// Acknowledges a HAL-owned IRQ binding after the device source is clear.
+    #[cfg(feature = "kernel")]
+    fn ack_irq_notification(&mut self, binding: &KernelIrqBinding) -> Result<(), Self::Error>
+    where
+        Self::Error: From<HalError>,
+    {
+        binding.ack_from_hal().map_err(Self::Error::from)
+    }
 }
 
 /// PCI capability layer for platforms that expose discoverable PCI/MMIO BARs.
@@ -719,6 +871,151 @@ impl<'a> KernelHal<'a> {
         &mut self.env
     }
 
+    /// Creates an IRQHandler and badged notification cap for a device IRQ.
+    ///
+    /// The returned binding is intentionally inert until the driver clears or
+    /// masks its device-side interrupt source and calls [`Self::ack_irq`].
+    pub fn bind_irq_notification(
+        &mut self,
+        irq: Irq,
+        trigger: IrqTrigger,
+    ) -> Result<KernelIrqBinding, HalError> {
+        let depth = sel4::word_bits() as u8;
+        let root_cnode = self.env.init_cnode_cap();
+        let handler_slot = self.env.allocate_slot();
+
+        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        let get_err = sel4::irq_control_get_trigger_handler(
+            irq.0 as seL4_Word,
+            trigger.arm_trigger_word(),
+            root_cnode,
+            handler_slot,
+            depth,
+        );
+
+        #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
+        let get_err = {
+            let _ = trigger;
+            sel4::irq_control_get_level_handler(irq.0 as seL4_Word, root_cnode, handler_slot, depth)
+        };
+
+        if get_err != seL4_NoError {
+            let _ = sel4::cnode_delete(root_cnode, handler_slot, depth);
+            return Err(HalError::Sel4(get_err));
+        }
+
+        let notification_slot = self.env.alloc_notification().map_err(|err| {
+            let _ = sel4::cnode_delete(root_cnode, handler_slot, depth);
+            HalError::Sel4(err)
+        })?;
+
+        let badged_notification_slot = self.env.allocate_slot();
+        let badge = irq_notification_badge(irq);
+        let mint_err = sel4::cnode_mint_depth(
+            root_cnode,
+            badged_notification_slot,
+            depth,
+            root_cnode,
+            notification_slot,
+            depth,
+            sel4_sys::seL4_CapRights_All,
+            badge,
+        );
+        if mint_err != seL4_NoError {
+            let _ = sel4::cnode_delete(root_cnode, badged_notification_slot, depth);
+            let _ = sel4::cnode_delete(root_cnode, notification_slot, depth);
+            let _ = sel4::cnode_delete(root_cnode, handler_slot, depth);
+            return Err(HalError::Sel4(mint_err));
+        }
+
+        let bind_err = sel4::irq_handler_set_notification(handler_slot, badged_notification_slot);
+        if bind_err != seL4_NoError {
+            let _ = sel4::irq_handler_clear(handler_slot);
+            let _ = sel4::cnode_delete(root_cnode, badged_notification_slot, depth);
+            let _ = sel4::cnode_delete(root_cnode, notification_slot, depth);
+            let _ = sel4::cnode_delete(root_cnode, handler_slot, depth);
+            return Err(HalError::Sel4(bind_err));
+        }
+
+        Ok(KernelIrqBinding {
+            irq,
+            trigger,
+            handler_slot,
+            notification_slot,
+            badged_notification_slot,
+            badge,
+        })
+    }
+
+    /// Acknowledges an IRQHandler after the driver has cleared the source.
+    pub fn ack_irq(&mut self, binding: &KernelIrqBinding) -> Result<(), HalError> {
+        binding.ack_from_hal()
+    }
+
+    /// Polls one IRQ notification and services it with a device clear callback.
+    ///
+    /// This is the required seL4 ordering for level-triggered device IRQs:
+    /// observe the notification, clear the device-side interrupt source, then
+    /// acknowledge the IRQHandler so seL4 may deliver the next interrupt.
+    pub fn poll_and_service_irq<F>(
+        &mut self,
+        binding: &KernelIrqBinding,
+        clear_device_source: F,
+    ) -> Result<IrqServiceOutcome, HalError>
+    where
+        F: FnOnce(&mut Self) -> Result<(), HalError>,
+    {
+        let mut badge = 0;
+        let _ = sel4::poll(binding.notification_slot, &mut badge);
+        if badge == 0 {
+            return Ok(IrqServiceOutcome::Idle);
+        }
+
+        clear_device_source(self)?;
+        binding.ack_from_hal()?;
+        Ok(IrqServiceOutcome::Serviced { badge })
+    }
+
+    /// Waits for one IRQ notification and services it with a device clear callback.
+    pub fn wait_and_service_irq<F>(
+        &mut self,
+        binding: &KernelIrqBinding,
+        clear_device_source: F,
+    ) -> Result<seL4_Word, HalError>
+    where
+        F: FnOnce(&mut Self) -> Result<(), HalError>,
+    {
+        let mut badge = 0;
+        let _ = sel4::wait(binding.notification_slot, &mut badge);
+        clear_device_source(self)?;
+        binding.ack_from_hal()?;
+        Ok(badge)
+    }
+
+    /// Clears an IRQ binding and deletes the caps owned by the HAL binding.
+    pub fn release_irq_notification(&mut self, binding: KernelIrqBinding) -> Result<(), HalError> {
+        let depth = sel4::word_bits() as u8;
+        let root_cnode = self.env.init_cnode_cap();
+        let mut first_error = seL4_NoError;
+
+        for err in [
+            sel4::irq_handler_clear(binding.handler_slot),
+            sel4::cnode_delete(root_cnode, binding.badged_notification_slot, depth),
+            sel4::cnode_delete(root_cnode, binding.notification_slot, depth),
+            sel4::cnode_delete(root_cnode, binding.handler_slot, depth),
+        ] {
+            if err != seL4_NoError && first_error == seL4_NoError {
+                first_error = err;
+            }
+        }
+
+        if first_error == seL4_NoError {
+            Ok(())
+        } else {
+            Err(HalError::Sel4(first_error))
+        }
+    }
+
     fn pi4_wifi_state(&mut self) -> Result<&mut pi4_wifi::Pi4WifiState, HalError> {
         if self.pi4_wifi.is_none() {
             self.pi4_wifi = Some(pi4_wifi::Pi4WifiState::new(self)?);
@@ -834,6 +1131,18 @@ impl<'a> DeviceHal for KernelHal<'a> {
     fn snapshot(&self) -> KernelEnvSnapshot {
         self.env.snapshot()
     }
+
+    fn bind_irq_notification(
+        &mut self,
+        irq: Irq,
+        trigger: IrqTrigger,
+    ) -> Result<KernelIrqBinding, Self::Error> {
+        KernelHal::bind_irq_notification(self, irq, trigger)
+    }
+
+    fn ack_irq_notification(&mut self, binding: &KernelIrqBinding) -> Result<(), Self::Error> {
+        KernelHal::ack_irq(self, binding)
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -914,6 +1223,23 @@ impl<'a> Cyw43Hal for KernelHal<'a> {
 #[cfg(test)]
 mod tests {
     use super::{SdioBusWidth, SdioFunction, WifiFirmwareBundle};
+
+    #[cfg(feature = "kernel")]
+    use super::{irq_notification_badge, Irq, IrqTrigger};
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn irq_notification_badges_are_nonzero_and_irq_derived() {
+        assert_eq!(irq_notification_badge(Irq(0)), 1);
+        assert_eq!(irq_notification_badge(Irq(143)), 144);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn irq_trigger_words_match_arm_sel4_contract() {
+        assert_eq!(IrqTrigger::Level.arm_trigger_word(), 0);
+        assert_eq!(IrqTrigger::Edge.arm_trigger_word(), 1);
+    }
 
     #[test]
     fn wifi_firmware_bundle_validation_rejects_missing_assets() {

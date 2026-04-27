@@ -957,6 +957,13 @@ pub fn nb_recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
     unsafe { syscall::nb_recv(dest, badge) }
 }
 
+/// Issues a non-blocking wait on the supplied notification object.
+#[cfg(feature = "kernel")]
+#[inline]
+pub fn poll(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
+    unsafe { syscall::poll(dest, badge) }
+}
+
 /// Yields the current thread to the scheduler.
 #[cfg(feature = "kernel")]
 #[inline]
