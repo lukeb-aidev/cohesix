@@ -990,12 +990,14 @@ const fn firmware_channel_uses_linux_minimal_setup(experimental_no_ht_transport:
 
 #[inline]
 const fn firmware_channel_defers_function2_interrupts(experimental_no_ht_transport: bool) -> bool {
-    // Linux arms the dongle-side interrupt path as part of the initial F2
-    // channel setup. Keep that order even on the bounded no-HT path; the Pi 4
-    // host still polls, but the device-side routing should not stay deferred
-    // once watermark/devctl/mesbusy programming is live.
+    // Linux arms the dongle-side interrupt path because brcmfmac has an MMC
+    // IRQ/DPC service loop. Cohesix is currently closer to the U-Boot model:
+    // transfer completion and the F2 mailbox are polled, and there is no seL4
+    // IRQHandler notification loop that clears the device-side source before
+    // IRQHandler_Ack. Keep Linux's register order, but do not enable
+    // CCCR/F2 interrupt delivery until that service loop exists.
     let _ = experimental_no_ht_transport;
-    false
+    true
 }
 
 #[inline]
@@ -2982,27 +2984,17 @@ const fn function2_accepts_linux_alp_kso_forced_ht_clock(
     last_cardcap: Option<u8>,
     current_clock_hz: u32,
 ) -> bool {
-    !experimental_no_ht_transport
-        && current_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ
-        && (chipclk & SBSDIO_ALP_AVAIL) != 0
-        && (chipclk & SBSDIO_HT_AVAIL_REQ) != 0
-        && (chipclk & SBSDIO_FORCE_HT) != 0
-        && (chipclk & SBSDIO_HT_AVAIL) == 0
-        && match last_wakeupctrl {
-            Some(value) => (value & SBSDIO_WAKE_TILL_HT_AVAIL) != 0,
-            None => false,
-        }
-        && match last_sleepcsr {
-            Some(value) => (value & SBSDIO_FUNC1_SLEEPCSR_KSO_MASK) != 0,
-            None => false,
-        }
-        && match last_cardcap {
-            Some(value) => {
-                (value & cyw43455_cardcap_command_decode_value())
-                    == cyw43455_cardcap_command_decode_value()
-            }
-            None => false,
-        }
+    // Linux proves HT before Function 2. KSO, ALP, and cardcap are useful
+    // wake/control evidence, but they are not a substitute for CHIPCLKCSR.HT_AVAIL.
+    let _ = (
+        experimental_no_ht_transport,
+        chipclk,
+        last_wakeupctrl,
+        last_sleepcsr,
+        last_cardcap,
+        current_clock_hz,
+    );
+    false
 }
 
 #[inline]
@@ -9730,7 +9722,7 @@ impl SdioHost {
             )?;
             if defer_interrupts {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=slow-link-channel-rearm action=linux-defer-interrupt-arm reason=brcmfmac-order hostintmask=0x{hostintmask:08x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
+                    "[pi4-wifi] firmware stage=slow-link-channel-rearm action=poll-only-defer-interrupt-arm reason=sel4-no-irq-ack-loop hostintmask=0x{hostintmask:08x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
                     hostintmask = HOSTINTMASK,
                     devctl = devctl_programmed,
                     mesbusy = CY_43455_MESBUSYCTRL,
@@ -9749,7 +9741,7 @@ impl SdioHost {
                 };
                 if defer_interrupts {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=linux-sdio-minimal-strict-order order=mailbox>{function2_order}>hostintmask>watermark>devctl>mesbusy budget={} interrupts=deferred",
+                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=linux-sdio-minimal-strict-order order=mailbox>{function2_order}>hostintmask>watermark>devctl>mesbusy budget={} interrupts=poll-only-deferred",
                         sdio_function_ready_budget_name(function2_ready_budget),
                     ));
                 } else {
@@ -12022,7 +12014,7 @@ impl SdioHost {
             )?;
             if defer_interrupts {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=setup-firmware-channel action=linux-defer-interrupt-arm reason=brcmfmac-order hostintmask=0x{hostintmask:08x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
+                    "[pi4-wifi] firmware stage=setup-firmware-channel action=poll-only-defer-interrupt-arm reason=sel4-no-irq-ack-loop hostintmask=0x{hostintmask:08x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
                     hostintmask = HOSTINTMASK,
                     devctl = devctl_programmed,
                     mesbusy = CY_43455_MESBUSYCTRL,
@@ -12036,7 +12028,7 @@ impl SdioHost {
             if linux_minimal_setup {
                 if defer_interrupts {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=setup-firmware-channel action=linux-sdio-minimal-strict-order order=mailbox>f2>hostintmask>watermark>devctl>mesbusy interrupts=deferred"
+                        "[pi4-wifi] firmware stage=setup-firmware-channel action=linux-sdio-minimal-strict-order order=mailbox>f2>hostintmask>watermark>devctl>mesbusy interrupts=poll-only-deferred"
                     ));
                 } else {
                     emit_breadcrumb(format_args!(
@@ -17877,9 +17869,9 @@ mod tests {
     }
 
     #[test]
-    fn firmware_channel_linux_minimal_setup_arms_interrupts_after_function2_ready() {
-        assert!(!firmware_channel_defers_function2_interrupts(true));
-        assert!(!firmware_channel_defers_function2_interrupts(false));
+    fn firmware_channel_linux_minimal_setup_defers_interrupt_delivery_for_sel4_polling() {
+        assert!(firmware_channel_defers_function2_interrupts(true));
+        assert!(firmware_channel_defers_function2_interrupts(false));
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(true));
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(false));
     }
@@ -25901,7 +25893,7 @@ mod tests {
     }
 
     #[test]
-    fn function2_enable_requires_linux_forced_ht_clock() {
+    fn function2_enable_requires_real_ht_clock_before_function2() {
         assert!(function2_requires_forced_ht_clock(false));
         assert!(function2_requires_forced_ht_clock(true));
         assert!(function2_requires_ht_available_for_forced_clock(false));
@@ -25917,7 +25909,7 @@ mod tests {
             function2_force_ht_clock_value(SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL),
             SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL | SBSDIO_FORCE_HT
         );
-        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
             false,
             SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL,
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
@@ -25925,7 +25917,7 @@ mod tests {
             Some(cyw43455_cardcap_command_decode_value()),
             CYW43_CONTROL_PLANE_CLOCK_HZ,
         ));
-        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
             false,
             SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL,
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
