@@ -108,9 +108,11 @@ const RPI4_XHCI_MMIO_FALLBACKS: [usize; 2] = [
     RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
     RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
 ];
-// Boot-time xHCI pinning must only target controller BAR aliases backed by
-// the firmware DTB or a validated runtime hint.
-const RPI4_XHCI_MMIO_PRESEED_CANDIDATES: [usize; 2] = [
+// Linux captures and prior Cohesix no-handoff boots identify the high PCIe
+// aperture as VL805 BAR0. Preseed it as the Cohesix-owned primary candidate;
+// keep the low aliases only as diagnostics.
+const RPI4_XHCI_MMIO_PRESEED_CANDIDATES: [usize; 3] = [
+    RPI4_XHCI_MMIO_HIGH_CANDIDATE,
     RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
     RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
 ];
@@ -337,12 +339,11 @@ static WIFI_PROGRESS_TICKS: AtomicUsize = AtomicUsize::new(0);
 #[inline]
 const fn xhci_runtime_init_strategy_prompt_safe(strategy: XhciRuntimeInitStrategy) -> bool {
     match strategy.firmware_handoff {
-        // Manual probes may use trusted snapshot modes, but the reset-owned
-        // runtime-default lane still needs PCI/config replay authority before
-        // it can safely assert HCRST on Pi 4 VL805.
+        // Manual probes use the same poll-only xHCI model as boot-time
+        // Cohesix-owned initialization; U-Boot handoff is only a fallback.
         XhciFirmwareHandoff::ColdStartFromSnapshot => true,
         XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState => true,
-        XhciFirmwareHandoff::None => false,
+        XhciFirmwareHandoff::None => true,
     }
 }
 
@@ -1383,7 +1384,7 @@ impl Pi4LocalSeat {
         if first_preseed {
             boot_log::force_uart_line("[local-seat] pi4 xhci preseed begin");
         }
-        // Reserve the handed-off xHCI BAR before any optional config-space
+        // Reserve the captured xHCI BAR before any optional config-space
         // preseed. Current Pi 4 evidence validates BAR0 only, so config-space
         // probing stays disabled until HAL provides a real PCIe config aperture.
         prime_pinned_xhci_window(
@@ -2037,9 +2038,9 @@ fn xhci_trusted_handoff_snapshot_allowed(
 
 #[inline]
 const fn xhci_preferred_trusted_handoff_mode(runtime_vl805_reset_state: u8) -> XhciFirmwareHandoff {
-    // Treat the U-Boot handoff as a capability source. The prompt-safe ladder
-    // first uses its stop-state seed to skip the fragile live pre-reset reads,
-    // then falls back to the unseeded U-Boot-shaped fresh-init lane if needed.
+    // If the boot script explicitly exports a U-Boot xHCI handoff contract,
+    // retain the existing fallback behavior. Default builds now omit that
+    // contract so the primary runtime path is Cohesix-owned/no-handoff.
     let _ = runtime_vl805_reset_state;
     XhciFirmwareHandoff::ColdStartFromSnapshot
 }
@@ -4118,6 +4119,7 @@ fn prime_pinned_xhci_window(
     if let Some(hint) = vl805_hint {
         push_candidate(hint);
     }
+    push_candidate(RPI4_XHCI_MMIO_HIGH_CANDIDATE);
     if let Some(hint) = xhci_mmio_hint {
         push_candidate(hint);
     }
@@ -11668,23 +11670,23 @@ mod tests {
     }
 
     #[test]
-    fn prompt_safe_runtime_init_strategy_requires_trusted_seed_for_runtime_default() {
-        assert!(!xhci_runtime_init_strategy_prompt_safe(
+    fn prompt_safe_runtime_init_strategy_accepts_cohesix_owned_default() {
+        assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
         ));
-        assert!(!xhci_runtime_init_strategy_prompt_safe_for_source(
+        assert!(xhci_runtime_init_strategy_prompt_safe_for_source(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
         ));
-        assert!(!xhci_runtime_init_strategy_prompt_safe_for_source(
+        assert!(xhci_runtime_init_strategy_prompt_safe_for_source(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             XhciFirmwareHandoff::None,
             super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
         ));
-        assert!(!xhci_runtime_init_strategy_prompt_safe(
+        assert!(xhci_runtime_init_strategy_prompt_safe(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
         assert!(xhci_runtime_init_strategy_prompt_safe_for_source(
@@ -11705,7 +11707,7 @@ mod tests {
             super::VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
-        assert!(!xhci_runtime_init_strategy_prompt_safe_for_source(
+        assert!(xhci_runtime_init_strategy_prompt_safe_for_source(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::None,
             super::VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED,
