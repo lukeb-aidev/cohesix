@@ -494,7 +494,7 @@ const fn skip_doorbell_readback_after_ring(firmware_handoff: XhciFirmwareHandoff
 const fn skip_config_write_during_init(firmware_handoff: XhciFirmwareHandoff) -> bool {
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::PlatformResetComplete | XhciFirmwareHandoff::PreserveControllerState
     )
 }
 
@@ -503,9 +503,10 @@ const fn skip_config_write_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Stop-state seeded lanes keep CONFIG untouched. Linux capture and U-Boot
-    // stop evidence both show MaxSlotsEn=32, and Pi 4/seL4 currently traps on
-    // the redundant CONFIG store before any ring ownership edge is reached.
+    // Platform-reset and stop-state lanes keep CONFIG untouched. Linux capture
+    // and U-Boot stop evidence both show MaxSlotsEn=32, and Pi 4/seL4 currently
+    // traps on the redundant CONFIG store before any ring ownership edge is
+    // reached.
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -582,10 +583,15 @@ const fn runtime_pollsafe_no_fresh_ownership_handoff(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Stop-state-only seeds prove the halted poll-safe state, but not enough
-    // runtime ring ownership to publish a fresh DCBAAP on Pi 4/seL4.
+    // Stop-state-only seeds and the Pi 4 platform-reset-complete witness prove
+    // a bounded poll-safe state, but not enough runtime ring ownership to
+    // publish a fresh DCBAAP on seL4.
     runtime_bootloader_owned_pollsafe_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
+        || (matches!(
+            firmware_handoff,
+            XhciFirmwareHandoff::PlatformResetComplete
+        ) && runtime_seed_snapshot.is_none())
 }
 
 #[inline(always)]
@@ -1594,13 +1600,11 @@ fn split_u64_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
 }
 
 #[inline(always)]
-fn dcbaap_reg_write_ops(offset: usize, current: u64, target: u64) -> [(usize, u32); 2] {
-    let [low, high] = split_u64_reg_write_ops(offset, target);
-    if ((current >> 32) as u32) != high.1 {
-        [high, low]
-    } else {
-        [low, high]
-    }
+fn dcbaap_reg_write_ops(offset: usize, _current: u64, target: u64) -> [(usize, u32); 2] {
+    // Preserve the original usb-oxide split-write order. VL805 observes the
+    // low/high pair directly; publishing the high dword first can expose a
+    // transient high-only DCBAAP base on the Pi 4 PCIe DMA alias.
+    split_u64_reg_write_ops(offset, target)
 }
 
 #[inline(always)]
@@ -2904,7 +2908,7 @@ impl<H: Dma> XhciCtrl<H> {
                 emit_xhci_diag(0x0242, this.read_op_u64(reg::DCBAAP), 0, 0);
             }
         };
-        if !defer_dcbaap_publish {
+        if !defer_dcbaap_publish && !skip_fresh_runtime_ownership_publish {
             publish_dcbaap(self);
         }
 
@@ -5751,10 +5755,10 @@ mod tests {
     }
 
     #[test]
-    fn dcbaap_write_ops_publish_high_before_low_when_high_dword_changes() {
+    fn dcbaap_write_ops_publish_low_before_high_when_high_dword_changes() {
         assert_eq!(
             dcbaap_reg_write_ops(0x50, 0x0000_0000_0000_0000, 0x0000_0004_0400_3000),
-            [(0x54, 0x0000_0004), (0x50, 0x0400_3000)]
+            [(0x50, 0x0400_3000), (0x54, 0x0000_0004)]
         );
     }
 
@@ -6217,9 +6221,16 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_complete_skips_hcrst_but_keeps_fresh_runtime_ownership() {
+    fn platform_reset_complete_skips_hcrst_config_and_fresh_runtime_ownership() {
         assert!(skip_reset_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
+        ));
+        assert!(skip_config_write_during_init(
+            XhciFirmwareHandoff::PlatformResetComplete
+        ));
+        assert!(skip_config_write_during_init_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
         ));
         assert!(skip_live_halt_revalidation(
             XhciFirmwareHandoff::PlatformResetComplete
@@ -6236,11 +6247,23 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(!skip_fresh_runtime_ownership_publish_with_snapshot(
+        assert!(runtime_pollsafe_no_fresh_ownership_handoff(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(!runtime_handoff_skips_live_run_write(
+        assert!(skip_fresh_runtime_ownership_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(skip_fresh_event_ring_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(runtime_handoff_skips_live_run_write(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(runtime_handoff_skips_live_drop_stop(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -7307,9 +7330,12 @@ mod tests {
     }
 
     #[test]
-    fn only_preserve_state_handoffs_skip_config_write_during_init() {
+    fn platform_and_preserve_state_handoffs_skip_config_write_during_init() {
         assert!(!skip_config_write_during_init(
             XhciFirmwareHandoff::ColdStartFromSnapshot
+        ));
+        assert!(skip_config_write_during_init(
+            XhciFirmwareHandoff::PlatformResetComplete
         ));
         assert!(skip_config_write_during_init(
             XhciFirmwareHandoff::PreserveControllerState
