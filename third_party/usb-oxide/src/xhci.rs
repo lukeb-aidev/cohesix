@@ -213,7 +213,9 @@ const fn preserve_firmware_handoff_config(firmware_handoff: XhciFirmwareHandoff)
 const fn skip_preinit_polling_scrub(firmware_handoff: XhciFirmwareHandoff) -> bool {
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PlatformResetComplete
+            | XhciFirmwareHandoff::PreserveControllerState
     )
 }
 
@@ -221,7 +223,9 @@ const fn skip_preinit_polling_scrub(firmware_handoff: XhciFirmwareHandoff) -> bo
 const fn skip_constructor_polling_scrub_writes(firmware_handoff: XhciFirmwareHandoff) -> bool {
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PlatformResetComplete
+            | XhciFirmwareHandoff::PreserveControllerState
     )
 }
 
@@ -321,6 +325,7 @@ const fn skip_legacy_ownership_claim_for_handoff(firmware_handoff: XhciFirmwareH
         firmware_handoff,
         XhciFirmwareHandoff::ColdStartFromSnapshot
             | XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PlatformResetComplete
             | XhciFirmwareHandoff::PreserveControllerState
     )
 }
@@ -438,7 +443,10 @@ const fn use_live_config_seed_reads_for_init(
 const fn skip_live_post_reset_verification_readbacks(
     firmware_handoff: XhciFirmwareHandoff,
 ) -> bool {
-    matches!(firmware_handoff, XhciFirmwareHandoff::ResetlessReinit)
+    matches!(
+        firmware_handoff,
+        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PlatformResetComplete
+    )
 }
 
 #[inline(always)]
@@ -638,6 +646,10 @@ const fn runtime_mailbox_reset_needs_blind_settle(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || matches!(
+            firmware_handoff,
+            XhciFirmwareHandoff::PlatformResetComplete
+        )
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -697,6 +709,10 @@ const fn runtime_handoff_needs_pre_run_settle(
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
+        || matches!(
+            firmware_handoff,
+            XhciFirmwareHandoff::PlatformResetComplete
+        )
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
             && runtime_seed_snapshot.is_none()
@@ -1109,7 +1125,9 @@ const fn skip_post_reset_cnr_poll_with_snapshot(
 const fn skip_live_halt_revalidation(firmware_handoff: XhciFirmwareHandoff) -> bool {
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PlatformResetComplete
+            | XhciFirmwareHandoff::PreserveControllerState
     )
 }
 
@@ -1398,6 +1416,10 @@ pub enum XhciFirmwareHandoff {
     /// runtime should adopt without rewriting preserved firmware-owned
     /// controller state.
     PreserveControllerState = 3,
+    /// Platform firmware or mailbox reset completed outside the xHCI HCRST
+    /// register edge. Runtime skips HCRST, then publishes fresh config and ring
+    /// ownership using the normal post-reset order.
+    PlatformResetComplete = 4,
 }
 
 /// Bootloader-exported xHCI stop/ring seed snapshot for trusted handoff.
@@ -4661,7 +4683,7 @@ mod tests {
         runtime_handoff_needs_uboot_style_reset_write, runtime_handoff_needs_uboot_style_run_write,
         runtime_handoff_skips_live_drop_stop, runtime_handoff_skips_live_run_write,
         runtime_mailbox_reset_handoff, runtime_mailbox_reset_needs_blind_settle,
-        runtime_mailbox_reset_stop_state_handoff,
+        runtime_mailbox_reset_stop_state_handoff, runtime_deferred_ring_handoff,
         runtime_needs_post_init_polling_irq_quiesce_with_snapshot,
         runtime_needs_post_run_polling_irq_quiesce_with_snapshot,
         runtime_owned_fresh_rings_handoff, runtime_pollsafe_no_fresh_ownership_handoff,
@@ -4678,7 +4700,7 @@ mod tests {
         skip_live_post_reset_verification_readbacks_with_snapshot,
         skip_post_reset_cnr_poll_with_snapshot, skip_post_run_interrupter_zeroing_with_snapshot,
         skip_preinit_polling_scrub, skip_reset_completion_poll_for_init, skip_reset_during_init,
-        skip_reset_during_init_with_snapshot,
+        skip_reset_during_init_with_snapshot, snapshot_resetless_reinit_handoff,
         skip_usbsts_clear_before_run_with_snapshot, split_u64_reg_write_ops,
         u64_register_change_mask, usbcmd_interrupt_delivery_enabled,
         use_atomic_erstba_publish_with_snapshot, use_atomic_runtime_ring_publish_with_snapshot,
@@ -6172,6 +6194,40 @@ mod tests {
             skip_reset_during_init(XhciFirmwareHandoff::None),
             SKIP_HCRST_DURING_INIT
         );
+    }
+
+    #[test]
+    fn platform_reset_complete_skips_hcrst_but_keeps_fresh_runtime_ownership() {
+        assert!(skip_reset_during_init(
+            XhciFirmwareHandoff::PlatformResetComplete
+        ));
+        assert!(skip_live_halt_revalidation(
+            XhciFirmwareHandoff::PlatformResetComplete
+        ));
+        assert!(runtime_mailbox_reset_needs_blind_settle(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(runtime_handoff_needs_pre_run_settle(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!runtime_deferred_ring_handoff(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!skip_fresh_runtime_ownership_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!runtime_handoff_skips_live_run_write(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!snapshot_resetless_reinit_handoff(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
     }
 
     #[test]

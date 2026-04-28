@@ -378,7 +378,9 @@ const fn xhci_runtime_init_strategy_prompt_safe(strategy: XhciRuntimeInitStrateg
         // Manual probes use the same poll-only xHCI model as boot-time
         // Cohesix-owned initialization; U-Boot handoff is only a fallback.
         XhciFirmwareHandoff::ColdStartFromSnapshot => true,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState => true,
+        XhciFirmwareHandoff::ResetlessReinit
+        | XhciFirmwareHandoff::PlatformResetComplete
+        | XhciFirmwareHandoff::PreserveControllerState => true,
         XhciFirmwareHandoff::None => true,
     }
 }
@@ -972,6 +974,7 @@ fn usb_probe_route_label(summary: UsbProbePathwaySummary) -> &'static str {
         ("cold-start-from-snapshot", "seeded-cold-start") => "trusted-high-bar-seeded-retry",
         ("preserve-controller-state", "stop-state-preserve") => "stop-state-preserve-fallback",
         ("resetless-reinit", "stop-state-resetless-reinit") => "stop-state-resetless-fallback",
+        ("platform-reset-complete", "mailbox-reset-complete") => "trusted-high-bar-mailbox-reset",
         _ => "diagnostic-fallback",
     }
 }
@@ -1040,9 +1043,8 @@ const fn usb_probe_preflight_next_step_for_source(
     preferred_handoff: XhciFirmwareHandoff,
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
-    if matches!(preferred_handoff, XhciFirmwareHandoff::None)
-        && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
-    {
+    let _ = preferred_handoff;
+    if xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy) {
         "mailbox-reset-notify"
     } else if xhci_controller_skips_initial_live_operational_reads(mmio, strategy) {
         "skip-pre-reset"
@@ -1082,10 +1084,9 @@ const fn usb_probe_preflight_followup_step_for_attempt(
     if xhci_runtime_init_strategy_skips_controller_entry(strategy) && strategy_idx < strategy_count
     {
         "fallback-next"
-    } else if matches!(preferred_handoff, XhciFirmwareHandoff::None)
-        && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
-    {
-        "skip-pre-reset"
+    } else if xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy) {
+        let _ = preferred_handoff;
+        "promote-platform-reset"
     } else {
         usb_probe_preflight_followup_step(strategy)
     }
@@ -1173,21 +1174,28 @@ fn usb_probe_preflight_status(
                     *strategy,
                 )
         })?;
+    let mailbox_reset_completed =
+        runtime_vl805_mailbox_reset_completed(VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire));
+    let effective_strategy = xhci_runtime_init_strategy_after_mailbox_reset(
+        effective_mmio,
+        strategy,
+        mailbox_reset_completed,
+    );
     let summary = UsbProbePathwaySummary::new(
         1,
         strategy_idx + 1,
         strategy_count,
-        xhci_runtime_init_strategy_policy_label(strategy),
-        xhci_runtime_init_strategy_origin_label(strategy),
-        xhci_firmware_handoff_mode_label(strategy.firmware_handoff),
-        xhci_runtime_init_strategy_seed_label(strategy),
-        xhci_runtime_init_strategy_halt_guard_label(strategy),
+        xhci_runtime_init_strategy_policy_label(effective_strategy),
+        xhci_runtime_init_strategy_origin_label(effective_strategy),
+        xhci_firmware_handoff_mode_label(effective_strategy.firmware_handoff),
+        xhci_runtime_init_strategy_seed_label(effective_strategy),
+        xhci_runtime_init_strategy_halt_guard_label(effective_strategy),
         false,
         XHCI_PCIE_DMA_WINDOW_ENABLED,
-        xhci_polling_only_runtime(effective_mmio, strategy.firmware_handoff),
+        xhci_polling_only_runtime(effective_mmio, effective_strategy.firmware_handoff),
     );
     let expected_diag_stage =
-        usb_probe_preflight_expected_diag_stage_for_source(effective_mmio, strategy);
+        usb_probe_preflight_expected_diag_stage_for_source(effective_mmio, effective_strategy);
     Some(UsbProbePreflightStatus {
         route: usb_probe_route_label(summary),
         strategy_idx: strategy_idx + 1,
@@ -1198,17 +1206,23 @@ fn usb_probe_preflight_status(
         seed: summary.seed,
         halt_guard: xhci_runtime_init_strategy_halt_guard_label_for_source(
             effective_mmio,
-            strategy,
+            effective_strategy,
         ),
         constructor: xhci_runtime_init_strategy_constructor_label_for_source(
             effective_mmio,
-            strategy,
+            effective_strategy,
         ),
-        pre_reset: xhci_runtime_init_strategy_pre_reset_label_for_source(effective_mmio, strategy),
-        legacy: xhci_runtime_init_strategy_legacy_label_for_source(effective_mmio, strategy),
-        run: xhci_runtime_init_strategy_run_label(strategy),
-        publish: xhci_runtime_init_strategy_publish_label(strategy),
-        post_ready_irq: xhci_runtime_init_strategy_post_ready_irq_label(strategy),
+        pre_reset: xhci_runtime_init_strategy_pre_reset_label_for_source(
+            effective_mmio,
+            effective_strategy,
+        ),
+        legacy: xhci_runtime_init_strategy_legacy_label_for_source(
+            effective_mmio,
+            effective_strategy,
+        ),
+        run: xhci_runtime_init_strategy_run_label(effective_strategy),
+        publish: xhci_runtime_init_strategy_publish_label(effective_strategy),
+        post_ready_irq: xhci_runtime_init_strategy_post_ready_irq_label(effective_strategy),
         current_step: usb_probe_preflight_current_step(),
         next_step: usb_probe_preflight_next_step_for_source(
             effective_mmio,
@@ -2147,6 +2161,21 @@ const fn xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(
 }
 
 #[inline]
+const fn xhci_runtime_init_strategy_after_mailbox_reset(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+    mailbox_reset_completed: bool,
+) -> XhciRuntimeInitStrategy {
+    if mailbox_reset_completed
+        && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
+    {
+        XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
+    } else {
+        strategy
+    }
+}
+
+#[inline]
 fn xhci_linux_capture_full_reset_mailbox_reset_required(
     mmio: usize,
     strategy: XhciRuntimeInitStrategy,
@@ -2233,6 +2262,7 @@ const fn xhci_firmware_handoff_mode_label(firmware_handoff: XhciFirmwareHandoff)
         XhciFirmwareHandoff::ColdStartFromSnapshot => "cold-start-from-snapshot",
         XhciFirmwareHandoff::ResetlessReinit => "resetless-reinit",
         XhciFirmwareHandoff::PreserveControllerState => "preserve-controller-state",
+        XhciFirmwareHandoff::PlatformResetComplete => "platform-reset-complete",
     }
 }
 
@@ -3685,8 +3715,11 @@ const fn xhci_controller_skips_initial_live_operational_reads(
     // HCRST/config/RUN rebuild controller ownership.
     mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
         && xhci_cap_probe_uses_linux_capture(mmio)
-        && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None)
-        && !strategy.seed_stop_state
+        && matches!(
+            (strategy.firmware_handoff, strategy.seed_stop_state),
+            (XhciFirmwareHandoff::None, false)
+                | (XhciFirmwareHandoff::PlatformResetComplete, false)
+        )
 }
 
 #[inline]
@@ -3791,6 +3824,7 @@ const fn xhci_runtime_init_strategy_policy_label(
         (XhciFirmwareHandoff::ColdStartFromSnapshot, false)
         | (XhciFirmwareHandoff::None, false) => "full-reset-start",
         (XhciFirmwareHandoff::ResetlessReinit, _) => "resetless-reinit",
+        (XhciFirmwareHandoff::PlatformResetComplete, _) => "platform-reset-complete",
     }
 }
 
@@ -3937,6 +3971,8 @@ const fn xhci_runtime_init_strategy_origin_label(
         (XhciFirmwareHandoff::PreserveControllerState, true) => "stop-state-preserve",
         (XhciFirmwareHandoff::ResetlessReinit, false) => "resetless-reinit",
         (XhciFirmwareHandoff::PreserveControllerState, false) => "preserve-controller-state",
+        (XhciFirmwareHandoff::PlatformResetComplete, true) => "stop-state-platform-reset-complete",
+        (XhciFirmwareHandoff::PlatformResetComplete, false) => "mailbox-reset-complete",
     }
 }
 
@@ -3978,7 +4014,9 @@ const fn xhci_runtime_init_strategy_skips_live_halt_read(
 ) -> bool {
     matches!(
         strategy.firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PlatformResetComplete
+            | XhciFirmwareHandoff::PreserveControllerState
     ) || (strategy.seed_stop_state
         && matches!(
             strategy.firmware_handoff,
@@ -4026,6 +4064,7 @@ const fn xhci_runtime_init_strategy_constructor_label(
         strategy.firmware_handoff,
         XhciFirmwareHandoff::ColdStartFromSnapshot
             | XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PlatformResetComplete
             | XhciFirmwareHandoff::PreserveControllerState
     ) {
         "trusted-quiesce"
@@ -4045,7 +4084,9 @@ const fn xhci_runtime_init_strategy_pre_reset_label(
     } else if strategy.seed_stop_state
         || matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ResetlessReinit
+                | XhciFirmwareHandoff::PlatformResetComplete
+                | XhciFirmwareHandoff::PreserveControllerState
         )
     {
         "skip-pre-reset"
@@ -4059,8 +4100,13 @@ const fn xhci_runtime_init_strategy_pre_reset_label_for_source(
     mmio: usize,
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
-    if xhci_controller_skips_initial_live_operational_reads(mmio, strategy) {
-        "mailbox-gated-hcrst"
+    if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::PlatformResetComplete
+    ) {
+        xhci_runtime_init_strategy_pre_reset_label(strategy)
+    } else if xhci_controller_skips_initial_live_operational_reads(mmio, strategy) {
+        "mailbox-reset-required"
     } else {
         xhci_runtime_init_strategy_pre_reset_label(strategy)
     }
@@ -4074,6 +4120,7 @@ const fn xhci_runtime_init_strategy_legacy_label(
         strategy.firmware_handoff,
         XhciFirmwareHandoff::ColdStartFromSnapshot
             | XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PlatformResetComplete
             | XhciFirmwareHandoff::PreserveControllerState
     ) || strategy.seed_stop_state
     {
@@ -4113,7 +4160,8 @@ const fn xhci_runtime_init_strategy_publish_label(
     if matches!(
         strategy.firmware_handoff,
         XhciFirmwareHandoff::ResetlessReinit
-    ) {
+    ) && strategy.seed_stop_state
+    {
         "rings-post-run"
     } else if strategy.seed_stop_state
         && matches!(
@@ -4135,6 +4183,7 @@ const fn xhci_runtime_init_strategy_post_ready_irq_label(
         strategy.firmware_handoff,
         XhciFirmwareHandoff::ColdStartFromSnapshot
             | XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PlatformResetComplete
             | XhciFirmwareHandoff::PreserveControllerState
     ) || strategy.seed_stop_state
     {
@@ -6544,6 +6593,7 @@ const fn xhci_irq_policy_reason(firmware_handoff: XhciFirmwareHandoff) -> &'stat
             XhciFirmwareHandoff::ColdStartFromSnapshot => "fw-handoff-cold-start-from-snapshot",
             XhciFirmwareHandoff::ResetlessReinit => "fw-handoff-resetless-reinit",
             XhciFirmwareHandoff::PreserveControllerState => "fw-handoff-preserve",
+            XhciFirmwareHandoff::PlatformResetComplete => "platform-reset-complete",
         }
     }
 }
@@ -6664,6 +6714,8 @@ const fn xhci_runtime_init_strategy_requires_primary_pcie_irq(
         && matches!(
             (strategy.firmware_handoff, strategy.seed_stop_state),
             (XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+                | (XhciFirmwareHandoff::PlatformResetComplete, false)
+                | (XhciFirmwareHandoff::ResetlessReinit, false)
                 | (XhciFirmwareHandoff::None, false)
                 | (XhciFirmwareHandoff::None, true)
         )
@@ -7690,7 +7742,8 @@ impl UsbKeyboard {
                     boot_log::force_uart_line(line.as_str());
                     continue;
                 }
-                let controller_params = xhci_controller_params_from_probe_with_strategy(
+                let mut effective_strategy = strategy;
+                let mut controller_params = xhci_controller_params_from_probe_with_strategy(
                     cap_probe,
                     effective_mmio,
                     strategy,
@@ -7795,35 +7848,35 @@ impl UsbKeyboard {
                         vl805_pci_mmio,
                         pci_cfg_ready,
                     );
-                if strategy_runtime_vl805_reset_requested
-                    && !runtime_vl805_mailbox_reset_completed(
+                if strategy_runtime_vl805_reset_requested {
+                    if !runtime_vl805_mailbox_reset_completed(
                         VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire),
-                    )
-                {
-                    let mut line = heapless::String::<320>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] vl805 reset handoff=cohesix-owned-linux-capture stage=pre-hcrst mmio=0x{mmio:016x} attempt={}/{} origin={} action=mailbox-notify",
-                            strategy_idx + 1,
-                            init_strategy_count,
-                            xhci_runtime_init_strategy_origin_label(strategy),
-                            mmio = effective_mmio,
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    if let Err(err) = ensure_runtime_vl805_mailbox_reset(hal) {
-                        let mut skip = heapless::String::<288>::new();
+                    ) {
+                        let mut line = heapless::String::<320>::new();
                         let _ = core::fmt::Write::write_fmt(
-                            &mut skip,
-                            format_args!(
-                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-hcrst detail={} action=skip-full-reset mmio=0x{mmio:016x}",
-                                err.as_str(),
+                            &mut line,
+                        format_args!(
+                            "[local-seat] vl805 reset handoff=cohesix-owned-linux-capture stage=pre-platform-reset mmio=0x{mmio:016x} attempt={}/{} origin={} action=mailbox-notify",
+                                strategy_idx + 1,
+                                init_strategy_count,
+                                xhci_runtime_init_strategy_origin_label(strategy),
                                 mmio = effective_mmio,
                             ),
                         );
-                        boot_log::force_uart_line(skip.as_str());
-                        continue;
+                        boot_log::force_uart_line(line.as_str());
+                        if let Err(err) = ensure_runtime_vl805_mailbox_reset(hal) {
+                            let mut skip = heapless::String::<288>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                            &mut skip,
+                            format_args!(
+                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-platform-reset detail={} action=skip-platform-reset mmio=0x{mmio:016x}",
+                                    err.as_str(),
+                                    mmio = effective_mmio,
+                                ),
+                            );
+                            boot_log::force_uart_line(skip.as_str());
+                            continue;
+                        }
                     }
                     let reset_state = VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire);
                     if !runtime_vl805_mailbox_reset_completed(reset_state) {
@@ -7831,7 +7884,7 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut skip,
                             format_args!(
-                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-hcrst detail={} action=skip-full-reset reason=mailbox-reset-unconfirmed mmio=0x{mmio:016x}",
+                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-platform-reset detail={} action=skip-platform-reset reason=mailbox-reset-unconfirmed mmio=0x{mmio:016x}",
                                 runtime_vl805_mailbox_reset_state_label(reset_state),
                                 mmio = effective_mmio,
                             ),
@@ -7843,12 +7896,59 @@ impl UsbKeyboard {
                     let _ = core::fmt::Write::write_fmt(
                         &mut ready,
                         format_args!(
-                            "[local-seat] vl805 reset handoff=runtime-owned stage=pre-hcrst detail=mailbox-acked action=enter-full-reset mmio=0x{mmio:016x}",
+                            "[local-seat] vl805 reset handoff=runtime-owned stage=pre-platform-reset detail=mailbox-acked action=promote-platform-reset mmio=0x{mmio:016x}",
                             mmio = effective_mmio,
                         ),
                     );
                     boot_log::force_uart_line(ready.as_str());
+                    effective_strategy = xhci_runtime_init_strategy_after_mailbox_reset(
+                        effective_mmio,
+                        strategy,
+                        true,
+                    );
+                    controller_params = xhci_controller_params_from_probe_with_strategy(
+                        cap_probe,
+                        effective_mmio,
+                        effective_strategy,
+                        xhci_stop_state_snapshot,
+                    );
+                    let promoted_seed_flags = xhci_runtime_seed_snapshot_flag_bits(
+                        controller_params.runtime_seed_snapshot,
+                    );
+                    let mut promoted = heapless::String::<384>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut promoted,
+                        format_args!(
+                            "[local-seat] xhci probe params promoted attempt={}/{} policy={} origin={} mode={} halt_guard={} ctor={} pre={} legacy={} run={} publish={} post_ready={} seed_flags=0x{promoted_seed_flags:02x} reason=mailbox-reset-complete",
+                            strategy_idx + 1,
+                            init_strategy_count,
+                            xhci_runtime_init_strategy_policy_label(effective_strategy),
+                            xhci_runtime_init_strategy_origin_label(effective_strategy),
+                            xhci_firmware_handoff_mode_label(effective_strategy.firmware_handoff),
+                            xhci_runtime_init_strategy_halt_guard_label_for_source(
+                                effective_mmio,
+                                effective_strategy,
+                            ),
+                            xhci_runtime_init_strategy_constructor_label_for_source(
+                                effective_mmio,
+                                effective_strategy,
+                            ),
+                            xhci_runtime_init_strategy_pre_reset_label_for_source(
+                                effective_mmio,
+                                effective_strategy,
+                            ),
+                            xhci_runtime_init_strategy_legacy_label_for_source(
+                                effective_mmio,
+                                effective_strategy,
+                            ),
+                            xhci_runtime_init_strategy_run_label(effective_strategy),
+                            xhci_runtime_init_strategy_publish_label(effective_strategy),
+                            xhci_runtime_init_strategy_post_ready_irq_label(effective_strategy),
+                        ),
+                    );
+                    boot_log::force_uart_line(promoted.as_str());
                 }
+                let strategy = effective_strategy;
                 let requires_primary_pcie_irq =
                     xhci_runtime_init_strategy_requires_primary_pcie_irq(effective_mmio, strategy);
                 let mut xhci_irq_guard = if retained_xhci_irq_guard.as_ref().is_some_and(|guard| {
@@ -8047,9 +8147,12 @@ impl UsbKeyboard {
                                     ),
                                 );
                                 boot_log::force_uart_line(line.as_str());
+                                let mailbox_suppression_edge =
+                                    matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None)
+                                        && (runtime_vl805_reset_requested
+                                            || strategy_runtime_vl805_reset_requested);
                                 log_xhci_probe_failure_edge(
-                                    runtime_vl805_reset_requested
-                                        || strategy_runtime_vl805_reset_requested,
+                                    mailbox_suppression_edge,
                                     strategy,
                                     diag_before,
                                     diag_after,
@@ -12503,8 +12606,9 @@ mod tests {
         mailbox_visible_dimension, normalize_hub_tt_profile, normalize_pi4_xhci_mmio_hint,
         parse_xhci_capbase, runtime_vl805_mailbox_reset_allows_trusted_cold_init,
         runtime_vl805_mailbox_reset_error_allows_cold_init, text_backspace_target, text_row_count,
-        text_viewport_height, translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode,
-        vl805_cfg_preseed_needed, vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
+        text_viewport_height, translate_bcm2711_soc_reg_addr,
+        usb_probe_preflight_next_step_for_source, vl805_cfg_preseed_mode, vl805_cfg_preseed_needed,
+        vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
         xhci_controller_params_from_probe, xhci_controller_params_from_probe_with_strategy,
         xhci_controller_skips_constructor_live_scrub,
         xhci_controller_skips_initial_live_operational_reads, xhci_diag_stage_label,
@@ -12512,12 +12616,15 @@ mod tests {
         xhci_irq_service_ack_loop_ready, xhci_irq_sink_mode, xhci_irq_sink_needed,
         xhci_preseed_allows_high_bar_candidate, xhci_preseed_allows_static_legacy_fallbacks,
         xhci_preseed_pin_only_reason, xhci_preseed_runtime_trusted, xhci_root_port_connected,
-        xhci_runtime_init_strategies, xhci_runtime_init_strategy_constructor_label_for_source,
+        xhci_runtime_init_strategies, xhci_runtime_init_strategy_after_mailbox_reset,
+        xhci_runtime_init_strategy_constructor_label_for_source,
         xhci_runtime_init_strategy_halt_guard_label_for_source,
         xhci_runtime_init_strategy_legacy_label_for_source,
-        xhci_runtime_init_strategy_policy_label,
+        xhci_runtime_init_strategy_origin_label, xhci_runtime_init_strategy_policy_label,
         xhci_runtime_init_strategy_pre_reset_label_for_source,
         xhci_runtime_init_strategy_prompt_safe, xhci_runtime_init_strategy_prompt_safe_for_source,
+        xhci_runtime_init_strategy_publish_label,
+        xhci_runtime_init_strategy_requires_primary_pcie_irq, xhci_runtime_init_strategy_run_label,
         xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
         xhci_safe_mode_skip_command, xhci_vl805_irq_delivery_ready, ConfigDesc,
         LocalSeatXhciStopStateSnapshot, Pi4SeatError, UsbKeyboard, UsbProbePathOutcome,
@@ -12938,6 +13045,35 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_acked_linux_capture_full_reset_promotes_to_platform_reset_init() {
+        let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+        assert_eq!(
+            xhci_runtime_init_strategy_after_mailbox_reset(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                full_reset,
+                true,
+            ),
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_after_mailbox_reset(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                full_reset,
+                false,
+            ),
+            full_reset
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_after_mailbox_reset(
+                RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+                full_reset,
+                true,
+            ),
+            full_reset
+        );
+    }
+
+    #[test]
     fn xhci_runtime_init_strategies_keep_bootloader_stop_seed_before_live_cold_start() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
@@ -13108,6 +13244,13 @@ mod tests {
             )),
             "rings-post-run"
         );
+        assert_eq!(
+            xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::ResetlessReinit,
+                false,
+            )),
+            "rings-pre-run"
+        );
     }
 
     #[test]
@@ -13214,6 +13357,19 @@ mod tests {
             true,
             true,
         );
+        let mailbox_reset = UsbProbePathwaySummary::new(
+            1,
+            1,
+            1,
+            "platform-reset-complete",
+            "mailbox-reset-complete",
+            "platform-reset-complete",
+            "none",
+            "skip-live-halt-read",
+            true,
+            true,
+            true,
+        );
         assert_eq!(
             super::usb_probe_route_label(stop_seed_primary),
             "trusted-high-bar-stop-seed-primary"
@@ -13229,6 +13385,10 @@ mod tests {
         assert_eq!(
             super::usb_probe_route_label(preserve),
             "stop-state-preserve-fallback"
+        );
+        assert_eq!(
+            super::usb_probe_route_label(mailbox_reset),
+            "trusted-high-bar-mailbox-reset"
         );
     }
 
@@ -13364,6 +13524,7 @@ mod tests {
             true,
         )
         .expect("Linux-captured high BAR full-reset path should be classified");
+        assert_eq!(status.route, "trusted-high-bar-primary");
         assert_eq!(status.strategy_idx, 1);
         assert_eq!(status.strategy_count, 1);
         assert_eq!(status.policy, "full-reset-start");
@@ -13372,10 +13533,10 @@ mod tests {
         assert_eq!(status.seed, "none");
         assert_eq!(status.halt_guard, "skip-live-halt-read");
         assert_eq!(status.constructor, "capture-quiesce");
-        assert_eq!(status.pre_reset, "mailbox-gated-hcrst");
+        assert_eq!(status.pre_reset, "mailbox-reset-required");
         assert_eq!(status.legacy, "skip-legacy");
         assert_eq!(status.next_step, "mailbox-reset-notify");
-        assert_eq!(status.followup_step, "skip-pre-reset");
+        assert_eq!(status.followup_step, "promote-platform-reset");
         assert_eq!(status.expected_diag_stage, 0x0204);
         assert_eq!(
             status.expected_diag_tag,
@@ -13387,7 +13548,7 @@ mod tests {
                 XhciFirmwareHandoff::ColdStartFromSnapshot,
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
             ),
-            "skip-pre-reset"
+            "mailbox-reset-notify"
         );
     }
 
@@ -13634,7 +13795,7 @@ mod tests {
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                 strategy,
             ),
-            "mailbox-gated-hcrst"
+            "mailbox-reset-required"
         );
         assert_eq!(
             xhci_runtime_init_strategy_legacy_label_for_source(
@@ -13643,6 +13804,36 @@ mod tests {
             ),
             "skip-legacy"
         );
+    }
+
+    #[test]
+    fn xhci_linux_capture_high_bar_platform_reset_promotion_skips_hcrst() {
+        let strategy =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
+
+        assert_eq!(
+            xhci_runtime_init_strategy_origin_label(strategy),
+            "mailbox-reset-complete"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_pre_reset_label_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+            ),
+            "skip-pre-reset"
+        );
+        assert_eq!(
+            usb_probe_preflight_next_step_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                XhciFirmwareHandoff::PlatformResetComplete,
+                strategy,
+            ),
+            "skip-pre-reset"
+        );
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+        ));
     }
 
     #[test]
@@ -15009,6 +15200,10 @@ mod tests {
         assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
+        ));
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
         ));
         assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,

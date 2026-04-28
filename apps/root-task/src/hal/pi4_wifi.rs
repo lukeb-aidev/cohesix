@@ -638,6 +638,36 @@ const fn ht_clock_assist_shadow_is_complete(
 }
 
 #[inline]
+const fn post_download_ht_request_primes_wake_sideband() -> bool {
+    // Cohesix keeps the Linux non-SR CHIPCLKCSR HT proof as the readiness
+    // gate, but primes the same wake/CMD14 sideband Linux programs once F2 is
+    // live so the post-upload HT request is not made with missing sideband.
+    true
+}
+
+#[inline]
+const fn post_download_ht_wakeupctrl_value(last_wakeupctrl: Option<u8>) -> u8 {
+    match last_wakeupctrl {
+        Some(value) => value | SBSDIO_WAKE_TILL_HT_AVAIL,
+        None => SBSDIO_WAKE_TILL_HT_AVAIL,
+    }
+}
+
+#[inline]
+const fn post_download_ht_cardcap_value() -> u8 {
+    cyw43455_cardcap_command_decode_value()
+}
+
+#[inline]
+const fn post_download_ht_sideband_shadow_is_complete(
+    last_wakeupctrl: Option<u8>,
+    last_sleepcsr: Option<u8>,
+    last_cardcap: Option<u8>,
+) -> bool {
+    ht_clock_assist_shadow_is_complete(last_wakeupctrl, last_sleepcsr, last_cardcap)
+}
+
+#[inline]
 const fn pre_function2_ht_sideband_programs_sr_registers() -> bool {
     // Linux leaves the SR wake/cardcap sideband until after Function 2 is
     // enabled. Before F2, KSO is only wake evidence for the CHIPCLKCSR path.
@@ -15503,6 +15533,7 @@ impl SdioHost {
         if required_ht_clock_linux_active_transition_resets_chipclk() {
             self.prepare_linux_post_download_ht_transition(stage)?;
         }
+        self.prime_post_download_ht_sideband_for(stage);
         let request = if required_ht_clock_linux_active_transition_uses_force_ht() {
             diagnostic_ht_clock_force_probe_value(self.last_chipclkcsr)
         } else if stronger_retry_request {
@@ -16775,6 +16806,131 @@ impl SdioHost {
             "[pi4-wifi] firmware stage={stage} action=linux-post-download-sdonly-chipclk before=0x{before:02x} after=0x{chipclk:02x}"
         ));
         Ok(())
+    }
+
+    fn prime_post_download_ht_sideband_for(&mut self, stage: &'static str) {
+        if !post_download_ht_request_primes_wake_sideband() {
+            return;
+        }
+
+        let wake_before = match self
+            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL)
+        {
+            Ok(value) => {
+                self.remember_wakeupctrl(value);
+                Some(value)
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=post-download-wakeupctrl-read-unavailable err={err} readiness=chipclk-ht-avail"
+                    ));
+                None
+            }
+        };
+        let wake_request = post_download_ht_wakeupctrl_value(wake_before.or(self.last_wakeupctrl));
+        let wake_after = match self.io_direct_write(
+            SdioFunction::Function1,
+            SBSDIO_FUNC1_WAKEUPCTRL,
+            wake_request,
+        ) {
+            Ok(()) => {
+                self.remember_wakeupctrl(wake_request);
+                match self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL) {
+                    Ok(value) => {
+                        self.remember_wakeupctrl(value);
+                        Some(value)
+                    }
+                    Err(err) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} action=post-download-wakeupctrl-readback-unavailable request=0x{wake_request:02x} err={err} readiness=chipclk-ht-avail"
+                        ));
+                        None
+                    }
+                }
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=post-download-wakeupctrl-write-unavailable request=0x{wake_request:02x} err={err} readiness=chipclk-ht-avail"
+                ));
+                None
+            }
+        };
+
+        let cardcap_before = match self
+            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP)
+        {
+            Ok(value) => {
+                self.remember_cardcap(value);
+                Some(value)
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=post-download-cardcap-read-unavailable err={err} readiness=chipclk-ht-avail"
+                    ));
+                None
+            }
+        };
+        let cardcap_request = post_download_ht_cardcap_value();
+        let cardcap_after = match self.io_direct_write(
+            SdioFunction::Function0,
+            SDIO_CCCR_BRCM_CARDCAP,
+            cardcap_request,
+        ) {
+            Ok(()) => {
+                self.remember_cardcap(cardcap_request);
+                match self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP) {
+                    Ok(value) => {
+                        self.remember_cardcap(value);
+                        Some(value)
+                    }
+                    Err(err) => {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} action=post-download-cardcap-readback-unavailable request=0x{cardcap_request:02x} err={err} readiness=chipclk-ht-avail"
+                        ));
+                        None
+                    }
+                }
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=post-download-cardcap-write-unavailable request=0x{cardcap_request:02x} err={err} readiness=chipclk-ht-avail"
+                ));
+                None
+            }
+        };
+
+        let sleep_after = match self.ensure_kso_awake_for(stage) {
+            Ok(value) => Some(value),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=post-download-kso-assist-unavailable err={err} readiness=chipclk-ht-avail"
+                ));
+                self.last_sleepcsr
+            }
+        };
+        let wake_effective = wake_after.or(self.last_wakeupctrl);
+        let cardcap_effective = cardcap_after.or(self.last_cardcap);
+        let sleep_effective = sleep_after.or(self.last_sleepcsr);
+        let shadow_complete = post_download_ht_sideband_shadow_is_complete(
+            wake_effective,
+            sleep_effective,
+            cardcap_effective,
+        );
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=post-download-ht-sideband-prime wake=0x{wake_before_value:02x}/{wake_before_set}->0x{wake_after_value:02x}/{wake_after_set} cardcap=0x{cardcap_before_value:02x}/{cardcap_before_set}->0x{cardcap_after_value:02x}/{cardcap_after_set} sleep=0x{sleep_value:02x}/{sleep_set} shadow_complete={} accept_kso_only=no readiness=chipclk-ht-avail",
+            yn(shadow_complete),
+            wake_before_value = wake_before.unwrap_or(0),
+            wake_before_set = yn(wake_before.is_some()),
+            wake_after_value = wake_effective.unwrap_or(0),
+            wake_after_set = yn(wake_effective.is_some()),
+            cardcap_before_value = cardcap_before.unwrap_or(0),
+            cardcap_before_set = yn(cardcap_before.is_some()),
+            cardcap_after_value = cardcap_effective.unwrap_or(0),
+            cardcap_after_set = yn(cardcap_effective.is_some()),
+            sleep_value = sleep_effective.unwrap_or(0),
+            sleep_set = yn(sleep_effective.is_some()),
+        ));
+        spin_wifi_progress_loops(CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS);
     }
 
     fn enable_ht_clock_sideband_for(&mut self, stage: &'static str) -> Result<(), HalError> {
@@ -18229,7 +18385,9 @@ mod tests {
         ht_timeout_exact_error_after_firmware_release, is_armcr4_postreset_fragile_read_error,
         is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word,
         next_distinct_firmware_bulk_clock_candidate, normalize_nvram,
-        passive_startup_link_wait_should_probe_reply, phys_to_bus, r5_status,
+        passive_startup_link_wait_should_probe_reply, phys_to_bus, post_download_ht_cardcap_value,
+        post_download_ht_request_primes_wake_sideband,
+        post_download_ht_sideband_shadow_is_complete, post_download_ht_wakeupctrl_value, r5_status,
         required_ht_clock_bounded_no_ht_shortcut_loops, sdhci_interrupt_buffer_ready_mask,
         sdhci_present_buffer_ready_mask, sdhci_status_reason, sdio_byte_mode_transfer_plan,
         sdio_cccr_speed_ehs_value, sdio_cccr_speed_supports_high_speed,
@@ -26942,6 +27100,16 @@ mod tests {
         assert_eq!(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, 0x08);
         assert_eq!(cyw43455_cardcap_command_decode_value(), 0x06);
         assert!(!pre_function2_ht_sideband_programs_sr_registers());
+        assert!(post_download_ht_request_primes_wake_sideband());
+        assert_eq!(
+            post_download_ht_wakeupctrl_value(None),
+            SBSDIO_WAKE_TILL_HT_AVAIL
+        );
+        assert_eq!(
+            post_download_ht_wakeupctrl_value(Some(0x80)),
+            0x80 | SBSDIO_WAKE_TILL_HT_AVAIL
+        );
+        assert_eq!(post_download_ht_cardcap_value(), 0x06);
         assert_eq!(
             cyw43455_cardcap_command_decode_value() & SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,
             0
@@ -27009,6 +27177,42 @@ mod tests {
             Some(0x02),
             Some(0),
             Some(cyw43455_cardcap_command_decode_value()),
+        ));
+        assert!(post_download_ht_sideband_shadow_is_complete(
+            Some(SBSDIO_WAKE_TILL_HT_AVAIL),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
+            Some(cyw43455_cardcap_command_decode_value()),
+        ));
+    }
+
+    #[test]
+    fn post_download_ht_sideband_prime_does_not_make_function2_ready() {
+        let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
+        let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK);
+        let cardcap = Some(cyw43455_cardcap_command_decode_value());
+        let production_timeout = SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL;
+        let diagnostic_timeout = SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL;
+
+        assert!(post_download_ht_sideband_shadow_is_complete(
+            wake, sleep, cardcap
+        ));
+        assert!(!function2_has_required_ht_clock(production_timeout));
+        assert!(!function2_has_required_ht_clock(diagnostic_timeout));
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+            false,
+            production_timeout,
+            wake,
+            sleep,
+            cardcap,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
+        ));
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+            false,
+            diagnostic_timeout,
+            wake,
+            sleep,
+            cardcap,
+            CYW43_CONTROL_PLANE_CLOCK_HZ,
         ));
     }
 
