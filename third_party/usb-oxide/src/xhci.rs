@@ -609,6 +609,16 @@ const fn runtime_owned_fresh_rings_handoff(
 }
 
 #[inline(always)]
+const fn runtime_unseeded_full_reset_handoff(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    matches!(firmware_handoff, XhciFirmwareHandoff::None)
+        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+        && !runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
+}
+
+#[inline(always)]
 const fn runtime_preserve_stop_state_handoff(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
@@ -741,6 +751,7 @@ const fn runtime_handoff_needs_uboot_style_reset_write(
     // Fresh unseeded paths use the same reset edge as U-Boot/Linux. Stop-state
     // seeds treat the halted snapshot as reset authority and skip HCRST.
     runtime_owned_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_unseeded_full_reset_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -4689,18 +4700,19 @@ mod tests {
         runtime_owned_fresh_rings_handoff, runtime_pollsafe_no_fresh_ownership_handoff,
         runtime_preserve_stop_state_handoff, runtime_seed_snapshot_flag_bits,
         runtime_seeded_full_reset_start_handoff, runtime_stop_state_needs_post_run_settle,
-        skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
-        skip_constructor_polling_scrub_writes_with_snapshot, skip_dnctrl_write_with_snapshot,
-        skip_doorbell_readback_after_ring, skip_fresh_event_ring_publish_with_snapshot,
-        skip_fresh_runtime_ownership_publish_with_snapshot, skip_init_pre_reset_scrub_writes,
-        skip_init_pre_reset_scrub_writes_for_init, skip_init_pre_reset_scrub_writes_with_snapshot,
-        skip_legacy_ownership_claim_for_handoff, skip_legacy_ownership_claim_for_handoff_with_snapshot,
-        skip_live_halt_revalidation, skip_live_halt_revalidation_for_init,
-        skip_live_halt_revalidation_with_snapshot, skip_live_post_reset_verification_readbacks,
-        skip_live_post_reset_verification_readbacks_with_snapshot,
-        skip_post_reset_cnr_poll_with_snapshot, skip_post_run_interrupter_zeroing_with_snapshot,
-        skip_preinit_polling_scrub, skip_reset_completion_poll_for_init, skip_reset_during_init,
-        skip_reset_during_init_with_snapshot, snapshot_resetless_reinit_handoff,
+        runtime_unseeded_full_reset_handoff, skip_config_write_during_init,
+        skip_config_write_during_init_with_snapshot, skip_constructor_polling_scrub_writes_with_snapshot,
+        skip_dnctrl_write_with_snapshot, skip_doorbell_readback_after_ring,
+        skip_fresh_event_ring_publish_with_snapshot, skip_fresh_runtime_ownership_publish_with_snapshot,
+        skip_init_pre_reset_scrub_writes, skip_init_pre_reset_scrub_writes_for_init,
+        skip_init_pre_reset_scrub_writes_with_snapshot, skip_legacy_ownership_claim_for_handoff,
+        skip_legacy_ownership_claim_for_handoff_with_snapshot, skip_live_halt_revalidation,
+        skip_live_halt_revalidation_for_init, skip_live_halt_revalidation_with_snapshot,
+        skip_live_post_reset_verification_readbacks,
+        skip_live_post_reset_verification_readbacks_with_snapshot, skip_post_reset_cnr_poll_with_snapshot,
+        skip_post_run_interrupter_zeroing_with_snapshot, skip_preinit_polling_scrub,
+        skip_reset_completion_poll_for_init, skip_reset_during_init, skip_reset_during_init_with_snapshot,
+        snapshot_resetless_reinit_handoff,
         skip_usbsts_clear_before_run_with_snapshot, split_u64_reg_write_ops,
         u64_register_change_mask, usbcmd_interrupt_delivery_enabled,
         use_atomic_erstba_publish_with_snapshot, use_atomic_runtime_ring_publish_with_snapshot,
@@ -5204,6 +5216,14 @@ mod tests {
         ));
         assert!(runtime_handoff_needs_uboot_style_run_write(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
+            None,
+        ));
+        assert!(runtime_unseeded_full_reset_handoff(
+            XhciFirmwareHandoff::None,
+            None,
+        ));
+        assert!(runtime_handoff_needs_uboot_style_reset_write(
+            XhciFirmwareHandoff::None,
             None,
         ));
         assert!(

@@ -1086,7 +1086,7 @@ const fn usb_probe_preflight_followup_step_for_attempt(
         "fallback-next"
     } else if xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy) {
         let _ = preferred_handoff;
-        "promote-platform-reset"
+        "mailbox-reset-then-hcrst"
     } else {
         usb_probe_preflight_followup_step(strategy)
     }
@@ -2166,13 +2166,9 @@ const fn xhci_runtime_init_strategy_after_mailbox_reset(
     strategy: XhciRuntimeInitStrategy,
     mailbox_reset_completed: bool,
 ) -> XhciRuntimeInitStrategy {
-    if mailbox_reset_completed
-        && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
-    {
-        XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
-    } else {
-        strategy
-    }
+    let _mailbox_reset_was_required = mailbox_reset_completed
+        && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy);
+    strategy
 }
 
 #[inline]
@@ -7856,7 +7852,7 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                         format_args!(
-                            "[local-seat] vl805 reset handoff=cohesix-owned-linux-capture stage=pre-platform-reset mmio=0x{mmio:016x} attempt={}/{} origin={} action=mailbox-notify",
+                            "[local-seat] vl805 reset handoff=cohesix-owned-linux-capture stage=pre-xhci-reset mmio=0x{mmio:016x} attempt={}/{} origin={} action=mailbox-notify",
                                 strategy_idx + 1,
                                 init_strategy_count,
                                 xhci_runtime_init_strategy_origin_label(strategy),
@@ -7869,7 +7865,7 @@ impl UsbKeyboard {
                             let _ = core::fmt::Write::write_fmt(
                             &mut skip,
                             format_args!(
-                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-platform-reset detail={} action=skip-platform-reset mmio=0x{mmio:016x}",
+                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-xhci-reset detail={} action=skip-full-reset mmio=0x{mmio:016x}",
                                     err.as_str(),
                                     mmio = effective_mmio,
                                 ),
@@ -7884,7 +7880,7 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut skip,
                             format_args!(
-                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-platform-reset detail={} action=skip-platform-reset reason=mailbox-reset-unconfirmed mmio=0x{mmio:016x}",
+                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-xhci-reset detail={} action=skip-full-reset reason=mailbox-reset-unconfirmed mmio=0x{mmio:016x}",
                                 runtime_vl805_mailbox_reset_state_label(reset_state),
                                 mmio = effective_mmio,
                             ),
@@ -7896,7 +7892,7 @@ impl UsbKeyboard {
                     let _ = core::fmt::Write::write_fmt(
                         &mut ready,
                         format_args!(
-                            "[local-seat] vl805 reset handoff=runtime-owned stage=pre-platform-reset detail=mailbox-acked action=promote-platform-reset mmio=0x{mmio:016x}",
+                            "[local-seat] vl805 reset handoff=runtime-owned stage=pre-xhci-reset detail=mailbox-acked action=continue-full-reset mmio=0x{mmio:016x}",
                             mmio = effective_mmio,
                         ),
                     );
@@ -7933,10 +7929,7 @@ impl UsbKeyboard {
                                 effective_mmio,
                                 effective_strategy,
                             ),
-                            xhci_runtime_init_strategy_pre_reset_label_for_source(
-                                effective_mmio,
-                                effective_strategy,
-                            ),
+                            xhci_runtime_init_strategy_pre_reset_label(effective_strategy),
                             xhci_runtime_init_strategy_legacy_label_for_source(
                                 effective_mmio,
                                 effective_strategy,
@@ -13045,7 +13038,7 @@ mod tests {
     }
 
     #[test]
-    fn mailbox_acked_linux_capture_full_reset_promotes_to_platform_reset_init() {
+    fn mailbox_acked_linux_capture_full_reset_keeps_xhci_hcrst_init() {
         let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
         assert_eq!(
             xhci_runtime_init_strategy_after_mailbox_reset(
@@ -13053,7 +13046,7 @@ mod tests {
                 full_reset,
                 true,
             ),
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
+            full_reset
         );
         assert_eq!(
             xhci_runtime_init_strategy_after_mailbox_reset(
@@ -13536,7 +13529,7 @@ mod tests {
         assert_eq!(status.pre_reset, "mailbox-reset-required");
         assert_eq!(status.legacy, "skip-legacy");
         assert_eq!(status.next_step, "mailbox-reset-notify");
-        assert_eq!(status.followup_step, "promote-platform-reset");
+        assert_eq!(status.followup_step, "mailbox-reset-then-hcrst");
         assert_eq!(status.expected_diag_stage, 0x0204);
         assert_eq!(
             status.expected_diag_tag,
@@ -13807,7 +13800,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_linux_capture_high_bar_platform_reset_promotion_skips_hcrst() {
+    fn xhci_linux_capture_high_bar_platform_reset_complete_lane_skips_hcrst() {
         let strategy =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
 

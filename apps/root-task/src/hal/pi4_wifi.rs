@@ -6926,6 +6926,29 @@ impl SdioHost {
         ));
     }
 
+    fn log_post_release_proof_tuple(&self, reset_vector: u32, upload_clock_hz: u32) {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=post-release-proof rstvec=0x{reset_vector:08x} verified={} attempts={} upload={}Hz current={}Hz width={} proof=core-reset-verify-log",
+            yn(self.firmware_download_verified),
+            self.armcr4_release_attempts,
+            upload_clock_hz,
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=post-release-proof chipclk=0x{chipclk:02x}/{chipclk_set} wake=0x{wake:02x}/{wake_set} sleep=0x{sleep:02x}/{sleep_set} cardcap=0x{cardcap:02x}/{cardcap_set} window=0x{window:08x}",
+            chipclk = self.last_chipclkcsr.unwrap_or(0),
+            chipclk_set = yn(self.last_chipclkcsr.is_some()),
+            wake = self.last_wakeupctrl.unwrap_or(0),
+            wake_set = yn(self.last_wakeupctrl.is_some()),
+            sleep = self.last_sleepcsr.unwrap_or(0),
+            sleep_set = yn(self.last_sleepcsr.is_some()),
+            cardcap = self.last_cardcap.unwrap_or(0),
+            cardcap_set = yn(self.last_cardcap.is_some()),
+            window = self.last_backplane_window.unwrap_or(0),
+        ));
+    }
+
     fn cache_ht_clock_timeout_snapshot(
         &self,
         stage: &'static str,
@@ -11579,6 +11602,7 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] sdio enable-function2 ready ioex=0x{ioex:02x} ready=0x{ready:02x}"
         ));
+        self.prime_post_download_ht_sideband_for("post-function2-sr-init");
         Ok(())
     }
 
@@ -14765,10 +14789,7 @@ impl SdioHost {
             .and_then(|value| value.checked_sub(4))
             .ok_or(HalError::Unsupported("cyw43-nvram-tail"))?;
         self.ensure_pre_ht_startup_clock("pre-write-ht-sdio-clock")?;
-        let prewrite_ht_ready = self.ensure_firmware_upload_alp_clock(
-            "pre-write-alp-clock",
-            "pre-write-alp-clock assist",
-        )?;
+        let prewrite_ht_ready = self.ensure_firmware_upload_alp_clock("pre-write-alp-clock")?;
         if prewrite_ht_ready {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=pre-write-alp-clock action=continue-with-ht csr=0x{:02x} reason=alp-request-readback-observed-ht",
@@ -14788,17 +14809,29 @@ impl SdioHost {
                 self.last_cardcap,
             );
         }
+        let firmware_upload_fast_path = prewrite_ht_ready;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=write-firmware-bulk policy={} ht_ready={} restore_clock={}Hz",
+            if firmware_upload_fast_path {
+                "fast-ht"
+            } else {
+                "conservative-alp-only"
+            },
+            yn(prewrite_ht_ready),
+            self.current_clock_hz,
+        ));
         let firmware_verify_required =
             firmware_download_readback_verify_required(prewrite_ht_ready);
         let clock_candidates =
-            firmware_bulk_clock_candidates(self.current_clock_hz, prewrite_ht_ready);
+            firmware_bulk_clock_candidates(self.current_clock_hz, firmware_upload_fast_path);
         let mut selected_bulk_clock_hz = CYW43_FIRMWARE_BULK_CLOCK_HZ;
         let mut upload_complete = false;
         for (attempt_index, &clock_hz) in clock_candidates.iter().enumerate() {
             if clock_hz == 0 || clock_candidates[..attempt_index].contains(&clock_hz) {
                 continue;
             }
-            let prefer_byte_mode = firmware_upload_prefers_byte_mode(clock_hz, prewrite_ht_ready);
+            let prefer_byte_mode =
+                firmware_upload_prefers_byte_mode(clock_hz, firmware_upload_fast_path);
             match self.with_firmware_bulk_clock("write-firmware-bulk", clock_hz, |this| {
                 this.write_firmware_payloads(
                     bundle.firmware,
@@ -14889,6 +14922,7 @@ impl SdioHost {
             ));
         }
         self.preferred_data_clock_hz = selected_bulk_clock_hz;
+        let reset_vector = firmware_reset_vector(bundle.firmware)?;
         self.recover_command_path_and_refresh_transport("firmware-activate-prep")?;
         self.activate_firmware_download(bundle.firmware)?;
         self.recover_command_path_and_refresh_transport("armcr4-reset-prep")?;
@@ -14903,6 +14937,7 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=armcr4-core-up action=skip-readback reason=linux-release-path"
         ));
+        self.log_post_release_proof_tuple(reset_vector, selected_bulk_clock_hz);
         self.ensure_post_download_ht_clock("wait-ht-clock-prep", selected_bulk_clock_hz)?;
         let strict_ht_ready =
             self.require_ht_clock_ready("wait-ht-clock", "wait-ht-clock assist")?;
@@ -15262,14 +15297,11 @@ impl SdioHost {
         self.wait_for_linux_chip_active_ht_clock(stage, stronger_retry_request)
     }
 
-    fn ensure_firmware_upload_alp_clock(
-        &mut self,
-        stage: &'static str,
-        assist_stage: &'static str,
-    ) -> Result<bool, HalError> {
+    fn ensure_firmware_upload_alp_clock(&mut self, stage: &'static str) -> Result<bool, HalError> {
+        let sleep_csr = self.ensure_kso_awake_for(stage)?;
         let request = firmware_upload_alp_clock_request_value();
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} request=0x{request:02x} mode=linux-alp-only-upload"
+            "[pi4-wifi] firmware stage={stage} request=0x{request:02x} sleep=0x{sleep_csr:02x} mode=linux-alp-only-upload"
         ));
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, request)?;
         self.remember_chipclkcsr(request);
@@ -15294,29 +15326,6 @@ impl SdioHost {
 
         let mut last_chipclk = request_chipclk;
         for _ in 0..CYW43_HT_CLOCK_INITIAL_WAIT_LOOPS {
-            let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
-            self.remember_chipclkcsr(chipclk);
-            last_chipclk = chipclk;
-            if firmware_upload_alp_clock_ready(chipclk) {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} ready=alp-only csr=0x{chipclk:02x} ht={}",
-                    yn((chipclk & SBSDIO_HT_AVAIL) != 0),
-                ));
-                return Ok((chipclk & SBSDIO_HT_AVAIL) != 0);
-            }
-            spin_loop();
-        }
-
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} retry=assist csr=0x{last_chipclk:02x} reason=alp-not-ready"
-        ));
-        self.enable_ht_clock_assist_for(assist_stage)?;
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} alp-rerequest request=0x{request:02x}"
-        ));
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, request)?;
-        self.remember_chipclkcsr(request);
-        for _ in 0..CYW43_HT_CLOCK_SOFT_WAIT_LOOPS {
             let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
             self.remember_chipclkcsr(chipclk);
             last_chipclk = chipclk;
@@ -15533,7 +15542,6 @@ impl SdioHost {
         if required_ht_clock_linux_active_transition_resets_chipclk() {
             self.prepare_linux_post_download_ht_transition(stage)?;
         }
-        self.prime_post_download_ht_sideband_for(stage);
         let request = if required_ht_clock_linux_active_transition_uses_force_ht() {
             diagnostic_ht_clock_force_probe_value(self.last_chipclkcsr)
         } else if stronger_retry_request {
@@ -15834,7 +15842,7 @@ impl SdioHost {
         ));
         if prefer_byte_mode {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=write-firmware mode=byte-start reason=alp-only-no-ht current_clock={}Hz",
+                "[pi4-wifi] firmware stage=write-firmware mode=byte-start reason=no-ht-byte-mode current_clock={}Hz",
                 self.current_clock_hz
             ));
         }
@@ -26453,7 +26461,7 @@ mod tests {
     }
 
     #[test]
-    fn firmware_bulk_clock_candidates_use_fast_alp_only_upload_without_ht() {
+    fn firmware_bulk_clock_candidates_keep_conservative_fallback_without_ht() {
         assert_eq!(
             firmware_bulk_clock_candidates(400_000, false),
             [CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ, 800_000, 400_000, 0,]
@@ -26461,7 +26469,7 @@ mod tests {
     }
 
     #[test]
-    fn firmware_upload_alp_clock_contract_matches_linux_download_gate() {
+    fn firmware_upload_alp_clock_contract_matches_linux_pre_download_gate() {
         assert_eq!(
             firmware_upload_alp_clock_request_value(),
             SBSDIO_ALP_AVAIL_REQ
@@ -26470,9 +26478,11 @@ mod tests {
             SBSDIO_ALP_AVAIL_REQ | SBSDIO_ALP_AVAIL
         ));
         assert!(firmware_upload_alp_clock_ready(
-            SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL
+            SBSDIO_ALP_AVAIL_REQ | SBSDIO_ALP_AVAIL | SBSDIO_HT_AVAIL
         ));
-        assert!(!firmware_upload_alp_clock_ready(SBSDIO_HT_AVAIL_REQ));
+        assert!(!firmware_upload_alp_clock_ready(
+            SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ
+        ));
     }
 
     #[test]
@@ -26508,7 +26518,7 @@ mod tests {
         assert!(!required_ht_clock_uses_pre_function2_kso_gate());
         assert!(post_download_devon_before_ht_is_diagnostic());
         assert!(!devon_before_ht_may_be_deferred_for_stage(
-            "pre-write-ht-clock"
+            "pre-write-alp-clock"
         ));
         assert!(!devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
         assert!(CYW43_KSO_DEVICE_ON_WAIT_LOOPS <= CYW43_KSO_AWAKE_WAIT_LOOPS);
@@ -26614,7 +26624,7 @@ mod tests {
     }
 
     #[test]
-    fn required_ht_clock_timeout_continues_when_alp_only_stays_up() {
+    fn ht_timeout_helper_recognizes_alp_only_state_without_ht() {
         assert!(ht_clock_timeout_can_continue(
             true,
             SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL
@@ -26749,7 +26759,7 @@ mod tests {
         assert!(!required_ht_clock_uses_pre_function2_kso_gate());
         assert!(post_download_devon_before_ht_is_diagnostic());
         assert!(!devon_before_ht_may_be_deferred_for_stage(
-            "pre-write-ht-clock"
+            "pre-write-alp-clock"
         ));
         assert!(!devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
         assert!(sleepcsr_kso_acknowledged(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK));
