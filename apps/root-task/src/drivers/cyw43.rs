@@ -3108,7 +3108,7 @@ mod tests {
                 false,
                 Some("cyw43-control-plane-sideband-read-stall-no-buffer-ready"),
             ),
-            None
+            Some("cyw43-control-plane-sideband-read-stall-no-buffer-ready")
         );
         assert_eq!(
             startup_link_ioctl_timeout_preserved_exact_error(

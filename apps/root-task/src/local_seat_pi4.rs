@@ -27,7 +27,9 @@ use usb_oxide::{
 };
 
 use crate::bootstrap::log as boot_log;
-use crate::hal::{dma, pi4_wifi, DeviceHal, HalError, KernelHal};
+use crate::hal::{
+    dma, pi4_wifi, DeviceHal, HalError, Irq, IrqTrigger, KernelHal, KernelIrqBinding,
+};
 use crate::local_seat::{LocalSeatXhciCapabilitySnapshot, LocalSeatXhciStopStateSnapshot};
 
 const PAGE_SIZE: usize = 4096;
@@ -125,9 +127,10 @@ const RPI4_XHCI_MMIO_FALLBACKS: [usize; 2] = [
     RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
 ];
 // Linux captures and prior Cohesix no-handoff boots identify the high PCIe
-// aperture as VL805 BAR0. Treat that as a layout fact, not boot authority:
-// preseed the high BAR only after firmware or HAL has produced an explicit
-// source for it.
+// aperture as VL805 BAR0. Treat that as a layout fact, not bootloader authority:
+// the default path may preseed that high BAR for Cohesix-owned cold start, but
+// it still rebuilds xHCI rings locally and keeps xHCI event progression
+// poll-driven.
 const RPI4_XHCI_MMIO_PRESEED_CANDIDATES: [usize; 3] = [
     RPI4_XHCI_MMIO_HIGH_CANDIDATE,
     RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
@@ -201,23 +204,33 @@ const USB_PROGRESS_MAX_DOTS: usize = 64;
 const WIFI_PROGRESS_LOOP_TICK_LOOPS: usize = 1_000_000;
 const WIFI_PROGRESS_EMIT_INTERVAL_TICKS: usize = 64;
 const WIFI_PROGRESS_MAX_DOTS: usize = 3;
-const PI4_VL805_XHCI_INTX_IRQ: u32 = 143;
-const PI4_PCIE_BRIDGE_IRQ: u32 = 147;
+const fn pi4_gic_spi_irq(spi: u32) -> u32 {
+    spi + 32
+}
+
+// The seL4 IRQ API uses the full GIC ID, not the Linux virtual IRQ number and
+// not the raw SPI cell from DT. Linux's `/proc/interrupts` shows PCIe INTx A as
+// `GICv2 175`; the Pi 4 DT maps the host interrupt at SPI 0x94 and child INTx A
+// at SPI 0x8f.
+const PI4_VL805_XHCI_INTX_IRQ: u32 = pi4_gic_spi_irq(0x8F);
+const PI4_PCIE_BRIDGE_IRQ: u32 = pi4_gic_spi_irq(0x94);
 const PI4_GENERIC_VTIMER_IRQ: u32 = 27;
 const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 2] = [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ];
-// Linux routes the Pi 4 VL805 through MSI IRQ 30. Cohesix does not publish an
-// MSI doorbell yet, and raw bridge/INTx sink binding has correlated with fatal
-// prompt-side halts, so keep the runtime path polling-only until MSI exists.
-// The HAL owns the seL4 notification wait/poll path that clears device state
-// before IRQHandler_Ack. Local-seat USB still lacks the Pi 4 VL805 MSI route and
-// xHCI event-source drain integration captured from Linux, so binding a raw
-// handler cap here would still be an incomplete IRQ sink even if the raw line
-// number were correct.
+// Linux routes the Pi 4 VL805 through MSI IRQ 30, but Cohesix has only the
+// seL4-visible bridge and child INTx lines during the early poll-only xHCI
+// path. Bind both lines before the first Cohesix-owned pre-run register writes
+// so PCIe/xHCI interrupt delivery is drained by HAL instead of escaping as an
+// unhandled kernel IRQ.
 // IRQ 27 is the kernel's ARM generic virtual timer PPI on this seL4 build, not
 // an xHCI/PCIe line, so it remains diagnostic-only for USB.
 const XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE: bool = true;
-const XHCI_VL805_MSI_ROUTE_ENABLED: bool = false;
-const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = false;
+const XHCI_VL805_PCIE_IRQ_SINK_ENABLED: bool = true;
+const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = true;
+// IRQ 27 is not an xHCI source, and the board trace proves seL4 rejects
+// root-task IRQControl requests for that kernel-owned virtual-timer PPI. Keep
+// the shadow lane disabled; USB may bind only the PCIe/xHCI sink set below.
+const XHCI_PRE_CONTROLLER_VTIMER_SHADOW_ENABLED: bool = false;
+const TRUSTED_XHCI_IRQ_BINDING_LIMIT: usize = TRUSTED_XHCI_PCIE_SINK_IRQS.len();
 // Device untyped retype on seL4 is monotonic; retries can only consume more
 // device window state without restoring earlier probe addresses.
 const KEYBOARD_ATTACH_ATTEMPTS: usize = 2;
@@ -347,6 +360,7 @@ static XHCI_DIAG_LAST_C: AtomicUsize = AtomicUsize::new(0);
 static VL805_CFG_VIRT: AtomicUsize = AtomicUsize::new(0);
 static VL805_XHCI_MMIO_HINT: AtomicUsize = AtomicUsize::new(0);
 static LATEST_USB_PROBE_ROUTE: Mutex<Option<UsbProbePathwaySummary>> = Mutex::new(None);
+static RETAINED_XHCI_IRQ_GUARD: Mutex<Option<XhciIrqGuard>> = Mutex::new(None);
 static PINNED_XHCI_MMIO: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
 static PINNED_VL805_CFG: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
 static USB_PROGRESS_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -1021,13 +1035,30 @@ const fn usb_probe_preflight_next_step(strategy: XhciRuntimeInitStrategy) -> &'s
 }
 
 #[inline]
+const fn usb_probe_preflight_next_step_for_source(
+    mmio: usize,
+    preferred_handoff: XhciFirmwareHandoff,
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if matches!(preferred_handoff, XhciFirmwareHandoff::None)
+        && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
+    {
+        "mailbox-reset-notify"
+    } else if xhci_controller_skips_initial_live_operational_reads(mmio, strategy) {
+        "skip-pre-reset"
+    } else {
+        usb_probe_preflight_next_step(strategy)
+    }
+}
+
+#[inline]
 const fn usb_probe_preflight_followup_step(strategy: XhciRuntimeInitStrategy) -> &'static str {
     if xhci_runtime_init_strategy_skips_controller_entry(strategy) {
         "return-to-shell"
     } else if strategy.seed_stop_state
         && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None)
     {
-        "ring-publish"
+        "reset-post-settle"
     } else if strategy.seed_stop_state
         && matches!(
             strategy.firmware_handoff,
@@ -1041,6 +1072,26 @@ const fn usb_probe_preflight_followup_step(strategy: XhciRuntimeInitStrategy) ->
 }
 
 #[inline]
+const fn usb_probe_preflight_followup_step_for_attempt(
+    mmio: usize,
+    preferred_handoff: XhciFirmwareHandoff,
+    strategy: XhciRuntimeInitStrategy,
+    strategy_idx: usize,
+    strategy_count: usize,
+) -> &'static str {
+    if xhci_runtime_init_strategy_skips_controller_entry(strategy) && strategy_idx < strategy_count
+    {
+        "fallback-next"
+    } else if matches!(preferred_handoff, XhciFirmwareHandoff::None)
+        && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
+    {
+        "skip-pre-reset"
+    } else {
+        usb_probe_preflight_followup_step(strategy)
+    }
+}
+
+#[inline]
 const fn usb_probe_preflight_expected_diag_stage(strategy: XhciRuntimeInitStrategy) -> u16 {
     if xhci_runtime_init_strategy_skips_controller_entry(strategy) {
         0
@@ -1048,6 +1099,18 @@ const fn usb_probe_preflight_expected_diag_stage(strategy: XhciRuntimeInitStrate
         0x0204
     } else {
         0x0200
+    }
+}
+
+#[inline]
+const fn usb_probe_preflight_expected_diag_stage_for_source(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> u16 {
+    if xhci_controller_skips_initial_live_operational_reads(mmio, strategy) {
+        0x0204
+    } else {
+        usb_probe_preflight_expected_diag_stage(strategy)
     }
 }
 
@@ -1123,7 +1186,8 @@ fn usb_probe_preflight_status(
         XHCI_PCIE_DMA_WINDOW_ENABLED,
         xhci_polling_only_runtime(effective_mmio, strategy.firmware_handoff),
     );
-    let expected_diag_stage = usb_probe_preflight_expected_diag_stage(strategy);
+    let expected_diag_stage =
+        usb_probe_preflight_expected_diag_stage_for_source(effective_mmio, strategy);
     Some(UsbProbePreflightStatus {
         route: usb_probe_route_label(summary),
         strategy_idx: strategy_idx + 1,
@@ -1132,16 +1196,32 @@ fn usb_probe_preflight_status(
         origin: summary.origin,
         handoff: summary.handoff,
         seed: summary.seed,
-        halt_guard: summary.halt_guard,
-        constructor: xhci_runtime_init_strategy_constructor_label(strategy),
-        pre_reset: xhci_runtime_init_strategy_pre_reset_label(strategy),
-        legacy: xhci_runtime_init_strategy_legacy_label(strategy),
+        halt_guard: xhci_runtime_init_strategy_halt_guard_label_for_source(
+            effective_mmio,
+            strategy,
+        ),
+        constructor: xhci_runtime_init_strategy_constructor_label_for_source(
+            effective_mmio,
+            strategy,
+        ),
+        pre_reset: xhci_runtime_init_strategy_pre_reset_label_for_source(effective_mmio, strategy),
+        legacy: xhci_runtime_init_strategy_legacy_label_for_source(effective_mmio, strategy),
         run: xhci_runtime_init_strategy_run_label(strategy),
         publish: xhci_runtime_init_strategy_publish_label(strategy),
         post_ready_irq: xhci_runtime_init_strategy_post_ready_irq_label(strategy),
         current_step: usb_probe_preflight_current_step(),
-        next_step: usb_probe_preflight_next_step(strategy),
-        followup_step: usb_probe_preflight_followup_step(strategy),
+        next_step: usb_probe_preflight_next_step_for_source(
+            effective_mmio,
+            preferred_handoff,
+            strategy,
+        ),
+        followup_step: usb_probe_preflight_followup_step_for_attempt(
+            effective_mmio,
+            preferred_handoff,
+            strategy,
+            strategy_idx + 1,
+            strategy_count,
+        ),
         prefer_high: summary.prefer_high,
         pcie_dma_window: summary.pcie_dma_window,
         poll_only: summary.poll_only,
@@ -1944,6 +2024,12 @@ fn xhci_preseed_allows_high_bar_candidate(
     xhci_mmio_hint == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
         || vl805_hint == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
         || hal_high_bar_source
+        || xhci_cohesix_owned_linux_capture_preseed_source()
+}
+
+#[inline]
+fn xhci_cohesix_owned_linux_capture_preseed_source() -> bool {
+    linux_captured_vl805_cfg_matches_high_bar()
 }
 
 #[inline]
@@ -2044,6 +2130,42 @@ fn xhci_runtime_vl805_mailbox_reset_required(
             xhci_pci_cmd,
             xhci_handoff_ready,
             xhci_irq_quiesced,
+        )
+}
+
+#[inline]
+const fn xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && xhci_cap_probe_uses_linux_capture(mmio)
+        && matches!(
+            (strategy.firmware_handoff, strategy.seed_stop_state),
+            (XhciFirmwareHandoff::None, false)
+        )
+}
+
+#[inline]
+fn xhci_linux_capture_full_reset_mailbox_reset_required(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+    pinned_xhci_state: Option<(usize, bool)>,
+    trusted_pinned_mmio: Option<usize>,
+    firmware_hint: Option<usize>,
+    verified_vl805_hint: Option<usize>,
+    vl805_pci_mmio: Option<usize>,
+    pci_cfg_ready: bool,
+) -> bool {
+    xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
+        && xhci_cohesix_owned_linux_capture_source(
+            mmio,
+            pinned_xhci_state,
+            trusted_pinned_mmio,
+            firmware_hint,
+            verified_vl805_hint,
+            vl805_pci_mmio,
+            pci_cfg_ready,
         )
 }
 
@@ -2303,7 +2425,12 @@ fn xhci_cohesix_owned_linux_capture_source(
     vl805_pci_mmio: Option<usize>,
     pci_cfg_ready: bool,
 ) -> bool {
-    let _ = (
+    // This is a bounded layout witness for Cohesix-owned cold start, not a
+    // bootloader ownership token. It is only accepted when the high BAR was
+    // already pinned locally and no firmware/PCI source is active. IRQ sink
+    // readiness is a separate controller-run contract; it must not suppress the
+    // static high-BAR layout source.
+    xhci_cohesix_owned_linux_capture_source_evidence(
         mmio,
         pinned_xhci_state,
         trusted_pinned_mmio,
@@ -2311,11 +2438,7 @@ fn xhci_cohesix_owned_linux_capture_source(
         verified_vl805_hint,
         vl805_pci_mmio,
         pci_cfg_ready,
-    );
-    // The Linux capture is a static layout witness only. The serial evidence
-    // shows that promoting it to runtime ownership reaches live xHCI writes
-    // and halts on the seL4 virtual-timer IRQ edge before keyboard bring-up.
-    false
+    )
 }
 
 fn xhci_linux_capture_static_layout_blocked(
@@ -2327,6 +2450,14 @@ fn xhci_linux_capture_static_layout_blocked(
     pci_cfg_ready: bool,
 ) -> bool {
     xhci_cohesix_owned_linux_capture_source_evidence(
+        RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        pinned_xhci_state,
+        trusted_pinned_mmio,
+        firmware_hint,
+        verified_vl805_hint,
+        vl805_pci_mmio,
+        pci_cfg_ready,
+    ) && !xhci_cohesix_owned_linux_capture_source(
         RPI4_XHCI_MMIO_HIGH_CANDIDATE,
         pinned_xhci_state,
         trusted_pinned_mmio,
@@ -2353,7 +2484,6 @@ fn xhci_cohesix_owned_linux_capture_source_evidence(
         && verified_vl805_hint.is_none()
         && vl805_pci_mmio.is_none()
         && !pci_cfg_ready
-        && !xhci_vl805_irq_delivery_ready()
         && linux_captured_vl805_cfg_matches_high_bar()
 }
 
@@ -2979,7 +3109,12 @@ const fn xhci_diag_stage_value_labels(
     match stage {
         0x0117 => Some(("handoff", "runtime_mask", "publish_mask")),
         0x0200 => Some(("usbcmd", "usbsts", "mmio")),
+        0x0201 => Some(("usbcmd", "masked_usbcmd", "write_needed")),
+        0x0202 => Some(("usbcmd", "unused", "skipped")),
+        0x0203 => Some(("usbsts", "clear_mask", "deferred")),
         0x0204 => Some(("mmio", "handoff", "seed_flags")),
+        0x0205 => Some(("usbcmd", "masked_usbcmd", "write_needed")),
+        0x0209 => Some(("usbcmd_off", "usbcmd", "skipped")),
         0x020d => Some(("usbsts_off", "clear_mask", "trusted")),
         0x020e => Some(("imod_off", "value", "trusted")),
         0x020f => Some(("iman_off", "value", "trusted")),
@@ -3006,6 +3141,9 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
     match stage {
         0x0117 => Some("init-policy-summary"),
         0x0200 => Some("pre-reset-usbcmd-usbsts-read"),
+        0x0201 => Some("pre-reset-usbcmd-mask-decision"),
+        0x0202 => Some("pre-reset-usbcmd-mask-result"),
+        0x0203 => Some("pre-reset-usbsts-clear-deferred"),
         0x0204 => Some("fw-handoff-skip-pre-quiesce"),
         0x0205 => Some("fw-handoff-usbcmd-mask-write"),
         0x0206 => Some("fw-handoff-usbsts-clear-write"),
@@ -3039,7 +3177,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0223 => Some("stop-revalidation-halted"),
         0x0224 => Some("fw-handoff-skip-stop-revalidation"),
         0x0225 => Some("stop-revalidation-ready"),
-        0x0226 => Some("reset-pre-usbcmd-read"),
+        0x0226 => Some("reset-pre-usbcmd-source"),
         0x0227 => Some("reset-post-settle-begin"),
         0x0228 => Some("reset-post-settle-done"),
         0x0229 => Some("reset-post-cnr-poll-skip"),
@@ -3528,6 +3666,42 @@ const fn xhci_controller_should_apply_brcm_axi_setup(
 }
 
 #[inline]
+const fn xhci_controller_skips_constructor_live_scrub(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    xhci_controller_skips_initial_live_operational_reads(mmio, strategy)
+}
+
+#[inline]
+const fn xhci_controller_skips_initial_live_operational_reads(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    // The Pi 4 Linux-captured high BAR path uses a static capability layout
+    // witness, not live config-space authority. Current seL4 traces show the
+    // first operational `USBCMD` read can halt before IRQ handling reaches
+    // root-task. Keep this unseeded captured-high-BAR lane read-free until
+    // HCRST/config/RUN rebuild controller ownership.
+    mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && xhci_cap_probe_uses_linux_capture(mmio)
+        && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None)
+        && !strategy.seed_stop_state
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_constructor_label_for_source(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if xhci_controller_skips_constructor_live_scrub(mmio, strategy) {
+        "capture-quiesce"
+    } else {
+        xhci_runtime_init_strategy_constructor_label(strategy)
+    }
+}
+
+#[inline]
 fn xhci_controller_params_from_probe(
     probe: XhciCapProbe,
     mmio: usize,
@@ -3538,6 +3712,7 @@ fn xhci_controller_params_from_probe(
         XhciFirmwareHandoff::None => None,
         _ => stop_state_snapshot.map(xhci_runtime_seed_snapshot_from_stop_state),
     };
+    let strategy = XhciRuntimeInitStrategy::new(firmware_handoff, runtime_seed_snapshot.is_some());
     XhciControllerParams {
         cap_length: probe.cap_length,
         hcs1: probe.hcs1,
@@ -3548,6 +3723,10 @@ fn xhci_controller_params_from_probe(
         firmware_handoff,
         runtime_seed_snapshot,
         apply_brcm_axi_setup: xhci_controller_should_apply_brcm_axi_setup(mmio, firmware_handoff),
+        skip_constructor_live_scrub: xhci_controller_skips_constructor_live_scrub(mmio, strategy),
+        skip_initial_live_operational_reads: xhci_controller_skips_initial_live_operational_reads(
+            mmio, strategy,
+        ),
     }
 }
 
@@ -3592,6 +3771,10 @@ fn xhci_controller_params_from_probe_with_strategy(
             mmio,
             strategy.firmware_handoff,
         ) && !strategy.seed_stop_state,
+        skip_constructor_live_scrub: xhci_controller_skips_constructor_live_scrub(mmio, strategy),
+        skip_initial_live_operational_reads: xhci_controller_skips_initial_live_operational_reads(
+            mmio, strategy,
+        ),
     }
 }
 
@@ -3638,6 +3821,13 @@ fn xhci_runtime_init_strategies(
     let mut count = 0usize;
     let stop_state_seed_available = stop_state_snapshot.is_some();
     if matches!(preferred_handoff, XhciFirmwareHandoff::None) {
+        if stop_state_seed_available {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
+            );
+        }
         xhci_runtime_init_strategy_push(
             &mut strategies,
             &mut count,
@@ -3680,11 +3870,6 @@ fn xhci_runtime_init_strategies(
         preferred_handoff,
         XhciFirmwareHandoff::ColdStartFromSnapshot
     ) {
-        xhci_runtime_init_strategy_push(
-            &mut strategies,
-            &mut count,
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
-        );
         if stop_state_seed_available
             && runtime_vl805_reset_authorizes_stop_seed_ownership(runtime_vl805_reset_state)
         {
@@ -3694,6 +3879,11 @@ fn xhci_runtime_init_strategies(
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
             );
         }
+        xhci_runtime_init_strategy_push(
+            &mut strategies,
+            &mut count,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
+        );
         if runtime_vl805_mailbox_reset_completed(runtime_vl805_reset_state) {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
@@ -3771,6 +3961,18 @@ const fn xhci_runtime_init_strategy_halt_guard_label(
 }
 
 #[inline]
+const fn xhci_runtime_init_strategy_halt_guard_label_for_source(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if xhci_controller_skips_initial_live_operational_reads(mmio, strategy) {
+        "skip-live-halt-read"
+    } else {
+        xhci_runtime_init_strategy_halt_guard_label(strategy)
+    }
+}
+
+#[inline]
 const fn xhci_runtime_init_strategy_skips_live_halt_read(
     strategy: XhciRuntimeInitStrategy,
 ) -> bool {
@@ -3794,7 +3996,7 @@ const fn xhci_runtime_init_strategy_skips_root_port_reads(
     ) || (strategy.seed_stop_state
         && matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::None
         ))
 }
 
@@ -3805,7 +4007,7 @@ const fn xhci_runtime_init_strategy_skips_controller_entry(
     strategy.seed_stop_state
         && matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::None
         )
 }
 
@@ -3830,7 +4032,7 @@ const fn xhci_runtime_init_strategy_constructor_label(
     } else if strategy.seed_stop_state {
         "trusted-quiesce"
     } else {
-        "full-quiesce"
+        "conditional-quiesce"
     }
 }
 
@@ -3838,7 +4040,9 @@ const fn xhci_runtime_init_strategy_constructor_label(
 const fn xhci_runtime_init_strategy_pre_reset_label(
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
-    if strategy.seed_stop_state
+    if strategy.seed_stop_state && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None) {
+        "seeded-no-hcrst"
+    } else if strategy.seed_stop_state
         || matches!(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
@@ -3847,6 +4051,18 @@ const fn xhci_runtime_init_strategy_pre_reset_label(
         "skip-pre-reset"
     } else {
         "full-pre-reset"
+    }
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_pre_reset_label_for_source(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if xhci_controller_skips_initial_live_operational_reads(mmio, strategy) {
+        "mailbox-gated-hcrst"
+    } else {
+        xhci_runtime_init_strategy_pre_reset_label(strategy)
     }
 }
 
@@ -3868,13 +4084,24 @@ const fn xhci_runtime_init_strategy_legacy_label(
 }
 
 #[inline]
+const fn xhci_runtime_init_strategy_legacy_label_for_source(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> &'static str {
+    if xhci_controller_skips_initial_live_operational_reads(mmio, strategy) {
+        "skip-legacy"
+    } else {
+        xhci_runtime_init_strategy_legacy_label(strategy)
+    }
+}
+
+#[inline]
 const fn xhci_runtime_init_strategy_run_label(strategy: XhciRuntimeInitStrategy) -> &'static str {
     match (strategy.firmware_handoff, strategy.seed_stop_state) {
         (XhciFirmwareHandoff::PreserveControllerState, _) => "run-skip",
         (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "run-skip",
-        (XhciFirmwareHandoff::ColdStartFromSnapshot, _) | (XhciFirmwareHandoff::None, true) => {
-            "run-uboot"
-        }
+        (XhciFirmwareHandoff::None, true) => "run-skip",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, _) => "run-uboot",
         _ => "run-default",
     }
 }
@@ -3891,7 +4118,7 @@ const fn xhci_runtime_init_strategy_publish_label(
     } else if strategy.seed_stop_state
         && matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::None
         )
     {
         "rings-skip"
@@ -6127,14 +6354,16 @@ struct UsbKeyboard {
     pending_display_scroll_rows: i8,
 }
 
+#[derive(Clone, Copy)]
 struct XhciIrqGuard {
-    bindings: [Option<XhciIrqBinding>; TRUSTED_XHCI_PCIE_SINK_IRQS.len()],
+    bindings: [Option<XhciIrqBinding>; TRUSTED_XHCI_IRQ_BINDING_LIMIT],
 }
 
 #[derive(Clone, Copy)]
 struct XhciIrqBinding {
     irq: u32,
     shadow: bool,
+    hal_binding: Option<KernelIrqBinding>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -6146,10 +6375,9 @@ enum XhciIrqInstallPhase {
 impl XhciIrqGuard {
     #[inline]
     fn covers_irq(&self, irq: u32) -> bool {
-        self.bindings
-            .iter()
-            .flatten()
-            .any(|binding| binding.irq == irq)
+        self.bindings.iter().flatten().any(|binding| {
+            binding.irq == irq && binding.hal_binding.map_or(true, |raw| raw.irq().0 == irq)
+        })
     }
 
     fn log_policy(
@@ -6178,25 +6406,63 @@ impl XhciIrqGuard {
     }
 
     fn install_binding(
+        hal: &mut KernelHal<'_>,
         mmio: usize,
         irq: u32,
         shadow: bool,
     ) -> Result<Option<XhciIrqBinding>, &'static str> {
+        let hal_binding = match hal.bind_irq_notification(Irq(irq), IrqTrigger::Level) {
+            Ok(binding) => binding,
+            Err(err) => {
+                let mut line = heapless::String::<240>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci irq {}bind failed irq={} mmio=0x{mmio:016x} err={err} action=defer",
+                        if shadow { "shadow " } else { "sink " },
+                        irq,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                if shadow {
+                    return Ok(None);
+                }
+                return Err("irq-bind-failed");
+            }
+        };
         let mut line = heapless::String::<240>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci irq {}bind refused irq={} mmio=0x{mmio:016x} reason=vl805-msi-route-missing action=poll-only",
+                "[local-seat] xhci irq {}bind irq={} mmio=0x{mmio:016x} trigger=level handler={} notification={} badge=0x{:x}",
                 if shadow { "shadow " } else { "sink " },
                 irq,
+                hal_binding.handler_slot_for_diagnostics(),
+                hal_binding.notification_slot_for_diagnostics(),
+                hal_binding.badge(),
             ),
         );
         boot_log::force_uart_line(line.as_str());
-        Err("vl805-msi-route-missing")
+        Ok(Some(XhciIrqBinding {
+            irq,
+            shadow,
+            hal_binding: Some(hal_binding),
+        }))
+    }
+
+    fn release_partial_bindings(
+        hal: &mut KernelHal<'_>,
+        bindings: &mut [Option<XhciIrqBinding>; TRUSTED_XHCI_IRQ_BINDING_LIMIT],
+    ) {
+        for binding in bindings.iter_mut().filter_map(Option::take) {
+            if let Some(raw) = binding.hal_binding {
+                let _ = hal.release_irq_notification(raw);
+            }
+        }
     }
 
     fn install(
-        _hal: &mut KernelHal<'_>,
+        hal: &mut KernelHal<'_>,
         mmio: usize,
         firmware_handoff: XhciFirmwareHandoff,
         phase: XhciIrqInstallPhase,
@@ -6209,11 +6475,11 @@ impl XhciIrqGuard {
             return Ok(None);
         }
 
-        let mut bindings = [None; TRUSTED_XHCI_PCIE_SINK_IRQS.len()];
+        let mut bindings = [None; TRUSTED_XHCI_IRQ_BINDING_LIMIT];
         match sink_mode {
             XhciIrqSinkMode::TrustedPcieSinks => {
                 for (index, irq) in TRUSTED_XHCI_PCIE_SINK_IRQS.iter().copied().enumerate() {
-                    match Self::install_binding(mmio, irq, false) {
+                    match Self::install_binding(hal, mmio, irq, false) {
                         Ok(binding) => bindings[index] = binding,
                         Err(err) if xhci_trusted_irq_soft_ignore_reason(irq, err) => {
                             let mut line = heapless::String::<256>::new();
@@ -6226,8 +6492,22 @@ impl XhciIrqGuard {
                             );
                             boot_log::force_uart_line(line.as_str());
                         }
-                        Err(err) => return Err(err),
+                        Err(err) => {
+                            Self::release_partial_bindings(hal, &mut bindings);
+                            return Err(err);
+                        }
                     }
+                }
+                if xhci_pre_controller_vtimer_shadow_needed(mmio, phase) {
+                    let mut line = heapless::String::<240>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci irq shadow disabled irq={} mmio=0x{mmio:016x} action=pcie-sinks-authoritative",
+                            PI4_GENERIC_VTIMER_IRQ,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
                 }
             }
             XhciIrqSinkMode::Disabled => {}
@@ -6235,6 +6515,16 @@ impl XhciIrqGuard {
 
         Ok(Some(Self { bindings }))
     }
+}
+
+#[inline]
+fn cached_xhci_irq_guard() -> Option<XhciIrqGuard> {
+    *RETAINED_XHCI_IRQ_GUARD.lock()
+}
+
+#[inline]
+fn remember_xhci_irq_guard(guard: XhciIrqGuard) {
+    *RETAINED_XHCI_IRQ_GUARD.lock() = Some(guard);
 }
 
 #[inline]
@@ -6247,7 +6537,7 @@ const fn xhci_irq_policy_reason(firmware_handoff: XhciFirmwareHandoff) -> &'stat
     if !xhci_irq_service_ack_loop_ready() {
         "hal-irq-ack-loop-missing"
     } else if !xhci_vl805_irq_delivery_ready() {
-        "vl805-msi-route-missing"
+        "vl805-pcie-irq-sink-missing"
     } else {
         match firmware_handoff {
             XhciFirmwareHandoff::None => "runtime-default",
@@ -6286,7 +6576,14 @@ const fn xhci_irq_service_ack_loop_ready() -> bool {
 
 #[inline]
 const fn xhci_vl805_irq_delivery_ready() -> bool {
-    XHCI_VL805_MSI_ROUTE_ENABLED && TRUSTED_XHCI_PCIE_SINKS_ENABLED
+    XHCI_VL805_PCIE_IRQ_SINK_ENABLED && TRUSTED_XHCI_PCIE_SINKS_ENABLED
+}
+
+#[inline]
+const fn xhci_pre_controller_vtimer_shadow_needed(mmio: usize, phase: XhciIrqInstallPhase) -> bool {
+    XHCI_PRE_CONTROLLER_VTIMER_SHADOW_ENABLED
+        && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && matches!(phase, XhciIrqInstallPhase::PreControllerReady)
 }
 
 #[inline]
@@ -6306,9 +6603,8 @@ const fn xhci_irq_sink_mode(
             }
             XhciIrqInstallPhase::ControllerReady => {
                 // Match the known-good U-Boot-style path: once RUN has reached
-                // controller-ready, enumeration is poll-driven. Re-requesting
-                // IRQ 27 here is the kernel timer PPI, not part of xHCI
-                // polling, and requesting it can steal or disturb kernel time.
+                // controller-ready, enumeration is poll-driven and no extra
+                // IRQ binding is required.
                 XhciIrqSinkMode::Disabled
             }
             XhciIrqInstallPhase::PreControllerReady => XhciIrqSinkMode::Disabled,
@@ -6366,10 +6662,11 @@ const fn xhci_runtime_init_strategy_requires_primary_pcie_irq(
     xhci_irq_service_ack_loop_ready()
         && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
         && matches!(
-            strategy.firmware_handoff,
-            XhciFirmwareHandoff::ColdStartFromSnapshot
+            (strategy.firmware_handoff, strategy.seed_stop_state),
+            (XhciFirmwareHandoff::ColdStartFromSnapshot, false)
+                | (XhciFirmwareHandoff::None, false)
+                | (XhciFirmwareHandoff::None, true)
         )
-        && !strategy.seed_stop_state
 }
 
 #[derive(Clone, Copy)]
@@ -6742,7 +7039,7 @@ impl UsbKeyboard {
             pci_cfg_ready,
         ) {
             boot_log::force_uart_line(
-                "[local-seat] xhci runtime trust source=cohesix-linux-capture-poll-only mmio=0x0000000600000000 cfg=static irq=masked",
+                "[local-seat] xhci runtime layout source=cohesix-linux-capture-poll-only mmio=0x0000000600000000 cfg=static irq=masked ownership=cohesix-cold-start",
             );
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
         } else {
@@ -7016,6 +7313,7 @@ impl UsbKeyboard {
         let mut saw_controller = false;
         let mut saw_keyboard_init_error = false;
         let mut best_probe_pathway = None;
+        let mut retained_xhci_irq_guard = cached_xhci_irq_guard();
         for &mmio_base in &candidates[..candidate_count] {
             let (
                 effective_mmio,
@@ -7410,10 +7708,16 @@ impl UsbKeyboard {
                         xhci_runtime_init_strategy_policy_label(strategy),
                         xhci_runtime_init_strategy_origin_label(strategy),
                         xhci_firmware_handoff_mode_label(strategy.firmware_handoff),
-                        xhci_runtime_init_strategy_halt_guard_label(strategy),
-                        xhci_runtime_init_strategy_constructor_label(strategy),
-                        xhci_runtime_init_strategy_pre_reset_label(strategy),
-                        xhci_runtime_init_strategy_legacy_label(strategy),
+                        xhci_runtime_init_strategy_halt_guard_label_for_source(
+                            effective_mmio,
+                            strategy,
+                        ),
+                        xhci_runtime_init_strategy_constructor_label_for_source(
+                            effective_mmio,
+                            strategy,
+                        ),
+                        xhci_runtime_init_strategy_pre_reset_label_for_source(effective_mmio, strategy),
+                        xhci_runtime_init_strategy_legacy_label_for_source(effective_mmio, strategy),
                         xhci_runtime_init_strategy_run_label(strategy),
                         xhci_runtime_init_strategy_publish_label(strategy),
                         xhci_runtime_init_strategy_post_ready_irq_label(strategy),
@@ -7431,6 +7735,11 @@ impl UsbKeyboard {
                     let handoff_label = xhci_firmware_handoff_mode_label(strategy.firmware_handoff);
                     let seed_label = xhci_runtime_init_strategy_seed_label(strategy);
                     let halt_guard_label = xhci_runtime_init_strategy_halt_guard_label(strategy);
+                    let skip_action = if strategy_idx + 1 < init_strategy_count {
+                        "fallback-next"
+                    } else {
+                        "return-to-shell"
+                    };
                     let poll_only =
                         xhci_polling_only_runtime(effective_mmio, strategy.firmware_handoff);
                     let mut pathway_summary = UsbProbePathwaySummary::new(
@@ -7461,7 +7770,7 @@ impl UsbKeyboard {
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] xhci probe skipped mmio=0x{mmio:016x} attempt={}/{} policy={} origin={} reason=bootloader-owned-no-fresh-ownership action=return-to-shell",
+                            "[local-seat] xhci probe skipped mmio=0x{mmio:016x} attempt={}/{} policy={} origin={} reason=bootloader-owned-no-fresh-ownership action={skip_action}",
                             strategy_idx + 1,
                             init_strategy_count,
                             policy_label,
@@ -7475,28 +7784,126 @@ impl UsbKeyboard {
                     saw_controller = true;
                     continue;
                 }
+                let strategy_runtime_vl805_reset_requested =
+                    xhci_linux_capture_full_reset_mailbox_reset_required(
+                        effective_mmio,
+                        strategy,
+                        pinned_xhci_state,
+                        effective_trusted_pinned_xhci_mmio,
+                        xhci_mmio_hint,
+                        verified_vl805_hint,
+                        vl805_pci_mmio,
+                        pci_cfg_ready,
+                    );
+                if strategy_runtime_vl805_reset_requested
+                    && !runtime_vl805_mailbox_reset_completed(
+                        VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire),
+                    )
+                {
+                    let mut line = heapless::String::<320>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] vl805 reset handoff=cohesix-owned-linux-capture stage=pre-hcrst mmio=0x{mmio:016x} attempt={}/{} origin={} action=mailbox-notify",
+                            strategy_idx + 1,
+                            init_strategy_count,
+                            xhci_runtime_init_strategy_origin_label(strategy),
+                            mmio = effective_mmio,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    if let Err(err) = ensure_runtime_vl805_mailbox_reset(hal) {
+                        let mut skip = heapless::String::<288>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut skip,
+                            format_args!(
+                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-hcrst detail={} action=skip-full-reset mmio=0x{mmio:016x}",
+                                err.as_str(),
+                                mmio = effective_mmio,
+                            ),
+                        );
+                        boot_log::force_uart_line(skip.as_str());
+                        continue;
+                    }
+                    let reset_state = VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire);
+                    if !runtime_vl805_mailbox_reset_completed(reset_state) {
+                        let mut skip = heapless::String::<288>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut skip,
+                            format_args!(
+                                "[local-seat] vl805 reset handoff=runtime-unconfirmed stage=pre-hcrst detail={} action=skip-full-reset reason=mailbox-reset-unconfirmed mmio=0x{mmio:016x}",
+                                runtime_vl805_mailbox_reset_state_label(reset_state),
+                                mmio = effective_mmio,
+                            ),
+                        );
+                        boot_log::force_uart_line(skip.as_str());
+                        continue;
+                    }
+                    let mut ready = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut ready,
+                        format_args!(
+                            "[local-seat] vl805 reset handoff=runtime-owned stage=pre-hcrst detail=mailbox-acked action=enter-full-reset mmio=0x{mmio:016x}",
+                            mmio = effective_mmio,
+                        ),
+                    );
+                    boot_log::force_uart_line(ready.as_str());
+                }
                 let requires_primary_pcie_irq =
                     xhci_runtime_init_strategy_requires_primary_pcie_irq(effective_mmio, strategy);
-                let mut xhci_irq_guard = match XhciIrqGuard::install(
-                    hal,
-                    effective_mmio,
-                    strategy.firmware_handoff,
-                    XhciIrqInstallPhase::PreControllerReady,
-                    requires_primary_pcie_irq,
-                ) {
-                    Ok(guard) => guard,
-                    Err(reason) => {
-                        let mut line = heapless::String::<224>::new();
+                let mut xhci_irq_guard = if retained_xhci_irq_guard.as_ref().is_some_and(|guard| {
+                    xhci_irq_guard_satisfies_phase(
+                        guard,
+                        effective_mmio,
+                        strategy.firmware_handoff,
+                        XhciIrqInstallPhase::PreControllerReady,
+                        requires_primary_pcie_irq,
+                    )
+                }) {
+                    let guard = retained_xhci_irq_guard;
+                    if let Some(existing_guard) = guard.as_ref() {
+                        let mut line = heapless::String::<288>::new();
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} stage={} detail={reason} action=defer-to-controller-gate",
+                                "[local-seat] xhci irq sink reuse mmio=0x{mmio:016x} stage={} has_bridge={} has_intx={} action=avoid-rebind",
                                 xhci_irq_phase_label(XhciIrqInstallPhase::PreControllerReady),
-                                mmio = effective_mmio
+                                existing_guard.covers_irq(PI4_PCIE_BRIDGE_IRQ) as u8,
+                                existing_guard.covers_irq(PI4_VL805_XHCI_INTX_IRQ) as u8,
+                                mmio = effective_mmio,
                             ),
                         );
                         boot_log::force_uart_line(line.as_str());
-                        None
+                    }
+                    guard
+                } else {
+                    match XhciIrqGuard::install(
+                        hal,
+                        effective_mmio,
+                        strategy.firmware_handoff,
+                        XhciIrqInstallPhase::PreControllerReady,
+                        requires_primary_pcie_irq,
+                    ) {
+                        Ok(guard) => {
+                            if let Some(installed_guard) = guard {
+                                retained_xhci_irq_guard = Some(installed_guard);
+                                remember_xhci_irq_guard(installed_guard);
+                            }
+                            guard
+                        }
+                        Err(reason) => {
+                            let mut line = heapless::String::<224>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci irq sink unavailable mmio=0x{mmio:016x} stage={} detail={reason} action=defer-to-controller-gate",
+                                    xhci_irq_phase_label(XhciIrqInstallPhase::PreControllerReady),
+                                    mmio = effective_mmio
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            None
+                        }
                     }
                 };
                 let irq27_bound = xhci_irq_guard
@@ -7641,7 +8048,8 @@ impl UsbKeyboard {
                                 );
                                 boot_log::force_uart_line(line.as_str());
                                 log_xhci_probe_failure_edge(
-                                    runtime_vl805_reset_requested,
+                                    runtime_vl805_reset_requested
+                                        || strategy_runtime_vl805_reset_requested,
                                     strategy,
                                     diag_before,
                                     diag_after,
@@ -7733,7 +8141,11 @@ impl UsbKeyboard {
                                 XhciIrqInstallPhase::ControllerReady,
                                 requires_primary_pcie_irq,
                             ) {
-                                Ok(Some(guard)) => xhci_irq_guard = Some(guard),
+                                Ok(Some(guard)) => {
+                                    retained_xhci_irq_guard = Some(guard);
+                                    remember_xhci_irq_guard(guard);
+                                    xhci_irq_guard = Some(guard);
+                                }
                                 Ok(None) => {}
                                 Err(reason) => {
                                     let mut line = heapless::String::<224>::new();
@@ -12094,22 +12506,29 @@ mod tests {
         text_viewport_height, translate_bcm2711_soc_reg_addr, vl805_cfg_preseed_mode,
         vl805_cfg_preseed_needed, vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
         xhci_controller_params_from_probe, xhci_controller_params_from_probe_with_strategy,
-        xhci_diag_stage_label, xhci_diag_stage_value_labels, xhci_firmware_handoff_hint_reason,
-        xhci_irq_policy_reason, xhci_irq_service_ack_loop_ready, xhci_irq_sink_mode,
-        xhci_irq_sink_needed, xhci_preseed_allows_high_bar_candidate,
-        xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
-        xhci_preseed_runtime_trusted, xhci_root_port_connected, xhci_runtime_init_strategies,
-        xhci_runtime_init_strategy_policy_label, xhci_runtime_init_strategy_prompt_safe,
-        xhci_runtime_init_strategy_prompt_safe_for_source, xhci_runtime_mmio_candidate_allowed,
-        xhci_runtime_mmio_has_accessible_window, xhci_safe_mode_skip_command,
-        xhci_vl805_irq_delivery_ready, ConfigDesc, LocalSeatXhciStopStateSnapshot, Pi4SeatError,
-        UsbKeyboard, UsbProbePathOutcome, UsbProbePathProgress, UsbProbePathwaySummary,
-        Vl805CfgPreseedMode, XhciCapProbe, XhciDiagSnapshot, XhciFirmwareHandoff, XhciIrqBinding,
-        XhciIrqGuard, XhciIrqInstallPhase, XhciIrqSinkMode, XhciRuntimeInitStrategy,
-        HUB_PORT_IFACE_FALLBACK_MAX, PI4_GENERIC_VTIMER_IRQ, PI4_PCIE_BRIDGE_IRQ,
-        PI4_VL805_XHCI_INTX_IRQ, RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-        TRUSTED_XHCI_PCIE_SINK_IRQS, XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE, XHCI_MMIO_ALIAS_SCAN_STEPS,
-        XHCI_VL805_MSI_ROUTE_ENABLED,
+        xhci_controller_skips_constructor_live_scrub,
+        xhci_controller_skips_initial_live_operational_reads, xhci_diag_stage_label,
+        xhci_diag_stage_value_labels, xhci_firmware_handoff_hint_reason, xhci_irq_policy_reason,
+        xhci_irq_service_ack_loop_ready, xhci_irq_sink_mode, xhci_irq_sink_needed,
+        xhci_preseed_allows_high_bar_candidate, xhci_preseed_allows_static_legacy_fallbacks,
+        xhci_preseed_pin_only_reason, xhci_preseed_runtime_trusted, xhci_root_port_connected,
+        xhci_runtime_init_strategies, xhci_runtime_init_strategy_constructor_label_for_source,
+        xhci_runtime_init_strategy_halt_guard_label_for_source,
+        xhci_runtime_init_strategy_legacy_label_for_source,
+        xhci_runtime_init_strategy_policy_label,
+        xhci_runtime_init_strategy_pre_reset_label_for_source,
+        xhci_runtime_init_strategy_prompt_safe, xhci_runtime_init_strategy_prompt_safe_for_source,
+        xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
+        xhci_safe_mode_skip_command, xhci_vl805_irq_delivery_ready, ConfigDesc,
+        LocalSeatXhciStopStateSnapshot, Pi4SeatError, UsbKeyboard, UsbProbePathOutcome,
+        UsbProbePathProgress, UsbProbePathwaySummary, Vl805CfgPreseedMode, XhciCapProbe,
+        XhciDiagSnapshot, XhciFirmwareHandoff, XhciIrqBinding, XhciIrqGuard, XhciIrqInstallPhase,
+        XhciIrqSinkMode, XhciRuntimeInitStrategy, HUB_PORT_IFACE_FALLBACK_MAX,
+        PI4_GENERIC_VTIMER_IRQ, PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ,
+        RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+        TRUSTED_XHCI_IRQ_BINDING_LIMIT, TRUSTED_XHCI_PCIE_SINK_IRQS,
+        XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE, XHCI_MMIO_ALIAS_SCAN_STEPS,
+        XHCI_PRE_CONTROLLER_VTIMER_SHADOW_ENABLED, XHCI_VL805_PCIE_IRQ_SINK_ENABLED,
     };
     use super::{
         hid_protocol, hid_subclass, scancode, xhci_firmware_handoff_safe, CHAR_HEIGHT,
@@ -12200,13 +12619,13 @@ mod tests {
             super::VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
-        assert!(!xhci_runtime_init_strategy_prompt_safe_for_source(
+        assert!(xhci_runtime_init_strategy_prompt_safe_for_source(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
-        assert!(!xhci_runtime_init_strategy_prompt_safe_for_source(
+        assert!(xhci_runtime_init_strategy_prompt_safe_for_source(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED,
@@ -12447,6 +12866,48 @@ mod tests {
     }
 
     #[test]
+    fn xhci_runtime_init_strategies_prefer_stop_seed_before_live_reads_for_no_handoff() {
+        let (strategies, count) = xhci_runtime_init_strategies(
+            XhciFirmwareHandoff::None,
+            super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
+            Some(LocalSeatXhciStopStateSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(1),
+                iman0: Some(0),
+            }),
+        );
+        assert_eq!(count, 2);
+        assert_eq!(
+            strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
+        );
+        assert_eq!(
+            strategies[1],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
+        );
+        assert!(super::xhci_runtime_init_strategy_skips_controller_entry(
+            strategies[0],
+        ));
+        assert!(!super::xhci_runtime_init_strategy_skips_controller_entry(
+            strategies[1],
+        ));
+    }
+
+    #[test]
+    fn xhci_runtime_init_strategies_keep_live_default_without_stop_seed() {
+        let (strategies, count) = xhci_runtime_init_strategies(
+            XhciFirmwareHandoff::None,
+            super::VL805_RUNTIME_RESET_STATE_UNATTEMPTED,
+            None,
+        );
+        assert_eq!(count, 1);
+        assert_eq!(
+            strategies[0],
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
+        );
+    }
+
+    #[test]
     fn xhci_runtime_init_strategies_lead_with_reset_owned_stop_seed_after_mailbox_ack() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
@@ -12460,11 +12921,11 @@ mod tests {
         assert_eq!(count, 4);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
         );
         assert_eq!(
             strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
         );
         assert_eq!(
             strategies[2],
@@ -12477,7 +12938,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_keep_stop_seed_after_live_bootloader_auth() {
+    fn xhci_runtime_init_strategies_keep_bootloader_stop_seed_before_live_cold_start() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_BOOTLOADER_AUTHORIZED,
@@ -12490,11 +12951,11 @@ mod tests {
         assert_eq!(count, 3);
         assert_eq!(
             strategies[0],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
         );
         assert_eq!(
             strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
         );
         assert_eq!(
             strategies[2],
@@ -12628,6 +13089,13 @@ mod tests {
         );
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::None,
+                true,
+            )),
+            "rings-skip"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
                 XhciFirmwareHandoff::PreserveControllerState,
                 true,
             )),
@@ -12657,6 +13125,13 @@ mod tests {
                 false,
             )),
             "run-uboot"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_run_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::None,
+                true,
+            )),
+            "run-skip"
         );
         assert_eq!(
             xhci_runtime_init_strategy_run_label(XhciRuntimeInitStrategy::new(
@@ -12853,7 +13328,7 @@ mod tests {
         )
         .expect("trusted prompt-safe path should be classified");
         assert_eq!(status.route, "trusted-high-bar-stop-seed-primary");
-        assert_eq!(status.strategy_idx, 2);
+        assert_eq!(status.strategy_idx, 1);
         assert_eq!(status.strategy_count, 3);
         assert_eq!(status.policy, "reset-owned-stop-seed");
         assert_eq!(status.origin, "reset-owned-stop-seed");
@@ -12861,23 +13336,59 @@ mod tests {
         assert_eq!(status.seed, "stop-state");
         assert_eq!(status.halt_guard, "skip-live-halt-read");
         assert_eq!(status.constructor, "trusted-quiesce");
-        assert_eq!(status.pre_reset, "skip-pre-reset");
+        assert_eq!(status.pre_reset, "seeded-no-hcrst");
         assert_eq!(status.legacy, "skip-legacy");
-        assert_eq!(status.run, "run-uboot");
-        assert_eq!(status.publish, "rings-pre-run");
+        assert_eq!(status.run, "run-skip");
+        assert_eq!(status.publish, "rings-skip");
         assert_eq!(status.post_ready_irq, "irq-skip");
         assert_eq!(status.current_step, "pre-controller-ready");
-        assert_eq!(status.next_step, "skip-pre-reset");
-        assert_eq!(status.followup_step, "ring-publish");
+        assert_eq!(status.next_step, "policy-return");
+        assert_eq!(status.followup_step, "fallback-next");
         assert!(!status.prefer_high);
         assert!(status.pcie_dma_window);
         assert!(status.poll_only);
+        assert_eq!(status.expected_diag_stage, 0);
+        assert_eq!(status.expected_diag_tag, None);
+        assert_eq!(status.expected_diag_exact, None);
+    }
+
+    #[test]
+    fn usb_probe_preflight_status_reports_mailbox_notify_before_linux_capture_full_reset() {
+        let status = super::usb_probe_preflight_status(
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            None,
+            false,
+            false,
+            false,
+            None,
+            true,
+        )
+        .expect("Linux-captured high BAR full-reset path should be classified");
+        assert_eq!(status.strategy_idx, 1);
+        assert_eq!(status.strategy_count, 1);
+        assert_eq!(status.policy, "full-reset-start");
+        assert_eq!(status.origin, "live-runtime-default");
+        assert_eq!(status.handoff, "none");
+        assert_eq!(status.seed, "none");
+        assert_eq!(status.halt_guard, "skip-live-halt-read");
+        assert_eq!(status.constructor, "capture-quiesce");
+        assert_eq!(status.pre_reset, "mailbox-gated-hcrst");
+        assert_eq!(status.legacy, "skip-legacy");
+        assert_eq!(status.next_step, "mailbox-reset-notify");
+        assert_eq!(status.followup_step, "skip-pre-reset");
         assert_eq!(status.expected_diag_stage, 0x0204);
         assert_eq!(
             status.expected_diag_tag,
             Some("fw-handoff-skip-pre-quiesce")
         );
-        assert_eq!(status.expected_diag_exact, None);
+        assert_eq!(
+            super::usb_probe_preflight_next_step_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                XhciFirmwareHandoff::ColdStartFromSnapshot,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
+            ),
+            "skip-pre-reset"
+        );
     }
 
     #[test]
@@ -13078,6 +13589,80 @@ mod tests {
         );
         assert_eq!(params.firmware_handoff, XhciFirmwareHandoff::None);
         assert!(!params.apply_brcm_axi_setup);
+    }
+
+    #[test]
+    fn xhci_linux_capture_high_bar_runtime_default_skips_constructor_live_scrub() {
+        let probe = super::pi4_vl805_linux_capture_capability_probe(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+            .expect("Pi4 high BAR should use Linux-captured caps");
+        let strategy = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+        let params = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+            None,
+        );
+
+        assert_eq!(params.firmware_handoff, XhciFirmwareHandoff::None);
+        assert!(params.runtime_seed_snapshot.is_none());
+        assert!(params.skip_constructor_live_scrub);
+        assert!(params.skip_initial_live_operational_reads);
+        assert!(xhci_controller_skips_constructor_live_scrub(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+        ));
+        assert!(xhci_controller_skips_initial_live_operational_reads(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+        ));
+        assert_eq!(
+            xhci_runtime_init_strategy_constructor_label_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+            ),
+            "capture-quiesce"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_halt_guard_label_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+            ),
+            "skip-live-halt-read"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_pre_reset_label_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+            ),
+            "mailbox-gated-hcrst"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_legacy_label_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+            ),
+            "skip-legacy"
+        );
+    }
+
+    #[test]
+    fn xhci_constructor_live_scrub_override_stays_high_bar_and_unseeded_only() {
+        assert!(!xhci_controller_skips_constructor_live_scrub(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
+        ));
+        assert!(!xhci_controller_skips_constructor_live_scrub(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
+        ));
+        assert!(!xhci_controller_skips_constructor_live_scrub(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        ));
+        assert!(!xhci_controller_skips_initial_live_operational_reads(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        ));
     }
 
     #[test]
@@ -13404,7 +13989,10 @@ mod tests {
             xhci_diag_stage_label(0x0225),
             Some("stop-revalidation-ready")
         );
-        assert_eq!(xhci_diag_stage_label(0x0226), Some("reset-pre-usbcmd-read"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0226),
+            Some("reset-pre-usbcmd-source")
+        );
         assert_eq!(
             xhci_diag_stage_label(0x0227),
             Some("reset-post-settle-begin")
@@ -14139,12 +14727,15 @@ mod tests {
     }
 
     #[test]
-    fn bootloader_owned_stop_state_strategies_skip_root_port_reads() {
+    fn stop_state_without_runtime_rings_skips_root_port_reads() {
         assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
         ));
         assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+        ));
+        assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
         assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
@@ -14156,7 +14747,7 @@ mod tests {
         assert!(super::xhci_runtime_init_strategy_skips_controller_entry(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
         ));
-        assert!(!super::xhci_runtime_init_strategy_skips_controller_entry(
+        assert!(super::xhci_runtime_init_strategy_skips_controller_entry(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
         assert!(!super::xhci_runtime_init_strategy_skips_controller_entry(
@@ -14217,7 +14808,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_sink_mode_stays_disabled_until_pi4_msi_support_exists() {
+    fn xhci_irq_sink_mode_enables_bounded_pcie_sinks_before_primary_writes() {
         assert_eq!(
             xhci_irq_sink_mode(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -14236,7 +14827,16 @@ mod tests {
                 XhciIrqInstallPhase::PreControllerReady,
                 true,
             ),
-            XhciIrqSinkMode::Disabled
+            XhciIrqSinkMode::TrustedPcieSinks
+        );
+        assert_eq!(
+            xhci_irq_sink_mode(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                XhciFirmwareHandoff::None,
+                XhciIrqInstallPhase::PreControllerReady,
+                true,
+            ),
+            XhciIrqSinkMode::TrustedPcieSinks
         );
         assert_eq!(
             xhci_irq_sink_mode(
@@ -14257,13 +14857,13 @@ mod tests {
             XhciIrqInstallPhase::PreControllerReady,
             false,
         ));
-        assert!(!xhci_irq_sink_needed(
+        assert!(xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             XhciIrqInstallPhase::PreControllerReady,
             true,
         ));
-        assert!(!xhci_irq_sink_needed(
+        assert!(xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::None,
             XhciIrqInstallPhase::PreControllerReady,
@@ -14292,16 +14892,25 @@ mod tests {
     }
 
     #[test]
-    fn xhci_irq_policy_requires_vl805_msi_delivery_before_binding() {
+    fn xhci_irq_policy_allows_pi4_pcie_irq_sinks_before_primary_writes() {
         assert!(XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE);
         assert!(xhci_irq_service_ack_loop_ready());
-        assert!(!XHCI_VL805_MSI_ROUTE_ENABLED);
-        assert!(!xhci_vl805_irq_delivery_ready());
+        assert!(XHCI_VL805_PCIE_IRQ_SINK_ENABLED);
+        assert!(xhci_vl805_irq_delivery_ready());
+        assert!(!XHCI_PRE_CONTROLLER_VTIMER_SHADOW_ENABLED);
+        assert!(!xhci_pre_controller_vtimer_shadow_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciIrqInstallPhase::PreControllerReady,
+        ));
+        assert!(!xhci_pre_controller_vtimer_shadow_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciIrqInstallPhase::ControllerReady,
+        ));
         assert_eq!(
             xhci_irq_policy_reason(XhciFirmwareHandoff::ColdStartFromSnapshot),
-            "vl805-msi-route-missing"
+            "fw-handoff-cold-start-from-snapshot"
         );
-        assert!(!xhci_irq_sink_needed(
+        assert!(xhci_irq_sink_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             XhciIrqInstallPhase::PreControllerReady,
@@ -14315,7 +14924,10 @@ mod tests {
             TRUSTED_XHCI_PCIE_SINK_IRQS,
             [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ]
         );
+        assert_eq!(PI4_PCIE_BRIDGE_IRQ, 180);
+        assert_eq!(PI4_VL805_XHCI_INTX_IRQ, 175);
         assert!(!TRUSTED_XHCI_PCIE_SINK_IRQS.contains(&PI4_GENERIC_VTIMER_IRQ));
+        assert_eq!(TRUSTED_XHCI_IRQ_BINDING_LIMIT, 2);
     }
 
     #[test]
@@ -14341,6 +14953,7 @@ mod tests {
                 Some(XhciIrqBinding {
                     irq: PI4_PCIE_BRIDGE_IRQ,
                     shadow: false,
+                    hal_binding: None,
                 }),
                 None,
             ],
@@ -14358,10 +14971,12 @@ mod tests {
                 Some(XhciIrqBinding {
                     irq: PI4_PCIE_BRIDGE_IRQ,
                     shadow: false,
+                    hal_binding: None,
                 }),
                 Some(XhciIrqBinding {
                     irq: PI4_VL805_XHCI_INTX_IRQ,
                     shadow: false,
+                    hal_binding: None,
                 }),
             ],
         };
@@ -14382,8 +14997,8 @@ mod tests {
     }
 
     #[test]
-    fn trusted_unseeded_cold_start_does_not_require_raw_irq_before_msi() {
-        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
+    fn primary_pcie_irq_is_required_for_untrusted_or_unseeded_high_bar_writes() {
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
         ));
@@ -14391,7 +15006,7 @@ mod tests {
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
         ));
-        assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
@@ -14578,7 +15193,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_high_candidate_rejects_linux_capture_as_runtime_source() {
+    fn xhci_high_candidate_accepts_linux_capture_as_bounded_layout_source() {
         assert!(super::linux_captured_vl805_cfg_matches_high_bar());
         assert!(super::xhci_cohesix_owned_linux_capture_source_evidence(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -14598,8 +15213,8 @@ mod tests {
             None,
             false,
         );
-        assert!(!runtime_source);
-        assert!(super::xhci_linux_capture_static_layout_blocked(
+        assert!(runtime_source);
+        assert!(!super::xhci_linux_capture_static_layout_blocked(
             Some((RPI4_XHCI_MMIO_HIGH_CANDIDATE, false)),
             None,
             None,
@@ -14607,7 +15222,7 @@ mod tests {
             None,
             false,
         ));
-        assert!(!xhci_runtime_mmio_candidate_allowed(
+        assert!(xhci_runtime_mmio_candidate_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             false,
             Some((RPI4_XHCI_MMIO_HIGH_CANDIDATE, false)),
@@ -14617,7 +15232,7 @@ mod tests {
             runtime_source,
             false,
         ));
-        assert!(!xhci_runtime_mmio_has_accessible_window(
+        assert!(xhci_runtime_mmio_has_accessible_window(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             false,
             true,
@@ -14829,8 +15444,9 @@ mod tests {
     }
 
     #[test]
-    fn xhci_high_bar_preseed_requires_explicit_source() {
-        assert!(!xhci_preseed_allows_high_bar_candidate(None, None, false));
+    fn xhci_high_bar_preseed_accepts_capture_layout_source() {
+        assert!(super::xhci_cohesix_owned_linux_capture_preseed_source());
+        assert!(xhci_preseed_allows_high_bar_candidate(None, None, false));
         assert!(xhci_preseed_allows_high_bar_candidate(
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             None,
@@ -14841,7 +15457,7 @@ mod tests {
             Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
             false
         ));
-        assert!(!xhci_preseed_allows_high_bar_candidate(
+        assert!(xhci_preseed_allows_high_bar_candidate(
             Some(RPI4_XHCI_MMIO_PRIMARY_CANDIDATE),
             None,
             false
@@ -15068,6 +15684,72 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    #[test]
+    fn linux_capture_full_reset_requires_runtime_mailbox_notify() {
+        let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+        let stop_seed = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true);
+
+        assert!(
+            super::xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                full_reset,
+            )
+        );
+        assert!(
+            !super::xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                stop_seed,
+            )
+        );
+        assert!(
+            !super::xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+            )
+        );
+        assert!(
+            !super::xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(
+                RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+                full_reset,
+            )
+        );
+
+        assert!(super::xhci_linux_capture_full_reset_mailbox_reset_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            full_reset,
+            Some((RPI4_XHCI_MMIO_HIGH_CANDIDATE, false)),
+            None,
+            None,
+            None,
+            None,
+            false,
+        ));
+        assert!(
+            !super::xhci_linux_capture_full_reset_mailbox_reset_required(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                full_reset,
+                Some((RPI4_XHCI_MMIO_HIGH_CANDIDATE, false)),
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+                None,
+                None,
+                None,
+                false,
+            )
+        );
+        assert!(
+            !super::xhci_linux_capture_full_reset_mailbox_reset_required(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                stop_seed,
+                Some((RPI4_XHCI_MMIO_HIGH_CANDIDATE, false)),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+        );
     }
 
     #[test]

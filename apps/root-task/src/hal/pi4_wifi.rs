@@ -577,11 +577,10 @@ const fn core_ctrl_can_defer_clear_reset_readback(base: u32, attempt: usize) -> 
 
 #[inline]
 const fn core_reset_can_skip_disable(base: u32, prereset: u8, reset: u8, postreset: u8) -> bool {
-    (base == CYW43_SOCRAM_CORE_BASE && prereset == 0 && reset == 0 && postreset == 0)
-        || (base == CYW43_ARMCR4_CORE_BASE
-            && prereset == ARMCR4_BCMA_IOCTL_CPUHALT
-            && reset == 0
-            && postreset == 0)
+    // SOCRAM is already held from the immediately preceding disable. ARMCR4
+    // must still run Linux's disable phase on active release so CPUHALT is
+    // cleared while reset is asserted.
+    base == CYW43_SOCRAM_CORE_BASE && prereset == 0 && reset == 0 && postreset == 0
 }
 
 #[inline]
@@ -639,6 +638,21 @@ const fn ht_clock_assist_shadow_is_complete(
 }
 
 #[inline]
+const fn pre_function2_ht_sideband_programs_sr_registers() -> bool {
+    // Linux leaves the SR wake/cardcap sideband until after Function 2 is
+    // enabled. Before F2, KSO is only wake evidence for the CHIPCLKCSR path.
+    false
+}
+
+#[inline]
+const fn pre_function2_ht_sideband_shadow_is_complete(last_sleepcsr: Option<u8>) -> bool {
+    match last_sleepcsr {
+        Some(sleep) => sleepcsr_kso_acknowledged(sleep),
+        None => false,
+    }
+}
+
+#[inline]
 fn is_sdhci_command_error(err: &HalError) -> bool {
     matches!(err, HalError::Unsupported("sdhci-command-error"))
 }
@@ -675,9 +689,11 @@ fn firmware_verify_readback_can_be_treated_as_unavailable(err: &HalError) -> boo
 }
 
 #[inline]
-const fn firmware_download_readback_verify_required(prewrite_ht_ready: bool) -> bool {
-    let _ = prewrite_ht_ready;
-    CYW43_FIRMWARE_BOOT_READBACK_VERIFY_ENABLED
+const fn firmware_download_readback_verify_required(_prewrite_ht_ready: bool) -> bool {
+    // Linux brcmfmac only compiles the full RAM compare path under DEBUG.
+    // The Pi 4 production path writes firmware, writes NVRAM, then releases
+    // ARMCR4 without forcing a Function 1 RAM readback first.
+    false
 }
 
 #[inline]
@@ -703,7 +719,6 @@ fn control_plane_frame_transfer_error_needs_terminate(err: &HalError) -> bool {
     is_sdhci_io_path_error(err) || is_sdhci_int_timeout(err)
 }
 
-#[inline]
 fn is_sdio_cmd52_access_error(err: &HalError) -> bool {
     matches!(
         err,
@@ -788,7 +803,17 @@ const fn control_plane_clock_target_hz(current_clock_hz: u32, preferred_data_clo
 
 #[inline]
 const fn pre_ht_control_plane_clock_target_hz(current_clock_hz: u32) -> u32 {
-    current_clock_hz
+    control_plane_clock_target_hz(current_clock_hz, CYW43_CONTROL_PLANE_CLOCK_HZ)
+}
+
+#[inline]
+const fn sdio_cccr_speed_supports_high_speed(speed: u8) -> bool {
+    (speed & SDIO_CCCR_SPEED_SHS) != 0
+}
+
+#[inline]
+const fn sdio_cccr_speed_ehs_value(speed: u8) -> u8 {
+    speed | SDIO_CCCR_SPEED_EHS
 }
 
 #[inline]
@@ -796,9 +821,9 @@ const fn post_download_ht_clock_target_hz(
     current_clock_hz: u32,
     selected_bulk_clock_hz: u32,
 ) -> u32 {
-    // Match the Pi 4 firmware/Linux high-speed request, but only after the
-    // SDHCI base-clock correction has made the encoded divider match the
-    // firmware-observed 50 MHz clock-control value.
+    // Match the Pi 4 firmware/Linux high-speed request. The BCM2711 SDHCI
+    // parent clock correction makes the encoded divider deliver Linux's
+    // observed 41.666667 MHz actual link for a 50 MHz request.
     let linux_floor = if selected_bulk_clock_hz > CYW43_CONTROL_PLANE_CLOCK_HZ {
         selected_bulk_clock_hz
     } else {
@@ -817,6 +842,19 @@ const fn bcm2711_sdhci_effective_base_clock_hz(mailbox_rate_hz: u32) -> u32 {
         BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ
     } else {
         mailbox_rate_hz
+    }
+}
+
+#[inline]
+fn sdhci_spec300_divider_for_base_clock(base_clock_hz: u32, target_hz: u32) -> u16 {
+    if base_clock_hz <= target_hz {
+        1
+    } else {
+        let mut div = 2u16;
+        while div < 2046 && (base_clock_hz / u32::from(div)) > target_hz {
+            div = div.saturating_add(2);
+        }
+        div
     }
 }
 
@@ -2809,8 +2847,18 @@ const fn backplane_alp_hold_value() -> u8 {
 }
 
 #[inline]
-const fn defer_backplane_sdio_pullup_clear() -> bool {
-    true
+const fn backplane_sdio_pullup_clear_enabled() -> bool {
+    false
+}
+
+#[inline]
+const fn backplane_sdio_pullup_clear_width_allowed(width: SdioBusWidth) -> bool {
+    matches!(width, SdioBusWidth::FourBit)
+}
+
+#[inline]
+const fn backplane_sdio_pullup_clear_error_is_terminal() -> bool {
+    false
 }
 
 #[inline]
@@ -2821,15 +2869,23 @@ const fn required_ht_clock_request_value(last_chipclkcsr: Option<u8>) -> u8 {
 
 #[inline]
 const fn required_ht_clock_retry_request_value(last_chipclkcsr: Option<u8>) -> u8 {
+    // Production retries mirror brcmf_sdio_htclk(): request HT and prove the
+    // observable HT_AVAIL bit before Function 2. FORCE_HT is not part of the
+    // required clock proof.
+    required_ht_clock_request_value(last_chipclkcsr)
+}
+
+#[inline]
+const fn diagnostic_ht_clock_force_probe_value(last_chipclkcsr: Option<u8>) -> u8 {
     required_ht_clock_request_value(last_chipclkcsr) | SBSDIO_FORCE_HT
 }
 
 #[inline]
 const fn required_ht_clock_uses_force_ht_timeout_retry() -> bool {
-    // Linux forces the backplane clock before Function 2 after it has proven HT.
-    // Keep one bounded FORCE_HT retry as a diagnostic, but do not let it bypass
-    // the HT_AVAIL requirement.
-    true
+    // Linux's pre-SR post-download path requests HT_AVAIL and waits. It only
+    // ORs FORCE_HT into the saved clock value after HT is already available,
+    // immediately before enabling Function 2.
+    false
 }
 
 #[inline]
@@ -2840,13 +2896,16 @@ const fn required_ht_clock_linux_active_wait_loops() -> usize {
 #[inline]
 const fn required_ht_clock_linux_active_transition_uses_force_ht() -> bool {
     // brcmfmac's HT clock bring-up first requests HT_AVAIL only. FORCE_HT is a
-    // later F2-interrupt propagation assist, so keep it as the bounded retry.
+    // later F2-interrupt propagation assist, never a pre-Function-2 HT proof.
     false
 }
 
 #[inline]
 const fn required_ht_clock_linux_active_transition_resets_chipclk() -> bool {
-    false
+    // Keep the SD-only edge adjacent to the production HT request. Linux drops
+    // the bus clock state to CLK_SDONLY after firmware release, then the next
+    // CLK_AVAIL transition writes the HT request and polls CHIPCLKCSR.
+    true
 }
 
 #[inline]
@@ -2854,6 +2913,16 @@ const fn cyw43455_uses_linux_sr_kso_clock() -> bool {
     // brcmfmac initializes sleep-retention after Function 2 is live. Before
     // Function 2, SLEEPCSR.KSO is wake evidence only and must not substitute
     // for CHIPCLKCSR.HT_AVAIL.
+    false
+}
+
+#[inline]
+const fn required_ht_clock_uses_pre_function2_kso_gate() -> bool {
+    // The Linux firmware callback reaches the post-download HT request through
+    // the non-SR CLK_SDONLY -> CLK_AVAIL path. brcmf_sdio_kso_control(on)
+    // waits for DEVON only on SR sleep wakeups, which happen after Function 2
+    // is already alive. Keep KSO/DEVON as sideband diagnostics here, not as a
+    // pre-HT production gate.
     false
 }
 
@@ -2898,7 +2967,6 @@ const fn firmware_upload_alp_clock_ready(chipclk: u8) -> bool {
     (chipclk & SBSDIO_ALP_AVAIL) != 0
 }
 
-#[inline]
 const fn cyw43455_cardcap_command_decode_value() -> u8 {
     SDIO_CCCR_BRCM_CARDCAP_CMD14_SUPPORT | SDIO_CCCR_BRCM_CARDCAP_CMD14_EXT
 }
@@ -2915,10 +2983,17 @@ const fn firmware_ram_size_4345_from_live(live_ram_size: u32) -> u32 {
 #[inline]
 const fn transport_phase_chipclk_value(last_chipclkcsr: Option<u8>) -> u8 {
     match last_chipclkcsr {
+        Some(value) if (value & SBSDIO_HT_AVAIL_REQ) != 0 => {
+            let mut request = SBSDIO_HT_AVAIL_REQ;
+            if (value & SBSDIO_FORCE_HT) != 0 {
+                request |= SBSDIO_FORCE_HT;
+            }
+            request
+        }
         Some(value) if (value & (SBSDIO_HT_AVAIL | SBSDIO_FORCE_HT)) != 0 => SBSDIO_HT_AVAIL_REQ,
         // A bare HT request with only ALPAV observed is the Pi 4 failure shape
-        // (0x50). Refreshes must fall back to the Linux ALP hold path until an
-        // explicit HT gate sees HTAV.
+        // (0x50). Refreshes keep the active HT request latched; only HTAV
+        // satisfies the gate.
         Some(value)
             if (value
                 & (SBSDIO_ALP_AVAIL
@@ -3023,7 +3098,8 @@ const fn function2_requires_ht_available_for_forced_clock(
 const fn function2_requires_sleepcsr_device_on_before_ready(
     experimental_no_ht_transport: bool,
 ) -> bool {
-    !experimental_no_ht_transport
+    let _ = experimental_no_ht_transport;
+    false
 }
 
 #[inline]
@@ -3523,6 +3599,7 @@ const SDHCI_WRITE_PROTECT: u32 = 1 << 19;
 const SDHCI_DATA_LVL_MASK: u32 = 0x00F0_0000;
 
 const SDHCI_CTRL_4BITBUS: u8 = 1 << 1;
+const SDHCI_CTRL_HISPD: u8 = 1 << 2;
 
 const SDHCI_POWER_ON: u8 = 0x01;
 const SDHCI_POWER_330: u8 = 0x0E;
@@ -3578,12 +3655,15 @@ const SDIO_CCCR_IORX: u32 = 0x03;
 const SDIO_CCCR_IENX: u32 = 0x04;
 const SDIO_CCCR_ABORT: u32 = 0x06;
 const SDIO_CCCR_IF: u32 = 0x07;
+const SDIO_CCCR_SPEED: u32 = 0x13;
 const SDIO_CCCR_BRCM_CARDCAP: u32 = 0xF0;
 const SDIO_CCCR_BRCM_CARDCTRL: u32 = 0xF1;
 const SDIO_CCCR_BRCM_CARDCTRL_WLANRESET: u8 = 0x02;
 const SDIO_CCCR_BRCM_CARDCAP_CMD14_SUPPORT: u8 = 0x02;
 const SDIO_CCCR_BRCM_CARDCAP_CMD14_EXT: u8 = 0x04;
 const SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC: u8 = 0x08;
+const SDIO_CCCR_SPEED_SHS: u8 = 0x01;
+const SDIO_CCCR_SPEED_EHS: u8 = 0x02;
 const SDIO_BUS_WIDTH_1BIT: u8 = 0x00;
 const SDIO_BUS_WIDTH_4BIT: u8 = 0x02;
 const SDIO_CCCR_FBR_BASE: u32 = 0x100;
@@ -3616,6 +3696,7 @@ const SBSDIO_FUNC1_SBADDRMID: u32 = 0x1000B;
 const SBSDIO_FUNC1_SBADDRHIGH: u32 = 0x1000C;
 const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1000D;
 const SBSDIO_FUNC1_CHIPCLKCSR: u32 = 0x1000E;
+const SBSDIO_FUNC1_SDIOPULLUP: u32 = 0x1000F;
 const SBSDIO_FUNC1_WFRAMEBCLO: u32 = 0x10019;
 const SBSDIO_FUNC1_WFRAMEBCHI: u32 = 0x1001A;
 const SBSDIO_FUNC1_RFRAMEBCLO: u32 = 0x1001B;
@@ -3670,11 +3751,20 @@ const fn linux_sr_kso_clock_ready_from_sleepcsr(sleep: u8) -> bool {
 
 #[inline]
 const fn post_download_devon_before_ht_is_diagnostic() -> bool {
-    // The Pi 4 capture shows brcmfmac proving post-download liveness through
-    // the Function 2/control-plane path and later CHIPACTIVE reporting. Cohesix
-    // was treating KSO-without-DEVON as a hard pre-HT blocker, which stopped at
-    // SLEEPCSR=0x01 before ever reaching that Linux-proven path.
+    // On the Pi 4 non-SR firmware callback path, DEVON is not a prerequisite
+    // for the post-download CLK_AVAIL request. It remains useful evidence when
+    // diagnosing sideband state, but CHIPCLKCSR.HT_AVAIL is the real Function-2
+    // clock contract.
     true
+}
+
+#[inline]
+fn devon_before_ht_may_be_deferred_for_stage(stage: &'static str) -> bool {
+    let _ = stage;
+    // The production HT path no longer calls the DEVON wait before requesting
+    // HT. If a diagnostic path does call this helper, keep the stricter
+    // behavior there so the diagnostic still records a real device-on proof.
+    false
 }
 
 #[inline]
@@ -4936,7 +5026,7 @@ const CYW43_TRANSFER_CHUNK: usize = 256;
 const CYW43_FIRMWARE_TRANSFER_CHUNK: usize = SDIO_MAX_BYTE_MODE;
 const CYW43_FIRMWARE_PROGRESS_INTERVAL: usize = 16 * 1024;
 const BCM2711_SDIO_MAILBOX_CLOCK_HZ: u32 = 100_000_000;
-const BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ: u32 = 200_000_000;
+const BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ: u32 = 250_000_000;
 // Linux on the same Pi 4 requests 50 MHz for mmc1 high-speed 4-bit SDIO and
 // reports an actual 41.666667 MHz link. Request the same high-speed target;
 // the SDHCI divider and mailbox base clock determine the exact delivered rate.
@@ -12102,9 +12192,18 @@ impl SdioHost {
             "cyw43-backplane-force-alp",
             CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS,
         );
-        if defer_backplane_sdio_pullup_clear() {
+        if backplane_sdio_pullup_clear_enabled()
+            && backplane_sdio_pullup_clear_width_allowed(self.desired_bus_width)
+        {
+            self.clear_backplane_sdio_pullups_linux_style();
+        } else if backplane_sdio_pullup_clear_enabled() {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] cyw43 backplane stage=pullup-clear deferred reason=pi4-cmd52-crc"
+                "[pi4-wifi] cyw43 backplane stage=pullup-clear deferred reason=await-4bit-linux-whd width={}",
+                sdio_bus_width_name(self.desired_bus_width)
+            ));
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] cyw43 backplane stage=pullup-clear deferred addr=0x{SBSDIO_FUNC1_SDIOPULLUP:05x} reason=pi4-cmd52-before-sideband"
             ));
         }
         emit_breadcrumb(format_args!(
@@ -12112,6 +12211,36 @@ impl SdioHost {
         ));
         emit_breadcrumb(format_args!("[pi4-wifi] cyw43 backplane ready"));
         Ok(())
+    }
+
+    fn clear_backplane_sdio_pullups_linux_style(&mut self) {
+        if !backplane_sdio_pullup_clear_enabled() {
+            return;
+        }
+        if !backplane_sdio_pullup_clear_width_allowed(self.desired_bus_width) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] cyw43 backplane stage=pullup-clear deferred reason=await-4bit-linux-whd width={}",
+                sdio_bus_width_name(self.desired_bus_width)
+            ));
+            return;
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] cyw43 backplane stage=pullup-clear addr=0x{SBSDIO_FUNC1_SDIOPULLUP:05x} value=0x00 reason=linux-buscoreprep policy=single-shot-ignore-error"
+        ));
+        match self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SDIOPULLUP, 0) {
+            Ok(()) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] cyw43 backplane stage=pullup-clear ready attempt=1"
+                ));
+            }
+            Err(err) => {
+                let terminal = backplane_sdio_pullup_clear_error_is_terminal();
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] cyw43 backplane stage=pullup-clear skipped err={err} policy=linux-ignored terminal={}",
+                    yn(terminal)
+                ));
+            }
+        }
     }
 
     fn setup_firmware_channel(
@@ -12811,7 +12940,8 @@ impl SdioHost {
             ));
             return Ok(sleep_before);
         }
-        if post_download_devon_before_ht_is_diagnostic() && sleepcsr_kso_acknowledged(sleep_before)
+        if devon_before_ht_may_be_deferred_for_stage(stage)
+            && sleepcsr_kso_acknowledged(sleep_before)
         {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage={stage} action=f2-devon-observe sleep=0x{sleep_before:02x} devon=pending policy=linux-sr-kso loops=0"
@@ -12916,7 +13046,8 @@ impl SdioHost {
             "[pi4-wifi] firmware stage={stage} action=f2-devon-timeout sleep=0x{sleep_before:02x}->0x{last_sleep:02x} clear_sleep=0x{last_clear_sleep:02x} expected=0x{:02x}",
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK,
         ));
-        if post_download_devon_before_ht_is_diagnostic() && sleepcsr_kso_acknowledged(last_sleep) {
+        if devon_before_ht_may_be_deferred_for_stage(stage) && sleepcsr_kso_acknowledged(last_sleep)
+        {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage={stage} action=f2-devon-deferred sleep=0x{last_sleep:02x} clear_sleep=0x{last_clear_sleep:02x} policy=linux-sr-kso"
             ));
@@ -12986,7 +13117,8 @@ impl SdioHost {
             ));
             return Ok(sleep_before);
         }
-        if post_download_devon_before_ht_is_diagnostic() && sleepcsr_kso_acknowledged(sleep_before)
+        if devon_before_ht_may_be_deferred_for_stage(stage)
+            && sleepcsr_kso_acknowledged(sleep_before)
         {
             self.remember_sleepcsr(sleep_before);
             emit_breadcrumb(format_args!(
@@ -13022,7 +13154,8 @@ impl SdioHost {
                 ));
                 return Ok(sleep);
             }
-            if post_download_devon_before_ht_is_diagnostic() && sleepcsr_kso_acknowledged(sleep) {
+            if devon_before_ht_may_be_deferred_for_stage(stage) && sleepcsr_kso_acknowledged(sleep)
+            {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} action=kso-devon-observe sleep=0x{sleep_before:02x}->0x{sleep:02x} devon=pending policy=linux-sr-kso loops={loop_index}"
                 ));
@@ -13058,7 +13191,8 @@ impl SdioHost {
             "[pi4-wifi] firmware stage={stage} action=kso-devon-timeout sleep=0x{sleep_before:02x}->0x{last_sleep:02x} expected=0x{:02x}",
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK,
         ));
-        if post_download_devon_before_ht_is_diagnostic() && sleepcsr_kso_acknowledged(last_sleep) {
+        if devon_before_ht_may_be_deferred_for_stage(stage) && sleepcsr_kso_acknowledged(last_sleep)
+        {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage={stage} action=kso-devon-deferred sleep=0x{last_sleep:02x} policy=linux-sr-kso"
             ));
@@ -14573,9 +14707,10 @@ impl SdioHost {
                 self.last_chipclkcsr.unwrap_or(0)
             ));
         }
-        emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-disable"));
-        self.core_disable(
+        emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-passive"));
+        self.core_reset(
             CYW43_ARMCR4_CORE_BASE,
+            ARMCR4_BCMA_IOCTL_CPUHALT,
             ARMCR4_BCMA_IOCTL_CPUHALT,
             ARMCR4_BCMA_IOCTL_CPUHALT,
         )?;
@@ -14599,39 +14734,32 @@ impl SdioHost {
             .checked_add(ram_size)
             .and_then(|value| value.checked_sub(4))
             .ok_or(HalError::Unsupported("cyw43-nvram-tail"))?;
-        let mut prewrite_ht_ready = self.ensure_firmware_upload_alp_clock(
+        self.ensure_pre_ht_startup_clock("pre-write-ht-sdio-clock")?;
+        let prewrite_ht_ready = self.ensure_firmware_upload_alp_clock(
             "pre-write-alp-clock",
             "pre-write-alp-clock assist",
         )?;
-        if !prewrite_ht_ready {
+        if prewrite_ht_ready {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=pre-write-ht-clock action=probe-after-alp reason=linux-capture-ht-before-firmware-download"
+                "[pi4-wifi] firmware stage=pre-write-alp-clock action=continue-with-ht csr=0x{:02x} reason=alp-request-readback-observed-ht",
+                self.last_chipclkcsr.unwrap_or(0),
             ));
-            match self.wait_for_linux_chip_active_ht_clock("pre-write-ht-clock", false) {
-                Ok(true) => {
-                    prewrite_ht_ready = true;
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=pre-write-ht-clock ready=ht-before-upload"
-                    ));
-                }
-                Ok(false) => {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=pre-write-ht-clock action=continue-alp-only verify=required reason=ht-not-proven-before-upload csr=0x{:02x}",
-                        self.last_chipclkcsr.unwrap_or(0),
-                    ));
-                }
-                Err(err) => {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=pre-write-ht-clock action=continue-alp-only verify=required err={err} reason=pre-upload-ht-probe"
-                    ));
-                    if is_sdhci_io_path_error(&err) {
-                        self.recover_command_path_and_refresh_transport(
-                            "pre-write-ht-clock-fallback",
-                        )?;
-                    }
-                }
-            }
+        } else {
+            let chipclk = self.last_chipclkcsr.unwrap_or(0);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=pre-write-alp-clock action=continue-alp-only csr=0x{chipclk:02x} reason=linux-brcmfmac-alp-only-firmware-download"
+            ));
+            log_ht_clock_status(
+                "pre-write-alp-clock",
+                "alp-only-upload",
+                chipclk,
+                self.last_wakeupctrl,
+                self.last_sleepcsr,
+                self.last_cardcap,
+            );
         }
+        let firmware_verify_required =
+            firmware_download_readback_verify_required(prewrite_ht_ready);
         let clock_candidates =
             firmware_bulk_clock_candidates(self.current_clock_hz, prewrite_ht_ready);
         let mut selected_bulk_clock_hz = CYW43_FIRMWARE_BULK_CLOCK_HZ;
@@ -14650,6 +14778,7 @@ impl SdioHost {
                     nvram_tail,
                     nvram_magic,
                     prefer_byte_mode,
+                    firmware_verify_required,
                 )
             }) {
                 Ok(()) => {
@@ -14683,16 +14812,15 @@ impl SdioHost {
         if !upload_complete {
             return Err(HalError::Unsupported("cyw43-firmware-clock-exhausted"));
         }
-        let firmware_verify_required =
-            firmware_download_readback_verify_required(prewrite_ht_ready);
         if firmware_verify_required {
-            match self.verify_firmware_payloads(
+            match self.verify_firmware_payloads_after_nvram(
                 bundle.firmware,
                 &nvram,
                 ram_base,
                 nvram_offset,
                 nvram_tail,
                 nvram_magic,
+                true,
             ) {
                 Ok(()) => {
                     self.firmware_download_verified = true;
@@ -14713,7 +14841,7 @@ impl SdioHost {
                     )?;
                     if !verified {
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware_verify outcome=readback-unavailable action=fail-before-armcr4-release reason=linux-preupload-ht-not-proven"
+                            "[pi4-wifi] firmware_verify outcome=readback-unavailable action=fail-before-armcr4-release reason=linux-mandatory-firmware-readback"
                         ));
                         return Err(HalError::Unsupported(
                             "cyw43-firmware-verify-readback-unavailable",
@@ -14725,7 +14853,7 @@ impl SdioHost {
         } else {
             self.firmware_download_verified = false;
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware_verify policy=skip-readback action=continue-after-upload reason=linux-boot-path clock={}Hz width={} verified=no",
+                "[pi4-wifi] firmware_verify policy=skip-readback action=continue-after-upload reason=linux-nondebug-debug-only-readback clock={}Hz width={} verified=no",
                 self.current_clock_hz,
                 sdio_bus_width_name(self.desired_bus_width),
             ));
@@ -14745,7 +14873,6 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=armcr4-core-up action=skip-readback reason=linux-release-path"
         ));
-        self.prepare_linux_post_download_ht_transition("armcr4-post-download-clock")?;
         self.ensure_post_download_ht_clock("wait-ht-clock-prep", selected_bulk_clock_hz)?;
         let strict_ht_ready =
             self.require_ht_clock_ready("wait-ht-clock", "wait-ht-clock assist")?;
@@ -15050,7 +15177,7 @@ impl SdioHost {
                 self.last_sleepcsr,
                 self.last_cardcap,
             );
-            let retry_request = required_ht_clock_retry_request_value(Some(last_chipclk));
+            let retry_request = diagnostic_ht_clock_force_probe_value(Some(last_chipclk));
             if retry_request != request {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} retry=force-ht request=0x{retry_request:02x} mode=soft-probe"
@@ -15330,7 +15457,16 @@ impl SdioHost {
         stage: &'static str,
         stronger_retry_request: bool,
     ) -> Result<bool, HalError> {
-        let sleep_csr = self.ensure_kso_device_on_for(stage)?;
+        let sleep_csr = if required_ht_clock_uses_pre_function2_kso_gate() {
+            self.ensure_kso_awake_for(stage)?
+        } else {
+            let sleep = self.last_sleepcsr.unwrap_or(0);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=pre-f2-kso-gate-skipped sleep=0x{sleep:02x}/{} reason=linux-non-sr-chipclk-ht",
+                yn(self.last_sleepcsr.is_some()),
+            ));
+            sleep
+        };
         if cyw43455_uses_linux_sr_kso_clock() && sleepcsr_kso_acknowledged(sleep_csr) {
             let chipclk_snapshot = match self
                 .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)
@@ -15367,9 +15503,9 @@ impl SdioHost {
         if required_ht_clock_linux_active_transition_resets_chipclk() {
             self.prepare_linux_post_download_ht_transition(stage)?;
         }
-        let request = if stronger_retry_request
-            || required_ht_clock_linux_active_transition_uses_force_ht()
-        {
+        let request = if required_ht_clock_linux_active_transition_uses_force_ht() {
+            diagnostic_ht_clock_force_probe_value(self.last_chipclkcsr)
+        } else if stronger_retry_request {
             required_ht_clock_retry_request_value(self.last_chipclkcsr)
         } else {
             required_ht_clock_request_value(self.last_chipclkcsr)
@@ -15543,24 +15679,75 @@ impl SdioHost {
 
     fn ensure_pre_ht_startup_clock(&mut self, stage: &'static str) -> Result<(), HalError> {
         let target_clock_hz = pre_ht_control_plane_clock_target_hz(self.current_clock_hz);
-        if target_clock_hz >= self.current_clock_hz {
+        if target_clock_hz == self.current_clock_hz {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} action=skip-pre-ht current={}Hz preferred={}Hz",
+                "[pi4-wifi] firmware stage={stage} action=hold-pre-ht current={}Hz preferred={}Hz",
                 self.current_clock_hz, self.preferred_data_clock_hz
             ));
+            self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(self.current_clock_hz);
             return Ok(());
+        }
+        if target_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ {
+            self.enable_sdio_high_speed_timing_for(stage)?;
         }
 
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=lower-pre-ht request={}Hz from={}Hz preferred={}Hz",
-            target_clock_hz, self.current_clock_hz, self.preferred_data_clock_hz
+            "[pi4-wifi] firmware stage={stage} action={} request={}Hz from={}Hz preferred={}Hz reason=linux-high-speed-before-ht-upload",
+            if target_clock_hz < self.current_clock_hz {
+                "lower-pre-ht"
+            } else {
+                "raise-pre-ht"
+            },
+            target_clock_hz,
+            self.current_clock_hz,
+            self.preferred_data_clock_hz
         ));
         let effective_hz = self.set_clock_hz(target_clock_hz)?;
+        self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(effective_hz);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=lower-pre-ht-ready effective={}Hz",
+            "[pi4-wifi] firmware stage={stage} action=pre-ht-clock-ready effective={}Hz",
             effective_hz
         ));
         Ok(())
+    }
+
+    fn enable_sdio_high_speed_timing_for(&mut self, stage: &'static str) -> Result<bool, HalError> {
+        if self.card.is_none() {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=sdio-high-speed-skip reason=no-card"
+            ));
+            return Ok(false);
+        }
+        let speed = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_SPEED)?;
+        if !sdio_cccr_speed_supports_high_speed(speed) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=sdio-high-speed-unavailable cccr_speed=0x{speed:02x}"
+            ));
+            return Ok(false);
+        }
+        let desired = sdio_cccr_speed_ehs_value(speed);
+        if desired != speed {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=sdio-high-speed-ehs-write before=0x{speed:02x} after=0x{desired:02x}"
+            ));
+            self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_SPEED, desired)?;
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=sdio-high-speed-ehs-hold value=0x{speed:02x}"
+            ));
+        }
+        let readback = self.io_direct_read(SdioFunction::Function0, SDIO_CCCR_SPEED)?;
+        if (readback & SDIO_CCCR_SPEED_EHS) == 0 {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=sdio-high-speed-ehs-missing readback=0x{readback:02x}"
+            ));
+            return Err(HalError::Unsupported("sdio-high-speed-ehs-not-set"));
+        }
+        self.apply_host_high_speed_timing(true);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=sdio-high-speed-ready cccr_speed=0x{readback:02x}"
+        ));
+        Ok(true)
     }
 
     fn ensure_post_download_ht_clock(
@@ -15608,6 +15795,7 @@ impl SdioHost {
         nvram_tail: u32,
         nvram_magic: u32,
         prefer_byte_mode: bool,
+        verify_image_before_nvram: bool,
     ) -> Result<(), HalError> {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=write-firmware bytes={}",
@@ -15632,6 +15820,16 @@ impl SdioHost {
             ram_base,
             firmware,
         )?;
+        if verify_image_before_nvram {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware_verify part=image order=before-nvram reason=linux-brcmfmac-download-sequence"
+            ));
+            self.verify_backplane_bytes("image", ram_base, firmware)?;
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware_verify part=image order=before-nvram policy=skip-readback reason=linux-nondebug-debug-only-readback"
+            ));
+        }
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=write-nvram bytes={} offset=0x{nvram_offset:08x}",
             nvram.len()
@@ -15702,15 +15900,17 @@ impl SdioHost {
                 nvram_tail,
                 nvram_magic,
                 profile.prefer_byte_mode,
+                true,
             )?;
             last_successful_upload_clock_hz = Some(effective_hz);
-            match self.verify_firmware_payloads(
+            match self.verify_firmware_payloads_after_nvram(
                 firmware,
                 nvram,
                 ram_base,
                 nvram_offset,
                 nvram_tail,
                 nvram_magic,
+                true,
             ) {
                 Ok(()) => {
                     *selected_bulk_clock_hz = effective_hz;
@@ -15745,7 +15945,7 @@ impl SdioHost {
         Err(last_err)
     }
 
-    fn verify_firmware_payloads(
+    fn verify_firmware_payloads_after_nvram(
         &mut self,
         firmware: &[u8],
         nvram: &[u8],
@@ -15753,13 +15953,17 @@ impl SdioHost {
         nvram_offset: u32,
         nvram_tail: u32,
         nvram_magic: u32,
+        image_already_verified: bool,
     ) -> Result<(), HalError> {
-        self.verify_backplane_bytes("image", ram_base, firmware)?;
+        if !image_already_verified {
+            self.verify_backplane_bytes("image", ram_base, firmware)?;
+        }
         self.verify_backplane_bytes("nvram", nvram_offset, nvram)?;
         self.verify_backplane_bytes("tail", nvram_tail, &nvram_magic.to_le_bytes())?;
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware_verify summary pass=yes image={} nvram={} tail=4 clock={}Hz width={}",
+            "[pi4-wifi] firmware_verify summary pass=yes image={} image_preverified={} nvram={} tail=4 clock={}Hz width={}",
             firmware.len(),
+            yn(image_already_verified),
             nvram.len(),
             self.current_clock_hz,
             sdio_bus_width_name(self.desired_bus_width),
@@ -16574,34 +16778,15 @@ impl SdioHost {
     }
 
     fn enable_ht_clock_sideband_for(&mut self, stage: &'static str) -> Result<(), HalError> {
-        let mut wake_ctrl =
-            self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL)?;
-        wake_ctrl |= SBSDIO_WAKE_TILL_HT_AVAIL;
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL, wake_ctrl)?;
-        self.remember_wakeupctrl(wake_ctrl);
-
-        let cardcap = cyw43455_cardcap_command_decode_value();
-        self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP, cardcap)?;
-        self.remember_cardcap(cardcap);
-
         let sleep_csr = self.ensure_kso_awake_for(stage)?;
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} sideband=full wake=0x{wake_ctrl:02x} cardcap=0x{cardcap:02x} sleep=0x{sleep_csr:02x} chipclk=preserved"
+            "[pi4-wifi] firmware stage={stage} sideband=pre-f2-kso sr_registers={} wake=preserved cardcap=preserved sleep=0x{sleep_csr:02x} chipclk=preserved",
+            yn(pre_function2_ht_sideband_programs_sr_registers()),
         ));
         Ok(())
     }
 
     fn enable_ht_clock_assist_for(&mut self, stage: &'static str) -> Result<(), HalError> {
-        let mut wake_ctrl =
-            self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL)?;
-        wake_ctrl |= SBSDIO_WAKE_TILL_HT_AVAIL;
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL, wake_ctrl)?;
-        self.remember_wakeupctrl(wake_ctrl);
-
-        let cardcap = cyw43455_cardcap_command_decode_value();
-        self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP, cardcap)?;
-        self.remember_cardcap(cardcap);
-
         let sleep_csr = self.ensure_kso_awake_for(stage)?;
 
         let alp_request = ht_clock_alp_prime_request_value(self.last_chipclkcsr);
@@ -16639,7 +16824,8 @@ impl SdioHost {
         self.remember_chipclkcsr(chipclk);
 
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} wake=0x{wake_ctrl:02x} cardcap=0x{cardcap:02x} sleep=0x{sleep_csr:02x} alp_request=0x{alp_request:02x} alp_ready=yes last=0x{last_chipclk:02x} chipclk=0x{chipclk:02x}",
+            "[pi4-wifi] firmware stage={stage} sideband=pre-f2-kso sr_registers={} wake=preserved cardcap=preserved sleep=0x{sleep_csr:02x} alp_request=0x{alp_request:02x} alp_ready=yes last=0x{last_chipclk:02x} chipclk=0x{chipclk:02x}",
+            yn(pre_function2_ht_sideband_programs_sr_registers()),
         ));
         Ok(())
     }
@@ -16648,30 +16834,21 @@ impl SdioHost {
         &mut self,
         stage: &'static str,
     ) -> Result<(), HalError> {
-        if !ht_clock_assist_shadow_is_complete(
-            self.last_wakeupctrl,
-            self.last_sleepcsr,
-            self.last_cardcap,
-        ) {
+        if !pre_function2_ht_sideband_shadow_is_complete(self.last_sleepcsr) {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} sideband=full reason=shadow-miss"
+                "[pi4-wifi] firmware stage={stage} sideband=pre-f2-kso reason=shadow-miss"
             ));
             return self.enable_ht_clock_sideband_for(stage);
         }
 
-        let wake_ctrl = self.last_wakeupctrl.unwrap_or(0) | SBSDIO_WAKE_TILL_HT_AVAIL;
-        let cardcap = cyw43455_cardcap_command_decode_value();
         let sleep_csr = self.last_sleepcsr.unwrap_or(0) | SBSDIO_FUNC1_SLEEPCSR_KSO_EN;
 
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL, wake_ctrl)?;
-        self.remember_wakeupctrl(wake_ctrl);
-        self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP, cardcap)?;
-        self.remember_cardcap(cardcap);
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SLEEPCSR, sleep_csr)?;
         self.remember_sleepcsr(sleep_csr);
 
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} sideband=shadow wake=0x{wake_ctrl:02x} cardcap=0x{cardcap:02x} sleep=0x{sleep_csr:02x} chipclk=preserved"
+            "[pi4-wifi] firmware stage={stage} sideband=pre-f2-shadow sr_registers={} wake=preserved cardcap=preserved sleep=0x{sleep_csr:02x} chipclk=preserved",
+            yn(pre_function2_ht_sideband_programs_sr_registers()),
         ));
         Ok(())
     }
@@ -16689,32 +16866,23 @@ impl SdioHost {
         stage: &'static str,
         chipclk: u8,
     ) -> Result<(), HalError> {
-        if !ht_clock_assist_shadow_is_complete(
-            self.last_wakeupctrl,
-            self.last_sleepcsr,
-            self.last_cardcap,
-        ) {
+        if !pre_function2_ht_sideband_shadow_is_complete(self.last_sleepcsr) {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} refresh=full reason=shadow-miss"
+                "[pi4-wifi] firmware stage={stage} refresh=pre-f2-kso reason=shadow-miss"
             ));
             return self.enable_ht_clock_assist_for(stage);
         }
 
-        let wake_ctrl = self.last_wakeupctrl.unwrap_or(0) | SBSDIO_WAKE_TILL_HT_AVAIL;
-        let cardcap = cyw43455_cardcap_command_decode_value();
         let sleep_csr = self.last_sleepcsr.unwrap_or(0) | SBSDIO_FUNC1_SLEEPCSR_KSO_EN;
 
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL, wake_ctrl)?;
-        self.remember_wakeupctrl(wake_ctrl);
-        self.io_direct_write(SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP, cardcap)?;
-        self.remember_cardcap(cardcap);
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, chipclk)?;
-        self.remember_chipclkcsr(chipclk);
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SLEEPCSR, sleep_csr)?;
         self.remember_sleepcsr(sleep_csr);
+        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, chipclk)?;
+        self.remember_chipclkcsr(chipclk);
 
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} refresh=shadow wake=0x{wake_ctrl:02x} cardcap=0x{cardcap:02x} sleep=0x{sleep_csr:02x} chipclk=0x{chipclk:02x}"
+            "[pi4-wifi] firmware stage={stage} refresh=pre-f2-shadow sr_registers={} wake=preserved cardcap=preserved sleep=0x{sleep_csr:02x} chipclk=0x{chipclk:02x}",
+            yn(pre_function2_ht_sideband_programs_sr_registers()),
         ));
         Ok(())
     }
@@ -17194,17 +17362,19 @@ impl SdioHost {
         self.write8(SDHCI_HOST_CONTROL, control);
     }
 
+    fn apply_host_high_speed_timing(&mut self, enabled: bool) {
+        let mut control = self.read8(SDHCI_HOST_CONTROL);
+        if enabled {
+            control |= SDHCI_CTRL_HISPD;
+        } else {
+            control &= !SDHCI_CTRL_HISPD;
+        }
+        self.write8(SDHCI_HOST_CONTROL, control);
+    }
+
     fn compute_divider(&self, target_hz: u32, version: u16) -> u16 {
         if version >= SDHCI_SPEC_300 {
-            if self.base_clock_hz <= target_hz {
-                1
-            } else {
-                let mut div = 2u16;
-                while div < 2046 && (self.base_clock_hz / u32::from(div)) > target_hz {
-                    div = div.saturating_add(2);
-                }
-                div
-            }
+            sdhci_spec300_divider_for_base_clock(self.base_clock_hz, target_hz)
         } else {
             let mut div = 1u16;
             while div < 256 && (self.base_clock_hz / u32::from(div)) > target_hz {
@@ -17926,21 +18096,71 @@ fn r5_status(response: u32) -> u32 {
     response & 0xCB00
 }
 
+#[inline]
+const fn is_nvram_printable(byte: u8) -> bool {
+    byte >= 0x20 && byte < 0x7f && byte != b'#'
+}
+
+#[inline]
+const fn is_nvram_key_char(byte: u8) -> bool {
+    is_nvram_printable(byte) && byte != b' ' && byte != b'='
+}
+
 pub fn normalize_nvram(nvram: &[u8]) -> Vec<u8> {
-    let mut normalized = Vec::with_capacity(nvram.len().saturating_add(2));
-    for &byte in nvram {
-        if byte == b'\r' {
+    let mut normalized = Vec::with_capacity(nvram.len().saturating_add(16));
+    let mut boardrev_found = false;
+    let mut cursor = 0usize;
+
+    while cursor < nvram.len() {
+        let line_start = cursor;
+        while cursor < nvram.len() && nvram[cursor] != b'\n' {
+            cursor += 1;
+        }
+        let mut line_end = cursor;
+        if cursor < nvram.len() {
+            cursor += 1;
+        }
+        while line_end > line_start && nvram[line_end - 1] == b'\r' {
+            line_end -= 1;
+        }
+
+        let mut pos = line_start;
+        while pos < line_end && matches!(nvram[pos], b' ' | b'\t' | b'\r' | b'\0') {
+            pos += 1;
+        }
+        if pos == line_end || nvram[pos] == b'#' {
             continue;
         }
-        normalized.push(byte);
-    }
-    if !normalized.ends_with(b"\n") {
-        normalized.push(b'\n');
-    }
-    normalized.push(0);
-    while normalized.len() % 4 != 0 {
+
+        let entry_start = pos;
+        while pos < line_end && is_nvram_key_char(nvram[pos]) {
+            pos += 1;
+        }
+        if entry_start == pos || pos == line_end || nvram[pos] != b'=' {
+            continue;
+        }
+        if nvram[entry_start..pos].starts_with(b"RAW1") {
+            continue;
+        }
+        if nvram[entry_start..pos].starts_with(b"boardrev") {
+            boardrev_found = true;
+        }
+
+        pos += 1;
+        while pos < line_end && is_nvram_printable(nvram[pos]) {
+            pos += 1;
+        }
+        normalized.extend_from_slice(&nvram[entry_start..pos]);
         normalized.push(0);
     }
+
+    if !boardrev_found {
+        normalized.extend_from_slice(b"boardrev=0xff");
+        normalized.push(0);
+    }
+
+    let padded_len = normalized.len().saturating_add(1).saturating_add(3) & !3usize;
+    normalized.resize(padded_len, 0);
     normalized
 }
 
@@ -18012,6 +18232,7 @@ mod tests {
         passive_startup_link_wait_should_probe_reply, phys_to_bus, r5_status,
         required_ht_clock_bounded_no_ht_shortcut_loops, sdhci_interrupt_buffer_ready_mask,
         sdhci_present_buffer_ready_mask, sdhci_status_reason, sdio_byte_mode_transfer_plan,
+        sdio_cccr_speed_ehs_value, sdio_cccr_speed_supports_high_speed,
         sdio_core_byte_function_addr, sdio_core_read_retries_backplane_word_path,
         sdio_core_reg_addr, sdio_core_transfer_function_addr, sdio_core_transfer_increment_addr,
         sdio_function_ready_budget_name, sdio_function_ready_extended_polls,
@@ -18046,12 +18267,12 @@ mod tests {
         HOSTINTMASK, I_HMB_FRAME_IND, PI4_WIFI_SDIO_PINS, PI4_WIFI_SDIO_PULLS,
         SBSDIO_ALP_AVAIL_REQ, SBSDIO_FORCE_HT, SBSDIO_HT_AVAIL, SBSDIO_HT_AVAIL_REQ,
         SBSDIO_WAKE_TILL_HT_AVAIL, SDHCI_CMD_CRC, SDHCI_CMD_INDEX, SDHCI_CMD_RESP_SHORT,
-        SDHCI_COMMAND, SDHCI_DATA_AVAILABLE, SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL,
+        SDHCI_COMMAND, SDHCI_CTRL_HISPD, SDHCI_DATA_AVAILABLE, SDHCI_INT_CRC, SDHCI_INT_DATA_AVAIL,
         SDHCI_INT_DATA_CRC, SDHCI_INT_SPACE_AVAIL, SDHCI_INT_TIMEOUT, SDHCI_SPACE_AVAILABLE,
         SDHCI_TRANSFER_MODE, SDHCI_TRNS_BLK_CNT_EN, SDHCI_TRNS_MULTI, SDHCI_TRNS_READ,
         SDHCI_WRITE_DELAY_LOOPS, SDHCI_WRITE_GAP_SPIN_LOOPS, SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,
-        SDIO_FUNCTION_ENABLE_F2, SDIO_FUNCTION_ENABLE_SEQUENCE,
-        SDIO_FUNCTION_READY_POLLS_FUNCTION2_REPLY_PROBE,
+        SDIO_CCCR_SPEED, SDIO_CCCR_SPEED_EHS, SDIO_CCCR_SPEED_SHS, SDIO_FUNCTION_ENABLE_F2,
+        SDIO_FUNCTION_ENABLE_SEQUENCE, SDIO_FUNCTION_READY_POLLS_FUNCTION2_REPLY_PROBE,
         SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE, SDIO_FUNC_ENABLE_1,
         SDIO_FUNC_ENABLE_2, SDIO_FUNC_READY_1, SDIO_FUNC_READY_2, SDIO_INTERRUPT_ENABLE_MASK,
         SDIO_INT_STATUS, SDIO_MAX_BYTE_MODE, SDPCMD_REG_FUNCTIONINTMASK, SDPCMD_REG_HOSTINTMASK,
@@ -18062,10 +18283,36 @@ mod tests {
     use crate::hal::SdioBusWidth;
 
     #[test]
-    fn normalize_nvram_appends_newline_nul_and_padding() {
-        let nvram = normalize_nvram(b"aa=1\r\nbb=2");
-        assert!(nvram.starts_with(b"aa=1\nbb=2\n\0"));
+    fn normalize_nvram_strips_linux_style_text_format() {
+        let nvram = normalize_nvram(
+            b"# comment\r\n foo=bar # inline\n\t# tab comment\nbaz=qux\r\nRAW1bad=skip\nbad key=drop\nboardrev=0x1304\n",
+        );
+        assert_eq!(
+            nvram,
+            b"foo=bar \0baz=qux\0boardrev=0x1304\0\0\0\0".to_vec()
+        );
         assert_eq!(nvram.len() % 4, 0);
+    }
+
+    #[test]
+    fn normalize_nvram_adds_default_boardrev_and_word_padding() {
+        let nvram = normalize_nvram(b"aa2g=1\n");
+        assert_eq!(nvram, b"aa2g=1\0boardrev=0xff\0\0\0\0".to_vec());
+        assert_eq!(nvram.len() % 4, 0);
+    }
+
+    #[test]
+    fn normalize_nvram_pi4_bundle_matches_linux_capture_length() {
+        if PI4_WIFI_NVRAM.is_empty() {
+            return;
+        }
+        let nvram = normalize_nvram(PI4_WIFI_NVRAM);
+        let nvram_words = u32::try_from(nvram.len() / 4).expect("nvram words fit u32");
+        let nvram_magic = (!nvram_words << 16) | nvram_words;
+
+        assert_eq!(PI4_WIFI_NVRAM.len(), 2_074);
+        assert_eq!(nvram.len(), 1_744);
+        assert_eq!(nvram_magic, 0xfe4b_01b4);
     }
 
     #[test]
@@ -21403,11 +21650,17 @@ mod tests {
             CYW43_ARMCR4_CORE_BASE,
             true,
         ));
-        assert!(core_reset_can_skip_disable(
+        assert!(!core_reset_can_skip_disable(
             CYW43_ARMCR4_CORE_BASE,
             ARMCR4_BCMA_IOCTL_CPUHALT,
             0,
             0,
+        ));
+        assert!(!core_reset_can_skip_disable(
+            CYW43_ARMCR4_CORE_BASE,
+            ARMCR4_BCMA_IOCTL_CPUHALT,
+            ARMCR4_BCMA_IOCTL_CPUHALT,
+            ARMCR4_BCMA_IOCTL_CPUHALT,
         ));
     }
 
@@ -25940,7 +26193,7 @@ mod tests {
         );
         assert_eq!(
             transport_phase_chipclk_value(Some(SBSDIO_HT_AVAIL_REQ)),
-            backplane_alp_hold_value()
+            SBSDIO_HT_AVAIL_REQ
         );
         assert_eq!(
             transport_phase_chipclk_value(Some(SBSDIO_ALP_AVAIL_REQ)),
@@ -25952,7 +26205,7 @@ mod tests {
         );
         assert_eq!(
             transport_phase_chipclk_value(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL)),
-            backplane_alp_hold_value()
+            SBSDIO_HT_AVAIL_REQ
         );
         assert_eq!(
             transport_phase_chipclk_value(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL)),
@@ -25962,7 +26215,13 @@ mod tests {
             transport_phase_chipclk_value(Some(
                 SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HW_CLKREQ_OFF
             )),
-            backplane_alp_hold_value()
+            SBSDIO_HT_AVAIL_REQ
+        );
+        assert_eq!(
+            transport_phase_chipclk_value(Some(
+                SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL
+            )),
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
         );
     }
 
@@ -26088,7 +26347,12 @@ mod tests {
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
         ));
         assert!(!linux_sr_kso_clock_ready_from_sleepcsr(0));
+        assert!(!required_ht_clock_uses_pre_function2_kso_gate());
         assert!(post_download_devon_before_ht_is_diagnostic());
+        assert!(!devon_before_ht_may_be_deferred_for_stage(
+            "pre-write-ht-clock"
+        ));
+        assert!(!devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
         assert!(CYW43_KSO_DEVICE_ON_WAIT_LOOPS <= CYW43_KSO_AWAKE_WAIT_LOOPS);
         assert!(CYW43_KSO_DEVICE_ON_PROGRESS_INTERVAL_LOOPS > 0);
         assert!(CYW43_KSO_INITIAL_SETTLE_LOOPS > 0);
@@ -26133,6 +26397,16 @@ mod tests {
             bcm2711_sdhci_effective_base_clock_hz(BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ),
             BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ
         );
+        assert_eq!(BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ, 250_000_000);
+        let high_speed_divider = sdhci_spec300_divider_for_base_clock(
+            BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ,
+            CYW43_FIRMWARE_BULK_CLOCK_HZ,
+        );
+        assert_eq!(high_speed_divider, 6);
+        assert_eq!(
+            BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ / u32::from(high_speed_divider),
+            41_666_666
+        );
     }
 
     #[test]
@@ -26147,7 +26421,7 @@ mod tests {
         );
         assert_eq!(
             pre_ht_control_plane_clock_target_hz(CYW43_STARTUP_CLOCK_HZ),
-            CYW43_STARTUP_CLOCK_HZ
+            CYW43_CONTROL_PLANE_CLOCK_HZ
         );
         assert_eq!(
             post_download_ht_clock_target_hz(400_000, CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ),
@@ -26164,6 +26438,20 @@ mod tests {
         assert_eq!(
             post_download_ht_clock_target_hz(200_000, 0),
             CYW43_CONTROL_PLANE_CLOCK_HZ
+        );
+    }
+
+    #[test]
+    fn sdio_high_speed_contract_matches_cccr_and_host_control_bits() {
+        assert_eq!(SDIO_CCCR_SPEED, 0x13);
+        assert_eq!(SDIO_CCCR_SPEED_SHS, 0x01);
+        assert_eq!(SDIO_CCCR_SPEED_EHS, 0x02);
+        assert_eq!(SDHCI_CTRL_HISPD, 1 << 2);
+        assert!(!sdio_cccr_speed_supports_high_speed(0));
+        assert!(sdio_cccr_speed_supports_high_speed(SDIO_CCCR_SPEED_SHS));
+        assert_eq!(
+            sdio_cccr_speed_ehs_value(SDIO_CCCR_SPEED_SHS),
+            SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS
         );
     }
 
@@ -26295,12 +26583,17 @@ mod tests {
     }
 
     #[test]
-    fn required_ht_wait_allows_kso_only_before_function2() {
-        assert!(required_ht_clock_uses_force_ht_timeout_retry());
+    fn required_ht_wait_uses_linux_non_sr_clkavail_without_devon_gate() {
+        assert!(!required_ht_clock_uses_force_ht_timeout_retry());
         assert!(!required_ht_clock_linux_active_transition_uses_force_ht());
-        assert!(!required_ht_clock_linux_active_transition_resets_chipclk());
+        assert!(required_ht_clock_linux_active_transition_resets_chipclk());
         assert!(!cyw43455_uses_linux_sr_kso_clock());
+        assert!(!required_ht_clock_uses_pre_function2_kso_gate());
         assert!(post_download_devon_before_ht_is_diagnostic());
+        assert!(!devon_before_ht_may_be_deferred_for_stage(
+            "pre-write-ht-clock"
+        ));
+        assert!(!devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
         assert!(sleepcsr_kso_acknowledged(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK));
         assert!(!sleepcsr_device_on_awake(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK));
         assert_eq!(required_ht_clock_request_value(None), SBSDIO_HT_AVAIL_REQ);
@@ -26362,19 +26655,31 @@ mod tests {
     }
 
     #[test]
-    fn required_ht_clock_retry_request_matches_direct_strong_request() {
+    fn required_ht_clock_retry_request_stays_direct_strong_request() {
         assert_eq!(
             required_ht_clock_retry_request_value(None),
-            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+            SBSDIO_HT_AVAIL_REQ
         );
         assert_eq!(
             required_ht_clock_retry_request_value(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL)),
-            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+            SBSDIO_HT_AVAIL_REQ
         );
         assert_eq!(
             required_ht_clock_retry_request_value(Some(
                 SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL,
             )),
+            SBSDIO_HT_AVAIL_REQ
+        );
+    }
+
+    #[test]
+    fn diagnostic_ht_clock_force_probe_is_separate_from_required_gate() {
+        assert_eq!(
+            diagnostic_ht_clock_force_probe_value(None),
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+        );
+        assert_eq!(
+            diagnostic_ht_clock_force_probe_value(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL,)),
             SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
         );
     }
@@ -26397,8 +26702,16 @@ mod tests {
     }
 
     #[test]
-    fn backplane_sdio_pullup_clear_is_deferred_on_pi4() {
-        assert!(defer_backplane_sdio_pullup_clear());
+    fn backplane_sdio_pullup_clear_is_deferred_after_pi4_cmd52_regression() {
+        assert!(!backplane_sdio_pullup_clear_enabled());
+        assert!(!backplane_sdio_pullup_clear_width_allowed(
+            SdioBusWidth::OneBit
+        ));
+        assert!(backplane_sdio_pullup_clear_width_allowed(
+            SdioBusWidth::FourBit
+        ));
+        assert!(!backplane_sdio_pullup_clear_error_is_terminal());
+        assert_eq!(SBSDIO_FUNC1_SDIOPULLUP, 0x1000F);
     }
 
     #[test]
@@ -26432,7 +26745,7 @@ mod tests {
         assert!(function2_requires_forced_ht_clock(true));
         assert!(function2_requires_ht_available_for_forced_clock(false));
         assert!(function2_requires_ht_available_for_forced_clock(true));
-        assert!(function2_requires_sleepcsr_device_on_before_ready(false));
+        assert!(!function2_requires_sleepcsr_device_on_before_ready(false));
         assert!(!function2_requires_sleepcsr_device_on_before_ready(true));
         assert_eq!(function2_force_ht_clock_value(0), SBSDIO_FORCE_HT);
         assert_eq!(
@@ -26628,6 +26941,7 @@ mod tests {
         assert_eq!(SDIO_CCCR_BRCM_CARDCAP_CMD14_EXT, 0x04);
         assert_eq!(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, 0x08);
         assert_eq!(cyw43455_cardcap_command_decode_value(), 0x06);
+        assert!(!pre_function2_ht_sideband_programs_sr_registers());
         assert_eq!(
             cyw43455_cardcap_command_decode_value() & SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,
             0
@@ -26696,6 +27010,21 @@ mod tests {
             Some(0),
             Some(cyw43455_cardcap_command_decode_value()),
         ));
+    }
+
+    #[test]
+    fn pre_function2_ht_sideband_shadow_uses_kso_only() {
+        assert!(!pre_function2_ht_sideband_programs_sr_registers());
+        assert!(!pre_function2_ht_sideband_shadow_is_complete(None));
+        assert!(!pre_function2_ht_sideband_shadow_is_complete(Some(0)));
+        assert!(pre_function2_ht_sideband_shadow_is_complete(Some(
+            SBSDIO_FUNC1_SLEEPCSR_KSO_MASK
+        )));
+        assert!(pre_function2_ht_sideband_shadow_is_complete(Some(
+            SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
+        )));
+        assert!(!required_ht_clock_uses_pre_function2_kso_gate());
+        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]
