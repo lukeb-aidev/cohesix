@@ -1235,7 +1235,15 @@ fn usb_ownership_fresh_ownership_label(
     cfg_replay_ready: bool,
     command_replay_ready: bool,
 ) -> &'static str {
-    if xhci_runtime_init_strategy_skips_controller_entry(effective_strategy) {
+    if matches!(
+        (
+            effective_strategy.firmware_handoff,
+            effective_strategy.seed_stop_state
+        ),
+        (XhciFirmwareHandoff::PlatformResetComplete, false)
+    ) {
+        "pollsafe-controller-entry"
+    } else if xhci_runtime_init_strategy_skips_controller_entry(effective_strategy) {
         "skipped"
     } else if xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy) {
         "skipped-after-mailbox-reset"
@@ -1260,6 +1268,8 @@ fn usb_ownership_blocker_label(
         "vl805-command-replay-missing"
     } else if mailbox_required && !mailbox_reset_completed {
         "mailbox-reset-pending"
+    } else if fresh_ownership == "pollsafe-controller-entry" {
+        "none"
     } else if fresh_ownership.starts_with("skipped") {
         "no-fresh-ownership"
     } else {
@@ -4316,14 +4326,11 @@ const fn xhci_runtime_init_strategy_skips_root_port_reads(
 const fn xhci_runtime_init_strategy_skips_controller_entry(
     strategy: XhciRuntimeInitStrategy,
 ) -> bool {
-    matches!(
-        (strategy.firmware_handoff, strategy.seed_stop_state),
-        (XhciFirmwareHandoff::PlatformResetComplete, false)
-    ) || (strategy.seed_stop_state
+    strategy.seed_stop_state
         && matches!(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::None
-        ))
+        )
 }
 
 #[inline]
@@ -13378,7 +13385,7 @@ mod tests {
     }
 
     #[test]
-    fn mailbox_acked_linux_capture_full_reset_promotes_to_platform_reset_pollsafe() {
+    fn mailbox_acked_linux_capture_full_reset_promotes_to_platform_reset_controller_entry() {
         let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
         let platform_reset =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
@@ -13390,9 +13397,17 @@ mod tests {
             ),
             platform_reset
         );
-        assert!(xhci_runtime_init_strategy_skips_controller_entry(
+        assert!(!xhci_runtime_init_strategy_skips_controller_entry(
             platform_reset
         ));
+        assert_eq!(
+            xhci_runtime_init_strategy_run_label(platform_reset),
+            "run-skip"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_publish_label(platform_reset),
+            "rings-skip"
+        );
         assert_eq!(
             xhci_runtime_init_strategy_after_mailbox_reset(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -14195,7 +14210,7 @@ mod tests {
             ),
             "skip-pre-reset"
         );
-        assert!(xhci_runtime_init_strategy_skips_controller_entry(strategy));
+        assert!(!xhci_runtime_init_strategy_skips_controller_entry(strategy));
         assert_eq!(xhci_runtime_init_strategy_run_label(strategy), "run-skip");
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(strategy),
@@ -14241,6 +14256,31 @@ mod tests {
         assert_eq!(status.bar0_source, "linux-capture-static");
         assert_eq!(status.fresh_ownership, "skipped-after-mailbox-reset");
         assert_eq!(status.next_step, "mailbox-reset-notify-then-pollsafe-skip",);
+    }
+
+    #[test]
+    fn usb_ownership_contract_allows_mailbox_acked_platform_controller_entry() {
+        let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+        let platform_reset =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
+        let status = super::usb_ownership_contract_status(
+            None,
+            None,
+            false,
+            false,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            full_reset,
+            platform_reset,
+            true,
+        );
+
+        assert_eq!(status.cfg_window, "absent");
+        assert_eq!(status.cfg_writes, "disabled-safe-mode");
+        assert_eq!(status.command, Some(super::RPI4_VL805_LINUX_COMMAND));
+        assert_eq!(status.command_source, "linux-capture-static");
+        assert_eq!(status.fresh_ownership, "pollsafe-controller-entry");
+        assert_eq!(status.blocker, "none");
+        assert_eq!(status.next_step, "controller-ready");
     }
 
     #[test]

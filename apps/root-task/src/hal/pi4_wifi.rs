@@ -98,6 +98,15 @@ static MAILBOX_TRANSPORT_READY: core::sync::atomic::AtomicBool =
 static MAILBOX_TRANSPORT_READY_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 static LAST_WIFI_DEBUG_SNAPSHOT: Mutex<Option<WifiDebugSnapshot>> = Mutex::new(None);
+static LAST_WIFI_FIRMWARE_CONTRACT_EVIDENCE: Mutex<Option<WifiFirmwareContractEvidence>> =
+    Mutex::new(None);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WifiFirmwareContractEvidence {
+    firmware_download_verified: bool,
+    sr_kso_clock_ready: bool,
+    armcr4_release_attempts: u8,
+}
 
 #[derive(Clone, Copy)]
 struct MappedRegs {
@@ -639,10 +648,12 @@ const fn ht_clock_assist_shadow_is_complete(
 
 #[inline]
 const fn post_download_ht_request_primes_wake_sideband() -> bool {
-    // Linux's captured pre-F2 contract is a strict CHIPCLKCSR HT proof:
+    // Linux's captured pre-F2 contract is still a strict CHIPCLKCSR HT proof:
     // request HT, poll until HT_AVAIL is real, and only then enable Function 2.
-    // Wake/CMD14/KSO sideband is not a prerequisite for that proof.
-    false
+    // The wake/CMD14/KSO sideband is restored before that post-download edge
+    // because Cohesix was reaching the proof with those Linux-visible assists
+    // missing. These bits are evidence only, not a substitute for HT_AVAIL.
+    true
 }
 
 #[inline]
@@ -3174,6 +3185,129 @@ fn firmware_release_contract_next_step(
 }
 
 #[inline]
+fn firmware_contract_should_use_cached_failure_snapshot(
+    live_card_ready: bool,
+    cached: &WifiDebugSnapshot,
+) -> bool {
+    !live_card_ready
+        && cached.card_ready
+        && (cached.debug_snapshot_stage.ends_with("-fail")
+            || control_plane_exact_error_is_pre_function2_clock_blocker(
+                cached.control_plane_exact_error,
+            )
+            || cached.chipclkcsr.is_some())
+}
+
+#[inline]
+fn firmware_contract_cached_armcr4_attempts(cached: &WifiDebugSnapshot, live_attempts: u8) -> u8 {
+    if live_attempts != 0 {
+        live_attempts
+    } else if cached.card_ready
+        && cached.chipclkcsr.is_some()
+        && (cached.debug_snapshot_stage == "cyw43-load-firmware-fail"
+            || control_plane_exact_error_is_pre_function2_clock_blocker(
+                cached.control_plane_exact_error,
+            ))
+    {
+        1
+    } else {
+        0
+    }
+}
+
+fn firmware_contract_trace_from_evidence(
+    bundle: WifiFirmwareBundle<'static>,
+    reset_vector: Option<u32>,
+    firmware_download_verified: bool,
+    armcr4_release_attempts: u8,
+    sr_kso_clock_ready: bool,
+    chipclkcsr: Option<u8>,
+    wakeupctrl: Option<u8>,
+    sleepcsr: Option<u8>,
+    cardcap: Option<u8>,
+    io_enable: Option<u8>,
+    io_ready: Option<u8>,
+    current_clock_hz: u32,
+    preferred_data_clock_hz: u32,
+    card_ready: bool,
+) -> WifiFirmwareContractTrace {
+    let f1_state = sdio_function_contract_state_label(
+        io_enable,
+        io_ready,
+        SDIO_FUNC_ENABLE_1,
+        SDIO_FUNC_READY_1,
+    );
+    let f2_state = sdio_function_contract_state_label(
+        io_enable,
+        io_ready,
+        SDIO_FUNC_ENABLE_2,
+        SDIO_FUNC_READY_2,
+    );
+    WifiFirmwareContractTrace {
+        firmware_len: bundle.firmware.len(),
+        nvram_len: bundle.nvram.len(),
+        clm_len: bundle.clm_blob.map(<[u8]>::len),
+        board_type: bundle.board_type,
+        reset_vector,
+        firmware_download_verified,
+        armcr4_release_attempts,
+        sr_kso_clock_ready,
+        alp_request: firmware_upload_alp_clock_request_value(),
+        ht_request: required_ht_clock_request_value(chipclkcsr),
+        ht_retry_request: required_ht_clock_retry_request_value(chipclkcsr),
+        force_ht_after_proof_request: force_ht_after_proof_request_value(chipclkcsr),
+        chipclkcsr,
+        wakeupctrl,
+        sleepcsr,
+        cardcap,
+        f1_state,
+        f2_state,
+        current_clock_hz,
+        preferred_data_clock_hz,
+        blocker: firmware_release_contract_blocker(
+            card_ready,
+            reset_vector,
+            firmware_download_verified,
+            armcr4_release_attempts,
+            chipclkcsr,
+        ),
+        next_step: firmware_release_contract_next_step(
+            card_ready,
+            reset_vector,
+            armcr4_release_attempts,
+            chipclkcsr,
+            f2_state,
+        ),
+    }
+}
+
+fn firmware_contract_trace_from_cached_snapshot(
+    bundle: WifiFirmwareBundle<'static>,
+    reset_vector: Option<u32>,
+    firmware_download_verified: bool,
+    sr_kso_clock_ready: bool,
+    live_armcr4_release_attempts: u8,
+    cached: &WifiDebugSnapshot,
+) -> WifiFirmwareContractTrace {
+    firmware_contract_trace_from_evidence(
+        bundle,
+        reset_vector,
+        firmware_download_verified,
+        firmware_contract_cached_armcr4_attempts(cached, live_armcr4_release_attempts),
+        sr_kso_clock_ready,
+        cached.chipclkcsr,
+        cached.wakeupctrl,
+        cached.sleepcsr,
+        cached.cardcap,
+        cached.io_enable,
+        cached.io_ready,
+        cached.current_clock_hz,
+        cached.preferred_data_clock_hz,
+        cached.card_ready,
+    )
+}
+
+#[inline]
 const fn ht_clock_timeout_can_continue(required: bool, last_chipclk: u8) -> bool {
     required
         && (last_chipclk & SBSDIO_ALP_AVAIL) != 0
@@ -4672,6 +4806,34 @@ fn cached_wifi_debug_snapshot() -> Option<WifiDebugSnapshot> {
 }
 
 #[inline]
+fn cache_wifi_firmware_contract_evidence(evidence: WifiFirmwareContractEvidence) {
+    *LAST_WIFI_FIRMWARE_CONTRACT_EVIDENCE.lock() = Some(evidence);
+}
+
+#[inline]
+fn cached_wifi_firmware_contract_evidence() -> Option<WifiFirmwareContractEvidence> {
+    LAST_WIFI_FIRMWARE_CONTRACT_EVIDENCE
+        .lock()
+        .as_ref()
+        .copied()
+}
+
+#[inline]
+fn firmware_contract_should_use_cached_snapshot(
+    live_card_ready: bool,
+    live_armcr4_release_attempts: u8,
+    cached_snapshot: &WifiDebugSnapshot,
+    cached_evidence: WifiFirmwareContractEvidence,
+) -> bool {
+    !live_card_ready
+        && cached_snapshot.card_ready
+        && cached_evidence.armcr4_release_attempts > live_armcr4_release_attempts
+        && control_plane_exact_error_is_pre_function2_clock_blocker(
+            cached_snapshot.control_plane_exact_error,
+        )
+}
+
+#[inline]
 fn wifi_debug_snapshot_should_be_cached(snapshot: &WifiDebugSnapshot) -> bool {
     let has_live_transport_evidence = snapshot.card_ready
         || snapshot.io_enable.is_some()
@@ -5736,7 +5898,50 @@ impl Pi4WifiState {
     pub fn debug_firmware_contract_trace(&mut self) -> WifiFirmwareContractTrace {
         let bundle = self.firmware_bundle();
         let reset_vector = firmware_reset_vector(bundle.firmware).ok();
-        let (io_enable, io_ready) = if self.host.card.is_some() {
+        let cached_snapshot = cached_wifi_debug_snapshot();
+        let cached_evidence = cached_wifi_firmware_contract_evidence();
+        let live_card_ready = self.host.card.is_some();
+        if let Some(snapshot) = cached_snapshot.as_ref() {
+            if let Some(evidence) = cached_evidence {
+                if firmware_contract_should_use_cached_snapshot(
+                    live_card_ready,
+                    self.host.armcr4_release_attempts,
+                    snapshot,
+                    evidence,
+                ) {
+                    return firmware_contract_trace_from_evidence(
+                        bundle,
+                        reset_vector,
+                        evidence.firmware_download_verified,
+                        evidence.armcr4_release_attempts,
+                        evidence.sr_kso_clock_ready,
+                        snapshot.chipclkcsr,
+                        snapshot.wakeupctrl,
+                        snapshot.sleepcsr,
+                        snapshot.cardcap,
+                        snapshot.io_enable,
+                        snapshot.io_ready,
+                        snapshot.current_clock_hz,
+                        snapshot.preferred_data_clock_hz,
+                        snapshot.card_ready,
+                    );
+                }
+            } else if firmware_contract_should_use_cached_failure_snapshot(
+                live_card_ready,
+                snapshot,
+            ) {
+                return firmware_contract_trace_from_cached_snapshot(
+                    bundle,
+                    reset_vector,
+                    self.host.firmware_download_verified,
+                    self.host.sr_kso_clock_ready,
+                    self.host.armcr4_release_attempts,
+                    snapshot,
+                );
+            }
+        }
+
+        let (io_enable, io_ready) = if live_card_ready {
             (
                 self.host
                     .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
@@ -5748,7 +5953,7 @@ impl Pi4WifiState {
         } else {
             (None, None)
         };
-        let chipclkcsr = if self.host.card.is_some() {
+        let chipclkcsr = if live_card_ready {
             match self
                 .host
                 .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)
@@ -5762,54 +5967,22 @@ impl Pi4WifiState {
         } else {
             self.host.last_chipclkcsr
         };
-        let f1_state = sdio_function_contract_state_label(
-            io_enable,
-            io_ready,
-            SDIO_FUNC_ENABLE_1,
-            SDIO_FUNC_READY_1,
-        );
-        let f2_state = sdio_function_contract_state_label(
-            io_enable,
-            io_ready,
-            SDIO_FUNC_ENABLE_2,
-            SDIO_FUNC_READY_2,
-        );
-        WifiFirmwareContractTrace {
-            firmware_len: bundle.firmware.len(),
-            nvram_len: bundle.nvram.len(),
-            clm_len: bundle.clm_blob.map(<[u8]>::len),
-            board_type: bundle.board_type,
+        firmware_contract_trace_from_evidence(
+            bundle,
             reset_vector,
-            firmware_download_verified: self.host.firmware_download_verified,
-            armcr4_release_attempts: self.host.armcr4_release_attempts,
-            sr_kso_clock_ready: self.host.sr_kso_clock_ready,
-            alp_request: firmware_upload_alp_clock_request_value(),
-            ht_request: required_ht_clock_request_value(chipclkcsr),
-            ht_retry_request: required_ht_clock_retry_request_value(chipclkcsr),
-            force_ht_after_proof_request: force_ht_after_proof_request_value(chipclkcsr),
+            self.host.firmware_download_verified,
+            self.host.armcr4_release_attempts,
+            self.host.sr_kso_clock_ready,
             chipclkcsr,
-            wakeupctrl: self.host.last_wakeupctrl,
-            sleepcsr: self.host.last_sleepcsr,
-            cardcap: self.host.last_cardcap,
-            f1_state,
-            f2_state,
-            current_clock_hz: self.host.current_clock_hz,
-            preferred_data_clock_hz: self.host.preferred_data_clock_hz,
-            blocker: firmware_release_contract_blocker(
-                self.host.card.is_some(),
-                reset_vector,
-                self.host.firmware_download_verified,
-                self.host.armcr4_release_attempts,
-                chipclkcsr,
-            ),
-            next_step: firmware_release_contract_next_step(
-                self.host.card.is_some(),
-                reset_vector,
-                self.host.armcr4_release_attempts,
-                chipclkcsr,
-                f2_state,
-            ),
-        }
+            self.host.last_wakeupctrl,
+            self.host.last_sleepcsr,
+            self.host.last_cardcap,
+            io_enable,
+            io_ready,
+            self.host.current_clock_hz,
+            self.host.preferred_data_clock_hz,
+            live_card_ready,
+        )
     }
 
     pub fn debug_sdhci_contract_trace(&self) -> WifiSdhciContractTrace {
@@ -7128,6 +7301,11 @@ impl SdioHost {
         last_chipclk: u8,
         exact_error: &'static str,
     ) {
+        cache_wifi_firmware_contract_evidence(WifiFirmwareContractEvidence {
+            firmware_download_verified: self.firmware_download_verified,
+            sr_kso_clock_ready: self.sr_kso_clock_ready,
+            armcr4_release_attempts: self.armcr4_release_attempts,
+        });
         let control_plane_sdhci_read_diag = resolved_control_plane_sdhci_read_diag(
             self.last_data_wait_cmd,
             self.last_data_wait_arg,
@@ -7147,8 +7325,8 @@ impl SdioHost {
             card_ready: self.card.is_some(),
             card_rca: self.card.map_or(0, |card| card.rca),
             card_ocr: self.card.map_or(0, |card| card.ocr),
-            io_enable: None,
-            io_ready: None,
+            io_enable: self.card.map(|_| SDIO_FUNC_ENABLE_1),
+            io_ready: self.card.map(|_| SDIO_FUNC_READY_1),
             chipclkcsr: Some(last_chipclk),
             wakeupctrl: self.last_wakeupctrl,
             sleepcsr: self.last_sleepcsr,
@@ -15678,7 +15856,7 @@ impl SdioHost {
         if required_ht_clock_linux_active_transition_resets_chipclk() {
             self.prepare_linux_post_download_ht_transition(stage)?;
         }
-        if post_download_ht_request_primes_wake_sideband() {
+        if post_download_ht_request_primes_wake_sideband() && stage == "wait-ht-clock" {
             self.prime_post_download_ht_sideband_for(stage);
         }
         let request = if required_ht_clock_linux_active_transition_uses_force_ht() {
@@ -27242,6 +27420,106 @@ mod tests {
     }
 
     #[test]
+    fn firmware_contract_prefers_cached_pre_function2_ht_blocker_over_fresh_state() {
+        let snapshot = WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_FIRMWARE_BULK_CLOCK_HZ / 4,
+            preferred_data_clock_hz: CYW43_FIRMWARE_BULK_CLOCK_HZ / 4,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+            wakeupctrl: Some(SBSDIO_WAKE_TILL_HT_AVAIL),
+            sleepcsr: Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
+            cardcap: Some(cyw43455_cardcap_command_decode_value()),
+            programmed_backplane_window: Some(0x1810_0000),
+            shadow_backplane_window: Some(0x1810_0000),
+            shadow_backplane_fn_addr: Some(0x03000),
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            control_plane_bootstrap_phase: "pre-function2-ht",
+            control_plane_reply_mode: "none",
+            control_plane_reply_attempts: 0,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: false,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: false,
+            control_plane_startup_profile_reason: "none",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "wait-ht-clock",
+            control_plane_startup_link_rescue_cycles: 0,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
+            control_plane_f2_state: "unproven",
+            control_plane_sdhci_read_diag: "none",
+            control_plane_exact_error: "cyw43-ht-clock-timeout-before-function2",
+        };
+        let evidence = super::WifiFirmwareContractEvidence {
+            firmware_download_verified: false,
+            sr_kso_clock_ready: false,
+            armcr4_release_attempts: 1,
+        };
+
+        assert!(firmware_contract_should_use_cached_snapshot(
+            false, 0, &snapshot, evidence,
+        ));
+        assert!(!firmware_contract_should_use_cached_snapshot(
+            true, 0, &snapshot, evidence,
+        ));
+        assert!(!firmware_contract_should_use_cached_snapshot(
+            false, 1, &snapshot, evidence,
+        ));
+        assert_eq!(
+            sdio_function_contract_state_label(
+                snapshot.io_enable,
+                snapshot.io_ready,
+                SDIO_FUNC_ENABLE_1,
+                SDIO_FUNC_READY_1,
+            ),
+            "enabled-ready"
+        );
+        assert_eq!(
+            sdio_function_contract_state_label(
+                snapshot.io_enable,
+                snapshot.io_ready,
+                SDIO_FUNC_ENABLE_2,
+                SDIO_FUNC_READY_2,
+            ),
+            "disabled-not-ready"
+        );
+        assert_eq!(
+            firmware_release_contract_blocker(
+                snapshot.card_ready,
+                Some(CYW43_RAM_BASE_4345),
+                evidence.firmware_download_verified,
+                evidence.armcr4_release_attempts,
+                snapshot.chipclkcsr,
+            ),
+            "chipclkcsr-ht-avail-missing"
+        );
+        assert_eq!(
+            firmware_release_contract_next_step(
+                snapshot.card_ready,
+                Some(CYW43_RAM_BASE_4345),
+                evidence.armcr4_release_attempts,
+                snapshot.chipclkcsr,
+                "disabled-not-ready",
+            ),
+            "linux-capture-post-release-chipclkcsr"
+        );
+    }
+
+    #[test]
     fn stronger_ht_retry_does_not_cut_over_to_bounded_no_ht() {
         let chipclk = Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL);
         let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
@@ -27341,7 +27619,7 @@ mod tests {
         assert_eq!(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, 0x08);
         assert_eq!(cyw43455_cardcap_command_decode_value(), 0x06);
         assert!(!pre_function2_ht_sideband_programs_sr_registers());
-        assert!(!post_download_ht_request_primes_wake_sideband());
+        assert!(post_download_ht_request_primes_wake_sideband());
         assert_eq!(
             post_download_ht_wakeupctrl_value(None),
             SBSDIO_WAKE_TILL_HT_AVAIL
