@@ -146,6 +146,34 @@ pub struct WifiDebugSnapshot {
     pub control_plane_exact_error: &'static str,
 }
 
+/// Firmware-release contract evidence for the Pi 4 Wi-Fi debug path.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WifiFirmwareContractTrace {
+    pub firmware_len: usize,
+    pub nvram_len: usize,
+    pub clm_len: Option<usize>,
+    pub board_type: &'static str,
+    pub reset_vector: Option<u32>,
+    pub firmware_download_verified: bool,
+    pub armcr4_release_attempts: u8,
+    pub sr_kso_clock_ready: bool,
+    pub alp_request: u8,
+    pub ht_request: u8,
+    pub ht_retry_request: u8,
+    pub force_ht_after_proof_request: Option<u8>,
+    pub chipclkcsr: Option<u8>,
+    pub wakeupctrl: Option<u8>,
+    pub sleepcsr: Option<u8>,
+    pub cardcap: Option<u8>,
+    pub f1_state: &'static str,
+    pub f2_state: &'static str,
+    pub current_clock_hz: u32,
+    pub preferred_data_clock_hz: u32,
+    pub blocker: &'static str,
+    pub next_step: &'static str,
+}
+
 /// Raw SDHCI contract evidence for the current Wi-Fi control-plane frontier.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -191,6 +219,9 @@ pub struct WifiControlPlaneTrace {
 #[cfg(feature = "kernel")]
 pub trait WifiDebugOps {
     fn dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError>;
+    fn firmware_contract_trace(&mut self) -> Option<WifiFirmwareContractTrace> {
+        None
+    }
     fn sdhci_contract_trace(&mut self) -> Option<WifiSdhciContractTrace> {
         None
     }
@@ -1055,6 +1086,13 @@ impl KernelWifiDebugHandle {
 impl WifiDebugOps for KernelWifiDebugHandle {
     fn dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
         self.hal_mut()?.pi4_wifi_state()?.debug_dump_state(stage)
+    }
+
+    fn firmware_contract_trace(&mut self) -> Option<WifiFirmwareContractTrace> {
+        self.hal_mut()
+            .ok()
+            .and_then(|hal| hal.pi4_wifi_state().ok())
+            .map(|state| state.debug_firmware_contract_trace())
     }
 
     fn sdhci_contract_trace(&mut self) -> Option<WifiSdhciContractTrace> {

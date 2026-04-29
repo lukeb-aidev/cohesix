@@ -13,8 +13,8 @@ use core::sync::atomic::{fence, Ordering};
 
 use super::{
     DeviceHal, HalError, Irq, IrqServiceOutcome, IrqTrigger, KernelIrqBinding, SdioBusWidth,
-    SdioFunction, WifiControlPlaneTrace, WifiDebugSnapshot, WifiFirmwareBundle, WifiPowerState,
-    WifiResetState, WifiSdhciContractTrace,
+    SdioFunction, WifiControlPlaneTrace, WifiDebugSnapshot, WifiFirmwareBundle,
+    WifiFirmwareContractTrace, WifiPowerState, WifiResetState, WifiSdhciContractTrace,
 };
 use crate::bootstrap::log as boot_log;
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -2908,7 +2908,10 @@ const fn required_ht_clock_retry_request_value(last_chipclkcsr: Option<u8>) -> u
 
 #[inline]
 const fn diagnostic_ht_clock_force_probe_value(last_chipclkcsr: Option<u8>) -> u8 {
-    required_ht_clock_request_value(last_chipclkcsr) | SBSDIO_FORCE_HT
+    match force_ht_after_proof_request_value(last_chipclkcsr) {
+        Some(value) => value,
+        None => required_ht_clock_request_value(last_chipclkcsr),
+    }
 }
 
 #[inline]
@@ -3085,6 +3088,89 @@ fn firmware_reset_vector(firmware: &[u8]) -> Result<u32, HalError> {
         firmware[2],
         firmware[3],
     ]))
+}
+
+#[inline]
+const fn sdio_function_contract_state_label(
+    io_enable: Option<u8>,
+    io_ready: Option<u8>,
+    enable_bit: u8,
+    ready_bit: u8,
+) -> &'static str {
+    match (io_enable, io_ready) {
+        (Some(enable), Some(ready)) if (enable & enable_bit) != 0 && (ready & ready_bit) != 0 => {
+            "enabled-ready"
+        }
+        (Some(enable), Some(ready)) if (enable & enable_bit) != 0 && (ready & ready_bit) == 0 => {
+            "enabled-not-ready"
+        }
+        (Some(enable), Some(ready)) if (enable & enable_bit) == 0 && (ready & ready_bit) != 0 => {
+            "disabled-ready"
+        }
+        (Some(_), Some(_)) => "disabled-not-ready",
+        _ => "unread",
+    }
+}
+
+#[inline]
+const fn force_ht_after_proof_request_value(chipclkcsr: Option<u8>) -> Option<u8> {
+    match chipclkcsr {
+        Some(value) if (value & SBSDIO_HT_AVAIL) != 0 => {
+            Some(value | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT)
+        }
+        _ => None,
+    }
+}
+
+#[inline]
+fn firmware_release_contract_blocker(
+    card_ready: bool,
+    reset_vector: Option<u32>,
+    firmware_download_verified: bool,
+    armcr4_release_attempts: u8,
+    chipclkcsr: Option<u8>,
+) -> &'static str {
+    let _ = firmware_download_verified;
+    if !card_ready {
+        "sdio-card-not-ready"
+    } else if reset_vector.is_none() {
+        "firmware-reset-vector-missing"
+    } else if armcr4_release_attempts == 0 {
+        "armcr4-release-not-attempted"
+    } else if chipclkcsr.is_some_and(function2_has_required_ht_clock) {
+        "none"
+    } else if chipclkcsr.is_some() {
+        "chipclkcsr-ht-avail-missing"
+    } else {
+        "chipclkcsr-unreadable"
+    }
+}
+
+#[inline]
+fn firmware_release_contract_next_step(
+    card_ready: bool,
+    reset_vector: Option<u32>,
+    armcr4_release_attempts: u8,
+    chipclkcsr: Option<u8>,
+    f2_state: &'static str,
+) -> &'static str {
+    if !card_ready {
+        "select-sdio-card"
+    } else if reset_vector.is_none() {
+        "validate-firmware-bundle"
+    } else if armcr4_release_attempts == 0 {
+        "release-armcr4"
+    } else if chipclkcsr.is_some_and(function2_has_required_ht_clock) {
+        if f2_state == "enabled-ready" {
+            "continue-firmware-channel"
+        } else {
+            "enable-function2-after-ht-proof"
+        }
+    } else if chipclkcsr.is_some() {
+        "linux-capture-post-release-chipclkcsr"
+    } else {
+        "read-chipclkcsr-before-function2"
+    }
 }
 
 #[inline]
@@ -5645,6 +5731,85 @@ impl Pi4WifiState {
             snapshot.control_plane_f2_state,
         ));
         Ok(snapshot)
+    }
+
+    pub fn debug_firmware_contract_trace(&mut self) -> WifiFirmwareContractTrace {
+        let bundle = self.firmware_bundle();
+        let reset_vector = firmware_reset_vector(bundle.firmware).ok();
+        let (io_enable, io_ready) = if self.host.card.is_some() {
+            (
+                self.host
+                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
+                    .ok(),
+                self.host
+                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
+                    .ok(),
+            )
+        } else {
+            (None, None)
+        };
+        let chipclkcsr = if self.host.card.is_some() {
+            match self
+                .host
+                .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)
+            {
+                Ok(value) => {
+                    self.host.remember_chipclkcsr(value);
+                    Some(value)
+                }
+                Err(_) => self.host.last_chipclkcsr,
+            }
+        } else {
+            self.host.last_chipclkcsr
+        };
+        let f1_state = sdio_function_contract_state_label(
+            io_enable,
+            io_ready,
+            SDIO_FUNC_ENABLE_1,
+            SDIO_FUNC_READY_1,
+        );
+        let f2_state = sdio_function_contract_state_label(
+            io_enable,
+            io_ready,
+            SDIO_FUNC_ENABLE_2,
+            SDIO_FUNC_READY_2,
+        );
+        WifiFirmwareContractTrace {
+            firmware_len: bundle.firmware.len(),
+            nvram_len: bundle.nvram.len(),
+            clm_len: bundle.clm_blob.map(<[u8]>::len),
+            board_type: bundle.board_type,
+            reset_vector,
+            firmware_download_verified: self.host.firmware_download_verified,
+            armcr4_release_attempts: self.host.armcr4_release_attempts,
+            sr_kso_clock_ready: self.host.sr_kso_clock_ready,
+            alp_request: firmware_upload_alp_clock_request_value(),
+            ht_request: required_ht_clock_request_value(chipclkcsr),
+            ht_retry_request: required_ht_clock_retry_request_value(chipclkcsr),
+            force_ht_after_proof_request: force_ht_after_proof_request_value(chipclkcsr),
+            chipclkcsr,
+            wakeupctrl: self.host.last_wakeupctrl,
+            sleepcsr: self.host.last_sleepcsr,
+            cardcap: self.host.last_cardcap,
+            f1_state,
+            f2_state,
+            current_clock_hz: self.host.current_clock_hz,
+            preferred_data_clock_hz: self.host.preferred_data_clock_hz,
+            blocker: firmware_release_contract_blocker(
+                self.host.card.is_some(),
+                reset_vector,
+                self.host.firmware_download_verified,
+                self.host.armcr4_release_attempts,
+                chipclkcsr,
+            ),
+            next_step: firmware_release_contract_next_step(
+                self.host.card.is_some(),
+                reset_vector,
+                self.host.armcr4_release_attempts,
+                chipclkcsr,
+                f2_state,
+            ),
+        }
     }
 
     pub fn debug_sdhci_contract_trace(&self) -> WifiSdhciContractTrace {
@@ -15258,54 +15423,9 @@ impl SdioHost {
                 self.last_sleepcsr,
                 self.last_cardcap,
             );
-            let retry_request = diagnostic_ht_clock_force_probe_value(Some(last_chipclk));
-            if retry_request != request {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} retry=force-ht request=0x{retry_request:02x} mode=soft-probe"
-                ));
-                self.io_direct_write(
-                    SdioFunction::Function1,
-                    SBSDIO_FUNC1_CHIPCLKCSR,
-                    retry_request,
-                )?;
-                self.remember_chipclkcsr(retry_request);
-                let retry_readback =
-                    self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
-                self.remember_chipclkcsr(retry_readback);
-                last_chipclk = retry_readback;
-                log_ht_clock_status(
-                    stage,
-                    "soft-probe-force-readback",
-                    retry_readback,
-                    self.last_wakeupctrl,
-                    self.last_sleepcsr,
-                    self.last_cardcap,
-                );
-                for _ in 0..CYW43_HT_CLOCK_SOFT_WAIT_LOOPS {
-                    let chipclk =
-                        self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
-                    self.remember_chipclkcsr(chipclk);
-                    last_chipclk = chipclk;
-                    if (chipclk & SBSDIO_HT_AVAIL) != 0 {
-                        emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware stage={stage} ready=force-ht csr=0x{chipclk:02x}"
-                        ));
-                        return Ok(true);
-                    }
-                    spin_loop();
-                }
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} timeout-soft-force csr=0x{last_chipclk:02x} action=continue-with-fallback-clocks"
-                ));
-                log_ht_clock_status(
-                    stage,
-                    "timeout-soft-force",
-                    last_chipclk,
-                    self.last_wakeupctrl,
-                    self.last_sleepcsr,
-                    self.last_cardcap,
-                );
-            }
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} force_ht_retry=disabled csr=0x{last_chipclk:02x} reason=requires-chipclk-ht-avail"
+            ));
             self.log_transport_shadow("wait-ht-clock-timeout-soft");
             return Ok(false);
         }
@@ -18705,6 +18825,65 @@ mod tests {
         assert_eq!(
             firmware_reset_vector(&[0x78, 0x56, 0x34]),
             Err(HalError::Unsupported("cyw43-firmware-rstvec"))
+        );
+    }
+
+    #[test]
+    fn firmware_release_contract_reports_real_ht_prerequisites() {
+        assert_eq!(
+            firmware_release_contract_blocker(false, None, false, 0, None),
+            "sdio-card-not-ready"
+        );
+        assert_eq!(
+            firmware_release_contract_blocker(true, None, false, 0, None),
+            "firmware-reset-vector-missing"
+        );
+        assert_eq!(
+            firmware_release_contract_blocker(true, Some(0x1234_5678), false, 0, None),
+            "armcr4-release-not-attempted"
+        );
+        assert_eq!(
+            firmware_release_contract_blocker(true, Some(0x1234_5678), false, 1, None),
+            "chipclkcsr-unreadable"
+        );
+        assert_eq!(
+            firmware_release_contract_blocker(
+                true,
+                Some(0x1234_5678),
+                false,
+                1,
+                Some(SBSDIO_HT_AVAIL_REQ)
+            ),
+            "chipclkcsr-ht-avail-missing"
+        );
+        assert_eq!(
+            firmware_release_contract_blocker(
+                true,
+                Some(0x1234_5678),
+                true,
+                1,
+                Some(SBSDIO_HT_AVAIL)
+            ),
+            "none"
+        );
+        assert_eq!(
+            firmware_release_contract_next_step(
+                true,
+                Some(0x1234_5678),
+                1,
+                Some(SBSDIO_HT_AVAIL_REQ),
+                "disabled-not-ready"
+            ),
+            "linux-capture-post-release-chipclkcsr"
+        );
+        assert_eq!(
+            sdio_function_contract_state_label(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                SDIO_FUNC_ENABLE_2,
+                SDIO_FUNC_READY_2,
+            ),
+            "enabled-not-ready"
         );
     }
 
@@ -26883,14 +27062,18 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_ht_clock_force_probe_is_separate_from_required_gate() {
+    fn diagnostic_ht_clock_force_probe_never_forces_before_ht_proof() {
         assert_eq!(
             diagnostic_ht_clock_force_probe_value(None),
-            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+            SBSDIO_HT_AVAIL_REQ
         );
         assert_eq!(
             diagnostic_ht_clock_force_probe_value(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL,)),
-            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+            SBSDIO_HT_AVAIL_REQ
+        );
+        assert_eq!(
+            diagnostic_ht_clock_force_probe_value(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL)),
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL | SBSDIO_FORCE_HT
         );
     }
 

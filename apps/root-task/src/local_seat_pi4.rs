@@ -706,6 +706,25 @@ pub(crate) struct UsbProbePreflightStatus {
     pub expected_diag_stage: u16,
     pub expected_diag_tag: Option<&'static str>,
     pub expected_diag_exact: Option<&'static str>,
+    pub ownership: UsbOwnershipContractStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbOwnershipContractStatus {
+    pub cfg_window: &'static str,
+    pub cfg_source: &'static str,
+    pub cfg_writes: &'static str,
+    pub cfg_replay_ready: bool,
+    pub command: Option<u16>,
+    pub command_source: &'static str,
+    pub command_ready: bool,
+    pub command_replay_ready: bool,
+    pub bar0: Option<usize>,
+    pub bar0_source: &'static str,
+    pub mailbox_reset_state: &'static str,
+    pub fresh_ownership: &'static str,
+    pub blocker: &'static str,
+    pub next_step: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -1116,6 +1135,226 @@ const fn usb_probe_preflight_expected_diag_stage_for_source(
 }
 
 #[inline]
+const fn vl805_command_ownership_ready(command: u16) -> bool {
+    (command & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE))
+        == (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE)
+}
+
+#[inline]
+fn usb_ownership_cfg_window_contract() -> (&'static str, &'static str, &'static str, bool) {
+    let cfg_window_present = current_vl805_cfg_virt().is_some();
+    let cfg_pinned = PINNED_VL805_CFG.lock().is_some();
+    let cfg_replay_ready =
+        vl805_runtime_cfg_touch_allowed(VL805_CFG_RUNTIME_TOUCH_ENABLED, cfg_window_present);
+    let cfg_window = if cfg_window_present {
+        "mapped"
+    } else if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
+        "bcm2711-ext-gated"
+    } else if !VL805_ECAM_BASE_CANDIDATES.is_empty() {
+        "ecam-candidate-gated"
+    } else {
+        "absent"
+    };
+    let cfg_source = if cfg_pinned {
+        "pinned-ecam"
+    } else if cfg_window_present {
+        "runtime-mapped"
+    } else if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
+        "bcm2711-ext-cfg"
+    } else if !VL805_ECAM_BASE_CANDIDATES.is_empty() {
+        "ecam-candidates"
+    } else {
+        "none"
+    };
+    let cfg_writes = if cfg_replay_ready || VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
+        "enabled"
+    } else {
+        "disabled-safe-mode"
+    };
+    (cfg_window, cfg_source, cfg_writes, cfg_replay_ready)
+}
+
+#[inline]
+fn usb_ownership_command_contract(xhci_pci_cmd: Option<u16>) -> (Option<u16>, &'static str, bool) {
+    let (command, source) = if let Some(command) = xhci_pci_cmd {
+        (Some(command), "bootloader-handoff")
+    } else if linux_captured_vl805_cfg_matches_high_bar() {
+        (Some(RPI4_VL805_LINUX_COMMAND), "linux-capture-static")
+    } else if current_vl805_cfg_virt().is_some() {
+        (None, "cfg-window-present-unread")
+    } else {
+        (None, "absent")
+    };
+    let ready = command.is_some_and(vl805_command_ownership_ready);
+    (command, source, ready)
+}
+
+#[inline]
+fn usb_ownership_bar0_contract(
+    xhci_mmio_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    xhci_handoff_ready: bool,
+    xhci_irq_quiesced: bool,
+) -> (Option<usize>, &'static str) {
+    if let Some(mmio) = current_vl805_xhci_mmio_hint() {
+        return (Some(mmio), "vl805-cfg-verified");
+    }
+    if let Some(mmio) = xhci_mmio_hint {
+        let source = if xhci_firmware_handoff_cold_start_trusted(
+            mmio,
+            xhci_mmio_hint,
+            xhci_pci_cmd,
+            xhci_handoff_ready,
+            xhci_irq_quiesced,
+        ) {
+            "firmware-handoff-trusted"
+        } else {
+            "firmware-handoff-hint"
+        };
+        return (Some(mmio), source);
+    }
+    if let Some((mmio, trusted)) = pinned_xhci_phys_state() {
+        let source = if trusted {
+            "pinned-xhci-trusted"
+        } else {
+            "pinned-xhci-untrusted"
+        };
+        return (Some(mmio), source);
+    }
+    if linux_captured_vl805_cfg_matches_high_bar() {
+        return (Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE), "linux-capture-static");
+    }
+    (None, "absent")
+}
+
+#[inline]
+fn usb_ownership_fresh_ownership_label(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+    effective_strategy: XhciRuntimeInitStrategy,
+    cfg_replay_ready: bool,
+    command_replay_ready: bool,
+) -> &'static str {
+    if xhci_runtime_init_strategy_skips_controller_entry(effective_strategy) {
+        "skipped"
+    } else if xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy) {
+        "skipped-after-mailbox-reset"
+    } else if cfg_replay_ready && command_replay_ready {
+        "allowed"
+    } else {
+        "blocked"
+    }
+}
+
+#[inline]
+fn usb_ownership_blocker_label(
+    cfg_replay_ready: bool,
+    command_replay_ready: bool,
+    mailbox_reset_completed: bool,
+    mailbox_required: bool,
+    fresh_ownership: &'static str,
+) -> &'static str {
+    if !cfg_replay_ready {
+        "pcie-vl805-config-contract-missing"
+    } else if !command_replay_ready {
+        "vl805-command-replay-missing"
+    } else if mailbox_required && !mailbox_reset_completed {
+        "mailbox-reset-pending"
+    } else if fresh_ownership.starts_with("skipped") {
+        "no-fresh-ownership"
+    } else {
+        "none"
+    }
+}
+
+#[inline]
+fn usb_ownership_next_step_label(
+    blocker: &'static str,
+    mailbox_required: bool,
+    mailbox_reset_completed: bool,
+) -> &'static str {
+    match blocker {
+        "pcie-vl805-config-contract-missing" => {
+            if mailbox_required && !mailbox_reset_completed {
+                "mailbox-reset-notify-then-pollsafe-skip"
+            } else {
+                "supply-safe-pcie-config-window-or-stay-pollsafe"
+            }
+        }
+        "vl805-command-replay-missing" => "export-vl805-command-ready",
+        "mailbox-reset-pending" => "mailbox-reset-notify",
+        "no-fresh-ownership" => "return-to-shell",
+        _ => "controller-ready",
+    }
+}
+
+#[inline]
+fn usb_ownership_contract_status(
+    xhci_mmio_hint: Option<usize>,
+    xhci_pci_cmd: Option<u16>,
+    xhci_handoff_ready: bool,
+    xhci_irq_quiesced: bool,
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+    effective_strategy: XhciRuntimeInitStrategy,
+    mailbox_reset_completed: bool,
+) -> UsbOwnershipContractStatus {
+    let (cfg_window, cfg_source, cfg_writes, cfg_replay_ready) =
+        usb_ownership_cfg_window_contract();
+    let (command, command_source, command_ready) = usb_ownership_command_contract(xhci_pci_cmd);
+    let command_replay_ready = cfg_replay_ready
+        && command_ready
+        && !matches!(
+            command_source,
+            "linux-capture-static" | "cfg-window-present-unread"
+        );
+    let (bar0, bar0_source) = usb_ownership_bar0_contract(
+        xhci_mmio_hint,
+        xhci_pci_cmd,
+        xhci_handoff_ready,
+        xhci_irq_quiesced,
+    );
+    let mailbox_required =
+        xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy);
+    let fresh_ownership = usb_ownership_fresh_ownership_label(
+        mmio,
+        strategy,
+        effective_strategy,
+        cfg_replay_ready,
+        command_replay_ready,
+    );
+    let blocker = usb_ownership_blocker_label(
+        cfg_replay_ready,
+        command_replay_ready,
+        mailbox_reset_completed,
+        mailbox_required,
+        fresh_ownership,
+    );
+    UsbOwnershipContractStatus {
+        cfg_window,
+        cfg_source,
+        cfg_writes,
+        cfg_replay_ready,
+        command,
+        command_source,
+        command_ready,
+        command_replay_ready,
+        bar0,
+        bar0_source,
+        mailbox_reset_state: runtime_vl805_mailbox_reset_state_label(
+            VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire),
+        ),
+        fresh_ownership,
+        blocker,
+        next_step: usb_ownership_next_step_label(
+            blocker,
+            mailbox_required,
+            mailbox_reset_completed,
+        ),
+    }
+}
+
+#[inline]
 fn usb_probe_preflight_status(
     xhci_mmio_hint: Option<usize>,
     xhci_pci_cmd: Option<u16>,
@@ -1152,7 +1391,9 @@ fn usb_probe_preflight_status(
         XhciFirmwareHandoff::None
     };
     let vl805_hint = current_vl805_xhci_mmio_hint();
-    let effective_mmio = xhci_mmio_hint.or(vl805_hint)?;
+    let linux_capture_hint =
+        linux_captured_vl805_cfg_matches_high_bar().then_some(RPI4_XHCI_MMIO_HIGH_CANDIDATE);
+    let effective_mmio = xhci_mmio_hint.or(vl805_hint).or(linux_capture_hint)?;
     if effective_mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE {
         return None;
     }
@@ -1196,6 +1437,16 @@ fn usb_probe_preflight_status(
     );
     let expected_diag_stage =
         usb_probe_preflight_expected_diag_stage_for_source(effective_mmio, effective_strategy);
+    let ownership = usb_ownership_contract_status(
+        xhci_mmio_hint,
+        xhci_pci_cmd,
+        xhci_handoff_ready,
+        xhci_irq_quiesced,
+        effective_mmio,
+        strategy,
+        effective_strategy,
+        mailbox_reset_completed,
+    );
     Some(UsbProbePreflightStatus {
         route: usb_probe_route_label(summary),
         strategy_idx: strategy_idx + 1,
@@ -1242,6 +1493,7 @@ fn usb_probe_preflight_status(
         expected_diag_stage,
         expected_diag_tag: xhci_diag_stage_label(expected_diag_stage),
         expected_diag_exact: xhci_diag_stage_exact_issue_label(expected_diag_stage),
+        ownership,
     })
 }
 
@@ -1989,6 +2241,28 @@ fn current_vl805_xhci_mmio_hint() -> Option<usize> {
     } else {
         Some(mmio)
     }
+}
+
+#[inline]
+pub(crate) fn latest_usb_ownership_contract_status() -> UsbOwnershipContractStatus {
+    let mailbox_reset_state = VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire);
+    let mailbox_reset_completed = runtime_vl805_mailbox_reset_completed(mailbox_reset_state);
+    let strategy = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+    let effective_strategy = xhci_runtime_init_strategy_after_mailbox_reset(
+        RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        strategy,
+        mailbox_reset_completed,
+    );
+    usb_ownership_contract_status(
+        None,
+        None,
+        false,
+        false,
+        RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        strategy,
+        effective_strategy,
+        mailbox_reset_completed,
+    )
 }
 
 #[inline]
@@ -13606,6 +13880,31 @@ mod tests {
             status.expected_diag_tag,
             Some("fw-handoff-skip-pre-quiesce")
         );
+        assert_eq!(status.ownership.cfg_window, "absent");
+        assert_eq!(status.ownership.cfg_source, "none");
+        assert_eq!(status.ownership.cfg_writes, "disabled-safe-mode");
+        assert!(!status.ownership.cfg_replay_ready);
+        assert_eq!(
+            status.ownership.command,
+            Some(super::RPI4_VL805_LINUX_COMMAND)
+        );
+        assert_eq!(status.ownership.command_source, "linux-capture-static");
+        assert!(status.ownership.command_ready);
+        assert!(!status.ownership.command_replay_ready);
+        assert_eq!(status.ownership.bar0, Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE));
+        assert_eq!(status.ownership.bar0_source, "firmware-handoff-hint");
+        assert_eq!(
+            status.ownership.fresh_ownership,
+            "skipped-after-mailbox-reset"
+        );
+        assert_eq!(
+            status.ownership.blocker,
+            "pcie-vl805-config-contract-missing"
+        );
+        assert_eq!(
+            status.ownership.next_step,
+            "mailbox-reset-notify-then-pollsafe-skip"
+        );
         assert_eq!(
             super::usb_probe_preflight_next_step_for_source(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -13617,10 +13916,20 @@ mod tests {
     }
 
     #[test]
-    fn usb_probe_preflight_status_defers_when_no_high_bar_source_exists() {
+    fn usb_probe_preflight_status_reports_static_linux_capture_without_firmware_source() {
         let status = super::usb_probe_preflight_status(None, None, false, false, false, None, true)
-            .is_none();
-        assert!(status);
+            .expect("static Linux-captured BAR0 should be diagnostic evidence");
+        assert_eq!(status.route, "trusted-high-bar-primary");
+        assert_eq!(status.ownership.bar0, Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE));
+        assert_eq!(status.ownership.bar0_source, "linux-capture-static");
+        assert_eq!(
+            status.ownership.blocker,
+            "pcie-vl805-config-contract-missing"
+        );
+        assert_eq!(
+            status.ownership.next_step,
+            "mailbox-reset-notify-then-pollsafe-skip"
+        );
     }
 
     #[test]
@@ -13904,6 +14213,34 @@ mod tests {
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             strategy,
         ));
+    }
+
+    #[test]
+    fn usb_ownership_contract_reports_config_replay_prerequisites() {
+        let strategy = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+        let status = super::usb_ownership_contract_status(
+            None,
+            None,
+            false,
+            false,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+            strategy,
+            false,
+        );
+        assert_eq!(status.blocker, "pcie-vl805-config-contract-missing",);
+        assert_eq!(status.cfg_window, "absent");
+        assert_eq!(status.cfg_source, "none");
+        assert_eq!(status.cfg_writes, "disabled-safe-mode");
+        assert!(!status.cfg_replay_ready);
+        assert_eq!(status.command, Some(super::RPI4_VL805_LINUX_COMMAND),);
+        assert_eq!(status.command_source, "linux-capture-static");
+        assert!(status.command_ready);
+        assert!(!status.command_replay_ready);
+        assert_eq!(status.bar0, Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE));
+        assert_eq!(status.bar0_source, "linux-capture-static");
+        assert_eq!(status.fresh_ownership, "skipped-after-mailbox-reset");
+        assert_eq!(status.next_step, "mailbox-reset-notify-then-pollsafe-skip",);
     }
 
     #[test]

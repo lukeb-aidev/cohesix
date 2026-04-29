@@ -112,8 +112,8 @@ use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TIC
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "kernel")]
 use crate::hal::{
-    SdioBusWidth, WifiControlPlaneTrace, WifiDebugOps, WifiDebugSnapshot, WifiPowerState,
-    WifiResetState, WifiSdhciContractTrace,
+    SdioBusWidth, WifiControlPlaneTrace, WifiDebugOps, WifiDebugSnapshot,
+    WifiFirmwareContractTrace, WifiPowerState, WifiResetState, WifiSdhciContractTrace,
 };
 use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
 #[cfg(feature = "kernel")]
@@ -2455,6 +2455,7 @@ where
             if status.poll_only { "yes" } else { "no" },
         ));
         self.emit_console_line(irq_line.as_str());
+        self.emit_usb_ownership_contract(&status.ownership);
     }
 
     #[cfg(feature = "kernel")]
@@ -2477,6 +2478,18 @@ where
             let _ = write!(line, " {action_detail}");
         }
         self.emit_console_line(line.as_str());
+        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        {
+            let ownership = self
+                .local_seat
+                .as_ref()
+                .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
+                .map_or_else(
+                    crate::local_seat_pi4::latest_usb_ownership_contract_status,
+                    |preflight| preflight.ownership,
+                );
+            self.emit_usb_ownership_contract(&ownership);
+        }
         #[cfg(all(target_arch = "aarch64", target_os = "none"))]
         let diag_exact_issue = crate::local_seat_pi4::latest_xhci_diag_status()
             .as_ref()
@@ -2623,6 +2636,41 @@ where
         }
     }
 
+    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    fn emit_usb_ownership_contract(
+        &mut self,
+        status: &crate::local_seat_pi4::UsbOwnershipContractStatus,
+    ) {
+        let evidence = format_message(format_args!(
+            "usb: ownership_contract cfg_window={} cfg_source={} cfg_writes={} cfg_replay={} cmd={} cmd_source={} cmd_ready={} cmd_replay={} mailbox={} bar0={} bar0_source={} fresh_ownership={}",
+            status.cfg_window,
+            status.cfg_source,
+            status.cfg_writes,
+            if status.cfg_replay_ready { "yes" } else { "no" },
+            Self::format_optional_u16(status.command),
+            status.command_source,
+            if status.command_ready { "yes" } else { "no" },
+            if status.command_replay_ready { "yes" } else { "no" },
+            status.mailbox_reset_state,
+            Self::format_optional_usize_hex(status.bar0),
+            status.bar0_source,
+            status.fresh_ownership,
+        ));
+        self.emit_console_line(evidence.as_str());
+
+        let blocker = format_message(format_args!(
+            "usb: ownership_blocker current=pcie-config-replay expected=vl805-config-window+command+bar0+mailbox observed={} blocker={} next={}",
+            if status.cfg_replay_ready {
+                "ready"
+            } else {
+                "missing-or-disabled"
+            },
+            status.blocker,
+            status.next_step,
+        ));
+        self.emit_console_line(blocker.as_str());
+    }
+
     #[cfg(feature = "kernel")]
     fn usb_capture_verdict(
         backend_attached: bool,
@@ -2748,15 +2796,19 @@ where
     #[cfg(feature = "kernel")]
     fn emit_wifi_snapshot_with_traces(&mut self, snapshot: &WifiDebugSnapshot) {
         self.emit_wifi_snapshot(snapshot);
-        let (sdhci_trace, control_plane_trace) = if let Some(wifi_debug) = self.wifi_debug.as_mut()
-        {
-            (
-                wifi_debug.sdhci_contract_trace(),
-                wifi_debug.control_plane_trace(),
-            )
-        } else {
-            (None, None)
-        };
+        let (firmware_trace, sdhci_trace, control_plane_trace) =
+            if let Some(wifi_debug) = self.wifi_debug.as_mut() {
+                (
+                    wifi_debug.firmware_contract_trace(),
+                    wifi_debug.sdhci_contract_trace(),
+                    wifi_debug.control_plane_trace(),
+                )
+            } else {
+                (None, None, None)
+            };
+        if let Some(trace) = firmware_trace {
+            self.emit_wifi_firmware_contract(&trace);
+        }
         if let Some(trace) = sdhci_trace {
             self.emit_wifi_sdhci_contract(&trace);
         }
@@ -2936,6 +2988,46 @@ where
             snapshot.control_plane_bootstrap_phase,
         ));
         self.emit_console_line(verdict_line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_firmware_contract(&mut self, trace: &WifiFirmwareContractTrace) {
+        let line = format_message(format_args!(
+            "wifi: firmware_contract fw={} nvram={} clm={} board={} rstvec={} verified={} armcr4_release={} sr_kso={} current_clock={}Hz preferred={}Hz",
+            trace.firmware_len,
+            trace.nvram_len,
+            Self::format_optional_usize(trace.clm_len),
+            trace.board_type,
+            Self::format_optional_u32(trace.reset_vector),
+            if trace.firmware_download_verified { "yes" } else { "no" },
+            trace.armcr4_release_attempts,
+            if trace.sr_kso_clock_ready { "yes" } else { "no" },
+            trace.current_clock_hz,
+            trace.preferred_data_clock_hz,
+        ));
+        self.emit_console_line(line.as_str());
+
+        let requests = format_message(format_args!(
+            "wifi: firmware_ht_req alp=0x{:02x} ht=0x{:02x} ht_retry=0x{:02x} force_ht_after_proof={}",
+            trace.alp_request,
+            trace.ht_request,
+            trace.ht_retry_request,
+            Self::format_optional_u8(trace.force_ht_after_proof_request),
+        ));
+        self.emit_console_line(requests.as_str());
+
+        let registers = format_message(format_args!(
+            "wifi: firmware_ht_state chipclk={} wake={} sleep={} cardcap={} f1={} f2={} blocker={} next={}",
+            Self::format_optional_u8(trace.chipclkcsr),
+            Self::format_optional_u8(trace.wakeupctrl),
+            Self::format_optional_u8(trace.sleepcsr),
+            Self::format_optional_u8(trace.cardcap),
+            trace.f1_state,
+            trace.f2_state,
+            trace.blocker,
+            trace.next_step,
+        ));
+        self.emit_console_line(registers.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -3460,6 +3552,34 @@ where
         match value {
             Some(value) => {
                 let _ = write!(buf, "0x{value:08x}");
+            }
+            None => {
+                let _ = buf.push_str("n/a");
+            }
+        }
+        buf
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_optional_usize(value: Option<usize>) -> HeaplessString<24> {
+        let mut buf = HeaplessString::new();
+        match value {
+            Some(value) => {
+                let _ = write!(buf, "{value}");
+            }
+            None => {
+                let _ = buf.push_str("n/a");
+            }
+        }
+        buf
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_optional_usize_hex(value: Option<usize>) -> HeaplessString<32> {
+        let mut buf = HeaplessString::new();
+        match value {
+            Some(value) => {
+                let _ = write!(buf, "0x{value:016x}");
             }
             None => {
                 let _ = buf.push_str("n/a");
@@ -6045,6 +6165,33 @@ mod tests {
             Ok(self.snapshot)
         }
 
+        fn firmware_contract_trace(&mut self) -> Option<WifiFirmwareContractTrace> {
+            Some(WifiFirmwareContractTrace {
+                firmware_len: 0x14000,
+                nvram_len: 0x0180,
+                clm_len: Some(0x4000),
+                board_type: "brcm,bcm43455-fmac",
+                reset_vector: Some(0x0019_8000),
+                firmware_download_verified: false,
+                armcr4_release_attempts: 1,
+                sr_kso_clock_ready: false,
+                alp_request: 0x08,
+                ht_request: 0x10,
+                ht_retry_request: 0x10,
+                force_ht_after_proof_request: None,
+                chipclkcsr: Some(0x50),
+                wakeupctrl: Some(0x02),
+                sleepcsr: Some(0x01),
+                cardcap: Some(0x08),
+                f1_state: "enabled-ready",
+                f2_state: "disabled-not-ready",
+                current_clock_hz: 400_000,
+                preferred_data_clock_hz: 3_125_000,
+                blocker: "chipclkcsr-ht-avail-missing",
+                next_step: "linux-capture-post-release-chipclkcsr",
+            })
+        }
+
         fn sdhci_contract_trace(&mut self) -> Option<WifiSdhciContractTrace> {
             Some(WifiSdhciContractTrace {
                 current_diag: "f1-reply-read-command-phase-no-data-active",
@@ -6689,6 +6836,18 @@ mod tests {
         assert!(
             rendered.contains(
                 "wifi: contract current=function1-sideband expected=f1-sideband-readable observed=sdhci=f1-reply-read-command-phase-no-data-active+f2=latched-linux-configured-no-iorx blocker=f1-sideband path=startup-link-f2"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: firmware_ht_req alp=0x08 ht=0x10 ht_retry=0x10 force_ht_after_proof=n/a"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: firmware_ht_state chipclk=0x50 wake=0x02 sleep=0x01 cardcap=0x08 f1=enabled-ready f2=disabled-not-ready blocker=chipclkcsr-ht-avail-missing next=linux-capture-post-release-chipclkcsr"
             ),
             "{rendered}"
         );
