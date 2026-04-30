@@ -583,15 +583,12 @@ const fn runtime_pollsafe_no_fresh_ownership_handoff(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Stop-state-only seeds and the Pi 4 platform-reset-complete witness prove
-    // a bounded poll-safe state, but not enough runtime ring ownership to
-    // publish a fresh DCBAAP on seL4.
+    // Stop-state-only seeds prove a bounded poll-safe state, but not enough
+    // runtime ring ownership to publish a fresh DCBAAP on seL4. A Pi 4
+    // platform-reset-complete witness is stronger: mailbox reset plus PCIe
+    // command ownership is the authority to publish fresh rings before RUN.
     runtime_bootloader_owned_pollsafe_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
-        || (matches!(
-            firmware_handoff,
-            XhciFirmwareHandoff::PlatformResetComplete
-        ) && runtime_seed_snapshot.is_none())
 }
 
 #[inline(always)]
@@ -612,6 +609,17 @@ const fn runtime_owned_fresh_rings_handoff(
     matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
         && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
         && !runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn runtime_platform_reset_fresh_rings_handoff(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    matches!(
+        firmware_handoff,
+        XhciFirmwareHandoff::PlatformResetComplete
+    ) && runtime_seed_snapshot.is_none()
 }
 
 #[inline(always)]
@@ -852,6 +860,7 @@ const fn runtime_handoff_needs_uboot_style_run_write(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_owned_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -4702,9 +4711,10 @@ mod tests {
         runtime_needs_post_init_polling_irq_quiesce_with_snapshot,
         runtime_needs_post_run_polling_irq_quiesce_with_snapshot,
         runtime_owned_fresh_rings_handoff, runtime_pollsafe_no_fresh_ownership_handoff,
-        runtime_preserve_stop_state_handoff, runtime_seed_snapshot_flag_bits,
-        runtime_seeded_full_reset_start_handoff, runtime_stop_state_needs_post_run_settle,
-        runtime_unseeded_full_reset_handoff, skip_config_write_during_init,
+        runtime_platform_reset_fresh_rings_handoff, runtime_preserve_stop_state_handoff,
+        runtime_seed_snapshot_flag_bits, runtime_seeded_full_reset_start_handoff,
+        runtime_stop_state_needs_post_run_settle, runtime_unseeded_full_reset_handoff,
+        skip_config_write_during_init,
         skip_config_write_during_init_with_snapshot, skip_constructor_polling_scrub_writes_with_snapshot,
         skip_dnctrl_write_with_snapshot, skip_doorbell_readback_after_ring,
         skip_fresh_event_ring_publish_with_snapshot, skip_fresh_runtime_ownership_publish_with_snapshot,
@@ -6221,7 +6231,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_complete_skips_hcrst_config_and_fresh_runtime_ownership() {
+    fn platform_reset_complete_skips_hcrst_but_publishes_fresh_runtime_ownership() {
         assert!(skip_reset_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
@@ -6247,23 +6257,31 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(runtime_pollsafe_no_fresh_ownership_handoff(
+        assert!(runtime_platform_reset_fresh_rings_handoff(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(skip_fresh_runtime_ownership_publish_with_snapshot(
+        assert!(!runtime_pollsafe_no_fresh_ownership_handoff(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(skip_fresh_event_ring_publish_with_snapshot(
+        assert!(!skip_fresh_runtime_ownership_publish_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(runtime_handoff_skips_live_run_write(
+        assert!(!skip_fresh_event_ring_publish_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(runtime_handoff_skips_live_drop_stop(
+        assert!(runtime_handoff_needs_uboot_style_run_write(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!runtime_handoff_skips_live_run_write(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!runtime_handoff_skips_live_drop_stop(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));

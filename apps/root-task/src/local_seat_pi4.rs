@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Raspberry Pi 4 local-seat backend (HDMI text mirror + USB keyboard ingress).
+// Purpose: Raspberry Pi 4 local-seat backend (optional HDMI text mirror + USB keyboard ingress).
 // Author: Lukas Bower
 
 #![allow(unsafe_code)]
@@ -1665,9 +1665,9 @@ const fn runtime_vl805_mailbox_reset_handoff_label(state: u8) -> &'static str {
     }
 }
 
-/// Concrete local-seat backend for Pi 4 (HDMI text + USB keyboard).
+/// Concrete local-seat backend for Pi 4 (optional HDMI text + USB keyboard).
 pub struct Pi4LocalSeat {
-    display: HdmiTextSink,
+    display: Option<HdmiTextSink>,
     keyboard: Option<UsbKeyboard>,
     keyboard_init_attempted: bool,
     prompt_safe_probe_armed: bool,
@@ -1686,6 +1686,19 @@ impl core::fmt::Debug for Pi4LocalSeat {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Pi4LocalSeat").finish_non_exhaustive()
     }
+}
+
+#[inline]
+const fn display_init_failure_allows_headless(err: Pi4SeatError) -> bool {
+    matches!(
+        err,
+        Pi4SeatError::MailboxMap
+            | Pi4SeatError::MailboxDma
+            | Pi4SeatError::MailboxProtocol
+            | Pi4SeatError::MailboxTimeout
+            | Pi4SeatError::FramebufferUnavailable
+            | Pi4SeatError::FramebufferMap
+    )
 }
 
 impl Pi4LocalSeat {
@@ -1763,20 +1776,37 @@ impl Pi4LocalSeat {
             boot_log::force_uart_line(line.as_str());
         }
         boot_log::force_uart_line("[local-seat] pi4 display init begin");
-        let mut display = HdmiTextSink::new(hal, hints.framebuffer_hint)?;
-        boot_log::force_uart_line("[local-seat] pi4 display init ok");
+        let display = match HdmiTextSink::new(hal, hints.framebuffer_hint) {
+            Ok(mut display) => {
+                boot_log::force_uart_line("[local-seat] pi4 display init ok");
 
-        let mut display_line = heapless::String::<128>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut display_line,
-            format_args!(
-                "[local-seat] pi4 display backend={}",
-                display.backend_label()
-            ),
-        );
-        boot_log::force_uart_line(display_line.as_str());
-        display.write_line("[cohesix] local-seat HDMI online");
-        boot_log::force_uart_line("[local-seat] pi4 hdmi banner emitted");
+                let mut display_line = heapless::String::<128>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut display_line,
+                    format_args!(
+                        "[local-seat] pi4 display backend={}",
+                        display.backend_label()
+                    ),
+                );
+                boot_log::force_uart_line(display_line.as_str());
+                display.write_line("[cohesix] local-seat HDMI online");
+                boot_log::force_uart_line("[local-seat] pi4 hdmi banner emitted");
+                Some(display)
+            }
+            Err(err) if display_init_failure_allows_headless(err) => {
+                let mut line = heapless::String::<160>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] pi4 display init degraded detail={} action=headless",
+                        err.as_str()
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                None
+            }
+            Err(err) => return Err(err),
+        };
 
         boot_log::force_uart_line("[local-seat] pi4 keyboard init deferred to runtime");
         Ok(Self {
@@ -1893,22 +1923,30 @@ impl Pi4LocalSeat {
 
     /// Mirror one rendered line to HDMI.
     pub fn write_line(&mut self, line: &str) {
-        self.display.write_line(line);
+        if let Some(display) = self.display.as_mut() {
+            display.write_line(line);
+        }
     }
 
     /// Publish the stable HDMI sink used for boot-progress banners.
     pub(crate) fn register_boot_progress_display(&mut self) {
-        register_wifi_progress_display(&mut self.display);
+        if let Some(display) = self.display.as_mut() {
+            register_wifi_progress_display(display);
+        }
     }
 
     /// Mirror raw console input bytes to HDMI without forcing a trailing newline.
     pub fn write_bytes(&mut self, bytes: &[u8]) {
-        self.display.write_bytes(bytes);
+        if let Some(display) = self.display.as_mut() {
+            display.write_bytes(bytes);
+        }
     }
 
     /// Scroll the HDMI text viewport by display rows using local keyboard-only controls.
     pub fn scroll_display_rows(&mut self, delta_rows: i8) {
-        self.display.scroll_view_rows(delta_rows);
+        if let Some(display) = self.display.as_mut() {
+            display.scroll_view_rows(delta_rows);
+        }
     }
 
     /// Returns whether the USB keyboard backend is currently online.
@@ -1949,7 +1987,9 @@ impl Pi4LocalSeat {
                     "[local-seat] pi4 keyboard runtime init mode=prompt-safe action=return-to-shell",
                 );
             }
-            usb_progress_begin(&mut self.display);
+            if let Some(display) = self.display.as_mut() {
+                usb_progress_begin(display);
+            }
             self.preseed_keyboard_mmio();
             boot_log::force_uart_line("[local-seat] pi4 keyboard runtime init after preseed");
             let mut keyboard_error = None;
@@ -2015,8 +2055,7 @@ impl Pi4LocalSeat {
             usb_progress_finish();
 
             if self.keyboard.is_some() {
-                self.display
-                    .write_line("[cohesix] local-seat USB keyboard online");
+                self.write_line("[cohesix] local-seat USB keyboard online");
                 boot_log::force_uart_line("[local-seat] pi4 keyboard runtime init result=online");
             } else if let Some(err) = keyboard_error {
                 if prompt_safe_probe {
@@ -2037,8 +2076,7 @@ impl Pi4LocalSeat {
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
-                self.display
-                    .write_line("[cohesix] local-seat USB keyboard unavailable");
+                self.write_line("[cohesix] local-seat USB keyboard unavailable");
                 boot_log::force_uart_line(
                     "[local-seat] pi4 keyboard runtime init result=unavailable",
                 );
@@ -2558,16 +2596,13 @@ fn xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
     strategy: XhciRuntimeInitStrategy,
     mailbox_reset_completed: bool,
     fresh_runtime_ownership_ready: bool,
-    stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
+    _stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
 ) -> XhciRuntimeInitStrategy {
     if mailbox_reset_completed
         && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
         && fresh_runtime_ownership_ready
     {
-        XhciRuntimeInitStrategy::new(
-            XhciFirmwareHandoff::ResetlessReinit,
-            stop_state_snapshot.is_some(),
-        )
+        XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
     } else {
         xhci_runtime_init_strategy_after_mailbox_reset(mmio, strategy, mailbox_reset_completed)
     }
@@ -4617,10 +4652,10 @@ const fn xhci_runtime_init_strategy_legacy_label_for_source(
 const fn xhci_runtime_init_strategy_run_label(strategy: XhciRuntimeInitStrategy) -> &'static str {
     match (strategy.firmware_handoff, strategy.seed_stop_state) {
         (XhciFirmwareHandoff::PreserveControllerState, _) => "run-skip",
-        (XhciFirmwareHandoff::PlatformResetComplete, false) => "run-skip",
         (XhciFirmwareHandoff::ColdStartFromSnapshot, true) => "run-skip",
         (XhciFirmwareHandoff::None, true) => "run-skip",
-        (XhciFirmwareHandoff::ColdStartFromSnapshot, _) => "run-uboot",
+        (XhciFirmwareHandoff::ColdStartFromSnapshot, _)
+        | (XhciFirmwareHandoff::PlatformResetComplete, false) => "run-uboot",
         _ => "run-default",
     }
 }
@@ -4639,10 +4674,6 @@ const fn xhci_runtime_init_strategy_publish_label(
         && matches!(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::None
-        )
-        || matches!(
-            (strategy.firmware_handoff, strategy.seed_stop_state),
-            (XhciFirmwareHandoff::PlatformResetComplete, false)
         )
     {
         "rings-skip"
@@ -8619,7 +8650,7 @@ impl UsbKeyboard {
                     let _ = core::fmt::Write::write_fmt(
                         &mut ready,
                         format_args!(
-                            "[local-seat] vl805 reset handoff=runtime-owned stage=pre-xhci-reset detail=mailbox-acked action=continue-platform-reset-complete mmio=0x{mmio:016x}",
+                            "[local-seat] vl805 reset handoff=runtime-owned stage=pre-xhci-reset detail=mailbox-acked action=continue-platform-reset-fresh-rings mmio=0x{mmio:016x}",
                             mmio = effective_mmio,
                         ),
                     );
@@ -13386,9 +13417,10 @@ mod tests {
 
     use super::{
         append_wrapped_scrollback_rows, clamp_visible_height, clamp_visible_width,
-        config_value_for_set, decode_pci_mmio_bar, hid_keyboard_attach_rank,
-        hid_keyboard_attach_source, hid_keyboard_candidate_requires_force_mode,
-        hub_retry_wait_spins, hub_should_eager_port_power, keyboard_attach_retry_allowed,
+        config_value_for_set, decode_pci_mmio_bar, display_init_failure_allows_headless,
+        hid_keyboard_attach_rank, hid_keyboard_attach_source,
+        hid_keyboard_candidate_requires_force_mode, hub_retry_wait_spins,
+        hub_should_eager_port_power, keyboard_attach_retry_allowed,
         keyboard_display_scroll_delta_for_key, keyboard_scancode_to_char,
         mailbox_visible_dimension, normalize_hub_tt_profile, normalize_pi4_xhci_mmio_hint,
         parse_xhci_capbase, runtime_vl805_mailbox_reset_allows_trusted_cold_init,
@@ -13499,6 +13531,19 @@ mod tests {
             Pi4SeatError::UsbKeyboardInit,
             2,
             2
+        ));
+    }
+
+    #[test]
+    fn display_init_failures_allow_headless_local_seat() {
+        assert!(display_init_failure_allows_headless(
+            Pi4SeatError::MailboxProtocol
+        ));
+        assert!(display_init_failure_allows_headless(
+            Pi4SeatError::FramebufferUnavailable
+        ));
+        assert!(!display_init_failure_allows_headless(
+            Pi4SeatError::XhciInit
         ));
     }
 
@@ -13855,7 +13900,7 @@ mod tests {
     }
 
     #[test]
-    fn mailbox_acked_linux_capture_full_reset_promotes_to_platform_reset_pollsafe_skip() {
+    fn mailbox_acked_linux_capture_full_reset_promotes_to_platform_reset_fresh_ring_lane() {
         let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
         let platform_reset =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
@@ -13885,11 +13930,11 @@ mod tests {
         );
         assert_eq!(
             xhci_runtime_init_strategy_run_label(platform_reset),
-            "run-skip"
+            "run-uboot"
         );
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(platform_reset),
-            "rings-skip"
+            "rings-pre-run"
         );
         assert_eq!(
             xhci_runtime_init_strategy_after_mailbox_reset(
@@ -13910,7 +13955,7 @@ mod tests {
     }
 
     #[test]
-    fn mailbox_acked_with_config_replay_promotes_to_resetless_fresh_ring_lane() {
+    fn mailbox_acked_with_config_replay_promotes_to_platform_reset_fresh_ring_lane() {
         let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
         let stop_seed = Some(LocalSeatXhciStopStateSnapshot {
             usbcmd: Some(0),
@@ -13927,15 +13972,12 @@ mod tests {
 
         assert_eq!(
             strategy,
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ResetlessReinit, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
         );
-        assert_eq!(
-            xhci_runtime_init_strategy_run_label(strategy),
-            "run-default"
-        );
+        assert_eq!(xhci_runtime_init_strategy_run_label(strategy), "run-uboot");
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(strategy),
-            "rings-post-run"
+            "rings-pre-run"
         );
         assert_eq!(
             xhci_runtime_init_strategy_pre_reset_label_for_source(
@@ -14131,6 +14173,13 @@ mod tests {
             )),
             "rings-pre-run"
         );
+        assert_eq!(
+            xhci_runtime_init_strategy_publish_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                false,
+            )),
+            "rings-pre-run"
+        );
     }
 
     #[test]
@@ -14162,6 +14211,13 @@ mod tests {
                 true,
             )),
             "run-skip"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_run_label(XhciRuntimeInitStrategy::new(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                false,
+            )),
+            "run-uboot"
         );
     }
 
@@ -14725,7 +14781,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_linux_capture_high_bar_platform_reset_complete_lane_skips_runtime_publish() {
+    fn xhci_linux_capture_high_bar_platform_reset_complete_lane_requires_config_replay() {
         let strategy =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
 
@@ -14748,10 +14804,10 @@ mod tests {
         assert!(
             !super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, true,)
         );
-        assert_eq!(xhci_runtime_init_strategy_run_label(strategy), "run-skip");
+        assert_eq!(xhci_runtime_init_strategy_run_label(strategy), "run-uboot");
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(strategy),
-            "rings-skip"
+            "rings-pre-run"
         );
         assert_eq!(
             usb_probe_preflight_next_step_for_source(

@@ -790,6 +790,42 @@ const fn firmware_download_readback_verify_required(_prewrite_ht_ready: bool) ->
 }
 
 #[inline]
+const fn firmware_download_readback_status(
+    readback_required: bool,
+    verified: bool,
+) -> &'static str {
+    if verified {
+        "verified-bounded-readback"
+    } else if readback_required {
+        "required-readback-not-verified"
+    } else {
+        "linux-debug-readback-skipped"
+    }
+}
+
+const PI4_WIFI_LINUX_CAPTURE_RAW_NVRAM_LEN: usize = 2_074;
+const PI4_WIFI_LINUX_CAPTURE_NORMALIZED_NVRAM_LEN: usize = 1_744;
+const PI4_WIFI_LINUX_CAPTURE_NVRAM_WITH_TAIL_LEN: usize = 1_748;
+
+#[inline]
+const fn pi4_wifi_nvram_linux_shape_state(raw_len: usize, normalized_len: usize) -> &'static str {
+    if raw_len != PI4_WIFI_LINUX_CAPTURE_RAW_NVRAM_LEN {
+        "raw-len-mismatch"
+    } else if normalized_len != PI4_WIFI_LINUX_CAPTURE_NORMALIZED_NVRAM_LEN {
+        "normalized-len-mismatch"
+    } else if normalized_len.saturating_add(4) != PI4_WIFI_LINUX_CAPTURE_NVRAM_WITH_TAIL_LEN {
+        "tail-total-mismatch"
+    } else {
+        "linux-shaped"
+    }
+}
+
+#[inline]
+fn firmware_contract_nvram_upload_len(bundle: WifiFirmwareBundle<'static>) -> usize {
+    normalize_nvram(bundle.nvram).len()
+}
+
+#[inline]
 const fn reset_vector_readback_verify_required(firmware_download_verified: bool) -> bool {
     firmware_download_verified
 }
@@ -3011,10 +3047,11 @@ const fn required_ht_clock_linux_active_transition_uses_force_ht() -> bool {
 
 #[inline]
 const fn required_ht_clock_linux_active_transition_resets_chipclk() -> bool {
-    // Keep the SD-only edge adjacent to the production HT request. Linux drops
-    // the bus clock state to CLK_SDONLY after firmware release, then the next
-    // CLK_AVAIL transition writes the HT request and polls CHIPCLKCSR.
-    true
+    // The Pi 4 bring-up lane now preserves the observed post-ARMCR4-release
+    // CHIPCLKCSR state. A zero write can clear the live ALP/HT request evidence
+    // (for example 0x50) before the required HT request, so the transition is
+    // logged as evidence only and the request is issued directly.
+    false
 }
 
 #[inline]
@@ -3455,7 +3492,7 @@ fn firmware_contract_trace_from_evidence(
     );
     WifiFirmwareContractTrace {
         firmware_len: bundle.firmware.len(),
-        nvram_len: bundle.nvram.len(),
+        nvram_len: firmware_contract_nvram_upload_len(bundle),
         clm_len: bundle.clm_blob.map(<[u8]>::len),
         board_type: bundle.board_type,
         reset_vector,
@@ -5532,6 +5569,7 @@ const CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT: u8 =
 const SDIO_MAX_BYTE_MODE: usize = 512;
 const SDIO_TRANSFER_TRACE_INCREMENT_CHUNKS: usize = 2;
 const CYW43_FIRMWARE_VERIFY_CHUNK: usize = SDIO_MAX_BYTE_MODE;
+const CYW43_FIRMWARE_PROOF_CHUNK: usize = 64;
 const CYW43_FIRMWARE_BOOT_READBACK_VERIFY_ENABLED: bool = false;
 const CYW43_HT_CLOCK_INITIAL_WAIT_LOOPS: usize = 2_048;
 const CYW43_HT_CLOCK_SOFT_WAIT_LOOPS: usize = 8_192;
@@ -7514,6 +7552,8 @@ impl SdioHost {
         let wake_state = firmware_wakeupctrl_state(self.last_wakeupctrl);
         let sleep_state = firmware_sleepcsr_state(self.last_sleepcsr);
         let cardcap_state = firmware_cardcap_state(self.last_cardcap);
+        let verify_status =
+            firmware_download_readback_status(false, self.firmware_download_verified);
         let precondition_state = firmware_release_precondition_state(
             upload_state,
             nvram_tail_state,
@@ -7526,7 +7566,7 @@ impl SdioHost {
             nvram_len,
         ));
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=post-release-proof boundary=post-armcr4-release rstvec_addr=0x{addr:08x} rstvec=0x{reset_vector:08x} rstvec_state={reset_vector_state} cpuhalt_release=0x{release_ioctrl:02x} reset=0x{release_resetctrl:02x} cpuhalt_state={cpuhalt_state} verified={} attempts={} upload_clock={}Hz current_clock={}Hz preferred_clock={}Hz width={}",
+            "[pi4-wifi] firmware stage=post-release-proof boundary=post-armcr4-release rstvec_addr=0x{addr:08x} rstvec=0x{reset_vector:08x} rstvec_state={reset_vector_state} cpuhalt_release=0x{release_ioctrl:02x} reset=0x{release_resetctrl:02x} cpuhalt_state={cpuhalt_state} verify_status={verify_status} verified={} attempts={} upload_clock={}Hz current_clock={}Hz preferred_clock={}Hz width={}",
             yn(self.firmware_download_verified),
             self.armcr4_release_attempts,
             upload_clock_hz,
@@ -15410,6 +15450,16 @@ impl SdioHost {
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=chipcommon-config"));
         self.configure_chipcommon()?;
         let nvram = normalize_nvram(bundle.nvram);
+        let nvram_shape_state = pi4_wifi_nvram_linux_shape_state(bundle.nvram.len(), nvram.len());
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=nvram-normalize raw={} normalized={} total_with_tail={} state={nvram_shape_state}",
+            bundle.nvram.len(),
+            nvram.len(),
+            nvram.len().saturating_add(4),
+        ));
+        if nvram_shape_state != "linux-shaped" {
+            return Err(HalError::Unsupported("cyw43-nvram-linux-shape"));
+        }
         let nvram_offset = ram_base
             .checked_add(ram_size)
             .and_then(|value| value.checked_sub(4))
@@ -15456,6 +15506,16 @@ impl SdioHost {
         ));
         let firmware_verify_required =
             firmware_download_readback_verify_required(prewrite_ht_ready);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware_verify status={} required={} verify_chunk={} proof_chunk={} action=bounded-policy",
+            firmware_download_readback_status(
+                firmware_verify_required,
+                self.firmware_download_verified
+            ),
+            yn(firmware_verify_required),
+            CYW43_FIRMWARE_VERIFY_CHUNK,
+            CYW43_FIRMWARE_PROOF_CHUNK,
+        ));
         let clock_candidates =
             firmware_bulk_clock_candidates(self.current_clock_hz, firmware_upload_fast_path);
         let mut selected_bulk_clock_hz = CYW43_FIRMWARE_BULK_CLOCK_HZ;
@@ -15550,11 +15610,19 @@ impl SdioHost {
         } else {
             self.firmware_download_verified = false;
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware_verify policy=skip-readback action=continue-after-upload reason=linux-nondebug-debug-only-readback clock={}Hz width={} verified=no",
+                "[pi4-wifi] firmware_verify policy=skip-readback status={} action=continue-after-upload reason=linux-nondebug-debug-only-readback clock={}Hz width={} verified=no",
+                firmware_download_readback_status(firmware_verify_required, self.firmware_download_verified),
                 self.current_clock_hz,
                 sdio_bus_width_name(self.desired_bus_width),
             ));
         }
+        self.prove_nvram_release_payload_bounded(
+            bundle.nvram.len(),
+            &nvram,
+            nvram_offset,
+            nvram_tail,
+            nvram_magic,
+        )?;
         self.preferred_data_clock_hz = selected_bulk_clock_hz;
         self.ensure_firmware_activation_clock("firmware-activate-clock", selected_bulk_clock_hz)?;
         let reset_vector = firmware_reset_vector(bundle.firmware)?;
@@ -16139,9 +16207,7 @@ impl SdioHost {
                 chipclk = chipclk_snapshot.unwrap_or(0),
             ));
         }
-        if required_ht_clock_linux_active_transition_resets_chipclk() {
-            self.prepare_linux_post_download_ht_transition(stage)?;
-        }
+        self.prepare_linux_post_download_ht_transition(stage)?;
         if post_download_ht_request_primes_wake_sideband() && stage == "wait-ht-clock" {
             self.prime_post_download_ht_sideband_for(stage);
         }
@@ -16687,6 +16753,106 @@ impl SdioHost {
         Ok(())
     }
 
+    fn prove_nvram_release_payload_bounded(
+        &mut self,
+        raw_nvram_len: usize,
+        nvram: &[u8],
+        nvram_offset: u32,
+        nvram_tail: u32,
+        nvram_magic: u32,
+    ) -> Result<(), HalError> {
+        let head_len = cmp::min(CYW43_FIRMWARE_PROOF_CHUNK, nvram.len());
+        let tail_len = cmp::min(CYW43_FIRMWARE_PROOF_CHUNK, nvram.len());
+        let mut proven = 0usize;
+        let mut unavailable = 0usize;
+
+        if head_len != 0 {
+            if self.probe_backplane_bytes_match("nvram-head", nvram_offset, &nvram[..head_len])? {
+                proven = proven.saturating_add(head_len);
+            } else {
+                unavailable = unavailable.saturating_add(head_len);
+            }
+        }
+
+        if tail_len != 0 && nvram.len() > head_len {
+            let tail_start = nvram.len() - tail_len;
+            let tail_addr = nvram_offset
+                .checked_add(
+                    u32::try_from(tail_start)
+                        .map_err(|_| HalError::Unsupported("cyw43-nvram-proof-range"))?,
+                )
+                .ok_or(HalError::Unsupported("cyw43-nvram-proof-range"))?;
+            if self.probe_backplane_bytes_match(
+                "nvram-tail-window",
+                tail_addr,
+                &nvram[tail_start..],
+            )? {
+                proven = proven.saturating_add(tail_len);
+            } else {
+                unavailable = unavailable.saturating_add(tail_len);
+            }
+        }
+
+        let tail_magic = nvram_magic.to_le_bytes();
+        if self.probe_backplane_bytes_match("nvram-tail-token", nvram_tail, &tail_magic)? {
+            proven = proven.saturating_add(tail_magic.len());
+        } else {
+            unavailable = unavailable.saturating_add(tail_magic.len());
+        }
+
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware_verify summary part=nvram-bounded raw={} normalized={} total_with_tail={} proven={} unavailable={} action=fail-before-armcr4-release-on-mismatch",
+            raw_nvram_len,
+            nvram.len(),
+            nvram.len().saturating_add(4),
+            proven,
+            unavailable,
+        ));
+        Ok(())
+    }
+
+    fn probe_backplane_bytes_match(
+        &mut self,
+        label: &'static str,
+        addr: u32,
+        expected: &[u8],
+    ) -> Result<bool, HalError> {
+        let mut observed = [0u8; CYW43_FIRMWARE_PROOF_CHUNK];
+        if expected.len() > observed.len() {
+            return Err(HalError::Unsupported("cyw43-firmware-proof-chunk"));
+        }
+        match self.backplane_read_into(addr, &mut observed[..expected.len()]) {
+            Ok(()) => {}
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware_verify part={label} pass=read-unavailable bytes={} addr=0x{addr:08x} err={err} clock={}Hz width={}",
+                    expected.len(),
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                ));
+                return Ok(false);
+            }
+        }
+        if let Some((first_off, expected_byte, observed_byte)) =
+            first_mismatch(expected, &observed[..expected.len()])
+        {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware_verify part={label} pass=fail first_off={first_off} expected=0x{expected_byte:02x} actual=0x{observed_byte:02x} bytes={} addr=0x{addr:08x} clock={}Hz width={} action=fail-before-armcr4-release",
+                expected.len(),
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+            ));
+            return Err(HalError::Unsupported("cyw43-firmware-proof-mismatch"));
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware_verify part={label} pass=yes bytes={} addr=0x{addr:08x} clock={}Hz width={}",
+            expected.len(),
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+        ));
+        Ok(true)
+    }
+
     fn verify_backplane_bytes(
         &mut self,
         label: &'static str,
@@ -16771,10 +16937,51 @@ impl SdioHost {
             "[pi4-wifi] firmware stage=firmware-activate action=reset-vector addr=0x{addr:08x} value=0x{reset_vector:08x}",
             addr = CYW43_FIRMWARE_RESET_VECTOR_ADDR,
         ));
+        let reset_vector_proven = self.probe_reset_vector_write_bounded(reset_vector)?;
+        if reset_vector_readback_verify_required(self.firmware_download_verified)
+            && !reset_vector_proven
+        {
+            return Err(HalError::Unsupported(
+                "cyw43-reset-vector-readback-unavailable",
+            ));
+        }
         if reset_vector_readback_verify_required(self.firmware_download_verified) {
             self.verify_reset_vector(reset_vector)?;
         }
         Ok(())
+    }
+
+    fn probe_reset_vector_write_bounded(&mut self, expected: u32) -> Result<bool, HalError> {
+        let mut observed = [0u8; 4];
+        match self.backplane_read_into(CYW43_FIRMWARE_RESET_VECTOR_ADDR, &mut observed) {
+            Ok(()) => {}
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=firmware-activate action=reset-vector-bounded-readback pass=read-unavailable addr=0x{addr:08x} err={err} clock={}Hz width={}",
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    addr = CYW43_FIRMWARE_RESET_VECTOR_ADDR,
+                ));
+                return Ok(false);
+            }
+        }
+        let observed = u32::from_le_bytes(observed);
+        if observed != expected {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=firmware-activate action=reset-vector-bounded-readback pass=fail expected=0x{expected:08x} actual=0x{observed:08x} addr=0x{addr:08x} clock={}Hz width={} action=fail-before-armcr4-release",
+                self.current_clock_hz,
+                sdio_bus_width_name(self.desired_bus_width),
+                addr = CYW43_FIRMWARE_RESET_VECTOR_ADDR,
+            ));
+            return Err(HalError::Unsupported("cyw43-reset-vector-mismatch"));
+        }
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=firmware-activate action=reset-vector-bounded-readback pass=yes value=0x{observed:08x} addr=0x{addr:08x} clock={}Hz width={}",
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            addr = CYW43_FIRMWARE_RESET_VECTOR_ADDR,
+        ));
+        Ok(true)
     }
 
     fn verify_reset_vector(&mut self, expected: u32) -> Result<(), HalError> {
@@ -17557,17 +17764,34 @@ impl SdioHost {
     ) -> Result<(), HalError> {
         self.sr_kso_clock_ready = false;
         let before = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, 0)?;
-        self.remember_chipclkcsr(0);
-        for _ in 0..CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS {
-            spin_loop();
-        }
-        wifi_progress_advance_loops(CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS);
-        let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+        self.remember_chipclkcsr(before);
+        let (chipclk, action) = if required_ht_clock_linux_active_transition_resets_chipclk() {
+            self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, 0)?;
+            self.remember_chipclkcsr(0);
+            for _ in 0..CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS {
+                spin_loop();
+            }
+            wifi_progress_advance_loops(CYW43_BACKPLANE_FORCE_ALP_SETTLE_LOOPS);
+            (
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?,
+                "linux-post-download-sdonly-chipclk",
+            )
+        } else {
+            (
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?,
+                "linux-post-download-observe-chipclk",
+            )
+        };
         self.remember_chipclkcsr(chipclk);
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=linux-post-download-sdonly-chipclk before=0x{before:02x} after=0x{chipclk:02x}"
-        ));
+        if required_ht_clock_linux_active_transition_resets_chipclk() {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action={action} before=0x{before:02x} after=0x{chipclk:02x} write_zero=yes"
+            ));
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action={action} before=0x{before:02x} after=0x{chipclk:02x} write_zero=no reason=preserve-post-release-chipclkcsr"
+            ));
+        }
         Ok(())
     }
 
@@ -19258,7 +19482,46 @@ mod tests {
 
         assert_eq!(PI4_WIFI_NVRAM.len(), 2_074);
         assert_eq!(nvram.len(), 1_744);
+        assert_eq!(
+            pi4_wifi_nvram_linux_shape_state(PI4_WIFI_NVRAM.len(), nvram.len()),
+            "linux-shaped"
+        );
+        assert_eq!(nvram.len() + 4, PI4_WIFI_LINUX_CAPTURE_NVRAM_WITH_TAIL_LEN);
         assert_eq!(nvram_magic, 0xfe4b_01b4);
+    }
+
+    #[test]
+    fn firmware_contract_reports_normalized_nvram_upload_length() {
+        if PI4_WIFI_NVRAM.is_empty() {
+            return;
+        }
+        let bundle = WifiFirmwareBundle {
+            firmware: &[0x78, 0x56, 0x34, 0x12],
+            nvram: PI4_WIFI_NVRAM,
+            clm_blob: None,
+            board_type: "brcm,bcm43455-fmac",
+        };
+        let trace = firmware_contract_trace_from_evidence(
+            bundle,
+            Some(0x1234_5678),
+            false,
+            1,
+            false,
+            Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+            Some(SBSDIO_WAKE_TILL_HT_AVAIL),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
+            Some(cyw43455_cardcap_command_decode_value()),
+            Some(SDIO_FUNC_ENABLE_1),
+            Some(SDIO_FUNC_READY_1),
+            41_666_666,
+            41_666_666,
+            true,
+        );
+
+        assert_eq!(trace.nvram_len, PI4_WIFI_LINUX_CAPTURE_NORMALIZED_NVRAM_LEN);
+        assert_ne!(trace.nvram_len, PI4_WIFI_LINUX_CAPTURE_RAW_NVRAM_LEN);
+        assert_eq!(trace.blocker, "chipclkcsr-ht-avail-missing");
+        assert_eq!(trace.f2_state, "disabled-not-ready");
     }
 
     #[test]
@@ -27839,7 +28102,7 @@ mod tests {
     fn required_ht_wait_uses_linux_non_sr_clkavail_without_devon_gate() {
         assert!(!required_ht_clock_uses_force_ht_timeout_retry());
         assert!(!required_ht_clock_linux_active_transition_uses_force_ht());
-        assert!(required_ht_clock_linux_active_transition_resets_chipclk());
+        assert!(!required_ht_clock_linux_active_transition_resets_chipclk());
         assert!(!cyw43455_uses_linux_sr_kso_clock());
         assert!(!required_ht_clock_uses_pre_function2_kso_gate());
         assert!(post_download_devon_before_ht_is_diagnostic());
@@ -27867,6 +28130,38 @@ mod tests {
             super::CYW43_HT_CLOCK_LINUX_ACTIVE_SETTLE_LOOPS
                 > super::SDIO_FUNCTION_READY_SETTLE_LOOPS
         );
+    }
+
+    #[test]
+    fn post_release_ht_transition_preserves_observed_chipclk_before_request() {
+        let observed_failure_shape = SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL;
+
+        assert_eq!(observed_failure_shape, 0x50);
+        assert!(!required_ht_clock_linux_active_transition_resets_chipclk());
+        assert_eq!(
+            required_ht_clock_request_value(Some(observed_failure_shape)),
+            SBSDIO_HT_AVAIL_REQ
+        );
+        assert!(!function2_has_required_ht_clock(observed_failure_shape));
+    }
+
+    #[test]
+    fn firmware_readback_status_is_explicit_and_bounded() {
+        assert!(!firmware_download_readback_verify_required(false));
+        assert_eq!(
+            firmware_download_readback_status(false, false),
+            "linux-debug-readback-skipped"
+        );
+        assert_eq!(
+            firmware_download_readback_status(true, false),
+            "required-readback-not-verified"
+        );
+        assert_eq!(
+            firmware_download_readback_status(true, true),
+            "verified-bounded-readback"
+        );
+        assert_eq!(CYW43_FIRMWARE_PROOF_CHUNK, 64);
+        assert!(CYW43_FIRMWARE_PROOF_CHUNK < CYW43_FIRMWARE_VERIFY_CHUNK);
     }
 
     #[test]
