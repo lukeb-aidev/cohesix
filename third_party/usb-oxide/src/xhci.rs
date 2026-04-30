@@ -584,9 +584,9 @@ const fn runtime_pollsafe_no_fresh_ownership_handoff(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     // Stop-state-only seeds prove a bounded poll-safe state, but not enough
-    // runtime ring ownership to publish a fresh DCBAAP on seL4. A Pi 4
-    // platform-reset-complete witness is stronger: mailbox reset plus PCIe
-    // command ownership is the authority to publish fresh rings before RUN.
+    // runtime ring ownership to publish a fresh DCBAAP on seL4. The Pi 4
+    // platform-reset-complete witness is mailbox-reset ownership, so it stays
+    // outside this poll-safe stop-seed set.
     runtime_bootloader_owned_pollsafe_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
 }
@@ -616,10 +616,8 @@ const fn runtime_platform_reset_fresh_rings_handoff(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    matches!(
-        firmware_handoff,
-        XhciFirmwareHandoff::PlatformResetComplete
-    ) && runtime_seed_snapshot.is_none()
+    matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
+        && runtime_seed_snapshot.is_none()
 }
 
 #[inline(always)]
@@ -670,10 +668,7 @@ const fn runtime_mailbox_reset_needs_blind_settle(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || matches!(
-            firmware_handoff,
-            XhciFirmwareHandoff::PlatformResetComplete
-        )
+        || matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -733,10 +728,7 @@ const fn runtime_handoff_needs_pre_run_settle(
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
-        || matches!(
-            firmware_handoff,
-            XhciFirmwareHandoff::PlatformResetComplete
-        )
+        || matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
         || snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || matches!(firmware_handoff, XhciFirmwareHandoff::ColdStartFromSnapshot)
             && runtime_seed_snapshot.is_none()
@@ -787,10 +779,16 @@ const fn runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Keep DCBAAP publication on the ordinary write path. The stop-state-only
-    // runtime handoff is no longer trying to protect a resetless edge, so the
-    // release-only helper just adds one more policy difference from U-Boot at
-    // exactly the point the latest Pi 4 trace wedged.
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    false
+}
+
+#[inline(always)]
+const fn platform_reset_dcbaap_publish_blocked_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
     let _ = firmware_handoff;
     let _ = runtime_seed_snapshot;
     false
@@ -2412,6 +2410,18 @@ impl<H: Dma> XhciCtrl<H> {
             runtime_handoff_mask,
             publish_policy_mask,
         );
+        if platform_reset_dcbaap_publish_blocked_with_snapshot(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        ) {
+            emit_xhci_diag(
+                0x034c,
+                self.firmware_handoff as u64,
+                runtime_seed_snapshot_flag_bits(trusted_runtime_seed_snapshot),
+                1,
+            );
+            return Err(UsbError::NotSupported);
+        }
 
         // Keep host-system and event interrupts masked during bring-up. Pi4
         // local-seat uses polling and does not install xHCI IRQ handlers in
@@ -3678,9 +3688,10 @@ impl<H: Dma> XhciCtrl<H> {
                 0,
             );
         }
-        let post_run_blind_settle =
-            runtime_stop_state_needs_post_run_settle(self.firmware_handoff, trusted_runtime_seed_snapshot)
-                || skip_initial_live_operational_reads;
+        let post_run_blind_settle = runtime_stop_state_needs_post_run_settle(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        ) || skip_initial_live_operational_reads;
         if skip_live_run_write {
             emit_xhci_diag(0x0273, 0, 0, 1);
         } else if post_run_blind_settle {
@@ -4670,7 +4681,7 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        blind_settle_precedes_live_stop_revalidation,
+        blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, compose_brcm_usbaxi_attr,
         compose_config, compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
         compose_run_usbcmd, constructor_polling_scrub_mode,
@@ -4682,10 +4693,10 @@ mod tests {
         defer_scratchpad_array_publish_with_snapshot,
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, disable_interrupter_iman_value,
-        claim_legacy_ownership_before_reset_for_init, disable_legacy_smi_control_bits,
-        halt_revalidation_needed, initial_live_operational_read_hazard, masked_usbcmd,
-        parse_controller_params, polling_iman_value, port_ready_for_enumeration,
-        post_start_polling_irq_quiesce_pending_bits,
+        disable_legacy_smi_control_bits, halt_revalidation_needed,
+        initial_live_operational_read_hazard, masked_usbcmd, parse_controller_params,
+        platform_reset_dcbaap_publish_blocked_with_snapshot, polling_iman_value,
+        port_ready_for_enumeration, post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
         pre_halt_source_quiesce_before_live_stop_revalidation, preserve_firmware_handoff_config,
@@ -4696,48 +4707,47 @@ mod tests {
         preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
-        replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
-        reset_usbcmd_seed_before_hcrst, reset_usbcmd_seed_before_hcrst_for_init,
-        run_usbcmd_needs_live_seed_read, run_usbcmd_prefers_snapshot_seed,
-        run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
-        runtime_bootloader_owned_pollsafe_handoff, runtime_handoff_needs_pre_run_settle,
+        replay_staged_dcbaap_snapshot_before_publish_with_snapshot, reset_usbcmd_seed_before_hcrst,
+        reset_usbcmd_seed_before_hcrst_for_init, run_usbcmd_needs_live_seed_read,
+        run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed, run_wait_observable_usbsts,
+        run_wait_progress_due, runtime_bootloader_owned_pollsafe_handoff,
+        runtime_deferred_ring_handoff, runtime_handoff_needs_pre_run_settle,
         runtime_handoff_needs_relaxed_run_write,
         runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
         runtime_handoff_needs_release_only_run_write,
         runtime_handoff_needs_uboot_style_reset_write, runtime_handoff_needs_uboot_style_run_write,
         runtime_handoff_skips_live_drop_stop, runtime_handoff_skips_live_run_write,
         runtime_mailbox_reset_handoff, runtime_mailbox_reset_needs_blind_settle,
-        runtime_mailbox_reset_stop_state_handoff, runtime_deferred_ring_handoff,
+        runtime_mailbox_reset_stop_state_handoff,
         runtime_needs_post_init_polling_irq_quiesce_with_snapshot,
         runtime_needs_post_run_polling_irq_quiesce_with_snapshot,
-        runtime_owned_fresh_rings_handoff, runtime_pollsafe_no_fresh_ownership_handoff,
-        runtime_platform_reset_fresh_rings_handoff, runtime_preserve_stop_state_handoff,
+        runtime_owned_fresh_rings_handoff, runtime_platform_reset_fresh_rings_handoff,
+        runtime_pollsafe_no_fresh_ownership_handoff, runtime_preserve_stop_state_handoff,
         runtime_seed_snapshot_flag_bits, runtime_seeded_full_reset_start_handoff,
         runtime_stop_state_needs_post_run_settle, runtime_unseeded_full_reset_handoff,
-        skip_config_write_during_init,
-        skip_config_write_during_init_with_snapshot, skip_constructor_polling_scrub_writes_with_snapshot,
-        skip_dnctrl_write_with_snapshot, skip_doorbell_readback_after_ring,
-        skip_fresh_event_ring_publish_with_snapshot, skip_fresh_runtime_ownership_publish_with_snapshot,
-        skip_init_pre_reset_scrub_writes, skip_init_pre_reset_scrub_writes_for_init,
-        skip_init_pre_reset_scrub_writes_with_snapshot, skip_legacy_ownership_claim_for_handoff,
+        skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
+        skip_constructor_polling_scrub_writes_with_snapshot, skip_dnctrl_write_with_snapshot,
+        skip_doorbell_readback_after_ring, skip_fresh_event_ring_publish_with_snapshot,
+        skip_fresh_runtime_ownership_publish_with_snapshot, skip_init_pre_reset_scrub_writes,
+        skip_init_pre_reset_scrub_writes_for_init, skip_init_pre_reset_scrub_writes_with_snapshot,
+        skip_legacy_ownership_claim_for_handoff,
         skip_legacy_ownership_claim_for_handoff_with_snapshot, skip_live_halt_revalidation,
         skip_live_halt_revalidation_for_init, skip_live_halt_revalidation_with_snapshot,
         skip_live_post_reset_verification_readbacks,
-        skip_live_post_reset_verification_readbacks_with_snapshot, skip_post_reset_cnr_poll_with_snapshot,
-        skip_post_run_interrupter_zeroing_with_snapshot, skip_preinit_polling_scrub,
-        skip_reset_completion_poll_for_init, skip_reset_during_init, skip_reset_during_init_with_snapshot,
-        snapshot_resetless_reinit_handoff,
-        skip_usbsts_clear_before_run_with_snapshot, split_u64_reg_write_ops,
-        u64_register_change_mask, usbcmd_interrupt_delivery_enabled,
-        use_atomic_erstba_publish_with_snapshot, use_atomic_runtime_ring_publish_with_snapshot,
-        use_live_config_seed_reads, use_live_config_seed_reads_for_init,
-        use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
-        use_live_post_reset_seed_reads_for_init, use_live_post_reset_seed_reads_with_snapshot,
-        ConstructorPollingScrubMode, XhciControllerParams, XhciCtrl, XhciFirmwareHandoff,
-        XhciRuntimeSeedSnapshot, BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
-        READY_WAIT_PROGRESS_SPINS, SKIP_HCRST_DURING_INIT,
-        TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
-        XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
+        skip_live_post_reset_verification_readbacks_with_snapshot,
+        skip_post_reset_cnr_poll_with_snapshot, skip_post_run_interrupter_zeroing_with_snapshot,
+        skip_preinit_polling_scrub, skip_reset_completion_poll_for_init, skip_reset_during_init,
+        skip_reset_during_init_with_snapshot, skip_usbsts_clear_before_run_with_snapshot,
+        snapshot_resetless_reinit_handoff, split_u64_reg_write_ops, u64_register_change_mask,
+        usbcmd_interrupt_delivery_enabled, use_atomic_erstba_publish_with_snapshot,
+        use_atomic_runtime_ring_publish_with_snapshot, use_live_config_seed_reads,
+        use_live_config_seed_reads_for_init, use_live_config_seed_reads_with_snapshot,
+        use_live_post_reset_seed_reads, use_live_post_reset_seed_reads_for_init,
+        use_live_post_reset_seed_reads_with_snapshot, ConstructorPollingScrubMode,
+        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
+        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, READY_WAIT_PROGRESS_SPINS,
+        SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
+        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
     };
     use crate::{reg, Dma};
     use alloc::vec;
@@ -5773,6 +5783,24 @@ mod tests {
     }
 
     #[test]
+    fn platform_reset_complete_dcbaap_publish_is_blocked_before_mmio_store() {
+        assert!(
+            !runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                None,
+            )
+        );
+        assert!(platform_reset_dcbaap_publish_blocked_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!platform_reset_dcbaap_publish_blocked_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            None,
+        ));
+    }
+
+    #[test]
     fn dcbaap_write_ops_keep_low_before_high_when_high_dword_is_stable() {
         assert_eq!(
             dcbaap_reg_write_ops(0x50, 0x0000_0004_0000_0000, 0x0000_0004_0400_3000),
@@ -6258,6 +6286,10 @@ mod tests {
             None,
         ));
         assert!(runtime_platform_reset_fresh_rings_handoff(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(platform_reset_dcbaap_publish_blocked_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));

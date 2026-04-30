@@ -1284,14 +1284,6 @@ fn usb_ownership_fresh_ownership_label(
 ) -> &'static str {
     if cfg_replay_ready && command_replay_ready {
         "allowed"
-    } else if matches!(
-        (
-            effective_strategy.firmware_handoff,
-            effective_strategy.seed_stop_state
-        ),
-        (XhciFirmwareHandoff::PlatformResetComplete, false)
-    ) {
-        "pollsafe-no-fresh-ownership"
     } else if xhci_runtime_init_strategy_skips_controller_entry(effective_strategy) {
         "skipped"
     } else if xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy) {
@@ -3532,6 +3524,10 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x032a => Some("post-start-iman-write-wedged"),
         0x032c => Some("post-start-usbsts-clear-write-wedged"),
         0x0332 => Some("pre-dcbaap-iman-write-wedged"),
+        0x0342 => Some("pre-run-dcbaap-high-clear-store-wedged"),
+        0x0346 => Some("pre-run-dcbaap-low-store-wedged"),
+        0x034a => Some("pre-run-dcbaap-high-store-wedged"),
+        0x034c => Some("platform-reset-dcbaap-publish-blocked"),
         0x02eb => Some("usbcmd-run-barrier-wedged"),
         0x02e9 => Some("usbcmd-run-store-wedged"),
         _ => None,
@@ -3643,6 +3639,8 @@ const fn xhci_diag_stage_value_labels(
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
         0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
         0x0332 | 0x0333 => Some(("iman", "masked_iman", "seed_flags")),
+        0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
+        0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
     }
 }
@@ -3871,6 +3869,19 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0331 => Some("drop-skip-uninitialized"),
         0x0332 => Some("pre-dcbaap-iman-quiesce"),
         0x0333 => Some("pre-dcbaap-iman-quiesce-done"),
+        0x0340 => Some("dcbaap-posted-high-clear"),
+        0x0341 => Some("dcbaap-posted-high-clear-barrier-done"),
+        0x0342 => Some("dcbaap-posted-high-clear-pre-store"),
+        0x0343 => Some("dcbaap-posted-high-clear-done"),
+        0x0344 => Some("dcbaap-posted-low"),
+        0x0345 => Some("dcbaap-posted-low-barrier-done"),
+        0x0346 => Some("dcbaap-posted-low-pre-store"),
+        0x0347 => Some("dcbaap-posted-low-done"),
+        0x0348 => Some("dcbaap-posted-high-commit"),
+        0x0349 => Some("dcbaap-posted-high-commit-barrier-done"),
+        0x034a => Some("dcbaap-posted-high-commit-pre-store"),
+        0x034b => Some("dcbaap-posted-high-commit-done"),
+        0x034c => Some("platform-reset-dcbaap-publish-blocked"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -6702,6 +6713,19 @@ fn ensure_capture_backed_xhci_pin(hal: &mut KernelHal<'_>, mmio: usize) -> bool 
 fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
     if !vl805_linux_capture_cfg_witness_available() {
         return None;
+    }
+    let mut host_irq_maps = Vec::new();
+    if let Some((_status_frame, status_reg)) = bcm2711_pcie_map_reg_page(
+        hal,
+        &mut host_irq_maps,
+        BCM2711_PCIE_MISC_PCIE_STATUS,
+        "pcie-capture-status",
+    ) {
+        bcm2711_pcie_mask_and_clear_irq_sources(status_reg);
+    } else {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 capture cfg witness irq-mask skipped reason=pcie-status-unavailable",
+        );
     }
     let snapshot = linux_captured_vl805_pci_cfg_snapshot();
     let Some(mmio) = snapshot.bar_mmio else {
@@ -14876,9 +14900,9 @@ mod tests {
         assert_eq!(status.cfg_writes, "disabled-capture-witness");
         assert_eq!(status.command, Some(super::RPI4_VL805_LINUX_COMMAND));
         assert_eq!(status.command_source, "linux-capture-static");
-        assert_eq!(status.fresh_ownership, "pollsafe-no-fresh-ownership");
-        assert_eq!(status.blocker, "pcie-vl805-config-contract-missing");
-        assert_eq!(status.next_step, "enable-live-ext-cfg-or-stay-pollsafe");
+        assert_eq!(status.fresh_ownership, "blocked");
+        assert_eq!(status.blocker, "vl805-command-replay-missing");
+        assert_eq!(status.next_step, "export-vl805-command-ready");
     }
 
     #[test]
@@ -15589,6 +15613,30 @@ mod tests {
             Some("post-start-usbsts-clear-skip-preserve")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x0340),
+            Some("dcbaap-posted-high-clear")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0342),
+            Some("dcbaap-posted-high-clear-pre-store")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0346),
+            Some("dcbaap-posted-low-pre-store")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x034a),
+            Some("dcbaap-posted-high-commit-pre-store")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x034b),
+            Some("dcbaap-posted-high-commit-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x034c),
+            Some("platform-reset-dcbaap-publish-blocked")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x02da),
             Some("erstsz-publish-skip-preserve")
         );
@@ -15674,6 +15722,22 @@ mod tests {
         assert_eq!(
             super::xhci_diag_stage_exact_issue_label(0x02f6),
             Some("pre-run-dcbaap-high-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0342),
+            Some("pre-run-dcbaap-high-clear-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x0346),
+            Some("pre-run-dcbaap-low-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x034a),
+            Some("pre-run-dcbaap-high-store-wedged")
+        );
+        assert_eq!(
+            super::xhci_diag_stage_exact_issue_label(0x034c),
+            Some("platform-reset-dcbaap-publish-blocked")
         );
         assert_eq!(
             super::xhci_diag_stage_exact_issue_label(0x0254),
@@ -15894,6 +15958,14 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),
             Some(("iman", "masked_iman", "seed_flags"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0346),
+            Some(("reg", "value", "dcbaa"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x034c),
+            Some(("handoff", "seed_flags", "blocked"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0316),
