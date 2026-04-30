@@ -411,13 +411,26 @@ const fn core_ctrl_postreset_access_mode_label(_base: u32, _offset: u32) -> &'st
 
 #[inline]
 const fn core_ctrl_postreset_read_uses_cmd52_current_window(base: u32, _offset: u32) -> bool {
-    let _ = base;
-    false
+    base == CYW43_ARMCR4_CORE_BASE
 }
 
 #[inline]
 const fn core_ctrl_postreset_read_access_mode_label(base: u32, offset: u32) -> &'static str {
     if core_ctrl_postreset_read_uses_cmd52_current_window(base, offset) {
+        "cmd52-byte-current-window retry=cmd52-byte-rewindow"
+    } else {
+        "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
+    }
+}
+
+#[inline]
+const fn core_ctrl_clear_reset_read_uses_cmd52_current_window(base: u32, offset: u32) -> bool {
+    base == CYW43_ARMCR4_CORE_BASE && offset == AI_RESETCTRL_OFFSET
+}
+
+#[inline]
+const fn core_ctrl_clear_reset_read_access_mode_label(base: u32, offset: u32) -> &'static str {
+    if core_ctrl_clear_reset_read_uses_cmd52_current_window(base, offset) {
         "cmd52-byte-current-window retry=cmd52-byte-rewindow"
     } else {
         "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
@@ -507,6 +520,19 @@ fn log_core_ctrl_postreset_read(base: u32, offset: u32) {
     ));
 }
 
+fn log_core_ctrl_clear_reset_read(base: u32, offset: u32) {
+    let addr = base.saturating_add(offset);
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] firmware core-ctrl access op=read8-clear-reset mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={inc}",
+        core_ctrl_clear_reset_read_access_mode_label(base, offset),
+        bus = core_ctrl_current_window_addr(addr),
+        trace_bus = core_ctrl_trace_function_addr(addr),
+        shift = backplane_word_byte_shift(addr),
+        inc = backplane_word_increment_addr() as u8,
+        window = addr & BACKPLANE_WINDOW_MASK,
+    ));
+}
+
 #[inline]
 const fn core_ctrl_in_reset_write_uses_word_path(base: u32, offset: u32) -> bool {
     base == CYW43_ARMCR4_CORE_BASE && offset == AI_IOCTRL_OFFSET
@@ -581,7 +607,32 @@ const fn backplane_window_differs_by_mid_byte_only(
 
 #[inline]
 const fn core_ctrl_can_defer_clear_reset_readback(base: u32, attempt: usize) -> bool {
-    attempt == 0 && (base == CYW43_SOCRAM_CORE_BASE || base == CYW43_ARMCR4_CORE_BASE)
+    attempt == 0 && base == CYW43_SOCRAM_CORE_BASE
+}
+
+#[inline]
+const fn core_ctrl_clear_reset_readback_error_reason(base: u32) -> &'static str {
+    if base == CYW43_ARMCR4_CORE_BASE {
+        "armcr4-release-clear-reset-must-be-proven-before-ht"
+    } else {
+        "core-clear-reset-readback-required"
+    }
+}
+
+#[inline]
+fn core_ctrl_can_defer_clear_reset_read_error(base: u32, offset: u32, err: &HalError) -> bool {
+    base == CYW43_ARMCR4_CORE_BASE
+        && offset == AI_RESETCTRL_OFFSET
+        && (is_sdio_cmd52_access_error(err) || is_armcr4_postreset_fragile_read_error(err))
+}
+
+#[inline]
+const fn core_ctrl_clear_reset_read_deferred_reason(base: u32) -> &'static str {
+    if base == CYW43_ARMCR4_CORE_BASE {
+        "armcr4-clear-reset-read-fragile-after-release"
+    } else {
+        "core-clear-reset-read-deferred"
+    }
 }
 
 #[inline]
@@ -849,6 +900,11 @@ const fn pre_ht_control_plane_clock_target_hz(current_clock_hz: u32) -> u32 {
 }
 
 #[inline]
+const fn firmware_core_reset_clock_target_hz(current_clock_hz: u32) -> u32 {
+    pre_ht_control_plane_clock_target_hz(current_clock_hz)
+}
+
+#[inline]
 const fn sdio_cccr_speed_supports_high_speed(speed: u8) -> bool {
     (speed & SDIO_CCCR_SPEED_SHS) != 0
 }
@@ -876,6 +932,14 @@ const fn post_download_ht_clock_target_hz(
     } else {
         current_clock_hz
     }
+}
+
+#[inline]
+const fn firmware_activation_clock_target_hz(
+    current_clock_hz: u32,
+    selected_bulk_clock_hz: u32,
+) -> u32 {
+    post_download_ht_clock_target_hz(current_clock_hz, selected_bulk_clock_hz)
 }
 
 #[inline]
@@ -15108,6 +15172,7 @@ impl SdioHost {
             core_ctrl_access_mode_label()
         ));
         self.configure_linux_probe_attach_state()?;
+        self.ensure_firmware_core_reset_clock("pre-core-reset-sdio-clock")?;
         if should_prime_ht_clock_assist_before_reset(self.last_chipclkcsr) {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=pre-reset-ht-assist"
@@ -15281,6 +15346,7 @@ impl SdioHost {
             ));
         }
         self.preferred_data_clock_hz = selected_bulk_clock_hz;
+        self.ensure_firmware_activation_clock("firmware-activate-clock", selected_bulk_clock_hz)?;
         let reset_vector = firmware_reset_vector(bundle.firmware)?;
         self.recover_command_path_and_refresh_transport("firmware-activate-prep")?;
         self.activate_firmware_download(bundle.firmware)?;
@@ -16067,6 +16133,40 @@ impl SdioHost {
         Ok(())
     }
 
+    fn ensure_firmware_core_reset_clock(&mut self, stage: &'static str) -> Result<(), HalError> {
+        let target_clock_hz = firmware_core_reset_clock_target_hz(self.current_clock_hz);
+        if target_clock_hz == self.current_clock_hz {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=hold-core-reset-clock current={}Hz preferred={}Hz reason=linux-high-speed-before-armcr4-socram-reset",
+                self.current_clock_hz, self.preferred_data_clock_hz
+            ));
+            self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(self.current_clock_hz);
+            return Ok(());
+        }
+        if target_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ {
+            self.enable_sdio_high_speed_timing_for(stage)?;
+        }
+
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action={} request={}Hz from={}Hz preferred={}Hz reason=linux-high-speed-before-armcr4-socram-reset",
+            if target_clock_hz < self.current_clock_hz {
+                "lower-core-reset-clock"
+            } else {
+                "raise-core-reset-clock"
+            },
+            target_clock_hz,
+            self.current_clock_hz,
+            self.preferred_data_clock_hz
+        ));
+        let effective_hz = self.set_clock_hz(target_clock_hz)?;
+        self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(effective_hz);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=core-reset-clock-ready effective={}Hz",
+            effective_hz
+        ));
+        Ok(())
+    }
+
     fn enable_sdio_high_speed_timing_for(&mut self, stage: &'static str) -> Result<bool, HalError> {
         if self.card.is_none() {
             emit_breadcrumb(format_args!(
@@ -16104,6 +16204,46 @@ impl SdioHost {
             "[pi4-wifi] firmware stage={stage} action=sdio-high-speed-ready cccr_speed=0x{readback:02x}"
         ));
         Ok(true)
+    }
+
+    fn ensure_firmware_activation_clock(
+        &mut self,
+        stage: &'static str,
+        selected_bulk_clock_hz: u32,
+    ) -> Result<(), HalError> {
+        let target_clock_hz =
+            firmware_activation_clock_target_hz(self.current_clock_hz, selected_bulk_clock_hz);
+        if target_clock_hz == self.current_clock_hz {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=hold-activation-clock current={}Hz selected={}Hz preferred={}Hz reason=reset-vector-armcr4-release-clock",
+                self.current_clock_hz, selected_bulk_clock_hz, self.preferred_data_clock_hz
+            ));
+            self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(self.current_clock_hz);
+            return Ok(());
+        }
+        if target_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ {
+            self.enable_sdio_high_speed_timing_for(stage)?;
+        }
+
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action={} request={}Hz from={}Hz selected={}Hz preferred={}Hz reason=reset-vector-armcr4-release-clock",
+            if target_clock_hz < self.current_clock_hz {
+                "lower-activation-clock"
+            } else {
+                "raise-activation-clock"
+            },
+            target_clock_hz,
+            self.current_clock_hz,
+            selected_bulk_clock_hz,
+            self.preferred_data_clock_hz
+        ));
+        let effective_hz = self.set_clock_hz(target_clock_hz)?;
+        self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(effective_hz);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=activation-clock-ready effective={}Hz",
+            effective_hz
+        ));
+        Ok(())
     }
 
     fn ensure_post_download_ht_clock(
@@ -16644,6 +16784,21 @@ impl SdioHost {
         Ok(byte[0])
     }
 
+    fn core_ctrl_cmd52_current_window_read8(
+        &mut self,
+        base: u32,
+        offset: u32,
+    ) -> Result<u8, HalError> {
+        let addr = base.saturating_add(offset);
+        self.with_backplane_window_addr(
+            addr,
+            core_ctrl_current_window_addr(addr),
+            |this, bus_addr| {
+                this.io_direct_read_no_cmd53_fallback(SdioFunction::Function1, bus_addr)
+            },
+        )
+    }
+
     fn core_ctrl_fallback_write8_cmd52_rewindow(
         &mut self,
         base: u32,
@@ -16693,6 +16848,26 @@ impl SdioHost {
     }
 
     fn core_ctrl_postreset_read8(&mut self, base: u32, offset: u32) -> Result<u8, HalError> {
+        if core_ctrl_postreset_read_uses_cmd52_current_window(base, offset) {
+            return match self.core_ctrl_cmd52_current_window_read8(base, offset) {
+                Ok(value) => Ok(value),
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware core-ctrl fallback op=read8-postreset base=0x{base:08x} off=0x{offset:03x} from=cmd52-byte-current-window to=cmd52-byte-rewindow err={err}"
+                    ));
+                    self.recover_command_path("core-ctrl-postreset-cmd52-rewindow");
+                    match self.core_ctrl_cmd52_current_window_read8(base, offset) {
+                        Ok(value) => Ok(value),
+                        Err(fallback_err) => {
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware core-ctrl fallback op=read8-postreset base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                            ));
+                            Err(fallback_err)
+                        }
+                    }
+                }
+            };
+        }
         match self.core_ctrl_windowed_read8(base, offset) {
             Ok(value) => Ok(value),
             Err(err) => {
@@ -16720,6 +16895,30 @@ impl SdioHost {
                 }
             }
         }
+    }
+
+    fn core_ctrl_clear_reset_read8(&mut self, base: u32, offset: u32) -> Result<u8, HalError> {
+        if core_ctrl_clear_reset_read_uses_cmd52_current_window(base, offset) {
+            return match self.core_ctrl_cmd52_current_window_read8(base, offset) {
+                Ok(value) => Ok(value),
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware core-ctrl fallback op=read8-clear-reset base=0x{base:08x} off=0x{offset:03x} from=cmd52-byte-current-window to=cmd52-byte-rewindow err={err}"
+                    ));
+                    self.recover_command_path("core-ctrl-clear-reset-cmd52-rewindow");
+                    match self.core_ctrl_cmd52_current_window_read8(base, offset) {
+                        Ok(value) => Ok(value),
+                        Err(fallback_err) => {
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware core-ctrl fallback op=read8-clear-reset base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                            ));
+                            Err(fallback_err)
+                        }
+                    }
+                }
+            };
+        }
+        self.core_ctrl_read8(base, offset)
     }
 
     fn core_ctrl_write8(&mut self, base: u32, offset: u32, value: u8) -> Result<(), HalError> {
@@ -16965,6 +17164,25 @@ impl SdioHost {
                 ));
                 self.log_transport_shadow(stage);
                 return Err(err);
+            }
+        }
+    }
+
+    fn core_ctrl_clear_reset_read8_logged(
+        &mut self,
+        base: u32,
+        offset: u32,
+        stage: &'static str,
+    ) -> Result<u8, HalError> {
+        log_core_ctrl_clear_reset_read(base, offset);
+        match self.core_ctrl_clear_reset_read8(base, offset) {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl access stage={stage} op=read8-clear-reset err={err} base=0x{base:08x} off=0x{offset:03x}"
+                ));
+                self.log_transport_shadow(stage);
+                Err(err)
             }
         }
     }
@@ -17729,7 +17947,31 @@ impl SdioHost {
                 self.log_transport_shadow("core-reset-clear-read-deferred");
                 break;
             }
-            last_reset = self.core_ctrl_read8_logged(base, AI_RESETCTRL_OFFSET, "clear-reset")?;
+            last_reset = match self.core_ctrl_clear_reset_read8_logged(
+                base,
+                AI_RESETCTRL_OFFSET,
+                "clear-reset",
+            ) {
+                Ok(value) => value,
+                Err(err) => {
+                    if core_ctrl_can_defer_clear_reset_read_error(base, AI_RESETCTRL_OFFSET, &err) {
+                        last_reset = 0;
+                        cleared = true;
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-read-deferred reset=0x{last_reset:02x} attempts={attempts} err={err} reason={}",
+                            core_ctrl_clear_reset_read_deferred_reason(base),
+                        ));
+                        self.recover_command_path_preserve_window("core-reset-clear-read-deferred");
+                        self.log_transport_shadow("core-reset-clear-read-deferred");
+                        break;
+                    }
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-readback-error attempts={attempts} err={err} reason={}",
+                        core_ctrl_clear_reset_readback_error_reason(base),
+                    ));
+                    return Err(err);
+                }
+            };
             if (last_reset & AI_RESETCTRL_BIT_RESET) == 0 {
                 cleared = true;
                 break;
@@ -18701,8 +18943,9 @@ mod tests {
         experimental_control_plane_write_needs_post_write_rearm,
         experimental_control_plane_write_prefers_passive_startup_link_wait,
         experimental_function2_fifo_chunk_limit, experimental_no_ht_f2_fifo_chunk_limit,
-        firmware_bulk_clock_candidates, firmware_channel_uses_linux_minimal_setup,
-        firmware_channel_watermark, firmware_phase_can_retry, firmware_reset_vector,
+        firmware_activation_clock_target_hz, firmware_bulk_clock_candidates,
+        firmware_channel_uses_linux_minimal_setup, firmware_channel_watermark,
+        firmware_core_reset_clock_target_hz, firmware_phase_can_retry, firmware_reset_vector,
         firmware_upload_alp_clock_ready, firmware_upload_alp_clock_request_value, first_mismatch,
         ht_clock_assist_shadow_is_complete, ht_clock_request_value,
         ht_clock_retry_can_cutover_to_bounded_no_ht_early,
@@ -21722,14 +21965,36 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_postreset_read_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
+            "cmd52-byte-current-window retry=cmd52-byte-rewindow"
         );
-        assert!(!core_ctrl_postreset_read_uses_cmd52_current_window(
+        assert!(core_ctrl_postreset_read_uses_cmd52_current_window(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
         assert!(!core_ctrl_postreset_read_uses_cmd52_current_window(
             CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert_eq!(
+            core_ctrl_clear_reset_read_access_mode_label(
+                CYW43_ARMCR4_CORE_BASE,
+                AI_RESETCTRL_OFFSET
+            ),
+            "cmd52-byte-current-window retry=cmd52-byte-rewindow"
+        );
+        assert_eq!(
+            core_ctrl_clear_reset_read_access_mode_label(
+                CYW43_SOCRAM_CORE_BASE,
+                AI_RESETCTRL_OFFSET
+            ),
+            "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
+        );
+        assert!(core_ctrl_clear_reset_read_uses_cmd52_current_window(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_RESETCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_clear_reset_read_uses_cmd52_current_window(
+            CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
         assert_eq!(
@@ -21828,7 +22093,7 @@ mod tests {
             CYW43_SOCRAM_CORE_BASE,
             1,
         ));
-        assert!(core_ctrl_can_defer_clear_reset_readback(
+        assert!(!core_ctrl_can_defer_clear_reset_readback(
             CYW43_ARMCR4_CORE_BASE,
             0,
         ));
@@ -21836,6 +22101,38 @@ mod tests {
             CYW43_ARMCR4_CORE_BASE,
             1,
         ));
+        assert_eq!(
+            core_ctrl_clear_reset_readback_error_reason(CYW43_ARMCR4_CORE_BASE),
+            "armcr4-release-clear-reset-must-be-proven-before-ht"
+        );
+        assert_eq!(
+            core_ctrl_clear_reset_readback_error_reason(CYW43_SOCRAM_CORE_BASE),
+            "core-clear-reset-readback-required"
+        );
+        assert!(core_ctrl_can_defer_clear_reset_read_error(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            &HalError::Unsupported("sdio-cmd52-read"),
+        ));
+        assert!(core_ctrl_can_defer_clear_reset_read_error(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(!core_ctrl_can_defer_clear_reset_read_error(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            &HalError::Unsupported("sdio-cmd52-read"),
+        ));
+        assert!(!core_ctrl_can_defer_clear_reset_read_error(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            &HalError::Unsupported("sdio-cmd52-read"),
+        ));
+        assert_eq!(
+            core_ctrl_clear_reset_read_deferred_reason(CYW43_ARMCR4_CORE_BASE),
+            "armcr4-clear-reset-read-fragile-after-release"
+        );
         assert!(core_reset_can_skip_disable(CYW43_SOCRAM_CORE_BASE, 0, 0, 0,));
         assert!(!core_reset_needs_clear_reset_prewrite_settle(
             CYW43_SOCRAM_CORE_BASE,
@@ -26986,6 +27283,14 @@ mod tests {
             CYW43_CONTROL_PLANE_CLOCK_HZ
         );
         assert_eq!(
+            firmware_core_reset_clock_target_hz(CYW43_STARTUP_CLOCK_HZ),
+            CYW43_CONTROL_PLANE_CLOCK_HZ
+        );
+        assert_eq!(
+            firmware_core_reset_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ),
+            CYW43_FIRMWARE_BULK_CLOCK_HZ
+        );
+        assert_eq!(
             post_download_ht_clock_target_hz(400_000, CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ),
             CYW43_CONTROL_PLANE_CLOCK_HZ
         );
@@ -27000,6 +27305,21 @@ mod tests {
         assert_eq!(
             post_download_ht_clock_target_hz(200_000, 0),
             CYW43_CONTROL_PLANE_CLOCK_HZ
+        );
+        assert_eq!(
+            firmware_activation_clock_target_hz(400_000, CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ),
+            CYW43_CONTROL_PLANE_CLOCK_HZ
+        );
+        assert_eq!(
+            firmware_activation_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ / 4, 800_000),
+            CYW43_CONTROL_PLANE_CLOCK_HZ
+        );
+        assert_eq!(
+            firmware_activation_clock_target_hz(
+                CYW43_FIRMWARE_BULK_CLOCK_HZ,
+                CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ
+            ),
+            CYW43_FIRMWARE_BULK_CLOCK_HZ
         );
     }
 
