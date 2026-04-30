@@ -3166,6 +3166,152 @@ fn firmware_reset_vector(firmware: &[u8]) -> Result<u32, HalError> {
 }
 
 #[inline]
+fn firmware_release_checked_end(start: u32, len: usize) -> Option<u32> {
+    let len = u32::try_from(len).ok()?;
+    start.checked_add(len)
+}
+
+#[inline]
+fn firmware_release_upload_range_state(
+    ram_base: u32,
+    ram_size: u32,
+    firmware_len: usize,
+    nvram_offset: u32,
+) -> &'static str {
+    let Some(ram_end) = ram_base.checked_add(ram_size) else {
+        return "ram-range-overflow";
+    };
+    let Some(firmware_end) = firmware_release_checked_end(ram_base, firmware_len) else {
+        return "firmware-range-overflow";
+    };
+    if firmware_len == 0 {
+        "firmware-empty"
+    } else if firmware_end > ram_end {
+        "firmware-out-of-ram"
+    } else if firmware_end > nvram_offset {
+        "firmware-overlaps-nvram"
+    } else {
+        "upload-range-ok"
+    }
+}
+
+#[inline]
+fn firmware_release_nvram_tail_state(
+    ram_base: u32,
+    ram_size: u32,
+    nvram_offset: u32,
+    nvram_len: usize,
+    nvram_tail: u32,
+) -> &'static str {
+    let Some(ram_end) = ram_base.checked_add(ram_size) else {
+        return "ram-range-overflow";
+    };
+    let Some(nvram_end) = firmware_release_checked_end(nvram_offset, nvram_len) else {
+        return "nvram-range-overflow";
+    };
+    let Some(tail_end) = nvram_tail.checked_add(4) else {
+        return "tail-range-overflow";
+    };
+    if nvram_offset < ram_base || nvram_end > ram_end {
+        "nvram-out-of-ram"
+    } else if nvram_end != nvram_tail {
+        "nvram-tail-gap"
+    } else if tail_end != ram_end {
+        "tail-not-at-ram-end"
+    } else {
+        "nvram-tail-ok"
+    }
+}
+
+#[inline]
+const fn firmware_reset_vector_state(reset_vector: u32) -> &'static str {
+    if reset_vector == 0 {
+        "zero-vector-linux-skip"
+    } else {
+        "reset-vector-programmed"
+    }
+}
+
+#[inline]
+const fn armcr4_release_ioctrl_value() -> u8 {
+    AI_CORE_POSTRESET_IOCTRL
+}
+
+#[inline]
+const fn firmware_cpuhalt_release_state(ioctrl: u8, resetctrl: u8) -> &'static str {
+    if (resetctrl & AI_RESETCTRL_BIT_RESET) != 0 {
+        "reset-still-held"
+    } else if (ioctrl & ARMCR4_BCMA_IOCTL_CPUHALT) != 0 {
+        "cpuhalt-still-set"
+    } else if ai_core_is_up(ioctrl, resetctrl) {
+        "cpuhalt-clear-core-up"
+    } else {
+        "cpuhalt-clear-unexpected-io"
+    }
+}
+
+#[inline]
+const fn firmware_chipclkcsr_state(chipclkcsr: Option<u8>) -> &'static str {
+    match chipclkcsr {
+        Some(value) if (value & SBSDIO_HT_AVAIL) != 0 => "ht-avail",
+        Some(value) if (value & SBSDIO_HT_AVAIL_REQ) != 0 => "ht-requested-not-avail",
+        Some(value) if (value & SBSDIO_ALP_AVAIL) != 0 => "alp-only",
+        Some(_) => "chipclkcsr-no-clock-proof",
+        None => "chipclkcsr-unread",
+    }
+}
+
+#[inline]
+const fn firmware_wakeupctrl_state(wakeupctrl: Option<u8>) -> &'static str {
+    match wakeupctrl {
+        Some(value) if (value & SBSDIO_WAKE_TILL_HT_AVAIL) != 0 => "htwait-set",
+        Some(_) => "htwait-clear",
+        None => "wakeupctrl-unread",
+    }
+}
+
+#[inline]
+const fn firmware_sleepcsr_state(sleepcsr: Option<u8>) -> &'static str {
+    match sleepcsr {
+        Some(value) if sleepcsr_device_on_awake(value) => "kso-devon",
+        Some(value) if sleepcsr_kso_acknowledged(value) => "kso-only",
+        Some(_) => "kso-clear",
+        None => "sleepcsr-unread",
+    }
+}
+
+#[inline]
+const fn firmware_cardcap_state(cardcap: Option<u8>) -> &'static str {
+    match cardcap {
+        Some(value) if value == cyw43455_cardcap_command_decode_value() => "cmd14-decode-ok",
+        Some(_) => "cmd14-decode-mismatch",
+        None => "cardcap-unread",
+    }
+}
+
+#[inline]
+fn firmware_release_precondition_state(
+    upload_state: &'static str,
+    nvram_tail_state: &'static str,
+    cpuhalt_state: &'static str,
+    chipclkcsr: Option<u8>,
+) -> &'static str {
+    if upload_state != "upload-range-ok" {
+        upload_state
+    } else if nvram_tail_state != "nvram-tail-ok" {
+        nvram_tail_state
+    } else if cpuhalt_state != "cpuhalt-clear-core-up" {
+        cpuhalt_state
+    } else if chipclkcsr.is_some_and(function2_has_required_ht_clock) {
+        "ready-for-function2-ht"
+    } else if chipclkcsr.is_some() {
+        "chipclkcsr-ht-missing"
+    } else {
+        "chipclkcsr-unreadable"
+    }
+}
+
+#[inline]
 const fn sdio_function_contract_state_label(
     io_enable: Option<u8>,
     io_ready: Option<u8>,
@@ -7336,7 +7482,71 @@ impl SdioHost {
         ));
     }
 
-    fn log_post_release_proof_tuple(&self, reset_vector: u32, upload_clock_hz: u32) {
+    fn log_post_release_proof_tuple(
+        &self,
+        ram_base: u32,
+        ram_size: u32,
+        firmware_len: usize,
+        nvram_offset: u32,
+        nvram_len: usize,
+        nvram_tail: u32,
+        nvram_magic: u32,
+        reset_vector: u32,
+        upload_clock_hz: u32,
+    ) {
+        let firmware_end = firmware_release_checked_end(ram_base, firmware_len).unwrap_or(0);
+        let nvram_end = firmware_release_checked_end(nvram_offset, nvram_len).unwrap_or(0);
+        let tail_end = nvram_tail.checked_add(4).unwrap_or(0);
+        let upload_state =
+            firmware_release_upload_range_state(ram_base, ram_size, firmware_len, nvram_offset);
+        let nvram_tail_state = firmware_release_nvram_tail_state(
+            ram_base,
+            ram_size,
+            nvram_offset,
+            nvram_len,
+            nvram_tail,
+        );
+        let reset_vector_state = firmware_reset_vector_state(reset_vector);
+        let release_ioctrl = armcr4_release_ioctrl_value();
+        let release_resetctrl = 0;
+        let cpuhalt_state = firmware_cpuhalt_release_state(release_ioctrl, release_resetctrl);
+        let chipclk_state = firmware_chipclkcsr_state(self.last_chipclkcsr);
+        let wake_state = firmware_wakeupctrl_state(self.last_wakeupctrl);
+        let sleep_state = firmware_sleepcsr_state(self.last_sleepcsr);
+        let cardcap_state = firmware_cardcap_state(self.last_cardcap);
+        let precondition_state = firmware_release_precondition_state(
+            upload_state,
+            nvram_tail_state,
+            cpuhalt_state,
+            self.last_chipclkcsr,
+        );
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=post-release-proof boundary=post-armcr4-release upload=0x{ram_base:08x}..0x{firmware_end:08x}/{} state={upload_state} nvram=0x{nvram_offset:08x}..0x{nvram_end:08x}/{} tail=0x{nvram_tail:08x}..0x{tail_end:08x} magic=0x{nvram_magic:08x} state={nvram_tail_state}",
+            firmware_len,
+            nvram_len,
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=post-release-proof boundary=post-armcr4-release rstvec_addr=0x{addr:08x} rstvec=0x{reset_vector:08x} rstvec_state={reset_vector_state} cpuhalt_release=0x{release_ioctrl:02x} reset=0x{release_resetctrl:02x} cpuhalt_state={cpuhalt_state} verified={} attempts={} upload_clock={}Hz current_clock={}Hz preferred_clock={}Hz width={}",
+            yn(self.firmware_download_verified),
+            self.armcr4_release_attempts,
+            upload_clock_hz,
+            self.current_clock_hz,
+            self.preferred_data_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            addr = CYW43_FIRMWARE_RESET_VECTOR_ADDR,
+        ));
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=post-release-proof boundary=post-armcr4-release chipclk=0x{chipclk:02x}/{chipclk_set}/{chipclk_state} wake=0x{wake:02x}/{wake_set}/{wake_state} sleep=0x{sleep:02x}/{sleep_set}/{sleep_state} cardcap=0x{cardcap:02x}/{cardcap_set}/{cardcap_state} precondition={precondition_state} window=0x{window:08x}",
+            chipclk = self.last_chipclkcsr.unwrap_or(0),
+            chipclk_set = yn(self.last_chipclkcsr.is_some()),
+            wake = self.last_wakeupctrl.unwrap_or(0),
+            wake_set = yn(self.last_wakeupctrl.is_some()),
+            sleep = self.last_sleepcsr.unwrap_or(0),
+            sleep_set = yn(self.last_sleepcsr.is_some()),
+            cardcap = self.last_cardcap.unwrap_or(0),
+            cardcap_set = yn(self.last_cardcap.is_some()),
+            window = self.last_backplane_window.unwrap_or(0),
+        ));
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=post-release-proof rstvec=0x{reset_vector:08x} verified={} attempts={} upload={}Hz current={}Hz width={} proof=core-reset-verify-log",
             yn(self.firmware_download_verified),
@@ -15362,7 +15572,17 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=armcr4-core-up action=skip-readback reason=linux-release-path"
         ));
-        self.log_post_release_proof_tuple(reset_vector, selected_bulk_clock_hz);
+        self.log_post_release_proof_tuple(
+            ram_base,
+            ram_size,
+            bundle.firmware.len(),
+            nvram_offset,
+            nvram.len(),
+            nvram_tail,
+            nvram_magic,
+            reset_vector,
+            selected_bulk_clock_hz,
+        );
         self.ensure_post_download_ht_clock("wait-ht-clock-prep", selected_bulk_clock_hz)?;
         let strict_ht_ready =
             self.require_ht_clock_ready("wait-ht-clock", "wait-ht-clock assist")?;
@@ -19042,6 +19262,47 @@ mod tests {
     }
 
     #[test]
+    fn firmware_release_proof_validates_upload_nvram_and_cpuhalt_edges() {
+        let ram_base = CYW43_RAM_BASE_4345;
+        let ram_size = 0x0008_0000;
+        let nvram_tail = ram_base + ram_size - 4;
+        let nvram_len = 1_744usize;
+        let nvram_offset = nvram_tail - u32::try_from(nvram_len).expect("nvram len fits u32");
+
+        assert_eq!(
+            firmware_release_checked_end(ram_base, 4096),
+            Some(ram_base + 4096)
+        );
+        assert_eq!(
+            firmware_release_upload_range_state(ram_base, ram_size, 4096, nvram_offset),
+            "upload-range-ok"
+        );
+        assert_eq!(
+            firmware_release_nvram_tail_state(
+                ram_base,
+                ram_size,
+                nvram_offset,
+                nvram_len,
+                nvram_tail,
+            ),
+            "nvram-tail-ok"
+        );
+        assert_eq!(
+            firmware_cpuhalt_release_state(armcr4_release_ioctrl_value(), 0),
+            "cpuhalt-clear-core-up"
+        );
+        assert_eq!(
+            firmware_release_precondition_state(
+                "upload-range-ok",
+                "nvram-tail-ok",
+                "cpuhalt-clear-core-up",
+                Some(SBSDIO_HT_AVAIL | SBSDIO_HT_AVAIL_REQ),
+            ),
+            "ready-for-function2-ht"
+        );
+    }
+
+    #[test]
     fn cmd_flags_encode_expected_response_modes() {
         assert_eq!(make_command(5, ResponseType::None, false) & 0x3F, 0);
         let cmd5 = make_command(5, ResponseType::Ocr, false);
@@ -19305,6 +19566,116 @@ mod tests {
                 SDIO_FUNC_READY_2,
             ),
             "enabled-not-ready"
+        );
+    }
+
+    #[test]
+    fn post_release_proof_labels_upload_and_nvram_tail_layout() {
+        let ram_base = CYW43_RAM_BASE_4345;
+        let ram_size = 0x1000;
+        let firmware_len = 0x400;
+        let nvram_offset = ram_base + 0x800;
+        let nvram_len = 0x7fc;
+        let nvram_tail = ram_base + ram_size - 4;
+
+        assert_eq!(
+            firmware_release_checked_end(ram_base, firmware_len),
+            Some(ram_base + firmware_len as u32)
+        );
+        assert_eq!(
+            firmware_release_upload_range_state(ram_base, ram_size, firmware_len, nvram_offset),
+            "upload-range-ok"
+        );
+        assert_eq!(
+            firmware_release_nvram_tail_state(
+                ram_base,
+                ram_size,
+                nvram_offset,
+                nvram_len,
+                nvram_tail,
+            ),
+            "nvram-tail-ok"
+        );
+        assert_eq!(
+            firmware_release_upload_range_state(ram_base, ram_size, 0x900, nvram_offset),
+            "firmware-overlaps-nvram"
+        );
+        assert_eq!(
+            firmware_release_nvram_tail_state(
+                ram_base,
+                ram_size,
+                nvram_offset,
+                nvram_len - 4,
+                nvram_tail,
+            ),
+            "nvram-tail-gap"
+        );
+    }
+
+    #[test]
+    fn post_release_proof_labels_cpuhalt_and_sideband_state() {
+        let release_ioctrl = armcr4_release_ioctrl_value();
+        assert_eq!(release_ioctrl, AI_CORE_POSTRESET_IOCTRL);
+        assert_eq!(
+            firmware_cpuhalt_release_state(release_ioctrl, 0),
+            "cpuhalt-clear-core-up"
+        );
+        assert_eq!(
+            firmware_cpuhalt_release_state(release_ioctrl | ARMCR4_BCMA_IOCTL_CPUHALT, 0),
+            "cpuhalt-still-set"
+        );
+        assert_eq!(
+            firmware_cpuhalt_release_state(release_ioctrl, AI_RESETCTRL_BIT_RESET),
+            "reset-still-held"
+        );
+        assert_eq!(
+            firmware_reset_vector_state(0x1234_5678),
+            "reset-vector-programmed"
+        );
+        assert_eq!(firmware_reset_vector_state(0), "zero-vector-linux-skip");
+        assert_eq!(
+            firmware_chipclkcsr_state(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL)),
+            "ht-requested-not-avail"
+        );
+        assert_eq!(
+            firmware_chipclkcsr_state(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL)),
+            "ht-avail"
+        );
+        assert_eq!(
+            firmware_wakeupctrl_state(Some(SBSDIO_WAKE_TILL_HT_AVAIL)),
+            "htwait-set"
+        );
+        assert_eq!(
+            firmware_sleepcsr_state(Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK)),
+            "kso-only"
+        );
+        assert_eq!(
+            firmware_sleepcsr_state(Some(
+                SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK,
+            )),
+            "kso-devon"
+        );
+        assert_eq!(
+            firmware_cardcap_state(Some(cyw43455_cardcap_command_decode_value())),
+            "cmd14-decode-ok"
+        );
+        assert_eq!(
+            firmware_release_precondition_state(
+                "upload-range-ok",
+                "nvram-tail-ok",
+                "cpuhalt-clear-core-up",
+                Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+            ),
+            "chipclkcsr-ht-missing"
+        );
+        assert_eq!(
+            firmware_release_precondition_state(
+                "upload-range-ok",
+                "nvram-tail-ok",
+                "cpuhalt-clear-core-up",
+                Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL),
+            ),
+            "ready-for-function2-ht"
         );
     }
 

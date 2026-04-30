@@ -252,9 +252,13 @@ const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
 // a real ECAM aperture.
 const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = false;
 // BCM2711 external-config reads use the same EXT_CFG_INDEX/DATA register pair
-// as Linux/U-Boot. The path is enabled only behind the early HAL-owned PCIe
-// bridge + VL805 INTx sink install in `prepare_vl805_pci_bcm2711`.
-const VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED: bool = true;
+// as Linux/U-Boot. Keep live replay opt-in for lab builds: the default USB
+// path uses the Linux capture only as a static witness and must not touch
+// EXT_CFG before the board trace proves that edge safe under seL4.
+const VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN: bool = false;
+const VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED: bool =
+    VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN;
+const VL805_LINUX_CAPTURE_CFG_WITNESS_ENABLED: bool = true;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Vl805CfgPreseedMode {
@@ -362,6 +366,8 @@ static XHCI_DIAG_LAST_A: AtomicUsize = AtomicUsize::new(0);
 static XHCI_DIAG_LAST_B: AtomicUsize = AtomicUsize::new(0);
 static XHCI_DIAG_LAST_C: AtomicUsize = AtomicUsize::new(0);
 static VL805_CFG_VIRT: AtomicUsize = AtomicUsize::new(0);
+const VL805_CFG_COMMAND_SHADOW_VALID: u32 = 1 << 31;
+static VL805_CFG_COMMAND_SHADOW: AtomicU32 = AtomicU32::new(0);
 static VL805_XHCI_MMIO_HINT: AtomicUsize = AtomicUsize::new(0);
 static LATEST_USB_PROBE_ROUTE: Mutex<Option<UsbProbePathwaySummary>> = Mutex::new(None);
 static RETAINED_XHCI_IRQ_GUARD: Mutex<Option<XhciIrqGuard>> = Mutex::new(None);
@@ -1158,15 +1164,22 @@ const fn vl805_command_ownership_ready(command: u16) -> bool {
 fn usb_ownership_cfg_window_contract() -> (&'static str, &'static str, &'static str, bool) {
     let cfg_window_present = current_vl805_cfg_virt().is_some();
     let cfg_pinned = PINNED_VL805_CFG.lock().is_some();
-    let cfg_replay_ready = vl805_runtime_cfg_replay_ready(
-        VL805_CFG_RUNTIME_TOUCH_ENABLED,
-        VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED,
-        cfg_window_present,
-    );
+    let capture_witness = vl805_linux_capture_cfg_witness_available();
+    let capture_replay_ready = vl805_capture_cfg_witness_ready();
+    let cfg_replay_ready = capture_replay_ready
+        || vl805_runtime_cfg_replay_ready(
+            VL805_CFG_RUNTIME_TOUCH_ENABLED,
+            VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED,
+            cfg_window_present,
+        );
     let cfg_window = if cfg_window_present {
         "mapped"
+    } else if capture_replay_ready {
+        "linux-capture-witness"
     } else if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
         "bcm2711-ext-gated"
+    } else if capture_witness {
+        "capture-witness"
     } else if !VL805_ECAM_BASE_CANDIDATES.is_empty() {
         "ecam-candidate-gated"
     } else {
@@ -1176,15 +1189,23 @@ fn usb_ownership_cfg_window_contract() -> (&'static str, &'static str, &'static 
         "pinned-ecam"
     } else if cfg_window_present {
         "runtime-mapped"
+    } else if capture_replay_ready {
+        "linux-capture-replay"
     } else if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
         "bcm2711-ext-cfg"
+    } else if capture_witness {
+        "linux-capture-static"
     } else if !VL805_ECAM_BASE_CANDIDATES.is_empty() {
         "ecam-candidates"
     } else {
         "none"
     };
-    let cfg_writes = if cfg_replay_ready || VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
+    let cfg_writes = if capture_replay_ready {
+        "capture-backed"
+    } else if cfg_replay_ready || VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
         "enabled"
+    } else if capture_witness {
+        "disabled-capture-witness"
     } else {
         "disabled-safe-mode"
     };
@@ -1197,6 +1218,8 @@ fn usb_ownership_command_contract(xhci_pci_cmd: Option<u16>) -> (Option<u16>, &'
         (Some(command), "bootloader-handoff")
     } else if let Some(command) = vl805_cfg_command() {
         (Some(command), "runtime-mapped")
+    } else if let Some(command) = current_vl805_cfg_command_shadow() {
+        (Some(command), "linux-capture-replay")
     } else if linux_captured_vl805_cfg_matches_high_bar() {
         (Some(RPI4_VL805_LINUX_COMMAND), "linux-capture-static")
     } else if current_vl805_cfg_virt().is_some() {
@@ -1216,7 +1239,12 @@ fn usb_ownership_bar0_contract(
     xhci_irq_quiesced: bool,
 ) -> (Option<usize>, &'static str) {
     if let Some(mmio) = current_vl805_xhci_mmio_hint() {
-        return (Some(mmio), "vl805-cfg-verified");
+        let source = if current_vl805_cfg_virt().is_none() && vl805_capture_cfg_witness_ready() {
+            "linux-capture-replay"
+        } else {
+            "vl805-cfg-verified"
+        };
+        return (Some(mmio), source);
     }
     if let Some(mmio) = xhci_mmio_hint {
         let source = if xhci_firmware_handoff_cold_start_trusted(
@@ -1307,7 +1335,7 @@ fn usb_ownership_next_step_label(
             if mailbox_required && !mailbox_reset_completed {
                 "mailbox-reset-notify-then-pollsafe-skip"
             } else {
-                "supply-safe-pcie-config-window-or-stay-pollsafe"
+                "enable-live-ext-cfg-or-stay-pollsafe"
             }
         }
         "vl805-command-replay-missing" => "export-vl805-command-ready",
@@ -2179,6 +2207,29 @@ fn pinned_xhci_phys_state() -> Option<(usize, bool)> {
         .map(|window| (window.phys_start, window.trusted_for_runtime))
 }
 
+fn promote_pinned_xhci_mmio_window_trusted(phys_start: usize, min_length: usize) -> bool {
+    let mut pinned = PINNED_XHCI_MMIO.lock();
+    let Some(window) = pinned.as_mut() else {
+        return false;
+    };
+    if window.phys_start != phys_start || window.length < min_length {
+        return false;
+    }
+    if !window.trusted_for_runtime {
+        window.trusted_for_runtime = true;
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci preseed trust-promote mmio=0x{phys_start:016x} bytes=0x{bytes:05x} source=linux-capture-replay",
+                bytes = window.length,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+    }
+    true
+}
+
 fn pinned_vl805_cfg_lookup(phys: usize, size: usize) -> Option<usize> {
     if size == 0 {
         return None;
@@ -2249,8 +2300,31 @@ fn vl805_cfg_command() -> Option<u16> {
 }
 
 #[inline]
+fn remember_vl805_cfg_command_shadow(command: u16) {
+    VL805_CFG_COMMAND_SHADOW.store(
+        VL805_CFG_COMMAND_SHADOW_VALID | u32::from(command),
+        Ordering::Release,
+    );
+}
+
+#[inline]
+fn current_vl805_cfg_command_shadow() -> Option<u16> {
+    let value = VL805_CFG_COMMAND_SHADOW.load(Ordering::Acquire);
+    if (value & VL805_CFG_COMMAND_SHADOW_VALID) == 0 {
+        None
+    } else {
+        Some((value & 0xffff) as u16)
+    }
+}
+
+#[inline]
+fn vl805_effective_cfg_command() -> Option<u16> {
+    vl805_cfg_command().or_else(current_vl805_cfg_command_shadow)
+}
+
+#[inline]
 fn vl805_cfg_bus_master_ready() -> bool {
-    let Some(command) = vl805_cfg_command() else {
+    let Some(command) = vl805_effective_cfg_command() else {
         return false;
     };
     (command & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER))
@@ -2531,15 +2605,15 @@ fn xhci_cohesix_owned_bcm2711_ext_cfg_source(
     mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
         && vl805_pci_mmio == Some(mmio)
         && pci_cfg_ready
-        && VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED
+        && (VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED || vl805_capture_cfg_witness_ready())
 }
 
 #[inline]
 const fn xhci_runtime_vl805_mailbox_reset_pci_replay_ready(
-    runtime_cfg_touch_enabled: bool,
+    runtime_cfg_replay_enabled: bool,
     pci_cfg_ready: bool,
 ) -> bool {
-    runtime_cfg_touch_enabled && pci_cfg_ready
+    runtime_cfg_replay_enabled && pci_cfg_ready
 }
 
 #[inline]
@@ -2781,6 +2855,32 @@ fn linux_captured_vl805_cfg_matches_high_bar() -> bool {
         && translate_vl805_pci_bar_to_cpu_mmio(snapshot.bar0, snapshot.bar1)
             == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
         && snapshot.bar_mmio == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+}
+
+fn vl805_linux_capture_cfg_witness_available() -> bool {
+    VL805_LINUX_CAPTURE_CFG_WITNESS_ENABLED && linux_captured_vl805_cfg_matches_high_bar()
+}
+
+#[inline]
+fn vl805_capture_cfg_witness_contract_ready(
+    capture_witness_available: bool,
+    xhci_mmio_hint: Option<usize>,
+    trusted_xhci_window: bool,
+    command: Option<u16>,
+) -> bool {
+    capture_witness_available
+        && xhci_mmio_hint == Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+        && trusted_xhci_window
+        && command.is_some_and(vl805_command_ownership_ready)
+}
+
+fn vl805_capture_cfg_witness_ready() -> bool {
+    vl805_capture_cfg_witness_contract_ready(
+        vl805_linux_capture_cfg_witness_available(),
+        current_vl805_xhci_mmio_hint(),
+        pinned_xhci_window_lookup_trusted(RPI4_XHCI_MMIO_HIGH_CANDIDATE, PAGE_SIZE).is_some(),
+        current_vl805_cfg_command_shadow(),
+    )
 }
 
 fn xhci_cohesix_owned_linux_capture_source(
@@ -4417,7 +4517,7 @@ const fn xhci_runtime_init_strategy_skips_runtime_publication_entry(
 
 #[inline]
 fn xhci_fresh_runtime_ownership_ready(pci_cfg_ready: bool) -> bool {
-    pci_cfg_ready && vl805_cfg_command().is_some_and(vl805_command_ownership_ready)
+    pci_cfg_ready && vl805_effective_cfg_command().is_some_and(vl805_command_ownership_ready)
 }
 
 #[inline]
@@ -6534,6 +6634,89 @@ fn ensure_vl805_config_replay_irq_sinks(hal: &mut KernelHal<'_>) -> bool {
     }
 }
 
+fn ensure_capture_backed_xhci_pin(hal: &mut KernelHal<'_>, mmio: usize) -> bool {
+    if pinned_xhci_window_lookup_trusted(mmio, PAGE_SIZE).is_some() {
+        return true;
+    }
+    if promote_pinned_xhci_mmio_window_trusted(mmio, XHCI_MMIO_INIT_BYTES) {
+        return true;
+    }
+    match pin_xhci_mmio_window(hal, mmio, XHCI_MMIO_PRESEED_BYTES_FALLBACK, true) {
+        Ok(()) => {
+            let mut line = heapless::String::<208>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 capture cfg xhci-pin mmio=0x{mmio:016x} bytes=0x{bytes:05x} trusted=1",
+                    bytes = XHCI_MMIO_PRESEED_BYTES_FALLBACK,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            true
+        }
+        Err(_) => {
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 capture cfg witness skipped mmio=0x{mmio:016x} reason=xhci-pin-failed"
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            false
+        }
+    }
+}
+
+fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
+    if !vl805_linux_capture_cfg_witness_available() {
+        return None;
+    }
+    let snapshot = linux_captured_vl805_pci_cfg_snapshot();
+    let Some(mmio) = snapshot.bar_mmio else {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 capture cfg witness skipped reason=no-mmio-bar",
+        );
+        return None;
+    };
+    if !xhci_mmio_candidate_valid(mmio) || mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 capture cfg witness skipped mmio=0x{mmio:016x} reason=unexpected-bar"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return None;
+    }
+    if !ensure_vl805_config_replay_irq_sinks(hal) {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 capture cfg witness skipped reason=pcie-sinks-unavailable",
+        );
+        return None;
+    }
+    if !ensure_capture_backed_xhci_pin(hal, mmio) {
+        return None;
+    }
+    remember_vl805_cfg_command_shadow(snapshot.command);
+    let selected = record_vl805_xhci_mmio_hint(&snapshot, "linux-capture-replay")?;
+    let mut line = heapless::String::<320>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 capture cfg witness selected source=linux-capture-static live_ext_cfg=disabled vid:did={vendor:08x} class=0x{class:08x} cmd=0x{cmd:04x} bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{selected:016x}",
+            vendor = snapshot.vendor_device,
+            class = snapshot.class_revision,
+            cmd = snapshot.command,
+            bar0 = snapshot.bar0,
+            bar1 = snapshot.bar1,
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    Some(selected)
+}
+
 fn prepare_vl805_pci_bcm2711(
     hal: &mut KernelHal<'_>,
     prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
@@ -6702,6 +6885,9 @@ fn prepare_vl805_pci_bcm2711(
 
 fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
     let mut prefix_maps = Vec::new();
+    if let Some(mmio) = prepare_vl805_pci_capture_witness(hal) {
+        return Some(mmio);
+    }
     if let Some(mmio) = prepare_vl805_pci_bcm2711(hal, &mut prefix_maps) {
         return Some(mmio);
     }
@@ -7340,6 +7526,8 @@ impl UsbKeyboard {
         let runtime_cfg_touch_enabled =
             vl805_runtime_cfg_touch_allowed(VL805_CFG_RUNTIME_TOUCH_ENABLED, cfg_window_present)
                 || VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED;
+        let capture_cfg_witness_enabled = vl805_linux_capture_cfg_witness_available();
+        let runtime_cfg_replay_enabled = runtime_cfg_touch_enabled || capture_cfg_witness_enabled;
         if runtime_cfg_touch_enabled {
             if cfg_window_present {
                 boot_log::force_uart_line("[local-seat] vl805 cfg present stage=usb-init-entry");
@@ -7356,11 +7544,15 @@ impl UsbKeyboard {
                     "[local-seat] vl805 pci cfg runtime preflight skipped reason=no-safe-cfg-window",
                 );
             }
+        } else if capture_cfg_witness_enabled {
+            boot_log::force_uart_line(
+                "[local-seat] vl805 cfg probe stage=usb-init-entry source=linux-capture-witness live_ext_cfg=disabled",
+            );
         } else if !VL805_CFG_SAFE_MODE_LOGGED.swap(true, Ordering::AcqRel) {
             boot_log::force_uart_line("[local-seat] vl805 pci cfg touch disabled (safe-mode)");
         }
 
-        let (vl805_pci_mmio, pci_cfg_ready) = if runtime_cfg_touch_enabled {
+        let (vl805_pci_mmio, pci_cfg_ready) = if runtime_cfg_replay_enabled {
             let vl805_pci_mmio = prepare_vl805_pci(hal);
             if vl805_pci_mmio.is_none() {
                 boot_log::force_uart_line("[local-seat] vl805 pci preflight=none");
@@ -7368,7 +7560,7 @@ impl UsbKeyboard {
             let pci_cfg_ready = vl805_cfg_bus_master_ready();
             if !pci_cfg_ready {
                 let mut line = heapless::String::<192>::new();
-                let command = vl805_cfg_command().unwrap_or(0);
+                let command = vl805_effective_cfg_command().unwrap_or(0);
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
@@ -7389,7 +7581,7 @@ impl UsbKeyboard {
         let has_safe_cfg_window = current_vl805_cfg_virt().is_some();
         let runtime_vl805_reset_pci_replay_ready =
             xhci_runtime_vl805_mailbox_reset_pci_replay_ready(
-                runtime_cfg_touch_enabled,
+                runtime_cfg_replay_enabled,
                 pci_cfg_ready,
             );
         let firmware_hint_safe = xhci_firmware_handoff_safe(xhci_pci_cmd);
@@ -7481,8 +7673,8 @@ impl UsbKeyboard {
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime action=skip-mailbox-notify reason=pci-config-replay-unavailable cfg_touch={} cfg_window={} pci_cfg_ready={}",
-                    runtime_cfg_touch_enabled as u8,
+                    "[local-seat] vl805 reset handoff=bootloader-owned stage=runtime action=skip-mailbox-notify reason=pci-config-replay-unavailable cfg_replay={} cfg_window={} pci_cfg_ready={}",
+                    runtime_cfg_replay_enabled as u8,
                     has_safe_cfg_window as u8,
                     pci_cfg_ready as u8,
                 ),
@@ -7598,7 +7790,7 @@ impl UsbKeyboard {
                 format_args!(
                     "[local-seat] xhci runtime trust source=cohesix-owned-vl805-pcie mmio=0x{mmio:016x} cmd=0x{cmd:04x} irq=poll-only",
                     mmio = RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-                    cmd = vl805_cfg_command().unwrap_or(0),
+                    cmd = vl805_effective_cfg_command().unwrap_or(0),
                 ),
             );
             boot_log::force_uart_line(line.as_str());
@@ -13202,10 +13394,10 @@ mod tests {
         parse_xhci_capbase, runtime_vl805_mailbox_reset_allows_trusted_cold_init,
         runtime_vl805_mailbox_reset_error_allows_cold_init, text_backspace_target, text_row_count,
         text_viewport_height, translate_bcm2711_soc_reg_addr, translate_vl805_pci_bar_to_cpu_mmio,
-        usb_probe_preflight_next_step_for_source, vl805_cfg_preseed_mode, vl805_cfg_preseed_needed,
-        vl805_runtime_cfg_replay_ready, vl805_runtime_cfg_touch_allowed,
-        xhci_connected_mask_from_portsc, xhci_controller_params_from_probe,
-        xhci_controller_params_from_probe_with_strategy,
+        usb_probe_preflight_next_step_for_source, vl805_capture_cfg_witness_contract_ready,
+        vl805_cfg_preseed_mode, vl805_cfg_preseed_needed, vl805_runtime_cfg_replay_ready,
+        vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
+        xhci_controller_params_from_probe, xhci_controller_params_from_probe_with_strategy,
         xhci_controller_skips_constructor_live_scrub,
         xhci_controller_skips_initial_live_operational_reads, xhci_diag_stage_label,
         xhci_diag_stage_value_labels, xhci_firmware_handoff_hint_reason, xhci_irq_policy_reason,
@@ -13230,7 +13422,7 @@ mod tests {
         XhciIrqSinkMode, XhciRuntimeInitStrategy, HUB_PORT_IFACE_FALLBACK_MAX,
         PI4_GENERIC_VTIMER_IRQ, PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ,
         RPI4_PCIE_BUS_MMIO_WINDOW_BASE, RPI4_VL805_LINUX_BAR0, RPI4_VL805_LINUX_BAR1,
-        RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+        RPI4_VL805_LINUX_COMMAND, RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
         TRUSTED_XHCI_IRQ_BINDING_LIMIT, TRUSTED_XHCI_PCIE_SINK_IRQS,
         XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE, XHCI_MMIO_ALIAS_SCAN_STEPS,
         XHCI_PRE_CONTROLLER_VTIMER_SHADOW_ENABLED, XHCI_VL805_PCIE_IRQ_SINK_ENABLED,
@@ -14230,9 +14422,9 @@ mod tests {
             status.expected_diag_tag,
             Some("fw-handoff-skip-pre-quiesce")
         );
-        assert_eq!(status.ownership.cfg_window, "bcm2711-ext-gated");
-        assert_eq!(status.ownership.cfg_source, "bcm2711-ext-cfg");
-        assert_eq!(status.ownership.cfg_writes, "enabled");
+        assert_eq!(status.ownership.cfg_window, "capture-witness");
+        assert_eq!(status.ownership.cfg_source, "linux-capture-static");
+        assert_eq!(status.ownership.cfg_writes, "disabled-capture-witness");
         assert!(!status.ownership.cfg_replay_ready);
         assert_eq!(
             status.ownership.command,
@@ -14272,9 +14464,9 @@ mod tests {
         assert_eq!(status.route, "trusted-high-bar-primary");
         assert_eq!(status.ownership.bar0, Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE));
         assert_eq!(status.ownership.bar0_source, "linux-capture-static");
-        assert_eq!(status.ownership.cfg_window, "bcm2711-ext-gated");
-        assert_eq!(status.ownership.cfg_source, "bcm2711-ext-cfg");
-        assert_eq!(status.ownership.cfg_writes, "enabled");
+        assert_eq!(status.ownership.cfg_window, "capture-witness");
+        assert_eq!(status.ownership.cfg_source, "linux-capture-static");
+        assert_eq!(status.ownership.cfg_writes, "disabled-capture-witness");
         assert_eq!(
             status.ownership.blocker,
             "pcie-vl805-config-contract-missing"
@@ -14594,9 +14786,9 @@ mod tests {
             false,
         );
         assert_eq!(status.blocker, "pcie-vl805-config-contract-missing",);
-        assert_eq!(status.cfg_window, "bcm2711-ext-gated");
-        assert_eq!(status.cfg_source, "bcm2711-ext-cfg");
-        assert_eq!(status.cfg_writes, "enabled");
+        assert_eq!(status.cfg_window, "capture-witness");
+        assert_eq!(status.cfg_source, "linux-capture-static");
+        assert_eq!(status.cfg_writes, "disabled-capture-witness");
         assert!(!status.cfg_replay_ready);
         assert_eq!(status.command, Some(super::RPI4_VL805_LINUX_COMMAND),);
         assert_eq!(status.command_source, "linux-capture-static");
@@ -14624,16 +14816,13 @@ mod tests {
             true,
         );
 
-        assert_eq!(status.cfg_window, "bcm2711-ext-gated");
-        assert_eq!(status.cfg_writes, "enabled");
+        assert_eq!(status.cfg_window, "capture-witness");
+        assert_eq!(status.cfg_writes, "disabled-capture-witness");
         assert_eq!(status.command, Some(super::RPI4_VL805_LINUX_COMMAND));
         assert_eq!(status.command_source, "linux-capture-static");
         assert_eq!(status.fresh_ownership, "pollsafe-no-fresh-ownership");
         assert_eq!(status.blocker, "pcie-vl805-config-contract-missing");
-        assert_eq!(
-            status.next_step,
-            "supply-safe-pcie-config-window-or-stay-pollsafe"
-        );
+        assert_eq!(status.next_step, "enable-live-ext-cfg-or-stay-pollsafe");
     }
 
     #[test]
@@ -16033,8 +16222,11 @@ mod tests {
     }
 
     #[test]
-    fn vl805_bcm2711_ext_cfg_runtime_touch_is_hal_owned() {
-        assert!(VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED);
+    fn vl805_bcm2711_ext_cfg_runtime_touch_is_explicit_opt_in() {
+        assert!(!VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN);
+        assert!(!VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED);
+        assert!(VL805_LINUX_CAPTURE_CFG_WITNESS_ENABLED);
+        assert!(super::vl805_linux_capture_cfg_witness_available());
         assert!(!vl805_runtime_cfg_touch_allowed(
             VL805_CFG_RUNTIME_TOUCH_ENABLED,
             false,
@@ -16044,10 +16236,45 @@ mod tests {
             VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED,
             false,
         ));
-        assert!(vl805_runtime_cfg_replay_ready(
+        assert!(!vl805_runtime_cfg_replay_ready(
             VL805_CFG_RUNTIME_TOUCH_ENABLED,
             VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED,
             true,
+        ));
+        assert!(vl805_runtime_cfg_replay_ready(false, true, true));
+    }
+
+    #[test]
+    fn vl805_capture_cfg_witness_requires_pinned_bar_and_command_shadow() {
+        assert!(vl805_capture_cfg_witness_contract_ready(
+            true,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            true,
+            Some(RPI4_VL805_LINUX_COMMAND),
+        ));
+        assert!(!vl805_capture_cfg_witness_contract_ready(
+            false,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            true,
+            Some(RPI4_VL805_LINUX_COMMAND),
+        ));
+        assert!(!vl805_capture_cfg_witness_contract_ready(
+            true,
+            None,
+            true,
+            Some(RPI4_VL805_LINUX_COMMAND),
+        ));
+        assert!(!vl805_capture_cfg_witness_contract_ready(
+            true,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            false,
+            Some(RPI4_VL805_LINUX_COMMAND),
+        ));
+        assert!(!vl805_capture_cfg_witness_contract_ready(
+            true,
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            true,
+            Some(RPI4_VL805_LINUX_COMMAND & !PCI_COMMAND_BUS_MASTER),
         ));
     }
 
