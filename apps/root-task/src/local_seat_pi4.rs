@@ -259,6 +259,10 @@ const VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN: bool = false;
 const VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED: bool =
     VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN;
 const VL805_LINUX_CAPTURE_CFG_WITNESS_ENABLED: bool = true;
+// The static Linux-capture witness is a config/layout proof, not permission to
+// touch BCM2711 PCIe host status or interrupt-source registers. Those MMIO
+// edges are kept opt-in until HAL IRQ sinks are proven installed first.
+const VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN: bool = false;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Vl805CfgPreseedMode {
@@ -6714,19 +6718,6 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
     if !vl805_linux_capture_cfg_witness_available() {
         return None;
     }
-    let mut host_irq_maps = Vec::new();
-    if let Some((_status_frame, status_reg)) = bcm2711_pcie_map_reg_page(
-        hal,
-        &mut host_irq_maps,
-        BCM2711_PCIE_MISC_PCIE_STATUS,
-        "pcie-capture-status",
-    ) {
-        bcm2711_pcie_mask_and_clear_irq_sources(status_reg);
-    } else {
-        boot_log::force_uart_line(
-            "[local-seat] vl805 capture cfg witness irq-mask skipped reason=pcie-status-unavailable",
-        );
-    }
     let snapshot = linux_captured_vl805_pci_cfg_snapshot();
     let Some(mmio) = snapshot.bar_mmio else {
         boot_log::force_uart_line(
@@ -6750,6 +6741,25 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
             "[local-seat] vl805 capture cfg witness skipped reason=pcie-sinks-unavailable",
         );
         return None;
+    }
+    if VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN {
+        let mut host_irq_maps = Vec::new();
+        if let Some((_status_frame, status_reg)) = bcm2711_pcie_map_reg_page(
+            hal,
+            &mut host_irq_maps,
+            BCM2711_PCIE_MISC_PCIE_STATUS,
+            "pcie-capture-status",
+        ) {
+            bcm2711_pcie_mask_and_clear_irq_sources(status_reg);
+        } else {
+            boot_log::force_uart_line(
+                "[local-seat] vl805 capture cfg witness irq-mask skipped reason=pcie-status-unavailable",
+            );
+        }
+    } else {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 capture cfg witness irq-mask skipped reason=host-mmio-quiesce-opt-in-disabled",
+        );
     }
     if !ensure_capture_backed_xhci_pin(hal, mmio) {
         return None;
@@ -16354,6 +16364,7 @@ mod tests {
         assert!(!VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN);
         assert!(!VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED);
         assert!(VL805_LINUX_CAPTURE_CFG_WITNESS_ENABLED);
+        assert!(!VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN);
         assert!(super::vl805_linux_capture_cfg_witness_available());
         assert!(!vl805_runtime_cfg_touch_allowed(
             VL805_CFG_RUNTIME_TOUCH_ENABLED,
