@@ -13,8 +13,10 @@ use core::sync::atomic::{fence, Ordering};
 
 use super::{
     DeviceHal, HalError, Irq, IrqServiceOutcome, IrqTrigger, KernelIrqBinding, SdioBusWidth,
-    SdioFunction, WifiControlPlaneTrace, WifiDebugSnapshot, WifiFirmwareBundle,
-    WifiFirmwareContractTrace, WifiPowerState, WifiResetState, WifiSdhciContractTrace,
+    SdioFunction, WifiBoundedPhaseRecord, WifiControlPlaneTrace, WifiDebugSnapshot,
+    WifiFirmwareBundle, WifiFirmwareContractTrace, WifiFirmwareProofTrace, WifiHtPhaseRecord,
+    WifiPowerState, WifiResetState, WifiSdhciContractTrace, WIFI_BOUNDED_PHASE_RECORD_CAPACITY,
+    WIFI_HT_PHASE_RECORD_CAPACITY,
 };
 use crate::bootstrap::log as boot_log;
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -100,12 +102,103 @@ static MAILBOX_TRANSPORT_READY_LOGGED: core::sync::atomic::AtomicBool =
 static LAST_WIFI_DEBUG_SNAPSHOT: Mutex<Option<WifiDebugSnapshot>> = Mutex::new(None);
 static LAST_WIFI_FIRMWARE_CONTRACT_EVIDENCE: Mutex<Option<WifiFirmwareContractEvidence>> =
     Mutex::new(None);
+static LAST_WIFI_FIRMWARE_PROOF: Mutex<Option<WifiFirmwareProofTrace>> = Mutex::new(None);
+static LAST_WIFI_HT_PHASES: Mutex<WifiHtPhaseRing> = Mutex::new(WifiHtPhaseRing::new());
+static LAST_WIFI_BOUNDED_PHASES: Mutex<WifiBoundedPhaseRing> =
+    Mutex::new(WifiBoundedPhaseRing::new());
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WifiFirmwareContractEvidence {
     firmware_download_verified: bool,
     sr_kso_clock_ready: bool,
     armcr4_release_attempts: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WifiHtPhaseRing {
+    records: [WifiHtPhaseRecord; WIFI_HT_PHASE_RECORD_CAPACITY],
+    next: usize,
+    count: u8,
+}
+
+impl WifiHtPhaseRing {
+    const fn new() -> Self {
+        Self {
+            records: [WifiHtPhaseRecord::EMPTY; WIFI_HT_PHASE_RECORD_CAPACITY],
+            next: 0,
+            count: 0,
+        }
+    }
+
+    fn push(&mut self, record: WifiHtPhaseRecord) {
+        self.records[self.next] = record;
+        self.next = (self.next + 1) % WIFI_HT_PHASE_RECORD_CAPACITY;
+        if usize::from(self.count) < WIFI_HT_PHASE_RECORD_CAPACITY {
+            self.count += 1;
+        }
+    }
+
+    fn ordered(&self) -> ([WifiHtPhaseRecord; WIFI_HT_PHASE_RECORD_CAPACITY], u8) {
+        let mut ordered = [WifiHtPhaseRecord::EMPTY; WIFI_HT_PHASE_RECORD_CAPACITY];
+        let count = usize::from(self.count);
+        let start = if count == WIFI_HT_PHASE_RECORD_CAPACITY {
+            self.next
+        } else {
+            0
+        };
+        let mut index = 0;
+        while index < count {
+            ordered[index] = self.records[(start + index) % WIFI_HT_PHASE_RECORD_CAPACITY];
+            index += 1;
+        }
+        (ordered, self.count)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WifiBoundedPhaseRing {
+    records: [WifiBoundedPhaseRecord; WIFI_BOUNDED_PHASE_RECORD_CAPACITY],
+    next: usize,
+    count: u8,
+}
+
+impl WifiBoundedPhaseRing {
+    const fn new() -> Self {
+        Self {
+            records: [WifiBoundedPhaseRecord::EMPTY; WIFI_BOUNDED_PHASE_RECORD_CAPACITY],
+            next: 0,
+            count: 0,
+        }
+    }
+
+    fn push(&mut self, record: WifiBoundedPhaseRecord) {
+        self.records[self.next] = record;
+        self.next = (self.next + 1) % WIFI_BOUNDED_PHASE_RECORD_CAPACITY;
+        if usize::from(self.count) < WIFI_BOUNDED_PHASE_RECORD_CAPACITY {
+            self.count += 1;
+        }
+    }
+
+    fn ordered(
+        &self,
+    ) -> (
+        [WifiBoundedPhaseRecord; WIFI_BOUNDED_PHASE_RECORD_CAPACITY],
+        u8,
+    ) {
+        let mut ordered = [WifiBoundedPhaseRecord::EMPTY; WIFI_BOUNDED_PHASE_RECORD_CAPACITY];
+        let count = usize::from(self.count);
+        let start = if count == WIFI_BOUNDED_PHASE_RECORD_CAPACITY {
+            self.next
+        } else {
+            0
+        };
+        let mut index = 0;
+        while index < count {
+            ordered[index] = self.records[(start + index) % WIFI_BOUNDED_PHASE_RECORD_CAPACITY];
+            index += 1;
+        }
+        (ordered, self.count)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -3453,6 +3546,53 @@ fn firmware_release_contract_next_step(
 }
 
 #[inline]
+fn firmware_function2_gate_state(
+    chipclkcsr: Option<u8>,
+    io_enable: Option<u8>,
+    io_ready: Option<u8>,
+) -> &'static str {
+    let f2_enabled = matches!(io_enable, Some(value) if (value & SDIO_FUNC_ENABLE_2) != 0);
+    let f2_ready = matches!(io_ready, Some(value) if (value & SDIO_FUNC_READY_2) != 0);
+    if chipclkcsr.is_some_and(function2_has_required_ht_clock) {
+        if f2_ready {
+            "function2-ready-after-ht-proof"
+        } else if f2_enabled {
+            "function2-latched-after-ht-proof"
+        } else {
+            "function2-enable-allowed-after-ht-proof"
+        }
+    } else if f2_ready {
+        "function2-ready-without-cached-ht-proof"
+    } else if f2_enabled {
+        "function2-latched-before-ht-proof"
+    } else {
+        "function2-disabled-until-ht-proof"
+    }
+}
+
+#[inline]
+fn firmware_ht_summary_state(
+    chipclkcsr: Option<u8>,
+    ht_phase_count: u8,
+    ht_phase_records: &[WifiHtPhaseRecord; WIFI_HT_PHASE_RECORD_CAPACITY],
+) -> &'static str {
+    if chipclkcsr.is_some_and(function2_has_required_ht_clock) {
+        "ht-proven"
+    } else if ht_phase_count == 0 {
+        "no-cached-ht-records"
+    } else {
+        let last = ht_phase_records[usize::from(ht_phase_count.saturating_sub(1))];
+        if last.status.contains("timeout") {
+            "ht-timeout-cached"
+        } else if last.status.contains("alp") {
+            "alp-only-no-ht-proof"
+        } else {
+            "ht-unproven"
+        }
+    }
+}
+
+#[inline]
 fn firmware_contract_should_use_cached_failure_snapshot(
     live_card_ready: bool,
     cached: &WifiDebugSnapshot,
@@ -3511,6 +3651,8 @@ fn firmware_contract_trace_from_evidence(
         SDIO_FUNC_ENABLE_2,
         SDIO_FUNC_READY_2,
     );
+    let (ht_phase_records, ht_phase_count) = cached_wifi_ht_phase_records();
+    let function2_gate = firmware_function2_gate_state(chipclkcsr, io_enable, io_ready);
     WifiFirmwareContractTrace {
         firmware_len: bundle.firmware.len(),
         nvram_len: firmware_contract_nvram_upload_len(bundle),
@@ -3546,6 +3688,11 @@ fn firmware_contract_trace_from_evidence(
             chipclkcsr,
             f2_state,
         ),
+        proof: cached_wifi_firmware_proof(),
+        ht_summary: firmware_ht_summary_state(chipclkcsr, ht_phase_count, &ht_phase_records),
+        function2_gate,
+        ht_phase_count,
+        ht_phase_records,
     }
 }
 
@@ -3700,6 +3847,14 @@ fn log_ht_clock_status(
     sleep_csr: Option<u8>,
     cardcap: Option<u8>,
 ) {
+    cache_wifi_ht_phase_record(WifiHtPhaseRecord {
+        stage,
+        status: phase,
+        chipclkcsr: Some(chipclk),
+        wakeupctrl: wake_ctrl,
+        sleepcsr: sleep_csr,
+        cardcap,
+    });
     emit_breadcrumb(format_args!(
         "[pi4-wifi] firmware stage={stage} status={phase} csr=0x{chipclk:02x} ht_req={ht_req} alp_req={alp_req} force_ht={force_ht} clkreq_off={clkreq_off} alp={alp} ht={ht} wake=0x{wake:02x}/{wake_set} sleep=0x{sleep:02x}/{sleep_set} cardcap=0x{cardcap:02x}/{cardcap_set}",
         ht_req = yn((chipclk & SBSDIO_HT_AVAIL_REQ) != 0),
@@ -5094,6 +5249,39 @@ fn cached_wifi_firmware_contract_evidence() -> Option<WifiFirmwareContractEviden
 }
 
 #[inline]
+fn cache_wifi_firmware_proof(proof: WifiFirmwareProofTrace) {
+    *LAST_WIFI_FIRMWARE_PROOF.lock() = Some(proof);
+}
+
+#[inline]
+fn cached_wifi_firmware_proof() -> Option<WifiFirmwareProofTrace> {
+    LAST_WIFI_FIRMWARE_PROOF.lock().as_ref().copied()
+}
+
+#[inline]
+fn cache_wifi_ht_phase_record(record: WifiHtPhaseRecord) {
+    LAST_WIFI_HT_PHASES.lock().push(record);
+}
+
+#[inline]
+fn cached_wifi_ht_phase_records() -> ([WifiHtPhaseRecord; WIFI_HT_PHASE_RECORD_CAPACITY], u8) {
+    LAST_WIFI_HT_PHASES.lock().ordered()
+}
+
+#[inline]
+fn cache_wifi_bounded_phase_record(record: WifiBoundedPhaseRecord) {
+    LAST_WIFI_BOUNDED_PHASES.lock().push(record);
+}
+
+#[inline]
+fn cached_wifi_bounded_phase_records() -> (
+    [WifiBoundedPhaseRecord; WIFI_BOUNDED_PHASE_RECORD_CAPACITY],
+    u8,
+) {
+    LAST_WIFI_BOUNDED_PHASES.lock().ordered()
+}
+
+#[inline]
 fn firmware_contract_should_use_cached_snapshot(
     live_card_ready: bool,
     live_armcr4_release_attempts: u8,
@@ -6357,6 +6545,7 @@ impl Pi4WifiState {
                 snapshot.control_plane_f2_state,
             )
         });
+        let (bounded_phase_records, bounded_phase_count) = cached_wifi_bounded_phase_records();
 
         WifiControlPlaneTrace {
             cccr_io_enable,
@@ -6377,6 +6566,22 @@ impl Pi4WifiState {
             cached_exact_error,
             cached_sdhci_read_diag,
             cached_f2_state,
+            cached_cccr_io_enable: self.host.last_cccr_io_enable,
+            cached_cccr_io_ready: self.host.last_cccr_io_ready,
+            cached_cccr_int_enable: self.host.last_cccr_int_enable,
+            cached_cccr_bus_interface: self.host.last_cccr_bus_interface,
+            cached_cccr_speed: self.host.last_cccr_speed,
+            cached_cccr_cardcap: self.host.last_cardcap,
+            cached_fbr1_block_size: SdioHost::cached_fbr_block_size(
+                self.host.last_fbr1_block_size_low,
+                self.host.last_fbr1_block_size_high,
+            ),
+            cached_fbr2_block_size: SdioHost::cached_fbr_block_size(
+                self.host.last_fbr2_block_size_low,
+                self.host.last_fbr2_block_size_high,
+            ),
+            bounded_phase_count,
+            bounded_phase_records,
         }
     }
 
@@ -7215,6 +7420,15 @@ struct SdioHost {
     last_wakeupctrl: Option<u8>,
     last_sleepcsr: Option<u8>,
     last_cardcap: Option<u8>,
+    last_cccr_io_enable: Option<u8>,
+    last_cccr_io_ready: Option<u8>,
+    last_cccr_int_enable: Option<u8>,
+    last_cccr_bus_interface: Option<u8>,
+    last_cccr_speed: Option<u8>,
+    last_fbr1_block_size_low: Option<u8>,
+    last_fbr1_block_size_high: Option<u8>,
+    last_fbr2_block_size_low: Option<u8>,
+    last_fbr2_block_size_high: Option<u8>,
     backplane_sdio_pullup_clear_attempted: bool,
     firmware_download_verified: bool,
     sr_kso_clock_ready: bool,
@@ -7341,6 +7555,15 @@ impl SdioHost {
             last_wakeupctrl: None,
             last_sleepcsr: None,
             last_cardcap: None,
+            last_cccr_io_enable: None,
+            last_cccr_io_ready: None,
+            last_cccr_int_enable: None,
+            last_cccr_bus_interface: None,
+            last_cccr_speed: None,
+            last_fbr1_block_size_low: None,
+            last_fbr1_block_size_high: None,
+            last_fbr2_block_size_low: None,
+            last_fbr2_block_size_high: None,
             backplane_sdio_pullup_clear_attempted: false,
             firmware_download_verified: false,
             sr_kso_clock_ready: false,
@@ -7420,6 +7643,7 @@ impl SdioHost {
         self.clear_control_plane_speculative_reply_frame();
         self.block_size_count_shadow = 0;
         self.transfer_mode_shadow = 0;
+        self.clear_sdio_register_cache();
         self.clear_last_data_wait_diag();
         self.clear_preserved_control_plane_data_wait_diag();
         self.clear_backplane_window_cache();
@@ -7531,6 +7755,65 @@ impl SdioHost {
         self.last_cardcap = Some(value);
     }
 
+    fn clear_sdio_register_cache(&mut self) {
+        self.last_chipclkcsr = None;
+        self.last_wakeupctrl = None;
+        self.last_sleepcsr = None;
+        self.last_cardcap = None;
+        self.last_cccr_io_enable = None;
+        self.last_cccr_io_ready = None;
+        self.last_cccr_int_enable = None;
+        self.last_cccr_bus_interface = None;
+        self.last_cccr_speed = None;
+        self.last_fbr1_block_size_low = None;
+        self.last_fbr1_block_size_high = None;
+        self.last_fbr2_block_size_low = None;
+        self.last_fbr2_block_size_high = None;
+    }
+
+    fn cached_fbr_block_size(low: Option<u8>, high: Option<u8>) -> Option<u16> {
+        Some(u16::from(low?) | (u16::from(high?) << 8))
+    }
+
+    fn remember_sdio_direct_value(&mut self, function: SdioFunction, addr: u32, value: u8) {
+        match (function, addr) {
+            (SdioFunction::Function0, SDIO_CCCR_IOEX) => self.last_cccr_io_enable = Some(value),
+            (SdioFunction::Function0, SDIO_CCCR_IORX) => self.last_cccr_io_ready = Some(value),
+            (SdioFunction::Function0, SDIO_CCCR_IENX) => self.last_cccr_int_enable = Some(value),
+            (SdioFunction::Function0, SDIO_CCCR_IF) => self.last_cccr_bus_interface = Some(value),
+            (SdioFunction::Function0, SDIO_CCCR_SPEED) => self.last_cccr_speed = Some(value),
+            (SdioFunction::Function0, SDIO_CCCR_BRCM_CARDCAP) => self.remember_cardcap(value),
+            (SdioFunction::Function0, addr) if addr == SDIO_CCCR_FBR_BASE + SDIO_FBR_BLKSIZE => {
+                self.last_fbr1_block_size_low = Some(value);
+            }
+            (SdioFunction::Function0, addr)
+                if addr == SDIO_CCCR_FBR_BASE + SDIO_FBR_BLKSIZE + 1 =>
+            {
+                self.last_fbr1_block_size_high = Some(value);
+            }
+            (SdioFunction::Function0, addr)
+                if addr == SDIO_CCCR_FBR_BASE * 2 + SDIO_FBR_BLKSIZE =>
+            {
+                self.last_fbr2_block_size_low = Some(value);
+            }
+            (SdioFunction::Function0, addr)
+                if addr == SDIO_CCCR_FBR_BASE * 2 + SDIO_FBR_BLKSIZE + 1 =>
+            {
+                self.last_fbr2_block_size_high = Some(value);
+            }
+            (SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR) => {
+                self.remember_chipclkcsr(value);
+            }
+            (SdioFunction::Function1, SBSDIO_FUNC1_WAKEUPCTRL) => {
+                self.remember_wakeupctrl(value);
+            }
+            (SdioFunction::Function1, SBSDIO_FUNC1_SLEEPCSR) => {
+                self.remember_sleepcsr(value);
+            }
+            _ => {}
+        }
+    }
+
     fn log_transport_shadow(&self, stage: &'static str) {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] sdio shadow {stage} regs=0x{regs:08x} window=0x{window:08x} fn=0x{function:05x} bytes={low:02x}:{mid:02x}:{high:02x} cached={cached}",
@@ -7555,6 +7838,17 @@ impl SdioHost {
             sleep = self.last_sleepcsr.unwrap_or(0),
             cardcap = self.last_cardcap.unwrap_or(0),
         ));
+    }
+
+    fn record_bounded_phase(&self, stage: &'static str, action: &'static str) {
+        cache_wifi_bounded_phase_record(WifiBoundedPhaseRecord {
+            stage,
+            action,
+            mode: cyw43_transport_mode_name(self.experimental_no_ht_transport),
+            current_clock_hz: self.current_clock_hz,
+            bus_width: sdio_bus_width_name(self.desired_bus_width),
+            no_ht_transport: self.experimental_no_ht_transport,
+        });
     }
 
     fn log_post_release_proof_tuple(
@@ -7597,6 +7891,18 @@ impl SdioHost {
             cpuhalt_state,
             self.last_chipclkcsr,
         );
+        cache_wifi_firmware_proof(WifiFirmwareProofTrace {
+            source: "cached",
+            upload_state,
+            nvram_tail_state,
+            reset_vector_state,
+            cpuhalt_state,
+            precondition_state,
+            readback_status: verify_status,
+            verified: self.firmware_download_verified,
+            armcr4_release_attempts: self.armcr4_release_attempts,
+            upload_clock_hz,
+        });
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage=post-release-proof boundary=post-armcr4-release upload=0x{ram_base:08x}..0x{firmware_end:08x}/{} state={upload_state} nvram=0x{nvram_offset:08x}..0x{nvram_end:08x}/{} tail=0x{nvram_tail:08x}..0x{tail_end:08x} magic=0x{nvram_magic:08x} state={nvram_tail_state}",
             firmware_len,
@@ -8219,6 +8525,7 @@ impl SdioHost {
             yn(self.experimental_control_plane_startup_profile_locked),
             self.experimental_control_plane_startup_profile_reason,
         ));
+        self.record_bounded_phase(stage, "transport-mode");
         self.log_transport_shadow("bounded-no-ht-transport");
         Ok(())
     }
@@ -8290,6 +8597,7 @@ impl SdioHost {
             self.experimental_control_plane_reply_rearm_empty_polls,
             yn(self.experimental_control_plane_startup_link_stabilized),
         ));
+        self.record_bounded_phase(stage, "reply-probe-cutover");
         self.log_transport_shadow("control-plane-reply-bounded-no-ht-cutover");
         Ok(())
     }
@@ -8324,6 +8632,7 @@ impl SdioHost {
             control_plane_reply_rearm_mode_name(reply_rearm_mode),
             reply_rearm_attempts,
         ));
+        self.record_bounded_phase(stage, "reply-probe-direct-cutover");
         self.log_transport_shadow("control-plane-reply-bounded-no-ht-direct-cutover");
         Ok(())
     }
@@ -11476,7 +11785,10 @@ impl SdioHost {
                     function.number()
                 ));
                 match self.io_direct_fallback_read(function, addr) {
-                    Ok(value) => return Ok(value),
+                    Ok(value) => {
+                        self.remember_sdio_direct_value(function, addr, value);
+                        return Ok(value);
+                    }
                     Err(fallback_err) => {
                         emit_breadcrumb(format_args!(
                             "[pi4-wifi] sdio cmd52 fallback op=read fn={} addr=0x{addr:05x} err={fallback_err}",
@@ -11488,7 +11800,9 @@ impl SdioHost {
             }
             return Err(HalError::Unsupported("sdio-cmd52-read"));
         }
-        Ok((resp & 0xFF) as u8)
+        let value = (resp & 0xFF) as u8;
+        self.remember_sdio_direct_value(function, addr, value);
+        Ok(value)
     }
 
     fn io_direct_write(
@@ -11511,7 +11825,10 @@ impl SdioHost {
                     function.number()
                 ));
                 match self.io_direct_fallback_write(function, addr, value) {
-                    Ok(()) => return Ok(()),
+                    Ok(()) => {
+                        self.remember_sdio_direct_value(function, addr, value);
+                        return Ok(());
+                    }
                     Err(fallback_err) => {
                         emit_breadcrumb(format_args!(
                             "[pi4-wifi] sdio cmd52 fallback op=write fn={} addr=0x{addr:05x} err={fallback_err}",
@@ -11523,6 +11840,7 @@ impl SdioHost {
             }
             return Err(HalError::Unsupported("sdio-cmd52-write"));
         }
+        self.remember_sdio_direct_value(function, addr, value);
         Ok(())
     }
 
@@ -27980,6 +28298,78 @@ mod tests {
             function2_ready_phase_chipclk_value(None),
             SBSDIO_HT_AVAIL_REQ
         );
+    }
+
+    #[test]
+    fn firmware_function2_gate_reports_disabled_until_ht_proof() {
+        assert_eq!(
+            firmware_function2_gate_state(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL), None, None),
+            "function2-disabled-until-ht-proof"
+        );
+        assert_eq!(
+            firmware_function2_gate_state(
+                Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+            ),
+            "function2-latched-before-ht-proof"
+        );
+        assert_eq!(
+            firmware_function2_gate_state(
+                Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_HT_AVAIL),
+                Some(SDIO_FUNC_ENABLE_1),
+                Some(SDIO_FUNC_READY_1),
+            ),
+            "function2-enable-allowed-after-ht-proof"
+        );
+    }
+
+    #[test]
+    fn wifi_diagnostic_rings_keep_last_bounded_records_in_order() {
+        let mut ht_ring = WifiHtPhaseRing::new();
+        for (stage, status) in [
+            ("phase-a", "alp-only-upload"),
+            ("phase-b", "active-ht-request-readback"),
+            ("phase-c", "active-ht-soft-timeout"),
+            ("phase-d", "active-ht-timeout"),
+            ("phase-e", "debug-probe-timeout"),
+        ] {
+            ht_ring.push(WifiHtPhaseRecord {
+                stage,
+                status,
+                chipclkcsr: Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+                wakeupctrl: None,
+                sleepcsr: None,
+                cardcap: None,
+            });
+        }
+        let (ht_records, ht_count) = ht_ring.ordered();
+        assert_eq!(usize::from(ht_count), WIFI_HT_PHASE_RECORD_CAPACITY);
+        assert_eq!(ht_records[0].stage, "phase-b");
+        assert_eq!(ht_records[3].stage, "phase-e");
+        assert_eq!(
+            firmware_ht_summary_state(None, ht_count, &ht_records),
+            "ht-timeout-cached"
+        );
+
+        let mut bounded_ring = WifiBoundedPhaseRing::new();
+        for stage in ["phase-a", "phase-b", "phase-c", "phase-d", "phase-e"] {
+            bounded_ring.push(WifiBoundedPhaseRecord {
+                stage,
+                action: "reply-probe-cutover",
+                mode: "bounded-no-ht",
+                current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+                bus_width: "4bit",
+                no_ht_transport: true,
+            });
+        }
+        let (bounded_records, bounded_count) = bounded_ring.ordered();
+        assert_eq!(
+            usize::from(bounded_count),
+            WIFI_BOUNDED_PHASE_RECORD_CAPACITY
+        );
+        assert_eq!(bounded_records[0].stage, "phase-b");
+        assert_eq!(bounded_records[3].stage, "phase-e");
     }
 
     #[test]

@@ -369,6 +369,20 @@ static XHCI_DIAG_LAST_STAGE: AtomicU32 = AtomicU32::new(0);
 static XHCI_DIAG_LAST_A: AtomicUsize = AtomicUsize::new(0);
 static XHCI_DIAG_LAST_B: AtomicUsize = AtomicUsize::new(0);
 static XHCI_DIAG_LAST_C: AtomicUsize = AtomicUsize::new(0);
+static XHCI_DIAG_HISTORY_STAGE: [AtomicU32; XHCI_DIAG_HISTORY_LEN] =
+    [const { AtomicU32::new(0) }; XHCI_DIAG_HISTORY_LEN];
+static XHCI_DIAG_HISTORY_LINE: [AtomicU32; XHCI_DIAG_HISTORY_LEN] =
+    [const { AtomicU32::new(0) }; XHCI_DIAG_HISTORY_LEN];
+static XHCI_DIAG_HISTORY_A: [AtomicUsize; XHCI_DIAG_HISTORY_LEN] =
+    [const { AtomicUsize::new(0) }; XHCI_DIAG_HISTORY_LEN];
+static XHCI_DIAG_HISTORY_B: [AtomicUsize; XHCI_DIAG_HISTORY_LEN] =
+    [const { AtomicUsize::new(0) }; XHCI_DIAG_HISTORY_LEN];
+static XHCI_DIAG_HISTORY_C: [AtomicUsize; XHCI_DIAG_HISTORY_LEN] =
+    [const { AtomicUsize::new(0) }; XHCI_DIAG_HISTORY_LEN];
+static XHCI_DIAG_HISTORY_TOTAL: AtomicU32 = AtomicU32::new(0);
+static XHCI_ROOT_PORT_STATUS_COUNT: AtomicU32 = AtomicU32::new(0);
+static XHCI_ROOT_PORT_STATUS_WORDS: [AtomicU32; XHCI_MAX_PROBE_PORTS] =
+    [const { AtomicU32::new(0) }; XHCI_MAX_PROBE_PORTS];
 static VL805_CFG_VIRT: AtomicUsize = AtomicUsize::new(0);
 const VL805_CFG_COMMAND_SHADOW_VALID: u32 = 1 << 31;
 static VL805_CFG_COMMAND_SHADOW: AtomicU32 = AtomicU32::new(0);
@@ -428,6 +442,7 @@ const fn xhci_rtsoff_offset(raw: u32) -> u32 {
 }
 
 const XHCI_DIAG_MAX_LINES: u32 = 160;
+pub(crate) const XHCI_DIAG_HISTORY_LEN: usize = 8;
 const VL805_RUNTIME_RESET_STATE_UNATTEMPTED: u8 = 0;
 const VL805_RUNTIME_RESET_STATE_NOTIFIED: u8 = 1;
 const VL805_RUNTIME_RESET_STATE_SOFT_CONTINUE: u8 = 2;
@@ -657,6 +672,36 @@ pub(crate) struct UsbXhciDiagStatus {
     pub b: u64,
     pub c: u64,
     pub value_labels: Option<(&'static str, &'static str, &'static str)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbXhciDiagHistoryEntry {
+    pub line_no: usize,
+    pub status: UsbXhciDiagStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbXhciDiagHistoryStatus {
+    pub total_lines: usize,
+    pub count: usize,
+    pub entries: [UsbXhciDiagHistoryEntry; XHCI_DIAG_HISTORY_LEN],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbRootPortStatusEntry {
+    pub port: u8,
+    pub portsc: u32,
+    pub connected: bool,
+    pub enabled: bool,
+    pub speed: u8,
+    pub link_state: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbRootPortStatus {
+    pub count: usize,
+    pub connected_mask: u32,
+    pub entries: [UsbRootPortStatusEntry; XHCI_MAX_PROBE_PORTS],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3222,6 +3267,17 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
     let line_no = XHCI_DIAG_LINE_COUNT
         .fetch_add(1, Ordering::Relaxed)
         .saturating_add(1);
+    if xhci_diag_history_stage_relevant(stage) {
+        let history_no = XHCI_DIAG_HISTORY_TOTAL
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let history_slot = (history_no.saturating_sub(1) as usize) % XHCI_DIAG_HISTORY_LEN;
+        XHCI_DIAG_HISTORY_LINE[history_slot].store(line_no, Ordering::Release);
+        XHCI_DIAG_HISTORY_STAGE[history_slot].store(u32::from(stage), Ordering::Release);
+        XHCI_DIAG_HISTORY_A[history_slot].store(a as usize, Ordering::Release);
+        XHCI_DIAG_HISTORY_B[history_slot].store(b as usize, Ordering::Release);
+        XHCI_DIAG_HISTORY_C[history_slot].store(c as usize, Ordering::Release);
+    }
     if line_no > XHCI_DIAG_MAX_LINES {
         if line_no == XHCI_DIAG_MAX_LINES.saturating_add(1) {
             boot_log::force_uart_line("[local-seat] xhci.diag suppressed (rate-limited)");
@@ -3257,6 +3313,15 @@ fn reset_latest_xhci_diag_snapshot() {
     XHCI_DIAG_LAST_A.store(0, Ordering::Release);
     XHCI_DIAG_LAST_B.store(0, Ordering::Release);
     XHCI_DIAG_LAST_C.store(0, Ordering::Release);
+    XHCI_DIAG_HISTORY_TOTAL.store(0, Ordering::Release);
+    for slot in 0..XHCI_DIAG_HISTORY_LEN {
+        XHCI_DIAG_HISTORY_LINE[slot].store(0, Ordering::Release);
+        XHCI_DIAG_HISTORY_STAGE[slot].store(0, Ordering::Release);
+        XHCI_DIAG_HISTORY_A[slot].store(0, Ordering::Release);
+        XHCI_DIAG_HISTORY_B[slot].store(0, Ordering::Release);
+        XHCI_DIAG_HISTORY_C[slot].store(0, Ordering::Release);
+    }
+    clear_xhci_root_port_statuses();
 }
 
 #[inline]
@@ -3274,19 +3339,79 @@ fn read_latest_xhci_diag_snapshot() -> XhciDiagSnapshot {
     }
 }
 
+#[inline]
+const fn empty_usb_xhci_diag_status() -> UsbXhciDiagStatus {
+    UsbXhciDiagStatus {
+        stage: 0,
+        tag: None,
+        exact_issue: None,
+        a: 0,
+        b: 0,
+        c: 0,
+        value_labels: None,
+    }
+}
+
+#[inline]
+const fn empty_usb_xhci_diag_history_entry() -> UsbXhciDiagHistoryEntry {
+    UsbXhciDiagHistoryEntry {
+        line_no: 0,
+        status: empty_usb_xhci_diag_status(),
+    }
+}
+
+#[inline]
+fn usb_xhci_diag_status_from_values(stage: u16, a: u64, b: u64, c: u64) -> UsbXhciDiagStatus {
+    UsbXhciDiagStatus {
+        stage,
+        tag: xhci_diag_stage_label(stage),
+        exact_issue: xhci_diag_stage_exact_issue_label(stage),
+        a,
+        b,
+        c,
+        value_labels: xhci_diag_stage_value_labels(stage),
+    }
+}
+
 pub(crate) fn latest_xhci_diag_status() -> Option<UsbXhciDiagStatus> {
     let snapshot = read_latest_xhci_diag_snapshot();
     if snapshot.line_count == 0 {
         return None;
     }
-    Some(UsbXhciDiagStatus {
-        stage: snapshot.stage,
-        tag: xhci_diag_stage_label(snapshot.stage),
-        exact_issue: xhci_diag_stage_exact_issue_label(snapshot.stage),
-        a: snapshot.a,
-        b: snapshot.b,
-        c: snapshot.c,
-        value_labels: xhci_diag_stage_value_labels(snapshot.stage),
+    Some(usb_xhci_diag_status_from_values(
+        snapshot.stage,
+        snapshot.a,
+        snapshot.b,
+        snapshot.c,
+    ))
+}
+
+pub(crate) fn latest_xhci_diag_history_status() -> Option<UsbXhciDiagHistoryStatus> {
+    let total_lines = XHCI_DIAG_LINE_COUNT.load(Ordering::Acquire) as usize;
+    let history_total = XHCI_DIAG_HISTORY_TOTAL.load(Ordering::Acquire) as usize;
+    if total_lines == 0 || history_total == 0 {
+        return None;
+    }
+    let count = cmp::min(history_total, XHCI_DIAG_HISTORY_LEN);
+    let start_seq = history_total.saturating_sub(count).saturating_add(1);
+    let mut entries = [empty_usb_xhci_diag_history_entry(); XHCI_DIAG_HISTORY_LEN];
+    for (offset, entry) in entries.iter_mut().take(count).enumerate() {
+        let seq = start_seq.saturating_add(offset);
+        let slot = seq.saturating_sub(1) % XHCI_DIAG_HISTORY_LEN;
+        let line_no = XHCI_DIAG_HISTORY_LINE[slot].load(Ordering::Acquire) as usize;
+        let stage = XHCI_DIAG_HISTORY_STAGE[slot].load(Ordering::Acquire) as u16;
+        let a = XHCI_DIAG_HISTORY_A[slot].load(Ordering::Acquire) as u64;
+        let b = XHCI_DIAG_HISTORY_B[slot].load(Ordering::Acquire) as u64;
+        let c = XHCI_DIAG_HISTORY_C[slot].load(Ordering::Acquire) as u64;
+        *entry = UsbXhciDiagHistoryEntry {
+            line_no,
+            status: usb_xhci_diag_status_from_values(stage, a, b, c),
+        };
+    }
+    Some(UsbXhciDiagHistoryStatus {
+        total_lines,
+        count,
+        entries,
     })
 }
 
@@ -3536,6 +3661,30 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x02e9 => Some("usbcmd-run-store-wedged"),
         _ => None,
     }
+}
+
+#[inline]
+const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
+    matches!(
+        stage,
+        0x0242
+            | 0x0244
+            | 0x0248..=0x024f
+            | 0x0257..=0x025a
+            | 0x026a
+            | 0x0270..=0x0278
+            | 0x0290
+            | 0x029e
+            | 0x02a5
+            | 0x02a7
+            | 0x02d4..=0x02d5
+            | 0x02e8..=0x02f7
+            | 0x0312
+            | 0x0315..=0x0319
+            | 0x0320..=0x0330
+            | 0x0332..=0x0333
+            | 0x0340..=0x034c
+    )
 }
 
 #[inline]
@@ -3918,6 +4067,72 @@ fn xhci_connected_mask_from_portsc(port_statuses: &[u32]) -> u32 {
 }
 
 #[inline]
+const fn empty_usb_root_port_status_entry() -> UsbRootPortStatusEntry {
+    UsbRootPortStatusEntry {
+        port: 0,
+        portsc: 0,
+        connected: false,
+        enabled: false,
+        speed: 0,
+        link_state: 0,
+    }
+}
+
+#[inline]
+fn usb_root_port_status_entry(index: usize, portsc: u32) -> UsbRootPortStatusEntry {
+    UsbRootPortStatusEntry {
+        port: index.saturating_add(1) as u8,
+        portsc,
+        connected: xhci_root_port_connected(portsc),
+        enabled: (portsc & usb_oxide::regs::PORTSC_PED) != 0,
+        speed: usb_oxide::regs::portsc_speed(portsc),
+        link_state: usb_oxide::regs::portsc_pls(portsc),
+    }
+}
+
+#[inline]
+fn clear_xhci_root_port_statuses() {
+    for word in XHCI_ROOT_PORT_STATUS_WORDS.iter() {
+        word.store(0, Ordering::Release);
+    }
+    XHCI_ROOT_PORT_STATUS_COUNT.store(0, Ordering::Release);
+}
+
+#[inline]
+fn remember_xhci_root_port_statuses(port_statuses: &[u32]) {
+    let count = cmp::min(port_statuses.len(), XHCI_MAX_PROBE_PORTS);
+    for (index, portsc) in port_statuses.iter().copied().take(count).enumerate() {
+        XHCI_ROOT_PORT_STATUS_WORDS[index].store(portsc, Ordering::Release);
+    }
+    for index in count..XHCI_MAX_PROBE_PORTS {
+        XHCI_ROOT_PORT_STATUS_WORDS[index].store(0, Ordering::Release);
+    }
+    XHCI_ROOT_PORT_STATUS_COUNT.store(count as u32, Ordering::Release);
+}
+
+pub(crate) fn latest_xhci_root_port_status() -> Option<UsbRootPortStatus> {
+    let count = cmp::min(
+        XHCI_ROOT_PORT_STATUS_COUNT.load(Ordering::Acquire) as usize,
+        XHCI_MAX_PROBE_PORTS,
+    );
+    if count == 0 {
+        return None;
+    }
+    let mut entries = [empty_usb_root_port_status_entry(); XHCI_MAX_PROBE_PORTS];
+    let mut raw = [0u32; XHCI_MAX_PROBE_PORTS];
+    for index in 0..count {
+        let portsc = XHCI_ROOT_PORT_STATUS_WORDS[index].load(Ordering::Acquire);
+        raw[index] = portsc;
+        entries[index] = usb_root_port_status_entry(index, portsc);
+    }
+    Some(UsbRootPortStatus {
+        count,
+        connected_mask: xhci_connected_mask_from_portsc(&raw[..count]),
+        entries,
+    })
+}
+
+#[inline]
 fn xhci_sample_root_ports(
     ctrl: &XhciCtrl<SeatDma>,
     max_ports: usize,
@@ -3953,6 +4168,7 @@ fn xhci_sample_root_ports(
             boot_log::force_uart_line(line.as_str());
         }
     }
+    remember_xhci_root_port_statuses(&port_statuses[..sample_ports]);
     xhci_connected_mask_from_portsc(&port_statuses[..sample_ports])
 }
 
@@ -13551,6 +13767,30 @@ mod tests {
             usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PED,
         ];
         assert_eq!(xhci_connected_mask_from_portsc(&statuses), 0b0101);
+    }
+
+    #[test]
+    fn xhci_diag_history_keeps_dcbaap_and_run_edges_only() {
+        assert!(super::xhci_diag_history_stage_relevant(0x0248));
+        assert!(super::xhci_diag_history_stage_relevant(0x02e9));
+        assert!(super::xhci_diag_history_stage_relevant(0x0316));
+        assert!(!super::xhci_diag_history_stage_relevant(0x0300));
+        assert!(!super::xhci_diag_history_stage_relevant(0x0214));
+    }
+
+    #[test]
+    fn usb_root_port_status_entry_decodes_cached_portsc_without_live_reads() {
+        let portsc = usb_oxide::regs::PORTSC_CCS
+            | usb_oxide::regs::PORTSC_PED
+            | ((usb_oxide::regs::SPEED_HIGH as u32) << 10)
+            | (3 << 5);
+        let entry = super::usb_root_port_status_entry(1, portsc);
+        assert_eq!(entry.port, 2);
+        assert_eq!(entry.portsc, portsc);
+        assert!(entry.connected);
+        assert!(entry.enabled);
+        assert_eq!(entry.speed, usb_oxide::regs::SPEED_HIGH);
+        assert_eq!(entry.link_state, 3);
     }
 
     #[test]

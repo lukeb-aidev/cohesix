@@ -146,6 +146,78 @@ pub struct WifiDebugSnapshot {
     pub control_plane_exact_error: &'static str,
 }
 
+/// Number of cached HT phase records exposed by Wi-Fi diagnostics.
+#[cfg(feature = "kernel")]
+pub const WIFI_HT_PHASE_RECORD_CAPACITY: usize = 4;
+
+/// Passive HT clock state record captured from bounded firmware phases.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WifiHtPhaseRecord {
+    pub stage: &'static str,
+    pub status: &'static str,
+    pub chipclkcsr: Option<u8>,
+    pub wakeupctrl: Option<u8>,
+    pub sleepcsr: Option<u8>,
+    pub cardcap: Option<u8>,
+}
+
+#[cfg(feature = "kernel")]
+impl WifiHtPhaseRecord {
+    pub const EMPTY: Self = Self {
+        stage: "n/a",
+        status: "n/a",
+        chipclkcsr: None,
+        wakeupctrl: None,
+        sleepcsr: None,
+        cardcap: None,
+    };
+}
+
+/// Cached firmware upload/release proof tuple for Wi-Fi diagnostics.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WifiFirmwareProofTrace {
+    pub source: &'static str,
+    pub upload_state: &'static str,
+    pub nvram_tail_state: &'static str,
+    pub reset_vector_state: &'static str,
+    pub cpuhalt_state: &'static str,
+    pub precondition_state: &'static str,
+    pub readback_status: &'static str,
+    pub verified: bool,
+    pub armcr4_release_attempts: u8,
+    pub upload_clock_hz: u32,
+}
+
+/// Number of cached bounded transport phase records exposed by diagnostics.
+#[cfg(feature = "kernel")]
+pub const WIFI_BOUNDED_PHASE_RECORD_CAPACITY: usize = 4;
+
+/// Passive bounded no-HT/control-plane phase record for Wi-Fi diagnostics.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WifiBoundedPhaseRecord {
+    pub stage: &'static str,
+    pub action: &'static str,
+    pub mode: &'static str,
+    pub current_clock_hz: u32,
+    pub bus_width: &'static str,
+    pub no_ht_transport: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl WifiBoundedPhaseRecord {
+    pub const EMPTY: Self = Self {
+        stage: "n/a",
+        action: "n/a",
+        mode: "n/a",
+        current_clock_hz: 0,
+        bus_width: "n/a",
+        no_ht_transport: false,
+    };
+}
+
 /// Firmware-release contract evidence for the Pi 4 Wi-Fi debug path.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,6 +244,11 @@ pub struct WifiFirmwareContractTrace {
     pub preferred_data_clock_hz: u32,
     pub blocker: &'static str,
     pub next_step: &'static str,
+    pub proof: Option<WifiFirmwareProofTrace>,
+    pub ht_summary: &'static str,
+    pub function2_gate: &'static str,
+    pub ht_phase_count: u8,
+    pub ht_phase_records: [WifiHtPhaseRecord; WIFI_HT_PHASE_RECORD_CAPACITY],
 }
 
 /// Raw SDHCI contract evidence for the current Wi-Fi control-plane frontier.
@@ -213,6 +290,16 @@ pub struct WifiControlPlaneTrace {
     pub cached_exact_error: &'static str,
     pub cached_sdhci_read_diag: &'static str,
     pub cached_f2_state: &'static str,
+    pub cached_cccr_io_enable: Option<u8>,
+    pub cached_cccr_io_ready: Option<u8>,
+    pub cached_cccr_int_enable: Option<u8>,
+    pub cached_cccr_bus_interface: Option<u8>,
+    pub cached_cccr_speed: Option<u8>,
+    pub cached_cccr_cardcap: Option<u8>,
+    pub cached_fbr1_block_size: Option<u16>,
+    pub cached_fbr2_block_size: Option<u16>,
+    pub bounded_phase_count: u8,
+    pub bounded_phase_records: [WifiBoundedPhaseRecord; WIFI_BOUNDED_PHASE_RECORD_CAPACITY],
 }
 
 /// Root-console Wi-Fi debug hooks backed by the kernel HAL.
