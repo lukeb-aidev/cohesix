@@ -1231,11 +1231,12 @@ fn setup_firmware_channel_can_assume_write_committed(
 
 #[inline]
 const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transport: bool) -> bool {
-    // brcmfmac treats Function 2 readiness as a real SDIO contract. The latest
-    // Pi 4 trace proves the no-HT bypass latches IOEX but never produces IOR2,
-    // so keep the firmware channel on the strict ready path.
-    let _ = experimental_no_ht_transport;
-    false
+    // brcmfmac treats Function 2 readiness as a real SDIO contract. The Pi 4
+    // forced ALP/KSO edge can, however, latch IOEX without surfacing IOR2 while
+    // Linux immediately proceeds to bounded F2 FIFO traffic. Limit that probe
+    // to the explicit no-HT diagnostic lane; strict bring-up still requires
+    // real IOR2.
+    experimental_no_ht_transport
 }
 
 #[inline]
@@ -6245,11 +6246,12 @@ const fn sdio_function_ready_timeout_can_continue_experimentally(
     ready: u8,
     budget: SdioFunctionReadyBudget,
 ) -> bool {
-    let _ = step;
-    let _ = desired;
-    let _ = ready;
-    let _ = budget;
-    false
+    matches!(step.function, SdioFunction::Function2)
+        && matches!(budget, SdioFunctionReadyBudget::ExperimentalBypass)
+        && (desired & SDIO_FUNC_ENABLE_1) == SDIO_FUNC_ENABLE_1
+        && (desired & step.enable_bit) == step.enable_bit
+        && (ready & SDIO_FUNC_READY_1) == SDIO_FUNC_READY_1
+        && (ready & step.ready_bit) == 0
 }
 
 #[inline]
@@ -6288,8 +6290,11 @@ const fn control_plane_promote_rearm_budget(
 const fn sdio_function_ready_budget_for_bypass(
     allow_ready_timeout_bypass: bool,
 ) -> SdioFunctionReadyBudget {
-    let _ = allow_ready_timeout_bypass;
-    SdioFunctionReadyBudget::Strict
+    if allow_ready_timeout_bypass {
+        SdioFunctionReadyBudget::ExperimentalBypass
+    } else {
+        SdioFunctionReadyBudget::Strict
+    }
 }
 
 #[inline]
@@ -16115,6 +16120,14 @@ impl SdioHost {
             self.experimental_no_ht_transport = false;
             self.experimental_control_plane_write_probe_pending = false;
             self.ensure_control_plane_clock("setup-firmware-channel-clock")?;
+        } else if self.post_download_forced_alp_kso_edge_can_continue_to_function2() {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=wait-ht-clock action=bounded-f2-probe mode={} reason=forced-alp-kso-no-ior2 current={}Hz",
+                cyw43_transport_mode_name(true),
+                self.current_clock_hz,
+            ));
+            self.enter_bounded_no_ht_transport("wait-ht-clock-pi4-forced-alp-kso")?;
+            self.ensure_pre_ht_startup_clock("setup-firmware-channel-clock")?;
         } else if firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout() {
             self.enter_bounded_no_ht_transport("wait-ht-clock")?;
             self.ensure_pre_ht_startup_clock("setup-firmware-channel-clock")?;
@@ -24744,9 +24757,9 @@ mod tests {
     }
 
     #[test]
-    fn function2_ready_timeout_requires_real_function2_ready() {
+    fn function2_ready_timeout_allows_only_bounded_experimental_f2_probe() {
         let desired = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
-        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
+        assert!(sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             desired,
             SDIO_FUNC_READY_1,
@@ -24803,22 +24816,22 @@ mod tests {
     }
 
     #[test]
-    fn firmware_stage_requires_real_function2_ready_even_on_no_ht_path() {
-        assert!(!firmware_stage_allows_function2_ready_bypass(true));
+    fn firmware_stage_bypass_is_limited_to_no_ht_probe_path() {
+        assert!(firmware_stage_allows_function2_ready_bypass(true));
         assert!(!firmware_stage_allows_function2_ready_bypass(false));
     }
 
     #[test]
-    fn bounded_no_ht_function2_setup_still_uses_strict_ready_budget() {
+    fn bounded_no_ht_function2_setup_uses_short_probe_budget() {
         assert_eq!(
             sdio_function_ready_budget_for_bypass(true),
-            SdioFunctionReadyBudget::Strict
+            SdioFunctionReadyBudget::ExperimentalBypass
         );
         assert_eq!(
             sdio_function_ready_budget_for_bypass(false),
             SdioFunctionReadyBudget::Strict
         );
-        assert!(!sdio_function_ready_timeout_can_continue_experimentally(
+        assert!(sdio_function_ready_timeout_can_continue_experimentally(
             SDIO_FUNCTION_ENABLE_F2,
             SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2,
             SDIO_FUNC_READY_1,

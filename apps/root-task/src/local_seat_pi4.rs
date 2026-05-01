@@ -239,6 +239,10 @@ const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 2] = [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XH
 const XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE: bool = true;
 const XHCI_VL805_PCIE_IRQ_SINK_ENABLED: bool = true;
 const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = true;
+// Drain the bound PCIe/INTx IRQHandlers before the fresh high-BAR HCRST edge,
+// but keep the unsafe BCM2711 host PCIe status/source MMIO mask disabled by
+// default. The latest board trace halted before the first pre-reset quiesce
+// log, which points at the host-page map/touch itself rather than xHCI HCRST.
 const XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED: bool = true;
 // IRQ 27 is not an xHCI source, and the board trace proves seL4 rejects
 // root-task IRQControl requests for that kernel-owned virtual-timer PPI. Keep
@@ -7774,26 +7778,50 @@ fn xhci_quiesce_pcie_irq_sources_before_reset(
     mmio: usize,
     firmware_handoff: XhciFirmwareHandoff,
 ) -> bool {
-    let mut host_irq_maps = Vec::new();
-    let Some((_status_frame, status_reg)) = bcm2711_pcie_map_reg_page(
-        hal,
-        &mut host_irq_maps,
-        BCM2711_PCIE_MISC_PCIE_STATUS,
-        "pcie-xhci-pre-reset-status",
-    ) else {
-        let mut line = heapless::String::<240>::new();
+    let host_mmio_quiesce = VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN;
+    let mut begin_line = heapless::String::<288>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut begin_line,
+        format_args!(
+            "[local-seat] xhci irq pre-reset quiesce begin mmio=0x{mmio:016x} handoff={} host_mmio={}",
+            xhci_firmware_handoff_mode_label(firmware_handoff),
+            if host_mmio_quiesce { "yes" } else { "no" },
+        ),
+    );
+    boot_log::force_uart_line(begin_line.as_str());
+
+    if host_mmio_quiesce {
+        let mut host_irq_maps = Vec::new();
+        let Some((_status_frame, status_reg)) = bcm2711_pcie_map_reg_page(
+            hal,
+            &mut host_irq_maps,
+            BCM2711_PCIE_MISC_PCIE_STATUS,
+            "pcie-xhci-pre-reset-status",
+        ) else {
+            let mut line = heapless::String::<240>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci irq pre-reset quiesce failed mmio=0x{mmio:016x} handoff={} reason=pcie-status-unavailable",
+                    xhci_firmware_handoff_mode_label(firmware_handoff),
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return false;
+        };
+
+        bcm2711_pcie_mask_and_clear_irq_sources(status_reg, "pre-xhci-reset");
+    } else {
+        let mut line = heapless::String::<288>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci irq pre-reset quiesce failed mmio=0x{mmio:016x} handoff={} reason=pcie-status-unavailable",
+                "[local-seat] xhci irq pre-reset host-mmio quiesce skipped mmio=0x{mmio:016x} handoff={} reason=host-mmio-quiesce-opt-in-disabled action=ack-bound-pcie-sinks",
                 xhci_firmware_handoff_mode_label(firmware_handoff),
             ),
         );
         boot_log::force_uart_line(line.as_str());
-        return false;
-    };
-
-    bcm2711_pcie_mask_and_clear_irq_sources(status_reg, "pre-xhci-reset");
+    }
 
     let mut acked = 0usize;
     for binding in guard.bindings.iter().flatten() {
@@ -7833,8 +7861,9 @@ fn xhci_quiesce_pcie_irq_sources_before_reset(
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] xhci irq pre-reset quiesce mmio=0x{mmio:016x} handoff={} acked={} expected={} complete={}",
+            "[local-seat] xhci irq pre-reset quiesce mmio=0x{mmio:016x} handoff={} host_mmio={} acked={} expected={} complete={}",
             xhci_firmware_handoff_mode_label(firmware_handoff),
+            if host_mmio_quiesce { "yes" } else { "no" },
             acked,
             TRUSTED_XHCI_PCIE_SINK_IRQS.len(),
             complete as u8,
@@ -9372,6 +9401,18 @@ impl UsbKeyboard {
                                 );
                                 continue;
                             }
+                        } else if requires_primary_pcie_irq
+                            && !XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED
+                        {
+                            let mut line = heapless::String::<288>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci irq pre-reset host-mmio quiesce skipped mmio=0x{effective_mmio:016x} handoff={} reason=host-mmio-quiesce-disabled action=use-bound-pcie-sinks",
+                                    xhci_firmware_handoff_mode_label(strategy.firmware_handoff),
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
                         }
 
                         let dma = SeatDma::new(hal, prefer_high, pcie_dma_window);
@@ -16859,8 +16900,17 @@ mod tests {
     }
 
     #[test]
-    fn pre_reset_irq_quiesce_is_required_before_high_bar_hcrst_paths() {
+    fn pre_reset_irq_quiesce_is_ack_only_for_high_bar_hcrst_paths_by_default() {
         assert!(XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED);
+        assert!(!VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN);
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
+        ));
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
+        ));
         assert!(xhci_pre_reset_irq_quiesce_required(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
