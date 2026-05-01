@@ -285,7 +285,10 @@ const fn initial_live_operational_read_hazard(
     skip_initial_live_operational_reads: bool,
 ) -> bool {
     skip_initial_live_operational_reads
-        && matches!(firmware_handoff, XhciFirmwareHandoff::None)
+        && matches!(
+            firmware_handoff,
+            XhciFirmwareHandoff::None | XhciFirmwareHandoff::PlatformResetComplete
+        )
         && runtime_seed_snapshot.is_none()
 }
 
@@ -494,7 +497,7 @@ const fn skip_doorbell_readback_after_ring(firmware_handoff: XhciFirmwareHandoff
 const fn skip_config_write_during_init(firmware_handoff: XhciFirmwareHandoff) -> bool {
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::PlatformResetComplete | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::PreserveControllerState
     )
 }
 
@@ -503,10 +506,9 @@ const fn skip_config_write_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Platform-reset and stop-state lanes keep CONFIG untouched. Linux capture
-    // and U-Boot stop evidence both show MaxSlotsEn=32, and Pi 4/seL4 currently
-    // traps on the redundant CONFIG store before any ring ownership edge is
-    // reached.
+    // Stop-state lanes keep CONFIG untouched. Platform-reset-complete is a
+    // fresh cold-start boundary, so it must program MaxSlotsEn before DCBAAP
+    // just like the generic xHCI reset path.
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -517,11 +519,13 @@ const fn skip_config_write_during_init_with_snapshot(
 #[inline(always)]
 const fn skip_reset_during_init(firmware_handoff: XhciFirmwareHandoff) -> bool {
     // Resetless and preserve-state handoff modes are only safe when firmware
-    // has already proven the controller halted and interrupt-quiesced. The
-    // snapshot-driven cold-start path intentionally falls back to the normal
-    // halt/reset/config sequence so runtime matches the known-good U-Boot
-    // controller bring-up more closely while still avoiding a live CAP read.
-    skip_preinit_polling_scrub(firmware_handoff) || SKIP_HCRST_DURING_INIT
+    // has already proven the controller halted and interrupt-quiesced. A Pi 4
+    // platform reset is not xHCI runtime ownership; still issue HCRST before
+    // CONFIG/DCBAAP so ring publication follows the known-good cold-start path.
+    matches!(
+        firmware_handoff,
+        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+    ) || SKIP_HCRST_DURING_INIT
 }
 
 #[inline(always)]
@@ -758,6 +762,7 @@ const fn runtime_handoff_needs_uboot_style_reset_write(
     // seeds treat the halted snapshot as reset authority and skip HCRST.
     runtime_owned_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_unseeded_full_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -789,12 +794,13 @@ const fn platform_reset_dcbaap_publish_blocked_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Pi 4/VL805 platform-reset-complete is a mailbox/layout witness, not a
-    // live controller-ownership proof. Board traces show the first DCBAAP
-    // dword store on this lane is the toxic edge, independent of split-register
-    // ordering, so fail before the MMIO publication until a stronger seeded
-    // ownership path exists.
-    runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
+    // Pi 4/VL805 platform-reset-complete reaches this xHCI layer only after
+    // local-seat has proven PCI COMMAND/BAR ownership and the mailbox reset
+    // boundary. The weaker static capture-only witness is filtered before
+    // controller construction, so this path may publish fresh runtime rings
+    // after the cold-start HCRST/CONFIG sequence.
+    let _ = (firmware_handoff, runtime_seed_snapshot);
+    false
 }
 
 #[inline(always)]
@@ -1444,8 +1450,8 @@ pub enum XhciFirmwareHandoff {
     /// controller state.
     PreserveControllerState = 3,
     /// Platform firmware or mailbox reset completed outside the xHCI HCRST
-    /// register edge. Runtime skips HCRST, then publishes fresh config and ring
-    /// ownership using the normal post-reset order.
+    /// register edge. Runtime treats that as the platform reset boundary, then
+    /// performs the xHCI HCRST/config/ring sequence locally.
     PlatformResetComplete = 4,
 }
 
@@ -5786,14 +5792,14 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_complete_dcbaap_publish_is_blocked_before_mmio_store() {
+    fn platform_reset_complete_dcbaap_publish_is_allowed_after_local_ownership_gate() {
         assert!(
             !runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 None,
             )
         );
-        assert!(platform_reset_dcbaap_publish_blocked_with_snapshot(
+        assert!(!platform_reset_dcbaap_publish_blocked_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -6262,14 +6268,14 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_complete_skips_hcrst_but_blocks_dcbaap_publish() {
-        assert!(skip_reset_during_init(
+    fn platform_reset_complete_uses_hcrst_and_config_before_ring_publish() {
+        assert!(!skip_reset_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
-        assert!(skip_config_write_during_init(
+        assert!(!skip_config_write_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
-        assert!(skip_config_write_during_init_with_snapshot(
+        assert!(!skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -6284,6 +6290,24 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
+        assert!(initial_live_operational_read_hazard(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+            true,
+        ));
+        assert_eq!(
+            reset_usbcmd_seed_before_hcrst_for_init(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                None,
+                true,
+            ),
+            Some(0),
+        );
+        assert!(skip_reset_completion_poll_for_init(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+            true,
+        ));
         assert!(!runtime_deferred_ring_handoff(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
@@ -6292,7 +6316,7 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(platform_reset_dcbaap_publish_blocked_with_snapshot(
+        assert!(!platform_reset_dcbaap_publish_blocked_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -6309,6 +6333,10 @@ mod tests {
             None,
         ));
         assert!(runtime_handoff_needs_uboot_style_run_write(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(runtime_handoff_needs_uboot_style_reset_write(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -7383,11 +7411,11 @@ mod tests {
     }
 
     #[test]
-    fn platform_and_preserve_state_handoffs_skip_config_write_during_init() {
+    fn preserve_state_handoff_skips_config_write_during_init() {
         assert!(!skip_config_write_during_init(
             XhciFirmwareHandoff::ColdStartFromSnapshot
         ));
-        assert!(skip_config_write_during_init(
+        assert!(!skip_config_write_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
         assert!(skip_config_write_during_init(

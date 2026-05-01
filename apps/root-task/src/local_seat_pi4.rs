@@ -93,8 +93,14 @@ const RPI4_VL805_XHCI_RTSOFF: u32 = 0x0000_0200;
 const RPI4_VL805_LINUX_VENDOR_DEVICE: u32 =
     ((VL805_PCI_DEVICE_ID as u32) << 16) | VL805_PCI_VENDOR_ID as u32;
 const RPI4_VL805_LINUX_CLASS_REVISION: u32 = VL805_EXPECTED_CLASS_CODE << 8;
-const RPI4_VL805_LINUX_COMMAND: u16 =
-    PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE;
+// Linux captures report COMMAND=0x0546. Cohesix still treats only Mem,
+// BusMaster, and INTx-disable as the ownership minimum; the extra ParErr/SERR
+// bits are retained here so the static witness matches the captured layout.
+const RPI4_VL805_LINUX_COMMAND: u16 = PCI_COMMAND_MEMORY_SPACE
+    | PCI_COMMAND_BUS_MASTER
+    | PCI_COMMAND_PARITY_ERROR_RESPONSE
+    | PCI_COMMAND_SERR_ENABLE
+    | PCI_COMMAND_INTERRUPT_DISABLE;
 const RPI4_VL805_LINUX_BAR0: u32 = 0xC000_0004;
 const RPI4_VL805_LINUX_BAR1: u32 = 0x0000_0000;
 const RPI4_PCIE_CPU_MMIO_WINDOW_BASE: usize = RPI4_XHCI_MMIO_HIGH_CANDIDATE;
@@ -252,16 +258,17 @@ const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
 // a real ECAM aperture.
 const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = false;
 // BCM2711 external-config reads use the same EXT_CFG_INDEX/DATA register pair
-// as Linux/U-Boot. Keep live replay opt-in for lab builds: the default USB
-// path uses the Linux capture only as a static witness and must not touch
-// EXT_CFG before the board trace proves that edge safe under seL4.
+// as Linux/U-Boot, but the current seL4 board trace traps immediately after
+// entering that lane. Keep live replay opt-in: the default USB path uses the
+// Linux capture as a bounded layout/COMMAND witness after local high-BAR
+// pinning and mailbox-reset confirmation.
 const VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN: bool = false;
 const VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED: bool =
     VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN;
 const VL805_LINUX_CAPTURE_CFG_WITNESS_ENABLED: bool = true;
 // The static Linux-capture witness is a config/layout proof, not permission to
 // touch BCM2711 PCIe host status or interrupt-source registers. Those MMIO
-// edges are kept opt-in until HAL IRQ sinks are proven installed first.
+// edges stay opt-in until HAL IRQ sinks are proven before the first host touch.
 const VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN: bool = false;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -292,6 +299,8 @@ const fn vl805_cfg_preseed_needed(
 
 const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
+const PCI_COMMAND_PARITY_ERROR_RESPONSE: u16 = 1 << 6;
+const PCI_COMMAND_SERR_ENABLE: u16 = 1 << 8;
 const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
 const VL805_PCI_VENDOR_ID: u16 = 0x1106;
 const VL805_PCI_DEVICE_ID: u16 = 0x3483;
@@ -1335,7 +1344,9 @@ fn usb_ownership_fresh_ownership_label(
         "allowed"
     } else if xhci_runtime_init_strategy_skips_controller_entry(effective_strategy) {
         "skipped"
-    } else if xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy) {
+    } else if strategy == effective_strategy
+        && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
+    {
         "skipped-after-mailbox-reset"
     } else {
         "blocked"
@@ -1376,7 +1387,7 @@ fn usb_ownership_next_step_label(
             if mailbox_required && !mailbox_reset_completed {
                 "mailbox-reset-notify-then-pollsafe-skip"
             } else {
-                "enable-live-ext-cfg-or-stay-pollsafe"
+                "live-ext-cfg-disabled-stay-pollsafe"
             }
         }
         "vl805-command-replay-missing" => "export-vl805-command-ready",
@@ -1515,10 +1526,12 @@ fn usb_probe_preflight_status(
         })?;
     let mailbox_reset_completed =
         runtime_vl805_mailbox_reset_completed(VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire));
-    let effective_strategy = xhci_runtime_init_strategy_after_mailbox_reset(
+    let effective_strategy = xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
         effective_mmio,
         strategy,
         mailbox_reset_completed,
+        xhci_fresh_runtime_ownership_ready(vl805_cfg_bus_master_ready()),
+        stop_state_snapshot,
     );
     let summary = UsbProbePathwaySummary::new(
         1,
@@ -2430,10 +2443,12 @@ pub(crate) fn latest_usb_ownership_contract_status() -> UsbOwnershipContractStat
     let mailbox_reset_state = VL805_RUNTIME_RESET_STATE.load(Ordering::Acquire);
     let mailbox_reset_completed = runtime_vl805_mailbox_reset_completed(mailbox_reset_state);
     let strategy = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
-    let effective_strategy = xhci_runtime_init_strategy_after_mailbox_reset(
+    let effective_strategy = xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
         RPI4_XHCI_MMIO_HIGH_CANDIDATE,
         strategy,
         mailbox_reset_completed,
+        xhci_fresh_runtime_ownership_ready(vl805_cfg_bus_master_ready()),
+        None,
     );
     usb_ownership_contract_status(
         None,
@@ -2636,13 +2651,17 @@ fn xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
     mmio: usize,
     strategy: XhciRuntimeInitStrategy,
     mailbox_reset_completed: bool,
-    fresh_runtime_ownership_ready: bool,
+    _fresh_runtime_ownership_ready: bool,
     _stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
 ) -> XhciRuntimeInitStrategy {
     if mailbox_reset_completed
         && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
-        && fresh_runtime_ownership_ready
     {
+        // A VL805 mailbox ACK is the platform reset boundary on the
+        // Linux-captured high-BAR lane. The xHCI layer still performs its own
+        // HCRST/CONFIG sequence before publishing rings; the local
+        // fresh-ownership gate below decides whether controller entry may
+        // publish or must return to the prompt.
         XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
     } else {
         strategy
@@ -4782,8 +4801,25 @@ const fn xhci_runtime_init_strategy_skips_runtime_publication_entry(
 }
 
 #[inline]
+const fn xhci_fresh_runtime_ownership_ready_from_sources(
+    pci_cfg_ready: bool,
+    live_command_ready: bool,
+    capture_witness_ready: bool,
+) -> bool {
+    capture_witness_ready || (pci_cfg_ready && live_command_ready)
+}
+
+#[inline]
 fn xhci_fresh_runtime_ownership_ready(pci_cfg_ready: bool) -> bool {
-    pci_cfg_ready && vl805_cfg_command().is_some_and(vl805_command_ownership_ready)
+    // Live BCM2711 EXT_CFG access is not safe on current Pi 4 hardware evidence.
+    // The capture witness path is accepted only after it has pinned the high BAR
+    // and recorded the captured COMMAND shadow; mailbox ACK still gates the
+    // PlatformResetComplete strategy that can publish runtime rings.
+    xhci_fresh_runtime_ownership_ready_from_sources(
+        pci_cfg_ready,
+        vl805_cfg_command().is_some_and(vl805_command_ownership_ready),
+        vl805_capture_cfg_witness_ready(),
+    )
 }
 
 #[inline]
@@ -4821,9 +4857,7 @@ const fn xhci_runtime_init_strategy_pre_reset_label(
     } else if strategy.seed_stop_state
         || matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::ResetlessReinit
-                | XhciFirmwareHandoff::PlatformResetComplete
-                | XhciFirmwareHandoff::PreserveControllerState
+            XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
         )
     {
         "skip-pre-reset"
@@ -6983,10 +7017,15 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
     remember_vl805_cfg_command_shadow(snapshot.command);
     let selected = record_vl805_xhci_mmio_hint(&snapshot, "linux-capture-replay")?;
     let mut line = heapless::String::<320>::new();
+    let live_ext_cfg = if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
+        "fallback"
+    } else {
+        "disabled"
+    };
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] vl805 capture cfg witness selected source=linux-capture-static live_ext_cfg=disabled vid:did={vendor:08x} class=0x{class:08x} cmd=0x{cmd:04x} bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{selected:016x}",
+            "[local-seat] vl805 capture cfg witness selected source=linux-capture-static live_ext_cfg={live_ext_cfg} vid:did={vendor:08x} class=0x{class:08x} cmd=0x{cmd:04x} bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{selected:016x}",
             vendor = snapshot.vendor_device,
             class = snapshot.class_revision,
             cmd = snapshot.command,
@@ -7166,11 +7205,18 @@ fn prepare_vl805_pci_bcm2711(
 
 fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
     let mut prefix_maps = Vec::new();
+    if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
+        if let Some(mmio) = prepare_vl805_pci_bcm2711(hal, &mut prefix_maps) {
+            return Some(mmio);
+        }
+    }
     if let Some(mmio) = prepare_vl805_pci_capture_witness(hal) {
         return Some(mmio);
     }
-    if let Some(mmio) = prepare_vl805_pci_bcm2711(hal, &mut prefix_maps) {
-        return Some(mmio);
+    if !VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
+        if let Some(mmio) = prepare_vl805_pci_bcm2711(hal, &mut prefix_maps) {
+            return Some(mmio);
+        }
     }
     for &ecam_base in &VL805_ECAM_BASE_CANDIDATES {
         let Some(config_paddr) = ecam_base.checked_add(VL805_PCI_DEV_ADDR as usize) else {
@@ -7854,7 +7900,7 @@ impl UsbKeyboard {
         } else {
             (None, false)
         };
-        let fresh_runtime_ownership_ready = xhci_fresh_runtime_ownership_ready(pci_cfg_ready);
+        let mut fresh_runtime_ownership_ready = xhci_fresh_runtime_ownership_ready(pci_cfg_ready);
 
         let trusted_pinned_xhci_mmio = pinned_xhci_phys_start_trusted();
         let pinned_xhci_state = pinned_xhci_phys_state();
@@ -8896,15 +8942,6 @@ impl UsbKeyboard {
                         boot_log::force_uart_line(skip.as_str());
                         continue;
                     }
-                    let mut ready = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut ready,
-                        format_args!(
-                            "[local-seat] vl805 reset handoff=runtime-owned stage=pre-xhci-reset detail=mailbox-acked action=continue-platform-reset-fresh-rings mmio=0x{mmio:016x}",
-                            mmio = effective_mmio,
-                        ),
-                    );
-                    boot_log::force_uart_line(ready.as_str());
                     effective_strategy =
                         xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
                             effective_mmio,
@@ -8913,6 +8950,23 @@ impl UsbKeyboard {
                             fresh_runtime_ownership_ready,
                             xhci_stop_state_snapshot,
                         );
+                    let mailbox_ready_action = match effective_strategy.firmware_handoff {
+                        XhciFirmwareHandoff::PlatformResetComplete => {
+                            "continue-platform-reset-fresh-rings"
+                        }
+                        _ => "continue-runtime-init",
+                    };
+                    let mut ready = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut ready,
+                        format_args!(
+                            "[local-seat] vl805 reset handoff=runtime-owned stage=pre-xhci-reset detail=mailbox-acked action={mailbox_ready_action} mmio=0x{mmio:016x}",
+                            mmio = effective_mmio,
+                        ),
+                    );
+                    boot_log::force_uart_line(ready.as_str());
+                    fresh_runtime_ownership_ready =
+                        xhci_fresh_runtime_ownership_ready(vl805_cfg_bus_master_ready());
                     controller_params = xhci_controller_params_from_probe_with_strategy(
                         cap_probe,
                         effective_mmio,
@@ -14258,7 +14312,7 @@ mod tests {
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                 strategy,
             ),
-            "skip-pre-reset"
+            "full-pre-reset"
         );
         assert_eq!(
             xhci_runtime_init_strategy_legacy_label_for_source(
@@ -14270,7 +14324,7 @@ mod tests {
     }
 
     #[test]
-    fn mailbox_acked_without_config_replay_keeps_full_reset_strategy() {
+    fn mailbox_acked_without_config_replay_uses_platform_reset_published_gate() {
         let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
         let strategy = xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -14280,7 +14334,32 @@ mod tests {
             None,
         );
 
-        assert_eq!(strategy, full_reset);
+        assert_eq!(
+            strategy,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
+        );
+        assert!(
+            super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, false,)
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_pre_reset_label_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+            ),
+            "full-pre-reset"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_legacy_label_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+            ),
+            "skip-legacy"
+        );
+        assert_eq!(xhci_runtime_init_strategy_run_label(strategy), "run-uboot");
+        assert_eq!(
+            xhci_runtime_init_strategy_publish_label(strategy),
+            "rings-pre-run"
+        );
     }
 
     #[test]
@@ -15082,7 +15161,7 @@ mod tests {
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                 strategy,
             ),
-            "skip-pre-reset"
+            "full-pre-reset"
         );
         assert!(!xhci_runtime_init_strategy_skips_controller_entry(strategy));
         assert!(super::xhci_runtime_init_strategy_requires_fresh_publication_proof(strategy));
@@ -15114,6 +15193,39 @@ mod tests {
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             strategy,
         ));
+    }
+
+    #[test]
+    fn capture_witness_allows_platform_reset_publish_without_live_ext_cfg() {
+        let strategy =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
+
+        assert!(super::xhci_fresh_runtime_ownership_ready_from_sources(
+            true, false, true,
+        ));
+        assert!(super::xhci_fresh_runtime_ownership_ready_from_sources(
+            false, false, true,
+        ));
+        assert!(!super::xhci_fresh_runtime_ownership_ready_from_sources(
+            true, false, false,
+        ));
+        assert!(
+            !super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, true,)
+        );
+        assert!(
+            super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, false,)
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_pre_reset_label_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+            ),
+            "full-pre-reset"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_publish_label(strategy),
+            "rings-pre-run"
+        );
     }
 
     #[test]
