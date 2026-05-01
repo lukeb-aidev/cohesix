@@ -861,6 +861,21 @@ const fn post_download_ht_sideband_shadow_is_complete(
     }
 }
 
+const fn post_download_forced_alp_kso_sideband_allows_function2_probe(
+    last_wakeupctrl: Option<u8>,
+    last_sleepcsr: Option<u8>,
+    last_cardcap: Option<u8>,
+) -> bool {
+    let _ = last_cardcap;
+    match (last_wakeupctrl, last_sleepcsr) {
+        (Some(wake), Some(sleep)) => {
+            (wake & SBSDIO_WAKE_TILL_HT_AVAIL) == SBSDIO_WAKE_TILL_HT_AVAIL
+                && post_download_ht_sleepcsr_ready_for_function2(sleep)
+        }
+        _ => false,
+    }
+}
+
 #[inline]
 const fn pre_function2_ht_sideband_programs_sr_registers() -> bool {
     // Generic pre-F2 recovery refreshes remain KSO-only. The post-download HT
@@ -3848,16 +3863,17 @@ const fn function2_accepts_linux_alp_kso_forced_ht_clock(
     current_clock_hz: u32,
 ) -> bool {
     // The Pi 4 CYW43455 post-release edge can remain at HT_REQ|FORCE_HT|ALP_AVAIL
-    // until Function 2 traffic starts. Accept only that promoted-clock tuple,
-    // with wake/CMD14/KSO sideband complete, and still require Function 2 IOR2
-    // before any firmware-channel use.
+    // until Function 2 traffic starts. Accept only that promoted-clock tuple
+    // with wake/KSO proof. CARDCAP readback is diagnostic on this path because
+    // the bounded probe still requires Function 2 latch/ready evidence before
+    // any firmware-channel use.
     let _ = experimental_no_ht_transport;
     (chipclk & SBSDIO_HT_AVAIL) == 0
         && (chipclk & SBSDIO_HT_AVAIL_REQ) != 0
         && (chipclk & SBSDIO_FORCE_HT) != 0
         && (chipclk & SBSDIO_ALP_AVAIL) != 0
         && function2_forced_ht_clock_can_try_ready_poll(current_clock_hz)
-        && post_download_ht_sideband_shadow_is_complete(
+        && post_download_forced_alp_kso_sideband_allows_function2_probe(
             last_wakeupctrl,
             last_sleepcsr,
             last_cardcap,
@@ -16287,10 +16303,6 @@ impl SdioHost {
                                 .map(|snapshot| snapshot.control_plane_exact_error)
                                 .unwrap_or(exact_error)
                         };
-                    let visible_linux_f2_state =
-                        control_plane_function2_latched_linux_configured_without_iorx(
-                            ioex, iorx, ienx, watermark, devctl, mesbusy,
-                        );
                     if post_firmware_ready_function2_strict_repoll_prefers_direct_reply_probe_cutover(
                         self.experimental_no_ht_transport,
                         ioex,
@@ -16331,8 +16343,7 @@ impl SdioHost {
                             ioex, iorx, ienx, watermark, devctl, mesbusy,
                         ),
                         Function2StrictRepollRecovery::CutoverToBoundedNoHtReplyProbe
-                    ) && !visible_linux_f2_state
-                        && !cached_direct_cutover
+                    ) && !cached_direct_cutover
                         && !post_firmware_ready_function2_strict_repoll_prefers_fail_fast(
                             self.experimental_no_ht_transport,
                             direct_cutover_exact_error,
@@ -16538,6 +16549,9 @@ impl SdioHost {
             self.last_sleepcsr,
             self.last_cardcap,
         );
+        self.experimental_no_ht_transport = true;
+        self.experimental_control_plane_write_probe_pending = true;
+        self.record_bounded_phase(stage, "forced-alp-kso-function2");
         self.log_transport_shadow("wait-ht-clock-pi4-forced-alp-kso-function2");
         true
     }
@@ -16881,6 +16895,35 @@ impl SdioHost {
                     required_ht_clock_linux_active_wait_loops(),
                 ));
                 return Ok(true);
+            }
+            if stronger_retry_request
+                && function2_accepts_linux_alp_kso_forced_ht_clock(
+                    self.experimental_no_ht_transport,
+                    chipclk,
+                    self.last_wakeupctrl,
+                    self.last_sleepcsr,
+                    self.last_cardcap,
+                    self.current_clock_hz,
+                )
+            {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} early-linux-alp-force-probe csr=0x{chipclk:02x} action=continue-to-function2 polls={}/{} reason=stable-forced-alp-kso",
+                    poll_index.saturating_add(1),
+                    required_ht_clock_linux_active_wait_loops(),
+                ));
+                log_ht_clock_status(
+                    stage,
+                    "active-ht-linux-alp-force-probe",
+                    chipclk,
+                    self.last_wakeupctrl,
+                    self.last_sleepcsr,
+                    self.last_cardcap,
+                );
+                self.experimental_no_ht_transport = true;
+                self.experimental_control_plane_write_probe_pending = true;
+                self.record_bounded_phase(stage, "early-forced-alp-kso-function2");
+                self.log_transport_shadow("wait-ht-clock-active-linux-alp-force-probe");
+                return Ok(false);
             }
             if poll_index != 0 && poll_index % CYW43_HT_CLOCK_LINUX_ACTIVE_PROGRESS_POLLS == 0 {
                 emit_breadcrumb(format_args!(
@@ -29184,6 +29227,62 @@ mod tests {
     }
 
     #[test]
+    fn forced_alp_kso_cutover_accepts_reported_pi4_snapshot_without_cardcap() {
+        let forced_tuple = SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL;
+        let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
+        let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK);
+
+        assert_eq!(forced_tuple, 0x52);
+        assert_eq!(wake, Some(0x02));
+        assert_eq!(sleep, Some(0x01));
+        assert!(!post_download_ht_sideband_shadow_is_complete(
+            wake, sleep, None
+        ));
+        assert!(post_download_forced_alp_kso_sideband_allows_function2_probe(wake, sleep, None));
+        assert!(post_download_forced_alp_kso_sideband_allows_function2_probe(wake, sleep, Some(0)));
+        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+            false,
+            forced_tuple,
+            wake,
+            sleep,
+            None,
+            CYW43_STARTUP_CLOCK_HZ,
+        ));
+        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+            false,
+            forced_tuple,
+            wake,
+            sleep,
+            Some(0),
+            CYW43_STARTUP_CLOCK_HZ,
+        ));
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+            false,
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL,
+            wake,
+            sleep,
+            None,
+            CYW43_STARTUP_CLOCK_HZ,
+        ));
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+            false,
+            forced_tuple,
+            None,
+            sleep,
+            None,
+            CYW43_STARTUP_CLOCK_HZ,
+        ));
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+            false,
+            forced_tuple,
+            wake,
+            Some(0),
+            None,
+            CYW43_STARTUP_CLOCK_HZ,
+        ));
+    }
+
+    #[test]
     fn firmware_readback_status_is_explicit_and_bounded() {
         assert!(!firmware_download_readback_verify_required(false));
         assert_eq!(
@@ -29405,7 +29504,7 @@ mod tests {
             Some(cyw43455_cardcap_command_decode_value()),
             CYW43_CONTROL_PLANE_CLOCK_HZ,
         ));
-        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
             false,
             SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL,
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),

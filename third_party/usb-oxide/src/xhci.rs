@@ -519,12 +519,15 @@ const fn skip_config_write_during_init_with_snapshot(
 #[inline(always)]
 const fn skip_reset_during_init(firmware_handoff: XhciFirmwareHandoff) -> bool {
     // Resetless and preserve-state handoff modes are only safe when firmware
-    // has already proven the controller halted and interrupt-quiesced. A Pi 4
-    // platform reset is not xHCI runtime ownership; still issue HCRST before
-    // CONFIG/DCBAAP so ring publication follows the known-good cold-start path.
+    // has already proven the controller halted and interrupt-quiesced. On Pi 4
+    // the mailbox reset is the platform reset boundary; current seL4 hardware
+    // traces trap IRQ 27 at the follow-on HCRST write, so publish fresh
+    // CONFIG/DCBAAP/rings without repeating the xHCI reset edge.
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::ResetlessReinit
+            | XhciFirmwareHandoff::PlatformResetComplete
+            | XhciFirmwareHandoff::PreserveControllerState
     ) || SKIP_HCRST_DURING_INIT
 }
 
@@ -759,10 +762,10 @@ const fn runtime_handoff_needs_uboot_style_reset_write(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     // Fresh unseeded paths use the same reset edge as U-Boot/Linux. Stop-state
-    // seeds treat the halted snapshot as reset authority and skip HCRST.
+    // and platform-reset-complete paths already have reset authority, so they
+    // skip HCRST and keep the U-Boot-style direct write only for RUN.
     runtime_owned_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_unseeded_full_reset_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -798,7 +801,7 @@ const fn platform_reset_dcbaap_publish_blocked_with_snapshot(
     // local-seat has proven PCI COMMAND/BAR ownership and the mailbox reset
     // boundary. The weaker static capture-only witness is filtered before
     // controller construction, so this path may publish fresh runtime rings
-    // after the cold-start HCRST/CONFIG sequence.
+    // after CONFIG/DCBAAP publication without repeating HCRST.
     let _ = (firmware_handoff, runtime_seed_snapshot);
     false
 }
@@ -1450,8 +1453,8 @@ pub enum XhciFirmwareHandoff {
     /// controller state.
     PreserveControllerState = 3,
     /// Platform firmware or mailbox reset completed outside the xHCI HCRST
-    /// register edge. Runtime treats that as the platform reset boundary, then
-    /// performs the xHCI HCRST/config/ring sequence locally.
+    /// register edge. Runtime treats that as the platform reset boundary and
+    /// performs CONFIG/ring publication locally without repeating HCRST.
     PlatformResetComplete = 4,
 }
 
@@ -6268,8 +6271,8 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_complete_uses_hcrst_and_config_before_ring_publish() {
-        assert!(!skip_reset_during_init(
+    fn platform_reset_complete_skips_hcrst_but_keeps_config_before_ring_publish() {
+        assert!(skip_reset_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
         assert!(!skip_config_write_during_init(
@@ -6336,7 +6339,7 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(runtime_handoff_needs_uboot_style_reset_write(
+        assert!(!runtime_handoff_needs_uboot_style_reset_write(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));

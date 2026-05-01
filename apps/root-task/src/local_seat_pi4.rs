@@ -239,10 +239,10 @@ const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 2] = [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XH
 const XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE: bool = true;
 const XHCI_VL805_PCIE_IRQ_SINK_ENABLED: bool = true;
 const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = true;
-// Drain the bound PCIe/INTx IRQHandlers before the fresh high-BAR HCRST edge,
+// Drain the bound PCIe/INTx IRQHandlers before high-BAR ownership writes,
 // but keep the unsafe BCM2711 host PCIe status/source MMIO mask disabled by
-// default. The latest board trace halted before the first pre-reset quiesce
-// log, which points at the host-page map/touch itself rather than xHCI HCRST.
+// default. Board traces have made both the host-page touch and post-mailbox
+// HCRST suspect edges, so the default path stays on HAL IRQ ACKs only.
 const XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED: bool = true;
 // IRQ 27 is not an xHCI source, and the board trace proves seL4 rejects
 // root-task IRQControl requests for that kernel-owned virtual-timer PPI. Keep
@@ -2663,10 +2663,9 @@ fn xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
         && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
     {
         // A VL805 mailbox ACK is the platform reset boundary on the
-        // Linux-captured high-BAR lane. The xHCI layer still performs its own
-        // HCRST/CONFIG sequence before publishing rings; the local
-        // fresh-ownership gate below decides whether controller entry may
-        // publish or must return to the prompt.
+        // Linux-captured high-BAR lane. The xHCI layer publishes CONFIG/rings
+        // without repeating HCRST; the local fresh-ownership gate below decides
+        // whether controller entry may publish or must return to the prompt.
         XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
     } else {
         strategy
@@ -4447,8 +4446,8 @@ const fn xhci_controller_skips_initial_live_operational_reads(
     // The Pi 4 Linux-captured high BAR path uses a static capability layout
     // witness, not live config-space authority. Current seL4 traces show the
     // first operational `USBCMD` read can halt before IRQ handling reaches
-    // root-task. Keep this unseeded captured-high-BAR lane read-free until
-    // HCRST/config/RUN rebuild controller ownership.
+    // root-task. Keep this unseeded captured-high-BAR lane read-free until the
+    // mailbox reset and CONFIG/ring/RUN publication rebuild controller ownership.
     mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
         && xhci_cap_probe_uses_linux_capture(mmio)
         && matches!(
@@ -4791,7 +4790,7 @@ const fn xhci_runtime_init_strategy_requires_fresh_publication_proof(
 ) -> bool {
     matches!(
         (strategy.firmware_handoff, strategy.seed_stop_state),
-        (XhciFirmwareHandoff::PlatformResetComplete, false)
+        (XhciFirmwareHandoff::PlatformResetComplete, _)
     )
 }
 
@@ -4857,7 +4856,14 @@ const fn xhci_runtime_init_strategy_constructor_label(
 const fn xhci_runtime_init_strategy_pre_reset_label(
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
-    if strategy.seed_stop_state && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None) {
+    if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::PlatformResetComplete
+    ) {
+        "skip-pre-reset"
+    } else if strategy.seed_stop_state
+        && matches!(strategy.firmware_handoff, XhciFirmwareHandoff::None)
+    {
         "seeded-no-hcrst"
     } else if strategy.seed_stop_state
         || matches!(
@@ -7757,6 +7763,7 @@ const fn xhci_runtime_init_strategy_requires_primary_pcie_irq(
             (strategy.firmware_handoff, strategy.seed_stop_state),
             (XhciFirmwareHandoff::ColdStartFromSnapshot, false)
                 | (XhciFirmwareHandoff::PlatformResetComplete, false)
+                | (XhciFirmwareHandoff::PlatformResetComplete, true)
                 | (XhciFirmwareHandoff::ResetlessReinit, false)
                 | (XhciFirmwareHandoff::None, false)
                 | (XhciFirmwareHandoff::None, true)
@@ -14503,7 +14510,7 @@ mod tests {
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                 strategy,
             ),
-            "full-pre-reset"
+            "skip-pre-reset"
         );
         assert_eq!(
             xhci_runtime_init_strategy_legacy_label_for_source(
@@ -14537,7 +14544,7 @@ mod tests {
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                 strategy,
             ),
-            "full-pre-reset"
+            "skip-pre-reset"
         );
         assert_eq!(
             xhci_runtime_init_strategy_legacy_label_for_source(
@@ -15352,7 +15359,7 @@ mod tests {
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                 strategy,
             ),
-            "full-pre-reset"
+            "skip-pre-reset"
         );
         assert!(!xhci_runtime_init_strategy_skips_controller_entry(strategy));
         assert!(super::xhci_runtime_init_strategy_requires_fresh_publication_proof(strategy));
@@ -15387,6 +15394,39 @@ mod tests {
     }
 
     #[test]
+    fn platform_reset_stop_seed_still_requires_pre_reset_irq_quiesce() {
+        let strategy =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true);
+
+        assert_eq!(
+            xhci_runtime_init_strategy_origin_label(strategy),
+            "stop-state-platform-reset-complete"
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_pre_reset_label_for_source(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+            ),
+            "skip-pre-reset"
+        );
+        assert!(super::xhci_runtime_init_strategy_requires_fresh_publication_proof(strategy));
+        assert!(
+            super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, false,)
+        );
+        assert!(
+            !super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, true,)
+        );
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+        ));
+        assert!(xhci_pre_reset_irq_quiesce_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+        ));
+    }
+
+    #[test]
     fn capture_witness_allows_platform_reset_publish_without_live_ext_cfg() {
         let strategy =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
@@ -15411,7 +15451,7 @@ mod tests {
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                 strategy,
             ),
-            "full-pre-reset"
+            "skip-pre-reset"
         );
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(strategy),
@@ -16889,6 +16929,10 @@ mod tests {
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
         ));
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true),
+        ));
         assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
@@ -16909,11 +16953,19 @@ mod tests {
         ));
         assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true),
+        ));
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
         assert!(xhci_pre_reset_irq_quiesce_required(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
+        ));
+        assert!(xhci_pre_reset_irq_quiesce_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true),
         ));
         assert!(xhci_pre_reset_irq_quiesce_required(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
