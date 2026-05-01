@@ -1471,6 +1471,11 @@ fn experimental_control_plane_post_write_timeout_prefers_direct_reply_probe_cuto
 }
 
 #[inline]
+fn diagnostic_ht_clock_ladder_enabled(stage: &'static str) -> bool {
+    stage != "debug-probe-ht"
+}
+
+#[inline]
 fn startup_link_resume_prefers_direct_reply_probe_cutover(
     experimental_no_ht_transport: bool,
     reply_rearm_mode: u8,
@@ -4774,6 +4779,18 @@ const fn control_plane_function2_latched_linux_configured_without_iorx(
 }
 
 #[inline]
+const fn control_plane_function2_latched_linux_transport_without_iorx(
+    ioex: Option<u8>,
+    iorx: Option<u8>,
+    watermark: Option<u8>,
+    devctl: Option<u8>,
+    mesbusy: Option<u8>,
+) -> bool {
+    control_plane_function2_enable_latched_not_ready(ioex, iorx)
+        && control_plane_function2_linux_transport_configured(watermark, devctl, mesbusy)
+}
+
+#[inline]
 const fn post_firmware_ready_function2_strict_repoll_can_soft_continue(
     ioex: Option<u8>,
     iorx: Option<u8>,
@@ -4782,8 +4799,9 @@ const fn post_firmware_ready_function2_strict_repoll_can_soft_continue(
     devctl: Option<u8>,
     mesbusy: Option<u8>,
 ) -> bool {
-    control_plane_function2_latched_linux_configured_without_iorx(
-        ioex, iorx, ienx, watermark, devctl, mesbusy,
+    let _ = ienx;
+    control_plane_function2_latched_linux_transport_without_iorx(
+        ioex, iorx, watermark, devctl, mesbusy,
     )
 }
 
@@ -4806,11 +4824,29 @@ fn post_firmware_ready_function2_strict_repoll_prefers_direct_reply_probe_cutove
     mesbusy: Option<u8>,
     exact_error: &'static str,
 ) -> bool {
+    let _ = ienx;
     experimental_no_ht_transport
-        && control_plane_function2_latched_linux_configured_without_iorx(
-            ioex, iorx, ienx, watermark, devctl, mesbusy,
+        && control_plane_function2_latched_linux_transport_without_iorx(
+            ioex, iorx, watermark, devctl, mesbusy,
         )
         && control_plane_exact_error_is_first_reply_blocker(exact_error)
+}
+
+#[inline]
+fn post_firmware_ready_function2_strict_repoll_can_skip_to_direct_probe(
+    experimental_no_ht_transport: bool,
+    ioex: Option<u8>,
+    iorx: Option<u8>,
+    ienx: Option<u8>,
+    watermark: Option<u8>,
+    devctl: Option<u8>,
+    mesbusy: Option<u8>,
+) -> bool {
+    let _ = ienx;
+    experimental_no_ht_transport
+        && control_plane_function2_latched_linux_transport_without_iorx(
+            ioex, iorx, watermark, devctl, mesbusy,
+        )
 }
 
 #[inline]
@@ -4824,9 +4860,10 @@ fn post_firmware_ready_function2_strict_repoll_prefers_cached_direct_reply_probe
     mesbusy: Option<u8>,
     cached_snapshot: Option<&WifiDebugSnapshot>,
 ) -> bool {
+    let _ = ienx;
     experimental_no_ht_transport
-        && control_plane_function2_latched_linux_configured_without_iorx(
-            ioex, iorx, ienx, watermark, devctl, mesbusy,
+        && control_plane_function2_latched_linux_transport_without_iorx(
+            ioex, iorx, watermark, devctl, mesbusy,
         )
         && cached_snapshot
             .is_some_and(cached_first_reply_blocker_prefers_direct_reply_probe_cutover)
@@ -5249,7 +5286,10 @@ fn cached_first_reply_blocker_preserves_linux_configured_f2_state(
             cached.control_plane_bootstrap_phase,
             "startup-link-recovery" | "startup-link-passive-wait" | "first-write-startup-link"
         )
-        && cached.control_plane_f2_state == "latched-linux-configured-no-iorx"
+        && matches!(
+            cached.control_plane_f2_state,
+            "latched-linux-configured-no-iorx" | "latched-linux-transport-no-iorx"
+        )
         && control_plane_exact_error_is_first_reply_blocker(cached.control_plane_exact_error)
 }
 
@@ -16254,6 +16294,31 @@ impl SdioHost {
                 )?;
                 return Ok(());
             }
+            if post_firmware_ready_function2_strict_repoll_can_skip_to_direct_probe(
+                self.experimental_no_ht_transport,
+                ioex,
+                iorx,
+                ienx,
+                watermark,
+                devctl,
+                mesbusy,
+            ) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll-skip-direct-cutover f2_state={f2_state} current_clock={}Hz width={} chunk_limit={} no_ht={} next=direct-reply-probe reason=poll-only-linux-transport-no-iorx",
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                    self.control_plane_chunk_limit(),
+                    self.experimental_no_ht_transport,
+                ));
+                self.cutover_control_plane_reply_probe_to_bounded_no_ht_without_startup_link_rearm(
+                    "post-firmware-ready-function2-strict-repoll-skip-direct-cutover",
+                    "post-firmware-ready-function2-first-reply",
+                )?;
+                self.log_control_plane_finish_snapshot(
+                    "post-firmware-ready-function2-strict-repoll-skip-direct-cutover",
+                );
+                return Ok(());
+            }
             match self.enable_function2(SdioFunctionReadyBudget::ControlPlaneReplyStrictRecovery) {
                 Ok(()) => emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=strict-repoll-ok"
@@ -16561,6 +16626,14 @@ impl SdioHost {
         stage: &'static str,
         assist_stage: &'static str,
     ) -> Result<bool, HalError> {
+        if !diagnostic_ht_clock_ladder_enabled(stage)
+            && self.continue_after_post_download_forced_alp_kso_edge(
+                stage,
+                "diagnostic-cached-forced-alp-kso",
+            )
+        {
+            return Ok(false);
+        }
         for attempt in 0..=1 {
             match self.wait_for_ht_clock_with_stage(stage, assist_stage, true, attempt > 0) {
                 Ok(true) => return Ok(true),
@@ -16578,7 +16651,7 @@ impl SdioHost {
                         cardcap = self.last_cardcap.unwrap_or(0),
                         cardcap_set = yn(self.last_cardcap.is_some()),
                     ));
-                    if self.retry_ht_clock_with_clock_ladder(stage)? {
+                    if self.retry_ht_clock_with_clock_ladder_for_stage(stage)? {
                         return Ok(true);
                     }
                     if self.continue_after_post_download_forced_alp_kso_edge(
@@ -16612,7 +16685,7 @@ impl SdioHost {
                             cardcap = self.last_cardcap.unwrap_or(0),
                             cardcap_set = yn(self.last_cardcap.is_some()),
                         ));
-                        if self.retry_ht_clock_with_clock_ladder(stage)? {
+                        if self.retry_ht_clock_with_clock_ladder_for_stage(stage)? {
                             return Ok(true);
                         }
                         if self.continue_after_post_download_forced_alp_kso_edge(
@@ -16684,7 +16757,7 @@ impl SdioHost {
                         self.log_transport_shadow("wait-ht-clock-bounded-no-ht");
                         return Ok(false);
                     }
-                    if self.retry_ht_clock_with_clock_ladder(stage)? {
+                    if self.retry_ht_clock_with_clock_ladder_for_stage(stage)? {
                         return Ok(true);
                     }
                     if self.continue_after_post_download_forced_alp_kso_edge(
@@ -16705,6 +16778,20 @@ impl SdioHost {
             }
         }
         Err(HalError::Unsupported("cyw43-ht-clock-timeout"))
+    }
+
+    fn retry_ht_clock_with_clock_ladder_for_stage(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<bool, HalError> {
+        if !diagnostic_ht_clock_ladder_enabled(stage) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=ht-clock-ladder-skip reason=diagnostic-one-shot csr=0x{:02x}",
+                self.last_chipclkcsr.unwrap_or(0),
+            ));
+            return Ok(false);
+        }
+        self.retry_ht_clock_with_clock_ladder(stage)
     }
 
     fn retry_ht_clock_with_clock_ladder(&mut self, stage: &'static str) -> Result<bool, HalError> {
@@ -21205,7 +21292,29 @@ mod tests {
             )
         );
         assert!(
-            !post_firmware_ready_function2_strict_repoll_can_soft_continue(
+            post_firmware_ready_function2_strict_repoll_can_soft_continue(
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                Some(SDIO_CCCR_IEN_FUNC0 | SDIO_CCCR_IEN_FUNC1),
+                Some(CY_43455_F2_WATERMARK),
+                Some(SBSDIO_DEVCTL_F2WM_ENAB),
+                Some(CY_43455_MESBUSYCTRL),
+            )
+        );
+        assert!(
+            post_firmware_ready_function2_strict_repoll_can_skip_to_direct_probe(
+                true,
+                Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+                Some(SDIO_FUNC_READY_1),
+                Some(SDIO_CCCR_IEN_FUNC0 | SDIO_CCCR_IEN_FUNC1),
+                Some(CY_43455_F2_WATERMARK),
+                Some(SBSDIO_DEVCTL_F2WM_ENAB),
+                Some(CY_43455_MESBUSYCTRL),
+            )
+        );
+        assert!(
+            !post_firmware_ready_function2_strict_repoll_can_skip_to_direct_probe(
+                false,
                 Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
                 Some(SDIO_FUNC_READY_1),
                 Some(SDIO_CCCR_IEN_FUNC0 | SDIO_CCCR_IEN_FUNC1),
@@ -21312,6 +21421,18 @@ mod tests {
                 Some(SBSDIO_DEVCTL_F2WM_ENAB),
                 Some(CY_43455_MESBUSYCTRL),
                 "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready",
+            )
+        );
+        assert!(
+            post_firmware_ready_function2_strict_repoll_prefers_direct_reply_probe_cutover(
+                true,
+                Some(0x06),
+                Some(0x02),
+                Some(SDIO_CCCR_IEN_FUNC0 | SDIO_CCCR_IEN_FUNC1),
+                Some(CY_43455_F2_WATERMARK),
+                Some(SBSDIO_DEVCTL_F2WM_ENAB),
+                Some(CY_43455_MESBUSYCTRL),
+                "cyw43-function2-enable-latched-not-ready",
             )
         );
         assert!(
@@ -29118,6 +29239,8 @@ mod tests {
     #[test]
     fn required_ht_wait_uses_linux_non_sr_clkavail_with_real_ht_gate() {
         assert!(required_ht_clock_uses_force_ht_timeout_retry());
+        assert!(!diagnostic_ht_clock_ladder_enabled("debug-probe-ht"));
+        assert!(diagnostic_ht_clock_ladder_enabled("wait-ht-clock"));
         assert!(!required_ht_clock_linux_active_transition_uses_force_ht());
         assert!(required_ht_clock_linux_active_transition_resets_chipclk());
         assert!(

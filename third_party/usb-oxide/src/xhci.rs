@@ -6275,6 +6275,10 @@ mod tests {
         assert!(skip_reset_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
+        assert!(skip_reset_during_init_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
         assert!(!skip_config_write_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));

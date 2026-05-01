@@ -4648,18 +4648,19 @@ fn xhci_runtime_init_strategies(
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
             );
         }
+        if runtime_vl805_mailbox_reset_completed(runtime_vl805_reset_state) {
+            xhci_runtime_init_strategy_push(
+                &mut strategies,
+                &mut count,
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
+            );
+            return (strategies, count);
+        }
         xhci_runtime_init_strategy_push(
             &mut strategies,
             &mut count,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
         );
-        if runtime_vl805_mailbox_reset_completed(runtime_vl805_reset_state) {
-            xhci_runtime_init_strategy_push(
-                &mut strategies,
-                &mut count,
-                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
-            );
-        }
         if stop_state_seed_available {
             xhci_runtime_init_strategy_push(
                 &mut strategies,
@@ -14396,7 +14397,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_runtime_init_strategies_lead_with_reset_owned_stop_seed_after_mailbox_ack() {
+    fn xhci_runtime_init_strategies_stop_hcrst_fallbacks_after_mailbox_ack() {
         let (strategies, count) = xhci_runtime_init_strategies(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             super::VL805_RUNTIME_RESET_STATE_NOTIFIED,
@@ -14406,22 +14407,14 @@ mod tests {
                 iman0: Some(0),
             }),
         );
-        assert_eq!(count, 4);
+        assert_eq!(count, 2);
         assert_eq!(
             strategies[0],
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true)
         );
         assert_eq!(
             strategies[1],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false)
-        );
-        assert_eq!(
-            strategies[2],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false)
-        );
-        assert_eq!(
-            strategies[3],
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
         );
     }
 
