@@ -699,18 +699,15 @@ const fn ht_clock_assist_shadow_is_complete(
 
 #[inline]
 const fn post_download_ht_request_primes_wake_sideband() -> bool {
-    // Linux's captured pre-F2 contract is still a strict CHIPCLKCSR HT proof:
-    // request HT, poll until HT_AVAIL is real, and only then enable Function 2.
-    // The wake/CMD14/KSO sideband is restored before that post-download edge
-    // because Cohesix was reaching the proof with those Linux-visible assists
-    // missing. DEVON is readback evidence only, not a writable request bit,
-    // and no sideband bit substitutes for HT_AVAIL.
-    true
+    // Linux's firmware callback requests CLK_AVAIL from CHIPCLKCSR before it
+    // enables Function 2. SR wake/cardcap/KSO programming belongs after the F2
+    // edge, so the pre-F2 HT proof stays a direct CHIPCLKCSR transition.
+    false
 }
 
 #[inline]
 fn post_download_ht_stage_primes_wake_sideband(stage: &'static str) -> bool {
-    matches!(stage, "wait-ht-clock" | "debug-probe-ht")
+    matches!(stage, "post-function2-sr-init")
 }
 
 #[inline]
@@ -3091,10 +3088,9 @@ const fn required_ht_clock_uses_pre_function2_kso_gate() -> bool {
 
 #[inline]
 const fn linux_probe_attach_initializes_function2_before_firmware() -> bool {
-    // The Pi 4 Linux capture completes brcmfmac's F2 init before the async
-    // firmware load path. Keep that SDIO CCCR ordering distinct from the later
-    // firmware-channel HT proof.
-    true
+    // brcmf_sdio_probe_attach leaves Function 2 disabled. brcmfmac enables F2
+    // later in the firmware callback after the post-download CLK_AVAIL proof.
+    false
 }
 
 #[inline]
@@ -5059,6 +5055,11 @@ fn effective_control_plane_snapshot_f2_linux_state(
 #[inline]
 fn cache_wifi_debug_snapshot(snapshot: WifiDebugSnapshot) {
     let mut last_snapshot = LAST_WIFI_DEBUG_SNAPSHOT.lock();
+    if let Some(cached) = last_snapshot.as_ref() {
+        if should_use_cached_wifi_debug_snapshot(&snapshot, cached) {
+            return;
+        }
+    }
     let snapshot = if let Some(cached) = last_snapshot.as_ref() {
         preserve_cached_first_reply_blocker_in_snapshot(snapshot, cached)
     } else {
@@ -17937,7 +17938,9 @@ impl SdioHost {
     }
 
     fn prime_post_download_ht_sideband_for(&mut self, stage: &'static str) {
-        if !post_download_ht_request_primes_wake_sideband() {
+        if !post_download_ht_request_primes_wake_sideband()
+            && !post_download_ht_stage_primes_wake_sideband(stage)
+        {
             return;
         }
 
@@ -28042,8 +28045,8 @@ mod tests {
     }
 
     #[test]
-    fn linux_probe_attach_initializes_f2_before_firmware_upload() {
-        assert!(linux_probe_attach_initializes_function2_before_firmware());
+    fn linux_probe_attach_defers_f2_until_firmware_callback() {
+        assert!(!linux_probe_attach_initializes_function2_before_firmware());
     }
 
     #[test]
@@ -28078,9 +28081,14 @@ mod tests {
         assert!(!linux_sr_kso_clock_ready_from_sleepcsr(0));
         assert!(!required_ht_clock_uses_pre_function2_kso_gate());
         assert!(post_download_devon_before_ht_is_diagnostic());
-        assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
-        assert!(post_download_ht_stage_primes_wake_sideband(
+        assert!(!post_download_ht_stage_primes_wake_sideband(
+            "wait-ht-clock"
+        ));
+        assert!(!post_download_ht_stage_primes_wake_sideband(
             "debug-probe-ht"
+        ));
+        assert!(post_download_ht_stage_primes_wake_sideband(
+            "post-function2-sr-init"
         ));
         assert!(!post_download_ht_stage_primes_wake_sideband(
             "pre-write-alp-clock"
@@ -28873,7 +28881,10 @@ mod tests {
         assert_eq!(SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC, 0x08);
         assert_eq!(cyw43455_cardcap_command_decode_value(), 0x06);
         assert!(!pre_function2_ht_sideband_programs_sr_registers());
-        assert!(post_download_ht_request_primes_wake_sideband());
+        assert!(!post_download_ht_request_primes_wake_sideband());
+        assert!(post_download_ht_stage_primes_wake_sideband(
+            "post-function2-sr-init"
+        ));
         assert_eq!(
             post_download_ht_wakeupctrl_value(None),
             SBSDIO_WAKE_TILL_HT_AVAIL

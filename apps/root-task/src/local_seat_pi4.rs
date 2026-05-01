@@ -2600,7 +2600,7 @@ fn xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
     {
         XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
     } else {
-        xhci_runtime_init_strategy_after_mailbox_reset(mmio, strategy, mailbox_reset_completed)
+        strategy
     }
 }
 
@@ -4567,7 +4567,7 @@ const fn xhci_runtime_init_strategy_skips_runtime_publication_entry(
 
 #[inline]
 fn xhci_fresh_runtime_ownership_ready(pci_cfg_ready: bool) -> bool {
-    pci_cfg_ready && vl805_effective_cfg_command().is_some_and(vl805_command_ownership_ready)
+    pci_cfg_ready && vl805_cfg_command().is_some_and(vl805_command_ownership_ready)
 }
 
 #[inline]
@@ -14027,6 +14027,20 @@ mod tests {
             ),
             "skip-legacy"
         );
+    }
+
+    #[test]
+    fn mailbox_acked_without_config_replay_keeps_full_reset_strategy() {
+        let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+        let strategy = xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            full_reset,
+            true,
+            false,
+            None,
+        );
+
+        assert_eq!(strategy, full_reset);
     }
 
     #[test]

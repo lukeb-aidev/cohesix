@@ -789,9 +789,12 @@ const fn platform_reset_dcbaap_publish_blocked_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    let _ = firmware_handoff;
-    let _ = runtime_seed_snapshot;
-    false
+    // Pi 4/VL805 platform-reset-complete is a mailbox/layout witness, not a
+    // live controller-ownership proof. Board traces show the first DCBAAP
+    // dword store on this lane is the toxic edge, independent of split-register
+    // ordering, so fail before the MMIO publication until a stronger seeded
+    // ownership path exists.
+    runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -6259,7 +6262,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_complete_skips_hcrst_but_publishes_fresh_runtime_ownership() {
+    fn platform_reset_complete_skips_hcrst_but_blocks_dcbaap_publish() {
         assert!(skip_reset_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
