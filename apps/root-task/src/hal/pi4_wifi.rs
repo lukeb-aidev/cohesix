@@ -3334,6 +3334,9 @@ const fn function2_ready_phase_chipclk_value(last_chipclkcsr: Option<u8>) -> u8 
         Some(value) if (value & SBSDIO_HT_AVAIL) != 0 => {
             value | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
         }
+        Some(value) if (value & SBSDIO_HT_AVAIL_REQ) != 0 && (value & SBSDIO_FORCE_HT) != 0 => {
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+        }
         Some(_) | None => SBSDIO_HT_AVAIL_REQ,
     }
 }
@@ -3825,6 +3828,16 @@ const fn function2_requires_sleepcsr_device_on_before_ready(
 }
 
 #[inline]
+const fn function2_forced_ht_clock_can_try_ready_poll(current_clock_hz: u32) -> bool {
+    let _ = current_clock_hz;
+    // Function 2 enable/readiness is an SDIO card-level poll. The Pi 4 Arasan
+    // divider can report the nominal 400 kHz lane as ~399 kHz, and that should
+    // not send an already-forced 0x52 CHIPCLKCSR tuple back through the slow HT
+    // clock ladder. Firmware-channel traffic remains gated on real CCCR IOR2.
+    true
+}
+
+#[inline]
 const fn function2_accepts_linux_alp_kso_forced_ht_clock(
     experimental_no_ht_transport: bool,
     chipclk: u8,
@@ -3842,7 +3855,7 @@ const fn function2_accepts_linux_alp_kso_forced_ht_clock(
         && (chipclk & SBSDIO_HT_AVAIL_REQ) != 0
         && (chipclk & SBSDIO_FORCE_HT) != 0
         && (chipclk & SBSDIO_ALP_AVAIL) != 0
-        && current_clock_hz > CYW43_STARTUP_CLOCK_HZ
+        && function2_forced_ht_clock_can_try_ready_poll(current_clock_hz)
         && post_download_ht_sideband_shadow_is_complete(
             last_wakeupctrl,
             last_sleepcsr,
@@ -28554,16 +28567,16 @@ mod tests {
     }
 
     #[test]
-    fn function2_ready_phase_does_not_force_ht_without_ht_avail() {
+    fn function2_ready_phase_preserves_forced_ht_request_without_requiring_ht_avail() {
         assert_eq!(
             function2_ready_phase_chipclk_value(Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT)),
-            SBSDIO_HT_AVAIL_REQ
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
         );
         assert_eq!(
             function2_ready_phase_chipclk_value(Some(
                 SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL
             )),
-            SBSDIO_HT_AVAIL_REQ
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
         );
         assert_eq!(
             function2_ready_phase_chipclk_value(Some(
@@ -28573,7 +28586,7 @@ mod tests {
                     | SBSDIO_FORCE_ALP
                     | SBSDIO_FORCE_HW_CLKREQ_OFF
             )),
-            SBSDIO_HT_AVAIL_REQ
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
         );
         assert_eq!(
             function2_ready_phase_chipclk_value(Some(
@@ -29129,6 +29142,30 @@ mod tests {
         );
         assert_eq!(
             function2_force_ht_clock_value(observed_failure_shape),
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+        );
+    }
+
+    #[test]
+    fn forced_alp_kso_tuple_can_try_f2_ready_even_on_effective_startup_clock() {
+        let forced_tuple = SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL;
+        let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
+        let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK);
+        let cardcap = Some(cyw43455_cardcap_command_decode_value());
+
+        assert!(function2_forced_ht_clock_can_try_ready_poll(
+            CYW43_STARTUP_CLOCK_HZ.saturating_sub(1)
+        ));
+        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+            false,
+            forced_tuple,
+            wake,
+            sleep,
+            cardcap,
+            CYW43_STARTUP_CLOCK_HZ.saturating_sub(1),
+        ));
+        assert_eq!(
+            function2_ready_phase_chipclk_value(Some(forced_tuple)),
             SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
         );
     }

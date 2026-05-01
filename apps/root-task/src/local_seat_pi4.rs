@@ -239,6 +239,7 @@ const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 2] = [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XH
 const XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE: bool = true;
 const XHCI_VL805_PCIE_IRQ_SINK_ENABLED: bool = true;
 const TRUSTED_XHCI_PCIE_SINKS_ENABLED: bool = true;
+const XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED: bool = true;
 // IRQ 27 is not an xHCI source, and the board trace proves seL4 rejects
 // root-task IRQControl requests for that kernel-owned virtual-timer PPI. Keep
 // the shadow lane disabled; USB may bind only the PCIe/xHCI sink set below.
@@ -6817,7 +6818,7 @@ fn mmio_write_u32(base: usize, offset: usize, value: u32) {
     }
 }
 
-fn bcm2711_pcie_mask_and_clear_irq_sources(status_reg: usize) {
+fn bcm2711_pcie_mask_and_clear_irq_sources(status_reg: usize, source: &'static str) {
     let Some(status_page_virt) = status_reg.checked_sub(BCM2711_PCIE_MISC_PCIE_STATUS & PAGE_MASK)
     else {
         return;
@@ -6855,9 +6856,12 @@ fn bcm2711_pcie_mask_and_clear_irq_sources(status_reg: usize) {
     mmio_write_u32(cpu_clr, 0, u32::MAX);
     mmio_write_u32(msi_mask_set, 0, u32::MAX);
     mmio_write_u32(msi_clr, 0, u32::MAX);
-    boot_log::force_uart_line(
-        "[local-seat] vl805 bcm2711-pcie irq sources masked source=host-before-sel4-bind",
+    let mut line = heapless::String::<176>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!("[local-seat] vl805 bcm2711-pcie irq sources masked source={source}"),
     );
+    boot_log::force_uart_line(line.as_str());
 }
 
 fn ensure_vl805_config_replay_irq_sinks(hal: &mut KernelHal<'_>) -> bool {
@@ -7000,7 +7004,7 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
             BCM2711_PCIE_MISC_PCIE_STATUS,
             "pcie-capture-status",
         ) {
-            bcm2711_pcie_mask_and_clear_irq_sources(status_reg);
+            bcm2711_pcie_mask_and_clear_irq_sources(status_reg, "capture-witness");
         } else {
             boot_log::force_uart_line(
                 "[local-seat] vl805 capture cfg witness irq-mask skipped reason=pcie-status-unavailable",
@@ -7050,7 +7054,7 @@ fn prepare_vl805_pci_bcm2711(
         BCM2711_PCIE_MISC_PCIE_STATUS,
         "pcie-status",
     )?;
-    bcm2711_pcie_mask_and_clear_irq_sources(status_reg);
+    bcm2711_pcie_mask_and_clear_irq_sources(status_reg, "live-cfg-replay");
     if !ensure_vl805_config_replay_irq_sinks(hal) {
         return None;
     }
@@ -7753,6 +7757,91 @@ const fn xhci_runtime_init_strategy_requires_primary_pcie_irq(
                 | (XhciFirmwareHandoff::None, false)
                 | (XhciFirmwareHandoff::None, true)
         )
+}
+
+#[inline]
+const fn xhci_pre_reset_irq_quiesce_required(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED
+        && xhci_runtime_init_strategy_requires_primary_pcie_irq(mmio, strategy)
+}
+
+fn xhci_quiesce_pcie_irq_sources_before_reset(
+    hal: &mut KernelHal<'_>,
+    guard: &XhciIrqGuard,
+    mmio: usize,
+    firmware_handoff: XhciFirmwareHandoff,
+) -> bool {
+    let mut host_irq_maps = Vec::new();
+    let Some((_status_frame, status_reg)) = bcm2711_pcie_map_reg_page(
+        hal,
+        &mut host_irq_maps,
+        BCM2711_PCIE_MISC_PCIE_STATUS,
+        "pcie-xhci-pre-reset-status",
+    ) else {
+        let mut line = heapless::String::<240>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci irq pre-reset quiesce failed mmio=0x{mmio:016x} handoff={} reason=pcie-status-unavailable",
+                xhci_firmware_handoff_mode_label(firmware_handoff),
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return false;
+    };
+
+    bcm2711_pcie_mask_and_clear_irq_sources(status_reg, "pre-xhci-reset");
+
+    let mut acked = 0usize;
+    for binding in guard.bindings.iter().flatten() {
+        let Some(raw) = binding.hal_binding else {
+            continue;
+        };
+        match hal.ack_irq(&raw) {
+            Ok(()) => {
+                acked = acked.saturating_add(1);
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci irq pre-reset ack irq={} mmio=0x{mmio:016x} shadow={}",
+                        binding.irq, binding.shadow as u8,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+            Err(err) => {
+                let mut line = heapless::String::<240>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci irq pre-reset quiesce failed irq={} mmio=0x{mmio:016x} err={err:?}",
+                        binding.irq,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return false;
+            }
+        }
+    }
+
+    let complete = acked == TRUSTED_XHCI_PCIE_SINK_IRQS.len();
+    let mut line = heapless::String::<256>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] xhci irq pre-reset quiesce mmio=0x{mmio:016x} handoff={} acked={} expected={} complete={}",
+            xhci_firmware_handoff_mode_label(firmware_handoff),
+            acked,
+            TRUSTED_XHCI_PCIE_SINK_IRQS.len(),
+            complete as u8,
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    complete
 }
 
 #[derive(Clone, Copy)]
@@ -9225,6 +9314,65 @@ impl UsbKeyboard {
                             ),
                         );
                         boot_log::force_uart_line(probe_line.as_str());
+
+                        if xhci_pre_reset_irq_quiesce_required(effective_mmio, strategy) {
+                            let Some(guard) = xhci_irq_guard.as_ref() else {
+                                pathway_summary.controller_gate = "pcie-irq-quiesce-missing";
+                                usb_probe_pathway_record(
+                                    &mut pathway_summary,
+                                    UsbProbePathProgress::NoController,
+                                    UsbProbePathOutcome::ControllerInitFailed,
+                                    None,
+                                    0,
+                                    0,
+                                    false,
+                                    XhciDiagSnapshot::empty(),
+                                    false,
+                                );
+                                boot_log::force_uart_line(
+                                    "[local-seat] xhci probe skipped reason=pcie-irq-quiesce-missing action=return-to-shell",
+                                );
+                                log_usb_probe_pathway_summary(&pathway_summary);
+                                usb_probe_best_pathway_update(
+                                    &mut best_probe_pathway,
+                                    pathway_summary,
+                                );
+                                continue;
+                            };
+                            if !xhci_quiesce_pcie_irq_sources_before_reset(
+                                hal,
+                                guard,
+                                effective_mmio,
+                                strategy.firmware_handoff,
+                            ) {
+                                pathway_summary.controller_gate = "pcie-irq-quiesce-failed";
+                                usb_probe_pathway_record(
+                                    &mut pathway_summary,
+                                    UsbProbePathProgress::NoController,
+                                    UsbProbePathOutcome::ControllerInitFailed,
+                                    None,
+                                    0,
+                                    0,
+                                    false,
+                                    XhciDiagSnapshot::empty(),
+                                    false,
+                                );
+                                let mut line = heapless::String::<240>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] xhci probe skipped mmio=0x{effective_mmio:016x} reason=pcie-irq-quiesce-failed action=return-to-shell"
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                                log_usb_probe_pathway_summary(&pathway_summary);
+                                usb_probe_best_pathway_update(
+                                    &mut best_probe_pathway,
+                                    pathway_summary,
+                                );
+                                continue;
+                            }
+                        }
 
                         let dma = SeatDma::new(hal, prefer_high, pcie_dma_window);
                         let ctrl = match XhciCtrl::new_with_params(
@@ -13738,9 +13886,10 @@ mod tests {
         xhci_controller_skips_initial_live_operational_reads, xhci_diag_stage_label,
         xhci_diag_stage_value_labels, xhci_firmware_handoff_hint_reason, xhci_irq_policy_reason,
         xhci_irq_service_ack_loop_ready, xhci_irq_sink_mode, xhci_irq_sink_needed,
-        xhci_preseed_allows_high_bar_candidate, xhci_preseed_allows_static_legacy_fallbacks,
-        xhci_preseed_pin_only_reason, xhci_preseed_runtime_trusted, xhci_root_port_connected,
-        xhci_runtime_init_strategies, xhci_runtime_init_strategy_after_mailbox_reset,
+        xhci_pre_reset_irq_quiesce_required, xhci_preseed_allows_high_bar_candidate,
+        xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
+        xhci_preseed_runtime_trusted, xhci_root_port_connected, xhci_runtime_init_strategies,
+        xhci_runtime_init_strategy_after_mailbox_reset,
         xhci_runtime_init_strategy_after_mailbox_reset_with_ownership,
         xhci_runtime_init_strategy_constructor_label_for_source,
         xhci_runtime_init_strategy_halt_guard_label_for_source,
@@ -13761,7 +13910,8 @@ mod tests {
         RPI4_VL805_LINUX_COMMAND, RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
         TRUSTED_XHCI_IRQ_BINDING_LIMIT, TRUSTED_XHCI_PCIE_SINK_IRQS,
         XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE, XHCI_MMIO_ALIAS_SCAN_STEPS,
-        XHCI_PRE_CONTROLLER_VTIMER_SHADOW_ENABLED, XHCI_VL805_PCIE_IRQ_SINK_ENABLED,
+        XHCI_PRE_CONTROLLER_VTIMER_SHADOW_ENABLED, XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED,
+        XHCI_VL805_PCIE_IRQ_SINK_ENABLED,
     };
     use super::{
         hid_protocol, hid_subclass, scancode, xhci_firmware_handoff_safe, CHAR_HEIGHT,
@@ -16705,6 +16855,27 @@ mod tests {
         assert!(!xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        ));
+    }
+
+    #[test]
+    fn pre_reset_irq_quiesce_is_required_before_high_bar_hcrst_paths() {
+        assert!(XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED);
+        assert!(xhci_pre_reset_irq_quiesce_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
+        ));
+        assert!(xhci_pre_reset_irq_quiesce_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
+        ));
+        assert!(!xhci_pre_reset_irq_quiesce_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+        ));
+        assert!(!xhci_pre_reset_irq_quiesce_required(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
         ));
     }
 
