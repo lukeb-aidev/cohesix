@@ -8910,14 +8910,15 @@ impl UsbKeyboard {
                     continue;
                 }
                 let mut effective_strategy = strategy;
-                let mut controller_params = xhci_controller_params_from_probe_with_strategy(
+                let initial_controller_params = xhci_controller_params_from_probe_with_strategy(
                     cap_probe,
                     effective_mmio,
                     strategy,
                     xhci_stop_state_snapshot,
                 );
-                let seed_flags =
-                    xhci_runtime_seed_snapshot_flag_bits(controller_params.runtime_seed_snapshot);
+                let seed_flags = xhci_runtime_seed_snapshot_flag_bits(
+                    initial_controller_params.runtime_seed_snapshot,
+                );
                 let mut params_line = heapless::String::<384>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut params_line,
@@ -8944,7 +8945,7 @@ impl UsbKeyboard {
                         (seed_flags & 0x01) != 0,
                         (seed_flags & 0x02) != 0,
                         (seed_flags & 0x04) != 0,
-                        controller_params.apply_brcm_axi_setup,
+                        initial_controller_params.apply_brcm_axi_setup,
                     ),
                 );
                 boot_log::force_uart_line(params_line.as_str());
@@ -9093,14 +9094,15 @@ impl UsbKeyboard {
                     boot_log::force_uart_line(ready.as_str());
                     fresh_runtime_ownership_ready =
                         xhci_fresh_runtime_ownership_ready(vl805_cfg_bus_master_ready());
-                    controller_params = xhci_controller_params_from_probe_with_strategy(
-                        cap_probe,
-                        effective_mmio,
-                        effective_strategy,
-                        xhci_stop_state_snapshot,
-                    );
+                    let promoted_controller_params =
+                        xhci_controller_params_from_probe_with_strategy(
+                            cap_probe,
+                            effective_mmio,
+                            effective_strategy,
+                            xhci_stop_state_snapshot,
+                        );
                     let promoted_seed_flags = xhci_runtime_seed_snapshot_flag_bits(
-                        controller_params.runtime_seed_snapshot,
+                        promoted_controller_params.runtime_seed_snapshot,
                     );
                     let mut promoted = heapless::String::<384>::new();
                     let _ = core::fmt::Write::write_fmt(
@@ -9133,6 +9135,12 @@ impl UsbKeyboard {
                     boot_log::force_uart_line(promoted.as_str());
                 }
                 let strategy = effective_strategy;
+                let controller_params = xhci_controller_params_from_probe_with_strategy(
+                    cap_probe,
+                    effective_mmio,
+                    strategy,
+                    xhci_stop_state_snapshot,
+                );
                 if xhci_runtime_init_strategy_skips_runtime_publication_entry(
                     strategy,
                     fresh_runtime_ownership_ready,
@@ -14512,6 +14520,39 @@ mod tests {
             ),
             "skip-legacy"
         );
+    }
+
+    #[test]
+    fn promoted_platform_reset_params_carry_handoff_to_usb_oxide() {
+        let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+        let promoted = xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            full_reset,
+            true,
+            true,
+            None,
+        );
+        let probe = super::pi4_vl805_linux_capture_capability_probe(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+            .expect("Pi4 high BAR should use Linux-captured caps");
+        let params = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            promoted,
+            None,
+        );
+
+        assert_eq!(
+            promoted,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
+        );
+        assert_eq!(
+            params.firmware_handoff,
+            XhciFirmwareHandoff::PlatformResetComplete
+        );
+        assert!(params.skip_initial_live_operational_reads);
+        assert!(params.skip_constructor_live_scrub);
+        assert!(params.runtime_seed_snapshot.is_none());
+        assert!(!params.apply_brcm_axi_setup);
     }
 
     #[test]

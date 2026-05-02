@@ -795,8 +795,8 @@ const fn post_download_ht_request_primes_wake_sideband() -> bool {
     // Hardware traces now prove firmware upload/release while CHIPCLKCSR stays
     // at HT_REQ|ALP_AVAIL with WAKEUPCTRL unset. Prime the Broadcom wake
     // sideband before the post-release CLK_AVAIL request. Pi 4 CYW43455 then
-    // permits the forced ALP/KSO post-release tuple to reach strict Function 2
-    // enablement; Function 2 readiness still gates the firmware channel.
+    // permits the forced ALP/KSO post-release tuple to enter the bounded
+    // no-HT Function 2 probe without waiting for HT_AVAIL.
     true
 }
 
@@ -1473,6 +1473,11 @@ fn experimental_control_plane_post_write_timeout_prefers_direct_reply_probe_cuto
 #[inline]
 fn diagnostic_ht_clock_ladder_enabled(stage: &'static str) -> bool {
     stage != "debug-probe-ht"
+}
+
+#[inline]
+fn post_download_forced_alp_kso_direct_path_enabled(stage: &'static str) -> bool {
+    matches!(stage, "wait-ht-clock" | "debug-probe-ht")
 }
 
 #[inline]
@@ -3172,11 +3177,9 @@ const fn required_ht_clock_request_value(last_chipclkcsr: Option<u8>) -> u8 {
 
 #[inline]
 const fn required_ht_clock_retry_request_value(last_chipclkcsr: Option<u8>) -> u8 {
-    // The first production pass mirrors brcmf_sdio_htclk(): request HT and
-    // wait for observable HT_AVAIL. Pi 4 traces now prove the stable miss as
-    // HT_REQ|ALP_AVAIL with the wake sideband already complete, so the bounded
-    // second pass asserts FORCE_HT and may continue only if the post-release
-    // wake/CMD14/KSO tuple is complete and Function 2 itself becomes ready.
+    // Pi 4 traces now prove the stable miss as HT_REQ|ALP_AVAIL with the wake
+    // sideband complete. The bounded direct path asserts FORCE_HT and may
+    // continue only if the post-release wake/CMD14/KSO tuple is complete.
     match last_chipclkcsr {
         Some(value) if (value & SBSDIO_HT_AVAIL) != 0 => {
             value | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
@@ -3199,9 +3202,9 @@ const fn diagnostic_ht_clock_force_probe_value(last_chipclkcsr: Option<u8>) -> u
 
 #[inline]
 const fn required_ht_clock_uses_force_ht_timeout_retry() -> bool {
-    // The first pass remains Linux-shaped. The bounded retry uses FORCE_HT only
-    // after the first pass has shown the Pi 4-specific ALP+HT-request timeout
-    // shape, and Function 2 remains gated on a real IOR2 ready indication.
+    // Non-direct fallback stages still use a bounded FORCE_HT retry after the
+    // first Linux-shaped miss. Pi 4 wait/probe stages use the same request
+    // immediately so they do not spend a full HT ladder rediscovering 0x52.
     true
 }
 
@@ -3246,7 +3249,7 @@ const fn cyw43455_uses_linux_sr_kso_clock() -> bool {
     // The post-download HT edge writes SLEEPCSR.KSO and records DEVON readback
     // as diagnostic sideband. Pi 4 CYW43455 still does not use SR KSO as a
     // generic clock shortcut; only the forced ALP/KSO post-release tuple may
-    // advance to strict Function 2 enablement.
+    // advance to the bounded Function 2 probe.
     false
 }
 
@@ -16176,7 +16179,9 @@ impl SdioHost {
             self.experimental_no_ht_transport = false;
             self.experimental_control_plane_write_probe_pending = false;
             self.ensure_control_plane_clock("setup-firmware-channel-clock")?;
-        } else if self.post_download_forced_alp_kso_edge_can_continue_to_function2() {
+        } else if self.experimental_no_ht_transport
+            || self.post_download_forced_alp_kso_edge_can_continue_to_function2()
+        {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=wait-ht-clock action=bounded-f2-probe mode={} reason=forced-alp-kso-no-ior2 current={}Hz",
                 cyw43_transport_mode_name(true),
@@ -16942,6 +16947,8 @@ impl SdioHost {
         }
         let request = if required_ht_clock_linux_active_transition_uses_force_ht() {
             diagnostic_ht_clock_force_probe_value(self.last_chipclkcsr)
+        } else if post_download_forced_alp_kso_direct_path_enabled(stage) {
+            required_ht_clock_retry_request_value(self.last_chipclkcsr)
         } else if stronger_retry_request {
             required_ht_clock_retry_request_value(self.last_chipclkcsr)
         } else {
@@ -16969,6 +16976,13 @@ impl SdioHost {
             self.last_sleepcsr,
             self.last_cardcap,
         );
+
+        if post_download_forced_alp_kso_direct_path_enabled(stage)
+            && self
+                .continue_after_post_download_forced_alp_kso_edge(stage, "forced-alp-kso-readback")
+        {
+            return Ok(false);
+        }
 
         let mut last_chipclk = request_chipclk;
         for poll_index in 0..required_ht_clock_linux_active_wait_loops() {
@@ -17084,6 +17098,9 @@ impl SdioHost {
                 self.last_sleepcsr,
                 self.last_cardcap,
             );
+            self.experimental_no_ht_transport = true;
+            self.experimental_control_plane_write_probe_pending = true;
+            self.record_bounded_phase(stage, "timeout-forced-alp-kso-function2");
             self.log_transport_shadow("wait-ht-clock-active-linux-alp-force-probe");
             return Ok(false);
         }
@@ -29241,6 +29258,15 @@ mod tests {
         assert!(required_ht_clock_uses_force_ht_timeout_retry());
         assert!(!diagnostic_ht_clock_ladder_enabled("debug-probe-ht"));
         assert!(diagnostic_ht_clock_ladder_enabled("wait-ht-clock"));
+        assert!(post_download_forced_alp_kso_direct_path_enabled(
+            "wait-ht-clock"
+        ));
+        assert!(post_download_forced_alp_kso_direct_path_enabled(
+            "debug-probe-ht"
+        ));
+        assert!(!post_download_forced_alp_kso_direct_path_enabled(
+            "setup-firmware-channel"
+        ));
         assert!(!required_ht_clock_linux_active_transition_uses_force_ht());
         assert!(required_ht_clock_linux_active_transition_resets_chipclk());
         assert!(
