@@ -2152,14 +2152,14 @@ const fn initial_control_plane_data_clock_target_hz(
     experimental_no_ht_transport: bool,
 ) -> u32 {
     if experimental_no_ht_transport {
-        // Linux keeps the first Function 2 control exchange on the startup
-        // link, then promotes after the device answers. Keep that smaller
-        // bootstrap shape here instead of starting at data clock and falling
-        // back later.
-        SDIO_STARTUP_CLOCK_HZ
-    } else {
-        control_plane_data_clock_target_hz(recommended_data_clock_hz)
+        return if recommended_data_clock_hz < SDIO_STARTUP_CLOCK_HZ {
+            recommended_data_clock_hz
+        } else {
+            SDIO_STARTUP_CLOCK_HZ
+        };
     }
+
+    control_plane_data_clock_target_hz(recommended_data_clock_hz)
 }
 
 #[inline]
@@ -2168,8 +2168,11 @@ const fn initial_control_plane_bootstrap_policy_label(
     effective_clock_hz: u32,
 ) -> &'static str {
     if experimental_no_ht_transport {
-        let _ = effective_clock_hz;
-        "startup-link-until-first-reply"
+        if effective_clock_hz > SDIO_STARTUP_CLOCK_HZ {
+            "data-link-first-reply"
+        } else {
+            "startup-link-until-first-reply"
+        }
     } else {
         "strict-data-link"
     }
@@ -2347,7 +2350,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_control_plane_data_clock_holds_startup_link_for_bounded_no_ht() {
+    fn initial_control_plane_data_clock_uses_startup_link_for_bounded_no_ht_write() {
         assert_eq!(
             initial_control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ, true),
             SDIO_STARTUP_CLOCK_HZ
@@ -2370,7 +2373,7 @@ mod tests {
         );
         assert_eq!(
             initial_control_plane_bootstrap_policy_label(true, SDIO_DATA_CLOCK_HZ),
-            "startup-link-until-first-reply"
+            "data-link-first-reply"
         );
         assert_eq!(
             initial_control_plane_bootstrap_policy_label(false, SDIO_DATA_CLOCK_HZ),
@@ -2563,6 +2566,11 @@ mod tests {
         assert!(!control_plane_bootstrap_needs_full_replay_retry(
             &DriverError::Hal(HalError::Unsupported(
                 "cyw43-function2-enable-latched-not-ready-sideband-read-stall-no-buffer-ready"
+            ))
+        ));
+        assert!(!control_plane_bootstrap_needs_full_replay_retry(
+            &DriverError::Hal(HalError::Unsupported(
+                "cyw43-control-plane-hintless-firstread-no-irq"
             ))
         ));
         assert!(!control_plane_bootstrap_needs_full_replay_retry(

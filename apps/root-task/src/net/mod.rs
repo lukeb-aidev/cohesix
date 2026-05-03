@@ -1025,6 +1025,9 @@ mod tests {
             "cyw43-control-plane-no-reply-linux-f2-armed"
         ));
         assert!(!cyw43_control_plane_bootstrap_replay_reason(
+            "cyw43-control-plane-hintless-firstread-no-irq"
+        ));
+        assert!(!cyw43_control_plane_bootstrap_replay_reason(
             "cyw43-control-plane-startup-link-reply-timeout"
         ));
         assert!(!cyw43_control_plane_bootstrap_replay_reason(
