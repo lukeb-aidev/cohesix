@@ -3300,7 +3300,7 @@ const fn required_ht_clock_linux_active_wait_loops() -> usize {
 fn required_ht_clock_linux_active_wait_loops_for_stage(stage: &'static str) -> usize {
     match stage {
         "debug-probe-ht" => CYW43_HT_CLOCK_DEBUG_ACTIVE_WAIT_POLLS,
-        "wait-ht-clock" => CYW43_HT_CLOCK_LINUX_ACTIVE_STABLE_TIMEOUT_POLLS,
+        "wait-ht-clock" => CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS,
         _ => required_ht_clock_linux_active_wait_loops(),
     }
 }
@@ -6090,15 +6090,14 @@ const CYW43_FIRMWARE_BOOT_READBACK_VERIFY_ENABLED: bool = false;
 const CYW43_HT_CLOCK_INITIAL_WAIT_LOOPS: usize = 2_048;
 const CYW43_HT_CLOCK_SOFT_WAIT_LOOPS: usize = 8_192;
 // Linux brcmfmac polls CHIPCLKCSR for up to PMU_MAX_TRANSITION_DLY with
-// 5-10 ms sleeps. Keep that upper bound available for non-terminal stages,
-// but the Pi 4 strict post-release gate uses the stable-timeout budget once
-// 0x50 proves ALP_AVAIL|HT_REQ without HT_AVAIL. The board reaches the same
-// terminal 0x50 shape under the shorter debug probe, so production fast-fails
-// that stable shape with the same poll count without weakening the HT/F2 gate.
+// 5-10 ms sleeps before treating a missing post-release HT clock as terminal.
+// Production boot mirrors that bounded proof window. Manual diagnostics keep a
+// shorter poll budget so a shell probe can characterize the stable 0x50
+// HT_REQ|ALP_AVAIL timeout shape without adding the full boot wait.
 const CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS: usize = 160;
 const CYW43_HT_CLOCK_DEBUG_ACTIVE_WAIT_POLLS: usize = 8;
 const CYW43_HT_CLOCK_LINUX_ACTIVE_STABLE_TIMEOUT_POLLS: usize =
-    CYW43_HT_CLOCK_DEBUG_ACTIVE_WAIT_POLLS;
+    CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS;
 const CYW43_HT_CLOCK_LINUX_ACTIVE_SETTLE_LOOPS: usize = 8_000_000;
 const CYW43_HT_CLOCK_LINUX_SDONLY_SETTLE_LOOPS: usize =
     CYW43_HT_CLOCK_LINUX_ACTIVE_SETTLE_LOOPS * 4;
@@ -29931,7 +29930,7 @@ mod tests {
         );
         assert_eq!(
             required_ht_clock_linux_active_wait_loops_for_stage("wait-ht-clock"),
-            super::CYW43_HT_CLOCK_LINUX_ACTIVE_STABLE_TIMEOUT_POLLS
+            super::CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS
         );
         assert_eq!(
             required_ht_clock_linux_active_wait_loops_for_stage("debug-probe-ht"),
@@ -29939,14 +29938,14 @@ mod tests {
         );
         assert_eq!(
             super::CYW43_HT_CLOCK_LINUX_ACTIVE_STABLE_TIMEOUT_POLLS,
-            super::CYW43_HT_CLOCK_DEBUG_ACTIVE_WAIT_POLLS
+            super::CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS
         );
         assert!(
             required_ht_clock_linux_active_wait_loops_for_stage("wait-ht-clock")
-                < required_ht_clock_linux_active_wait_loops()
+                == required_ht_clock_linux_active_wait_loops()
         );
         assert!(
-            super::CYW43_HT_CLOCK_LINUX_ACTIVE_STABLE_TIMEOUT_POLLS
+            super::CYW43_HT_CLOCK_DEBUG_ACTIVE_WAIT_POLLS
                 < super::CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS
         );
         assert!(super::CYW43_HT_CLOCK_LINUX_ACTIVE_SETTLE_LOOPS > 0);

@@ -23,6 +23,8 @@ pub mod dma;
 #[cfg(feature = "kernel")]
 pub mod pci;
 #[cfg(feature = "kernel")]
+pub mod pi4_pcie;
+#[cfg(feature = "kernel")]
 pub mod pi4_wifi;
 
 #[cfg(feature = "kernel")]

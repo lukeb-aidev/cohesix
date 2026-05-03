@@ -28,7 +28,7 @@ use usb_oxide::{
 
 use crate::bootstrap::log as boot_log;
 use crate::hal::{
-    dma, pi4_wifi, DeviceHal, HalError, Irq, IrqTrigger, KernelHal, KernelIrqBinding,
+    dma, pi4_pcie, pi4_wifi, DeviceHal, HalError, Irq, IrqTrigger, KernelHal, KernelIrqBinding,
 };
 use crate::local_seat::{LocalSeatXhciCapabilitySnapshot, LocalSeatXhciStopStateSnapshot};
 
@@ -108,8 +108,6 @@ const RPI4_PCIE_BUS_MMIO_WINDOW_BASE: usize = 0xC000_0000;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BYTES: usize = 0x0010_0000;
 const BCM2711_PCIE_HOST_PHYS_BASE: usize = 0xFD50_0000;
 const BCM2711_PCIE_MISC_PCIE_STATUS: usize = 0x4068;
-const BCM2711_PCIE_EXT_CFG_DATA: usize = 0x8000;
-const BCM2711_PCIE_EXT_CFG_INDEX: usize = 0x9000;
 const BCM2711_PCIE_INTR2_CPU_CLR: usize = 0x4308;
 const BCM2711_PCIE_INTR2_CPU_MASK_SET: usize = 0x4310;
 const BCM2711_PCIE_MSI_INTR2_CLR: usize = 0x4508;
@@ -258,11 +256,11 @@ const VL805_CFG_PRESEED_TOUCH_ENABLED: bool = false;
 // a real ECAM aperture.
 const VL805_CFG_RUNTIME_TOUCH_ENABLED: bool = false;
 // BCM2711 external-config reads use the same EXT_CFG_INDEX/DATA register pair
-// as Linux/U-Boot. Static Linux capture is only layout evidence, and the latest
-// Pi 4 trace halted immediately after the first live EXT_CFG select write. Keep
-// live EXT_CFG replay opt-in until HAL owns a bounded BCM2711 PCIe-host config
-// transaction with source clear/masking and interrupt binding.
-const VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN: bool = false;
+// as Linux/U-Boot. Static Linux capture is only layout evidence; fresh VL805
+// ownership now requires the HAL-owned BCM2711 PCIe proof path to bind the PCIe
+// sinks, mask/clear host sources, validate live link/RC state, read the VL805
+// config tuple, disable MSI for the poll-only lane, and read back COMMAND.
+const VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN: bool = true;
 const VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED: bool =
     VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN;
 const VL805_LINUX_CAPTURE_CFG_WITNESS_ENABLED: bool = true;
@@ -305,20 +303,15 @@ const PCI_COMMAND_SERR_ENABLE: u16 = 1 << 8;
 const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
 const VL805_PCI_VENDOR_ID: u16 = 0x1106;
 const VL805_PCI_DEVICE_ID: u16 = 0x3483;
-const VL805_EXPECTED_CLASS_CODE: u32 = 0x0C03_30;
+const VL805_EXPECTED_CLASS_CODE: u32 = 0x000C_0330;
 const VL805_ECAM_WINDOW_BYTES: usize = 0x0100_0000;
 const PCI_CFG_VENDOR_DEVICE: usize = 0x00;
 const PCI_CFG_COMMAND_STATUS: usize = 0x04;
 const PCI_CFG_CLASS_REVISION: usize = 0x08;
 const PCI_CFG_BAR0: usize = 0x10;
 const PCI_CFG_BAR1: usize = 0x14;
-const PCI_CFG_CAP_PTR: usize = 0x34;
-const PCI_STATUS_CAPABILITIES_LIST: u16 = 1 << 4;
-const PCI_CAP_ID_MSI: u8 = 0x05;
-const PCI_CAP_NEXT_MASK: u8 = 0xfc;
-const PCI_MSI_CONTROL_OFFSET: usize = 0x02;
+#[cfg(test)]
 const PCI_MSI_CONTROL_ENABLE: u16 = 1 << 0;
-const PCI_CAP_TRAVERSE_LIMIT: usize = 16;
 const PCI_BAR_IO_SPACE: u32 = 1 << 0;
 const PCI_BAR_TYPE_MASK: u32 = 0b110;
 const PCI_BAR_TYPE_64: u32 = 0b100;
@@ -2443,21 +2436,25 @@ fn vl805_cfg_bus_master_ready() -> bool {
     vl805_live_cfg_bus_master_ready_from_sources(vl805_cfg_command())
 }
 
+#[cfg(test)]
 #[inline]
 const fn vl805_msi_control_disable_value(control: u16) -> u16 {
     control & !PCI_MSI_CONTROL_ENABLE
 }
 
+#[cfg(test)]
 #[inline]
 const fn vl805_msi_control_disabled(control: u16) -> bool {
     (control & PCI_MSI_CONTROL_ENABLE) == 0
 }
 
+#[cfg(test)]
 #[inline]
 const fn vl805_poll_only_intx_mask_command(command: u16) -> u16 {
     command | PCI_COMMAND_INTERRUPT_DISABLE
 }
 
+#[cfg(test)]
 #[inline]
 const fn vl805_poll_only_bus_master_command(masked_command: u16) -> u16 {
     masked_command | PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER
@@ -2466,57 +2463,6 @@ const fn vl805_poll_only_bus_master_command(masked_command: u16) -> u16 {
 #[inline]
 fn remember_vl805_msi_disabled_proof(disabled: bool) {
     VL805_MSI_DISABLED_PROOF.store(disabled, Ordering::Release);
-}
-
-fn disable_vl805_msi_for_poll_only(config_virt: usize) -> bool {
-    let status = pci_cfg_read_u16(config_virt, PCI_CFG_COMMAND_STATUS + 2);
-    if (status & PCI_STATUS_CAPABILITIES_LIST) == 0 {
-        boot_log::force_uart_line(
-            "[local-seat] vl805 bcm2711-pcie msi proof skipped reason=no-cap-list",
-        );
-        remember_vl805_msi_disabled_proof(false);
-        return false;
-    }
-
-    let mut cap = (pci_cfg_read_u8(config_virt, PCI_CFG_CAP_PTR) & PCI_CAP_NEXT_MASK) as usize;
-    for _ in 0..PCI_CAP_TRAVERSE_LIMIT {
-        if !(0x40..0x100).contains(&cap) {
-            break;
-        }
-        let cap_id = pci_cfg_read_u8(config_virt, cap);
-        let next = (pci_cfg_read_u8(config_virt, cap + 1) & PCI_CAP_NEXT_MASK) as usize;
-        if cap_id == PCI_CAP_ID_MSI {
-            let ctrl_offset = cap + PCI_MSI_CONTROL_OFFSET;
-            let control_before = pci_cfg_read_u16(config_virt, ctrl_offset);
-            let control_request = vl805_msi_control_disable_value(control_before);
-            if control_request != control_before {
-                pci_cfg_write_u16(config_virt, ctrl_offset, control_request);
-            }
-            let control_after = pci_cfg_read_u16(config_virt, ctrl_offset);
-            let disabled = vl805_msi_control_disabled(control_after);
-            remember_vl805_msi_disabled_proof(disabled);
-            let mut line = heapless::String::<240>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] vl805 bcm2711-pcie msi proof cap=0x{cap:02x} control=0x{control_before:04x}->0x{control_after:04x} disabled={}",
-                    disabled as u8,
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-            return disabled;
-        }
-        if next == 0 || next == cap {
-            break;
-        }
-        cap = next;
-    }
-
-    boot_log::force_uart_line(
-        "[local-seat] vl805 bcm2711-pcie msi proof skipped reason=msi-cap-missing",
-    );
-    remember_vl805_msi_disabled_proof(false);
-    false
 }
 
 fn remember_vl805_xhci_mmio_hint(mmio: usize) {
@@ -3229,7 +3175,7 @@ const fn vl805_runtime_cfg_replay_ready(
     bcm2711_ext_enabled: bool,
     has_cfg_window: bool,
 ) -> bool {
-    has_cfg_window && (runtime_enabled || bcm2711_ext_enabled)
+    (runtime_enabled && has_cfg_window) || bcm2711_ext_enabled
 }
 
 #[inline]
@@ -7150,7 +7096,7 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
 
 fn prepare_vl805_pci_bcm2711(
     hal: &mut KernelHal<'_>,
-    prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
+    _prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
 ) -> Option<usize> {
     if !VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
         return None;
@@ -7161,127 +7107,47 @@ fn prepare_vl805_pci_bcm2711(
         );
         return None;
     }
-    let (data_frame, config_virt) =
-        bcm2711_pcie_map_reg_page(hal, prefix_maps, BCM2711_PCIE_EXT_CFG_DATA, "pcie-ext-data")?;
-    let (index_frame, index_reg) = bcm2711_pcie_map_reg_page(
-        hal,
-        prefix_maps,
-        BCM2711_PCIE_EXT_CFG_INDEX,
-        "pcie-ext-index",
-    )?;
 
-    boot_log::force_uart_line(
-        "[local-seat] vl805 bcm2711-pcie ext-cfg mapped action=select-device",
-    );
-    mmio_write_u32(index_reg, 0, VL805_PCI_DEV_ADDR);
-    let vendor_device = pci_cfg_read_u32(config_virt, PCI_CFG_VENDOR_DEVICE);
-    let vendor_id = (vendor_device & 0xffff) as u16;
-    let device_id = ((vendor_device >> 16) & 0xffff) as u16;
-    if vendor_id != VL805_PCI_VENDOR_ID || device_id != VL805_PCI_DEVICE_ID {
-        let mut line = heapless::String::<208>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie id mismatch got={vendor_id:04x}:{device_id:04x}"
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        return None;
-    }
-
-    let class_revision = pci_cfg_read_u32(config_virt, PCI_CFG_CLASS_REVISION);
-    let class_code = (class_revision >> 8) & 0x00ff_ffff;
-    if class_code != VL805_EXPECTED_CLASS_CODE {
-        let mut line = heapless::String::<192>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie class mismatch got=0x{class_code:06x} expected=0x{expected:06x}",
-                expected = VL805_EXPECTED_CLASS_CODE,
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        return None;
-    }
-
-    let command_before = (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
-    let bar0_before = pci_cfg_read_u32(config_virt, PCI_CFG_BAR0);
-    let bar1_before = pci_cfg_read_u32(config_virt, PCI_CFG_BAR1);
-    let mmio = translate_vl805_pci_bar_to_cpu_mmio(bar0_before, bar1_before);
-    if mmio != Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE) {
-        let mut line = heapless::String::<256>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie reject bar=0x{bar0_before:08x}/0x{bar1_before:08x} translated=0x{mmio:016x} reason=unexpected-bus-window-no-bar-write",
-                mmio = mmio.unwrap_or(0),
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-    }
-
-    let Some(mmio) = mmio else {
-        boot_log::force_uart_line("[local-seat] vl805 bcm2711-pcie reject reason=no-mmio-bar");
-        return None;
+    let proof = match hal.prove_pi4_vl805_pcie_ownership() {
+        Ok(proof) => proof,
+        Err(err) => {
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 bcm2711-pcie ext-cfg skipped source=hal reason={err}"
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return None;
+        }
     };
+    let pi4_pcie::Pi4Vl805PcieProof {
+        status,
+        config_virt,
+        vendor_id,
+        device_id,
+        class_code,
+        command_before,
+        command_after,
+        bar0,
+        bar1,
+        mmio,
+        msi_control_after,
+        ..
+    } = proof;
     if mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE || !xhci_mmio_candidate_valid(mmio) {
         let mut line = heapless::String::<192>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 bcm2711-pcie reject mmio=0x{mmio:016x} reason=unexpected-bar"
+                "[local-seat] vl805 bcm2711-pcie reject mmio=0x{mmio:016x} reason=unexpected-hal-proof-bar"
             ),
         );
         boot_log::force_uart_line(line.as_str());
         return None;
     }
-
-    let command_masked = vl805_poll_only_intx_mask_command(command_before);
-    if command_masked != command_before {
-        pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_masked);
-    }
-    let command_masked_after =
-        (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
-    if (command_masked_after & PCI_COMMAND_INTERRUPT_DISABLE) == 0 {
-        let mut line = heapless::String::<224>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie reject cmd=0x{command_before:04x}->0x{command_masked_after:04x} reason=intx-mask-not-ready"
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        return None;
-    }
-
-    if !disable_vl805_msi_for_poll_only(config_virt) {
-        let mut line = heapless::String::<224>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie reject cmd=0x{command_masked_after:04x} reason=msi-ownership-unproven"
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        return None;
-    }
-
-    let command_required = vl805_poll_only_bus_master_command(command_masked_after);
-    if command_required != command_masked_after {
-        pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_required);
-    }
-    let command_after = (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
-    if !vl805_command_ownership_ready(command_after) {
-        let mut line = heapless::String::<224>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie reject cmd=0x{command_before:04x}->0x{command_after:04x} reason=command-not-ready"
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        return None;
-    }
+    remember_vl805_msi_disabled_proof(msi_control_after.is_some());
     if !ensure_vl805_config_replay_irq_sinks(hal) {
         boot_log::force_uart_line(
             "[local-seat] vl805 bcm2711-pcie reject reason=pcie-sinks-unavailable-after-mask",
@@ -7293,7 +7159,7 @@ fn prepare_vl805_pci_bcm2711(
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] vl805 bcm2711-pcie selected cfg=ext status=unread vid:did={vendor_id:04x}:{device_id:04x} class=0x{class_code:06x} cmd=0x{command_before:04x}->0x{command_after:04x} msi=disabled bar=0x{bar0_before:08x}/0x{bar1_before:08x} mmio=0x{mmio:016x}"
+            "[local-seat] vl805 bcm2711-pcie selected cfg=hal-ext status=0x{status:08x} vid:did={vendor_id:04x}:{device_id:04x} class=0x{class_code:06x} cmd=0x{command_before:04x}->0x{command_after:04x} msi=disabled bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{mmio:016x}"
         ),
     );
     boot_log::force_uart_line(line.as_str());
@@ -7325,8 +7191,6 @@ fn prepare_vl805_pci_bcm2711(
             }
         }
     }
-    core::mem::forget(data_frame);
-    core::mem::forget(index_frame);
     Some(mmio)
 }
 
@@ -14491,7 +14355,7 @@ mod tests {
     fn vl805_runtime_cfg_replay_accepts_bcm2711_ext_window() {
         assert!(vl805_runtime_cfg_replay_ready(false, true, true));
         assert!(vl805_runtime_cfg_replay_ready(true, false, true));
-        assert!(!vl805_runtime_cfg_replay_ready(false, true, false));
+        assert!(vl805_runtime_cfg_replay_ready(false, true, false));
         assert!(!vl805_runtime_cfg_replay_ready(false, false, true));
     }
 
@@ -17243,9 +17107,9 @@ mod tests {
     }
 
     #[test]
-    fn vl805_bcm2711_ext_cfg_runtime_touch_is_opt_in_diagnostic_proof() {
-        assert!(!VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN);
-        assert!(!VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED);
+    fn vl805_bcm2711_ext_cfg_runtime_touch_uses_hal_owned_proof() {
+        assert!(VL805_BCM2711_PCIE_EXT_CFG_LIVE_REPLAY_OPT_IN);
+        assert!(VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED);
         assert!(VL805_LINUX_CAPTURE_CFG_WITNESS_ENABLED);
         assert!(!VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN);
         assert!(super::vl805_linux_capture_cfg_witness_available());
@@ -17253,12 +17117,12 @@ mod tests {
             VL805_CFG_RUNTIME_TOUCH_ENABLED,
             false,
         ));
-        assert!(!vl805_runtime_cfg_replay_ready(
+        assert!(vl805_runtime_cfg_replay_ready(
             VL805_CFG_RUNTIME_TOUCH_ENABLED,
             VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED,
             false,
         ));
-        assert!(!vl805_runtime_cfg_replay_ready(
+        assert!(vl805_runtime_cfg_replay_ready(
             VL805_CFG_RUNTIME_TOUCH_ENABLED,
             VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED,
             true,
