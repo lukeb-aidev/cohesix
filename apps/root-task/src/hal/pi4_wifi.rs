@@ -803,7 +803,10 @@ const fn post_download_ht_request_primes_wake_sideband() -> bool {
 
 #[inline]
 fn post_download_ht_stage_primes_wake_sideband(stage: &'static str) -> bool {
-    matches!(stage, "debug-probe-ht" | "post-function2-sr-init")
+    matches!(
+        stage,
+        "wait-ht-clock" | "debug-probe-ht" | "post-function2-sr-init"
+    )
 }
 
 #[inline]
@@ -867,7 +870,7 @@ const fn post_download_ht_sleepcsr_clear_set_is_primary_before_ht() -> bool {
 
 #[inline]
 const fn post_download_ht_sleepcsr_preserves_cached_devon() -> bool {
-    false
+    true
 }
 
 #[inline]
@@ -910,8 +913,7 @@ fn post_download_ht_sleepcsr_clear_set_poll_limit_for_stage(stage: &'static str)
 
 #[inline]
 fn post_download_ht_sleepcsr_requires_live_devon_before_ht(stage: &'static str) -> bool {
-    let _ = stage;
-    false
+    matches!(stage, "wait-ht-clock")
 }
 
 #[inline]
@@ -1032,6 +1034,17 @@ const fn firmware_download_readback_status(
     }
 }
 
+#[inline]
+const fn firmware_readback_unavailable_can_continue_before_armcr4_release(
+    readback_required: bool,
+) -> bool {
+    // Linux production firmware download does not require a full debug readback
+    // before ARMCR4 release. Cohesix still retries bounded readback profiles and
+    // keeps byte mismatches fatal, but transport-unavailable readback is advisory
+    // once the staged upload path has completed.
+    readback_required
+}
+
 const PI4_WIFI_LINUX_CAPTURE_RAW_NVRAM_LEN: usize = 2_074;
 const PI4_WIFI_LINUX_CAPTURE_NORMALIZED_NVRAM_LEN: usize = 1_744;
 const PI4_WIFI_LINUX_CAPTURE_NVRAM_WITH_TAIL_LEN: usize = 1_748;
@@ -1150,6 +1163,15 @@ const fn firmware_transfer_chunk_limit(byte_mode_fallback: bool) -> usize {
         SDIO_MAX_BYTE_MODE
     } else {
         CYW43_FIRMWARE_TRANSFER_CHUNK
+    }
+}
+
+#[inline]
+const fn firmware_verify_transfer_chunk_limit(byte_mode_fallback: bool) -> usize {
+    if firmware_transfer_uses_byte_mode(byte_mode_fallback) {
+        SDIO_MAX_BYTE_MODE
+    } else {
+        CYW43_FIRMWARE_VERIFY_CHUNK
     }
 }
 
@@ -14274,8 +14296,14 @@ impl SdioHost {
         &mut self,
         addr: u32,
         out: &mut [u8],
+        prefer_byte_mode: bool,
     ) -> Result<(), HalError> {
-        self.backplane_read_into_with_chunk_limit(addr, out, CYW43_FIRMWARE_VERIFY_CHUNK)
+        self.backplane_read_into_with_chunk_limit_and_mode(
+            addr,
+            out,
+            firmware_verify_transfer_chunk_limit(prefer_byte_mode),
+            prefer_byte_mode,
+        )
     }
 
     fn backplane_read_into_with_chunk_limit(
@@ -14283,6 +14311,16 @@ impl SdioHost {
         addr: u32,
         out: &mut [u8],
         chunk_limit: usize,
+    ) -> Result<(), HalError> {
+        self.backplane_read_into_with_chunk_limit_and_mode(addr, out, chunk_limit, false)
+    }
+
+    fn backplane_read_into_with_chunk_limit_and_mode(
+        &mut self,
+        addr: u32,
+        out: &mut [u8],
+        chunk_limit: usize,
+        prefer_byte_mode: bool,
     ) -> Result<(), HalError> {
         if chunk_limit == 0 {
             return Err(HalError::Unsupported("backplane-read-zero-chunk"));
@@ -14300,13 +14338,23 @@ impl SdioHost {
                 )
                 .ok_or(HalError::Unsupported("backplane-read-overflow"))?;
             self.with_backplane_transfer_window(chunk_addr, |this, function_addr| {
-                this.io_extended(
-                    SdioFunction::Function1,
-                    function_addr,
-                    true,
-                    false,
-                    &mut out[offset..offset + chunk_len],
-                )
+                if prefer_byte_mode {
+                    this.io_extended_byte_mode(
+                        SdioFunction::Function1,
+                        function_addr,
+                        true,
+                        false,
+                        &mut out[offset..offset + chunk_len],
+                    )
+                } else {
+                    this.io_extended(
+                        SdioFunction::Function1,
+                        function_addr,
+                        true,
+                        false,
+                        &mut out[offset..offset + chunk_len],
+                    )
+                }
             })?;
             offset += chunk_len;
         }
@@ -16507,6 +16555,7 @@ impl SdioHost {
                 nvram_tail,
                 nvram_magic,
                 false,
+                false,
             ) {
                 Ok(()) => {
                     self.firmware_download_verified = true;
@@ -16525,12 +16574,23 @@ impl SdioHost {
                         &mut selected_bulk_clock_hz,
                         initial_verify_err,
                     )?;
-                    if !verified {
+                    if !verified
+                        && !firmware_readback_unavailable_can_continue_before_armcr4_release(
+                            firmware_verify_required,
+                        )
+                    {
                         emit_breadcrumb(format_args!(
                             "[pi4-wifi] firmware_verify outcome=readback-unavailable action=fail-before-armcr4-release reason=linux-mandatory-firmware-readback"
                         ));
                         return Err(HalError::Unsupported(
                             "cyw43-firmware-verify-readback-unavailable",
+                        ));
+                    }
+                    if !verified {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware_verify outcome=readback-unavailable action=continue-before-armcr4-release reason=linux-production-readback-unavailable clock={}Hz width={} verified=no",
+                            self.current_clock_hz,
+                            sdio_bus_width_name(self.desired_bus_width),
                         ));
                     }
                     self.firmware_download_verified = verified;
@@ -17883,7 +17943,7 @@ impl SdioHost {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware_verify part=image order=before-nvram reason=linux-brcmfmac-download-sequence"
             ));
-            self.verify_backplane_bytes("image", ram_base, firmware)?;
+            self.verify_backplane_bytes("image", ram_base, firmware, prefer_byte_mode)?;
         } else {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware_verify part=image order=before-nvram policy=defer-readback reason=verify-after-complete-upload"
@@ -17946,7 +18006,7 @@ impl SdioHost {
                 index + 1,
                 profile.clock_hz,
                 sdio_bus_width_name(profile.width),
-                CYW43_FIRMWARE_VERIFY_CHUNK,
+                firmware_verify_transfer_chunk_limit(profile.prefer_byte_mode),
                 yn(profile.prefer_byte_mode),
             ));
             self.set_bus_width(profile.width)?;
@@ -17970,6 +18030,7 @@ impl SdioHost {
                 nvram_tail,
                 nvram_magic,
                 false,
+                profile.prefer_byte_mode,
             ) {
                 Ok(()) => {
                     *selected_bulk_clock_hz = effective_hz;
@@ -18013,12 +18074,18 @@ impl SdioHost {
         nvram_tail: u32,
         nvram_magic: u32,
         image_already_verified: bool,
+        prefer_byte_mode: bool,
     ) -> Result<(), HalError> {
         if !image_already_verified {
-            self.verify_backplane_bytes("image", ram_base, firmware)?;
+            self.verify_backplane_bytes("image", ram_base, firmware, prefer_byte_mode)?;
         }
-        self.verify_backplane_bytes("nvram", nvram_offset, nvram)?;
-        self.verify_backplane_bytes("tail", nvram_tail, &nvram_magic.to_le_bytes())?;
+        self.verify_backplane_bytes("nvram", nvram_offset, nvram, prefer_byte_mode)?;
+        self.verify_backplane_bytes(
+            "tail",
+            nvram_tail,
+            &nvram_magic.to_le_bytes(),
+            prefer_byte_mode,
+        )?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware_verify summary pass=yes image={} image_preverified={} nvram={} tail=4 clock={}Hz width={}",
             firmware.len(),
@@ -18135,18 +18202,26 @@ impl SdioHost {
         label: &'static str,
         addr: u32,
         expected: &[u8],
+        prefer_byte_mode: bool,
     ) -> Result<(), HalError> {
         let mut observed = [0u8; CYW43_FIRMWARE_VERIFY_CHUNK];
         let mut offset = 0usize;
         while offset < expected.len() {
-            let chunk_len = cmp::min(CYW43_FIRMWARE_VERIFY_CHUNK, expected.len() - offset);
+            let chunk_len = cmp::min(
+                firmware_verify_transfer_chunk_limit(prefer_byte_mode),
+                expected.len() - offset,
+            );
             let chunk_addr = addr
                 .checked_add(
                     u32::try_from(offset)
                         .map_err(|_| HalError::Unsupported("cyw43-firmware-verify-range"))?,
                 )
                 .ok_or(HalError::Unsupported("cyw43-firmware-verify-range"))?;
-            match self.backplane_read_firmware_verify_into(chunk_addr, &mut observed[..chunk_len]) {
+            match self.backplane_read_firmware_verify_into(
+                chunk_addr,
+                &mut observed[..chunk_len],
+                prefer_byte_mode,
+            ) {
                 Ok(()) => {}
                 Err(err) => {
                     emit_breadcrumb(format_args!(
@@ -19366,7 +19441,13 @@ impl SdioHost {
         let cached_sleep_ready = post_download_ht_sleepcsr_preserves_cached_devon()
             && cached_sleep_before_sideband
                 .is_some_and(post_download_ht_sleepcsr_ready_for_function2);
-        if post_download_ht_sleepcsr_uses_linux_clear_set() && !cached_sleep_ready {
+        let live_sleep_ready =
+            sleep_after.is_some_and(post_download_ht_sleepcsr_ready_for_function2);
+        let requires_live_devon = post_download_ht_sleepcsr_requires_live_devon_before_ht(stage);
+        if post_download_ht_sleepcsr_uses_linux_clear_set()
+            && !(stage == "wait-ht-clock" && live_sleep_ready)
+            && (!cached_sleep_ready || requires_live_devon)
+        {
             sleep_after = self.try_post_download_ht_sleepcsr_clear_set_for(stage, sleep_after);
         } else if cached_sleep_ready
             && !sleep_after.is_some_and(post_download_ht_sleepcsr_ready_for_function2)
@@ -19490,8 +19571,7 @@ impl SdioHost {
             cardcap_effective,
         );
         let sleep_request_effective = post_download_ht_sleepcsr_value(sleep_effective);
-        let accept_kso_only_before_ht =
-            !post_download_ht_sleepcsr_requires_live_devon_before_ht(stage);
+        let accept_kso_only_before_ht = !requires_live_devon;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} action=post-download-ht-sideband-prime wake=0x{wake_before_value:02x}/{wake_before_set}->0x{wake_after_value:02x}/{wake_after_set} cardcap=0x{cardcap_before_value:02x}/{cardcap_before_set}->0x{cardcap_after_value:02x}/{cardcap_after_set} sleep=0x{sleep_before_value:02x}/{sleep_before_set}->0x{sleep_value:02x}/{sleep_set} sleep_request=0x{sleep_request_effective:02x} shadow_complete={} clear_set={} accept_kso_only={} readiness=chipclk-ht-avail",
             yn(shadow_complete),
@@ -19510,7 +19590,7 @@ impl SdioHost {
             sleep_value = sleep_effective.unwrap_or(0),
             sleep_set = yn(sleep_effective.is_some()),
         ));
-        if post_download_ht_sleepcsr_requires_live_devon_before_ht(stage)
+        if requires_live_devon
             && !sleep_effective.is_some_and(post_download_ht_sleepcsr_ready_for_function2)
         {
             emit_breadcrumb(format_args!(
@@ -24981,6 +25061,14 @@ mod tests {
     fn firmware_verify_retry_profiles_use_conservative_sdio_shapes() {
         assert_eq!(CYW43_FIRMWARE_VERIFY_CHUNK, 2 * 1024);
         assert!(CYW43_FIRMWARE_VERIFY_CHUNK > SDIO_MAX_BYTE_MODE);
+        assert_eq!(
+            firmware_verify_transfer_chunk_limit(false),
+            CYW43_FIRMWARE_VERIFY_CHUNK
+        );
+        assert_eq!(
+            firmware_verify_transfer_chunk_limit(true),
+            SDIO_MAX_BYTE_MODE
+        );
         let verify_plan =
             sdio_transfer_plan(SdioFunction::Function1, CYW43_FIRMWARE_VERIFY_CHUNK, false)
                 .expect("firmware verify plan is valid");
@@ -25005,6 +25093,15 @@ mod tests {
             SdioBusWidth::FourBit
         );
         assert!(CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[0].prefer_byte_mode);
+        let retry_plan = sdio_byte_mode_transfer_plan(
+            firmware_verify_transfer_chunk_limit(
+                CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[0].prefer_byte_mode,
+            ),
+            false,
+        )
+        .expect("firmware verify byte-mode retry plan is valid");
+        assert!(!retry_plan.block_mode);
+        assert_eq!(retry_plan.block_size, SDIO_MAX_BYTE_MODE as u16);
         assert_eq!(
             CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[1].clock_hz,
             CYW43_STARTUP_CLOCK_HZ
@@ -25029,6 +25126,8 @@ mod tests {
         assert!(!firmware_verify_readback_can_be_treated_as_unavailable(
             &HalError::Unsupported("cyw43-firmware-verify-mismatch")
         ));
+        assert!(firmware_readback_unavailable_can_continue_before_armcr4_release(true));
+        assert!(!firmware_readback_unavailable_can_continue_before_armcr4_release(false));
     }
 
     #[test]
@@ -29826,7 +29925,7 @@ mod tests {
         assert!(!post_download_ht_sleepcsr_ready_for_function2(0));
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
-        assert!(!post_download_ht_sleepcsr_preserves_cached_devon());
+        assert!(post_download_ht_sleepcsr_preserves_cached_devon());
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert_eq!(
             post_download_ht_sleepcsr_clear_set_poll_limit(),
@@ -29854,16 +29953,14 @@ mod tests {
         );
         assert!(CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
         assert!(post_download_ht_sleepcsr_poll_limit() < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
-        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "debug-probe-ht"
         ));
         assert!(post_download_ht_sideband_primes_before_clock_request());
-        assert!(!post_download_ht_stage_primes_wake_sideband(
-            "wait-ht-clock"
-        ));
+        assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
         assert!(post_download_ht_stage_primes_wake_sideband(
             "debug-probe-ht"
         ));
@@ -29883,13 +29980,13 @@ mod tests {
     }
 
     #[test]
-    fn post_download_ht_sideband_allows_kso_before_ht_but_requires_devon_before_function2() {
+    fn post_download_ht_sideband_requires_live_devon_before_production_ht() {
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
-        assert!(!post_download_ht_sleepcsr_preserves_cached_devon());
+        assert!(post_download_ht_sleepcsr_preserves_cached_devon());
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert!(post_download_ht_sideband_primes_before_clock_request());
-        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert!(!post_download_ht_sleepcsr_ready_for_function2(
@@ -29902,9 +29999,7 @@ mod tests {
             (SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL) & SBSDIO_HT_AVAIL,
             0
         );
-        assert!(!post_download_ht_stage_primes_wake_sideband(
-            "wait-ht-clock"
-        ));
+        assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
         assert!(!post_download_ht_stage_primes_wake_sideband(
             "pre-write-alp-clock"
         ));
@@ -30210,7 +30305,7 @@ mod tests {
         assert!(post_download_devon_before_ht_is_diagnostic());
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
-        assert!(!post_download_ht_sleepcsr_preserves_cached_devon());
+        assert!(post_download_ht_sleepcsr_preserves_cached_devon());
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert_eq!(
             post_download_ht_sleepcsr_clear_set_poll_limit(),
@@ -30310,9 +30405,7 @@ mod tests {
             true,
             true
         ));
-        assert!(!post_download_ht_stage_primes_wake_sideband(
-            "wait-ht-clock"
-        ));
+        assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
         assert!(post_download_ht_stage_primes_wake_sideband(
             "debug-probe-ht"
         ));
@@ -30470,6 +30563,7 @@ mod tests {
             firmware_download_readback_status(true, true),
             "verified-bounded-readback"
         );
+        assert!(firmware_readback_unavailable_can_continue_before_armcr4_release(true));
         assert_eq!(CYW43_FIRMWARE_PROOF_CHUNK, 64);
         assert!(CYW43_FIRMWARE_PROOF_CHUNK < CYW43_FIRMWARE_VERIFY_CHUNK);
     }
@@ -30969,15 +31063,13 @@ mod tests {
         assert!(!pre_function2_ht_sideband_programs_sr_registers());
         assert!(post_download_ht_request_primes_wake_sideband());
         assert!(post_download_ht_sideband_primes_before_clock_request());
-        assert!(!post_download_ht_stage_primes_wake_sideband(
-            "wait-ht-clock"
-        ));
+        assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
         assert!(post_download_ht_stage_primes_wake_sideband(
             "post-function2-sr-init"
         ));
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
-        assert!(!post_download_ht_sleepcsr_preserves_cached_devon());
+        assert!(post_download_ht_sleepcsr_preserves_cached_devon());
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert_eq!(
             post_download_ht_sleepcsr_clear_set_poll_limit(),
@@ -30989,7 +31081,7 @@ mod tests {
         );
         assert!(CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
         assert!(post_download_ht_sleepcsr_poll_limit() < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
-        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert_eq!(

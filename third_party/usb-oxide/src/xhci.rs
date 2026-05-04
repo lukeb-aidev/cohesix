@@ -902,8 +902,21 @@ const fn runtime_handoff_skips_live_drop_stop(
     // A controller instance that did not publish fresh runtime ownership must
     // not acquire ownership later from Drop. The Pi 4 stop-seed path uses this
     // temporary controller only as a poll-safe progress witness before the
-    // next live cold-start strategy is attempted.
+    // next live cold-start strategy is attempted. The platform-reset stop-seed
+    // lane also avoids an implicit Drop-time stop because the live post-RUN
+    // operational reads are intentionally kept behind explicit breadcrumbs.
     runtime_pollsafe_no_fresh_ownership_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_platform_reset_stop_seed_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn runtime_platform_reset_stop_seed_handoff(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
+        && runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
+        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -912,6 +925,9 @@ const fn runtime_stop_state_needs_post_run_settle(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
+        || matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
+            && runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
+            && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -3670,7 +3686,7 @@ impl<H: Dma> XhciCtrl<H> {
                 0x026a,
                 0x02eb,
                 0x02e9,
-                0x02da,
+                0x02e5,
                 2,
             );
         } else if uboot_style_run_write {
@@ -3687,7 +3703,7 @@ impl<H: Dma> XhciCtrl<H> {
             unsafe {
                 ((self.op_base + reg::USBCMD) as *mut u32).write_volatile(run_usbcmd);
             }
-            emit_xhci_diag(0x02da, reg::USBCMD as u64, run_usbcmd as u64, 3);
+            emit_xhci_diag(0x02e5, reg::USBCMD as u64, run_usbcmd as u64, 3);
         } else if relaxed_run_write {
             self.write_op_u32_store_diag_relaxed_with_barrier_phase(
                 reg::USBCMD,
@@ -3695,7 +3711,7 @@ impl<H: Dma> XhciCtrl<H> {
                 0x026a,
                 0x02eb,
                 0x02e9,
-                0x02da,
+                0x02e5,
                 1,
             );
         } else {
@@ -3705,7 +3721,7 @@ impl<H: Dma> XhciCtrl<H> {
                 0x026a,
                 0x02eb,
                 0x02e9,
-                0x02da,
+                0x02e5,
                 0,
             );
         }
@@ -5403,6 +5419,14 @@ mod tests {
                 runtime_ring_snapshot,
             )
         );
+        assert!(runtime_stop_state_needs_post_run_settle(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            stop_state_snapshot,
+        ));
+        assert!(!runtime_stop_state_needs_post_run_settle(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            runtime_ring_snapshot,
+        ));
         assert!(replay_staged_dcbaap_snapshot_before_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             runtime_ring_snapshot,
@@ -6438,6 +6462,10 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             stop_state_only_snapshot,
         ));
+        assert!(runtime_stop_state_needs_post_run_settle(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            stop_state_only_snapshot,
+        ));
     }
 
     #[test]
@@ -7251,6 +7279,10 @@ mod tests {
         ));
         assert!(runtime_handoff_skips_live_drop_stop(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
+            stop_state_seed,
+        ));
+        assert!(runtime_handoff_skips_live_drop_stop(
+            XhciFirmwareHandoff::PlatformResetComplete,
             stop_state_seed,
         ));
         assert!(!runtime_handoff_skips_live_drop_stop(

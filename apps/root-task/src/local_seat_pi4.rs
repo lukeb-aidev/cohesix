@@ -3754,6 +3754,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x02a5
             | 0x02a7
             | 0x02d4..=0x02d5
+            | 0x02e5
             | 0x02e8..=0x02f7
             | 0x0312
             | 0x0315..=0x0319
@@ -3770,6 +3771,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
         0x02a5
             | 0x02a7
             | 0x02cb..=0x02d9
+            | 0x02e5
             | 0x02e9
             | 0x02eb
             | 0x0315..=0x0319
@@ -3843,6 +3845,7 @@ const fn xhci_diag_stage_value_labels(
     stage: u16,
 ) -> Option<(&'static str, &'static str, &'static str)> {
     match stage {
+        0x0110 => Some(("ready", "unused", "unused")),
         0x0117 => Some(("handoff", "runtime_mask", "publish_mask")),
         0x0200 => Some(("usbcmd", "usbsts", "mmio")),
         0x0201 => Some(("usbcmd", "masked_usbcmd", "write_needed")),
@@ -3863,6 +3866,7 @@ const fn xhci_diag_stage_value_labels(
         0x02f3 => Some(("staged_erstba", "staged_erstsz", "erstsz")),
         0x02f4 => Some(("publish_mask", "run_usbcmd", "run_mode")),
         0x02f5 => Some(("dcbaap_off", "crcr_off", "int_base")),
+        0x02e5 => Some(("reg", "value", "mode")),
         0x02f7 => Some(("policy_mask", "handoff", "seed_flags")),
         0x0316 => Some(("erdp_ack", "iman_ip", "usbsts_clear")),
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
@@ -3877,6 +3881,7 @@ const fn xhci_diag_stage_value_labels(
 #[inline]
 fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
     match stage {
+        0x0110 => Some("controller-init-complete"),
         0x0117 => Some("init-policy-summary"),
         0x0200 => Some("pre-reset-usbcmd-usbsts-read"),
         0x0201 => Some("pre-reset-usbcmd-mask-decision"),
@@ -3973,6 +3978,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x026e => Some("erstba-write-low"),
         0x026f => Some("erstba-write-high"),
         0x02e8 => Some("fw-handoff-trusted-usbcmd-run-skip"),
+        0x02e5 => Some("usbcmd-run-write-done"),
         0x02ea => Some("usbcmd-run-barrier-done"),
         0x02eb => Some("usbcmd-run-barrier-begin"),
         0x02e9 => Some("usbcmd-run-pre-store"),
@@ -16180,6 +16186,11 @@ mod tests {
         assert_eq!(xhci_diag_stage_label(0x0266), Some("erdp-plan"));
         assert_eq!(xhci_diag_stage_label(0x026a), Some("usbcmd-run-write"));
         assert_eq!(
+            xhci_diag_stage_label(0x0110),
+            Some("controller-init-complete")
+        );
+        assert_eq!(xhci_diag_stage_label(0x02e5), Some("usbcmd-run-write-done"));
+        assert_eq!(
             xhci_diag_stage_label(0x02e8),
             Some("fw-handoff-trusted-usbcmd-run-skip")
         );
@@ -16665,6 +16676,7 @@ mod tests {
     #[test]
     fn xhci_diag_stage_after_run_distinguishes_post_run_and_pre_run_edges() {
         assert!(super::xhci_diag_stage_after_run(0x02d4));
+        assert!(super::xhci_diag_stage_after_run(0x02e5));
         assert!(super::xhci_diag_stage_after_run(0x02e9));
         assert!(super::xhci_diag_stage_after_run(0x0316));
         assert!(super::xhci_diag_stage_after_run(0x032c));
@@ -16735,6 +16747,10 @@ mod tests {
 
     #[test]
     fn xhci_diag_value_labels_name_pre_run_ring_snapshot_fields() {
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0110),
+            Some(("ready", "unused", "unused"))
+        );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0117),
             Some(("handoff", "runtime_mask", "publish_mask"))
@@ -16823,6 +16839,10 @@ mod tests {
             xhci_diag_stage_value_labels(0x0320),
             Some(("usbcmd", "masked_usbcmd", "masked_bits"))
         );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x02e5),
+            Some(("reg", "value", "mode"))
+        );
         assert_eq!(xhci_diag_stage_value_labels(0x02e9), None);
     }
 
@@ -16879,7 +16899,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_state_without_runtime_rings_skips_root_port_reads() {
+    fn bootloader_owned_stop_state_without_runtime_rings_skips_root_port_reads() {
         assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
         ));
@@ -16890,7 +16910,13 @@ mod tests {
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
         assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true),
+        ));
+        assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false),
+        ));
+        assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
         ));
     }
 

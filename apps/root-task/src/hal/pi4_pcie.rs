@@ -84,6 +84,7 @@ const PCI_MSI_CONTROL_ENABLE: u16 = 1;
 
 const RPI4_VL805_XHCI_MMIO: usize = 0x0000_0006_0000_0000;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BASE: usize = 0xC000_0000;
+const RPI4_PCIE_BUS_MMIO_WINDOW_BASE_U32: u32 = 0xC000_0000;
 const RPI4_PCIE_CPU_MMIO_WINDOW_BASE: usize = RPI4_VL805_XHCI_MMIO;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BYTES: usize = 0x4000_0000;
 const RPI4_PCIE_DMA_BUS_BASE: u64 = 0x0000_0004_0000_0000;
@@ -326,8 +327,27 @@ fn prove_pi4_vl805_pcie_ownership(
     }
 
     let command_before = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS);
-    let bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0);
-    let bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1);
+    let mut bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0);
+    let mut bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1);
+    if status_ready && vl805_bar_assignment_needed(bar0, bar1) {
+        let assigned_bar0 = vl805_pi4_assigned_bar0_value();
+        vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR1, 0);
+        vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR0, assigned_bar0);
+        fence(Ordering::SeqCst);
+        pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
+        let reassigned_bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0);
+        let reassigned_bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1);
+        let mut line = heapless::String::<240>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 bcm2711-pcie bar assign old=0x{bar0:08x}/0x{bar1:08x} new=0x{reassigned_bar0:08x}/0x{reassigned_bar1:08x} reason=unassigned-64bit-memory-bar"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        bar0 = reassigned_bar0;
+        bar1 = reassigned_bar1;
+    }
     let exact_config_ready =
         vl805_exact_config_tuple_ready(vendor_device, class_revision, bar0, bar1);
     let Some(mmio) = translate_vl805_pci_bar_to_cpu_mmio(bar0, bar1) else {
@@ -985,6 +1005,16 @@ fn vl805_exact_config_tuple_ready(
 }
 
 #[inline]
+const fn vl805_bar_assignment_needed(bar0: u32, bar1: u32) -> bool {
+    (bar0 & 0xf) == 0x4 && (bar0 & !0xf) == 0 && bar1 == 0
+}
+
+#[inline]
+const fn vl805_pi4_assigned_bar0_value() -> u32 {
+    RPI4_PCIE_BUS_MMIO_WINDOW_BASE_U32 | 0x4
+}
+
+#[inline]
 const fn vl805_vendor_device_dword(vendor_id: u16, device_id: u16) -> u32 {
     vendor_id as u32 | ((device_id as u32) << 16)
 }
@@ -1055,6 +1085,12 @@ fn vl805_cfg_write_u16(index_reg: usize, config_virt: usize, offset: usize, valu
 }
 
 #[inline]
+fn vl805_cfg_write_u32(index_reg: usize, config_virt: usize, offset: usize, value: u32) {
+    let _ = bcm2711_ext_cfg_select(index_reg);
+    pci_cfg_write_u32(config_virt, offset, value);
+}
+
+#[inline]
 fn vl805_cfg_read_u32(index_reg: usize, config_virt: usize, offset: usize) -> u32 {
     let _ = bcm2711_ext_cfg_select(index_reg);
     pci_cfg_read_u32(config_virt, offset)
@@ -1100,6 +1136,18 @@ fn pci_cfg_read_u32(config_virt: usize, offset: usize) -> u32 {
     // SAFETY: `config_virt` is the HAL-owned BCM2711 EXT_CFG_DATA mapping for
     // the selected VL805 function. PCI config dword reads are volatile MMIO.
     unsafe { ptr::read_volatile(addr as *const u32) }
+}
+
+#[inline]
+fn pci_cfg_write_u32(config_virt: usize, offset: usize, value: u32) {
+    let Some(addr) = config_virt.checked_add(offset) else {
+        return;
+    };
+    // SAFETY: `config_virt` is the HAL-owned BCM2711 EXT_CFG_DATA mapping for
+    // the selected VL805 function. PCI config dword writes are volatile MMIO.
+    unsafe {
+        ptr::write_volatile(addr as *mut u32, value);
+    }
 }
 
 const fn div_ceil(value: usize, divisor: usize) -> usize {
@@ -1228,6 +1276,16 @@ mod tests {
             Some(RPI4_VL805_XHCI_MMIO + 0x1000)
         );
         assert_eq!(translate_vl805_pci_bar_to_cpu_mmio(0xb000_0004, 0), None);
+    }
+
+    #[test]
+    fn vl805_bar_assignment_is_limited_to_unassigned_64bit_memory_bar() {
+        assert!(vl805_bar_assignment_needed(0x0000_0004, 0));
+        assert_eq!(vl805_pi4_assigned_bar0_value(), 0xc000_0004);
+        assert!(!vl805_bar_assignment_needed(0xc000_0004, 0));
+        assert!(!vl805_bar_assignment_needed(0x0000_0000, 0));
+        assert!(!vl805_bar_assignment_needed(0x0000_0005, 0));
+        assert!(!vl805_bar_assignment_needed(0x0000_0004, 1));
     }
 
     #[test]
