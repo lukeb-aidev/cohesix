@@ -504,8 +504,8 @@ const fn core_ctrl_postreset_access_mode_label(_base: u32, _offset: u32) -> &'st
 }
 
 #[inline]
-const fn core_ctrl_postreset_read_uses_cmd52_current_window(base: u32, _offset: u32) -> bool {
-    base == CYW43_ARMCR4_CORE_BASE
+const fn core_ctrl_postreset_read_uses_cmd52_current_window(_base: u32, _offset: u32) -> bool {
+    false
 }
 
 #[inline]
@@ -518,8 +518,8 @@ const fn core_ctrl_postreset_read_access_mode_label(base: u32, offset: u32) -> &
 }
 
 #[inline]
-const fn core_ctrl_clear_reset_read_uses_cmd52_current_window(base: u32, offset: u32) -> bool {
-    base == CYW43_ARMCR4_CORE_BASE && offset == AI_RESETCTRL_OFFSET
+const fn core_ctrl_clear_reset_read_uses_cmd52_current_window(_base: u32, _offset: u32) -> bool {
+    false
 }
 
 #[inline]
@@ -1019,6 +1019,11 @@ fn firmware_verify_readback_can_be_treated_as_unavailable(err: &HalError) -> boo
 }
 
 #[inline]
+fn firmware_verify_cmd52_fallback_enabled(prefer_byte_mode: bool, err: &HalError) -> bool {
+    prefer_byte_mode && firmware_verify_readback_can_be_treated_as_unavailable(err)
+}
+
+#[inline]
 const fn firmware_download_readback_verify_required(prewrite_ht_ready: bool) -> bool {
     // When pre-upload HT is absent, the post-release HT gate cannot distinguish
     // a clock edge from a partial firmware/NVRAM image. Require the existing
@@ -1052,11 +1057,9 @@ const fn firmware_download_readback_status(
 const fn firmware_readback_unavailable_can_continue_before_armcr4_release(
     readback_required: bool,
 ) -> bool {
-    // Linux production firmware download does not require a full debug readback
-    // before ARMCR4 release. Cohesix still retries bounded readback profiles and
-    // keeps byte mismatches fatal, but transport-unavailable readback is advisory
-    // once the staged upload path has completed.
-    readback_required
+    // If pre-upload HT was absent, Cohesix must prove the staged payload before
+    // releasing ARMCR4. Otherwise a later HT timeout can mask an unproven image.
+    !readback_required
 }
 
 const PI4_WIFI_LINUX_CAPTURE_RAW_NVRAM_LEN: usize = 2_074;
@@ -6273,7 +6276,12 @@ struct FirmwareVerifyRetryProfile {
     prefer_byte_mode: bool,
 }
 
-const CYW43_FIRMWARE_VERIFY_RETRY_PROFILES: [FirmwareVerifyRetryProfile; 2] = [
+const CYW43_FIRMWARE_VERIFY_RETRY_PROFILES: [FirmwareVerifyRetryProfile; 3] = [
+    FirmwareVerifyRetryProfile {
+        clock_hz: CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ,
+        width: SdioBusWidth::FourBit,
+        prefer_byte_mode: true,
+    },
     FirmwareVerifyRetryProfile {
         clock_hz: CYW43_STARTUP_CLOCK_HZ,
         width: SdioBusWidth::FourBit,
@@ -14359,12 +14367,69 @@ impl SdioHost {
         out: &mut [u8],
         prefer_byte_mode: bool,
     ) -> Result<(), HalError> {
-        self.backplane_read_into_with_chunk_limit_and_mode(
+        let cmd53_err = match self.backplane_read_into_with_chunk_limit_and_mode(
             addr,
             out,
             firmware_verify_transfer_chunk_limit(prefer_byte_mode),
             prefer_byte_mode,
-        )
+        ) {
+            Ok(()) => return Ok(()),
+            Err(err) if firmware_verify_cmd52_fallback_enabled(prefer_byte_mode, &err) => err,
+            Err(err) => return Err(err),
+        };
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware_verify readback mode=cmd53-byte-unavailable addr=0x{addr:08x} bytes={} err={cmd53_err} action=cmd52-small-fallback clock={}Hz width={}",
+            out.len(),
+            self.current_clock_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+        ));
+        self.recover_command_path_and_refresh_transport("firmware-verify-cmd52-fallback")?;
+        match self.backplane_read_firmware_verify_cmd52_into(addr, out) {
+            Ok(()) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware_verify readback mode=cmd52-small-fallback addr=0x{addr:08x} bytes={} pass=read clock={}Hz width={}",
+                    out.len(),
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                ));
+                Ok(())
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware_verify readback mode=cmd52-small-fallback addr=0x{addr:08x} bytes={} pass=read-fail initial_err={cmd53_err} err={err} clock={}Hz width={}",
+                    out.len(),
+                    self.current_clock_hz,
+                    sdio_bus_width_name(self.desired_bus_width),
+                ));
+                Err(err)
+            }
+        }
+    }
+
+    fn backplane_read_firmware_verify_cmd52_into(
+        &mut self,
+        addr: u32,
+        out: &mut [u8],
+    ) -> Result<(), HalError> {
+        let mut offset = 0usize;
+        while offset < out.len() {
+            let window_offset = (addr as usize + offset) & BACKPLANE_ADDRESS_MASK as usize;
+            let window_remaining =
+                (BACKPLANE_ADDRESS_MASK as usize + 1).saturating_sub(window_offset);
+            let chunk_len = cmp::min(out.len() - offset, window_remaining);
+            let chunk_addr = addr
+                .checked_add(
+                    u32::try_from(offset)
+                        .map_err(|_| HalError::Unsupported("backplane-read-overflow"))?,
+                )
+                .ok_or(HalError::Unsupported("backplane-read-overflow"))?;
+            self.backplane_read_small(
+                backplane_small_access_addr(chunk_addr),
+                &mut out[offset..offset + chunk_len],
+            )?;
+            offset += chunk_len;
+        }
+        Ok(())
     }
 
     fn backplane_read_into_with_chunk_limit(
@@ -16694,6 +16759,7 @@ impl SdioHost {
             yn(self.firmware_download_verified),
         ));
         self.core_reset(CYW43_ARMCR4_CORE_BASE, ARMCR4_BCMA_IOCTL_CPUHALT, 0, 0)?;
+        self.prove_armcr4_release_live("armcr4-release-proof")?;
         if armcr4_release_requires_linux_sdonly_fence() {
             self.apply_linux_post_release_sdonly_fence("armcr4-release")?;
         }
@@ -20424,6 +20490,47 @@ impl SdioHost {
             ai_core_state_reason(ioctrl, resetctrl),
         ));
         self.log_transport_shadow("core-reset-verify");
+        Ok(())
+    }
+
+    fn prove_armcr4_release_live(&mut self, stage: &'static str) -> Result<(), HalError> {
+        let ioctrl = match self.core_ctrl_postreset_read8_logged(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET,
+            stage,
+        ) {
+            Ok(value) => value,
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=ioctrl err={err} action=fail-before-ht"
+                ));
+                return Err(HalError::Unsupported(
+                    "cyw43-armcr4-release-readback-unavailable",
+                ));
+            }
+        };
+        let resetctrl = match self.core_ctrl_postreset_read8_logged(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_RESETCTRL_OFFSET,
+            stage,
+        ) {
+            Ok(value) => value,
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=resetctrl io=0x{ioctrl:02x} err={err} action=fail-before-ht"
+                ));
+                return Err(HalError::Unsupported(
+                    "cyw43-armcr4-release-readback-unavailable",
+                ));
+            }
+        };
+        let state = firmware_cpuhalt_release_state(ioctrl, resetctrl);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} armcr4-release-proof={state} io=0x{ioctrl:02x} reset=0x{resetctrl:02x}"
+        ));
+        if (ioctrl & ARMCR4_BCMA_IOCTL_CPUHALT) != 0 || !ai_core_is_up(ioctrl, resetctrl) {
+            return Err(HalError::Unsupported("cyw43-armcr4-release-not-live"));
+        }
         Ok(())
     }
 
@@ -24664,9 +24771,9 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_postreset_read_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd52-byte-current-window retry=cmd52-byte-rewindow"
+            "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
         );
-        assert!(core_ctrl_postreset_read_uses_cmd52_current_window(
+        assert!(!core_ctrl_postreset_read_uses_cmd52_current_window(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
@@ -24679,7 +24786,7 @@ mod tests {
                 CYW43_ARMCR4_CORE_BASE,
                 AI_RESETCTRL_OFFSET
             ),
-            "cmd52-byte-current-window retry=cmd52-byte-rewindow"
+            "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
         );
         assert_eq!(
             core_ctrl_clear_reset_read_access_mode_label(
@@ -24688,7 +24795,7 @@ mod tests {
             ),
             "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
         );
-        assert!(core_ctrl_clear_reset_read_uses_cmd52_current_window(
+        assert!(!core_ctrl_clear_reset_read_uses_cmd52_current_window(
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET
         ));
@@ -25300,10 +25407,10 @@ mod tests {
         assert!(!firmware_upload_attempt_pre_nvram_readback_enabled(true));
         assert!(!reset_vector_readback_verify_required(false));
         assert!(reset_vector_readback_verify_required(true));
-        assert_eq!(CYW43_FIRMWARE_VERIFY_RETRY_PROFILES.len(), 2);
+        assert_eq!(CYW43_FIRMWARE_VERIFY_RETRY_PROFILES.len(), 3);
         assert_eq!(
             CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[0].clock_hz,
-            CYW43_STARTUP_CLOCK_HZ
+            CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ
         );
         assert_eq!(
             CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[0].width,
@@ -25325,9 +25432,18 @@ mod tests {
         );
         assert_eq!(
             CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[1].width,
-            SdioBusWidth::OneBit
+            SdioBusWidth::FourBit
         );
         assert!(CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[1].prefer_byte_mode);
+        assert_eq!(
+            CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[2].clock_hz,
+            CYW43_STARTUP_CLOCK_HZ
+        );
+        assert_eq!(
+            CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[2].width,
+            SdioBusWidth::OneBit
+        );
+        assert!(CYW43_FIRMWARE_VERIFY_RETRY_PROFILES[2].prefer_byte_mode);
         assert_eq!(first_mismatch(b"abc", b"abc"), None);
         assert_eq!(first_mismatch(b"abc", b"axc"), Some((1, b'b', b'x')));
         assert_eq!(first_mismatch(b"abc", b"ab"), Some((2, b'c', 0)));
@@ -25343,8 +25459,20 @@ mod tests {
         assert!(!firmware_verify_readback_can_be_treated_as_unavailable(
             &HalError::Unsupported("cyw43-firmware-verify-mismatch")
         ));
-        assert!(firmware_readback_unavailable_can_continue_before_armcr4_release(true));
-        assert!(!firmware_readback_unavailable_can_continue_before_armcr4_release(false));
+        assert!(firmware_verify_cmd52_fallback_enabled(
+            true,
+            &HalError::Unsupported("sdhci-int-timeout")
+        ));
+        assert!(!firmware_verify_cmd52_fallback_enabled(
+            false,
+            &HalError::Unsupported("sdhci-int-timeout")
+        ));
+        assert!(!firmware_verify_cmd52_fallback_enabled(
+            true,
+            &HalError::Unsupported("cyw43-firmware-verify-mismatch")
+        ));
+        assert!(!firmware_readback_unavailable_can_continue_before_armcr4_release(true));
+        assert!(firmware_readback_unavailable_can_continue_before_armcr4_release(false));
     }
 
     #[test]
@@ -30877,7 +31005,7 @@ mod tests {
             firmware_download_readback_status(true, true),
             "verified-bounded-readback"
         );
-        assert!(firmware_readback_unavailable_can_continue_before_armcr4_release(true));
+        assert!(!firmware_readback_unavailable_can_continue_before_armcr4_release(true));
         assert_eq!(CYW43_FIRMWARE_PROOF_CHUNK, 64);
         assert!(CYW43_FIRMWARE_PROOF_CHUNK < CYW43_FIRMWARE_VERIFY_CHUNK);
     }

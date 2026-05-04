@@ -9959,8 +9959,15 @@ impl UsbKeyboard {
                                 ),
                             );
                             boot_log::force_uart_line(line.as_str());
-                            event_candidate_mask =
+                            if matches!(
+                                strategy.firmware_handoff,
+                                XhciFirmwareHandoff::PlatformResetComplete
+                            ) {
+                                ctrl.clear_event_handler_busy_for_polling();
+                            }
+                            let drained_event_candidate_mask =
                                 xhci_drain_root_port_change_events(ctrl.as_ref(), max_ports);
+                            event_candidate_mask |= drained_event_candidate_mask;
                             command_probe = xhci_probe_command_ring_after_event_drain(
                                 ctrl.as_ref(),
                                 event_candidate_mask,

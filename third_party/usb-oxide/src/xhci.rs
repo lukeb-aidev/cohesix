@@ -128,6 +128,12 @@ const fn polling_iman_value() -> u32 {
 }
 
 #[inline(always)]
+const fn polling_iman_ack_value() -> u32 {
+    // IMAN.IP is write-one-to-clear; leave IMAN.IE clear for poll-only runtime.
+    reg::IMAN_IP
+}
+
+#[inline(always)]
 const fn disable_interrupter_iman_value(iman: u32) -> u32 {
     // Linux and U-Boot disable an interrupter by clearing IE without writing
     // IP=1. IP is write-one-to-clear, so keep the pre-DCBAAP handoff from
@@ -1782,6 +1788,11 @@ fn compose_initial_erdp(event_ring_ptr: u64) -> u64 {
 }
 
 #[inline(always)]
+fn compose_polling_erdp_ack(event_ring_ptr: u64) -> u64 {
+    event_ring_ptr | reg::ERST_EHB
+}
+
+#[inline(always)]
 const fn compose_brcm_usbaxi_attr(current: u32) -> u32 {
     (current & !BRCM_XHCI_USBAXI_SA_UA_MASK) | BRCM_XHCI_USBAXI_SA_UA_VAL
 }
@@ -2049,11 +2060,12 @@ impl<H: Dma> XhciCtrl<H> {
         erdp: u64,
         diag_stage: Option<u16>,
     ) {
+        let erdp_ack = compose_polling_erdp_ack(erdp);
         if let Some(stage) = diag_stage {
-            emit_xhci_diag(stage, erdp | reg::ERST_EHB, polling_iman_value() as u64, 0);
+            emit_xhci_diag(stage, erdp_ack, polling_iman_value() as u64, 0);
         }
         let _ = op_offset;
-        Self::write_reg_at::<u64>(mmio, int_base + reg::ERDP, erdp | reg::ERST_EHB);
+        Self::write_reg_at::<u64>(mmio, int_base + reg::ERDP, erdp_ack);
     }
 
     #[inline(always)]
@@ -4197,6 +4209,20 @@ impl<H: Dma> XhciCtrl<H> {
         );
     }
 
+    /// Acknowledge inherited Event Handler Busy state before poll-only drains.
+    pub fn clear_event_handler_busy_for_polling(&self) {
+        let event_ring = self.event_ring.lock();
+        let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        let erdp = compose_polling_erdp_ack(event_ring.dequeue_ptr(&*self.host));
+        let iman_ack = polling_iman_ack_value();
+        emit_xhci_diag(0x031b, (int_base + reg::ERDP) as u64, erdp, 0);
+        Self::write_reg_at::<u64>(self.mmio, int_base + reg::ERDP, erdp);
+        emit_xhci_diag(0x031c, (int_base + reg::ERDP) as u64, erdp, 0);
+        emit_xhci_diag(0x031d, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
+        Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, iman_ack);
+        emit_xhci_diag(0x031e, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
+    }
+
     /// Drain inherited pending interrupter state on the polling runtime path.
     pub fn quiesce_polling_interrupts_post_init(&self) {
         let event_ring = self.event_ring.lock();
@@ -4879,7 +4905,7 @@ mod tests {
         blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, compose_brcm_usbaxi_attr,
         compose_config, compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
-        compose_run_usbcmd, constructor_polling_scrub_mode,
+        compose_polling_erdp_ack, compose_run_usbcmd, constructor_polling_scrub_mode,
         constructor_polling_scrub_mode_from_params, dcbaap_reg_write_ops,
         defer_crcr_publish_until_after_run_with_snapshot, defer_crcr_publish_with_snapshot,
         defer_dcbaap_publish_until_after_run_with_snapshot, defer_dcbaap_publish_with_snapshot,
@@ -4891,7 +4917,7 @@ mod tests {
         disable_legacy_smi_control_bits, halt_revalidation_needed,
         initial_live_operational_read_hazard, masked_usbcmd, parse_controller_params,
         no_op_command_trb_for_probe, platform_reset_dcbaap_publish_blocked_with_snapshot,
-        polling_iman_value, port_ready_for_enumeration,
+        polling_iman_ack_value, polling_iman_value, port_ready_for_enumeration,
         post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
@@ -6082,6 +6108,12 @@ mod tests {
     fn polling_mode_keeps_interrupter_disabled() {
         assert_eq!(polling_iman_value(), 0);
         assert_eq!(polling_iman_value() & reg::IMAN_IE, 0);
+    }
+
+    #[test]
+    fn polling_iman_ack_clears_pending_without_enabling_interrupts() {
+        assert_eq!(polling_iman_ack_value(), reg::IMAN_IP);
+        assert_eq!(polling_iman_ack_value() & reg::IMAN_IE, 0);
     }
 
     #[test]
@@ -7815,6 +7847,13 @@ mod tests {
     fn initial_erdp_clears_ehb() {
         let erdp = compose_initial_erdp(0x0404_0040_08);
         assert_eq!(erdp & reg::ERST_EHB, 0);
+        assert_eq!(erdp & !reg::ERST_PTR_MASK, 0x0404_0040_00);
+    }
+
+    #[test]
+    fn polling_erdp_ack_sets_ehb() {
+        let erdp = compose_polling_erdp_ack(compose_initial_erdp(0x0404_0040_08));
+        assert_eq!(erdp & reg::ERST_EHB, reg::ERST_EHB);
         assert_eq!(erdp & !reg::ERST_PTR_MASK, 0x0404_0040_00);
     }
 
