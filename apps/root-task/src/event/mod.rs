@@ -3455,6 +3455,14 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn wifi_snapshot_ht_avail(snapshot: &WifiDebugSnapshot) -> bool {
+        match snapshot.chipclkcsr {
+            Some(value) => (value & 0x80) != 0,
+            None => false,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_capture_verdict(snapshot: &WifiDebugSnapshot) -> (&'static str, &'static str) {
         let exact_error = snapshot.control_plane_exact_error;
         if exact_error.is_empty()
@@ -3469,6 +3477,11 @@ where
             || exact_error == "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
         {
             return ("function2-reply-edge", "first-function2-reply");
+        }
+        if exact_error.starts_with("cyw43-function2-disabled")
+            && !Self::wifi_snapshot_ht_avail(snapshot)
+        {
+            return ("transport-edge", "wait-ht-clock");
         }
         if exact_error.starts_with("cyw43-function2-disabled")
             || exact_error.starts_with("cyw43-function2-enable-latched-not-ready")
@@ -3541,6 +3554,11 @@ where
             || exact_error == "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
         {
             return "first-function2-reply";
+        }
+        if exact_error.starts_with("cyw43-function2-disabled")
+            && !Self::wifi_snapshot_ht_avail(snapshot)
+        {
+            return "wait-ht-clock";
         }
         if exact_error.starts_with("cyw43-function2-disabled")
             || exact_error.starts_with("cyw43-function2-enable-latched-not-ready")
@@ -8273,6 +8291,33 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_golden_path_current_step(&snapshot),
             "first-function2-reply"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_function2_disabled_without_ht_reports_wait_ht_clock() {
+        let mut fake = FakeWifiDebug::new();
+        fake.snapshot.control_plane_exact_error = "cyw43-function2-disabled";
+        fake.snapshot.control_plane_f2_state = "unproven";
+        fake.snapshot.control_plane_bootstrap_phase = "steady-state";
+        fake.snapshot.control_plane_no_ht_transport = false;
+        fake.snapshot.control_plane_probe_pending = false;
+        fake.snapshot.chipclkcsr = Some(0x50);
+        fake.snapshot.io_enable = Some(0x02);
+        fake.snapshot.io_ready = Some(0x02);
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_capture_verdict(&fake.snapshot),
+            ("transport-edge", "wait-ht-clock")
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_golden_path_current_step(&fake.snapshot),
+            "wait-ht-clock"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_contract_expected(&fake.snapshot),
+            "chipclkcsr-ht-avail"
         );
     }
 

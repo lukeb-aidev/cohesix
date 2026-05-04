@@ -1293,6 +1293,19 @@ fn usb_ownership_command_contract(xhci_pci_cmd: Option<u16>) -> (Option<u16>, &'
 }
 
 #[inline]
+fn usb_ownership_command_replay_ready(
+    cfg_replay_ready: bool,
+    command_ready: bool,
+    command_source: &'static str,
+) -> bool {
+    crate::local_seat::usb_runtime_command_replay_ready(
+        cfg_replay_ready,
+        command_ready,
+        command_source,
+    )
+}
+
+#[inline]
 fn usb_ownership_bar0_contract(
     xhci_mmio_hint: Option<usize>,
     xhci_pci_cmd: Option<u16>,
@@ -1414,12 +1427,8 @@ fn usb_ownership_contract_status(
     let (cfg_window, cfg_source, cfg_writes, cfg_replay_ready) =
         usb_ownership_cfg_window_contract();
     let (command, command_source, command_ready) = usb_ownership_command_contract(xhci_pci_cmd);
-    let command_replay_ready = cfg_replay_ready
-        && command_ready
-        && !matches!(
-            command_source,
-            "linux-capture-static" | "cfg-window-present-unread"
-        );
+    let command_replay_ready =
+        usb_ownership_command_replay_ready(cfg_replay_ready, command_ready, command_source);
     let (bar0, bar0_source) = usb_ownership_bar0_contract(
         xhci_mmio_hint,
         xhci_pci_cmd,
@@ -7417,6 +7426,56 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
     None
 }
 
+#[inline]
+const fn vl805_post_mailbox_pcie_retry_needed(
+    mmio: usize,
+    fresh_runtime_ready: bool,
+    link_and_rc_ready_proven: bool,
+) -> bool {
+    VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED
+        && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && !fresh_runtime_ready
+        && link_and_rc_ready_proven
+}
+
+fn retry_vl805_pci_bcm2711_after_mailbox_reset(
+    hal: &mut KernelHal<'_>,
+    mmio: usize,
+    fresh_runtime_ready: bool,
+) -> bool {
+    let link_and_rc_ready_proven = pi4_pcie::pi4_pcie_link_and_rc_ready_proven();
+    if !vl805_post_mailbox_pcie_retry_needed(mmio, fresh_runtime_ready, link_and_rc_ready_proven) {
+        if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED
+            && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+            && !fresh_runtime_ready
+            && !link_and_rc_ready_proven
+        {
+            boot_log::force_uart_line(
+                "[local-seat] vl805 bcm2711-pcie ext-cfg retry skipped stage=post-mailbox-reset reason=link-or-rc-not-proven action=gate-platform-init",
+            );
+        }
+        return fresh_runtime_ready;
+    }
+    boot_log::force_uart_line(
+        "[local-seat] vl805 bcm2711-pcie ext-cfg retry stage=post-mailbox-reset action=prove-live-ownership",
+    );
+    let mut retry_maps = Vec::new();
+    let proven = prepare_vl805_pci_bcm2711(hal, &mut retry_maps) == Some(mmio);
+    let ready = xhci_fresh_runtime_ownership_ready(vl805_cfg_bus_master_ready());
+    let mut line = heapless::String::<240>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie ext-cfg retry stage=post-mailbox-reset proven={} fresh={} cmd=0x{cmd:04x}",
+            proven as u8,
+            ready as u8,
+            cmd = vl805_cfg_command().unwrap_or(0),
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    ready
+}
+
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
     _xhci_irq_guard: Option<XhciIrqGuard>,
@@ -9077,14 +9136,6 @@ impl UsbKeyboard {
                         boot_log::force_uart_line(skip.as_str());
                         continue;
                     }
-                    effective_strategy =
-                        xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
-                            effective_mmio,
-                            strategy,
-                            true,
-                            fresh_runtime_ownership_ready,
-                            xhci_stop_state_snapshot,
-                        );
                     let mailbox_ready_action = "continue-runtime-init";
                     let mut ready = heapless::String::<256>::new();
                     let _ = core::fmt::Write::write_fmt(
@@ -9097,6 +9148,19 @@ impl UsbKeyboard {
                     boot_log::force_uart_line(ready.as_str());
                     fresh_runtime_ownership_ready =
                         xhci_fresh_runtime_ownership_ready(vl805_cfg_bus_master_ready());
+                    fresh_runtime_ownership_ready = retry_vl805_pci_bcm2711_after_mailbox_reset(
+                        hal,
+                        effective_mmio,
+                        fresh_runtime_ownership_ready,
+                    );
+                    effective_strategy =
+                        xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
+                            effective_mmio,
+                            strategy,
+                            true,
+                            fresh_runtime_ownership_ready,
+                            xhci_stop_state_snapshot,
+                        );
                     let promoted_controller_params =
                         xhci_controller_params_from_probe_with_strategy(
                             cap_probe,
@@ -15548,6 +15612,30 @@ mod tests {
     }
 
     #[test]
+    fn post_mailbox_pcie_retry_requires_prior_root_link_proof() {
+        assert!(super::vl805_post_mailbox_pcie_retry_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+            true,
+        ));
+        assert!(!super::vl805_post_mailbox_pcie_retry_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            false,
+            false,
+        ));
+        assert!(!super::vl805_post_mailbox_pcie_retry_needed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            true,
+            true,
+        ));
+        assert!(!super::vl805_post_mailbox_pcie_retry_needed(
+            0x0000_0000_fe98_0000,
+            false,
+            true,
+        ));
+    }
+
+    #[test]
     fn linux_capture_shadow_does_not_make_live_pci_cfg_ready() {
         let capture_cmd = super::PCI_COMMAND_MEMORY_SPACE
             | super::PCI_COMMAND_BUS_MASTER
@@ -15560,6 +15648,31 @@ mod tests {
         )));
         assert!(!super::xhci_fresh_runtime_ownership_ready_from_sources(
             false, false, true,
+        ));
+        assert!(!super::usb_ownership_command_replay_ready(
+            true,
+            true,
+            "linux-capture-replay",
+        ));
+        assert!(!super::usb_ownership_command_replay_ready(
+            true,
+            true,
+            "linux-capture-static",
+        ));
+        assert!(super::usb_ownership_command_replay_ready(
+            true,
+            true,
+            "runtime-mapped",
+        ));
+        assert!(!super::usb_ownership_command_replay_ready(
+            false,
+            true,
+            "runtime-mapped",
+        ));
+        assert!(!super::usb_ownership_command_replay_ready(
+            true,
+            false,
+            "runtime-mapped",
         ));
     }
 

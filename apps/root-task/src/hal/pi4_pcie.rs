@@ -9,7 +9,7 @@ use core::cmp;
 use core::ptr;
 use core::sync::atomic::{fence, AtomicUsize, Ordering};
 
-use super::{DeviceHal, HalError, KernelHal};
+use super::{pi4_wifi, DeviceHal, HalError, KernelHal};
 use crate::bootstrap::log as boot_log;
 use crate::rust_alloc::vec::Vec;
 use crate::sel4::{page_get_address, PAGE_BITS};
@@ -20,13 +20,41 @@ const MAP_EXACT_ATTEMPT_CAP: usize = 512;
 const EXACT_MAP_LOG_STRIDE: usize = 64;
 
 const BCM2711_PCIE_HOST_PHYS_BASE: usize = 0xFD50_0000;
+const BCM2711_PCIE_MISC_MISC_CTRL: usize = 0x4008;
+const BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LO: usize = 0x400c;
+const BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_HI: usize = 0x4010;
+const BCM2711_PCIE_MISC_RC_BAR1_CONFIG_LO: usize = 0x402c;
+const BCM2711_PCIE_MISC_RC_BAR2_CONFIG_LO: usize = 0x4034;
+const BCM2711_PCIE_MISC_RC_BAR2_CONFIG_HI: usize = 0x4038;
+const BCM2711_PCIE_MISC_RC_BAR3_CONFIG_LO: usize = 0x403c;
 const BCM2711_PCIE_MISC_PCIE_STATUS: usize = 0x4068;
+const BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT: usize = 0x4070;
+const BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI: usize = 0x4080;
+const BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI: usize = 0x4084;
+const BCM2711_PCIE_MISC_HARD_PCIE_HARD_DEBUG: usize = 0x4204;
 const BCM2711_PCIE_INTR2_CPU_CLR: usize = 0x4308;
 const BCM2711_PCIE_INTR2_CPU_MASK_SET: usize = 0x4310;
 const BCM2711_PCIE_MSI_INTR2_CLR: usize = 0x4508;
 const BCM2711_PCIE_MSI_INTR2_MASK_SET: usize = 0x4510;
 const BCM2711_PCIE_EXT_CFG_DATA: usize = 0x8000;
 const BCM2711_PCIE_EXT_CFG_INDEX: usize = 0x9000;
+const BCM2711_PCIE_RGR1_SW_INIT_1: usize = 0x9210;
+
+const PCIE_MISC_MISC_CTRL_SCB_ACCESS_EN_MASK: u32 = 0x1000;
+const PCIE_MISC_MISC_CTRL_CFG_READ_UR_MODE_MASK: u32 = 0x2000;
+const PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_MASK: u32 = 0x300000;
+const PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_128: u32 = 0;
+const PCIE_MISC_MISC_CTRL_SCB0_SIZE_MASK: u32 = 0xf8000000;
+const PCIE_MISC_RC_BAR1_CONFIG_LO_SIZE_MASK: u32 = 0x1f;
+const PCIE_MISC_RC_BAR2_CONFIG_LO_SIZE_MASK: u32 = 0x1f;
+const PCIE_MISC_RC_BAR3_CONFIG_LO_SIZE_MASK: u32 = 0x1f;
+const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_LIMIT_MASK: u32 = 0xfff00000;
+const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_BASE_MASK: u32 = 0xfff0;
+const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI_BASE_MASK: u32 = 0xff;
+const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI_LIMIT_MASK: u32 = 0xff;
+const PCIE_HARD_DEBUG_SERDES_IDDQ_MASK: u32 = 0x08000000;
+const PCIE_RGR1_SW_INIT_1_INIT_MASK: u32 = 0x2;
+const PCIE_RGR1_SW_INIT_1_PERST_MASK: u32 = 0x1;
 
 const BCM2711_PCIE_STATUS_PORT: u32 = 0x80;
 const BCM2711_PCIE_STATUS_DL_ACTIVE: u32 = 0x20;
@@ -57,11 +85,28 @@ const PCI_MSI_CONTROL_ENABLE: u16 = 1;
 const RPI4_VL805_XHCI_MMIO: usize = 0x0000_0006_0000_0000;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BASE: usize = 0xC000_0000;
 const RPI4_PCIE_CPU_MMIO_WINDOW_BASE: usize = RPI4_VL805_XHCI_MMIO;
-const RPI4_PCIE_BUS_MMIO_WINDOW_BYTES: usize = 0x0010_0000;
+const RPI4_PCIE_BUS_MMIO_WINDOW_BYTES: usize = 0x4000_0000;
+const RPI4_PCIE_DMA_BUS_BASE: u64 = 0x0000_0004_0000_0000;
+const RPI4_PCIE_DMA_CPU_BASE: u64 = 0;
+const RPI4_PCIE_DMA_WINDOW_BYTES: u64 = 0x0000_0001_0000_0000;
+const RPI4_PCIE_MMIO_WINDOW_SIZE: u64 = 0x4000_0000;
+const PCIE_SHORT_SETTLE_SPINS: usize = 16_384;
+const PCIE_SPINS_PER_MS: usize = 50_000;
+const PCIE_POST_PERST_SETTLE_MS: usize = 100;
+const PCIE_LINK_POLL_TOTAL_MS: usize = 100;
+const PCIE_LINK_POLL_INTERVAL_MS: usize = 5;
+const PCIE_LINK_POLL_ATTEMPTS: usize = PCIE_LINK_POLL_TOTAL_MS / PCIE_LINK_POLL_INTERVAL_MS;
+const PCIE_POST_PERST_SETTLE_SPINS: usize =
+    PCIE_POST_PERST_SETTLE_MS.saturating_mul(PCIE_SPINS_PER_MS);
+const PCIE_LINK_POLL_SPINS: usize = PCIE_LINK_POLL_INTERVAL_MS.saturating_mul(PCIE_SPINS_PER_MS);
+const PCIE_EXT_CFG_SELECT_SETTLE_SPINS: usize = 1_024;
+const PCIE_EXT_CFG_SELECTOR_RETRIES: usize = 2;
 
 static PCIE_STATUS_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_EXT_DATA_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_EXT_INDEX_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
+static PCIE_ROOT_INIT_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
+static PCIE_LINK_AND_RC_READY_PROVEN: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Pi4Vl805PcieProof {
@@ -95,31 +140,41 @@ impl<'a> KernelHal<'a> {
     }
 }
 
+#[must_use]
+pub fn pi4_pcie_link_and_rc_ready_proven() -> bool {
+    PCIE_LINK_AND_RC_READY_PROVEN.load(Ordering::Acquire) != 0
+}
+
 fn prove_pi4_vl805_pcie_ownership(hal: &mut KernelHal<'_>) -> Result<Pi4Vl805PcieProof, HalError> {
+    pi4_wifi::power_on_vl805_usb_hcd(hal)?;
+
     let status_page =
         map_pcie_reg_page_cached(hal, BCM2711_PCIE_MISC_PCIE_STATUS, "pi4-pcie-status")?;
     let status_reg = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_PCIE_STATUS)?;
     mask_and_clear_pcie_irq_sources(status_page);
 
-    let status = mmio_read_u32(status_reg);
-    if !pcie_status_link_up_and_rc(status) {
-        let mut line = heapless::String::<192>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie ext-cfg skipped status=0x{status:08x} reason=link-or-rc-not-ready"
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        return Err(HalError::Unsupported("pcie-link-or-rc-not-ready"));
-    }
-
+    // seL4 device untyped retyping is monotonic. Map the BCM2711 PCIe register
+    // pages in ascending physical order so root init's SW_INIT page does not
+    // consume past the lower EXT_CFG_DATA page before the exact VL805 proof.
     let config_page =
         map_pcie_reg_page_cached(hal, BCM2711_PCIE_EXT_CFG_DATA, "pi4-pcie-ext-data")?;
     let index_page =
         map_pcie_reg_page_cached(hal, BCM2711_PCIE_EXT_CFG_INDEX, "pi4-pcie-ext-index")?;
     let config_virt = same_page_reg_virt(config_page, BCM2711_PCIE_EXT_CFG_DATA)?;
     let index_reg = same_page_reg_virt(index_page, BCM2711_PCIE_EXT_CFG_INDEX)?;
+
+    let status = ensure_pi4_pcie_root_ready(hal, status_page, status_reg)?;
+    let status_ready = pcie_status_link_up_and_rc(status);
+    if !status_ready {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 bcm2711-pcie status inconclusive status=0x{status:08x} action=exact-vl805-ext-cfg-proof"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+    }
 
     let mut select = heapless::String::<224>::new();
     let _ = core::fmt::Write::write_fmt(
@@ -130,25 +185,63 @@ fn prove_pi4_vl805_pcie_ownership(hal: &mut KernelHal<'_>) -> Result<Pi4Vl805Pci
     );
     boot_log::force_uart_line(select.as_str());
 
-    mmio_write_u32(index_reg, VL805_PCI_DEV_ADDR);
-    fence(Ordering::SeqCst);
-
-    let vendor_device = pci_cfg_read_u32(config_virt, PCI_CFG_VENDOR_DEVICE);
-    let vendor_id = (vendor_device & 0xffff) as u16;
-    let device_id = ((vendor_device >> 16) & 0xffff) as u16;
+    let mut vendor_id = 0xffff;
+    let mut device_id = 0xffff;
+    let mut vendor_device = 0xffff_ffff;
+    for attempt in 0..=PCIE_EXT_CFG_SELECTOR_RETRIES {
+        vendor_id = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_VENDOR_DEVICE);
+        device_id = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_VENDOR_DEVICE + 2);
+        vendor_device = vl805_vendor_device_dword(vendor_id, device_id);
+        if !vl805_ext_cfg_selector_echo(vendor_device) {
+            break;
+        }
+        if attempt < PCIE_EXT_CFG_SELECTOR_RETRIES {
+            pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
+        }
+    }
     if vendor_id != VL805_PCI_VENDOR_ID || device_id != VL805_PCI_DEVICE_ID {
+        let selector_echo = vl805_ext_cfg_selector_echo(vendor_device);
         let mut line = heapless::String::<208>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie id mismatch got={vendor_id:04x}:{device_id:04x}"
-            ),
-        );
+        if selector_echo {
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 bcm2711-pcie id mismatch got={vendor_id:04x}:{device_id:04x} reason=selector-echo idx=0x{VL805_PCI_DEV_ADDR:08x}"
+                ),
+            );
+        } else {
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 bcm2711-pcie id mismatch got={vendor_id:04x}:{device_id:04x}"
+                ),
+            );
+        }
         boot_log::force_uart_line(line.as_str());
+        if !status_ready {
+            let mut skipped = heapless::String::<224>::new();
+            if selector_echo {
+                let _ = core::fmt::Write::write_fmt(
+                    &mut skipped,
+                    format_args!(
+                        "[local-seat] vl805 bcm2711-pcie ext-cfg skipped status=0x{status:08x} reason=link-or-rc-not-ready exact=selector-echo"
+                    ),
+                );
+            } else {
+                let _ = core::fmt::Write::write_fmt(
+                    &mut skipped,
+                    format_args!(
+                        "[local-seat] vl805 bcm2711-pcie ext-cfg skipped status=0x{status:08x} reason=link-or-rc-not-ready exact=id"
+                    ),
+                );
+            }
+            boot_log::force_uart_line(skipped.as_str());
+            return Err(HalError::Unsupported("pcie-link-or-rc-not-ready"));
+        }
         return Err(HalError::Unsupported("vl805-id"));
     }
 
-    let class_revision = pci_cfg_read_u32(config_virt, PCI_CFG_CLASS_REVISION);
+    let class_revision = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_CLASS_REVISION);
     let class_code = (class_revision >> 8) & 0x00ff_ffff;
     if class_code != VL805_EXPECTED_CLASS_CODE {
         let mut line = heapless::String::<208>::new();
@@ -159,12 +252,25 @@ fn prove_pi4_vl805_pcie_ownership(hal: &mut KernelHal<'_>) -> Result<Pi4Vl805Pci
             ),
         );
         boot_log::force_uart_line(line.as_str());
+        if !status_ready {
+            let mut skipped = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut skipped,
+                format_args!(
+                    "[local-seat] vl805 bcm2711-pcie ext-cfg skipped status=0x{status:08x} reason=link-or-rc-not-ready exact=class"
+                ),
+            );
+            boot_log::force_uart_line(skipped.as_str());
+            return Err(HalError::Unsupported("pcie-link-or-rc-not-ready"));
+        }
         return Err(HalError::Unsupported("vl805-class"));
     }
 
-    let command_before = pci_cfg_read_u16(config_virt, PCI_CFG_COMMAND_STATUS);
-    let bar0 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR0);
-    let bar1 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR1);
+    let command_before = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS);
+    let bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0);
+    let bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1);
+    let exact_config_ready =
+        vl805_exact_config_tuple_ready(vendor_device, class_revision, bar0, bar1);
     let Some(mmio) = translate_vl805_pci_bar_to_cpu_mmio(bar0, bar1) else {
         let mut line = heapless::String::<208>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -174,6 +280,17 @@ fn prove_pi4_vl805_pcie_ownership(hal: &mut KernelHal<'_>) -> Result<Pi4Vl805Pci
             ),
         );
         boot_log::force_uart_line(line.as_str());
+        if !status_ready {
+            let mut skipped = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut skipped,
+                format_args!(
+                    "[local-seat] vl805 bcm2711-pcie ext-cfg skipped status=0x{status:08x} reason=link-or-rc-not-ready exact=bar"
+                ),
+            );
+            boot_log::force_uart_line(skipped.as_str());
+            return Err(HalError::Unsupported("pcie-link-or-rc-not-ready"));
+        }
         return Err(HalError::Unsupported("vl805-bar"));
     };
     if mmio != RPI4_VL805_XHCI_MMIO {
@@ -185,14 +302,46 @@ fn prove_pi4_vl805_pcie_ownership(hal: &mut KernelHal<'_>) -> Result<Pi4Vl805Pci
             ),
         );
         boot_log::force_uart_line(line.as_str());
+        if !status_ready {
+            let mut skipped = heapless::String::<240>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut skipped,
+                format_args!(
+                    "[local-seat] vl805 bcm2711-pcie ext-cfg skipped status=0x{status:08x} reason=link-or-rc-not-ready exact=bar translated=0x{mmio:016x}"
+                ),
+            );
+            boot_log::force_uart_line(skipped.as_str());
+            return Err(HalError::Unsupported("pcie-link-or-rc-not-ready"));
+        }
         return Err(HalError::Unsupported("vl805-bar"));
+    }
+
+    if !status_ready {
+        if !exact_config_ready {
+            return Err(HalError::Unsupported("pcie-link-or-rc-not-ready"));
+        }
+        configure_pi4_pcie_outbound_window(status_page)?;
+        PCIE_LINK_AND_RC_READY_PROVEN.store(1, Ordering::Release);
+        let mut line = heapless::String::<240>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 bcm2711-pcie ext-cfg exact-proof promoted status=0x{status:08x} id={vendor_id:04x}:{device_id:04x} class=0x{class_code:06x} bar0=0x{bar0:08x}"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
     }
 
     let command_masked = vl805_poll_only_intx_mask_command(command_before);
     if command_masked != command_before {
-        pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_masked);
+        vl805_cfg_write_u16(
+            index_reg,
+            config_virt,
+            PCI_CFG_COMMAND_STATUS,
+            command_masked,
+        );
     }
-    let command_masked_after = pci_cfg_read_u16(config_virt, PCI_CFG_COMMAND_STATUS);
+    let command_masked_after = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS);
     if (command_masked_after & PCI_COMMAND_INTERRUPT_DISABLE) == 0 {
         let mut line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -206,13 +355,19 @@ fn prove_pi4_vl805_pcie_ownership(hal: &mut KernelHal<'_>) -> Result<Pi4Vl805Pci
     }
 
     let (msi_control_before, msi_control_after) =
-        disable_vl805_msi_for_poll_only(config_virt).ok_or(HalError::Unsupported("vl805-msi"))?;
+        disable_vl805_msi_for_poll_only(index_reg, config_virt)
+            .ok_or(HalError::Unsupported("vl805-msi"))?;
 
     let command_required = vl805_poll_only_bus_master_command(command_masked_after);
     if command_required != command_masked_after {
-        pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_required);
+        vl805_cfg_write_u16(
+            index_reg,
+            config_virt,
+            PCI_CFG_COMMAND_STATUS,
+            command_required,
+        );
     }
-    let command_after = pci_cfg_read_u16(config_virt, PCI_CFG_COMMAND_STATUS);
+    let command_after = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS);
     if !vl805_command_ownership_ready(command_after) {
         let mut line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -239,6 +394,277 @@ fn prove_pi4_vl805_pcie_ownership(hal: &mut KernelHal<'_>) -> Result<Pi4Vl805Pci
         msi_control_before: Some(msi_control_before),
         msi_control_after: Some(msi_control_after),
     })
+}
+
+fn ensure_pi4_pcie_root_ready(
+    hal: &mut KernelHal<'_>,
+    status_page: usize,
+    status_reg: usize,
+) -> Result<u32, HalError> {
+    let status_before = mmio_read_u32(status_reg);
+    if remember_pi4_pcie_link_and_rc_ready(status_before) {
+        return Ok(status_before);
+    }
+
+    if PCIE_ROOT_INIT_ATTEMPTED
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 bcm2711-pcie root-init skipped status=0x{status_before:08x} reason=already-attempted"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return Ok(status_before);
+    }
+
+    let init_page = map_pcie_reg_page_cached(hal, BCM2711_PCIE_RGR1_SW_INIT_1, "pi4-pcie-sw-init")?;
+    let sw_init_reg = same_page_reg_virt(init_page, BCM2711_PCIE_RGR1_SW_INIT_1)?;
+    let misc_ctrl = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_MISC_CTRL)?;
+    let hard_debug = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_HARD_PCIE_HARD_DEBUG)?;
+    let rc_bar1 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR1_CONFIG_LO)?;
+    let rc_bar2_lo = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_LO)?;
+    let rc_bar2_hi = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_HI)?;
+    let rc_bar3 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR3_CONFIG_LO)?;
+
+    let mut begin = heapless::String::<208>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut begin,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie root-init begin status_before=0x{status_before:08x} source=hal"
+        ),
+    );
+    boot_log::force_uart_line(begin.as_str());
+
+    mmio_set_bits_u32(
+        sw_init_reg,
+        PCIE_RGR1_SW_INIT_1_INIT_MASK | PCIE_RGR1_SW_INIT_1_PERST_MASK,
+    );
+    pcie_spin_delay(PCIE_SHORT_SETTLE_SPINS);
+
+    mmio_clear_bits_u32(sw_init_reg, PCIE_RGR1_SW_INIT_1_INIT_MASK);
+    mmio_clear_bits_u32(hard_debug, PCIE_HARD_DEBUG_SERDES_IDDQ_MASK);
+    pcie_spin_delay(PCIE_SHORT_SETTLE_SPINS);
+
+    mmio_clear_set_bits_u32(
+        misc_ctrl,
+        PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_MASK,
+        PCIE_MISC_MISC_CTRL_SCB_ACCESS_EN_MASK
+            | PCIE_MISC_MISC_CTRL_CFG_READ_UR_MODE_MASK
+            | PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_128,
+    );
+    configure_pi4_pcie_dma_window(misc_ctrl, rc_bar1, rc_bar2_lo, rc_bar2_hi, rc_bar3);
+    mask_and_clear_pcie_irq_sources(status_page);
+
+    mmio_clear_bits_u32(sw_init_reg, PCIE_RGR1_SW_INIT_1_PERST_MASK);
+    fence(Ordering::SeqCst);
+    pcie_spin_delay(PCIE_POST_PERST_SETTLE_SPINS);
+
+    let mut status_after = mmio_read_u32(status_reg);
+    let mut polls = 0usize;
+    while polls < PCIE_LINK_POLL_ATTEMPTS && !pcie_status_link_up_and_rc(status_after) {
+        pcie_spin_delay(PCIE_LINK_POLL_SPINS);
+        polls += 1;
+        status_after = mmio_read_u32(status_reg);
+    }
+
+    let ready = remember_pi4_pcie_link_and_rc_ready(status_after);
+    if ready {
+        configure_pi4_pcie_outbound_window(status_page)?;
+    }
+
+    let mut done = heapless::String::<240>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut done,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie root-init done status_before=0x{status_before:08x} status_after=0x{status_after:08x} ready={} polls={polls} post_perst_ms={} poll_window_ms={} poll_interval_ms={}",
+            ready as u8,
+            PCIE_POST_PERST_SETTLE_MS,
+            PCIE_LINK_POLL_TOTAL_MS,
+            PCIE_LINK_POLL_INTERVAL_MS,
+        ),
+    );
+    boot_log::force_uart_line(done.as_str());
+
+    Ok(status_after)
+}
+
+fn remember_pi4_pcie_link_and_rc_ready(status: u32) -> bool {
+    let ready = pcie_status_link_up_and_rc(status);
+    if ready {
+        PCIE_LINK_AND_RC_READY_PROVEN.store(1, Ordering::Release);
+    }
+    ready
+}
+
+fn configure_pi4_pcie_dma_window(
+    misc_ctrl: usize,
+    rc_bar1: usize,
+    rc_bar2_lo: usize,
+    rc_bar2_hi: usize,
+    rc_bar3: usize,
+) {
+    let dma_offset = RPI4_PCIE_DMA_BUS_BASE.saturating_sub(RPI4_PCIE_DMA_CPU_BASE);
+    let dma_size = pcie_next_power_of_two(RPI4_PCIE_DMA_WINDOW_BYTES);
+    let rc_bar2_value = replace_u32_field(
+        dma_offset as u32,
+        PCIE_MISC_RC_BAR2_CONFIG_LO_SIZE_MASK,
+        brcm_pcie_encode_ibar_size(dma_size),
+    );
+    mmio_write_u32(rc_bar2_lo, rc_bar2_value);
+    mmio_write_u32(rc_bar2_hi, (dma_offset >> 32) as u32);
+
+    let scb_size = pcie_log2_power_of_two(dma_size)
+        .and_then(|log2| log2.checked_sub(15))
+        .unwrap_or(0x0f);
+    mmio_clear_set_bits_u32(
+        misc_ctrl,
+        PCIE_MISC_MISC_CTRL_SCB0_SIZE_MASK,
+        replace_u32_field(0, PCIE_MISC_MISC_CTRL_SCB0_SIZE_MASK, scb_size as u32),
+    );
+    mmio_clear_bits_u32(rc_bar1, PCIE_MISC_RC_BAR1_CONFIG_LO_SIZE_MASK);
+    mmio_clear_bits_u32(rc_bar3, PCIE_MISC_RC_BAR3_CONFIG_LO_SIZE_MASK);
+}
+
+fn configure_pi4_pcie_outbound_window(status_page: usize) -> Result<(), HalError> {
+    let win_lo = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LO)?;
+    let win_hi = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_HI)?;
+    let base_limit = same_page_reg_virt(
+        status_page,
+        BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT,
+    )?;
+    let base_hi = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI)?;
+    let limit_hi = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI)?;
+    configure_pcie_outbound_window_regs(
+        win_lo,
+        win_hi,
+        base_limit,
+        base_hi,
+        limit_hi,
+        RPI4_PCIE_CPU_MMIO_WINDOW_BASE as u64,
+        RPI4_PCIE_BUS_MMIO_WINDOW_BASE as u64,
+        RPI4_PCIE_MMIO_WINDOW_SIZE,
+    );
+    Ok(())
+}
+
+fn configure_pcie_outbound_window_regs(
+    win_lo: usize,
+    win_hi: usize,
+    base_limit: usize,
+    base_hi: usize,
+    limit_hi: usize,
+    cpu_addr: u64,
+    pcie_addr: u64,
+    size: u64,
+) {
+    mmio_write_u32(win_lo, pcie_addr as u32);
+    mmio_write_u32(win_hi, (pcie_addr >> 32) as u32);
+
+    mmio_clear_set_bits_u32(
+        base_limit,
+        PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_BASE_MASK
+            | PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_LIMIT_MASK,
+        pcie_outbound_base_limit_value(cpu_addr, size),
+    );
+    mmio_clear_set_bits_u32(
+        base_hi,
+        PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI_BASE_MASK,
+        pcie_outbound_base_hi_value(cpu_addr),
+    );
+    mmio_clear_set_bits_u32(
+        limit_hi,
+        PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI_LIMIT_MASK,
+        pcie_outbound_limit_hi_value(cpu_addr, size),
+    );
+}
+
+fn pcie_spin_delay(spins: usize) {
+    for _ in 0..spins {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline]
+fn mmio_set_bits_u32(addr: usize, bits: u32) {
+    let value = mmio_read_u32(addr);
+    mmio_write_u32(addr, value | bits);
+}
+
+#[inline]
+fn mmio_clear_bits_u32(addr: usize, bits: u32) {
+    let value = mmio_read_u32(addr);
+    mmio_write_u32(addr, value & !bits);
+}
+
+#[inline]
+fn mmio_clear_set_bits_u32(addr: usize, clear: u32, set: u32) {
+    let value = mmio_read_u32(addr);
+    mmio_write_u32(addr, (value & !clear) | set);
+}
+
+#[inline]
+const fn pcie_outbound_base_limit_value(cpu_addr: u64, size: u64) -> u32 {
+    let base_mb = cpu_addr / 0x10_0000;
+    let limit_mb = cpu_addr.saturating_add(size).saturating_sub(1) / 0x10_0000;
+    replace_u32_field(
+        replace_u32_field(
+            0,
+            PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_BASE_MASK,
+            base_mb as u32,
+        ),
+        PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_LIMIT_MASK,
+        limit_mb as u32,
+    )
+}
+
+#[inline]
+const fn pcie_outbound_base_hi_value(cpu_addr: u64) -> u32 {
+    let base_mb = cpu_addr / 0x10_0000;
+    (base_mb >> 12) as u32 & PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI_BASE_MASK
+}
+
+#[inline]
+const fn pcie_outbound_limit_hi_value(cpu_addr: u64, size: u64) -> u32 {
+    let limit_mb = cpu_addr.saturating_add(size).saturating_sub(1) / 0x10_0000;
+    (limit_mb >> 12) as u32 & PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI_LIMIT_MASK
+}
+
+#[inline]
+const fn replace_u32_field(raw: u32, mask: u32, value: u32) -> u32 {
+    if mask == 0 {
+        return raw;
+    }
+    let shift = mask.trailing_zeros();
+    (raw & !mask) | ((value << shift) & mask)
+}
+
+const fn brcm_pcie_encode_ibar_size(size: u64) -> u32 {
+    match pcie_log2_power_of_two(size) {
+        Some(log2) if log2 >= 12 && log2 <= 15 => (log2 - 12) as u32 + 0x1c,
+        Some(log2) if log2 >= 16 && log2 <= 37 => (log2 - 15) as u32,
+        _ => 0,
+    }
+}
+
+const fn pcie_next_power_of_two(value: u64) -> u64 {
+    if value <= 1 {
+        return 1;
+    }
+    match value.checked_next_power_of_two() {
+        Some(power) => power,
+        None => u64::MAX,
+    }
+}
+
+const fn pcie_log2_power_of_two(value: u64) -> Option<u32> {
+    if value == 0 || (value & (value - 1)) != 0 {
+        return None;
+    }
+    Some(63 - value.leading_zeros())
 }
 
 fn map_pcie_reg_page_cached(
@@ -373,8 +799,8 @@ const fn pcie_status_link_up_and_rc(status: u32) -> bool {
         && (status & BCM2711_PCIE_STATUS_PORT) != 0
 }
 
-fn disable_vl805_msi_for_poll_only(config_virt: usize) -> Option<(u16, u16)> {
-    let status = pci_cfg_read_u16(config_virt, PCI_CFG_COMMAND_STATUS + 2);
+fn disable_vl805_msi_for_poll_only(index_reg: usize, config_virt: usize) -> Option<(u16, u16)> {
+    let status = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS + 2);
     if (status & PCI_STATUS_CAPABILITIES_LIST) == 0 {
         boot_log::force_uart_line(
             "[local-seat] vl805 bcm2711-pcie msi proof skipped reason=no-cap-list",
@@ -382,21 +808,23 @@ fn disable_vl805_msi_for_poll_only(config_virt: usize) -> Option<(u16, u16)> {
         return None;
     }
 
-    let mut cap = (pci_cfg_read_u8(config_virt, PCI_CFG_CAP_PTR) & PCI_CAP_NEXT_MASK) as usize;
+    let mut cap =
+        (vl805_cfg_read_u8(index_reg, config_virt, PCI_CFG_CAP_PTR) & PCI_CAP_NEXT_MASK) as usize;
     for _ in 0..PCI_CAP_TRAVERSE_LIMIT {
         if !(0x40..0x100).contains(&cap) {
             break;
         }
-        let cap_id = pci_cfg_read_u8(config_virt, cap);
-        let next = (pci_cfg_read_u8(config_virt, cap + 1) & PCI_CAP_NEXT_MASK) as usize;
+        let cap_id = vl805_cfg_read_u8(index_reg, config_virt, cap);
+        let next =
+            (vl805_cfg_read_u8(index_reg, config_virt, cap + 1) & PCI_CAP_NEXT_MASK) as usize;
         if cap_id == PCI_CAP_ID_MSI {
             let ctrl_offset = cap + PCI_MSI_CONTROL_OFFSET;
-            let control_before = pci_cfg_read_u16(config_virt, ctrl_offset);
+            let control_before = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset);
             let control_request = vl805_msi_control_disable_value(control_before);
             if control_request != control_before {
-                pci_cfg_write_u16(config_virt, ctrl_offset, control_request);
+                vl805_cfg_write_u16(index_reg, config_virt, ctrl_offset, control_request);
             }
-            let control_after = pci_cfg_read_u16(config_virt, ctrl_offset);
+            let control_after = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset);
             let disabled = vl805_msi_control_disabled(control_after);
             let mut line = heapless::String::<240>::new();
             let _ = core::fmt::Write::write_fmt(
@@ -459,6 +887,28 @@ fn translate_vl805_pci_bar_to_cpu_mmio(bar0: u32, bar1: u32) -> Option<usize> {
     RPI4_PCIE_CPU_MMIO_WINDOW_BASE.checked_add(bus_offset)
 }
 
+fn vl805_exact_config_tuple_ready(
+    vendor_device: u32,
+    class_revision: u32,
+    bar0: u32,
+    bar1: u32,
+) -> bool {
+    (vendor_device & 0xffff) as u16 == VL805_PCI_VENDOR_ID
+        && ((vendor_device >> 16) & 0xffff) as u16 == VL805_PCI_DEVICE_ID
+        && ((class_revision >> 8) & 0x00ff_ffff) == VL805_EXPECTED_CLASS_CODE
+        && translate_vl805_pci_bar_to_cpu_mmio(bar0, bar1) == Some(RPI4_VL805_XHCI_MMIO)
+}
+
+#[inline]
+const fn vl805_vendor_device_dword(vendor_id: u16, device_id: u16) -> u32 {
+    vendor_id as u32 | ((device_id as u32) << 16)
+}
+
+#[inline]
+const fn vl805_ext_cfg_selector_echo(value: u32) -> bool {
+    value == VL805_PCI_DEV_ADDR
+}
+
 fn decode_pci_mmio_bar(bar0: u32, bar1: u32) -> Option<usize> {
     if (bar0 & 0x1) != 0 {
         return None;
@@ -489,6 +939,40 @@ fn mmio_write_u32(addr: usize, value: u32) {
     unsafe {
         ptr::write_volatile(addr as *mut u32, value);
     }
+}
+
+#[inline]
+fn bcm2711_ext_cfg_select(index_reg: usize) -> u32 {
+    mmio_write_u32(index_reg, VL805_PCI_DEV_ADDR);
+    fence(Ordering::SeqCst);
+    let selected = mmio_read_u32(index_reg);
+    fence(Ordering::SeqCst);
+    pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
+    selected
+}
+
+#[inline]
+fn vl805_cfg_read_u8(index_reg: usize, config_virt: usize, offset: usize) -> u8 {
+    let _ = bcm2711_ext_cfg_select(index_reg);
+    pci_cfg_read_u8(config_virt, offset)
+}
+
+#[inline]
+fn vl805_cfg_read_u16(index_reg: usize, config_virt: usize, offset: usize) -> u16 {
+    let _ = bcm2711_ext_cfg_select(index_reg);
+    pci_cfg_read_u16(config_virt, offset)
+}
+
+#[inline]
+fn vl805_cfg_write_u16(index_reg: usize, config_virt: usize, offset: usize, value: u16) {
+    let _ = bcm2711_ext_cfg_select(index_reg);
+    pci_cfg_write_u16(config_virt, offset, value);
+}
+
+#[inline]
+fn vl805_cfg_read_u32(index_reg: usize, config_virt: usize, offset: usize) -> u32 {
+    let _ = bcm2711_ext_cfg_select(index_reg);
+    pci_cfg_read_u32(config_virt, offset)
 }
 
 #[inline]
@@ -557,6 +1041,41 @@ mod tests {
         assert!(!pcie_status_link_up_and_rc(
             BCM2711_PCIE_STATUS_DL_ACTIVE | BCM2711_PCIE_STATUS_PHY_LINK_UP
         ));
+        assert!(!pcie_status_link_up_and_rc(0xf2c0_000a));
+    }
+
+    #[test]
+    fn bcm2711_root_init_timing_matches_uboot_link_contract() {
+        assert_eq!(PCIE_POST_PERST_SETTLE_MS, 100);
+        assert_eq!(PCIE_LINK_POLL_TOTAL_MS, 100);
+        assert_eq!(PCIE_LINK_POLL_INTERVAL_MS, 5);
+        assert_eq!(PCIE_LINK_POLL_ATTEMPTS, 20);
+        assert!(PCIE_POST_PERST_SETTLE_SPINS > PCIE_SHORT_SETTLE_SPINS);
+        assert!(PCIE_EXT_CFG_SELECT_SETTLE_SPINS < PCIE_LINK_POLL_SPINS);
+        assert_eq!(
+            PCIE_LINK_POLL_ATTEMPTS * PCIE_LINK_POLL_INTERVAL_MS,
+            PCIE_LINK_POLL_TOTAL_MS
+        );
+    }
+
+    #[test]
+    fn vl805_ext_cfg_selector_targets_pi4_bus1_dev0_func0() {
+        assert_eq!(VL805_PCI_DEV_ADDR, 1 << 20);
+        assert_eq!(VL805_PCI_DEV_ADDR & 0x000f_f000, 0);
+        assert_eq!(VL805_PCI_DEV_ADDR >> 20, 1);
+    }
+
+    #[test]
+    fn bcm2711_pcie_register_pages_are_mapped_in_sel4_cursor_order() {
+        let (status_page, _) = pcie_reg_page(BCM2711_PCIE_MISC_PCIE_STATUS).expect("status page");
+        let (ext_data_page, _) = pcie_reg_page(BCM2711_PCIE_EXT_CFG_DATA).expect("ext data page");
+        let (ext_index_page, _) =
+            pcie_reg_page(BCM2711_PCIE_EXT_CFG_INDEX).expect("ext index page");
+        let (sw_init_page, _) = pcie_reg_page(BCM2711_PCIE_RGR1_SW_INIT_1).expect("sw init page");
+
+        assert!(status_page < ext_data_page);
+        assert!(ext_data_page < ext_index_page);
+        assert_eq!(ext_index_page, sw_init_page);
     }
 
     #[test]
@@ -569,7 +1088,45 @@ mod tests {
             translate_vl805_pci_bar_to_cpu_mmio(0xc000_1004, 0),
             Some(RPI4_VL805_XHCI_MMIO + 0x1000)
         );
-        assert_eq!(translate_vl805_pci_bar_to_cpu_mmio(0xd000_0004, 0), None);
+        assert_eq!(translate_vl805_pci_bar_to_cpu_mmio(0xb000_0004, 0), None);
+    }
+
+    #[test]
+    fn vl805_exact_ext_cfg_proof_requires_live_pi4_tuple() {
+        let vendor_device = vl805_vendor_device_dword(VL805_PCI_VENDOR_ID, VL805_PCI_DEVICE_ID);
+        let class_revision = VL805_EXPECTED_CLASS_CODE << 8;
+        assert_eq!(vendor_device, 0x3483_1106);
+        assert!(vl805_exact_config_tuple_ready(
+            vendor_device,
+            class_revision,
+            0xc000_0004,
+            0
+        ));
+        assert!(!vl805_exact_config_tuple_ready(
+            0xffff_ffff,
+            class_revision,
+            0xc000_0004,
+            0
+        ));
+        assert!(!vl805_exact_config_tuple_ready(
+            vendor_device,
+            0x0001_0000,
+            0xc000_0004,
+            0
+        ));
+        assert!(!vl805_exact_config_tuple_ready(
+            vendor_device,
+            class_revision,
+            0xb000_0004,
+            0
+        ));
+        assert!(vl805_ext_cfg_selector_echo(VL805_PCI_DEV_ADDR));
+        assert!(!vl805_exact_config_tuple_ready(
+            VL805_PCI_DEV_ADDR,
+            class_revision,
+            0xc000_0004,
+            0
+        ));
     }
 
     #[test]
@@ -596,5 +1153,50 @@ mod tests {
         assert_eq!(vl805_msi_control_disable_value(0x00a5), 0x00a4);
         assert!(vl805_msi_control_disabled(0x00a4));
         assert!(!vl805_msi_control_disabled(0x00a5));
+    }
+
+    #[test]
+    fn bcm2711_root_window_values_match_pi4_dt_ranges() {
+        assert_eq!(
+            pcie_outbound_base_limit_value(
+                RPI4_PCIE_CPU_MMIO_WINDOW_BASE as u64,
+                RPI4_PCIE_MMIO_WINDOW_SIZE,
+            ),
+            0x3ff0_0000
+        );
+        assert_eq!(
+            pcie_outbound_base_hi_value(RPI4_PCIE_CPU_MMIO_WINDOW_BASE as u64),
+            0x06
+        );
+        assert_eq!(
+            pcie_outbound_limit_hi_value(
+                RPI4_PCIE_CPU_MMIO_WINDOW_BASE as u64,
+                RPI4_PCIE_MMIO_WINDOW_SIZE,
+            ),
+            0x06
+        );
+        assert_eq!(RPI4_PCIE_BUS_MMIO_WINDOW_BASE, 0xc000_0000);
+        assert_eq!(RPI4_PCIE_BUS_MMIO_WINDOW_BYTES, 0x4000_0000);
+    }
+
+    #[test]
+    fn bcm2711_dma_window_values_match_pi4_dma_ranges() {
+        let dma_size = pcie_next_power_of_two(RPI4_PCIE_DMA_WINDOW_BYTES);
+        assert_eq!(dma_size, 0x1_0000_0000);
+        assert_eq!(brcm_pcie_encode_ibar_size(dma_size), 17);
+        assert_eq!(
+            replace_u32_field(
+                0,
+                PCIE_MISC_RC_BAR2_CONFIG_LO_SIZE_MASK,
+                brcm_pcie_encode_ibar_size(dma_size),
+            ),
+            17
+        );
+        assert_eq!(
+            replace_u32_field(0, PCIE_MISC_MISC_CTRL_SCB0_SIZE_MASK, 17),
+            0x8800_0000
+        );
+        assert_eq!(RPI4_PCIE_DMA_BUS_BASE, 0x4_0000_0000);
+        assert_eq!(RPI4_PCIE_DMA_CPU_BASE, 0);
     }
 }

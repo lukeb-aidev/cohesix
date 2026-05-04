@@ -5601,6 +5601,24 @@ mod tests {
     }
 
     #[test]
+    fn device_coverage_disappears_after_cursor_advances_past_target_page() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.untyped.start = 0x300;
+        bootinfo.untyped.end = 0x301;
+        bootinfo.untypedList[0].paddr = 0xfd50_0000;
+        bootinfo.untypedList[0].sizeBits = 16;
+        bootinfo.untypedList[0].isDevice = 1;
+
+        let mut catalog = UntypedCatalog::new(&bootinfo, None);
+        assert!(catalog.device_coverage(0xfd50_8000, PAGE_BITS).is_some());
+
+        catalog.record_usage(0, 0xa000);
+        assert!(catalog.device_coverage(0xfd50_8000, PAGE_BITS).is_none());
+        assert!(catalog.device_coverage(0xfd50_9000, PAGE_BITS).is_none());
+        assert!(catalog.device_coverage(0xfd50_a000, PAGE_BITS).is_some());
+    }
+
+    #[test]
     fn reserve_paddr_range_consumes_prefix() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
         bootinfo.untyped.start = 0;

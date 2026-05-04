@@ -32,6 +32,16 @@ pub const KEYBOARD_QUEUE_MAX_BYTES: usize = 4_096;
 /// Maximum keyboard bytes drained from the runtime in one event-pump cycle.
 pub const KEYBOARD_POLL_CHUNK_BYTES: usize = 128;
 
+/// Return whether a USB ownership status line may report replayed COMMAND as
+/// fresh runtime authority.
+pub(crate) fn usb_runtime_command_replay_ready(
+    cfg_replay_ready: bool,
+    command_ready: bool,
+    command_source: &'static str,
+) -> bool {
+    cfg_replay_ready && command_ready && matches!(command_source, "runtime-mapped")
+}
+
 /// Deterministic local-seat initialisation outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalSeatInit {
@@ -644,6 +654,40 @@ mod tests {
             },
             devices,
         }
+    }
+
+    #[test]
+    fn usb_runtime_command_replay_requires_live_runtime_mapping() {
+        assert!(usb_runtime_command_replay_ready(
+            true,
+            true,
+            "runtime-mapped",
+        ));
+        assert!(!usb_runtime_command_replay_ready(
+            true,
+            true,
+            "linux-capture-replay",
+        ));
+        assert!(!usb_runtime_command_replay_ready(
+            true,
+            true,
+            "linux-capture-static",
+        ));
+        assert!(!usb_runtime_command_replay_ready(
+            true,
+            true,
+            "bootloader-handoff",
+        ));
+        assert!(!usb_runtime_command_replay_ready(
+            false,
+            true,
+            "runtime-mapped",
+        ));
+        assert!(!usb_runtime_command_replay_ready(
+            true,
+            false,
+            "runtime-mapped",
+        ));
     }
 
     #[test]
