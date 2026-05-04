@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: DMA pin/unpin seam capturing shared-memory regions for audit.
 // Author: Lukas Bower
@@ -193,6 +193,74 @@ pub fn pin(
         &mut ready,
         format_args!(
             "[dma][share] ready label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+            range.label, range.vaddr, range.paddr, range.len,
+        ),
+    );
+    emit_audit_line(ready.as_str());
+
+    Ok(range)
+}
+
+/// Synchronize a DMA-capable range for CPU reads after device writes.
+#[inline(always)]
+pub fn sync_for_cpu(
+    vaddr: usize,
+    paddr: usize,
+    len: usize,
+    label: &'static str,
+) -> Result<PinnedDmaRange, PinError> {
+    if vaddr == 0 {
+        log_pin_error(label, "null-vaddr");
+        return Err(PinError::NullVaddr);
+    }
+    if paddr == 0 {
+        log_pin_error(label, "null-paddr");
+        return Err(PinError::NullPaddr);
+    }
+    if len == 0 {
+        log_pin_error(label, "empty-range");
+        return Err(PinError::EmptyRange);
+    }
+
+    let range = PinnedDmaRange {
+        vaddr,
+        paddr,
+        len,
+        label,
+    };
+
+    let mut line = heapless::String::<192>::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "[dma][share] sync-for-cpu label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+            range.label, range.vaddr, range.paddr, range.len,
+        ),
+    );
+    emit_audit_line(line.as_str());
+
+    let policy = cache_policy();
+    if cache_ops_requested(policy) && policy.dma_invalidate {
+        if !policy.kernel_ops {
+            log_pin_error(label, "cache-kernel-ops-disabled");
+            return Err(PinError::CacheFailure(CacheError::new(
+                sel4_sys::seL4_InvalidArgument,
+            )));
+        }
+
+        emit_cache_line("invalidate-before-cpu-read", &range);
+        let maintenance = CacheMaintenance::init_thread();
+        if let Err(err) = maintenance.invalidate(range.vaddr, range.len) {
+            emit_cache_error("invalidate-before-cpu-read", &range, err);
+            return Err(PinError::CacheFailure(err));
+        }
+    }
+
+    let mut ready = heapless::String::<192>::new();
+    let _ = core::fmt::write(
+        &mut ready,
+        format_args!(
+            "[dma][share] cpu-ready label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
             range.label, range.vaddr, range.paddr, range.len,
         ),
     );

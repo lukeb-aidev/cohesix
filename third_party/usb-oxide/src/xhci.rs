@@ -29,6 +29,7 @@ const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
+const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
 const PORT_ENABLE_WAIT_SPINS: usize = 10_000_000;
 const PORT_SETTLE_SPINS: usize = 100_000;
@@ -93,6 +94,12 @@ pub const fn no_op_command_trb_for_probe() -> Trb {
         control: trb_type::NO_OP_CMD << 10,
     }
 }
+
+#[inline]
+const fn command_wait_should_sync_event_ring(waited: usize) -> bool {
+    waited == 0 || waited % COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS == 0
+}
+
 // Keep only bits that are safe to mirror back across maintenance writes.
 // PORTSC_PED must not be mirrored: on some USB2 paths it is RW1CS and writing
 // a sampled 1 can clear the enabled state immediately after reset/ACK.
@@ -499,7 +506,13 @@ const fn skip_usbsts_clear_before_run_with_snapshot(
 
 #[inline(always)]
 const fn skip_doorbell_readback_after_ring(firmware_handoff: XhciFirmwareHandoff) -> bool {
-    !matches!(firmware_handoff, XhciFirmwareHandoff::None)
+    matches!(
+        firmware_handoff,
+        XhciFirmwareHandoff::ColdStartFromSnapshot
+            | XhciFirmwareHandoff::PlatformResetComplete
+            | XhciFirmwareHandoff::PreserveControllerState
+            | XhciFirmwareHandoff::ResetlessReinit
+    )
 }
 
 #[inline(always)]
@@ -4139,9 +4152,12 @@ impl<H: Dma> XhciCtrl<H> {
     /// Ring the command doorbell
     fn ring_cmd_doorbell(&self) {
         let db = reg::doorbell(self.db_offset, 0);
+        let skip_readback = skip_doorbell_readback_after_ring(self.firmware_handoff);
+        emit_xhci_diag(0x030f, db as u64, 0, u64::from(skip_readback));
         ring_write_barrier();
         self.write_reg(db, 0u32);
-        if !skip_doorbell_readback_after_ring(self.firmware_handoff) {
+        emit_xhci_diag(0x031a, db as u64, 0, u64::from(skip_readback));
+        if !skip_readback {
             let _ = self.read_reg::<u32>(db);
         }
     }
@@ -4279,9 +4295,14 @@ impl<H: Dma> XhciCtrl<H> {
         let mut waited = 0usize;
         let mut other_event_logs = 0usize;
         let mut last_non_command_event = None;
+        let mut event_syncs = 0usize;
         loop {
             let trb = {
                 let mut event_ring = self.event_ring.lock();
+                if command_wait_should_sync_event_ring(waited) {
+                    event_ring.sync_current_for_cpu(&*self.host, "xhci-event-ring-poll")?;
+                    event_syncs = event_syncs.saturating_add(1);
+                }
                 event_ring.try_dequeue()
             };
 
@@ -4355,7 +4376,7 @@ impl<H: Dma> XhciCtrl<H> {
                     0x0307,
                     waited as u64,
                     expected_cmd_trb.unwrap_or(0) & !0x0f,
-                    self.read_op_u64(reg::CRCR),
+                    event_syncs as u64,
                 );
                 emit_xhci_diag(
                     0x0309,
@@ -4383,9 +4404,14 @@ impl<H: Dma> XhciCtrl<H> {
         let mut waited = 0usize;
         let mut other_event_logs = 0usize;
         let mut last_non_command_event = None;
+        let mut event_syncs = 0usize;
         loop {
             let trb = {
                 let mut event_ring = self.event_ring.lock();
+                if command_wait_should_sync_event_ring(waited) {
+                    event_ring.sync_current_for_cpu(&*self.host, "xhci-event-ring-poll")?;
+                    event_syncs = event_syncs.saturating_add(1);
+                }
                 event_ring.try_dequeue()
             };
 
@@ -4440,7 +4466,7 @@ impl<H: Dma> XhciCtrl<H> {
                     0x030b,
                     waited as u64,
                     expected_cmd_trb.unwrap_or(0) & !0x0f,
-                    0,
+                    event_syncs as u64,
                 );
                 if let Some(trb) = last_non_command_event {
                     emit_xhci_diag(
@@ -4459,6 +4485,12 @@ impl<H: Dma> XhciCtrl<H> {
     /// Poll for transfer events (non-blocking)
     pub fn poll_event(&self) -> Option<Trb> {
         let mut event_ring = self.event_ring.lock();
+        if event_ring
+            .sync_current_for_cpu(&*self.host, "xhci-event-ring-poll")
+            .is_err()
+        {
+            return None;
+        }
         let trb = event_ring.try_dequeue();
         drop(event_ring);
         if trb.is_some() {
@@ -4489,7 +4521,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue(&*self.host, trb);
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -4523,7 +4555,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue(&*self.host, trb);
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -7659,6 +7691,9 @@ mod tests {
         ));
         assert!(skip_doorbell_readback_after_ring(
             XhciFirmwareHandoff::ResetlessReinit
+        ));
+        assert!(skip_doorbell_readback_after_ring(
+            XhciFirmwareHandoff::PlatformResetComplete
         ));
         assert!(!skip_doorbell_readback_after_ring(
             XhciFirmwareHandoff::None

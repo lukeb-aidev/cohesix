@@ -73,6 +73,20 @@ pub trait Dma: Send + Sync {
         Ok(())
     }
 
+    /// Prepares a DMA-backed memory range for CPU reads after device writes.
+    ///
+    /// Implementations may invalidate caches or perform other platform-specific
+    /// DMA visibility transitions before software inspects device-written
+    /// memory.
+    fn sync_for_cpu(
+        &self,
+        _vaddr: usize,
+        _len: usize,
+        _label: &'static str,
+    ) -> core::result::Result<(), DmaShareError> {
+        Ok(())
+    }
+
     /// Returns the system page size in bytes.
     fn page_size(&self) -> usize {
         4096

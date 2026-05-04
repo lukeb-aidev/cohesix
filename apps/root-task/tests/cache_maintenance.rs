@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate cache maintenance helpers and DMA audit log ordering.
 // Author: Lukas Bower
@@ -8,9 +8,13 @@
 use root_task::hal::cache::{set_test_error, CacheErrorKind, CacheMaintenance};
 use root_task::hal::dma;
 use sel4_sys::{seL4_InvalidArgument, seL4_NoError, seL4_RangeError};
+use std::sync::Mutex;
+
+static DMA_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn cache_maintenance_helpers_surface_success_and_error_paths() {
+    let _guard = DMA_TEST_LOCK.lock().expect("cache test lock");
     let maintenance = CacheMaintenance::init_thread();
 
     set_test_error(Some(seL4_InvalidArgument));
@@ -33,6 +37,7 @@ fn cache_maintenance_helpers_surface_success_and_error_paths() {
 
 #[test]
 fn cache_maintenance_dma_audit_logs_flush_before_share_ready() {
+    let _guard = DMA_TEST_LOCK.lock().expect("cache test lock");
     let _ = dma::take_audit_log();
     set_test_error(None);
 
@@ -69,4 +74,39 @@ fn cache_maintenance_dma_audit_logs_flush_before_share_ready() {
         reclaim_idx < invalidate_idx && invalidate_idx < reclaimed_idx,
         "cache invalidate should occur between reclaim and reclaimed logs"
     );
+}
+
+#[test]
+fn cache_maintenance_dma_sync_for_cpu_invalidates_before_ready() {
+    let _guard = DMA_TEST_LOCK.lock().expect("cache test lock");
+    let _ = dma::take_audit_log();
+    set_test_error(None);
+
+    let _range = dma::sync_for_cpu(0x3000, 0x5000, 0x40, "test-cpu-sync").expect("sync for cpu");
+    let lines = dma::take_audit_log();
+    let sync_idx = lines
+        .iter()
+        .position(|line| line.contains("[dma][share] sync-for-cpu"))
+        .expect("sync log");
+    let invalidate_idx = lines
+        .iter()
+        .position(|line| line.contains("[dma][cache] invalidate-before-cpu-read"))
+        .expect("invalidate log");
+    let ready_idx = lines
+        .iter()
+        .position(|line| line.contains("[dma][share] cpu-ready"))
+        .expect("ready log");
+    assert!(
+        sync_idx < invalidate_idx && invalidate_idx < ready_idx,
+        "cache invalidate should occur before CPU-ready log"
+    );
+
+    set_test_error(Some(seL4_InvalidArgument));
+    let err = dma::sync_for_cpu(0x3000, 0x5000, 0x40, "test-cpu-sync-error")
+        .expect_err("expected injected cache failure");
+    assert_eq!(
+        err,
+        dma::PinError::CacheFailure(root_task::hal::cache::CacheError::new(seL4_InvalidArgument))
+    );
+    set_test_error(None);
 }

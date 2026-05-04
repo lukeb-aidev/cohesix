@@ -5,7 +5,10 @@
 
 use crate::{Dma, Result, UsbError};
 
-use core::marker::PhantomData;
+use core::{
+    marker::PhantomData,
+    sync::atomic::{compiler_fence, Ordering},
+};
 
 /// Transfer Request Block (TRB) - 16 bytes aligned.
 ///
@@ -334,6 +337,25 @@ impl<H: Dma> PhysMem<H> {
         Ok(host.virt_to_phys(self.addr) as u64)
     }
 
+    /// Makes a device-written subrange visible before CPU reads.
+    pub fn sync_for_cpu_range(
+        &self,
+        host: &H,
+        offset: usize,
+        len: usize,
+        label: &'static str,
+    ) -> Result<()> {
+        let end = offset.checked_add(len).ok_or(UsbError::DmaSync)?;
+        if len == 0 || end > self.size {
+            return Err(UsbError::DmaSync);
+        }
+        let vaddr = self.addr.checked_add(offset).ok_or(UsbError::DmaSync)?;
+        host.sync_for_cpu(vaddr, len, label)
+            .map_err(|_| UsbError::DmaSync)?;
+        compiler_fence(Ordering::Acquire);
+        Ok(())
+    }
+
     /// Returns a pointer to the memory.
     pub fn as_ptr<T>(&self) -> *mut T {
         self.addr as *mut T
@@ -366,6 +388,7 @@ pub(crate) struct Ring<H: Dma> {
 }
 
 impl<H: Dma> Ring<H> {
+    /// Allocates a TRB ring and initializes its link TRB.
     pub fn new(host: &H, trb_count: usize) -> Result<Self> {
         if trb_count < 2 {
             return Err(UsbError::NotSupported);
@@ -385,18 +408,28 @@ impl<H: Dma> Ring<H> {
         Ok(ring)
     }
 
+    /// Returns the device-visible physical address for the ring.
     pub fn phys(&self, host: &H) -> u64 {
         self.mem.phys(host)
     }
 
+    /// Shares the current ring contents with the device.
     pub fn share_for_device(&self, host: &H, label: &'static str) -> Result<u64> {
         self.mem.share_for_device(host, label)
+    }
+
+    /// Publishes host writes made after the initial ring share to the device.
+    pub fn sync_for_device(&self, host: &H, label: &'static str) -> Result<()> {
+        compiler_fence(Ordering::Release);
+        self.mem.share_for_device(host, label)?;
+        Ok(())
     }
 
     fn trbs(&self) -> &mut [Trb] {
         unsafe { core::slice::from_raw_parts_mut(self.mem.as_ptr(), self.size) }
     }
 
+    /// Enqueues one TRB and returns its device-visible address.
     pub fn enqueue(&mut self, host: &H, mut trb: Trb) -> u64 {
         trb.set_cycle(self.cycle);
         let addr = self.mem.phys(host) + (self.enqueue * 16) as u64;
@@ -416,6 +449,18 @@ impl<H: Dma> Ring<H> {
         addr
     }
 
+    /// Enqueues one TRB, then publishes the updated ring contents to the device.
+    pub fn enqueue_and_sync(
+        &mut self,
+        host: &H,
+        trb: Trb,
+        label: &'static str,
+    ) -> Result<u64> {
+        let addr = self.enqueue(host, trb);
+        self.sync_for_device(host, label)?;
+        Ok(addr)
+    }
+
     /// Returns `(enqueue_index, producer_cycle)` for diagnostics.
     pub fn debug_state(&self) -> (usize, bool) {
         (self.enqueue, self.cycle)
@@ -430,6 +475,7 @@ impl<H: Dma> Ring<H> {
         self.trbs()[last] = link;
     }
 
+    /// Frees the ring allocation.
     pub fn free(self, host: &H) {
         self.mem.free(host);
     }
@@ -489,6 +535,15 @@ impl<H: Dma> EventRing<H> {
         Ok((ring, erst))
     }
 
+    pub fn sync_current_for_cpu(&self, host: &H, label: &'static str) -> Result<()> {
+        self.ring.sync_for_cpu_range(
+            host,
+            self.dequeue * core::mem::size_of::<Trb>(),
+            core::mem::size_of::<Trb>(),
+            label,
+        )
+    }
+
     pub fn try_dequeue(&mut self) -> Option<Trb> {
         // Read the candidate TRB twice before consuming it. On some firmware /
         // controller combinations, software can observe an event entry while
@@ -543,7 +598,7 @@ impl<H: Dma> EventRing<H> {
 
 #[cfg(test)]
 mod tests {
-    use super::PhysMem;
+    use super::{trb_type, PhysMem, Ring, Trb};
     use crate::{Dma, DmaShareError};
     use core::sync::atomic::{AtomicUsize, Ordering};
     use std::alloc::{alloc_zeroed, dealloc, Layout};
@@ -610,6 +665,18 @@ mod tests {
             self.last_share_len.store(len, Ordering::Relaxed);
             Ok(())
         }
+
+        fn sync_for_cpu(
+            &self,
+            vaddr: usize,
+            len: usize,
+            _label: &'static str,
+        ) -> core::result::Result<(), DmaShareError> {
+            self.share_calls.fetch_add(1, Ordering::Relaxed);
+            self.last_share_vaddr.store(vaddr, Ordering::Relaxed);
+            self.last_share_len.store(len, Ordering::Relaxed);
+            Ok(())
+        }
     }
 
     #[test]
@@ -627,5 +694,57 @@ mod tests {
         assert_eq!(bus, (mem.virt() + 0x1000) as u64);
 
         mem.free(&host);
+    }
+
+    #[test]
+    fn ring_enqueue_and_sync_reshare_after_late_trb_write() {
+        let host = MockDma::default();
+        let mut ring = Ring::<MockDma>::new(&host, 8).expect("allocate ring");
+        host.share_calls.store(0, Ordering::Relaxed);
+        host.last_share_vaddr.store(0, Ordering::Relaxed);
+        host.last_share_len.store(0, Ordering::Relaxed);
+
+        let addr = ring
+            .enqueue_and_sync(
+                &host,
+                Trb {
+                    param: 0,
+                    status: 0,
+                    control: trb_type::NO_OP_CMD << 10,
+                },
+                "cmd-submit",
+            )
+            .expect("sync after enqueue");
+
+        assert_eq!(addr, ring.phys(&host));
+        assert_eq!(host.share_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(host.last_share_vaddr.load(Ordering::Relaxed), ring.mem.virt());
+        assert_eq!(
+            host.last_share_len.load(Ordering::Relaxed),
+            8 * core::mem::size_of::<Trb>()
+        );
+    }
+
+    #[test]
+    fn event_ring_sync_current_calls_host_before_cpu_read() {
+        let host = MockDma::default();
+        let event_ring = super::EventRing::<MockDma>::new(&host, 8).expect("allocate event ring");
+        host.share_calls.store(0, Ordering::Relaxed);
+        host.last_share_vaddr.store(0, Ordering::Relaxed);
+        host.last_share_len.store(0, Ordering::Relaxed);
+
+        event_ring
+            .sync_current_for_cpu(&host, "event-sync")
+            .expect("sync current event trb");
+
+        assert_eq!(host.share_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            host.last_share_vaddr.load(Ordering::Relaxed),
+            event_ring.ring.virt()
+        );
+        assert_eq!(
+            host.last_share_len.load(Ordering::Relaxed),
+            core::mem::size_of::<Trb>()
+        );
     }
 }

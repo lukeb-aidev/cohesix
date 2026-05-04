@@ -3810,6 +3810,8 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x02e5
             | 0x02e8..=0x02f7
             | 0x0300..=0x030e
+            | 0x030f
+            | 0x031a
             | 0x0312
             | 0x0315..=0x0319
             | 0x0320..=0x0330
@@ -3933,6 +3935,7 @@ const fn xhci_diag_stage_value_labels(
         0x030c => Some(("completion_ptr", "expected_ptr", "control")),
         0x030d => Some(("completion_code", "slot_id", "live_reads")),
         0x030e => Some(("param", "status_control", "trb_type")),
+        0x030f | 0x031a => Some(("doorbell", "target", "skip_readback")),
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
         0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
         0x0332 | 0x0333 => Some(("iman", "masked_iman", "seed_flags")),
@@ -4196,6 +4199,8 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x030c => Some("cmd-poll-only-ccs-mismatch"),
         0x030d => Some("cmd-poll-only-fail"),
         0x030e => Some("cmd-poll-only-timeout-last-event"),
+        0x030f => Some("cmd-doorbell-write"),
+        0x031a => Some("cmd-doorbell-write-done"),
         _ => None,
     }
 }
@@ -13891,6 +13896,32 @@ impl SeatDma {
         }
         Err(DmaShareError)
     }
+
+    fn sync_for_cpu_locked(
+        state: &SeatDmaState,
+        vaddr: usize,
+        len: usize,
+        label: &'static str,
+    ) -> Result<(), DmaShareError> {
+        let end = vaddr.checked_add(len).ok_or(DmaShareError)?;
+        for region in &state.regions {
+            let RegionBacking::Dma(_) = &region.backing else {
+                continue;
+            };
+            let start = region.virt_start;
+            let Some(region_end) = start.checked_add(region.length) else {
+                continue;
+            };
+            if vaddr < start || end > region_end {
+                continue;
+            }
+            let offset = vaddr.checked_sub(start).ok_or(DmaShareError)?;
+            let phys = region.phys_start.checked_add(offset).ok_or(DmaShareError)?;
+            dma::sync_for_cpu(vaddr, phys, len, label).map_err(|_| DmaShareError)?;
+            return Ok(());
+        }
+        Err(DmaShareError)
+    }
 }
 
 impl Dma for SeatDma {
@@ -13942,6 +13973,16 @@ impl Dma for SeatDma {
     ) -> Result<(), DmaShareError> {
         let state = self.state.lock();
         Self::share_for_device_locked(&state, vaddr, len, label)
+    }
+
+    fn sync_for_cpu(
+        &self,
+        vaddr: usize,
+        len: usize,
+        label: &'static str,
+    ) -> Result<(), DmaShareError> {
+        let state = self.state.lock();
+        Self::sync_for_cpu_locked(&state, vaddr, len, label)
     }
 
     fn page_size(&self) -> usize {
@@ -16420,6 +16461,11 @@ mod tests {
             xhci_diag_stage_label(0x020f),
             Some("fw-handoff-trusted-iman-skip")
         );
+        assert_eq!(xhci_diag_stage_label(0x030f), Some("cmd-doorbell-write"));
+        assert_eq!(
+            xhci_diag_stage_label(0x031a),
+            Some("cmd-doorbell-write-done")
+        );
         assert_eq!(xhci_diag_stage_label(0x0117), Some("init-policy-summary"));
         assert_eq!(
             xhci_diag_stage_label(0x0200),
@@ -17211,6 +17257,14 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x02f7),
             Some(("policy_mask", "handoff", "seed_flags"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x030f),
+            Some(("doorbell", "target", "skip_readback"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x031a),
+            Some(("doorbell", "target", "skip_readback"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),

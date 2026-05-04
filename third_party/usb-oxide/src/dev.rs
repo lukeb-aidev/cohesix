@@ -1360,6 +1360,7 @@ impl<H: Dma> UsbDevice<H> {
 
         // Data Stage TRB (if needed)
         let data_trb_addr = if let Some(ref buf) = data_buf {
+            buf.share_for_device(host, "xhci-control-buffer")?;
             let data_trb = Trb {
                 param: buf.phys(host),
                 status: setup.length as u32,
@@ -1381,6 +1382,7 @@ impl<H: Dma> UsbDevice<H> {
                 | (1 << 5), // IOC
         };
         let status_trb_addr = ep0_ring.enqueue(host, status_trb);
+        ep0_ring.sync_for_device(host, "xhci-ep0-ring-submit")?;
         self.ctrl.emit_diag(
             0x0334,
             setup_trb_addr,
@@ -1835,12 +1837,13 @@ impl<H: Dma> UsbDevice<H> {
         let ring = ep_rings[ring_idx].as_mut().ok_or(UsbError::InvEndpoint)?;
 
         let host = self.ctrl.host();
+        buf.share_for_device(host, "xhci-transfer-buffer")?;
         let trb = Trb {
             param: buf.phys(host),
             status: len as u32,
             control: (trb_type::NORMAL << 10) | (1 << 5), // IOC
         };
-        ring.enqueue(host, trb);
+        ring.enqueue_and_sync(host, trb, "xhci-transfer-ring-submit")?;
         drop(ep_rings);
 
         // Ring doorbell
