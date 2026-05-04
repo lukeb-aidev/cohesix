@@ -846,11 +846,8 @@ const fn post_download_ht_cardcap_value() -> u8 {
 
 #[inline]
 const fn post_download_ht_sleepcsr_value(last_sleepcsr: Option<u8>) -> u8 {
-    let preserved_devon = match last_sleepcsr {
-        Some(value) => value & SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK,
-        None => 0,
-    };
-    SBSDIO_FUNC1_SLEEPCSR_KSO_EN | preserved_devon
+    let _ = last_sleepcsr;
+    SBSDIO_FUNC1_SLEEPCSR_KSO_EN
 }
 
 #[inline]
@@ -870,7 +867,7 @@ const fn post_download_ht_sleepcsr_clear_set_is_primary_before_ht() -> bool {
 
 #[inline]
 const fn post_download_ht_sleepcsr_preserves_cached_devon() -> bool {
-    true
+    false
 }
 
 #[inline]
@@ -913,7 +910,8 @@ fn post_download_ht_sleepcsr_clear_set_poll_limit_for_stage(stage: &'static str)
 
 #[inline]
 fn post_download_ht_sleepcsr_requires_live_devon_before_ht(stage: &'static str) -> bool {
-    matches!(stage, "wait-ht-clock")
+    let _ = stage;
+    !post_download_devon_before_ht_is_diagnostic()
 }
 
 #[inline]
@@ -16612,6 +16610,13 @@ impl SdioHost {
             nvram_tail,
             nvram_magic,
         )?;
+        if self.desired_bus_width != SdioBusWidth::FourBit {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=firmware-release-width action=restore-4bit from={} reason=linux-pre-armcr4-ht-proof",
+                sdio_bus_width_name(self.desired_bus_width),
+            ));
+            self.set_bus_width(SdioBusWidth::FourBit)?;
+        }
         self.preferred_data_clock_hz = selected_bulk_clock_hz;
         self.ensure_firmware_activation_clock("firmware-activate-clock", selected_bulk_clock_hz)?;
         let reset_vector = firmware_reset_vector(bundle.firmware)?;
@@ -19460,11 +19465,7 @@ impl SdioHost {
             ));
         }
         if !sleep_after.is_some_and(post_download_ht_sleepcsr_ready_for_function2) {
-            let sleep_seed = if cached_sleep_ready {
-                cached_sleep_before_sideband
-            } else {
-                sleep_after.or(self.last_sleepcsr)
-            };
+            let sleep_seed = sleep_after.or(self.last_sleepcsr);
             let sleep_request = post_download_ht_sleepcsr_value(sleep_seed);
             sleep_after = match self.io_direct_write(
                 SdioFunction::Function1,
@@ -29925,7 +29926,7 @@ mod tests {
         assert!(!post_download_ht_sleepcsr_ready_for_function2(0));
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
-        assert!(post_download_ht_sleepcsr_preserves_cached_devon());
+        assert!(!post_download_ht_sleepcsr_preserves_cached_devon());
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert_eq!(
             post_download_ht_sleepcsr_clear_set_poll_limit(),
@@ -29953,7 +29954,7 @@ mod tests {
         );
         assert!(CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
         assert!(post_download_ht_sleepcsr_poll_limit() < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
-        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
@@ -29980,13 +29981,19 @@ mod tests {
     }
 
     #[test]
-    fn post_download_ht_sideband_requires_live_devon_before_production_ht() {
+    fn post_download_ht_sideband_treats_devon_as_diagnostic_before_production_ht() {
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
-        assert!(post_download_ht_sleepcsr_preserves_cached_devon());
+        assert!(!post_download_ht_sleepcsr_preserves_cached_devon());
+        assert_eq!(
+            post_download_ht_sleepcsr_value(Some(
+                SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
+            )),
+            SBSDIO_FUNC1_SLEEPCSR_KSO_MASK
+        );
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert!(post_download_ht_sideband_primes_before_clock_request());
-        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert!(!post_download_ht_sleepcsr_ready_for_function2(
@@ -30305,7 +30312,7 @@ mod tests {
         assert!(post_download_devon_before_ht_is_diagnostic());
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
-        assert!(post_download_ht_sleepcsr_preserves_cached_devon());
+        assert!(!post_download_ht_sleepcsr_preserves_cached_devon());
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert_eq!(
             post_download_ht_sleepcsr_clear_set_poll_limit(),
@@ -31069,7 +31076,7 @@ mod tests {
         ));
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
-        assert!(post_download_ht_sleepcsr_preserves_cached_devon());
+        assert!(!post_download_ht_sleepcsr_preserves_cached_devon());
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert_eq!(
             post_download_ht_sleepcsr_clear_set_poll_limit(),
@@ -31081,7 +31088,7 @@ mod tests {
         );
         assert!(CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
         assert!(post_download_ht_sleepcsr_poll_limit() < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
-        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert_eq!(
@@ -31105,7 +31112,7 @@ mod tests {
             post_download_ht_sleepcsr_value(Some(
                 SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK | 0x80
             )),
-            SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
+            SBSDIO_FUNC1_SLEEPCSR_KSO_MASK
         );
         assert_eq!(
             cyw43455_cardcap_command_decode_value() & SDIO_CCCR_BRCM_CARDCAP_CMD_NODEC,

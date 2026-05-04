@@ -152,6 +152,7 @@ const XHCI_MAX_PROBE_PORTS: usize = 16;
 const XHCI_PORT_DETECT_PASSES: usize = 4;
 const XHCI_PORT_DETECT_SETTLE_SPINS: usize = 200_000;
 const XHCI_PORT_DETECT_FINAL_WAIT_MS: u64 = 100;
+const XHCI_PORT_EVENT_DRAIN_LIMIT: usize = 16;
 const HUB_ENUM_MAX_DEPTH: usize = 2;
 const HUB_MAX_DOWNSTREAM_PORTS: usize = 15;
 const HUB_DESC_MAX_BYTES: usize = 12;
@@ -735,6 +736,8 @@ pub(crate) struct UsbProbeRouteStatus {
     pub poll_only: bool,
     pub port: Option<u8>,
     pub connected_mask: u32,
+    pub event_candidate_mask: u32,
+    pub command_probe: &'static str,
     pub detect_passes: usize,
     pub slow_recheck: bool,
     pub irq27_bound: bool,
@@ -832,6 +835,7 @@ enum UsbProbePathOutcome {
     Pending,
     ControllerInitFailed,
     EnumerationDisabledBootloaderOwned,
+    RootPortSampleDeferred,
     NoConnectedPorts,
     AddressFailed,
     DeviceDescFailed,
@@ -851,6 +855,7 @@ impl UsbProbePathOutcome {
             Self::Pending => "pending",
             Self::ControllerInitFailed => "controller-init-failed",
             Self::EnumerationDisabledBootloaderOwned => "enumeration-disabled-bootloader-owned",
+            Self::RootPortSampleDeferred => "root-port-sample-deferred",
             Self::NoConnectedPorts => "no-connected-ports",
             Self::AddressFailed => "address-failed",
             Self::DeviceDescFailed => "device-desc-failed",
@@ -869,17 +874,18 @@ impl UsbProbePathOutcome {
         match self {
             Self::Pending => 0,
             Self::EnumerationDisabledBootloaderOwned => 1,
-            Self::NoConnectedPorts => 2,
-            Self::AddressFailed => 3,
-            Self::DeviceDescFailed => 4,
-            Self::ConfigDescFailed => 5,
-            Self::ConfigParseFailed => 6,
-            Self::InvalidConfigValue => 7,
-            Self::SetConfigFailed => 8,
-            Self::NoKeyboardFound => 9,
-            Self::HidInitFailed => 10,
-            Self::ControllerInitFailed => 11,
-            Self::KeyboardReady => 12,
+            Self::RootPortSampleDeferred => 2,
+            Self::NoConnectedPorts => 3,
+            Self::AddressFailed => 4,
+            Self::DeviceDescFailed => 5,
+            Self::ConfigDescFailed => 6,
+            Self::ConfigParseFailed => 7,
+            Self::InvalidConfigValue => 8,
+            Self::SetConfigFailed => 9,
+            Self::NoKeyboardFound => 10,
+            Self::HidInitFailed => 11,
+            Self::ControllerInitFailed => 12,
+            Self::KeyboardReady => 13,
         }
     }
 }
@@ -901,6 +907,8 @@ struct UsbProbePathwaySummary {
     outcome: UsbProbePathOutcome,
     port: Option<u8>,
     connected_mask: u32,
+    event_candidate_mask: u32,
+    command_probe: &'static str,
     detect_passes: usize,
     slow_recheck: bool,
     irq27_bound: bool,
@@ -942,6 +950,8 @@ impl UsbProbePathwaySummary {
             outcome: UsbProbePathOutcome::Pending,
             port: None,
             connected_mask: 0,
+            event_candidate_mask: 0,
+            command_probe: "n/a",
             detect_passes: 0,
             slow_recheck: false,
             irq27_bound: false,
@@ -973,6 +983,16 @@ impl UsbProbePathwaySummary {
         let other_connected = other.connected_mask.count_ones();
         if self_connected != other_connected {
             return self_connected > other_connected;
+        }
+        let self_event_candidates = self.event_candidate_mask.count_ones();
+        let other_event_candidates = other.event_candidate_mask.count_ones();
+        if self_event_candidates != other_event_candidates {
+            return self_event_candidates > other_event_candidates;
+        }
+        let self_command_ready = usb_command_probe_proves_ring(self.command_probe);
+        let other_command_ready = usb_command_probe_proves_ring(other.command_probe);
+        if self_command_ready != other_command_ready {
+            return self_command_ready;
         }
         if self.diag_fresh != other.diag_fresh {
             return self.diag_fresh;
@@ -1101,9 +1121,20 @@ fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
             if matches!(
                 summary.outcome,
                 UsbProbePathOutcome::EnumerationDisabledBootloaderOwned
+                    | UsbProbePathOutcome::RootPortSampleDeferred
             ) =>
         {
-            "return-to-shell"
+            if summary.event_candidate_mask != 0 && summary.command_probe == "n/a" {
+                "command-ring-probe"
+            } else if summary.command_probe == "enable-slot-ok" {
+                "safe-port-state"
+            } else if summary.command_probe == "no-op-ok" {
+                "safe-port-event-required"
+            } else if summary.command_probe != "n/a" {
+                "command-ring-recovery"
+            } else {
+                "return-to-shell"
+            }
         }
         UsbProbePathProgress::NoController if summary.diag.stage == 0x0224 => "reset-post-settle",
         UsbProbePathProgress::NoController => "controller-ready",
@@ -3513,6 +3544,8 @@ pub(crate) fn latest_usb_probe_route_status() -> Option<UsbProbeRouteStatus> {
         poll_only: summary.poll_only,
         port: summary.port,
         connected_mask: summary.connected_mask,
+        event_candidate_mask: summary.event_candidate_mask,
+        command_probe: summary.command_probe,
         detect_passes: summary.detect_passes,
         slow_recheck: summary.slow_recheck,
         irq27_bound: summary.irq27_bound,
@@ -3590,6 +3623,15 @@ fn log_usb_probe_pathway_summary(summary: &UsbProbePathwaySummary) {
             summary.connected_mask, summary.detect_passes, summary.slow_recheck as u8,
         ),
     );
+    if summary.event_candidate_mask != 0 || summary.command_probe != "n/a" {
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                " event_candidate_mask=0x{:04x} command_probe={}",
+                summary.event_candidate_mask, summary.command_probe,
+            ),
+        );
+    }
     if summary.diag.line_count != 0 {
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -3643,6 +3685,15 @@ fn log_usb_probe_best_pathway(result: &str, summary: &UsbProbePathwaySummary) {
             summary.connected_mask, summary.detect_passes, summary.slow_recheck as u8,
         ),
     );
+    if summary.event_candidate_mask != 0 || summary.command_probe != "n/a" {
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                " event_candidate_mask=0x{:04x} command_probe={}",
+                summary.event_candidate_mask, summary.command_probe,
+            ),
+        );
+    }
     if summary.diag.line_count != 0 {
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -3733,6 +3784,8 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x0346 => Some("pre-run-dcbaap-low-store-wedged"),
         0x034a => Some("pre-run-dcbaap-high-store-wedged"),
         0x034c => Some("platform-reset-dcbaap-publish-blocked"),
+        0x030b => Some("cmd-poll-only-timeout"),
+        0x030d => Some("cmd-poll-only-fail"),
         0x02eb => Some("usbcmd-run-barrier-wedged"),
         0x02e9 => Some("usbcmd-run-store-wedged"),
         _ => None,
@@ -3756,6 +3809,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x02d4..=0x02d5
             | 0x02e5
             | 0x02e8..=0x02f7
+            | 0x0300..=0x030e
             | 0x0312
             | 0x0315..=0x0319
             | 0x0320..=0x0330
@@ -3774,6 +3828,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x02e5
             | 0x02e9
             | 0x02eb
+            | 0x0300..=0x030e
             | 0x0315..=0x0319
             | 0x0320..=0x0330
     )
@@ -3869,6 +3924,15 @@ const fn xhci_diag_stage_value_labels(
         0x02e5 => Some(("reg", "value", "mode")),
         0x02f7 => Some(("policy_mask", "handoff", "seed_flags")),
         0x0316 => Some(("erdp_ack", "iman_ip", "usbsts_clear")),
+        0x0300 => Some(("param", "status_control", "poll_only")),
+        0x0301 => Some(("param", "status_control", "completion_code")),
+        0x0303 => Some(("cmd_addr", "enqueue", "cycle")),
+        0x0304 => Some(("completion_ptr", "expected_ptr", "match")),
+        0x0308 => Some(("param", "status_control", "trb_type")),
+        0x030b => Some(("waited", "expected_ptr", "live_reads")),
+        0x030c => Some(("completion_ptr", "expected_ptr", "control")),
+        0x030d => Some(("completion_code", "slot_id", "live_reads")),
+        0x030e => Some(("param", "status_control", "trb_type")),
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
         0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
         0x0332 | 0x0333 => Some(("iman", "masked_iman", "seed_flags")),
@@ -4128,6 +4192,10 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0308 => Some("cmd-wait-other-event"),
         0x0309 => Some("cmd-timeout-state"),
         0x030a => Some("cmd-timeout-last-event"),
+        0x030b => Some("cmd-poll-only-timeout"),
+        0x030c => Some("cmd-poll-only-ccs-mismatch"),
+        0x030d => Some("cmd-poll-only-fail"),
+        0x030e => Some("cmd-poll-only-timeout-last-event"),
         _ => None,
     }
 }
@@ -4252,6 +4320,178 @@ fn xhci_sample_root_ports(
     }
     remember_xhci_root_port_statuses(&port_statuses[..sample_ports]);
     xhci_connected_mask_from_portsc(&port_statuses[..sample_ports])
+}
+
+#[inline]
+const fn xhci_port_status_change_event_port_index(
+    trb_type: u8,
+    param: u64,
+    max_ports: usize,
+) -> Option<usize> {
+    if trb_type as u32 != usb_oxide::trb_type::PORT_STATUS_CHANGE {
+        return None;
+    }
+    let port_id = ((param >> 24) & 0xff) as usize;
+    if port_id == 0 || port_id > max_ports || port_id > XHCI_MAX_PROBE_PORTS {
+        return None;
+    }
+    Some(port_id - 1)
+}
+
+#[inline]
+const fn xhci_port_status_change_event_mask(trb_type: u8, param: u64, max_ports: usize) -> u32 {
+    match xhci_port_status_change_event_port_index(trb_type, param, max_ports) {
+        Some(index) if index < u32::BITS as usize => 1u32 << index,
+        Some(_) | None => 0,
+    }
+}
+
+#[inline]
+fn xhci_drain_root_port_change_events(ctrl: &XhciCtrl<SeatDma>, max_ports: usize) -> u32 {
+    let capped_ports = cmp::min(max_ports, XHCI_MAX_PROBE_PORTS);
+    let mut candidate_mask = 0u32;
+    let mut drained = 0usize;
+    let mut ignored = 0usize;
+    for _ in 0..XHCI_PORT_EVENT_DRAIN_LIMIT {
+        let Some(event) = ctrl.poll_event() else {
+            break;
+        };
+        drained = drained.saturating_add(1);
+        let event_mask =
+            xhci_port_status_change_event_mask(event.trb_type(), event.param, capped_ports);
+        if event_mask == 0 {
+            ignored = ignored.saturating_add(1);
+            continue;
+        }
+        candidate_mask |= event_mask;
+        let mut line = heapless::String::<160>::new();
+        let port_id = ((event.param >> 24) & 0xff) as u8;
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci root-port event-candidate port={} mask=0x{candidate_mask:04x}",
+                port_id
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+    }
+    let mut line = heapless::String::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] xhci root-port event-drain drained={} ignored={} candidate_mask=0x{candidate_mask:04x} limit={}",
+            drained, ignored, XHCI_PORT_EVENT_DRAIN_LIMIT
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    candidate_mask
+}
+
+#[inline]
+fn usb_command_probe_error_label(err: UsbError) -> &'static str {
+    match err {
+        UsbError::EnableSlotTimeout | UsbError::Timeout => "enable-slot-timeout",
+        UsbError::CmdFail(_) => "enable-slot-cmd-fail",
+        _ => "enable-slot-error",
+    }
+}
+
+#[inline]
+fn usb_no_op_probe_error_label(err: UsbError) -> &'static str {
+    match err {
+        UsbError::Timeout => "no-op-timeout",
+        UsbError::CmdFail(_) => "no-op-command-failed",
+        _ => "no-op-error",
+    }
+}
+
+#[inline]
+fn usb_command_probe_proves_ring(label: &str) -> bool {
+    matches!(label, "enable-slot-ok" | "no-op-ok")
+}
+
+#[inline]
+fn xhci_probe_command_ring_after_event_drain(
+    ctrl: &XhciCtrl<SeatDma>,
+    event_candidate_mask: u32,
+) -> &'static str {
+    if event_candidate_mask == 0 {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x0000 verb=no-op"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+
+        return match ctrl.probe_no_op_command() {
+            Ok(()) => {
+                boot_log::force_uart_line(
+                    "[local-seat] xhci root-port command-probe result=no-op-ok",
+                );
+                "no-op-ok"
+            }
+            Err(err) => {
+                let result = usb_no_op_probe_error_label(err);
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci root-port command-probe result={result} detail={err:?}"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                result
+            }
+        };
+    }
+
+    let mut line = heapless::String::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=enable-slot"
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+
+    match ctrl.enable_slot() {
+        Ok(slot) => {
+            let cleanup = match ctrl.disable_slot(slot) {
+                Ok(()) => "disable-slot-ok",
+                Err(UsbError::Timeout) => "disable-slot-timeout",
+                Err(UsbError::CmdFail(_)) => "disable-slot-cmd-fail",
+                Err(_) => "disable-slot-error",
+            };
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci root-port command-probe result=enable-slot-ok slot={} cleanup={cleanup}",
+                    slot
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            if cleanup == "disable-slot-ok" {
+                "enable-slot-ok"
+            } else {
+                "enable-slot-ok-cleanup-failed"
+            }
+        }
+        Err(err) => {
+            let result = usb_command_probe_error_label(err);
+            let mut line = heapless::String::<224>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci root-port command-probe result={result} detail={err:?}"
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            result
+        }
+    }
 }
 
 fn log_xhci_root_port_statuses(port_statuses: &[u32], stage: &str) {
@@ -4832,7 +5072,9 @@ const fn xhci_runtime_init_strategy_skips_root_port_reads(
     ) || (strategy.seed_stop_state
         && matches!(
             strategy.firmware_handoff,
-            XhciFirmwareHandoff::ColdStartFromSnapshot | XhciFirmwareHandoff::None
+            XhciFirmwareHandoff::ColdStartFromSnapshot
+                | XhciFirmwareHandoff::None
+                | XhciFirmwareHandoff::PlatformResetComplete
         ))
 }
 
@@ -9689,13 +9931,34 @@ impl UsbKeyboard {
 
                         let max_ports = cmp::min(ctrl.max_ports() as usize, XHCI_MAX_PROBE_PORTS);
                         let mut connected_mask = 0u32;
+                        let mut event_candidate_mask = 0u32;
+                        let mut command_probe = "n/a";
                         let mut port_statuses = [0u32; XHCI_MAX_PROBE_PORTS];
                         let mut detect_passes_used = 1usize;
                         let bootloader_port_reads_toxic =
                             xhci_runtime_init_strategy_skips_root_port_reads(strategy);
                         if bootloader_port_reads_toxic {
-                            boot_log::force_uart_line(
-                                "[local-seat] xhci root-port sample skipped reason=bootloader-owned-portsc-toxic",
+                            let mut line = heapless::String::<192>::new();
+                            let reason = if matches!(
+                                strategy.firmware_handoff,
+                                XhciFirmwareHandoff::PlatformResetComplete
+                            ) {
+                                "platform-reset-stop-seed-portsc-toxic"
+                            } else {
+                                "bootloader-owned-portsc-toxic"
+                            };
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci root-port sample skipped reason={reason}"
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            event_candidate_mask =
+                                xhci_drain_root_port_change_events(ctrl.as_ref(), max_ports);
+                            command_probe = xhci_probe_command_ring_after_event_drain(
+                                ctrl.as_ref(),
+                                event_candidate_mask,
                             );
                         } else {
                             {
@@ -9765,10 +10028,28 @@ impl UsbKeyboard {
                             ),
                         );
                         boot_log::force_uart_line(line.as_str());
+                        if event_candidate_mask != 0 || command_probe != "n/a" {
+                            let mut line = heapless::String::<192>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci root-port deferred-state connected_mask=0x{connected_mask:04x} event_candidate_mask=0x{event_candidate_mask:04x} command_probe={command_probe}"
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                        }
+
+                        pathway_summary.event_candidate_mask = event_candidate_mask;
+                        pathway_summary.command_probe = command_probe;
 
                         let mut attempt_recorded = false;
+                        let enumeration_mask = if bootloader_port_reads_toxic {
+                            0
+                        } else {
+                            connected_mask
+                        };
                         for port in 0..max_ports {
-                            if (connected_mask & (1u32 << port)) == 0 {
+                            if (enumeration_mask & (1u32 << port)) == 0 {
                                 continue;
                             }
 
@@ -10091,7 +10372,7 @@ impl UsbKeyboard {
                         if !attempt_recorded {
                             let diag_after = read_latest_xhci_diag_snapshot();
                             let outcome = if bootloader_port_reads_toxic {
-                                UsbProbePathOutcome::EnumerationDisabledBootloaderOwned
+                                UsbProbePathOutcome::RootPortSampleDeferred
                             } else {
                                 UsbProbePathOutcome::NoConnectedPorts
                             };
@@ -14124,6 +14405,35 @@ mod tests {
     }
 
     #[test]
+    fn xhci_port_status_change_event_mask_decodes_one_based_port_id() {
+        let event_type = usb_oxide::trb_type::PORT_STATUS_CHANGE as u8;
+        assert_eq!(
+            super::xhci_port_status_change_event_mask(event_type, 1 << 24, 5),
+            0b0001
+        );
+        assert_eq!(
+            super::xhci_port_status_change_event_mask(event_type, 5 << 24, 5),
+            0b1_0000
+        );
+        assert_eq!(
+            super::xhci_port_status_change_event_mask(event_type, 0, 5),
+            0
+        );
+        assert_eq!(
+            super::xhci_port_status_change_event_mask(event_type, 6 << 24, 5),
+            0
+        );
+        assert_eq!(
+            super::xhci_port_status_change_event_mask(
+                usb_oxide::trb_type::TRANSFER_EVENT as u8,
+                1 << 24,
+                5
+            ),
+            0
+        );
+    }
+
+    #[test]
     fn xhci_diag_history_keeps_dcbaap_and_run_edges_only() {
         assert!(super::xhci_diag_history_stage_relevant(0x0248));
         assert!(super::xhci_diag_history_stage_relevant(0x02e9));
@@ -15108,6 +15418,8 @@ mod tests {
         assert_eq!(route.diag_b, 0x0402_3000);
         assert_eq!(route.diag_c, 1);
         assert_eq!(route.diag_value_labels, None);
+        assert_eq!(route.event_candidate_mask, 0);
+        assert_eq!(route.command_probe, "n/a");
     }
 
     #[test]
@@ -15348,6 +15660,81 @@ mod tests {
             "skip-stop-revalidation"
         );
         assert_eq!(super::usb_probe_next_step(summary), "reset-post-settle");
+    }
+
+    #[test]
+    fn usb_probe_next_step_advances_event_candidates_to_safe_command_frontier() {
+        let event_candidate = UsbProbePathwaySummary {
+            progress: UsbProbePathProgress::ControllerReady,
+            outcome: UsbProbePathOutcome::RootPortSampleDeferred,
+            event_candidate_mask: 0x0006,
+            ..UsbProbePathwaySummary::new(
+                1,
+                2,
+                2,
+                "platform-reset-complete",
+                "mailbox-reset-complete",
+                "platform-reset-complete",
+                "stop-state",
+                "skip-live-halt-read",
+                true,
+                true,
+                true,
+            )
+        };
+        assert_eq!(
+            super::usb_probe_next_step(event_candidate),
+            "command-ring-probe"
+        );
+
+        let command_ready = UsbProbePathwaySummary {
+            command_probe: "enable-slot-ok",
+            ..event_candidate
+        };
+        assert_eq!(super::usb_probe_next_step(command_ready), "safe-port-state");
+        assert!(command_ready.is_better_than(event_candidate));
+
+        let no_event_command_ready = UsbProbePathwaySummary {
+            progress: UsbProbePathProgress::ControllerReady,
+            outcome: UsbProbePathOutcome::RootPortSampleDeferred,
+            command_probe: "no-op-ok",
+            ..UsbProbePathwaySummary::new(
+                1,
+                2,
+                2,
+                "platform-reset-complete",
+                "mailbox-reset-complete",
+                "platform-reset-complete",
+                "stop-state",
+                "skip-live-halt-read",
+                true,
+                true,
+                true,
+            )
+        };
+        assert_eq!(
+            super::usb_probe_next_step(no_event_command_ready),
+            "safe-port-event-required"
+        );
+        assert!(
+            no_event_command_ready.is_better_than(UsbProbePathwaySummary {
+                progress: UsbProbePathProgress::ControllerReady,
+                outcome: UsbProbePathOutcome::RootPortSampleDeferred,
+                ..UsbProbePathwaySummary::new(
+                    1,
+                    2,
+                    2,
+                    "platform-reset-complete",
+                    "mailbox-reset-complete",
+                    "platform-reset-complete",
+                    "stop-state",
+                    "skip-live-halt-read",
+                    true,
+                    true,
+                    true,
+                )
+            })
+        );
     }
 
     #[test]
@@ -16525,6 +16912,16 @@ mod tests {
             xhci_diag_stage_label(0x030a),
             Some("cmd-timeout-last-event")
         );
+        assert_eq!(xhci_diag_stage_label(0x030b), Some("cmd-poll-only-timeout"));
+        assert_eq!(
+            xhci_diag_stage_label(0x030c),
+            Some("cmd-poll-only-ccs-mismatch")
+        );
+        assert_eq!(xhci_diag_stage_label(0x030d), Some("cmd-poll-only-fail"));
+        assert_eq!(
+            xhci_diag_stage_label(0x030e),
+            Some("cmd-poll-only-timeout-last-event")
+        );
         assert_eq!(xhci_diag_stage_label(0x9999), None);
     }
 
@@ -16899,7 +17296,7 @@ mod tests {
     }
 
     #[test]
-    fn bootloader_owned_stop_state_without_runtime_rings_skips_root_port_reads() {
+    fn stop_seeded_runtime_lanes_without_safe_portsc_skip_root_port_reads() {
         assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, true),
         ));
@@ -16909,7 +17306,7 @@ mod tests {
         assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, true),
         ));
-        assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
+        assert!(super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true),
         ));
         assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
@@ -16942,9 +17339,17 @@ mod tests {
             UsbProbePathOutcome::EnumerationDisabledBootloaderOwned.as_str(),
             "enumeration-disabled-bootloader-owned"
         );
+        assert_eq!(
+            UsbProbePathOutcome::RootPortSampleDeferred.as_str(),
+            "root-port-sample-deferred"
+        );
+        assert!(
+            UsbProbePathOutcome::RootPortSampleDeferred.tie_priority()
+                > UsbProbePathOutcome::EnumerationDisabledBootloaderOwned.tie_priority()
+        );
         assert!(
             UsbProbePathOutcome::NoConnectedPorts.tie_priority()
-                > UsbProbePathOutcome::EnumerationDisabledBootloaderOwned.tie_priority()
+                > UsbProbePathOutcome::RootPortSampleDeferred.tie_priority()
         );
     }
 

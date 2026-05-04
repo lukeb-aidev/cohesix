@@ -2532,7 +2532,7 @@ where
             ));
             self.emit_console_line(route_line.as_str());
             let mut progress_line = format_message(format_args!(
-                "usb: golden_path outcome={} pathway={} progress={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} detect_passes={}",
+                "usb: golden_path outcome={} pathway={} progress={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} command_probe={} detect_passes={}",
                 route.outcome,
                 route.pathway_idx,
                 route.progress,
@@ -2545,6 +2545,8 @@ where
                 },
                 if route.poll_only { "yes" } else { "no" },
                 route.connected_mask,
+                route.event_candidate_mask,
+                route.command_probe,
                 route.detect_passes,
             ));
             if let Some(port) = route.port {
@@ -2569,11 +2571,13 @@ where
             }
             self.emit_console_line(progress_line.as_str());
             let enum_line = format_message(format_args!(
-                "usb: enum_state phase={} outcome={} port={} connected_mask=0x{:04x} next={}",
+                "usb: enum_state phase={} outcome={} port={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} command_probe={} next={}",
                 route.progress,
                 route.outcome,
                 route.port.unwrap_or(0),
                 route.connected_mask,
+                route.event_candidate_mask,
+                route.command_probe,
                 route.next_step,
             ));
             self.emit_console_line(enum_line.as_str());
@@ -2836,6 +2840,17 @@ where
             Some(("policy-skip-before-run", "fresh-ownership"))
         } else if route.outcome == "controller-init-failed" {
             Some(("controller-init-edge", "controller-init"))
+        } else if route.command_probe == "enable-slot-ok" {
+            Some(("command-ring-ready", "safe-port-state"))
+        } else if route.command_probe == "no-op-ok" {
+            Some((
+                "command-ring-ready-no-port-event",
+                "safe-port-event-required",
+            ))
+        } else if route.command_probe != "n/a" {
+            Some(("command-ring-edge", "command-ring-probe"))
+        } else if route.progress == "controller-ready" && route.event_candidate_mask != 0 {
+            Some(("controller-ready-port-event", "command-ring-probe"))
         } else if route.progress == "controller-ready" && route.connected_mask == 0 {
             Some(("controller-ready-no-port", "root-port-detect"))
         } else if matches!(
@@ -2883,6 +2898,12 @@ where
     fn usb_contract_blocker(route: &crate::local_seat_pi4::UsbProbeRouteStatus) -> &'static str {
         if route.controller_gate != "none" {
             route.controller_gate
+        } else if route.command_probe == "enable-slot-ok" {
+            "safe-port-state"
+        } else if route.command_probe == "no-op-ok" {
+            "safe-port-event-required"
+        } else if route.command_probe != "n/a" {
+            route.command_probe
         } else if let Some(exact) = route.diag_exact {
             exact
         } else if route.outcome != "pending" {

@@ -84,6 +84,15 @@ const PORT_CHANGE_BITS: u32 = reg::PORTSC_CSC
     | reg::PORTSC_PLC
     | reg::PORTSC_CEC;
 const POST_START_POLLING_IRQ_QUIESCE_RETRY_SPINS: usize = 32;
+
+/// Build a command-ring No Op TRB for bounded controller liveness probes.
+pub const fn no_op_command_trb_for_probe() -> Trb {
+    Trb {
+        param: 0,
+        status: 0,
+        control: trb_type::NO_OP_CMD << 10,
+    }
+}
 // Keep only bits that are safe to mirror back across maintenance writes.
 // PORTSC_PED must not be mirrored: on some USB2 paths it is RW1CS and writing
 // a sampled 1 can clear the enabled state immediately after reset/ACK.
@@ -4370,6 +4379,83 @@ impl<H: Dma> XhciCtrl<H> {
         }
     }
 
+    fn wait_command_poll_only(&self, expected_cmd_trb: Option<u64>) -> Result<Trb> {
+        let mut waited = 0usize;
+        let mut other_event_logs = 0usize;
+        let mut last_non_command_event = None;
+        loop {
+            let trb = {
+                let mut event_ring = self.event_ring.lock();
+                event_ring.try_dequeue()
+            };
+
+            if let Some(trb) = trb {
+                self.update_erdp();
+
+                if trb.trb_type() == trb_type::COMMAND_COMPLETION as u8 {
+                    let code = trb.completion_code();
+                    let completion_ptr = trb.param & !0x0f;
+                    if let Some(expected_ptr_raw) = expected_cmd_trb {
+                        let expected_ptr = expected_ptr_raw & !0x0f;
+                        let ptr_match = completion_ptr == expected_ptr;
+                        emit_xhci_diag(
+                            0x0304,
+                            completion_ptr,
+                            expected_ptr,
+                            if ptr_match { 1 } else { 0 },
+                        );
+                        if !ptr_match {
+                            emit_xhci_diag(0x030c, completion_ptr, expected_ptr, trb.control as u64);
+                            continue;
+                        }
+                    }
+                    emit_xhci_diag(
+                        0x0301,
+                        trb.param,
+                        ((trb.status as u64) << 32) | trb.control as u64,
+                        code as u64,
+                    );
+                    if code != completion::SUCCESS {
+                        emit_xhci_diag(0x030d, code as u64, trb.slot_id() as u64, 0);
+                        return Err(UsbError::CmdFail(code));
+                    }
+                    return Ok(trb);
+                }
+
+                last_non_command_event = Some(trb);
+                if other_event_logs < COMMAND_WAIT_OTHER_EVENT_LOGS {
+                    emit_xhci_diag(
+                        0x0308,
+                        trb.param,
+                        ((trb.status as u64) << 32) | trb.control as u64,
+                        trb.trb_type() as u64,
+                    );
+                    other_event_logs = other_event_logs.saturating_add(1);
+                }
+            }
+
+            waited = waited.saturating_add(1);
+            if waited >= COMMAND_WAIT_SPINS {
+                emit_xhci_diag(
+                    0x030b,
+                    waited as u64,
+                    expected_cmd_trb.unwrap_or(0) & !0x0f,
+                    0,
+                );
+                if let Some(trb) = last_non_command_event {
+                    emit_xhci_diag(
+                        0x030e,
+                        trb.param,
+                        ((trb.status as u64) << 32) | trb.control as u64,
+                        trb.trb_type() as u64,
+                    );
+                }
+                return Err(UsbError::Timeout);
+            }
+            spin_loop();
+        }
+    }
+
     /// Poll for transfer events (non-blocking)
     pub fn poll_event(&self) -> Option<Trb> {
         let mut event_ring = self.event_ring.lock();
@@ -4414,6 +4500,46 @@ impl<H: Dma> XhciCtrl<H> {
         drop(cmd_ring);
         self.ring_cmd_doorbell();
         self.wait_command(Some(cmd_addr))
+    }
+
+    fn submit_command_poll_only(&self, trb: Trb) -> Result<Trb> {
+        if runtime_pollsafe_no_fresh_ownership_handoff(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+        ) {
+            emit_xhci_diag(
+                0x0336,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
+            );
+            return Err(UsbError::NotSupported);
+        }
+        emit_xhci_diag(
+            0x0300,
+            trb.param,
+            ((trb.status as u64) << 32) | trb.control as u64,
+            1,
+        );
+        let mut cmd_ring = self.cmd_ring.lock();
+        let (enqueue_before, cycle_before) = cmd_ring.debug_state();
+        let cmd_addr = cmd_ring.enqueue(&*self.host, trb);
+        let (enqueue_after, cycle_after) = cmd_ring.debug_state();
+        emit_xhci_diag(
+            0x0303,
+            cmd_addr,
+            ((enqueue_before as u64) << 32) | enqueue_after as u64,
+            ((cycle_before as u64) << 1) | (cycle_after as u64),
+        );
+        drop(cmd_ring);
+        self.ring_cmd_doorbell();
+        self.wait_command_poll_only(Some(cmd_addr))
+    }
+
+    /// Submit a command-ring No Op probe without touching root-port registers.
+    pub fn probe_no_op_command(&self) -> Result<()> {
+        self.submit_command_poll_only(no_op_command_trb_for_probe())?;
+        Ok(())
     }
 
     /// Enable a device slot
@@ -4732,8 +4858,9 @@ mod tests {
         deferred_erst_publish_uses_size_first_with_snapshot, disable_interrupter_iman_value,
         disable_legacy_smi_control_bits, halt_revalidation_needed,
         initial_live_operational_read_hazard, masked_usbcmd, parse_controller_params,
-        platform_reset_dcbaap_publish_blocked_with_snapshot, polling_iman_value,
-        port_ready_for_enumeration, post_start_polling_irq_quiesce_pending_bits,
+        no_op_command_trb_for_probe, platform_reset_dcbaap_publish_blocked_with_snapshot,
+        polling_iman_value, port_ready_for_enumeration,
+        post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
         pre_halt_source_quiesce_before_live_stop_revalidation, preserve_firmware_handoff_config,
@@ -4786,7 +4913,7 @@ mod tests {
         SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
         TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
     };
-    use crate::{reg, Dma};
+    use crate::{reg, ring::trb_type, Dma};
     use alloc::vec;
 
     struct MockDma;
@@ -4815,6 +4942,16 @@ mod tests {
             parse_controller_params(0xff, 0xffff_ffff, 0xffff_ffff, 0xffff_ffff, 0xffff_ffff)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn no_op_command_probe_trb_has_no_slot_side_effect() {
+        let trb = no_op_command_trb_for_probe();
+        assert_eq!(trb.param, 0);
+        assert_eq!(trb.status, 0);
+        assert_eq!(trb.trb_type(), trb_type::NO_OP_CMD as u8);
+        assert_eq!(trb.slot_id(), 0);
+        assert_eq!(trb.endpoint_id(), 0);
     }
 
     #[test]
