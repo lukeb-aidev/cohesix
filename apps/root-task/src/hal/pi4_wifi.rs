@@ -820,7 +820,12 @@ fn post_download_ht_transition_reuses_armcr4_sdonly_fence(
     already_fenced: bool,
     reset_chipclk: bool,
 ) -> bool {
-    matches!(stage, "wait-ht-clock") && already_fenced && reset_chipclk
+    let _ = (stage, already_fenced, reset_chipclk);
+    // The ARMCR4 release fence mirrors brcmf_sdio_download_state() returning
+    // the chip to CLK_SDONLY. brcmf_sdio_firmware_callback() then performs a
+    // fresh CLK_SDONLY -> CLK_AVAIL transition before enabling Function 2, so
+    // the production HT gate must not reuse the earlier release fence.
+    false
 }
 
 #[inline]
@@ -998,10 +1003,18 @@ fn firmware_verify_readback_can_be_treated_as_unavailable(err: &HalError) -> boo
 }
 
 #[inline]
-const fn firmware_download_readback_verify_required(_prewrite_ht_ready: bool) -> bool {
-    // Linux brcmfmac only compiles the full RAM compare path under DEBUG.
-    // The Pi 4 production path writes firmware, writes NVRAM, then releases
-    // ARMCR4 without forcing a Function 1 RAM readback first.
+const fn firmware_download_readback_verify_required(prewrite_ht_ready: bool) -> bool {
+    // When pre-upload HT is absent, the post-release HT gate cannot distinguish
+    // a clock edge from a partial firmware/NVRAM image. Require the existing
+    // bounded readback profiles before ARMCR4 release on that ALP-only path.
+    !prewrite_ht_ready
+}
+
+#[inline]
+const fn firmware_upload_attempt_pre_nvram_readback_enabled(_readback_required: bool) -> bool {
+    // Cohesix proves the image, NVRAM, and tail as one staged payload before
+    // ARMCR4 release. That preserves the Linux download order while allowing the
+    // bounded retry profiles to classify firmware-readback transport failures.
     false
 }
 
@@ -6143,7 +6156,9 @@ const CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT: u8 =
     super::control_plane_startup_link_rescue_limit();
 const SDIO_MAX_BYTE_MODE: usize = 512;
 const SDIO_TRANSFER_TRACE_INCREMENT_CHUNKS: usize = 2;
-const CYW43_FIRMWARE_VERIFY_CHUNK: usize = SDIO_MAX_BYTE_MODE;
+// Linux brcmfmac verifies CYW43455 RAM download in 2048-byte SDIO reads on Pi 4.
+// Keep Cohesix's mandatory pre-release proof on that same block-mode shape.
+const CYW43_FIRMWARE_VERIFY_CHUNK: usize = 2 * 1024;
 const CYW43_FIRMWARE_PROOF_CHUNK: usize = 64;
 const CYW43_FIRMWARE_BOOT_READBACK_VERIFY_ENABLED: bool = false;
 const CYW43_HT_CLOCK_INITIAL_WAIT_LOOPS: usize = 2_048;
@@ -14252,15 +14267,32 @@ impl SdioHost {
     }
 
     fn backplane_read_into(&mut self, addr: u32, out: &mut [u8]) -> Result<(), HalError> {
+        self.backplane_read_into_with_chunk_limit(addr, out, CYW43_TRANSFER_CHUNK)
+    }
+
+    fn backplane_read_firmware_verify_into(
+        &mut self,
+        addr: u32,
+        out: &mut [u8],
+    ) -> Result<(), HalError> {
+        self.backplane_read_into_with_chunk_limit(addr, out, CYW43_FIRMWARE_VERIFY_CHUNK)
+    }
+
+    fn backplane_read_into_with_chunk_limit(
+        &mut self,
+        addr: u32,
+        out: &mut [u8],
+        chunk_limit: usize,
+    ) -> Result<(), HalError> {
+        if chunk_limit == 0 {
+            return Err(HalError::Unsupported("backplane-read-zero-chunk"));
+        }
         let mut offset = 0usize;
         while offset < out.len() {
             let window_offset = (addr as usize + offset) & BACKPLANE_ADDRESS_MASK as usize;
             let window_remaining =
                 (BACKPLANE_ADDRESS_MASK as usize + 1).saturating_sub(window_offset);
-            let chunk_len = cmp::min(
-                out.len() - offset,
-                cmp::min(CYW43_TRANSFER_CHUNK, window_remaining),
-            );
+            let chunk_len = cmp::min(out.len() - offset, cmp::min(chunk_limit, window_remaining));
             let chunk_addr = addr
                 .checked_add(
                     u32::try_from(offset)
@@ -16432,7 +16464,7 @@ impl SdioHost {
                     nvram_tail,
                     nvram_magic,
                     prefer_byte_mode,
-                    firmware_verify_required,
+                    firmware_upload_attempt_pre_nvram_readback_enabled(firmware_verify_required),
                 )
             }) {
                 Ok(()) => {
@@ -16474,7 +16506,7 @@ impl SdioHost {
                 nvram_offset,
                 nvram_tail,
                 nvram_magic,
-                true,
+                false,
             ) {
                 Ok(()) => {
                     self.firmware_download_verified = true;
@@ -17854,7 +17886,7 @@ impl SdioHost {
             self.verify_backplane_bytes("image", ram_base, firmware)?;
         } else {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware_verify part=image order=before-nvram policy=skip-readback reason=linux-nondebug-debug-only-readback"
+                "[pi4-wifi] firmware_verify part=image order=before-nvram policy=defer-readback reason=verify-after-complete-upload"
             ));
         }
         emit_breadcrumb(format_args!(
@@ -17927,7 +17959,7 @@ impl SdioHost {
                 nvram_tail,
                 nvram_magic,
                 profile.prefer_byte_mode,
-                true,
+                firmware_upload_attempt_pre_nvram_readback_enabled(true),
             )?;
             last_successful_upload_clock_hz = Some(effective_hz);
             match self.verify_firmware_payloads_after_nvram(
@@ -17937,7 +17969,7 @@ impl SdioHost {
                 nvram_offset,
                 nvram_tail,
                 nvram_magic,
-                true,
+                false,
             ) {
                 Ok(()) => {
                     *selected_bulk_clock_hz = effective_hz;
@@ -18114,7 +18146,7 @@ impl SdioHost {
                         .map_err(|_| HalError::Unsupported("cyw43-firmware-verify-range"))?,
                 )
                 .ok_or(HalError::Unsupported("cyw43-firmware-verify-range"))?;
-            match self.backplane_read_into(chunk_addr, &mut observed[..chunk_len]) {
+            match self.backplane_read_firmware_verify_into(chunk_addr, &mut observed[..chunk_len]) {
                 Ok(()) => {}
                 Err(err) => {
                     emit_breadcrumb(format_args!(
@@ -24947,10 +24979,20 @@ mod tests {
 
     #[test]
     fn firmware_verify_retry_profiles_use_conservative_sdio_shapes() {
-        assert_eq!(CYW43_FIRMWARE_VERIFY_CHUNK, SDIO_MAX_BYTE_MODE);
+        assert_eq!(CYW43_FIRMWARE_VERIFY_CHUNK, 2 * 1024);
+        assert!(CYW43_FIRMWARE_VERIFY_CHUNK > SDIO_MAX_BYTE_MODE);
+        let verify_plan =
+            sdio_transfer_plan(SdioFunction::Function1, CYW43_FIRMWARE_VERIFY_CHUNK, false)
+                .expect("firmware verify plan is valid");
+        assert!(verify_plan.block_mode);
+        assert_eq!(
+            verify_plan.block_count,
+            (CYW43_FIRMWARE_VERIFY_CHUNK / usize::from(SDIO_FUNCTION_ENABLE_F1.block_size)) as u16
+        );
         assert!(!CYW43_FIRMWARE_BOOT_READBACK_VERIFY_ENABLED);
         assert!(!firmware_download_readback_verify_required(true));
-        assert!(!firmware_download_readback_verify_required(false));
+        assert!(firmware_download_readback_verify_required(false));
+        assert!(!firmware_upload_attempt_pre_nvram_readback_enabled(true));
         assert!(!reset_vector_readback_verify_required(false));
         assert!(reset_vector_readback_verify_required(true));
         assert_eq!(CYW43_FIRMWARE_VERIFY_RETRY_PROFILES.len(), 2);
@@ -30244,7 +30286,7 @@ mod tests {
     }
 
     #[test]
-    fn post_release_ht_transition_consumes_armcr4_sdonly_fence_before_ht_request() {
+    fn post_release_ht_transition_replays_firmware_callback_sdonly_edge_before_ht_request() {
         let observed_failure_shape = SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL;
 
         assert_eq!(observed_failure_shape, 0x50);
@@ -30253,7 +30295,7 @@ mod tests {
         )));
         assert!(armcr4_release_requires_linux_sdonly_fence());
         assert!(required_ht_clock_linux_active_transition_resets_chipclk());
-        assert!(post_download_ht_transition_reuses_armcr4_sdonly_fence(
+        assert!(!post_download_ht_transition_reuses_armcr4_sdonly_fence(
             "wait-ht-clock",
             true,
             true
@@ -30415,7 +30457,7 @@ mod tests {
 
     #[test]
     fn firmware_readback_status_is_explicit_and_bounded() {
-        assert!(!firmware_download_readback_verify_required(false));
+        assert!(firmware_download_readback_verify_required(false));
         assert_eq!(
             firmware_download_readback_status(false, false),
             "linux-debug-readback-skipped"

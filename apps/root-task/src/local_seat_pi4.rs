@@ -7103,9 +7103,16 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
     Some(selected)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Vl805Bcm2711ProofMode {
+    Initial,
+    PostMailboxReset,
+}
+
 fn prepare_vl805_pci_bcm2711(
     hal: &mut KernelHal<'_>,
     _prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
+    mode: Vl805Bcm2711ProofMode,
 ) -> Option<usize> {
     if !VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
         return None;
@@ -7117,7 +7124,13 @@ fn prepare_vl805_pci_bcm2711(
         return None;
     }
 
-    let proof = match hal.prove_pi4_vl805_pcie_ownership() {
+    let proof = match mode {
+        Vl805Bcm2711ProofMode::Initial => hal.prove_pi4_vl805_pcie_ownership(),
+        Vl805Bcm2711ProofMode::PostMailboxReset => {
+            hal.prove_pi4_vl805_pcie_ownership_after_mailbox_reset()
+        }
+    };
+    let proof = match proof {
         Ok(proof) => proof,
         Err(err) => {
             let mut line = heapless::String::<224>::new();
@@ -7206,7 +7219,9 @@ fn prepare_vl805_pci_bcm2711(
 fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
     let mut prefix_maps = Vec::new();
     if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
-        if let Some(mmio) = prepare_vl805_pci_bcm2711(hal, &mut prefix_maps) {
+        if let Some(mmio) =
+            prepare_vl805_pci_bcm2711(hal, &mut prefix_maps, Vl805Bcm2711ProofMode::Initial)
+        {
             return Some(mmio);
         }
     }
@@ -7214,7 +7229,9 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
         return Some(mmio);
     }
     if !VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
-        if let Some(mmio) = prepare_vl805_pci_bcm2711(hal, &mut prefix_maps) {
+        if let Some(mmio) =
+            prepare_vl805_pci_bcm2711(hal, &mut prefix_maps, Vl805Bcm2711ProofMode::Initial)
+        {
             return Some(mmio);
         }
     }
@@ -7430,12 +7447,14 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
 const fn vl805_post_mailbox_pcie_retry_needed(
     mmio: usize,
     fresh_runtime_ready: bool,
-    link_and_rc_ready_proven: bool,
+    _link_and_rc_ready_proven: bool,
 ) -> bool {
-    VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED
-        && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
-        && !fresh_runtime_ready
-        && link_and_rc_ready_proven
+    pi4_pcie::vl805_post_mailbox_ext_cfg_retry_needed(
+        mmio,
+        RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+        fresh_runtime_ready,
+        VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED,
+    )
 }
 
 fn retry_vl805_pci_bcm2711_after_mailbox_reset(
@@ -7445,22 +7464,23 @@ fn retry_vl805_pci_bcm2711_after_mailbox_reset(
 ) -> bool {
     let link_and_rc_ready_proven = pi4_pcie::pi4_pcie_link_and_rc_ready_proven();
     if !vl805_post_mailbox_pcie_retry_needed(mmio, fresh_runtime_ready, link_and_rc_ready_proven) {
-        if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED
-            && mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
-            && !fresh_runtime_ready
-            && !link_and_rc_ready_proven
-        {
-            boot_log::force_uart_line(
-                "[local-seat] vl805 bcm2711-pcie ext-cfg retry skipped stage=post-mailbox-reset reason=link-or-rc-not-proven action=gate-platform-init",
-            );
-        }
         return fresh_runtime_ready;
     }
-    boot_log::force_uart_line(
-        "[local-seat] vl805 bcm2711-pcie ext-cfg retry stage=post-mailbox-reset action=prove-live-ownership",
+    let mut action_line = heapless::String::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut action_line,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie ext-cfg retry stage=post-mailbox-reset action=prove-live-ownership prior_root_proof={}",
+            link_and_rc_ready_proven as u8
+        ),
     );
+    boot_log::force_uart_line(action_line.as_str());
     let mut retry_maps = Vec::new();
-    let proven = prepare_vl805_pci_bcm2711(hal, &mut retry_maps) == Some(mmio);
+    let proven = prepare_vl805_pci_bcm2711(
+        hal,
+        &mut retry_maps,
+        Vl805Bcm2711ProofMode::PostMailboxReset,
+    ) == Some(mmio);
     let ready = xhci_fresh_runtime_ownership_ready(vl805_cfg_bus_master_ready());
     let mut line = heapless::String::<240>::new();
     let _ = core::fmt::Write::write_fmt(
@@ -15612,13 +15632,13 @@ mod tests {
     }
 
     #[test]
-    fn post_mailbox_pcie_retry_requires_prior_root_link_proof() {
+    fn post_mailbox_pcie_retry_uses_hal_proof_after_mailbox_ack() {
         assert!(super::vl805_post_mailbox_pcie_retry_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             false,
             true,
         ));
-        assert!(!super::vl805_post_mailbox_pcie_retry_needed(
+        assert!(super::vl805_post_mailbox_pcie_retry_needed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             false,
             false,
