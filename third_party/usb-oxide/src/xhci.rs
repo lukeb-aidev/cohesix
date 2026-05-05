@@ -129,7 +129,8 @@ const fn polling_iman_value() -> u32 {
 
 #[inline(always)]
 const fn polling_iman_ack_value() -> u32 {
-    // IMAN.IP is write-one-to-clear; leave IMAN.IE clear for poll-only runtime.
+    // IMAN.IP is write-one-to-clear; event generation is enabled separately
+    // on the narrow platform-reset-complete polling path.
     reg::IMAN_IP
 }
 
@@ -205,6 +206,41 @@ const fn compose_run_usbcmd(current_usbcmd: u32, merge_existing_bits: bool) -> u
         masked_usbcmd(current_usbcmd) | reg::USBCMD_RUN
     } else {
         reg::USBCMD_RUN
+    }
+}
+
+#[inline(always)]
+const fn polling_event_generation_enabled(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
+        && runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
+        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn polling_event_generation_run_usbcmd(
+    run_usbcmd: u32,
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> u32 {
+    if polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot) {
+        run_usbcmd | reg::USBCMD_INTE
+    } else {
+        run_usbcmd
+    }
+}
+
+#[inline(always)]
+const fn polling_event_generation_iman_value(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> u32 {
+    if polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot) {
+        reg::IMAN_IE
+    } else {
+        polling_iman_value()
     }
 }
 
@@ -535,11 +571,15 @@ const fn skip_config_write_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Stop-state lanes keep CONFIG untouched. On Pi 4, U-Boot's stopped xHCI
-    // state has already programmed MaxSlotsEn, and the seL4 trace now proves
-    // the first post-mailbox platform-reset CONFIG write can escape as IRQ27
-    // before root-task can continue. Preserve CONFIG for the platform-reset
-    // lane as well; DCBAAP/rings remain Cohesix-owned.
+    // After the Pi 4 mailbox reset, runtime owns fresh DCBAA/rings and must
+    // replay CONFIG.MaxSlotsEn before RUN. The captured Linux controller state
+    // has CONFIG=0x20; a skipped write left Cohesix with no command completions.
+    if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot) {
+        return false;
+    }
+    // Other stop-state lanes keep CONFIG untouched. On those paths, U-Boot's
+    // stopped xHCI state has already programmed MaxSlotsEn, while runtime does
+    // not have enough ownership to republish fresh rings.
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -3619,6 +3659,20 @@ impl<H: Dma> XhciCtrl<H> {
             );
             reg::USBCMD_RUN
         };
+        let event_generation_run_usbcmd = polling_event_generation_run_usbcmd(
+            run_usbcmd,
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        );
+        if event_generation_run_usbcmd != run_usbcmd {
+            emit_xhci_diag(
+                0x0350,
+                run_usbcmd as u64,
+                event_generation_run_usbcmd as u64,
+                runtime_seed_snapshot_flag_bits(trusted_runtime_seed_snapshot),
+            );
+        }
+        let run_usbcmd = event_generation_run_usbcmd;
         if preserve_firmware_state {
             emit_xhci_diag(0x0270, 0, 1, 0);
         } else if !skip_post_reset_verification_readbacks {
@@ -4215,12 +4269,31 @@ impl<H: Dma> XhciCtrl<H> {
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         let erdp = compose_polling_erdp_ack(event_ring.dequeue_ptr(&*self.host));
         let iman_ack = polling_iman_ack_value();
+        let iman_event_generation =
+            polling_event_generation_iman_value(self.firmware_handoff, self.runtime_seed_snapshot);
         emit_xhci_diag(0x031b, (int_base + reg::ERDP) as u64, erdp, 0);
-        Self::write_reg_at::<u64>(self.mmio, int_base + reg::ERDP, erdp);
+        let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
+        Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
+        Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
         emit_xhci_diag(0x031c, (int_base + reg::ERDP) as u64, erdp, 0);
         emit_xhci_diag(0x031d, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
         Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, iman_ack);
         emit_xhci_diag(0x031e, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
+        if iman_event_generation != polling_iman_value() {
+            emit_xhci_diag(
+                0x0351,
+                (int_base + reg::IMAN) as u64,
+                iman_event_generation as u64,
+                runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
+            );
+            Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, iman_event_generation);
+            emit_xhci_diag(
+                0x0352,
+                (int_base + reg::IMAN) as u64,
+                iman_event_generation as u64,
+                runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
+            );
+        }
     }
 
     /// Drain inherited pending interrupter state on the polling runtime path.
@@ -4917,6 +4990,7 @@ mod tests {
         disable_legacy_smi_control_bits, halt_revalidation_needed,
         initial_live_operational_read_hazard, masked_usbcmd, parse_controller_params,
         no_op_command_trb_for_probe, platform_reset_dcbaap_publish_blocked_with_snapshot,
+        polling_event_generation_iman_value, polling_event_generation_run_usbcmd,
         polling_iman_ack_value, polling_iman_value, port_ready_for_enumeration,
         post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear,
@@ -6347,6 +6421,48 @@ mod tests {
     }
 
     #[test]
+    fn platform_reset_stop_seed_enables_polled_event_generation() {
+        let stop_seed = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+
+        assert_eq!(
+            polling_event_generation_run_usbcmd(
+                reg::USBCMD_RUN,
+                XhciFirmwareHandoff::PlatformResetComplete,
+                stop_seed,
+            ),
+            reg::USBCMD_RUN | reg::USBCMD_INTE
+        );
+        assert_eq!(
+            polling_event_generation_iman_value(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                stop_seed,
+            ),
+            reg::IMAN_IE
+        );
+        assert_eq!(
+            polling_event_generation_run_usbcmd(
+                reg::USBCMD_RUN,
+                XhciFirmwareHandoff::None,
+                None,
+            ),
+            reg::USBCMD_RUN
+        );
+        assert_eq!(
+            polling_event_generation_iman_value(XhciFirmwareHandoff::None, None),
+            polling_iman_value()
+        );
+    }
+
+    #[test]
     fn halt_revalidation_depends_on_live_halt_bit() {
         assert!(halt_revalidation_needed(0));
         assert!(halt_revalidation_needed(reg::USBSTS_CNR));
@@ -6534,7 +6650,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_complete_skips_config_before_ring_publish() {
+    fn platform_reset_complete_replays_config_before_fresh_ring_publish() {
         assert!(skip_reset_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
@@ -6545,7 +6661,7 @@ mod tests {
         assert!(skip_config_write_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
-        assert!(skip_config_write_during_init_with_snapshot(
+        assert!(!skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -6631,7 +6747,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_complete_with_stop_seed_preserves_config_before_fresh_ring_publish() {
+    fn platform_reset_complete_with_stop_seed_replays_config_before_fresh_ring_publish() {
         let stop_state_only_snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -6647,7 +6763,7 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             stop_state_only_snapshot,
         ));
-        assert!(skip_config_write_during_init_with_snapshot(
+        assert!(!skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             stop_state_only_snapshot,
         ));
@@ -7799,7 +7915,7 @@ mod tests {
             XhciFirmwareHandoff::None,
             stop_state_only_snapshot,
         ));
-        assert!(skip_config_write_during_init_with_snapshot(
+        assert!(!skip_config_write_during_init_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             stop_state_only_snapshot,
         ));

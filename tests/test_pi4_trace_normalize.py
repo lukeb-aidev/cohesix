@@ -96,6 +96,48 @@ def test_summary_tracks_latest_and_blockers() -> None:
     assert summary["domains"] == {"usb": 2, "wifi": 1}
     assert summary["latest"]["wifi"]["stage"] == "cyw43-load-firmware-fail"
     assert len(summary["blockers"]) == 2
+    assert summary["gates"]["WIFI_BLOCKER"] == "cyw43-device-on-timeout-before-ht"
+
+
+def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
+            "usb: contract current=controller-ready expected=command-ring-recovery",
+            "usb: diag_contract stage=0x030b diag_fresh=yes "
+            "tag=cmd-poll-only-timeout exact=cmd-poll-only-timeout",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
+            "wifi: boot_failure source=live stage=cyw43-load-firmware-fail "
+            "exact=cyw43-ht-clock-timeout-before-function2",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record() == {
+        "USB_GATE": 3,
+        "USB_BLOCKER": "cmd-poll-only-timeout",
+        "WIFI_GATE": 4,
+        "WIFI_BLOCKER": "ht-clock-timeout",
+    }
+
+
+def test_gate_expectation_reports_mismatch(capsys) -> None:
+    gates = normalizer.GateSummary(
+        usb_gate=3,
+        usb_blocker="cmd-poll-only-timeout",
+        wifi_gate=4,
+        wifi_blocker="ht-clock-timeout",
+    )
+
+    ok = normalizer.check_gate_expectations(
+        gates, {"USB_GATE": "4"}, sys.stderr
+    )
+
+    captured = capsys.readouterr()
+    assert not ok
+    assert "USB_GATE expected 4 got 3" in captured.err
 
 
 def test_jsonl_output_is_stable() -> None:

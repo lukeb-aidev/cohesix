@@ -3817,6 +3817,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0320..=0x0330
             | 0x0332..=0x0333
             | 0x0340..=0x034c
+            | 0x0350..=0x0352
     )
 }
 
@@ -3833,6 +3834,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x0300..=0x030e
             | 0x0315..=0x0319
             | 0x0320..=0x0330
+            | 0x0350..=0x0352
     )
 }
 
@@ -3939,6 +3941,8 @@ const fn xhci_diag_stage_value_labels(
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
         0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
         0x0332 | 0x0333 => Some(("iman", "masked_iman", "seed_flags")),
+        0x0350 => Some(("run_usbcmd", "event_run_usbcmd", "seed_flags")),
+        0x0351 | 0x0352 => Some(("iman_off", "iman", "seed_flags")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4171,6 +4175,9 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0331 => Some("drop-skip-uninitialized"),
         0x0332 => Some("pre-dcbaap-iman-quiesce"),
         0x0333 => Some("pre-dcbaap-iman-quiesce-done"),
+        0x0350 => Some("usbcmd-run-event-generation"),
+        0x0351 => Some("polling-iman-event-generation-write"),
+        0x0352 => Some("polling-iman-event-generation-write-done"),
         0x0340 => Some("dcbaap-posted-high-clear"),
         0x0341 => Some("dcbaap-posted-high-clear-barrier-done"),
         0x0342 => Some("dcbaap-posted-high-clear-pre-store"),
@@ -9968,6 +9975,16 @@ impl UsbKeyboard {
                             let drained_event_candidate_mask =
                                 xhci_drain_root_port_change_events(ctrl.as_ref(), max_ports);
                             event_candidate_mask |= drained_event_candidate_mask;
+                            {
+                                let mut line = heapless::String::<160>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] xhci root-port command-probe mask-flow drained=0x{drained_event_candidate_mask:04x} probe=0x{event_candidate_mask:04x}"
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                            }
                             command_probe = xhci_probe_command_ring_after_event_drain(
                                 ctrl.as_ref(),
                                 event_candidate_mask,
@@ -16908,6 +16925,18 @@ mod tests {
             Some("post-start-usbsts-clear-skip-preserve")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x0350),
+            Some("usbcmd-run-event-generation")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0351),
+            Some("polling-iman-event-generation-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0352),
+            Some("polling-iman-event-generation-write-done")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x0340),
             Some("dcbaap-posted-high-clear")
         );
@@ -17296,6 +17325,14 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0320),
             Some(("usbcmd", "masked_usbcmd", "masked_bits"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0350),
+            Some(("run_usbcmd", "event_run_usbcmd", "seed_flags"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0352),
+            Some(("iman_off", "iman", "seed_flags"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x02e5),

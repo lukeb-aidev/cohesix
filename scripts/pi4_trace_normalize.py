@@ -59,6 +59,32 @@ class TraceEvent:
         return record
 
 
+@dataclass(frozen=True)
+class GateSummary:
+    """Current USB/WiFi hardware bring-up gate state."""
+
+    usb_gate: int
+    usb_blocker: str
+    wifi_gate: int
+    wifi_blocker: str
+
+    def to_record(self) -> dict[str, object]:
+        """Return a JSON-serializable gate summary."""
+
+        return {
+            "USB_GATE": self.usb_gate,
+            "USB_BLOCKER": self.usb_blocker,
+            "WIFI_GATE": self.wifi_gate,
+            "WIFI_BLOCKER": self.wifi_blocker,
+        }
+
+    def to_env_lines(self) -> list[str]:
+        """Return stable KEY=VALUE lines for shell-friendly assertions."""
+
+        record = self.to_record()
+        return [f"{key}={value}" for key, value in record.items()]
+
+
 def sanitize_line(line: str) -> str:
     """Strip terminal control noise while preserving trace payload text."""
 
@@ -208,7 +234,169 @@ def summarize_events(events: Iterable[TraceEvent]) -> dict[str, object]:
         "stages": dict(sorted(stage_counts.items())),
         "latest": latest,
         "blockers": blockers[-16:],
+        "gates": summarize_gates(event_list).to_record(),
     }
+
+
+def normalize_usb_blocker(value: str) -> str:
+    """Normalize USB blocker strings into stable gate labels."""
+
+    lower = value.lower()
+    if "cmd-poll-only-timeout" in lower:
+        return "cmd-poll-only-timeout"
+    if "command-ring" in lower:
+        return "command-ring"
+    if "pcie-config-replay" in lower:
+        return "pcie-config-replay"
+    if "root-port-sample-deferred" in lower:
+        return "root-port-sample-deferred"
+    if "no-controller-edge-yet" in lower:
+        return "no-controller-edge-yet"
+    return value
+
+
+def normalize_wifi_blocker(value: str) -> str:
+    """Normalize WiFi blocker strings into stable gate labels."""
+
+    lower = value.lower()
+    if "ht-clock" in lower or "ht-avail" in lower:
+        return "ht-clock-timeout"
+    if "firmware-verify-readback" in lower:
+        return "firmware-verify-readback"
+    if "function2-disabled" in lower:
+        return "function2-disabled"
+    if "firmware-verify-mismatch" in lower:
+        return "firmware-verify-mismatch"
+    if "firmware" in lower:
+        return "firmware-load"
+    return value
+
+
+def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
+    """Summarize the USB xHCI proof gate from normalized events."""
+
+    usb_events = [event for event in events if event.domain == "usb"]
+    if not usb_events:
+        return 0, "missing"
+
+    gate = 1
+    blocker = "unknown"
+    for event in usb_events:
+        raw = event.raw.lower()
+        fields = event.fields
+        if "cfg_window=mapped" in raw or "selected cfg=hal-ext" in raw:
+            gate = max(gate, 2)
+        if "controller-ready" in raw or "controller-init-complete" in raw:
+            gate = max(gate, 3)
+        if (
+            "cmd-poll-only-timeout" in raw
+            or fields.get("tag") == "cmd-poll-only-timeout"
+            or fields.get("exact") == "cmd-poll-only-timeout"
+            or fields.get("verdict") == "command-ring-edge"
+        ):
+            gate = max(gate, 3)
+            blocker = "cmd-poll-only-timeout"
+        elif fields.get("command_probe", "").endswith("-ok") or fields.get(
+            "verdict", ""
+        ).startswith("command-ring-ready"):
+            gate = max(gate, 4)
+            blocker = "none"
+        else:
+            for key in ("blocker", "cause", "exact", "outcome", "verdict", "focus"):
+                value = fields.get(key)
+                if value and value not in {"none", "n/a"}:
+                    blocker = normalize_usb_blocker(value)
+
+    return gate, blocker
+
+
+def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
+    """Summarize the WiFi CYW43455 HT-clock proof gate from events."""
+
+    wifi_events = [event for event in events if event.domain == "wifi"]
+    if not wifi_events:
+        return 0, "missing"
+
+    gate = 1
+    blocker = "unknown"
+    for event in wifi_events:
+        raw = event.raw.lower()
+        fields = event.fields
+        if "f1=enabled" in raw or "ioex=0x02" in raw or "iordy=0x02" in raw:
+            gate = max(gate, 2)
+        if (
+            "firmware_release" in raw
+            or "armcr4_release=1" in raw
+            or "rstvec=" in raw
+        ):
+            gate = max(gate, 4)
+        if (
+            "ht-clock" in raw
+            or "ht-avail" in raw
+            or fields.get("focus") == "wait-ht-clock"
+            or fields.get("current") == "wait-ht-clock"
+        ):
+            gate = max(gate, 4)
+            blocker = "ht-clock-timeout"
+        elif "firmware-verify-readback" in raw:
+            gate = max(gate, 3)
+            blocker = "firmware-verify-readback"
+        elif "ht_avail=yes" in raw or "ht_avail=ready" in raw:
+            gate = max(gate, 5)
+            blocker = "none"
+        else:
+            for key in ("blocker", "cause", "exact", "exact_error", "outcome"):
+                value = fields.get(key)
+                if value and value not in {"none", "n/a"}:
+                    blocker = normalize_wifi_blocker(value)
+
+    if blocker == "function2-disabled" and gate >= 4:
+        blocker = "ht-clock-timeout"
+    return gate, blocker
+
+
+def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
+    """Build the current narrow USB/WiFi hardware proof gate summary."""
+
+    event_list = list(events)
+    usb_gate, usb_blocker = summarize_usb_gate(event_list)
+    wifi_gate, wifi_blocker = summarize_wifi_gate(event_list)
+    return GateSummary(
+        usb_gate=usb_gate,
+        usb_blocker=usb_blocker,
+        wifi_gate=wifi_gate,
+        wifi_blocker=wifi_blocker,
+    )
+
+
+def parse_expectations(expectations: Iterable[str]) -> dict[str, str]:
+    """Parse KEY=VALUE gate expectations from CLI arguments."""
+
+    parsed: dict[str, str] = {}
+    for expectation in expectations:
+        key, separator, value = expectation.partition("=")
+        if not separator or not key or not value:
+            raise SystemExit(f"invalid expectation, use KEY=VALUE: {expectation}")
+        parsed[key] = value
+    return parsed
+
+
+def check_gate_expectations(
+    summary: GateSummary, expectations: dict[str, str], stderr: TextIO
+) -> bool:
+    """Return true when all expected gate values match."""
+
+    actual = {key: str(value) for key, value in summary.to_record().items()}
+    ok = True
+    for key, expected_value in expectations.items():
+        actual_value = actual.get(key)
+        if actual_value != expected_value:
+            print(
+                f"gate assertion failed: {key} expected {expected_value} got {actual_value}",
+                file=stderr,
+            )
+            ok = False
+    return ok
 
 
 def read_input(path: str) -> list[str]:
@@ -248,6 +436,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="emit a compact JSON summary instead of JSON Lines",
     )
+    parser.add_argument(
+        "--gate-summary",
+        action="store_true",
+        help="emit stable USB/WiFi gate KEY=VALUE lines instead of JSON Lines",
+    )
+    parser.add_argument(
+        "--expect",
+        action="append",
+        default=[],
+        help="assert a gate KEY=VALUE value; may be repeated with --gate-summary",
+    )
     return parser
 
 
@@ -257,9 +456,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     events = filter_events(parse_events(read_input(args.log)), set(args.domain))
-    if args.summary:
+    if args.gate_summary:
+        gate_summary = summarize_gates(events)
+        print("\n".join(gate_summary.to_env_lines()))
+        if not check_gate_expectations(
+            gate_summary, parse_expectations(args.expect), sys.stderr
+        ):
+            return 2
+    elif args.summary:
         print(json.dumps(summarize_events(events), indent=2, sort_keys=True))
     else:
+        if args.expect:
+            raise SystemExit("--expect requires --gate-summary")
         write_jsonl(events, sys.stdout)
     return 0
 
