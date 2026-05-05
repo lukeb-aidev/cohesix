@@ -116,6 +116,12 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         [
             "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
             "usb: contract current=controller-ready expected=command-ring-recovery",
+            "[local-seat] xhci.diag stage=0x0368 tag=cmd-gate-post-doorbell-plan-0 "
+            "usbcmd_usbsts=0x0000000500000000 config_dnctrl=0x0000002000000002 "
+            "expected_ptr=0x0000000404024000",
+            "[local-seat] xhci.diag stage=0x036c tag=cmd-gate-timeout-plan-0 "
+            "usbcmd_usbsts=0x0000000500000000 config_dnctrl=0x0000002000000002 "
+            "expected_ptr=0x0000000404024000",
             "usb: diag_contract stage=0x030b diag_fresh=yes "
             "tag=cmd-poll-only-timeout exact=cmd-poll-only-timeout",
             "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
@@ -133,6 +139,52 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_GATE": 4,
         "WIFI_BLOCKER": "ht-clock-timeout",
     }
+
+
+def test_gate_summary_tracks_usb_command_doorbell_vtimer_halt() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
+            "usb: contract current=controller-ready expected=command-ring-recovery",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
+            "doorbell=0x000000000100 target=0x0",
+            "Kernel entry via Interrupt, irq 27",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-doorbell-vtimer-interrupt"
+
+
+def test_gate_summary_tracks_latest_usb_pre_doorbell_vtimer_halt() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
+            "doorbell=0x000000000100 target=0x0",
+            "Kernel entry via Interrupt, irq 27",
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x0353 tag=cmd-event-ring-before-0 "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x0356 tag=cmd-event-ring-before-3 "
+            "param=0x0000000000000000",
+            "Kernel entry via Interrupt, irq 27",
+            "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-pre-doorbell-vtimer-interrupt"
 
 
 def test_gate_summary_prefers_latest_wifi_nettest_cause() -> None:

@@ -31,6 +31,7 @@ const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
+const COMMAND_RING_DEBUG_TRBS: usize = 4;
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
 const PORT_ENABLE_WAIT_SPINS: usize = 10_000_000;
 const PORT_SETTLE_SPINS: usize = 100_000;
@@ -130,8 +131,8 @@ const fn polling_iman_value() -> u32 {
 
 #[inline(always)]
 const fn polling_iman_ack_value() -> u32 {
-    // IMAN.IP is write-one-to-clear; event generation is enabled separately
-    // on the narrow platform-reset-complete polling path.
+    // IMAN.IP is write-one-to-clear. Keep IMAN.IE clear so command proofs stay
+    // poll-only; event production is observed from the event ring, not IRQs.
     reg::IMAN_IP
 }
 
@@ -226,11 +227,8 @@ const fn polling_event_generation_run_usbcmd(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    if polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot) {
-        run_usbcmd | reg::USBCMD_INTE
-    } else {
-        run_usbcmd
-    }
+    let _ = polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot);
+    run_usbcmd & !reg::USBCMD_INTE
 }
 
 #[inline(always)]
@@ -238,10 +236,19 @@ const fn polling_event_generation_iman_value(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
+    let _ = polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot);
+    polling_iman_value()
+}
+
+#[inline(always)]
+const fn polling_command_proof_dnctrl_value(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> u32 {
     if polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot) {
-        reg::IMAN_IE
+        0x2
     } else {
-        polling_iman_value()
+        0
     }
 }
 
@@ -3136,6 +3143,7 @@ impl<H: Dma> XhciCtrl<H> {
         let event_ring = self.event_ring.lock();
         let (event_ring_phys, erst_phys) = event_ring.share_for_device(&*self.host)?;
         let event_ring_dequeue = event_ring.dequeue_ptr(&*self.host);
+        let erst_entries = event_ring.erst_entries();
         let staged_current_erst_size = trusted_runtime_seed_snapshot
             .and_then(|snapshot| snapshot.erstsz0)
             .unwrap_or(0);
@@ -3259,7 +3267,7 @@ impl<H: Dma> XhciCtrl<H> {
             } else {
                 current_erst_size
             },
-            1,
+            erst_entries,
         );
         // Preserve-state is already trusting the bootloader's halted seed.
         // Use the desired size as the publish seed so this lane stays no-touch
@@ -3584,11 +3592,13 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Disable device notifications before the first command can observe
         // any stale firmware-originated notification state.
+        let dnctrl_value =
+            polling_command_proof_dnctrl_value(self.firmware_handoff, trusted_runtime_seed_snapshot);
         if skip_dnctrl_write {
             emit_xhci_diag(0x0314, reg::DNCTRL as u64, 0, 1);
         } else if !defer_dnctrl_write_until_after_run && !skip_fresh_runtime_ownership_publish {
-            emit_xhci_diag(0x0256, reg::DNCTRL as u64, 0, 0);
-            self.write_op(reg::DNCTRL, 0u32);
+            emit_xhci_diag(0x0256, reg::DNCTRL as u64, dnctrl_value as u64, 0);
+            self.write_op(reg::DNCTRL, dnctrl_value);
         }
 
         // The trusted snapshot paths follow U-Boot's polling order: publish
@@ -4006,9 +4016,9 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x02d7, reg::CRCR as u64, crcr, current_crcr);
         }
         if defer_dnctrl_write_until_after_run && !skip_fresh_runtime_ownership_publish {
-            emit_xhci_diag(0x02d8, reg::DNCTRL as u64, 0, 1);
-            self.write_op(reg::DNCTRL, 0u32);
-            emit_xhci_diag(0x02d9, reg::DNCTRL as u64, 0, 1);
+            emit_xhci_diag(0x02d8, reg::DNCTRL as u64, dnctrl_value as u64, 1);
+            self.write_op(reg::DNCTRL, dnctrl_value);
+            emit_xhci_diag(0x02d9, reg::DNCTRL as u64, dnctrl_value as u64, 1);
         }
 
         Ok(())
@@ -4523,6 +4533,77 @@ impl<H: Dma> XhciCtrl<H> {
         }
     }
 
+    fn emit_command_ring_debug_snapshot(&self, base_stage: u16) {
+        let cmd_ring = self.cmd_ring.lock();
+        let (enqueue, cycle) = cmd_ring.debug_state();
+        for index in 0..COMMAND_RING_DEBUG_TRBS {
+            let trb = cmd_ring.debug_trb_at(index).unwrap_or_default();
+            let state = ((index as u64) << 32) | ((enqueue as u64) << 1) | u64::from(cycle);
+            emit_xhci_diag(
+                base_stage + index as u16,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                state,
+            );
+        }
+    }
+
+    fn emit_command_gate_plan_snapshot(
+        &self,
+        base_stage: u16,
+        expected_cmd_trb: Option<u64>,
+        phase: u64,
+    ) {
+        let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        let db = reg::doorbell(self.db_offset, 0);
+        let expected_ptr = expected_cmd_trb.unwrap_or(0) & !0x0f;
+        let expected_cmd_ring = expected_ptr & !((self.host.page_size() as u64).saturating_sub(1));
+        let expected_dcbaap = self.dcbaa.phys(&*self.host);
+        let expected_usbcmd = polling_event_generation_run_usbcmd(
+            reg::USBCMD_RUN,
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+        );
+        let expected_dnctrl =
+            polling_command_proof_dnctrl_value(self.firmware_handoff, self.runtime_seed_snapshot);
+        let (expected_erstba, expected_erstsz, expected_erdp) = {
+            let event_ring = self.event_ring.lock();
+            (
+                event_ring.erst_phys(&*self.host),
+                event_ring.erst_entries(),
+                compose_polling_erdp_ack(event_ring.dequeue_ptr(&*self.host)),
+            )
+        };
+
+        emit_xhci_diag(
+            base_stage,
+            (expected_usbcmd as u64) << 32,
+            ((self.max_slots as u64) << 32) | expected_dnctrl as u64,
+            expected_ptr,
+        );
+
+        emit_xhci_diag(
+            base_stage + 1,
+            expected_cmd_ring | 1,
+            expected_dcbaap,
+            ((self.db_offset as u64) << 32) | db as u64,
+        );
+
+        emit_xhci_diag(
+            base_stage + 2,
+            (polling_iman_value() as u64) << 32,
+            expected_erstsz as u64,
+            phase,
+        );
+
+        emit_xhci_diag(
+            base_stage + 3,
+            expected_erstba,
+            ((int_base as u64) << 32) | reg::ERDP as u64,
+            expected_erdp,
+        );
+    }
+
     fn wait_command_poll_only(&self, expected_cmd_trb: Option<u64>) -> Result<Trb> {
         let mut waited = 0usize;
         let mut other_event_logs = 0usize;
@@ -4585,7 +4666,9 @@ impl<H: Dma> XhciCtrl<H> {
 
             waited = waited.saturating_add(1);
             if waited >= COMMAND_WAIT_SPINS {
+                self.emit_command_ring_debug_snapshot(0x0364);
                 self.emit_command_event_ring_debug_snapshot(0x0357);
+                self.emit_command_gate_plan_snapshot(0x036c, expected_cmd_trb, 2);
                 emit_xhci_diag(
                     0x030b,
                     waited as u64,
@@ -4688,8 +4771,11 @@ impl<H: Dma> XhciCtrl<H> {
             ((cycle_before as u64) << 1) | (cycle_after as u64),
         );
         drop(cmd_ring);
+        self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
+        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0);
         self.ring_cmd_doorbell();
+        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1);
         self.wait_command_poll_only(Some(cmd_addr))
     }
 
@@ -5016,9 +5102,9 @@ mod tests {
         disable_legacy_smi_control_bits, halt_revalidation_needed,
         initial_live_operational_read_hazard, masked_usbcmd, parse_controller_params,
         no_op_command_trb_for_probe, platform_reset_dcbaap_publish_blocked_with_snapshot,
-        polling_event_generation_iman_value, polling_event_generation_run_usbcmd,
-        polling_iman_ack_value, polling_iman_value, port_ready_for_enumeration,
-        post_start_polling_irq_quiesce_pending_bits,
+        polling_command_proof_dnctrl_value, polling_event_generation_iman_value,
+        polling_event_generation_run_usbcmd, polling_iman_ack_value, polling_iman_value,
+        port_ready_for_enumeration, post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
         pre_halt_source_quiesce_before_live_stop_revalidation, preserve_firmware_handoff_config,
@@ -6447,7 +6533,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_stop_seed_enables_polled_event_generation() {
+    fn platform_reset_stop_seed_keeps_poll_only_interrupts_disabled() {
         let stop_seed = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -6465,14 +6551,36 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            reg::USBCMD_RUN | reg::USBCMD_INTE
+            reg::USBCMD_RUN
         );
         assert_eq!(
             polling_event_generation_iman_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            reg::IMAN_IE
+            polling_iman_value()
+        );
+        assert_eq!(
+            polling_event_generation_run_usbcmd(
+                reg::USBCMD_RUN | reg::USBCMD_INTE,
+                XhciFirmwareHandoff::PlatformResetComplete,
+                stop_seed,
+            ) & reg::USBCMD_INTE,
+            0
+        );
+        assert_eq!(
+            polling_event_generation_iman_value(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                stop_seed,
+            ) & reg::IMAN_IE,
+            0
+        );
+        assert_eq!(
+            polling_command_proof_dnctrl_value(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                stop_seed,
+            ),
+            0x2
         );
         assert_eq!(
             polling_event_generation_run_usbcmd(
@@ -6485,6 +6593,10 @@ mod tests {
         assert_eq!(
             polling_event_generation_iman_value(XhciFirmwareHandoff::None, None),
             polling_iman_value()
+        );
+        assert_eq!(
+            polling_command_proof_dnctrl_value(XhciFirmwareHandoff::None, None),
+            0
         );
     }
 

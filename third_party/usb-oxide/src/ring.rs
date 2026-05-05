@@ -10,6 +10,8 @@ use core::{
     sync::atomic::{compiler_fence, Ordering},
 };
 
+const EVENT_RING_ERST_SEGMENTS: usize = 8;
+
 /// Transfer Request Block (TRB) - 16 bytes aligned.
 ///
 /// The fundamental data structure used for communication between
@@ -466,6 +468,15 @@ impl<H: Dma> Ring<H> {
         (self.enqueue, self.cycle)
     }
 
+    pub fn debug_trb_at(&self, index: usize) -> Option<Trb> {
+        if index >= self.size {
+            return None;
+        }
+        // SAFETY: index is bounded by self.size, and Ring::new allocates ring
+        // memory for exactly self.size TRBs.
+        Some(unsafe { (self.mem.as_ptr::<Trb>()).add(index).read_volatile() })
+    }
+
     fn init_link_trb(&mut self, host: &H) {
         let last = self.size - 1;
         let mut link = Trb::new();
@@ -493,6 +504,7 @@ pub(crate) struct EventRing<H: Dma> {
     ring: PhysMem<H>,
     erst: PhysMem<H>,
     size: usize,
+    erst_entries: usize,
     dequeue: usize,
     cycle: bool,
 }
@@ -506,16 +518,29 @@ impl<H: Dma> EventRing<H> {
         )?;
         let erst = PhysMem::alloc(host, host.page_size(), core::mem::align_of::<ErstEntry>())?;
 
+        let erst_entries = trb_count.min(EVENT_RING_ERST_SEGMENTS).max(1);
         let entry = erst.as_ptr::<ErstEntry>();
+        let trbs_per_entry = trb_count / erst_entries;
+        let extra_trbs = trb_count % erst_entries;
+        let mut trb_offset = 0usize;
+        // SAFETY: the ERST allocation is one page, which holds far more than
+        // EVENT_RING_ERST_SEGMENTS entries. Each written entry is within that
+        // bounded prefix, and each segment points into the allocated ring.
         unsafe {
-            (*entry).base = ring.phys(host);
-            (*entry).size = trb_count as u16;
+            for index in 0..erst_entries {
+                let segment_trbs = trbs_per_entry + usize::from(index < extra_trbs);
+                (*entry.add(index)).base =
+                    ring.phys(host) + (trb_offset * core::mem::size_of::<Trb>()) as u64;
+                (*entry.add(index)).size = segment_trbs as u16;
+                trb_offset += segment_trbs;
+            }
         }
 
         Ok(Self {
             ring,
             erst,
             size: trb_count,
+            erst_entries,
             dequeue: 0,
             cycle: true,
         })
@@ -527,6 +552,10 @@ impl<H: Dma> EventRing<H> {
 
     pub fn erst_phys(&self, host: &H) -> u64 {
         self.erst.phys(host)
+    }
+
+    pub fn erst_entries(&self) -> u32 {
+        self.erst_entries as u32
     }
 
     pub fn share_for_device(&self, host: &H) -> Result<(u64, u64)> {
@@ -754,6 +783,8 @@ mod tests {
             host.last_share_len.load(Ordering::Relaxed),
             8 * core::mem::size_of::<Trb>()
         );
+        let observed = ring.debug_trb_at(0).expect("debug trb");
+        assert_eq!(observed.control, (trb_type::NO_OP_CMD << 10) | 1);
     }
 
     #[test]
@@ -816,5 +847,22 @@ mod tests {
         assert_eq!(observed.param, first.param);
         assert_eq!(observed.status, first.status);
         assert_eq!(observed.control, first.control);
+    }
+
+    #[test]
+    fn event_ring_erst_uses_linux_shaped_segment_count() {
+        let host = MockDma::default();
+        let event_ring =
+            super::EventRing::<MockDma>::new(&host, 256).expect("allocate event ring");
+        let entry = event_ring.erst.as_ptr::<super::ErstEntry>();
+
+        assert_eq!(event_ring.erst_entries(), 8);
+        for index in 0..8 {
+            // SAFETY: EventRing::new initialized the bounded eight-entry ERST
+            // prefix, and this test reads only that initialized prefix.
+            let observed = unsafe { entry.add(index).read() };
+            assert_eq!(observed.base, event_ring.ring.phys(&host) + (index as u64 * 32 * 16));
+            assert_eq!(observed.size, 32);
+        }
     }
 }

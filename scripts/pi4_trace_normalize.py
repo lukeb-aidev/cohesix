@@ -129,6 +129,8 @@ def classify_domain(line: str) -> str | None:
         return "usb"
     if line.startswith("usb:") or "[local-seat]" in lower:
         return "usb"
+    if line.startswith("Kernel entry via Interrupt"):
+        return "usb"
     if line.startswith("wifi:") or "[pi4-wifi]" in lower or "[cyw43]" in lower:
         return "wifi"
     if line.startswith("ERR NETTEST") and "cause=cyw43-" in lower:
@@ -246,6 +248,10 @@ def normalize_usb_blocker(value: str) -> str:
     """Normalize USB blocker strings into stable gate labels."""
 
     lower = value.lower()
+    if "cmd-pre-doorbell-vtimer-interrupt" in lower:
+        return "cmd-pre-doorbell-vtimer-interrupt"
+    if "cmd-doorbell-vtimer-interrupt" in lower:
+        return "cmd-doorbell-vtimer-interrupt"
     if "cmd-poll-only-timeout" in lower:
         return "cmd-poll-only-timeout"
     if "command-ring" in lower:
@@ -287,21 +293,49 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
 
     gate = 1
     blocker = "unknown"
+    saw_command_doorbell = False
+    saw_command_event_ring_before = False
     for event in usb_events:
         raw = event.raw.lower()
         fields = event.fields
+        tag = fields.get("tag", "")
         if "cfg_window=mapped" in raw or "selected cfg=hal-ext" in raw:
             gate = max(gate, 2)
         if "controller-ready" in raw or "controller-init-complete" in raw:
             gate = max(gate, 3)
+        if tag == "cmd-submit":
+            saw_command_doorbell = False
+            saw_command_event_ring_before = False
+            gate = max(gate, 3)
         if (
             "cmd-poll-only-timeout" in raw
-            or fields.get("tag") == "cmd-poll-only-timeout"
+            or tag == "cmd-poll-only-timeout"
             or fields.get("exact") == "cmd-poll-only-timeout"
             or fields.get("verdict") == "command-ring-edge"
         ):
             gate = max(gate, 3)
             blocker = "cmd-poll-only-timeout"
+        elif tag.startswith("cmd-event-ring-before"):
+            saw_command_event_ring_before = True
+            gate = max(gate, 3)
+        elif tag == "cmd-doorbell-post-barrier":
+            saw_command_doorbell = True
+            gate = max(gate, 3)
+        elif (
+            saw_command_doorbell
+            and "kernel entry via interrupt" in raw
+            and "irq 27" in raw
+        ):
+            gate = max(gate, 3)
+            blocker = "cmd-doorbell-vtimer-interrupt"
+        elif (
+            saw_command_event_ring_before
+            and not saw_command_doorbell
+            and "kernel entry via interrupt" in raw
+            and "irq 27" in raw
+        ):
+            gate = max(gate, 3)
+            blocker = "cmd-pre-doorbell-vtimer-interrupt"
         elif fields.get("command_probe", "").endswith("-ok") or fields.get(
             "verdict", ""
         ).startswith("command-ring-ready"):

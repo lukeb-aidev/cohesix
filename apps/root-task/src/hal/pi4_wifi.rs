@@ -931,7 +931,25 @@ fn post_download_ht_sleepcsr_clear_set_poll_limit_for_stage(stage: &'static str)
 
 #[inline]
 fn post_download_ht_sleepcsr_requires_live_devon_before_ht(stage: &'static str) -> bool {
-    matches!(stage, "wait-ht-clock" | "debug-probe-ht")
+    matches!(stage, "wait-ht-clock")
+}
+
+#[inline]
+fn post_download_ht_sleepcsr_requires_clear_set_before_ht(
+    stage: &'static str,
+    cached_sleep_before_sideband: Option<u8>,
+    live_sleep: Option<u8>,
+) -> bool {
+    let cached_sleep_ready = post_download_ht_sleepcsr_preserves_cached_devon()
+        && cached_sleep_before_sideband.is_some_and(post_download_ht_sleepcsr_ready_for_function2);
+    let requires_live_devon = post_download_ht_sleepcsr_requires_live_devon_before_ht(stage);
+    let live_sleep_ready = live_sleep.is_some_and(|sleep| {
+        post_download_ht_sleepcsr_ready_for_clock_request(sleep, requires_live_devon)
+    });
+
+    post_download_ht_sleepcsr_uses_linux_clear_set()
+        && !live_sleep_ready
+        && (!cached_sleep_ready || requires_live_devon)
 }
 
 #[inline]
@@ -4828,19 +4846,15 @@ const fn linux_sr_kso_clock_ready_from_sleepcsr(sleep: u8) -> bool {
 
 #[inline]
 const fn post_download_devon_before_ht_is_diagnostic() -> bool {
-    // KSO is wake acknowledgement for the firmware-callback HT request. DEVON
-    // remains diagnostic before HT; Function 2 still requires real HT proof and
-    // later readiness.
+    // DEVON readback is useful evidence before the HT request, but it does not
+    // authorize Function 2. Function 2 remains gated on real HT proof and later
+    // readiness.
     true
 }
 
 #[inline]
 fn devon_before_ht_may_be_deferred_for_stage(stage: &'static str) -> bool {
-    let _ = stage;
-    // The post-download path writes KSO and observes DEVON directly without
-    // allowing this generic helper to weaken DEVON waits for other diagnostic
-    // callers.
-    false
+    matches!(stage, "debug-probe-ht")
 }
 
 #[inline]
@@ -19762,13 +19776,11 @@ impl SdioHost {
                 .is_some_and(post_download_ht_sleepcsr_ready_for_function2);
         let requires_live_devon = post_download_ht_sleepcsr_requires_live_devon_before_ht(stage);
         let accept_kso_only_before_ht = !requires_live_devon;
-        let sleep_ready_for_clock_request = sleep_after.is_some_and(|sleep| {
-            post_download_ht_sleepcsr_ready_for_clock_request(sleep, requires_live_devon)
-        });
-        if post_download_ht_sleepcsr_uses_linux_clear_set()
-            && !sleep_ready_for_clock_request
-            && (!cached_sleep_ready || requires_live_devon)
-        {
+        if post_download_ht_sleepcsr_requires_clear_set_before_ht(
+            stage,
+            cached_sleep_before_sideband,
+            sleep_after,
+        ) {
             sleep_after = self.try_post_download_ht_sleepcsr_clear_set_for(stage, sleep_after);
         } else if cached_sleep_ready
             && !sleep_after.is_some_and(post_download_ht_sleepcsr_ready_for_function2)
@@ -19790,6 +19802,15 @@ impl SdioHost {
                     cached = sleep_after.unwrap_or(0),
                 ));
             }
+        }
+        if !sleep_after.is_some_and(post_download_ht_sleepcsr_ready_for_function2)
+            && sleep_after.is_some_and(post_download_ht_sleepcsr_ready_for_ht_request)
+        {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=post-download-sleepcsr-devon-deferred sleep=0x{sleep_value:02x}/{sleep_set} readiness=chipclk-ht-avail terminal=no f2=blocked policy=kso-only-before-ht",
+                sleep_value = sleep_after.unwrap_or(0),
+                sleep_set = yn(sleep_after.is_some()),
+            ));
         }
         if !sleep_after.is_some_and(|sleep| {
             post_download_ht_sleepcsr_ready_for_clock_request(sleep, requires_live_devon)
@@ -30378,9 +30399,8 @@ mod tests {
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK,
             false
         ));
-        assert!(!post_download_ht_sleepcsr_ready_for_clock_request(
+        assert!(!post_download_ht_sleepcsr_ready_for_function2(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK,
-            true
         ));
         assert!(post_download_ht_sleepcsr_ready_for_function2(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
@@ -30419,8 +30439,23 @@ mod tests {
         assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
-        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "debug-probe-ht"
+        ));
+        assert!(post_download_ht_sleepcsr_requires_clear_set_before_ht(
+            "wait-ht-clock",
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
+        ));
+        assert!(!post_download_ht_sleepcsr_requires_clear_set_before_ht(
+            "debug-probe-ht",
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
+        ));
+        assert!(!post_download_ht_sleepcsr_requires_clear_set_before_ht(
+            "wait-ht-clock",
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
         ));
         assert!(post_download_ht_sideband_primes_before_clock_request());
         assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
@@ -30443,7 +30478,7 @@ mod tests {
     }
 
     #[test]
-    fn post_download_ht_sideband_requires_live_devon_before_production_ht_request() {
+    fn post_download_ht_sideband_requires_live_devon_for_production_ht_request() {
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
         assert!(post_download_ht_sleepcsr_preserves_cached_devon());
@@ -30465,6 +30500,10 @@ mod tests {
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK,
             post_download_ht_sleepcsr_requires_live_devon_before_ht("wait-ht-clock")
         ));
+        assert!(post_download_ht_sleepcsr_ready_for_clock_request(
+            SBSDIO_FUNC1_SLEEPCSR_KSO_MASK,
+            post_download_ht_sleepcsr_requires_live_devon_before_ht("debug-probe-ht")
+        ));
         assert!(post_download_ht_sleepcsr_ready_for_function2(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
         ));
@@ -30475,6 +30514,11 @@ mod tests {
         assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
         assert!(!post_download_ht_stage_primes_wake_sideband(
             "pre-write-alp-clock"
+        ));
+        assert!(post_download_ht_sleepcsr_requires_clear_set_before_ht(
+            "wait-ht-clock",
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
         ));
     }
 

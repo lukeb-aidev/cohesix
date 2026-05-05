@@ -3819,6 +3819,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0332..=0x0333
             | 0x0340..=0x034c
             | 0x0350..=0x035a
+            | 0x0360..=0x036f
     )
 }
 
@@ -3837,6 +3838,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x0315..=0x0319
             | 0x0320..=0x0330
             | 0x0350..=0x035a
+            | 0x0360..=0x036f
     )
 }
 
@@ -3946,6 +3948,13 @@ const fn xhci_diag_stage_value_labels(
         0x0350 => Some(("run_usbcmd", "event_run_usbcmd", "seed_flags")),
         0x0351 | 0x0352 => Some(("iman_off", "iman", "seed_flags")),
         0x0353..=0x035a => Some(("param", "status_control", "index_dequeue_cycle")),
+        0x0360..=0x0367 => Some(("param", "status_control", "index_enqueue_cycle")),
+        0x0368 | 0x036c | 0x0370 => {
+            Some(("expected_usbcmd_usbsts", "slots_dnctrl", "expected_ptr"))
+        }
+        0x0369 | 0x036d | 0x0371 => Some(("crcr_plan", "dcbaap_plan", "dboff_doorbell")),
+        0x036a | 0x036e | 0x0372 => Some(("iman_imod_plan", "erstsz", "phase")),
+        0x036b | 0x036f | 0x0373 => Some(("erstba_plan", "erdp_off", "expected_erdp")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4220,6 +4229,26 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0358 => Some("cmd-event-ring-timeout-1"),
         0x0359 => Some("cmd-event-ring-timeout-2"),
         0x035a => Some("cmd-event-ring-timeout-3"),
+        0x0360 => Some("cmd-ring-after-enqueue-0"),
+        0x0361 => Some("cmd-ring-after-enqueue-1"),
+        0x0362 => Some("cmd-ring-after-enqueue-2"),
+        0x0363 => Some("cmd-ring-after-enqueue-3"),
+        0x0364 => Some("cmd-ring-timeout-0"),
+        0x0365 => Some("cmd-ring-timeout-1"),
+        0x0366 => Some("cmd-ring-timeout-2"),
+        0x0367 => Some("cmd-ring-timeout-3"),
+        0x0368 => Some("cmd-gate-post-doorbell-plan-0"),
+        0x0369 => Some("cmd-gate-post-doorbell-plan-1"),
+        0x036a => Some("cmd-gate-post-doorbell-plan-2"),
+        0x036b => Some("cmd-gate-post-doorbell-plan-3"),
+        0x036c => Some("cmd-gate-timeout-plan-0"),
+        0x036d => Some("cmd-gate-timeout-plan-1"),
+        0x036e => Some("cmd-gate-timeout-plan-2"),
+        0x036f => Some("cmd-gate-timeout-plan-3"),
+        0x0370 => Some("cmd-gate-pre-doorbell-plan-0"),
+        0x0371 => Some("cmd-gate-pre-doorbell-plan-1"),
+        0x0372 => Some("cmd-gate-pre-doorbell-plan-2"),
+        0x0373 => Some("cmd-gate-pre-doorbell-plan-3"),
         _ => None,
     }
 }
@@ -16514,6 +16543,23 @@ mod tests {
             xhci_diag_stage_label(0x0357),
             Some("cmd-event-ring-timeout-0")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x0360),
+            Some("cmd-ring-after-enqueue-0")
+        );
+        assert_eq!(xhci_diag_stage_label(0x0364), Some("cmd-ring-timeout-0"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0368),
+            Some("cmd-gate-post-doorbell-plan-0")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x036c),
+            Some("cmd-gate-timeout-plan-0")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0370),
+            Some("cmd-gate-pre-doorbell-plan-0")
+        );
         assert_eq!(xhci_diag_stage_label(0x0117), Some("init-policy-summary"));
         assert_eq!(
             xhci_diag_stage_label(0x0200),
@@ -17028,6 +17074,7 @@ mod tests {
             xhci_diag_stage_label(0x030e),
             Some("cmd-poll-only-timeout-last-event")
         );
+        assert_eq!(xhci_diag_stage_label(0x0367), Some("cmd-ring-timeout-3"));
         assert_eq!(xhci_diag_stage_label(0x9999), None);
     }
 
@@ -17183,6 +17230,7 @@ mod tests {
         assert!(super::xhci_diag_stage_after_run(0x02e9));
         assert!(super::xhci_diag_stage_after_run(0x0316));
         assert!(super::xhci_diag_stage_after_run(0x032c));
+        assert!(super::xhci_diag_stage_after_run(0x0360));
         assert!(!super::xhci_diag_stage_after_run(0x0248));
         assert!(!super::xhci_diag_stage_after_run(0x0213));
     }
@@ -17333,6 +17381,30 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0353),
             Some(("param", "status_control", "index_dequeue_cycle"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0360),
+            Some(("param", "status_control", "index_enqueue_cycle"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0368),
+            Some(("expected_usbcmd_usbsts", "slots_dnctrl", "expected_ptr"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0369),
+            Some(("crcr_plan", "dcbaap_plan", "dboff_doorbell"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x036a),
+            Some(("iman_imod_plan", "erstsz", "phase"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0370),
+            Some(("expected_usbcmd_usbsts", "slots_dnctrl", "expected_ptr"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x036b),
+            Some(("erstba_plan", "erdp_off", "expected_erdp"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),
