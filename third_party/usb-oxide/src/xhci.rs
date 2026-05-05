@@ -30,6 +30,7 @@ const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
+const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
 const PORT_ENABLE_WAIT_SPINS: usize = 10_000_000;
 const PORT_SETTLE_SPINS: usize = 100_000;
@@ -4220,9 +4221,11 @@ impl<H: Dma> XhciCtrl<H> {
         let db = reg::doorbell(self.db_offset, 0);
         let skip_readback = skip_doorbell_readback_after_ring(self.firmware_handoff);
         emit_xhci_diag(0x030f, db as u64, 0, u64::from(skip_readback));
-        ring_write_barrier();
+        mmio_write_barrier();
         self.write_reg(db, 0u32);
+        mmio_write_barrier();
         emit_xhci_diag(0x031a, db as u64, 0, u64::from(skip_readback));
+        emit_xhci_diag(0x031f, db as u64, 0, u64::from(skip_readback));
         if !skip_readback {
             let _ = self.read_reg::<u32>(db);
         }
@@ -4499,6 +4502,27 @@ impl<H: Dma> XhciCtrl<H> {
         }
     }
 
+    fn emit_command_event_ring_debug_snapshot(&self, base_stage: u16) {
+        let event_ring = self.event_ring.lock();
+        let _ = event_ring.sync_prefix_for_cpu(
+            &*self.host,
+            COMMAND_EVENT_RING_DEBUG_TRBS,
+            "xhci-event-ring-debug-prefix",
+        );
+        let (dequeue, cycle) = event_ring.debug_state();
+        for index in 0..COMMAND_EVENT_RING_DEBUG_TRBS {
+            let trb = event_ring.debug_trb_at(index).unwrap_or_default();
+            let state =
+                ((index as u64) << 32) | ((dequeue as u64) << 1) | u64::from(cycle);
+            emit_xhci_diag(
+                base_stage + index as u16,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                state,
+            );
+        }
+    }
+
     fn wait_command_poll_only(&self, expected_cmd_trb: Option<u64>) -> Result<Trb> {
         let mut waited = 0usize;
         let mut other_event_logs = 0usize;
@@ -4561,6 +4585,7 @@ impl<H: Dma> XhciCtrl<H> {
 
             waited = waited.saturating_add(1);
             if waited >= COMMAND_WAIT_SPINS {
+                self.emit_command_event_ring_debug_snapshot(0x0357);
                 emit_xhci_diag(
                     0x030b,
                     waited as u64,
@@ -4663,6 +4688,7 @@ impl<H: Dma> XhciCtrl<H> {
             ((cycle_before as u64) << 1) | (cycle_after as u64),
         );
         drop(cmd_ring);
+        self.emit_command_event_ring_debug_snapshot(0x0353);
         self.ring_cmd_doorbell();
         self.wait_command_poll_only(Some(cmd_addr))
     }

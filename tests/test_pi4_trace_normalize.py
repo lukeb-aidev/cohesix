@@ -80,6 +80,18 @@ def test_parse_events_filters_unrelated_lines() -> None:
     assert events[0].fields["tag"] == "reset-write"
 
 
+def test_nettest_policy_error_is_wifi_terminal_evidence() -> None:
+    event = normalizer.parse_line(
+        "ERR NETTEST reason=policy detail=net-disabled "
+        "cause=cyw43-armcr4-release-readback-unavailable",
+        23,
+    )
+
+    assert event is not None
+    assert event.domain == "wifi"
+    assert event.fields["cause"] == "cyw43-armcr4-release-readback-unavailable"
+
+
 def test_summary_tracks_latest_and_blockers() -> None:
     events = normalizer.parse_events(
         [
@@ -121,6 +133,24 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_GATE": 4,
         "WIFI_BLOCKER": "ht-clock-timeout",
     }
+
+
+def test_gate_summary_prefers_latest_wifi_nettest_cause() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
+            "wifi: boot_failure source=live stage=cyw43-load-firmware-fail "
+            "exact=cyw43-ht-clock-timeout-before-function2",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-armcr4-release-readback-unavailable",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "armcr4-release-readback-unavailable"
 
 
 def test_gate_expectation_reports_mismatch(capsys) -> None:

@@ -131,6 +131,10 @@ def classify_domain(line: str) -> str | None:
         return "usb"
     if line.startswith("wifi:") or "[pi4-wifi]" in lower or "[cyw43]" in lower:
         return "wifi"
+    if line.startswith("ERR NETTEST") and "cause=cyw43-" in lower:
+        return "wifi"
+    if "cyw43-" in lower and ("net-disabled" in lower or "net-console" in lower):
+        return "wifi"
     if "brcmfmac" in lower or "brcmf_" in lower:
         return "wifi"
     if line.startswith("[cohesix]") and any(hint in lower for hint in USB_HINTS):
@@ -259,6 +263,8 @@ def normalize_wifi_blocker(value: str) -> str:
     """Normalize WiFi blocker strings into stable gate labels."""
 
     lower = value.lower()
+    if "armcr4-release-readback-unavailable" in lower:
+        return "armcr4-release-readback-unavailable"
     if "ht-clock" in lower or "ht-avail" in lower:
         return "ht-clock-timeout"
     if "firmware-verify-readback" in lower:

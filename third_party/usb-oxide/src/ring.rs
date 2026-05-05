@@ -544,6 +544,37 @@ impl<H: Dma> EventRing<H> {
         )
     }
 
+    pub fn sync_prefix_for_cpu(
+        &self,
+        host: &H,
+        trb_count: usize,
+        label: &'static str,
+    ) -> Result<()> {
+        let bounded_count = trb_count.min(self.size);
+        if bounded_count == 0 {
+            return Err(UsbError::DmaSync);
+        }
+        self.ring.sync_for_cpu_range(
+            host,
+            0,
+            bounded_count * core::mem::size_of::<Trb>(),
+            label,
+        )
+    }
+
+    pub fn debug_state(&self) -> (usize, bool) {
+        (self.dequeue, self.cycle)
+    }
+
+    pub fn debug_trb_at(&self, index: usize) -> Option<Trb> {
+        if index >= self.size {
+            return None;
+        }
+        // SAFETY: index is bounded by self.size, and EventRing::new allocates
+        // ring memory for exactly self.size TRBs.
+        Some(unsafe { (self.ring.as_ptr::<Trb>()).add(index).read_volatile() })
+    }
+
     pub fn try_dequeue(&mut self) -> Option<Trb> {
         // Read the candidate TRB twice before consuming it. On some firmware /
         // controller combinations, software can observe an event entry while
@@ -746,5 +777,44 @@ mod tests {
             host.last_share_len.load(Ordering::Relaxed),
             core::mem::size_of::<Trb>()
         );
+    }
+
+    #[test]
+    fn event_ring_debug_prefix_syncs_and_reads_without_dequeueing() {
+        let host = MockDma::default();
+        let event_ring = super::EventRing::<MockDma>::new(&host, 8).expect("allocate event ring");
+        let first = Trb {
+            param: 0x1122,
+            status: 0x3344,
+            control: trb_type::COMMAND_COMPLETION << 10,
+        };
+        // SAFETY: the test writes the first allocated TRB in an 8-entry event
+        // ring before asking the debug accessor to read that same entry.
+        unsafe {
+            (event_ring.ring.as_ptr::<Trb>()).write(first);
+        }
+        host.share_calls.store(0, Ordering::Relaxed);
+        host.last_share_vaddr.store(0, Ordering::Relaxed);
+        host.last_share_len.store(0, Ordering::Relaxed);
+
+        event_ring
+            .sync_prefix_for_cpu(&host, 4, "event-prefix")
+            .expect("sync event prefix");
+        let (dequeue, cycle) = event_ring.debug_state();
+        let observed = event_ring.debug_trb_at(0).expect("debug trb");
+
+        assert_eq!(host.share_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            host.last_share_vaddr.load(Ordering::Relaxed),
+            event_ring.ring.virt()
+        );
+        assert_eq!(
+            host.last_share_len.load(Ordering::Relaxed),
+            4 * core::mem::size_of::<Trb>()
+        );
+        assert_eq!((dequeue, cycle), (0, true));
+        assert_eq!(observed.param, first.param);
+        assert_eq!(observed.status, first.status);
+        assert_eq!(observed.control, first.control);
     }
 }

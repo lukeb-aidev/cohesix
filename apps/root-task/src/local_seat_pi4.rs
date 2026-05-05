@@ -3812,12 +3812,13 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0300..=0x030e
             | 0x030f
             | 0x031a
+            | 0x031f
             | 0x0312
             | 0x0315..=0x0319
             | 0x0320..=0x0330
             | 0x0332..=0x0333
             | 0x0340..=0x034c
-            | 0x0350..=0x0352
+            | 0x0350..=0x035a
     )
 }
 
@@ -3832,9 +3833,10 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x02e9
             | 0x02eb
             | 0x0300..=0x030e
+            | 0x031f
             | 0x0315..=0x0319
             | 0x0320..=0x0330
-            | 0x0350..=0x0352
+            | 0x0350..=0x035a
     )
 }
 
@@ -3933,16 +3935,17 @@ const fn xhci_diag_stage_value_labels(
         0x0303 => Some(("cmd_addr", "enqueue", "cycle")),
         0x0304 => Some(("completion_ptr", "expected_ptr", "match")),
         0x0308 => Some(("param", "status_control", "trb_type")),
-        0x030b => Some(("waited", "expected_ptr", "live_reads")),
+        0x030b => Some(("waited", "expected_ptr", "event_syncs")),
         0x030c => Some(("completion_ptr", "expected_ptr", "control")),
         0x030d => Some(("completion_code", "slot_id", "live_reads")),
         0x030e => Some(("param", "status_control", "trb_type")),
-        0x030f | 0x031a => Some(("doorbell", "target", "skip_readback")),
+        0x030f | 0x031a | 0x031f => Some(("doorbell", "target", "skip_readback")),
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
         0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
         0x0332 | 0x0333 => Some(("iman", "masked_iman", "seed_flags")),
         0x0350 => Some(("run_usbcmd", "event_run_usbcmd", "seed_flags")),
         0x0351 | 0x0352 => Some(("iman_off", "iman", "seed_flags")),
+        0x0353..=0x035a => Some(("param", "status_control", "index_dequeue_cycle")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4208,6 +4211,15 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x030e => Some("cmd-poll-only-timeout-last-event"),
         0x030f => Some("cmd-doorbell-write"),
         0x031a => Some("cmd-doorbell-write-done"),
+        0x031f => Some("cmd-doorbell-post-barrier"),
+        0x0353 => Some("cmd-event-ring-before-0"),
+        0x0354 => Some("cmd-event-ring-before-1"),
+        0x0355 => Some("cmd-event-ring-before-2"),
+        0x0356 => Some("cmd-event-ring-before-3"),
+        0x0357 => Some("cmd-event-ring-timeout-0"),
+        0x0358 => Some("cmd-event-ring-timeout-1"),
+        0x0359 => Some("cmd-event-ring-timeout-2"),
+        0x035a => Some("cmd-event-ring-timeout-3"),
         _ => None,
     }
 }
@@ -16490,6 +16502,18 @@ mod tests {
             xhci_diag_stage_label(0x031a),
             Some("cmd-doorbell-write-done")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x031f),
+            Some("cmd-doorbell-post-barrier")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0353),
+            Some("cmd-event-ring-before-0")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0357),
+            Some("cmd-event-ring-timeout-0")
+        );
         assert_eq!(xhci_diag_stage_label(0x0117), Some("init-policy-summary"));
         assert_eq!(
             xhci_diag_stage_label(0x0200),
@@ -17301,6 +17325,14 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x031a),
             Some(("doorbell", "target", "skip_readback"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x031f),
+            Some(("doorbell", "target", "skip_readback"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0353),
+            Some(("param", "status_control", "index_dequeue_cycle"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),

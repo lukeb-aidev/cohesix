@@ -138,7 +138,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
   - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
 
-Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-poll-only-timeout` or `WIFI_BLOCKER=ht-clock-timeout`.
+Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-poll-only-timeout`, `WIFI_BLOCKER=armcr4-release-readback-unavailable`, or `WIFI_BLOCKER=ht-clock-timeout`.
 
 ### 3) QEMU boot + TCP console baseline
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`

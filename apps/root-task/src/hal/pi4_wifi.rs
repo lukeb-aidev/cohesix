@@ -3134,6 +3134,11 @@ fn core_wait_can_defer_after_read_error(
 }
 
 #[inline]
+fn armcr4_release_can_continue_after_readback_error(err: &HalError) -> bool {
+    is_armcr4_postreset_fragile_read_error(err)
+}
+
+#[inline]
 const fn core_reset_can_skip_postreset_verify(base: u32) -> bool {
     base == CYW43_SOCRAM_CORE_BASE
 }
@@ -20557,6 +20562,13 @@ impl SdioHost {
         ) {
             Ok(value) => value,
             Err(err) => {
+                if armcr4_release_can_continue_after_readback_error(&err) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=ioctrl err={err} action=continue-to-ht reason=linux-release-path"
+                    ));
+                    self.restore_window_cache_from_shadow("armcr4-release-proof-ioctrl-deferred");
+                    return Ok(());
+                }
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=ioctrl err={err} action=fail-before-ht"
                 ));
@@ -20565,6 +20577,12 @@ impl SdioHost {
                 ));
             }
         };
+        if (ioctrl & ARMCR4_BCMA_IOCTL_CPUHALT) != 0 {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} armcr4-release-proof=halted io=0x{ioctrl:02x} reset=n/a action=fail-before-ht"
+            ));
+            return Err(HalError::Unsupported("cyw43-armcr4-release-not-live"));
+        }
         let resetctrl = match self.core_ctrl_postreset_read8_logged(
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET,
@@ -20572,6 +20590,17 @@ impl SdioHost {
         ) {
             Ok(value) => value,
             Err(err) => {
+                if (ioctrl & ARMCR4_BCMA_IOCTL_CPUHALT) == 0
+                    && armcr4_release_can_continue_after_readback_error(&err)
+                {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=resetctrl io=0x{ioctrl:02x} err={err} action=continue-to-ht reason=linux-release-path"
+                    ));
+                    self.restore_window_cache_from_shadow(
+                        "armcr4-release-proof-resetctrl-deferred",
+                    );
+                    return Ok(());
+                }
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=resetctrl io=0x{ioctrl:02x} err={err} action=fail-before-ht"
                 ));
@@ -21430,13 +21459,13 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
     use super::{
-        backplane_byte_function_addr, backplane_firmware_verify_cmd52_function_addr,
-        backplane_small_access_addr, backplane_transfer_function_addr, backplane_window_base,
-        backplane_window_register_bytes, backplane_window_reprogram_needed,
-        backplane_word_function_addr, bcm2711_gpfsel_offset, bcm2711_puppdn_offset,
-        bcm2711_sdhci_effective_base_clock_hz, clear_reset_keepalive_chunk_loops, cmd52_argument,
-        control_plane_promote_rearm_budget, control_plane_promote_rearm_mode_name,
-        control_plane_promoted_probe_stalled_after_rearm,
+        armcr4_release_can_continue_after_readback_error, backplane_byte_function_addr,
+        backplane_firmware_verify_cmd52_function_addr, backplane_small_access_addr,
+        backplane_transfer_function_addr, backplane_window_base, backplane_window_register_bytes,
+        backplane_window_reprogram_needed, backplane_word_function_addr, bcm2711_gpfsel_offset,
+        bcm2711_puppdn_offset, bcm2711_sdhci_effective_base_clock_hz,
+        clear_reset_keepalive_chunk_loops, cmd52_argument, control_plane_promote_rearm_budget,
+        control_plane_promote_rearm_mode_name, control_plane_promoted_probe_stalled_after_rearm,
         control_plane_reply_int_status_has_frame_indication,
         control_plane_reply_mailbox_has_firmware_halt,
         control_plane_reply_mailbox_has_frame_indication, control_plane_reply_mailbox_requires_ack,
@@ -25193,6 +25222,15 @@ mod tests {
             0,
             CYW43_CONTROL_PLANE_CLOCK_HZ,
             &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(armcr4_release_can_continue_after_readback_error(
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(armcr4_release_can_continue_after_readback_error(
+            &HalError::Unsupported("sdio-cmd52-read"),
+        ));
+        assert!(!armcr4_release_can_continue_after_readback_error(
+            &HalError::Unsupported("firmware-verify-mismatch"),
         ));
         assert!(core_wait_can_defer_after_read_error(
             CYW43_ARMCR4_CORE_BASE,
