@@ -248,10 +248,20 @@ def normalize_usb_blocker(value: str) -> str:
     """Normalize USB blocker strings into stable gate labels."""
 
     lower = value.lower()
+    if "cmd-event-ring-timeout" in lower or "event-ring-missing" in lower:
+        return "cmd-event-ring-timeout"
+    if "cmd-fetch-timeout" in lower or "cmd-fetch-missing" in lower:
+        return "cmd-fetch-timeout"
+    if "cmd-live-timeout-snapshot-missing" in lower:
+        return "cmd-live-timeout-snapshot-missing"
     if "cmd-pre-doorbell-vtimer-interrupt" in lower:
-        return "cmd-pre-doorbell-vtimer-interrupt"
+        return "cmd-pre-doorbell-timer-halt"
     if "cmd-doorbell-vtimer-interrupt" in lower:
-        return "cmd-doorbell-vtimer-interrupt"
+        return "cmd-doorbell-timer-halt"
+    if "cmd-pre-doorbell-timer-halt" in lower:
+        return "cmd-pre-doorbell-timer-halt"
+    if "cmd-doorbell-timer-halt" in lower:
+        return "cmd-doorbell-timer-halt"
     if "cmd-poll-only-timeout" in lower:
         return "cmd-poll-only-timeout"
     if "command-ring" in lower:
@@ -265,10 +275,29 @@ def normalize_usb_blocker(value: str) -> str:
     return value
 
 
+def parse_hex_int(value: str | None) -> int | None:
+    """Parse a decimal or hex integer field value, returning None on absence."""
+
+    if value is None:
+        return None
+    try:
+        return int(value, 0)
+    except ValueError:
+        return None
+
+
 def normalize_wifi_blocker(value: str) -> str:
     """Normalize WiFi blocker strings into stable gate labels."""
 
     lower = value.lower()
+    if "ht-backplane-cmd53-data-wait" in lower:
+        return "ht-backplane-cmd53-data-wait"
+    if "ht-backplane-cmd52-unreadable" in lower:
+        return "ht-backplane-cmd52-unreadable"
+    if "diagnostic-ht-timeout-backplane-unreadable" in lower:
+        if "mode=cmd52-windowed" in lower:
+            return "ht-backplane-cmd52-unreadable"
+        return "ht-backplane-cmd53-data-wait"
     if "armcr4-release-readback-unavailable" in lower:
         return "armcr4-release-readback-unavailable"
     if (
@@ -332,6 +361,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     blocker = "unknown"
     saw_command_doorbell = False
     saw_command_event_ring_before = False
+    saw_command_timeout_plan = False
+    command_timeout_detail: str | None = None
     for event in usb_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -343,6 +374,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if tag == "cmd-submit":
             saw_command_doorbell = False
             saw_command_event_ring_before = False
+            saw_command_timeout_plan = False
             gate = max(gate, 3)
         if (
             "cmd-poll-only-timeout" in raw
@@ -351,7 +383,33 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             or fields.get("verdict") == "command-ring-edge"
         ):
             gate = max(gate, 3)
-            blocker = "cmd-poll-only-timeout"
+            if command_timeout_detail in {"cmd-fetch-timeout", "cmd-event-ring-timeout"}:
+                blocker = command_timeout_detail
+            else:
+                command_timeout_detail = "cmd-poll-only-timeout"
+                blocker = command_timeout_detail
+        elif tag.startswith("cmd-gate-timeout-plan"):
+            gate = max(gate, 3)
+            saw_command_timeout_plan = True
+            if command_timeout_detail is None:
+                command_timeout_detail = "cmd-live-timeout-snapshot-missing"
+            blocker = command_timeout_detail
+        elif tag == "cmd-gate-timeout-live-snapshot-deferred":
+            gate = max(gate, 3)
+            command_timeout_detail = "cmd-poll-only-timeout"
+            blocker = command_timeout_detail
+        elif tag == "cmd-gate-timeout-live-crcr":
+            gate = max(gate, 3)
+            ptr_match = parse_hex_int(fields.get("ptr_match"))
+            live_crcr = parse_hex_int(fields.get("live_crcr"))
+            expected_ptr = parse_hex_int(fields.get("expected_ptr"))
+            if ptr_match == 1:
+                command_timeout_detail = "cmd-fetch-timeout"
+            elif live_crcr is not None and expected_ptr is not None:
+                command_timeout_detail = "cmd-event-ring-timeout"
+            else:
+                command_timeout_detail = "cmd-poll-only-timeout"
+            blocker = command_timeout_detail
         elif tag.startswith("cmd-event-ring-before"):
             saw_command_event_ring_before = True
             gate = max(gate, 3)
@@ -363,12 +421,19 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             saw_command_doorbell = True
             gate = max(gate, 3)
         elif (
+            saw_command_timeout_plan
+            and "kernel entry via interrupt" in raw
+            and "irq 27" in raw
+        ):
+            gate = max(gate, 3)
+            blocker = command_timeout_detail or "cmd-live-timeout-snapshot-missing"
+        elif (
             saw_command_doorbell
             and "kernel entry via interrupt" in raw
             and "irq 27" in raw
         ):
             gate = max(gate, 3)
-            blocker = "cmd-doorbell-vtimer-interrupt"
+            blocker = "cmd-doorbell-timer-halt"
         elif (
             saw_command_event_ring_before
             and not saw_command_doorbell
@@ -376,7 +441,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             and "irq 27" in raw
         ):
             gate = max(gate, 3)
-            blocker = "cmd-pre-doorbell-vtimer-interrupt"
+            blocker = "cmd-pre-doorbell-timer-halt"
         elif fields.get("command_probe", "").endswith("-ok") or fields.get(
             "verdict", ""
         ).startswith("command-ring-ready"):
@@ -400,6 +465,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
 
     gate = 1
     blocker = "unknown"
+    precise_ht_blockers = {
+        "devon-timeout",
+        "ht-backplane-cmd53-data-wait",
+        "ht-backplane-cmd52-unreadable",
+    }
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -408,6 +478,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             value = fields.get(key)
             if value and value not in {"none", "n/a"}:
                 explicit_blocker = normalize_wifi_blocker(value)
+        if "diagnostic-ht-timeout-backplane-unreadable" in raw:
+            gate = max(gate, 4)
+            blocker = normalize_wifi_blocker(raw)
+            continue
+        if (
+            "sdhci xfer error cmd=53 arg=0x15000018" in raw
+            and "phase=data-wait" in raw
+        ):
+            gate = max(gate, 4)
+            blocker = "ht-backplane-cmd53-data-wait"
+            continue
         if "f1=enabled" in raw or "ioex=0x02" in raw or "iordy=0x02" in raw:
             gate = max(gate, 2)
         if fields.get("ht_avail") in {"yes", "ready"} or "ht_avail=ready" in raw:
@@ -434,13 +515,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             or ht_evidence
         ):
             gate = max(gate, 4)
-            if blocker != "devon-timeout":
+            if blocker not in precise_ht_blockers:
                 blocker = "ht-clock-timeout"
         elif "firmware-verify-readback" in raw:
             gate = max(gate, 3)
             blocker = "firmware-verify-readback"
         elif explicit_blocker:
-            blocker = explicit_blocker
+            if blocker not in precise_ht_blockers:
+                blocker = explicit_blocker
 
     if blocker == "function2-disabled" and gate >= 4:
         blocker = "ht-clock-timeout"

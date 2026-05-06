@@ -131,8 +131,8 @@ const fn polling_iman_value() -> u32 {
 
 #[inline(always)]
 const fn polling_iman_ack_value() -> u32 {
-    // IMAN.IP is write-one-to-clear. Keep IMAN.IE clear so command proofs stay
-    // poll-only; event production is observed from the event ring, not IRQs.
+    // IMAN.IP is write-one-to-clear. The normal polling path keeps IMAN.IE clear
+    // so command proofs observe event production from the event ring, not IRQs.
     reg::IMAN_IP
 }
 
@@ -227,8 +227,11 @@ const fn polling_event_generation_run_usbcmd(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    let _ = polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot);
-    run_usbcmd & !reg::USBCMD_INTE
+    if polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot) {
+        run_usbcmd | reg::USBCMD_INTE
+    } else {
+        run_usbcmd & !reg::USBCMD_INTE
+    }
 }
 
 #[inline(always)]
@@ -236,8 +239,16 @@ const fn polling_event_generation_iman_value(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    let _ = polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot);
-    polling_iman_value()
+    if polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot) {
+        reg::IMAN_IE
+    } else {
+        polling_iman_value()
+    }
+}
+
+#[inline(always)]
+const fn command_timeout_live_snapshot_enabled() -> bool {
+    false
 }
 
 #[inline(always)]
@@ -4604,6 +4615,33 @@ impl<H: Dma> XhciCtrl<H> {
         );
     }
 
+    fn emit_command_gate_live_timeout_snapshot(&self, expected_cmd_trb: Option<u64>) {
+        let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        let expected_ptr = expected_cmd_trb.unwrap_or(0) & !0x0f;
+        let live_crcr = self.read_op_u64(reg::CRCR);
+        let live_crcr_ptr = live_crcr & !0x0f;
+        let live_usbcmd = self.read_op::<u32>(reg::USBCMD);
+        let live_usbsts = self.read_op::<u32>(reg::USBSTS);
+        let live_iman = self.read_reg::<u32>(int_base + reg::IMAN);
+        let live_erstsz = self.read_reg::<u32>(int_base + reg::ERSTSZ);
+        let live_erstba = self.read_reg_u64(int_base + reg::ERSTBA);
+        let live_erdp = self.read_reg_u64(int_base + reg::ERDP);
+
+        emit_xhci_diag(
+            0x0374,
+            live_crcr,
+            expected_ptr,
+            u64::from(live_crcr_ptr == expected_ptr),
+        );
+        emit_xhci_diag(
+            0x0375,
+            ((live_usbcmd as u64) << 32) | live_usbsts as u64,
+            ((live_iman as u64) << 32) | live_erstsz as u64,
+            self.read_op_u64(reg::DCBAAP),
+        );
+        emit_xhci_diag(0x0376, live_erstba, live_erdp, 0);
+    }
+
     fn wait_command_poll_only(&self, expected_cmd_trb: Option<u64>) -> Result<Trb> {
         let mut waited = 0usize;
         let mut other_event_logs = 0usize;
@@ -4675,6 +4713,16 @@ impl<H: Dma> XhciCtrl<H> {
                     expected_cmd_trb.unwrap_or(0) & !0x0f,
                     event_syncs as u64,
                 );
+                if command_timeout_live_snapshot_enabled() {
+                    self.emit_command_gate_live_timeout_snapshot(expected_cmd_trb);
+                } else {
+                    emit_xhci_diag(
+                        0x0377,
+                        expected_cmd_trb.unwrap_or(0) & !0x0f,
+                        event_syncs as u64,
+                        0,
+                    );
+                }
                 if let Some(trb) = last_non_command_event {
                     emit_xhci_diag(
                         0x030e,
@@ -5088,8 +5136,9 @@ impl<H: Dma> XhciCtrl<H> {
 mod tests {
     use super::{
         blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
-        claim_legacy_ownership_before_reset_with_snapshot, compose_brcm_usbaxi_attr,
-        compose_config, compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
+        claim_legacy_ownership_before_reset_with_snapshot, command_timeout_live_snapshot_enabled,
+        compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base, compose_erst_size,
+        compose_initial_erdp,
         compose_polling_erdp_ack, compose_run_usbcmd, constructor_polling_scrub_mode,
         constructor_polling_scrub_mode_from_params, dcbaap_reg_write_ops,
         defer_crcr_publish_until_after_run_with_snapshot, defer_crcr_publish_with_snapshot,
@@ -6533,7 +6582,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_stop_seed_keeps_poll_only_interrupts_disabled() {
+    fn platform_reset_stop_seed_enables_bounded_event_generation_probe() {
         let stop_seed = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -6551,14 +6600,14 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            reg::USBCMD_RUN
+            reg::USBCMD_RUN | reg::USBCMD_INTE
         );
         assert_eq!(
             polling_event_generation_iman_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            polling_iman_value()
+            reg::IMAN_IE
         );
         assert_eq!(
             polling_event_generation_run_usbcmd(
@@ -6566,14 +6615,14 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ) & reg::USBCMD_INTE,
-            0
+            reg::USBCMD_INTE
         );
         assert_eq!(
             polling_event_generation_iman_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ) & reg::IMAN_IE,
-            0
+            reg::IMAN_IE
         );
         assert_eq!(
             polling_command_proof_dnctrl_value(
@@ -6598,6 +6647,11 @@ mod tests {
             polling_command_proof_dnctrl_value(XhciFirmwareHandoff::None, None),
             0
         );
+    }
+
+    #[test]
+    fn command_timeout_live_snapshot_is_deferred_by_default() {
+        assert!(!command_timeout_live_snapshot_enabled());
     }
 
     #[test]

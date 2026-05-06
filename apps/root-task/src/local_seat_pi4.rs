@@ -3958,6 +3958,10 @@ const fn xhci_diag_stage_value_labels(
         0x0369 | 0x036d | 0x0371 => Some(("crcr_plan", "dcbaap_plan", "dboff_doorbell")),
         0x036a | 0x036e | 0x0372 => Some(("iman_imod_plan", "erstsz", "phase")),
         0x036b | 0x036f | 0x0373 => Some(("erstba_plan", "erdp_off", "expected_erdp")),
+        0x0374 => Some(("live_crcr", "expected_ptr", "ptr_match")),
+        0x0375 => Some(("usbcmd_usbsts", "iman_erstsz", "dcbaap")),
+        0x0376 => Some(("erstba", "erdp", "phase")),
+        0x0377 => Some(("expected_ptr", "event_syncs", "live_snapshot_deferred")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4252,6 +4256,10 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0371 => Some("cmd-gate-pre-doorbell-plan-1"),
         0x0372 => Some("cmd-gate-pre-doorbell-plan-2"),
         0x0373 => Some("cmd-gate-pre-doorbell-plan-3"),
+        0x0374 => Some("cmd-gate-timeout-live-crcr"),
+        0x0375 => Some("cmd-gate-timeout-live-state"),
+        0x0376 => Some("cmd-gate-timeout-live-event-ring"),
+        0x0377 => Some("cmd-gate-timeout-live-snapshot-deferred"),
         _ => None,
     }
 }
@@ -16034,6 +16042,10 @@ mod tests {
         assert!(
             !super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, true,)
         );
+        assert!(!xhci_controller_should_apply_brcm_axi_setup(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::PlatformResetComplete,
+        ));
         assert_eq!(xhci_runtime_init_strategy_run_label(strategy), "run-uboot");
         assert_eq!(
             xhci_runtime_init_strategy_publish_label(strategy),
@@ -16562,6 +16574,14 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_label(0x0370),
             Some("cmd-gate-pre-doorbell-plan-0")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0374),
+            Some("cmd-gate-timeout-live-crcr")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0377),
+            Some("cmd-gate-timeout-live-snapshot-deferred")
         );
         assert_eq!(xhci_diag_stage_label(0x0117), Some("init-policy-summary"));
         assert_eq!(
@@ -17408,6 +17428,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x036b),
             Some(("erstba_plan", "erdp_off", "expected_erdp"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0377),
+            Some(("expected_ptr", "event_syncs", "live_snapshot_deferred"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),

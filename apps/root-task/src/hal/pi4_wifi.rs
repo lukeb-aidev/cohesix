@@ -1669,7 +1669,8 @@ fn required_ht_clock_soft_timeout_fails_without_ladder(stage: &'static str) -> b
 
 #[inline]
 fn post_download_forced_alp_kso_direct_path_enabled(stage: &'static str) -> bool {
-    matches!(stage, "debug-probe-ht")
+    let _ = stage;
+    false
 }
 
 #[inline]
@@ -3490,6 +3491,11 @@ fn required_ht_clock_stable_timeout_polls_for_stage(stage: &'static str) -> usiz
 }
 
 #[inline]
+fn debug_probe_ht_backplane_liveness_enabled(stage: &'static str) -> bool {
+    matches!(stage, "debug-probe-ht")
+}
+
+#[inline]
 const fn required_ht_clock_linux_active_transition_uses_force_ht() -> bool {
     // brcmfmac's HT clock bring-up first requests HT_AVAIL only. FORCE_HT is a
     // later F2-interrupt propagation assist, never a pre-Function-2 HT proof.
@@ -4187,21 +4193,13 @@ const fn function2_accepts_linux_alp_kso_forced_ht_clock(
     last_cardcap: Option<u8>,
     current_clock_hz: u32,
 ) -> bool {
-    // The Pi 4 CYW43455 post-release edge can remain at HT_REQ|FORCE_HT|ALP_AVAIL
-    // until Function 2 traffic starts on explicit diagnostic paths. Production
-    // firmware setup must not use this non-Linux shortcut; it requires the real
-    // HT_AVAIL gate before Function 2.
-    allow_no_ht_function2_probe
-        && (chipclk & SBSDIO_HT_AVAIL) == 0
-        && (chipclk & SBSDIO_HT_AVAIL_REQ) != 0
-        && (chipclk & SBSDIO_FORCE_HT) != 0
-        && (chipclk & SBSDIO_ALP_AVAIL) != 0
-        && function2_forced_ht_clock_can_try_ready_poll(current_clock_hz)
-        && post_download_forced_alp_kso_sideband_allows_function2_probe(
-            last_wakeupctrl,
-            last_sleepcsr,
-            last_cardcap,
-        )
+    let _ = allow_no_ht_function2_probe;
+    let _ = chipclk;
+    let _ = last_wakeupctrl;
+    let _ = last_sleepcsr;
+    let _ = last_cardcap;
+    let _ = current_clock_hz;
+    false
 }
 
 #[inline]
@@ -6278,6 +6276,9 @@ const CYW43_HT_CLOCK_LINUX_SDONLY_SETTLE_LOOPS: usize =
     CYW43_HT_CLOCK_LINUX_ACTIVE_SETTLE_LOOPS * 4;
 const CYW43_HT_CLOCK_LINUX_ACTIVE_PROGRESS_POLLS: usize = 8;
 const CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_LOOPS: usize = CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS;
+const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR: u32 = 0x0025_8000;
+const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES: usize = 24;
+const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY: bool = true;
 const CYW43_HT_CLOCK_LADDER_HZ: [u32; 4] = [
     CYW43_FIRMWARE_BULK_CLOCK_HZ / 2,
     CYW43_FIRMWARE_BULK_CLOCK_HZ / 4,
@@ -17869,6 +17870,64 @@ impl SdioHost {
         Err(HalError::Unsupported(exact_error))
     }
 
+    fn debug_probe_ht_backplane_liveness_after_timeout(
+        &mut self,
+        stage: &'static str,
+        chipclk: u8,
+    ) {
+        if !debug_probe_ht_backplane_liveness_enabled(stage) {
+            return;
+        }
+
+        let mut bytes = [0u8; CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES];
+        let mode = if CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY {
+            "cmd52-windowed"
+        } else {
+            "cmd53-byte"
+        };
+        let result = if CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY {
+            self.backplane_read_firmware_verify_cmd52_into(
+                CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                &mut bytes,
+            )
+        } else {
+            self.backplane_read_into_with_chunk_limit_and_mode(
+                CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                &mut bytes,
+                CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES,
+                true,
+            )
+        };
+        match result {
+            Ok(()) => {
+                let first = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                let last_offset = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES - 4;
+                let last = u32::from_le_bytes([
+                    bytes[last_offset],
+                    bytes[last_offset + 1],
+                    bytes[last_offset + 2],
+                    bytes[last_offset + 3],
+                ]);
+                let mut checksum = 0u32;
+                for byte in bytes {
+                    checksum = checksum.wrapping_add(byte as u32);
+                }
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-live addr=0x{addr:08x} bytes={} mode={mode} chipclk=0x{chipclk:02x} first=0x{first:08x} last=0x{last:08x} checksum=0x{checksum:08x} production_continue=no",
+                    CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES,
+                    addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                ));
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-unreadable addr=0x{addr:08x} bytes={} mode={mode} chipclk=0x{chipclk:02x} err={err} production_continue=no",
+                    CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES,
+                    addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                ));
+            }
+        }
+    }
+
     fn debug_probe_forced_ht_after_timeout(
         &mut self,
         stage: &'static str,
@@ -17976,6 +18035,7 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} action=diagnostic-force-ht-timeout before=0x{before:02x} request=0x{request:02x} csr=0x{last_chipclk:02x} polls={poll_limit}/{poll_limit} production_continue=no"
         ));
+        self.debug_probe_ht_backplane_liveness_after_timeout(stage, last_chipclk);
         log_ht_clock_status(
             stage,
             "diagnostic-force-ht-timeout",
@@ -30807,7 +30867,7 @@ mod tests {
         assert!(!post_download_forced_alp_kso_direct_path_enabled(
             "wait-ht-clock"
         ));
-        assert!(post_download_forced_alp_kso_direct_path_enabled(
+        assert!(!post_download_forced_alp_kso_direct_path_enabled(
             "debug-probe-ht"
         ));
         assert!(!post_download_forced_alp_kso_direct_path_enabled(
@@ -31059,7 +31119,7 @@ mod tests {
     }
 
     #[test]
-    fn forced_alp_kso_tuple_can_try_f2_ready_only_on_diagnostic_no_ht_lane() {
+    fn forced_alp_kso_tuple_cannot_bypass_required_ht_gate() {
         let forced_tuple = SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL;
         let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
         let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK);
@@ -31076,7 +31136,7 @@ mod tests {
             cardcap,
             CYW43_STARTUP_CLOCK_HZ.saturating_sub(1),
         ));
-        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
             true,
             forced_tuple,
             wake,
@@ -31123,7 +31183,7 @@ mod tests {
             Some(0),
             CYW43_STARTUP_CLOCK_HZ,
         ));
-        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
             true,
             forced_tuple,
             wake,
@@ -31197,6 +31257,21 @@ mod tests {
         );
         assert_eq!(ht_clock_progress_chunk_loops(1234), 1234);
         assert_eq!(ht_clock_progress_chunk_loops(0), 0);
+    }
+
+    #[test]
+    fn debug_ht_timeout_backplane_probe_stays_diagnostic_only() {
+        assert!(debug_probe_ht_backplane_liveness_enabled("debug-probe-ht"));
+        assert!(!debug_probe_ht_backplane_liveness_enabled("wait-ht-clock"));
+        assert_eq!(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR, 0x0025_8000);
+        assert_eq!(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES, 24);
+        assert!(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY);
+        assert!(!function2_has_required_ht_clock(
+            SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL
+        ));
+        assert!(!function2_has_required_ht_clock(
+            SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL
+        ));
     }
 
     #[test]
@@ -31373,7 +31448,7 @@ mod tests {
             Some(cyw43455_cardcap_command_decode_value()),
             CYW43_FIRMWARE_BULK_CLOCK_HZ / 4,
         ));
-        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
             true,
             SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL,
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
@@ -31397,7 +31472,7 @@ mod tests {
             Some(cyw43455_cardcap_command_decode_value()),
             CYW43_STARTUP_CLOCK_HZ,
         ));
-        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
             true,
             SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL,
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
@@ -31799,7 +31874,7 @@ mod tests {
     }
 
     #[test]
-    fn post_download_ht_sideband_prime_accepts_only_forced_pi4_edge_for_function2() {
+    fn post_download_ht_sideband_prime_does_not_bypass_function2_ht_gate() {
         let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
         let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK);
         let cardcap = Some(cyw43455_cardcap_command_decode_value());
@@ -31819,7 +31894,7 @@ mod tests {
             cardcap,
             CYW43_FIRMWARE_BULK_CLOCK_HZ / 4,
         ));
-        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
             true,
             diagnostic_timeout,
             wake,
