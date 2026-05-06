@@ -196,6 +196,10 @@ const WIFI_CHIPCLKCSR_ALP_AVAIL: u8 = 0x40;
 const WIFI_CHIPCLKCSR_HT_AVAIL: u8 = 0x80;
 #[cfg(feature = "kernel")]
 const WIFI_WAKE_TILL_HT_AVAIL: u8 = 0x02;
+#[cfg(feature = "kernel")]
+const WIFI_SLEEPCSR_KSO: u8 = 0x01;
+#[cfg(feature = "kernel")]
+const WIFI_SLEEPCSR_DEVON: u8 = 0x02;
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_LIMIT_MS: u64 = 15_000;
 #[cfg(feature = "net-console")]
@@ -3168,10 +3172,12 @@ where
         self.emit_console_line(requests.as_str());
 
         let registers = format_message(format_args!(
-            "wifi: firmware_ht_state chipclk={} wake={} sleep={} cardcap={} f1={} f2={} blocker={} next={}",
+            "wifi: firmware_ht_state chipclk={} wake={} sleep={} kso={} devon={} cardcap={} f1={} f2={} blocker={} next={}",
             Self::format_optional_u8(trace.chipclkcsr),
             Self::format_optional_u8(trace.wakeupctrl),
             Self::format_optional_u8(trace.sleepcsr),
+            Self::wifi_sleep_bit_label(trace.sleepcsr, WIFI_SLEEPCSR_KSO),
+            Self::wifi_sleep_bit_label(trace.sleepcsr, WIFI_SLEEPCSR_DEVON),
             Self::format_optional_u8(trace.cardcap),
             trace.f1_state,
             trace.f2_state,
@@ -3223,12 +3229,14 @@ where
             .enumerate()
         {
             let line = format_message(format_args!(
-                "wifi: ht_record[{index}] stage={} status={} chipclk={} wake={} sleep={} cardcap={}",
+                "wifi: ht_record[{index}] stage={} status={} chipclk={} wake={} sleep={} kso={} devon={} cardcap={}",
                 record.stage,
                 record.status,
                 Self::format_optional_u8(record.chipclkcsr),
                 Self::format_optional_u8(record.wakeupctrl),
                 Self::format_optional_u8(record.sleepcsr),
+                Self::wifi_sleep_bit_label(record.sleepcsr, WIFI_SLEEPCSR_KSO),
+                Self::wifi_sleep_bit_label(record.sleepcsr, WIFI_SLEEPCSR_DEVON),
                 Self::format_optional_u8(record.cardcap),
             ));
             self.emit_console_line(line.as_str());
@@ -3378,7 +3386,7 @@ where
                 .and_then(|trace| trace.cccr_io_ready)
                 .is_some_and(|value| (value & 0x04) != 0);
         let ht_line = format_message(format_args!(
-            "wifi: ht_state chipclk={} ht_req={} ht_avail={} alp_req={} alp_avail={} force_ht={} wake_htwait={} sleep={} cardcap={} clock={}Hz width={}",
+            "wifi: ht_state chipclk={} ht_req={} ht_avail={} alp_req={} alp_avail={} force_ht={} wake_htwait={} sleep={} kso={} devon={} cardcap={} clock={}Hz width={}",
             Self::format_optional_u8(chipclk),
             Self::yes_no(ht_req),
             Self::yes_no(ht_avail),
@@ -3387,6 +3395,8 @@ where
             Self::yes_no(force_ht),
             Self::yes_no(htwait),
             Self::format_optional_u8(sleep),
+            Self::wifi_sleep_bit_label(sleep, WIFI_SLEEPCSR_KSO),
+            Self::wifi_sleep_bit_label(sleep, WIFI_SLEEPCSR_DEVON),
             Self::format_optional_u8(cardcap),
             snapshot.current_clock_hz,
             Self::wifi_bus_width_label(snapshot.bus_width),
@@ -3912,6 +3922,15 @@ where
             "yes"
         } else {
             "no"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_sleep_bit_label(value: Option<u8>, mask: u8) -> &'static str {
+        match value {
+            Some(value) if (value & mask) != 0 => "yes",
+            Some(_) => "no",
+            None => "n/a",
         }
     }
 
@@ -7282,7 +7301,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: firmware_ht_state chipclk=0x50 wake=0x02 sleep=0x01 cardcap=0x08 f1=enabled-ready f2=disabled-not-ready blocker=chipclkcsr-ht-avail-missing next=linux-capture-post-release-chipclkcsr"
+                "wifi: firmware_ht_state chipclk=0x50 wake=0x02 sleep=0x01 kso=yes devon=no cardcap=0x08 f1=enabled-ready f2=disabled-not-ready blocker=chipclkcsr-ht-avail-missing next=linux-capture-post-release-chipclkcsr"
             ),
             "{rendered}"
         );
@@ -7300,7 +7319,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: ht_record[0] stage=debug-probe-ht status=active-ht-timeout chipclk=0x50 wake=0x02 sleep=0x01 cardcap=0x08"
+                "wifi: ht_record[0] stage=debug-probe-ht status=active-ht-timeout chipclk=0x50 wake=0x02 sleep=0x01 kso=yes devon=no cardcap=0x08"
             ),
             "{rendered}"
         );

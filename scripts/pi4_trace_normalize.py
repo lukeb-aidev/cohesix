@@ -271,6 +271,16 @@ def normalize_wifi_blocker(value: str) -> str:
     lower = value.lower()
     if "armcr4-release-readback-unavailable" in lower:
         return "armcr4-release-readback-unavailable"
+    if (
+        "device-on" in lower
+        or "sleepcsr-devon" in lower
+        or "devon-timeout" in lower
+        or (
+            "devon" in lower
+            and any(token in lower for token in ("timeout", "missing", "absent"))
+        )
+    ):
+        return "devon-timeout"
     if "ht-clock" in lower or "ht-avail" in lower:
         return "ht-clock-timeout"
     if "firmware-verify-readback" in lower:
@@ -318,7 +328,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         elif tag.startswith("cmd-event-ring-before"):
             saw_command_event_ring_before = True
             gate = max(gate, 3)
-        elif tag == "cmd-doorbell-post-barrier":
+        elif tag in {
+            "cmd-doorbell-write",
+            "cmd-doorbell-write-done",
+            "cmd-doorbell-post-barrier",
+        }:
             saw_command_doorbell = True
             gate = max(gate, 3)
         elif (
@@ -362,6 +376,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
+        explicit_blocker = None
+        for key in ("blocker", "cause", "exact", "exact_error", "outcome"):
+            value = fields.get(key)
+            if value and value not in {"none", "n/a"}:
+                explicit_blocker = normalize_wifi_blocker(value)
         if "f1=enabled" in raw or "ioex=0x02" in raw or "iordy=0x02" in raw:
             gate = max(gate, 2)
         if (
@@ -370,6 +389,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             or "rstvec=" in raw
         ):
             gate = max(gate, 4)
+        if explicit_blocker == "devon-timeout":
+            gate = max(gate, 4)
+            blocker = explicit_blocker
+            continue
         if (
             "ht-clock" in raw
             or "ht-avail" in raw
@@ -377,18 +400,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             or fields.get("current") == "wait-ht-clock"
         ):
             gate = max(gate, 4)
-            blocker = "ht-clock-timeout"
+            if blocker != "devon-timeout":
+                blocker = "ht-clock-timeout"
         elif "firmware-verify-readback" in raw:
             gate = max(gate, 3)
             blocker = "firmware-verify-readback"
         elif "ht_avail=yes" in raw or "ht_avail=ready" in raw:
             gate = max(gate, 5)
             blocker = "none"
-        else:
-            for key in ("blocker", "cause", "exact", "exact_error", "outcome"):
-                value = fields.get(key)
-                if value and value not in {"none", "n/a"}:
-                    blocker = normalize_wifi_blocker(value)
+        elif explicit_blocker:
+            blocker = explicit_blocker
 
     if blocker == "function2-disabled" and gate >= 4:
         blocker = "ht-clock-timeout"

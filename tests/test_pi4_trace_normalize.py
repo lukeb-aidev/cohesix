@@ -108,7 +108,7 @@ def test_summary_tracks_latest_and_blockers() -> None:
     assert summary["domains"] == {"usb": 2, "wifi": 1}
     assert summary["latest"]["wifi"]["stage"] == "cyw43-load-firmware-fail"
     assert len(summary["blockers"]) == 2
-    assert summary["gates"]["WIFI_BLOCKER"] == "cyw43-device-on-timeout-before-ht"
+    assert summary["gates"]["WIFI_BLOCKER"] == "devon-timeout"
 
 
 def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
@@ -162,6 +162,25 @@ def test_gate_summary_tracks_usb_command_doorbell_vtimer_halt() -> None:
     assert gates.usb_blocker == "cmd-doorbell-vtimer-interrupt"
 
 
+def test_gate_summary_treats_usb_doorbell_write_edges_as_vtimer_halt() -> None:
+    for tag in ("cmd-doorbell-write", "cmd-doorbell-write-done"):
+        events = normalizer.parse_events(
+            [
+                "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
+                "usb: contract current=controller-ready expected=command-ring-recovery",
+                f"[local-seat] xhci.diag stage=0x030f tag={tag} "
+                "doorbell=0x000000000100 target=0x0",
+                "Kernel entry via Interrupt, irq 27",
+                "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
+            ]
+        )
+
+        gates = normalizer.summarize_gates(events)
+
+        assert gates.usb_gate == 3
+        assert gates.usb_blocker == "cmd-doorbell-vtimer-interrupt"
+
+
 def test_gate_summary_tracks_latest_usb_pre_doorbell_vtimer_halt() -> None:
     events = normalizer.parse_events(
         [
@@ -203,6 +222,41 @@ def test_gate_summary_prefers_latest_wifi_nettest_cause() -> None:
 
     assert gates.wifi_gate == 4
     assert gates.wifi_blocker == "armcr4-release-readback-unavailable"
+
+
+def test_gate_summary_classifies_wifi_devon_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
+            "wifi: boot_failure source=live stage=cyw43-load-firmware-fail "
+            "exact=cyw43-sleepcsr-devon-timeout-before-ht",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-device-on-timeout-before-ht",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "devon-timeout"
+
+
+def test_gate_summary_keeps_sleep_decode_from_becoming_devon_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
+            "wifi: ht_state chipclk=0x50 ht_req=yes ht_avail=no alp_req=no "
+            "alp_avail=yes force_ht=no wake_htwait=yes sleep=0x01 kso=yes "
+            "devon=no cardcap=0x06 clock=41666666Hz width=4bit",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "ht-clock-timeout"
 
 
 def test_gate_expectation_reports_mismatch(capsys) -> None:
