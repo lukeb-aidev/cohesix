@@ -294,6 +294,33 @@ def normalize_wifi_blocker(value: str) -> str:
     return value
 
 
+def wifi_ht_runtime_evidence(
+    raw: str, fields: dict[str, str], explicit_blocker: str | None
+) -> bool:
+    """Return true when a WiFi line proves the HT request/readback path ran."""
+
+    if explicit_blocker == "ht-clock-timeout":
+        return True
+    if fields.get("ht_req") == "yes":
+        return True
+    if fields.get("ht_avail") in {"yes", "ready", "no"} and "ht_state" in raw:
+        return True
+    if any(
+        token in raw
+        for token in (
+            "active-ht-request",
+            "active-ht-stable-timeout",
+            "active-ht-terminal-timeout",
+            "diagnostic-force-ht-readback",
+            "diagnostic-force-ht-timeout",
+            "status=active-ht-request-readback",
+            "status=active-ht-terminal-timeout",
+        )
+    ):
+        return True
+    return False
+
+
 def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     """Summarize the USB xHCI proof gate from normalized events."""
 
@@ -383,21 +410,28 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 explicit_blocker = normalize_wifi_blocker(value)
         if "f1=enabled" in raw or "ioex=0x02" in raw or "iordy=0x02" in raw:
             gate = max(gate, 2)
+        if fields.get("ht_avail") in {"yes", "ready"} or "ht_avail=ready" in raw:
+            gate = max(gate, 5)
+            blocker = "none"
+            continue
         if (
             "firmware_release" in raw
             or "armcr4_release=1" in raw
             or "rstvec=" in raw
         ):
-            gate = max(gate, 4)
+            gate = max(gate, 3)
         if explicit_blocker == "devon-timeout":
             gate = max(gate, 4)
             blocker = explicit_blocker
             continue
+        if explicit_blocker == "armcr4-release-readback-unavailable":
+            gate = max(gate, 4)
+            blocker = explicit_blocker
+            continue
+        ht_evidence = wifi_ht_runtime_evidence(raw, fields, explicit_blocker)
         if (
-            "ht-clock" in raw
-            or "ht-avail" in raw
-            or fields.get("focus") == "wait-ht-clock"
-            or fields.get("current") == "wait-ht-clock"
+            explicit_blocker == "ht-clock-timeout"
+            or ht_evidence
         ):
             gate = max(gate, 4)
             if blocker != "devon-timeout":
@@ -405,9 +439,6 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         elif "firmware-verify-readback" in raw:
             gate = max(gate, 3)
             blocker = "firmware-verify-readback"
-        elif "ht_avail=yes" in raw or "ht_avail=ready" in raw:
-            gate = max(gate, 5)
-            blocker = "none"
         elif explicit_blocker:
             blocker = explicit_blocker
 
@@ -454,6 +485,59 @@ def check_gate_expectations(
         if actual_value != expected_value:
             print(
                 f"gate assertion failed: {key} expected {expected_value} got {actual_value}",
+                file=stderr,
+            )
+            ok = False
+    return ok
+
+
+def check_gate_min_expectations(
+    summary: GateSummary, expectations: dict[str, str], stderr: TextIO
+) -> bool:
+    """Return true when numeric gate values meet lower-bound expectations."""
+
+    actual = {key: str(value) for key, value in summary.to_record().items()}
+    ok = True
+    for key, expected_value in expectations.items():
+        actual_value = actual.get(key)
+        try:
+            actual_number = int(actual_value or "", 10)
+            expected_number = int(expected_value, 10)
+        except ValueError:
+            print(
+                f"gate assertion failed: {key} min {expected_value} got {actual_value}",
+                file=stderr,
+            )
+            ok = False
+            continue
+        if actual_number < expected_number:
+            print(
+                f"gate assertion failed: {key} min {expected_number} got {actual_number}",
+                file=stderr,
+            )
+            ok = False
+    return ok
+
+
+def check_gate_not_expectations(
+    summary: GateSummary, expectations: dict[str, str], stderr: TextIO
+) -> bool:
+    """Return true when all gate values differ from rejected values."""
+
+    actual = {key: str(value) for key, value in summary.to_record().items()}
+    ok = True
+    for key, rejected_value in expectations.items():
+        if key not in actual:
+            print(
+                f"gate assertion failed: unknown key {key}",
+                file=stderr,
+            )
+            ok = False
+            continue
+        actual_value = actual.get(key)
+        if actual_value == rejected_value:
+            print(
+                f"gate assertion failed: {key} rejected {rejected_value}",
                 file=stderr,
             )
             ok = False
@@ -508,6 +592,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="assert a gate KEY=VALUE value; may be repeated with --gate-summary",
     )
+    parser.add_argument(
+        "--expect-min",
+        action="append",
+        default=[],
+        help="assert a numeric gate KEY is at least VALUE; may be repeated with --gate-summary",
+    )
+    parser.add_argument(
+        "--expect-not",
+        action="append",
+        default=[],
+        help="assert a gate KEY is not VALUE; may be repeated with --gate-summary",
+    )
     return parser
 
 
@@ -520,15 +616,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.gate_summary:
         gate_summary = summarize_gates(events)
         print("\n".join(gate_summary.to_env_lines()))
-        if not check_gate_expectations(
+        exact_ok = check_gate_expectations(
             gate_summary, parse_expectations(args.expect), sys.stderr
-        ):
+        )
+        min_ok = check_gate_min_expectations(
+            gate_summary, parse_expectations(args.expect_min), sys.stderr
+        )
+        not_ok = check_gate_not_expectations(
+            gate_summary, parse_expectations(args.expect_not), sys.stderr
+        )
+        if not (exact_ok and min_ok and not_ok):
             return 2
     elif args.summary:
         print(json.dumps(summarize_events(events), indent=2, sort_keys=True))
     else:
-        if args.expect:
-            raise SystemExit("--expect requires --gate-summary")
+        if args.expect or args.expect_min or args.expect_not:
+            raise SystemExit("--expect, --expect-min, and --expect-not require --gate-summary")
         write_jsonl(events, sys.stdout)
     return 0
 

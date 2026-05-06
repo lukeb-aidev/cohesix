@@ -931,7 +931,7 @@ fn post_download_ht_sleepcsr_clear_set_poll_limit_for_stage(stage: &'static str)
 
 #[inline]
 fn post_download_ht_sleepcsr_requires_live_devon_before_ht(stage: &'static str) -> bool {
-    matches!(stage, "wait-ht-clock")
+    !matches!(stage, "wait-ht-clock" | "debug-probe-ht")
 }
 
 #[inline]
@@ -4854,7 +4854,7 @@ const fn post_download_devon_before_ht_is_diagnostic() -> bool {
 
 #[inline]
 fn devon_before_ht_may_be_deferred_for_stage(stage: &'static str) -> bool {
-    matches!(stage, "debug-probe-ht")
+    matches!(stage, "wait-ht-clock" | "debug-probe-ht")
 }
 
 #[inline]
@@ -30436,14 +30436,22 @@ mod tests {
         );
         assert!(CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
         assert!(post_download_ht_sleepcsr_poll_limit() < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
-        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "debug-probe-ht"
         ));
-        assert!(post_download_ht_sleepcsr_requires_clear_set_before_ht(
+        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
+            "pre-write-alp-clock"
+        ));
+        assert!(!post_download_ht_sleepcsr_requires_clear_set_before_ht(
             "wait-ht-clock",
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
+        ));
+        assert!(post_download_ht_sleepcsr_requires_clear_set_before_ht(
+            "pre-write-alp-clock",
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
         ));
@@ -30471,14 +30479,14 @@ mod tests {
         assert!(!devon_before_ht_may_be_deferred_for_stage(
             "pre-write-alp-clock"
         ));
-        assert!(!devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
+        assert!(devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
         assert!(CYW43_KSO_DEVICE_ON_WAIT_LOOPS <= CYW43_KSO_AWAKE_WAIT_LOOPS);
         assert!(CYW43_KSO_DEVICE_ON_PROGRESS_INTERVAL_LOOPS > 0);
         assert!(CYW43_KSO_INITIAL_SETTLE_LOOPS > 0);
     }
 
     #[test]
-    fn post_download_ht_sideband_requires_live_devon_for_production_ht_request() {
+    fn post_download_ht_sideband_allows_kso_only_for_production_ht_request() {
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
         assert!(post_download_ht_sleepcsr_preserves_cached_devon());
@@ -30490,13 +30498,16 @@ mod tests {
         );
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert!(post_download_ht_sideband_primes_before_clock_request());
-        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
+        ));
+        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
+            "pre-write-alp-clock"
         ));
         assert!(!post_download_ht_sleepcsr_ready_for_function2(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK
         ));
-        assert!(!post_download_ht_sleepcsr_ready_for_clock_request(
+        assert!(post_download_ht_sleepcsr_ready_for_clock_request(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK,
             post_download_ht_sleepcsr_requires_live_devon_before_ht("wait-ht-clock")
         ));
@@ -30515,8 +30526,13 @@ mod tests {
         assert!(!post_download_ht_stage_primes_wake_sideband(
             "pre-write-alp-clock"
         ));
-        assert!(post_download_ht_sleepcsr_requires_clear_set_before_ht(
+        assert!(!post_download_ht_sleepcsr_requires_clear_set_before_ht(
             "wait-ht-clock",
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
+            Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
+        ));
+        assert!(post_download_ht_sleepcsr_requires_clear_set_before_ht(
+            "pre-write-alp-clock",
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
         ));
@@ -30856,7 +30872,7 @@ mod tests {
         assert!(!devon_before_ht_may_be_deferred_for_stage(
             "pre-write-alp-clock"
         ));
-        assert!(!devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
+        assert!(devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
         assert!(sleepcsr_kso_acknowledged(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK));
         assert!(!sleepcsr_device_on_awake(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK));
         assert_eq!(required_ht_clock_request_value(None), SBSDIO_HT_AVAIL_REQ);
@@ -31677,7 +31693,7 @@ mod tests {
         );
         assert!(CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
         assert!(post_download_ht_sleepcsr_poll_limit() < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
-        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert_eq!(

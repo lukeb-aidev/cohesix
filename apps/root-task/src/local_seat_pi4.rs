@@ -345,9 +345,12 @@ const RPI4_PCIE_DMA_BUS_ALIAS_BASE: usize = 0x4_0000_0000;
 // Per-allocation DMA tracing is useful for bring-up debugging but can add
 // heavy UART latency during normal keyboard enumeration.
 const XHCI_DMA_VERBOSE_LOGS: bool = false;
-// Raw-phys DMA fallback is disabled on Pi4 because it consistently times out
-// controller start (stage 0x0272) and adds long startup stalls.
-const XHCI_TRY_RAW_PHYS_DMA_FALLBACK: bool = false;
+// Keep the Linux-observed PCIe bus alias as the primary path, but run one
+// bounded raw-physical command-ring proof after the alias path. Current
+// hardware reaches doorbell publication and then times out waiting for the
+// no-op completion, so the next gate must rule DMA address interpretation in
+// or out without advancing into HID enumeration.
+const XHCI_TRY_RAW_PHYS_DMA_FALLBACK: bool = true;
 const XHCI_DMA_MAX_BYTES: usize = 8 * 1024 * 1024;
 // BCM2711 PCIe cannot DMA above the first 3 GiB (see upstream bcm2711.dtsi
 // pcie0 dma-ranges). Keep VL805/xHCI buffers under this ceiling.
@@ -19129,6 +19132,12 @@ mod tests {
             Some(0x4_BFFF_F000)
         );
         assert_eq!(pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT), None);
+    }
+
+    #[test]
+    fn pi4_xhci_command_ring_proof_tries_raw_phys_after_pcie_alias() {
+        assert!(XHCI_PCIE_DMA_WINDOW_ENABLED);
+        assert!(XHCI_TRY_RAW_PHYS_DMA_FALLBACK);
     }
 
     #[test]

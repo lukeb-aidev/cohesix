@@ -34,6 +34,8 @@ DEFAULT_COMMANDS=(
 )
 EXTRA_COMMANDS=()
 EXPECTATIONS=()
+MIN_EXPECTATIONS=()
+NOT_EXPECTATIONS=()
 CAPTURE_PID=""
 
 usage() {
@@ -70,6 +72,10 @@ Options:
   --command <line>           Append a console command to send during capture
   --expect <KEY=VALUE>       Require a gate summary value from the normalizer.
                              Examples: USB_GATE=3, WIFI_BLOCKER=ht-clock-timeout
+  --expect-min <KEY=VALUE>   Require a numeric gate to be at least VALUE.
+                             Example: USB_GATE=3 accepts USB_GATE=4.
+  --expect-not <KEY=VALUE>   Fail if a gate summary value still equals VALUE.
+                             Example: USB_BLOCKER=cmd-poll-only-timeout.
   -h, --help                 Show this help
 
 Default proof commands:
@@ -116,7 +122,13 @@ for disk in plist.get("AllDisksAndPartitions", []):
         info = plistlib.loads(
             subprocess.check_output(["diskutil", "info", "-plist", f"/dev/{parent}"])
         )
-        if info.get("Internal", True):
+        removable = (
+            info.get("RemovableMediaOrExternalDevice", False)
+            or info.get("Removable", False)
+            or info.get("Ejectable", False)
+        )
+        system_image = info.get("SystemImage", False) or info.get("OSInternalMedia", False)
+        if not removable or system_image:
             continue
         candidates.append(f"/dev/{parent}")
 
@@ -166,8 +178,16 @@ cleanup_capture() {
 }
 
 run_capture() {
-    local -a commands=("${DEFAULT_COMMANDS[@]}" "${EXTRA_COMMANDS[@]}")
+    local -a commands=()
     local command
+    local index
+
+    for ((index = 0; index < ${#DEFAULT_COMMANDS[@]}; index++)); do
+        commands+=("${DEFAULT_COMMANDS[$index]}")
+    done
+    for ((index = 0; index < ${#EXTRA_COMMANDS[@]}; index++)); do
+        commands+=("${EXTRA_COMMANDS[$index]}")
+    done
 
     [[ -e "${SERIAL_DEVICE}" ]] || fail "serial device missing: ${SERIAL_DEVICE}"
     : > "${LOG_PATH}"
@@ -191,12 +211,18 @@ run_capture() {
 
 run_normalizer() {
     local -a args=("${PYTHON}" "${TRACE_NORMALIZER}" "${LOG_PATH}" "--gate-summary")
-    local expectation
+    local index
 
     require_file "${TRACE_NORMALIZER}"
     require_file "${LOG_PATH}"
-    for expectation in "${EXPECTATIONS[@]}"; do
-        args+=("--expect" "${expectation}")
+    for ((index = 0; index < ${#EXPECTATIONS[@]}; index++)); do
+        args+=("--expect" "${EXPECTATIONS[$index]}")
+    done
+    for ((index = 0; index < ${#MIN_EXPECTATIONS[@]}; index++)); do
+        args+=("--expect-min" "${MIN_EXPECTATIONS[$index]}")
+    done
+    for ((index = 0; index < ${#NOT_EXPECTATIONS[@]}; index++)); do
+        args+=("--expect-not" "${NOT_EXPECTATIONS[$index]}")
     done
 
     "${args[@]}"
@@ -263,6 +289,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --expect)
             EXPECTATIONS+=("$2")
+            shift 2
+            ;;
+        --expect-min)
+            MIN_EXPECTATIONS+=("$2")
+            shift 2
+            ;;
+        --expect-not)
+            NOT_EXPECTATIONS+=("$2")
             shift 2
             ;;
         -h|--help)

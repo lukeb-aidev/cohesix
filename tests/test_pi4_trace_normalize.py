@@ -259,6 +259,34 @@ def test_gate_summary_keeps_sleep_decode_from_becoming_devon_blocker() -> None:
     assert gates.wifi_blocker == "ht-clock-timeout"
 
 
+def test_gate_summary_requires_wifi_ht_runtime_evidence() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 3
+    assert gates.wifi_blocker != "ht-clock-timeout"
+
+
+def test_gate_summary_tracks_wifi_ht_available_as_terminal_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=yes alp_req=no "
+            "alp_avail=yes wake_htwait=yes sleep=0x01 kso=yes devon=no",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "none"
+
+
 def test_gate_expectation_reports_mismatch(capsys) -> None:
     gates = normalizer.GateSummary(
         usb_gate=3,
@@ -274,6 +302,74 @@ def test_gate_expectation_reports_mismatch(capsys) -> None:
     captured = capsys.readouterr()
     assert not ok
     assert "USB_GATE expected 4 got 3" in captured.err
+
+
+def test_gate_min_expectation_allows_advancement(capsys) -> None:
+    gates = normalizer.GateSummary(
+        usb_gate=4,
+        usb_blocker="none",
+        wifi_gate=4,
+        wifi_blocker="devon-timeout",
+    )
+
+    ok = normalizer.check_gate_min_expectations(
+        gates, {"USB_GATE": "3", "WIFI_GATE": "4"}, sys.stderr
+    )
+
+    captured = capsys.readouterr()
+    assert ok
+    assert captured.err == ""
+
+
+def test_gate_min_expectation_reports_regression(capsys) -> None:
+    gates = normalizer.GateSummary(
+        usb_gate=2,
+        usb_blocker="pcie-config-replay",
+        wifi_gate=4,
+        wifi_blocker="devon-timeout",
+    )
+
+    ok = normalizer.check_gate_min_expectations(
+        gates, {"USB_GATE": "3"}, sys.stderr
+    )
+
+    captured = capsys.readouterr()
+    assert not ok
+    assert "USB_GATE min 3 got 2" in captured.err
+
+
+def test_gate_not_expectation_rejects_stale_blocker(capsys) -> None:
+    gates = normalizer.GateSummary(
+        usb_gate=3,
+        usb_blocker="cmd-poll-only-timeout",
+        wifi_gate=4,
+        wifi_blocker="devon-timeout",
+    )
+
+    ok = normalizer.check_gate_not_expectations(
+        gates, {"USB_BLOCKER": "cmd-poll-only-timeout"}, sys.stderr
+    )
+
+    captured = capsys.readouterr()
+    assert not ok
+    assert "USB_BLOCKER rejected cmd-poll-only-timeout" in captured.err
+
+
+def test_gate_not_expectation_rejects_unknown_keys(capsys) -> None:
+    gates = normalizer.GateSummary(
+        usb_gate=3,
+        usb_blocker="cmd-poll-only-timeout",
+        wifi_gate=4,
+        wifi_blocker="devon-timeout",
+    )
+
+    ok = normalizer.check_gate_not_expectations(
+        gates, {"USB_BLOCKR": "cmd-poll-only-timeout"}, sys.stderr
+    )
+
+    captured = capsys.readouterr()
+    assert not ok
+    assert "unknown key USB_BLOCKR" in captured.err
 
 
 def test_jsonl_output_is_stable() -> None:
