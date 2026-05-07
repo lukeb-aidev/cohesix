@@ -28,6 +28,15 @@ KEY_VALUE_RE = re.compile(
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat")
 WIFI_HINTS = ("wifi", "cyw", "brcmf", "sdio", "sdhci", "mmc")
+BOOT_START_MARKERS = (
+    "u-boot ",
+    "starting kernel ...",
+    "elf-loader started",
+    "bootstrapping kernel",
+    "booting all finished, dropped to user space",
+    "[kernel:entry] root-task entry reached",
+    "[cohesix:root-task] cohesix boot: root-task online",
+)
 USB_PROGRESS_GATES = {
     "no-controller": 1,
     "controller-ready": 3,
@@ -335,14 +344,18 @@ def normalize_usb_blocker(value: str) -> str:
         return "cmd-fetch-timeout"
     if "cmd-live-timeout-snapshot-missing" in lower:
         return "cmd-live-timeout-snapshot-missing"
-    if "cmd-pre-doorbell-vtimer-interrupt" in lower:
-        return "cmd-pre-doorbell-timer-halt"
-    if "cmd-doorbell-vtimer-interrupt" in lower:
-        return "cmd-doorbell-timer-halt"
-    if "cmd-pre-doorbell-timer-halt" in lower:
-        return "cmd-pre-doorbell-timer-halt"
-    if "cmd-doorbell-timer-halt" in lower:
-        return "cmd-doorbell-timer-halt"
+    if (
+        "cmd-pre-doorbell-proof-timer-preempted" in lower
+        or "cmd-pre-doorbell-vtimer-interrupt" in lower
+        or "cmd-pre-doorbell-timer-halt" in lower
+    ):
+        return "cmd-pre-doorbell-proof-timer-preempted"
+    if (
+        "cmd-doorbell-proof-timer-preempted" in lower
+        or "cmd-doorbell-vtimer-interrupt" in lower
+        or "cmd-doorbell-timer-halt" in lower
+    ):
+        return "cmd-doorbell-proof-timer-preempted"
     if "cmd-poll-only-timeout" in lower:
         return "cmd-poll-only-timeout"
     if "command-ring" in lower:
@@ -436,6 +449,10 @@ def normalize_wifi_blocker(value: str) -> str:
     """Normalize WiFi blocker strings into stable gate labels."""
 
     lower = value.lower()
+    if "ht-recover-cmd5-timeout" in lower or (
+        "ht-retry-sdio-card-not-ready" in lower and "phase=card-ready" in lower
+    ):
+        return "ht-recover-cmd5-timeout"
     if "ht-backplane-cmd53-r5-rejected" in lower:
         return "ht-backplane-cmd53-r5-rejected"
     if "sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower:
@@ -587,6 +604,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     saw_command_timeout_plan = False
     command_timeout_detail: str | None = None
     precise_command_timeout_details = {
+        "cmd-poll-only-timeout",
         "cmd-fetch-timeout",
         "cmd-event-ring-timeout",
         "cmd-controller-not-running",
@@ -688,6 +706,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             saw_command_doorbell = False
             saw_command_event_ring_before = False
             saw_command_timeout_plan = False
+            command_timeout_detail = None
             gate = max(gate, 3)
         if (
             "cmd-poll-only-timeout" in raw
@@ -758,7 +777,10 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             and "irq 27" in raw
         ):
             gate = max(gate, 3)
-            blocker = "cmd-doorbell-timer-halt"
+            if command_timeout_detail in precise_command_timeout_details:
+                blocker = command_timeout_detail
+            else:
+                blocker = "cmd-doorbell-proof-timer-preempted"
         elif (
             saw_command_event_ring_before
             and not saw_command_doorbell
@@ -766,7 +788,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             and "irq 27" in raw
         ):
             gate = max(gate, 3)
-            blocker = "cmd-pre-doorbell-timer-halt"
+            blocker = "cmd-pre-doorbell-proof-timer-preempted"
         elif (
             fields.get("command_probe", "").endswith("-ok")
             or (
@@ -807,6 +829,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     blocker = "unknown"
     precise_ht_blockers = {
         "devon-timeout",
+        "ht-recover-cmd5-timeout",
         "ht-backplane-cmd53-r5-rejected",
         "ht-backplane-cmd53-data-wait",
         "ht-backplane-cmd52-r5-rejected",
@@ -830,6 +853,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             value = fields.get(key)
             if value and value not in {"none", "n/a"}:
                 explicit_blocker = normalize_wifi_blocker(value)
+        if (
+            "ht-clock-recover-retry-fail" in raw
+            and "ht-retry-sdio-card-not-ready" in raw
+            and "phase=card-ready" in raw
+        ):
+            explicit_blocker = normalize_wifi_blocker(raw)
         for key in ("stage", "current", "outcome", "focus", "result", "source"):
             progress_gate = wifi_progress_gate(fields.get(key))
             if progress_gate is not None:
@@ -922,10 +951,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = "none"
             continue
         if raw.startswith("err nettest"):
-            if explicit_blocker:
+            if blocker in precise_ht_blockers:
+                blocker = blocker
+            elif explicit_blocker:
                 blocker = explicit_blocker
             else:
-                blocker = "nettest-failed"
+                blocker = (
+                    "ht-backplane-cmd53-data-wait"
+                    if blocker == "ht-backplane-cmd53-data-wait"
+                    else "nettest-failed"
+                )
             if blocker in {"dhcp-pending", "dhcp-failed"}:
                 gate = max(gate, 8)
             elif blocker.startswith("net-not-ready") or blocker.startswith(
@@ -935,7 +970,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if "diagnostic-ht-timeout-backplane-unreadable" in raw:
             gate = max(gate, 4)
-            blocker = normalize_wifi_blocker(raw)
+            if blocker not in {
+                "ht-backplane-cmd53-data-wait",
+                "ht-recover-cmd5-timeout",
+            }:
+                blocker = normalize_wifi_blocker(raw)
             continue
         if "diagnostic-ht-timeout-backplane-cmd52-rejected" in raw:
             gate = max(gate, 4)
@@ -943,10 +982,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if "sdio cmd53 r5 fail" in raw:
             gate = max(gate, 4)
-            blocker = normalize_wifi_blocker(raw)
+            if blocker not in {
+                "ht-backplane-cmd53-data-wait",
+                "ht-recover-cmd5-timeout",
+            }:
+                blocker = normalize_wifi_blocker(raw)
             continue
         if (
-            "sdhci xfer error cmd=53 arg=0x15000018" in raw
+            (
+                "sdhci xfer error cmd=53 arg=0x15000018" in raw
+                or "sdhci xfer error cmd=53 arg=0x15bd8818" in raw
+            )
             and "phase=data-wait" in raw
         ):
             gate = max(gate, 4)
@@ -957,7 +1003,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if fields.get("ht_avail") in {"yes", "ready"} or "ht_avail=ready" in raw:
             ht_available_seen = True
             gate = max(gate, 5)
-            if blocker in {"unknown", "ht-clock-timeout"}:
+            if blocker in {"unknown", "ht-clock-timeout"} or blocker in precise_ht_blockers:
                 blocker = "none"
             continue
         if (
@@ -967,6 +1013,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         ):
             gate = max(gate, 3)
         if explicit_blocker == "devon-timeout":
+            gate = max(gate, 4)
+            blocker = explicit_blocker
+            continue
+        if explicit_blocker == "ht-recover-cmd5-timeout":
             gate = max(gate, 4)
             blocker = explicit_blocker
             continue
@@ -1127,6 +1177,19 @@ def read_input(path: str) -> list[str]:
     return log_path.read_text(encoding="utf-8", errors="replace").splitlines()
 
 
+def latest_boot_lines(lines: list[str]) -> list[str]:
+    """Return the latest boot slice from an accumulated serial capture."""
+
+    latest_start = None
+    for index, line in enumerate(lines):
+        clean = ANSI_RE.sub("", line).lower()
+        if any(marker in clean for marker in BOOT_START_MARKERS):
+            latest_start = index
+    if latest_start is None:
+        return lines
+    return lines[latest_start:]
+
+
 def write_jsonl(events: Iterable[TraceEvent], output: TextIO) -> None:
     """Write normalized events as JSON Lines."""
 
@@ -1156,7 +1219,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gate-summary",
         action="store_true",
-        help="emit stable USB/WiFi gate KEY=VALUE lines instead of JSON Lines",
+        help=(
+            "emit stable USB/WiFi gate KEY=VALUE lines for the latest boot "
+            "instead of JSON Lines"
+        ),
     )
     parser.add_argument(
         "--expect",
@@ -1184,7 +1250,10 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
-    events = filter_events(parse_events(read_input(args.log)), set(args.domain))
+    lines = read_input(args.log)
+    if args.gate_summary:
+        lines = latest_boot_lines(lines)
+    events = filter_events(parse_events(lines), set(args.domain))
     if args.gate_summary:
         gate_summary = summarize_gates(events)
         print("\n".join(gate_summary.to_env_lines()))

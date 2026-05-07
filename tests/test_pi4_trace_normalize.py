@@ -197,7 +197,7 @@ def test_gate_summary_tracks_usb_command_doorbell_timer_halt() -> None:
     gates = normalizer.summarize_gates(events)
 
     assert gates.usb_gate == 3
-    assert gates.usb_blocker == "cmd-doorbell-timer-halt"
+    assert gates.usb_blocker == "cmd-doorbell-proof-timer-preempted"
 
 
 def test_gate_summary_treats_usb_doorbell_write_edges_as_timer_halt() -> None:
@@ -216,7 +216,7 @@ def test_gate_summary_treats_usb_doorbell_write_edges_as_timer_halt() -> None:
         gates = normalizer.summarize_gates(events)
 
         assert gates.usb_gate == 3
-        assert gates.usb_blocker == "cmd-doorbell-timer-halt"
+        assert gates.usb_blocker == "cmd-doorbell-proof-timer-preempted"
 
 
 def test_gate_summary_tracks_latest_usb_pre_doorbell_timer_halt() -> None:
@@ -241,7 +241,7 @@ def test_gate_summary_tracks_latest_usb_pre_doorbell_timer_halt() -> None:
     gates = normalizer.summarize_gates(events)
 
     assert gates.usb_gate == 3
-    assert gates.usb_blocker == "cmd-pre-doorbell-timer-halt"
+    assert gates.usb_blocker == "cmd-pre-doorbell-proof-timer-preempted"
 
 
 def test_gate_summary_keeps_usb_timeout_plan_ahead_of_timer_halt() -> None:
@@ -264,6 +264,105 @@ def test_gate_summary_keeps_usb_timeout_plan_ahead_of_timer_halt() -> None:
 
     assert gates.usb_gate == 3
     assert gates.usb_blocker == "cmd-live-timeout-snapshot-missing"
+
+
+def test_gate_summary_preserves_usb_live_snapshot_ahead_of_timer_halt() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x0374 "
+            "tag=cmd-gate-timeout-live-crcr "
+            "live_crcr=0x0000000404024001 expected_ptr=0x0000000404024000 "
+            "ptr_match=0x0000000000000001",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-fetch-timeout"
+
+
+def test_gate_summary_preserves_usb_poll_timeout_after_doorbell_timer_halt() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
+            "waited=0x00000000001e8480 expected_ptr=0x0000000404024000 "
+            "event_syncs=0x0000000000000002",
+            "[local-seat] xhci root-port command-probe result=no-op-timeout "
+            "bus=pcie-window action=retry-raw-phys detail=Timeout",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-poll-only-timeout"
+
+
+def test_gate_summary_resets_usb_timeout_detail_on_later_cmd_submit() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
+            "waited=0x00000000001e8480 expected_ptr=0x0000000404024000 "
+            "event_syncs=0x0000000000000002",
+            "usb: xhci_recent[7] line=116 stage=0x030b "
+            "tag=cmd-poll-only-timeout exact=cmd-poll-only-timeout",
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
+            "doorbell=0x000000000100 target=0x0",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-doorbell-proof-timer-preempted"
+
+
+def test_gate_summary_latest_boot_drops_stale_usb_timeout() -> None:
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+        "param=0x0000000000000000",
+        "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
+        "waited=0x00000000001e8480 expected_ptr=0x0000000404024000 "
+        "event_syncs=0x0000000000000002",
+        "U-Boot 2026.01-dirty",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+        "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+        "param=0x0000000000000000",
+        "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+        "doorbell=0x000000000100 target=0x0",
+        "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
+        "doorbell=0x000000000100 target=0x0",
+        "Kernel entry via Interrupt, irq 27",
+    ]
+
+    events = normalizer.parse_events(normalizer.latest_boot_lines(lines))
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-doorbell-proof-timer-preempted"
 
 
 def test_gate_summary_keeps_usb_poll_timeout_ahead_of_later_timer_halt() -> None:
@@ -493,6 +592,70 @@ def test_gate_summary_tracks_wifi_ht_backplane_cmd53_r5_rejection() -> None:
     assert gates.wifi_blocker == "ht-backplane-cmd53-r5-rejected"
 
 
+def test_gate_summary_preserves_wifi_ht_recover_cmd5_timeout_over_nettest() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: ht_state chipclk=0x50 ht_req=yes ht_avail=no alp_avail=yes",
+            "[pi4-wifi] sdio card-init phase=cmd5-probe",
+            "[pi4-wifi] sdhci cmd error cmd=5 arg=0x00000000 "
+            "st=0x00018000 why=timeout",
+            "[pi4-wifi] firmware stage=debug-probe-ht "
+            "action=ht-clock-recover-retry-fail "
+            "exact_error=ht-retry-sdio-card-not-ready phase=card-ready "
+            "err=unsupported operation: sdhci-command-error",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "ht-recover-cmd5-timeout"
+
+
+def test_gate_summary_preserves_linux_shape_wifi_cmd53_data_wait() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=no alp_avail=yes",
+            "[pi4-wifi] sdhci xfer error cmd=53 arg=0x15bd8818 len=24 "
+            "phase=data-wait err=unsupported operation: sdhci-int-timeout",
+            "[pi4-wifi] firmware stage=debug-probe-ht "
+            "action=diagnostic-ht-timeout-backplane-try-fail "
+            "addr=0x0025dec4 fn_addr=0x0dec4 bytes=24 "
+            "mode=cmd53-byte-flagged-24-inc inc=1 linux_shape=y "
+            "chipclk=0x52 err=unsupported operation: sdhci-int-timeout "
+            "exact_error=ht-backplane-cmd53-data-wait production_continue=no",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x14bd8818 len=24 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "ht-backplane-cmd53-data-wait"
+
+
+def test_gate_summary_clears_ht_blocker_after_retry_ht_avail() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
+            "[pi4-wifi] sdhci xfer error cmd=53 arg=0x15bd8818 len=24 "
+            "phase=data-wait err=unsupported operation: sdhci-int-timeout",
+            "[pi4-wifi] firmware stage=wait-ht-clock "
+            "status=ht-retry-readback chipclk=0x70 ht_avail=yes exact_error=none",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "none"
+
+
 def test_gate_summary_promotes_wifi_cmd53_after_cmd52_rejection() -> None:
     events = normalizer.parse_events(
         [
@@ -589,7 +752,8 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
     cases = {
         "event-ring-missing": "cmd-event-ring-timeout",
         "cmd-fetch-missing": "cmd-fetch-timeout",
-        "cmd-doorbell-vtimer-interrupt": "cmd-doorbell-timer-halt",
+        "cmd-pre-doorbell-timer-halt": "cmd-pre-doorbell-proof-timer-preempted",
+        "cmd-doorbell-vtimer-interrupt": "cmd-doorbell-proof-timer-preempted",
         "pcie-config-replay": "pcie-config-replay",
         "root-port-sample-deferred": "root-port-sample-deferred",
         "no-connected-ports": "no-connected-ports",
@@ -614,6 +778,7 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         "cyw43-firmware-ready-timeout": "firmware-ready-timeout",
         "firmware-channel-f2": "firmware-channel-f2",
         "cyw43-control-plane-no-reply-linux-f2-armed": "control-plane-no-reply",
+        "ht-retry-sdio-card-not-ready phase=card-ready": "ht-recover-cmd5-timeout",
         "cyw43-control-plane-sideband-unreadable": (
             "control-plane-sideband-unreadable"
         ),

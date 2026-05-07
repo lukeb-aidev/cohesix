@@ -28,7 +28,8 @@ const MAILBOX_RESET_POST_SETTLE_SPINS: usize = 1_000_000;
 const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
-const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = COMMAND_WAIT_SPINS / 2;
+const COMMAND_POLL_ONLY_WAIT_SPINS: usize = 64;
+const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
@@ -4701,7 +4702,7 @@ impl<H: Dma> XhciCtrl<H> {
                 self.emit_command_gate_live_timeout_snapshot(expected_cmd_trb);
                 live_timeout_snapshot_emitted = true;
             }
-            if waited >= COMMAND_WAIT_SPINS {
+            if waited >= COMMAND_POLL_ONLY_WAIT_SPINS {
                 self.emit_command_ring_debug_snapshot(0x0364);
                 self.emit_command_event_ring_debug_snapshot(0x0357);
                 self.emit_command_gate_plan_snapshot(0x036c, expected_cmd_trb, 2);
@@ -5135,7 +5136,8 @@ mod tests {
     use super::{
         blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, command_timeout_live_snapshot_enabled,
-        command_timeout_live_snapshot_spins, COMMAND_WAIT_SPINS,
+        command_timeout_live_snapshot_spins, COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS,
+        COMMAND_POLL_ONLY_WAIT_SPINS, COMMAND_WAIT_SPINS,
         compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base, compose_erst_size,
         compose_initial_erdp,
         compose_polling_erdp_ack, compose_run_usbcmd, constructor_polling_scrub_mode,
@@ -6656,7 +6658,11 @@ mod tests {
     #[test]
     fn command_timeout_live_snapshot_runs_before_final_timeout() {
         assert!(command_timeout_live_snapshot_spins() > 0);
-        assert!(command_timeout_live_snapshot_spins() < COMMAND_WAIT_SPINS);
+        assert_eq!(command_timeout_live_snapshot_spins(), 32);
+        assert_eq!(COMMAND_POLL_ONLY_WAIT_SPINS, 64);
+        assert!(command_timeout_live_snapshot_spins() < COMMAND_POLL_ONLY_WAIT_SPINS);
+        assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);
+        assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_WAIT_SPINS);
     }
 
     #[test]

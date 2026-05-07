@@ -4553,13 +4553,19 @@ fn usb_command_probe_proves_ring(label: &str) -> bool {
 fn xhci_probe_command_ring_after_event_drain(
     ctrl: &XhciCtrl<SeatDma>,
     event_candidate_mask: u32,
+    pcie_dma_window: bool,
 ) -> &'static str {
+    let bus = if pcie_dma_window {
+        "pcie-window"
+    } else {
+        "phys"
+    };
     if event_candidate_mask == 0 {
         let mut line = heapless::String::<192>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x0000 verb=no-op"
+                "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x0000 verb=no-op bus={bus}"
             ),
         );
         boot_log::force_uart_line(line.as_str());
@@ -4573,11 +4579,19 @@ fn xhci_probe_command_ring_after_event_drain(
             }
             Err(err) => {
                 let result = usb_no_op_probe_error_label(err);
-                let mut line = heapless::String::<192>::new();
+                let action = if pcie_dma_window
+                    && XHCI_TRY_RAW_PHYS_DMA_FALLBACK
+                    && result == "no-op-timeout"
+                {
+                    "retry-raw-phys"
+                } else {
+                    "none"
+                };
+                let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci root-port command-probe result={result} detail={err:?}"
+                        "[local-seat] xhci root-port command-probe result={result} bus={bus} action={action} detail={err:?}"
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -4590,7 +4604,7 @@ fn xhci_probe_command_ring_after_event_drain(
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=enable-slot"
+            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=enable-slot bus={bus}"
         ),
     );
     boot_log::force_uart_line(line.as_str());
@@ -4607,7 +4621,7 @@ fn xhci_probe_command_ring_after_event_drain(
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci root-port command-probe result=enable-slot-ok slot={} cleanup={cleanup}",
+                    "[local-seat] xhci root-port command-probe result=enable-slot-ok bus={bus} slot={} cleanup={cleanup}",
                     slot
                 ),
             );
@@ -4624,7 +4638,7 @@ fn xhci_probe_command_ring_after_event_drain(
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci root-port command-probe result={result} detail={err:?}"
+                    "[local-seat] xhci root-port command-probe result={result} bus={bus} detail={err:?}"
                 ),
             );
             boot_log::force_uart_line(line.as_str());
@@ -10118,6 +10132,7 @@ impl UsbKeyboard {
                             command_probe = xhci_probe_command_ring_after_event_drain(
                                 ctrl.as_ref(),
                                 event_candidate_mask,
+                                pcie_dma_window,
                             );
                         } else {
                             {
@@ -10603,6 +10618,35 @@ impl UsbKeyboard {
                             );
                         }
                         log_usb_probe_pathway_summary(&pathway_summary);
+                        if command_probe != "n/a"
+                            && !usb_command_probe_proves_ring(command_probe)
+                            && bus_mode_idx + 1 < dma_bus_modes.len()
+                        {
+                            let next_bus = if dma_bus_modes[bus_mode_idx + 1] {
+                                "pcie-window"
+                            } else {
+                                "phys"
+                            };
+                            let mut fallback_line = heapless::String::<320>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut fallback_line,
+                                format_args!(
+                                    "[local-seat] xhci probe fallback mmio=0x{mmio:016x} attempt={}/{} origin={} dma={} from_bus={} to_bus={} reason={command_probe}",
+                                    strategy_idx + 1,
+                                    init_strategy_count,
+                                    xhci_runtime_init_strategy_origin_label(strategy),
+                                    if prefer_high { "high" } else { "low" },
+                                    if pcie_dma_window {
+                                        "pcie-window"
+                                    } else {
+                                        "phys"
+                                    },
+                                    next_bus,
+                                    mmio = effective_mmio
+                                ),
+                            );
+                            boot_log::force_uart_line(fallback_line.as_str());
+                        }
                         usb_probe_best_pathway_update(&mut best_probe_pathway, pathway_summary);
                     }
                 }
@@ -14655,6 +14699,7 @@ mod tests {
         parse_xhci_capbase, runtime_vl805_mailbox_reset_allows_trusted_cold_init,
         runtime_vl805_mailbox_reset_error_allows_cold_init, text_backspace_target, text_row_count,
         text_viewport_height, translate_bcm2711_soc_reg_addr, translate_vl805_pci_bar_to_cpu_mmio,
+        usb_command_probe_proves_ring, usb_no_op_probe_error_label,
         usb_probe_preflight_next_step_for_source, vl805_capture_cfg_witness_contract_ready,
         vl805_cfg_preseed_mode, vl805_cfg_preseed_needed, vl805_runtime_cfg_replay_ready,
         vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
@@ -14678,7 +14723,7 @@ mod tests {
         xhci_runtime_init_strategy_requires_primary_pcie_irq, xhci_runtime_init_strategy_run_label,
         xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
         xhci_safe_mode_skip_command, xhci_vl805_irq_delivery_ready, ConfigDesc,
-        LocalSeatXhciStopStateSnapshot, Pi4SeatError, UsbKeyboard, UsbProbePathOutcome,
+        LocalSeatXhciStopStateSnapshot, Pi4SeatError, UsbError, UsbKeyboard, UsbProbePathOutcome,
         UsbProbePathProgress, UsbProbePathwaySummary, Vl805CfgPreseedMode, XhciCapProbe,
         XhciDiagSnapshot, XhciFirmwareHandoff, XhciIrqBinding, XhciIrqGuard, XhciIrqInstallPhase,
         XhciIrqSinkMode, XhciRuntimeInitStrategy, HUB_PORT_IFACE_FALLBACK_MAX,
@@ -19438,6 +19483,12 @@ mod tests {
     fn pi4_xhci_command_ring_proof_tries_raw_phys_after_pcie_alias() {
         assert!(XHCI_PCIE_DMA_WINDOW_ENABLED);
         assert!(XHCI_TRY_RAW_PHYS_DMA_FALLBACK);
+        assert_eq!(
+            usb_no_op_probe_error_label(UsbError::Timeout),
+            "no-op-timeout"
+        );
+        assert!(!usb_command_probe_proves_ring("no-op-timeout"));
+        assert!(usb_command_probe_proves_ring("no-op-ok"));
     }
 
     #[test]
