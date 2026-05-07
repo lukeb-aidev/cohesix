@@ -413,6 +413,11 @@ const fn backplane_firmware_verify_cmd52_function_addr(addr: u32) -> u32 {
 }
 
 #[inline]
+const fn backplane_diagnostic_cmd52_function_addr(addr: u32) -> u32 {
+    backplane_byte_function_addr(addr)
+}
+
+#[inline]
 const fn backplane_word_aligned_addr(addr: u32) -> u32 {
     addr & !0x3
 }
@@ -6276,9 +6281,48 @@ const CYW43_HT_CLOCK_LINUX_SDONLY_SETTLE_LOOPS: usize =
     CYW43_HT_CLOCK_LINUX_ACTIVE_SETTLE_LOOPS * 4;
 const CYW43_HT_CLOCK_LINUX_ACTIVE_PROGRESS_POLLS: usize = 8;
 const CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_LOOPS: usize = CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS;
-const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR: u32 = 0x0025_8000;
+// Linux repeatedly reads the post-release dongle console window at 0x00258000
+// offset 0x5ec4 while proving CYW43455 liveness after CHIPACTIVE.
+const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR: u32 = 0x0025_DEC4;
 const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES: usize = 24;
-const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY: bool = true;
+const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_MAX_BYTES: usize = 24;
+const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY: bool = false;
+const CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD53_AFTER_CMD52: bool = true;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HtBackplaneCmd53ProbePlan {
+    mode: &'static str,
+    function_addr: u32,
+    bytes: usize,
+    increment_addr: bool,
+}
+
+const CYW43_HT_TIMEOUT_BACKPLANE_CMD53_PROBE_PLANS: [HtBackplaneCmd53ProbePlan; 4] = [
+    HtBackplaneCmd53ProbePlan {
+        mode: "cmd53-byte-flagged-24-inc",
+        function_addr: backplane_transfer_function_addr(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR),
+        bytes: 24,
+        increment_addr: true,
+    },
+    HtBackplaneCmd53ProbePlan {
+        mode: "cmd53-byte-unflagged-24-inc",
+        function_addr: backplane_byte_function_addr(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR),
+        bytes: 24,
+        increment_addr: true,
+    },
+    HtBackplaneCmd53ProbePlan {
+        mode: "cmd53-byte-unflagged-4-inc",
+        function_addr: backplane_byte_function_addr(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR),
+        bytes: 4,
+        increment_addr: true,
+    },
+    HtBackplaneCmd53ProbePlan {
+        mode: "cmd53-byte-unflagged-1-fixed",
+        function_addr: backplane_byte_function_addr(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR),
+        bytes: 1,
+        increment_addr: false,
+    },
+];
 const CYW43_HT_CLOCK_LADDER_HZ: [u32; 4] = [
     CYW43_FIRMWARE_BULK_CLOCK_HZ / 2,
     CYW43_FIRMWARE_BULK_CLOCK_HZ / 4,
@@ -14471,6 +14515,63 @@ impl SdioHost {
         Ok(())
     }
 
+    fn backplane_read_diagnostic_cmd52_into(
+        &mut self,
+        addr: u32,
+        out: &mut [u8],
+    ) -> Result<(), HalError> {
+        let mut offset = 0usize;
+        while offset < out.len() {
+            let window_offset = (addr as usize + offset) & BACKPLANE_ADDRESS_MASK as usize;
+            let window_remaining =
+                (BACKPLANE_ADDRESS_MASK as usize + 1).saturating_sub(window_offset);
+            let chunk_len = cmp::min(out.len() - offset, window_remaining);
+            let chunk_addr = addr
+                .checked_add(
+                    u32::try_from(offset)
+                        .map_err(|_| HalError::Unsupported("backplane-read-overflow"))?,
+                )
+                .ok_or(HalError::Unsupported("backplane-read-overflow"))?;
+            self.with_backplane_window_addr(
+                chunk_addr,
+                backplane_diagnostic_cmd52_function_addr(chunk_addr),
+                |this, function_addr| {
+                    for (index, slot) in out[offset..offset + chunk_len].iter_mut().enumerate() {
+                        let byte_addr =
+                            function_addr
+                                .checked_add(u32::try_from(index).map_err(|_| {
+                                    HalError::Unsupported("backplane-read-overflow")
+                                })?)
+                                .ok_or(HalError::Unsupported("backplane-read-overflow"))?;
+                        *slot = this
+                            .io_direct_read_no_cmd53_fallback(SdioFunction::Function1, byte_addr)?;
+                    }
+                    Ok(())
+                },
+            )?;
+            offset += chunk_len;
+        }
+        Ok(())
+    }
+
+    fn backplane_read_diagnostic_cmd53_into(
+        &mut self,
+        addr: u32,
+        function_addr: u32,
+        increment_addr: bool,
+        out: &mut [u8],
+    ) -> Result<(), HalError> {
+        self.with_backplane_window_addr(addr, function_addr, |this, function_addr| {
+            this.io_extended_byte_mode(
+                SdioFunction::Function1,
+                function_addr,
+                increment_addr,
+                false,
+                out,
+            )
+        })
+    }
+
     fn backplane_read_into_with_chunk_limit(
         &mut self,
         addr: u32,
@@ -17879,29 +17980,54 @@ impl SdioHost {
             return;
         }
 
-        let mut bytes = [0u8; CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES];
+        let mut bytes = [0u8; CYW43_HT_TIMEOUT_BACKPLANE_PROBE_MAX_BYTES];
+        let mut result_len = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES;
         let mode = if CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY {
-            "cmd52-windowed"
+            "cmd52-byte-windowed"
         } else {
-            "cmd53-byte"
+            CYW43_HT_TIMEOUT_BACKPLANE_CMD53_PROBE_PLANS[0].mode
         };
+        let mut result_mode = mode;
+        let mut cmd52_error = None;
         let result = if CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY {
-            self.backplane_read_firmware_verify_cmd52_into(
+            match self.backplane_read_diagnostic_cmd52_into(
                 CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
-                &mut bytes,
-            )
+                &mut bytes[..CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES],
+            ) {
+                Ok(()) => Ok(()),
+                Err(err) if CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD53_AFTER_CMD52 => {
+                    cmd52_error = Some(err);
+                    result_mode = "cmd53-byte-after-cmd52-matrix";
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-cmd52-rejected addr=0x{addr:08x} fn_addr=0x{fn_addr:05x} bytes={} mode={mode} chipclk=0x{chipclk:02x} err={err} production_continue=no",
+                        CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES,
+                        addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                        fn_addr = backplane_diagnostic_cmd52_function_addr(
+                            CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR
+                        ),
+                    ));
+                    let matrix =
+                        self.debug_probe_ht_backplane_cmd53_matrix(stage, chipclk, &mut bytes);
+                    if let Ok((len, matrix_mode)) = matrix {
+                        result_len = len;
+                        result_mode = matrix_mode;
+                    }
+                    matrix.map(|_| ())
+                }
+                Err(err) => Err(err),
+            }
         } else {
-            self.backplane_read_into_with_chunk_limit_and_mode(
-                CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
-                &mut bytes,
-                CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES,
-                true,
-            )
+            let matrix = self.debug_probe_ht_backplane_cmd53_matrix(stage, chipclk, &mut bytes);
+            if let Ok((len, matrix_mode)) = matrix {
+                result_len = len;
+                result_mode = matrix_mode;
+            }
+            matrix.map(|_| ())
         };
         match result {
             Ok(()) => {
                 let first = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                let last_offset = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES - 4;
+                let last_offset = result_len.saturating_sub(4);
                 let last = u32::from_le_bytes([
                     bytes[last_offset],
                     bytes[last_offset + 1],
@@ -17909,23 +18035,79 @@ impl SdioHost {
                     bytes[last_offset + 3],
                 ]);
                 let mut checksum = 0u32;
-                for byte in bytes {
-                    checksum = checksum.wrapping_add(byte as u32);
+                for byte in &bytes[..result_len] {
+                    checksum = checksum.wrapping_add(u32::from(*byte));
                 }
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-live addr=0x{addr:08x} bytes={} mode={mode} chipclk=0x{chipclk:02x} first=0x{first:08x} last=0x{last:08x} checksum=0x{checksum:08x} production_continue=no",
-                    CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES,
-                    addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
-                ));
+                if let Some(cmd52_err) = cmd52_error {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-live addr=0x{addr:08x} bytes={} mode={result_mode} chipclk=0x{chipclk:02x} first=0x{first:08x} last=0x{last:08x} checksum=0x{checksum:08x} cmd52_err={cmd52_err} production_continue=no",
+                        result_len,
+                        addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                    ));
+                } else {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-live addr=0x{addr:08x} bytes={} mode={result_mode} chipclk=0x{chipclk:02x} first=0x{first:08x} last=0x{last:08x} checksum=0x{checksum:08x} production_continue=no",
+                        result_len,
+                        addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                    ));
+                }
             }
             Err(err) => {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-unreadable addr=0x{addr:08x} bytes={} mode={mode} chipclk=0x{chipclk:02x} err={err} production_continue=no",
-                    CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES,
-                    addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
-                ));
+                if let Some(cmd52_err) = cmd52_error {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-unreadable addr=0x{addr:08x} bytes={} mode={result_mode} chipclk=0x{chipclk:02x} err={err} cmd52_err={cmd52_err} production_continue=no",
+                        result_len,
+                        addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                    ));
+                } else {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-unreadable addr=0x{addr:08x} bytes={} mode={result_mode} chipclk=0x{chipclk:02x} err={err} production_continue=no",
+                        result_len,
+                        addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                    ));
+                }
             }
         }
+    }
+
+    fn debug_probe_ht_backplane_cmd53_matrix(
+        &mut self,
+        stage: &'static str,
+        chipclk: u8,
+        bytes: &mut [u8; CYW43_HT_TIMEOUT_BACKPLANE_PROBE_MAX_BYTES],
+    ) -> Result<(usize, &'static str), HalError> {
+        let mut last_err = HalError::Unsupported("ht-backplane-cmd53-matrix-empty");
+        for plan in CYW43_HT_TIMEOUT_BACKPLANE_CMD53_PROBE_PLANS {
+            bytes.fill(0);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-try addr=0x{addr:08x} fn_addr=0x{fn_addr:05x} bytes={} mode={} inc={} chipclk=0x{chipclk:02x} production_continue=no",
+                plan.bytes,
+                plan.mode,
+                plan.increment_addr as u8,
+                addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                fn_addr = plan.function_addr,
+            ));
+            match self.backplane_read_diagnostic_cmd53_into(
+                CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                plan.function_addr,
+                plan.increment_addr,
+                &mut bytes[..plan.bytes],
+            ) {
+                Ok(()) => return Ok((plan.bytes, plan.mode)),
+                Err(err) => {
+                    last_err = err;
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=diagnostic-ht-timeout-backplane-try-fail addr=0x{addr:08x} fn_addr=0x{fn_addr:05x} bytes={} mode={} inc={} chipclk=0x{chipclk:02x} err={err} production_continue=no",
+                        plan.bytes,
+                        plan.mode,
+                        plan.increment_addr as u8,
+                        addr = CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR,
+                        fn_addr = plan.function_addr,
+                    ));
+                }
+            }
+        }
+        Err(last_err)
     }
 
     fn debug_probe_forced_ht_after_timeout(
@@ -20922,6 +21104,18 @@ impl SdioHost {
             self.recover_command_path("cmd-error");
             return Err(HalError::Unsupported("sdhci-transfer-command"));
         }
+        let cmd_response = self.read32(SDHCI_RESPONSE);
+        if let Some(r5) = sdio_cmd53_r5_error(cmd, cmd_response) {
+            self.remember_last_data_wait_diag(cmd, arg, Some(cmd_status));
+            log_sdio_cmd53_shape("command-r5", cmd, arg, buffer.len(), plan);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] sdio cmd53 r5 fail arg=0x{arg:08x} len={} phase=command-r5 resp=0x{cmd_response:08x} r5=0x{r5:04x}",
+                buffer.len(),
+            ));
+            self.log_host_state("xfer-command-r5");
+            self.recover_command_path("cmd-error");
+            return Err(HalError::Unsupported("sdio-cmd53-r5-error"));
+        }
 
         let mut offset = 0usize;
         let wait_mask = sdhci_interrupt_buffer_ready_mask(write);
@@ -21467,6 +21661,14 @@ fn r5_status(response: u32) -> u32 {
     response & 0xCB00
 }
 
+fn sdio_cmd53_r5_error(cmd: u16, response: u32) -> Option<u32> {
+    if cmd != SDIO_CMD53 {
+        return None;
+    }
+    let status = r5_status(response);
+    (status != 0).then_some(status)
+}
+
 #[inline]
 const fn is_nvram_printable(byte: u8) -> bool {
     byte >= 0x20 && byte < 0x7f && byte != b'#'
@@ -21541,12 +21743,13 @@ mod tests {
     use super::*;
     use super::{
         armcr4_release_can_continue_after_readback_error, backplane_byte_function_addr,
-        backplane_firmware_verify_cmd52_function_addr, backplane_small_access_addr,
-        backplane_transfer_function_addr, backplane_window_base, backplane_window_register_bytes,
-        backplane_window_reprogram_needed, backplane_word_function_addr, bcm2711_gpfsel_offset,
-        bcm2711_puppdn_offset, bcm2711_sdhci_effective_base_clock_hz,
-        clear_reset_keepalive_chunk_loops, cmd52_argument, control_plane_promote_rearm_budget,
-        control_plane_promote_rearm_mode_name, control_plane_promoted_probe_stalled_after_rearm,
+        backplane_diagnostic_cmd52_function_addr, backplane_firmware_verify_cmd52_function_addr,
+        backplane_small_access_addr, backplane_transfer_function_addr, backplane_window_base,
+        backplane_window_register_bytes, backplane_window_reprogram_needed,
+        backplane_word_function_addr, bcm2711_gpfsel_offset, bcm2711_puppdn_offset,
+        bcm2711_sdhci_effective_base_clock_hz, clear_reset_keepalive_chunk_loops, cmd52_argument,
+        control_plane_promote_rearm_budget, control_plane_promote_rearm_mode_name,
+        control_plane_promoted_probe_stalled_after_rearm,
         control_plane_reply_int_status_has_frame_indication,
         control_plane_reply_mailbox_has_firmware_halt,
         control_plane_reply_mailbox_has_frame_indication, control_plane_reply_mailbox_requires_ack,
@@ -24894,6 +25097,14 @@ mod tests {
         assert_eq!(
             backplane_firmware_verify_cmd52_function_addr(0x0026_fffc),
             BACKPLANE_32BIT_FLAG | 0x7ffc
+        );
+        assert_eq!(
+            backplane_diagnostic_cmd52_function_addr(0x0025_dec4),
+            0x5ec4
+        );
+        assert_eq!(
+            backplane_diagnostic_cmd52_function_addr(0x0026_fffc),
+            0x7ffc
         );
         assert_eq!(
             backplane_word_function_addr(CYW43_ARMCR4_CORE_BASE + ARMCR4_CAP),
@@ -31263,9 +31474,37 @@ mod tests {
     fn debug_ht_timeout_backplane_probe_stays_diagnostic_only() {
         assert!(debug_probe_ht_backplane_liveness_enabled("debug-probe-ht"));
         assert!(!debug_probe_ht_backplane_liveness_enabled("wait-ht-clock"));
-        assert_eq!(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR, 0x0025_8000);
+        assert_eq!(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR, 0x0025_DEC4);
+        assert_eq!(
+            backplane_diagnostic_cmd52_function_addr(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR),
+            0x5ec4
+        );
+        assert_eq!(
+            backplane_transfer_function_addr(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_ADDR),
+            BACKPLANE_32BIT_FLAG | 0x5ec4
+        );
         assert_eq!(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_BYTES, 24);
-        assert!(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY);
+        assert_eq!(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_MAX_BYTES, 24);
+        assert_eq!(
+            CYW43_HT_TIMEOUT_BACKPLANE_CMD53_PROBE_PLANS[0],
+            HtBackplaneCmd53ProbePlan {
+                mode: "cmd53-byte-flagged-24-inc",
+                function_addr: BACKPLANE_32BIT_FLAG | 0x5ec4,
+                bytes: 24,
+                increment_addr: true,
+            }
+        );
+        assert_eq!(
+            CYW43_HT_TIMEOUT_BACKPLANE_CMD53_PROBE_PLANS[1],
+            HtBackplaneCmd53ProbePlan {
+                mode: "cmd53-byte-unflagged-24-inc",
+                function_addr: 0x5ec4,
+                bytes: 24,
+                increment_addr: true,
+            }
+        );
+        assert!(!CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD52_ONLY);
+        assert!(CYW43_HT_TIMEOUT_BACKPLANE_PROBE_CMD53_AFTER_CMD52);
         assert!(!function2_has_required_ht_clock(
             SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL
         ));
@@ -31990,6 +32229,13 @@ mod tests {
         assert_eq!(r5_status(0), 0);
         assert_eq!(r5_status(0xCB00), 0xCB00);
         assert_eq!(r5_status(0xFFFF_FFFF), 0xCB00);
+    }
+
+    #[test]
+    fn cmd53_r5_error_is_reported_only_for_extended_io() {
+        assert_eq!(sdio_cmd53_r5_error(SDIO_CMD53, 0), None);
+        assert_eq!(sdio_cmd53_r5_error(SDIO_CMD53, 0x0800), Some(0x0800));
+        assert_eq!(sdio_cmd53_r5_error(SDIO_CMD52, 0x0800), None);
     }
 
     #[test]

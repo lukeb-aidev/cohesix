@@ -28,6 +28,7 @@ const MAILBOX_RESET_POST_SETTLE_SPINS: usize = 1_000_000;
 const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
+const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = COMMAND_WAIT_SPINS / 2;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
@@ -212,26 +213,14 @@ const fn compose_run_usbcmd(current_usbcmd: u32, merge_existing_bits: bool) -> u
 }
 
 #[inline(always)]
-const fn polling_event_generation_enabled(
-    firmware_handoff: XhciFirmwareHandoff,
-    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
-) -> bool {
-    matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
-        && runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
-        && !runtime_snapshot_has_runtime_ring_seed(runtime_seed_snapshot)
-}
-
-#[inline(always)]
 const fn polling_event_generation_run_usbcmd(
     run_usbcmd: u32,
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    if polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot) {
-        run_usbcmd | reg::USBCMD_INTE
-    } else {
-        run_usbcmd & !reg::USBCMD_INTE
-    }
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    run_usbcmd & !reg::USBCMD_INTE
 }
 
 #[inline(always)]
@@ -239,16 +228,19 @@ const fn polling_event_generation_iman_value(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    if polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot) {
-        reg::IMAN_IE
-    } else {
-        polling_iman_value()
-    }
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    polling_iman_value()
 }
 
 #[inline(always)]
 const fn command_timeout_live_snapshot_enabled() -> bool {
-    false
+    true
+}
+
+#[inline(always)]
+const fn command_timeout_live_snapshot_spins() -> usize {
+    COMMAND_WAIT_LIVE_SNAPSHOT_SPINS
 }
 
 #[inline(always)]
@@ -256,11 +248,9 @@ const fn polling_command_proof_dnctrl_value(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    if polling_event_generation_enabled(firmware_handoff, runtime_seed_snapshot) {
-        0x2
-    } else {
-        0
-    }
+    let _ = firmware_handoff;
+    let _ = runtime_seed_snapshot;
+    0
 }
 
 #[inline(always)]
@@ -4647,6 +4637,7 @@ impl<H: Dma> XhciCtrl<H> {
         let mut other_event_logs = 0usize;
         let mut last_non_command_event = None;
         let mut event_syncs = 0usize;
+        let mut live_timeout_snapshot_emitted = false;
         loop {
             let trb = {
                 let mut event_ring = self.event_ring.lock();
@@ -4703,6 +4694,13 @@ impl<H: Dma> XhciCtrl<H> {
             }
 
             waited = waited.saturating_add(1);
+            if command_timeout_live_snapshot_enabled()
+                && !live_timeout_snapshot_emitted
+                && waited >= command_timeout_live_snapshot_spins()
+            {
+                self.emit_command_gate_live_timeout_snapshot(expected_cmd_trb);
+                live_timeout_snapshot_emitted = true;
+            }
             if waited >= COMMAND_WAIT_SPINS {
                 self.emit_command_ring_debug_snapshot(0x0364);
                 self.emit_command_event_ring_debug_snapshot(0x0357);
@@ -4713,9 +4711,9 @@ impl<H: Dma> XhciCtrl<H> {
                     expected_cmd_trb.unwrap_or(0) & !0x0f,
                     event_syncs as u64,
                 );
-                if command_timeout_live_snapshot_enabled() {
+                if command_timeout_live_snapshot_enabled() && !live_timeout_snapshot_emitted {
                     self.emit_command_gate_live_timeout_snapshot(expected_cmd_trb);
-                } else {
+                } else if !command_timeout_live_snapshot_enabled() {
                     emit_xhci_diag(
                         0x0377,
                         expected_cmd_trb.unwrap_or(0) & !0x0f,
@@ -5137,6 +5135,7 @@ mod tests {
     use super::{
         blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, command_timeout_live_snapshot_enabled,
+        command_timeout_live_snapshot_spins, COMMAND_WAIT_SPINS,
         compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base, compose_erst_size,
         compose_initial_erdp,
         compose_polling_erdp_ack, compose_run_usbcmd, constructor_polling_scrub_mode,
@@ -6582,7 +6581,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_stop_seed_enables_bounded_event_generation_probe() {
+    fn platform_reset_stop_seed_keeps_command_proof_poll_only() {
         let stop_seed = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -6600,14 +6599,14 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            reg::USBCMD_RUN | reg::USBCMD_INTE
+            reg::USBCMD_RUN
         );
         assert_eq!(
             polling_event_generation_iman_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            reg::IMAN_IE
+            polling_iman_value()
         );
         assert_eq!(
             polling_event_generation_run_usbcmd(
@@ -6615,21 +6614,21 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ) & reg::USBCMD_INTE,
-            reg::USBCMD_INTE
+            0
         );
         assert_eq!(
             polling_event_generation_iman_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ) & reg::IMAN_IE,
-            reg::IMAN_IE
+            0
         );
         assert_eq!(
             polling_command_proof_dnctrl_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            0x2
+            0
         );
         assert_eq!(
             polling_event_generation_run_usbcmd(
@@ -6650,8 +6649,14 @@ mod tests {
     }
 
     #[test]
-    fn command_timeout_live_snapshot_is_deferred_by_default() {
-        assert!(!command_timeout_live_snapshot_enabled());
+    fn command_timeout_live_snapshot_is_enabled_for_command_ring_edge() {
+        assert!(command_timeout_live_snapshot_enabled());
+    }
+
+    #[test]
+    fn command_timeout_live_snapshot_runs_before_final_timeout() {
+        assert!(command_timeout_live_snapshot_spins() > 0);
+        assert!(command_timeout_live_snapshot_spins() < COMMAND_WAIT_SPINS);
     }
 
     #[test]

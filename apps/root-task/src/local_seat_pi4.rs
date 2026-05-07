@@ -93,9 +93,8 @@ const RPI4_VL805_XHCI_RTSOFF: u32 = 0x0000_0200;
 const RPI4_VL805_LINUX_VENDOR_DEVICE: u32 =
     ((VL805_PCI_DEVICE_ID as u32) << 16) | VL805_PCI_VENDOR_ID as u32;
 const RPI4_VL805_LINUX_CLASS_REVISION: u32 = VL805_EXPECTED_CLASS_CODE << 8;
-// Linux captures report COMMAND=0x0546. Cohesix still treats only Mem,
-// BusMaster, and INTx-disable as the ownership minimum; the extra ParErr/SERR
-// bits are retained here so the static witness matches the captured layout.
+// Linux captures report COMMAND=0x0546. The static witness keeps that exact
+// layout, and runtime config replay restores the same poll-only command shape.
 const RPI4_VL805_LINUX_COMMAND: u16 = PCI_COMMAND_MEMORY_SPACE
     | PCI_COMMAND_BUS_MASTER
     | PCI_COMMAND_PARITY_ERROR_RESPONSE
@@ -2500,7 +2499,7 @@ const fn vl805_poll_only_intx_mask_command(command: u16) -> u16 {
 #[cfg(test)]
 #[inline]
 const fn vl805_poll_only_bus_master_command(masked_command: u16) -> u16 {
-    masked_command | PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER
+    masked_command | RPI4_VL805_LINUX_COMMAND
 }
 
 #[inline]
@@ -3823,6 +3822,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0340..=0x034c
             | 0x0350..=0x035a
             | 0x0360..=0x036f
+            | 0x0370..=0x0377
     )
 }
 
@@ -3842,6 +3842,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x0320..=0x0330
             | 0x0350..=0x035a
             | 0x0360..=0x036f
+            | 0x0370..=0x0377
     )
 }
 
@@ -4788,7 +4789,7 @@ const fn xhci_controller_should_apply_brcm_axi_setup(
     firmware_handoff: XhciFirmwareHandoff,
 ) -> bool {
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
-        return false;
+        return matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete);
     }
     matches!(firmware_handoff, XhciFirmwareHandoff::None)
 }
@@ -4853,7 +4854,8 @@ fn xhci_controller_params_from_probe(
         rts_offset: probe.rts_offset,
         firmware_handoff,
         runtime_seed_snapshot,
-        apply_brcm_axi_setup: xhci_controller_should_apply_brcm_axi_setup(mmio, firmware_handoff),
+        apply_brcm_axi_setup: xhci_controller_should_apply_brcm_axi_setup(mmio, firmware_handoff)
+            && runtime_seed_snapshot.is_none(),
         skip_constructor_live_scrub: xhci_controller_skips_constructor_live_scrub(mmio, strategy),
         skip_initial_live_operational_reads: xhci_controller_skips_initial_live_operational_reads(
             mmio, strategy,
@@ -7816,6 +7818,7 @@ struct UsbKeyboard {
     poll_error_logged: bool,
     led_error_logged: bool,
     first_report_logged: bool,
+    first_no_report_logged: bool,
     pending_display_scroll_rows: i8,
 }
 
@@ -10429,6 +10432,7 @@ impl UsbKeyboard {
                                     poll_error_logged: false,
                                     led_error_logged: false,
                                     first_report_logged: false,
+                                    first_no_report_logged: false,
                                     pending_display_scroll_rows: 0,
                                 });
                             }
@@ -11000,10 +11004,23 @@ impl UsbKeyboard {
         if force_keyboard_mode && report_layout == "boot" {
             hid = hid.into_forced_keyboard();
         }
-        if hid.queue_read().is_err() {
+        if let Err(err) = hid.queue_read() {
             if track_failures {
                 *saw_keyboard_init_error = true;
             }
+            let mut line = heapless::String::<256>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] usb hid queue-read failed slot={} iface={} ep=0x{:02x} source={} layout={} detail={err:?}",
+                    device.slot_id(),
+                    iface.interface_number,
+                    ep_in.endpoint_address,
+                    source,
+                    report_layout,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
             return None;
         }
         let mut line = heapless::String::<256>::new();
@@ -13403,7 +13420,15 @@ impl UsbKeyboard {
                 }
                 report
             }
-            Ok(None) => return 0,
+            Ok(None) => {
+                if !self.first_no_report_logged {
+                    boot_log::force_uart_line(
+                        "[local-seat] usb hid first report pending detail=interrupt-in-no-event",
+                    );
+                    self.first_no_report_logged = true;
+                }
+                return 0;
+            }
             Err(err) => {
                 if !self.poll_error_logged {
                     let mut line = heapless::String::<192>::new();
@@ -14555,6 +14580,7 @@ mod tests {
         assert!(super::xhci_diag_history_stage_relevant(0x0248));
         assert!(super::xhci_diag_history_stage_relevant(0x02e9));
         assert!(super::xhci_diag_history_stage_relevant(0x0316));
+        assert!(super::xhci_diag_history_stage_relevant(0x0374));
         assert!(!super::xhci_diag_history_stage_relevant(0x0300));
         assert!(!super::xhci_diag_history_stage_relevant(0x0214));
     }
@@ -15114,7 +15140,7 @@ mod tests {
         assert!(params.skip_initial_live_operational_reads);
         assert!(params.skip_constructor_live_scrub);
         assert!(params.runtime_seed_snapshot.is_none());
-        assert!(!params.apply_brcm_axi_setup);
+        assert!(params.apply_brcm_axi_setup);
     }
 
     #[test]
@@ -16042,7 +16068,7 @@ mod tests {
         assert!(
             !super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, true,)
         );
-        assert!(!xhci_controller_should_apply_brcm_axi_setup(
+        assert!(xhci_controller_should_apply_brcm_axi_setup(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::PlatformResetComplete,
         ));
@@ -17254,6 +17280,7 @@ mod tests {
         assert!(super::xhci_diag_stage_after_run(0x0316));
         assert!(super::xhci_diag_stage_after_run(0x032c));
         assert!(super::xhci_diag_stage_after_run(0x0360));
+        assert!(super::xhci_diag_stage_after_run(0x0374));
         assert!(!super::xhci_diag_stage_after_run(0x0248));
         assert!(!super::xhci_diag_stage_after_run(0x0213));
     }
@@ -17933,7 +17960,7 @@ mod tests {
         assert_eq!(masked_command & PCI_COMMAND_BUS_MASTER, 0);
         assert_eq!(
             vl805_poll_only_bus_master_command(masked_command),
-            PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE
+            RPI4_VL805_LINUX_COMMAND
         );
     }
 

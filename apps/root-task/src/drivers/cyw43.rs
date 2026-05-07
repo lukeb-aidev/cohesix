@@ -961,30 +961,63 @@ impl Cyw43NetDevice {
         credentials: WifiCredentials,
         wait_for_join_completion: bool,
     ) -> Result<(), DriverError> {
-        if let Some(clm) = firmware.clm_blob {
-            self.load_clm(clm)?;
+        macro_rules! control_step {
+            ($name:literal, $expr:expr) => {{
+                info!("[cyw43] control-plane step={} action=begin", $name);
+                match $expr {
+                    Ok(value) => {
+                        info!("[cyw43] control-plane step={} action=ready", $name);
+                        value
+                    }
+                    Err(err) => {
+                        warn!("[cyw43] control-plane step={} action=fail err={err}", $name);
+                        return Err(err);
+                    }
+                }
+            }};
         }
 
-        self.set_iovar_u32("bus:txglom", 0)?;
-        self.set_iovar_u32("apsta", 1)?;
-        self.set_country_worldwide()?;
-        self.apply_linux_preinit_defaults()?;
-        self.ioctl_set_u32(Ioctl::SetAntdiv, 0, 0)?;
-        self.set_iovar_u32("ampdu_ba_wsize", 8)?;
-        self.set_iovar_u32("ampdu_mpdu", 4)?;
-        self.set_event_mask(&[
-            EVENT_SET_SSID,
-            EVENT_AUTH,
-            EVENT_LINK,
-            EVENT_DEAUTH,
-            EVENT_DISASSOC,
-        ])?;
-        self.ioctl_raw(IoctlType::Set, Ioctl::Up, 0, &[])?;
-        self.ioctl_set_u32(Ioctl::SetGmode, 0, 1)?;
-        self.ioctl_set_u32(Ioctl::SetBand, 0, 0)?;
-        self.ioctl_set_u32(Ioctl::SetPm, 0, 0)?;
+        if let Some(clm) = firmware.clm_blob {
+            control_step!("clm-download", self.load_clm(clm));
+        } else {
+            info!("[cyw43] control-plane step=clm-download action=skip");
+        }
+
+        control_step!("bus-txglom-disable", self.set_iovar_u32("bus:txglom", 0));
+        control_step!("apsta-enable", self.set_iovar_u32("apsta", 1));
+        control_step!("country-worldwide", self.set_country_worldwide());
+        control_step!(
+            "linux-preinit-defaults",
+            self.apply_linux_preinit_defaults()
+        );
+        control_step!(
+            "antenna-diversity",
+            self.ioctl_set_u32(Ioctl::SetAntdiv, 0, 0)
+        );
+        control_step!("ampdu-ba-window", self.set_iovar_u32("ampdu_ba_wsize", 8));
+        control_step!("ampdu-mpdu", self.set_iovar_u32("ampdu_mpdu", 4));
+        control_step!(
+            "event-mask",
+            self.set_event_mask(&[
+                EVENT_SET_SSID,
+                EVENT_AUTH,
+                EVENT_LINK,
+                EVENT_DEAUTH,
+                EVENT_DISASSOC,
+            ])
+        );
+        control_step!("up", self.ioctl_raw(IoctlType::Set, Ioctl::Up, 0, &[]));
+        control_step!("gmode", self.ioctl_set_u32(Ioctl::SetGmode, 0, 1));
+        control_step!("band", self.ioctl_set_u32(Ioctl::SetBand, 0, 0));
+        control_step!("power-mode", self.ioctl_set_u32(Ioctl::SetPm, 0, 0));
+        info!("[cyw43] control-plane step=read-mac action=begin");
         self.mac = self.read_mac_address();
-        self.join(credentials, wait_for_join_completion)?;
+        info!(
+            "[cyw43] control-plane step=read-mac action=ready mac={}",
+            self.mac
+        );
+        control_step!("join", self.join(credentials, wait_for_join_completion));
+        info!("[cyw43] control-plane step=init-complete action=ready");
         Ok(())
     }
 

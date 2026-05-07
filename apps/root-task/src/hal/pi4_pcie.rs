@@ -74,7 +74,14 @@ const PCI_CFG_BAR1: usize = 0x14;
 
 const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
+const PCI_COMMAND_PARITY_ERROR_RESPONSE: u16 = 1 << 6;
+const PCI_COMMAND_SERR_ENABLE: u16 = 1 << 8;
 const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
+const VL805_POLL_ONLY_COMMAND_REQUIRED: u16 = PCI_COMMAND_MEMORY_SPACE
+    | PCI_COMMAND_BUS_MASTER
+    | PCI_COMMAND_PARITY_ERROR_RESPONSE
+    | PCI_COMMAND_SERR_ENABLE
+    | PCI_COMMAND_INTERRUPT_DISABLE;
 const PCI_STATUS_CAPABILITIES_LIST: u16 = 1 << 4;
 const PCI_CAP_ID_MSI: u8 = 0x05;
 const PCI_CAP_NEXT_MASK: u8 = 0xfc;
@@ -971,13 +978,12 @@ const fn vl805_poll_only_intx_mask_command(command: u16) -> u16 {
 
 #[inline]
 const fn vl805_poll_only_bus_master_command(masked_command: u16) -> u16 {
-    masked_command | PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER
+    masked_command | VL805_POLL_ONLY_COMMAND_REQUIRED
 }
 
 #[inline]
 const fn vl805_command_ownership_ready(command: u16) -> bool {
-    (command & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE))
-        == (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE)
+    (command & VL805_POLL_ONLY_COMMAND_REQUIRED) == VL805_POLL_ONLY_COMMAND_REQUIRED
 }
 
 fn translate_vl805_pci_bar_to_cpu_mmio(bar0: u32, bar1: u32) -> Option<usize> {
@@ -1335,10 +1341,10 @@ mod tests {
         );
         assert_eq!(
             vl805_poll_only_bus_master_command(masked),
-            PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE
+            VL805_POLL_ONLY_COMMAND_REQUIRED
         );
         assert!(vl805_command_ownership_ready(
-            PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTERRUPT_DISABLE
+            VL805_POLL_ONLY_COMMAND_REQUIRED
         ));
         assert!(!vl805_command_ownership_ready(
             PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER
