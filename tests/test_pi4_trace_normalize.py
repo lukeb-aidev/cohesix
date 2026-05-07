@@ -92,6 +92,16 @@ def test_nettest_policy_error_is_wifi_terminal_evidence() -> None:
     assert event.fields["cause"] == "cyw43-armcr4-release-readback-unavailable"
 
 
+def test_uppercase_usb_and_wifi_prefixes_are_classified() -> None:
+    usb_event = normalizer.parse_line("USB: stage=controller-ready", 24)
+    wifi_event = normalizer.parse_line("WiFi: stage=firmware-ready", 25)
+
+    assert usb_event is not None
+    assert wifi_event is not None
+    assert usb_event.domain == "usb"
+    assert wifi_event.domain == "wifi"
+
+
 def test_summary_tracks_latest_and_blockers() -> None:
     events = normalizer.parse_events(
         [
