@@ -690,6 +690,23 @@ def test_gate_summary_tracks_usb_remaining_enumeration_gates() -> None:
     assert gates.usb_blocker == "hid-init-failed"
 
 
+def test_gate_summary_tracks_usb_descriptor_and_set_config_success() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb device-desc ready port=1 vid=0x046d pid=0xc31c "
+            "class=0x00 subclass=0x00 proto=0x00 mps0=64 configs=1 bcd_usb=0x0200",
+            "[local-seat] usb config-desc ready port=1 total=59 interfaces=2 "
+            "config_value=0x01 attrs=0xa0 max_power=50",
+            "[local-seat] usb set-config ready port=1 value=0x01",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 7
+    assert gates.usb_blocker == "none"
+
+
 def test_gate_summary_tracks_usb_invalid_config_value_gate() -> None:
     events = normalizer.parse_events(
         [
@@ -733,6 +750,23 @@ def test_gate_summary_tracks_usb_hid_queue_and_report_blockers() -> None:
 
     assert gates.usb_gate == 8
     assert gates.usb_blocker == "hid-first-report"
+
+
+def test_gate_summary_tracks_usb_hid_report_decode_diag() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb hid keyboard ready slot=1 iface=0 ep=0x81 "
+            "source=direct layout=boot subclass=0x01 protocol=0x01",
+            "[local-seat] xhci.diag stage=0x03c1 tag=usb-hid-report-decode-fail "
+            "slot_ep=0x0000000100000003 code_payload=0x0000000100000008 "
+            "decode_state=0x0000000000000001",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 8
+    assert gates.usb_blocker == "hid-report-decode-fail"
 
 
 def test_gate_summary_tracks_wifi_function2_and_firmware_channel() -> None:
@@ -784,6 +818,20 @@ def test_gate_summary_tracks_wifi_control_plane_step_err_without_snapshot() -> N
     assert gates.wifi_blocker == "ioctl-timeout"
 
 
+def test_gate_summary_tracks_wifi_preinit_substep_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cyw43] control-plane preinit step=mpc action=begin",
+            "[cyw43] control-plane preinit step=mpc action=fail err=ioctl-timeout",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "ioctl-timeout"
+
+
 def test_gate_summary_tracks_wifi_join_and_dhcp_gates() -> None:
     events = normalizer.parse_events(
         [
@@ -800,6 +848,20 @@ def test_gate_summary_tracks_wifi_join_and_dhcp_gates() -> None:
     assert gates.wifi_blocker == "dhcp-pending"
 
 
+def test_gate_summary_tracks_wifi_join_pending_evidence() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cyw43] control-plane step=init-complete action=ready",
+            "[cyw43] join pending mode=deferred polls=0 ssid_len=8 psk_len=12",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "join-pending"
+
+
 def test_gate_summary_tracks_wifi_dhcp_failure_evidence() -> None:
     events = normalizer.parse_events(
         [
@@ -812,6 +874,23 @@ def test_gate_summary_tracks_wifi_dhcp_failure_evidence() -> None:
 
     assert gates.wifi_gate == 8
     assert gates.wifi_blocker == "dhcp-failed"
+
+
+def test_gate_summary_tracks_wifi_dhcp_transition_evidence() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cyw43] join complete mode=deferred polls=3",
+            "[dhcp] tx queued kind=discover from=selecting to=selecting "
+            "len=300 attempts=1 tx_packets=1",
+            "[dhcp] rx transition from=selecting to=requesting "
+            "action=send-queued len=300 attempts=0 rx_packets=1 invalid=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 8
+    assert gates.wifi_blocker == "dhcp-pending"
 
 
 def test_gate_summary_tracks_wifi_dhcp_and_nettest_success() -> None:

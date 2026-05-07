@@ -1006,12 +1006,22 @@ impl<H: Dma> HidDevice<H> {
             let code = evt.completion_code();
             let payload_len =
                 (self.ep_max_packet as usize).saturating_sub(evt.transfer_length() as usize);
+            self.device.ctrl().emit_diag(
+                0x03c0,
+                ((self.device.slot_id() as u64) << 32) | u64::from(evt.endpoint_id()),
+                ((code as u64) << 32) | payload_len as u64,
+                ((self.keyboard_protocol_mode as u64) << 32)
+                    | ((self.keyboard_decode_mode as u64) << 16)
+                    | u64::from(self.keyboard_report_offset),
+            );
             if has_report_payload(
                 code,
                 self.ep_max_packet as usize,
                 evt.transfer_length(),
                 7,
             ) {
+                // SAFETY: report_buf is the DMA buffer backing this submitted interrupt-IN
+                // transfer, and payload_len is clamped to the allocated endpoint packet size.
                 let payload = unsafe {
                     core::slice::from_raw_parts(
                         self.report_buf.as_ptr::<u8>(),
@@ -1054,13 +1064,35 @@ impl<H: Dma> HidDevice<H> {
                     self.queue_read()?;
                     return Ok(Some(report));
                 }
+                self.device.ctrl().emit_diag(
+                    0x03c1,
+                    ((self.device.slot_id() as u64) << 32) | u64::from(evt.endpoint_id()),
+                    ((code as u64) << 32) | payload_len as u64,
+                    ((self.keyboard_decode_failures as u64) << 32)
+                        | ((self.keyboard_protocol_mode as u64) << 16)
+                        | (self.keyboard_decode_mode as u64),
+                );
+                self.queue_read()?;
+                return Ok(None);
             }
             if code == completion::SUCCESS || code == completion::SHORT_PACKET {
                 // Ignore zero/partial payload completions and keep polling.
+                self.device.ctrl().emit_diag(
+                    0x03c2,
+                    ((self.device.slot_id() as u64) << 32) | u64::from(evt.endpoint_id()),
+                    ((code as u64) << 32) | payload_len as u64,
+                    self.ep_max_packet as u64,
+                );
                 self.queue_read()?;
                 return Ok(None);
             }
             let _ = self.queue_read();
+            self.device.ctrl().emit_diag(
+                0x03c3,
+                ((self.device.slot_id() as u64) << 32) | u64::from(evt.endpoint_id()),
+                ((code as u64) << 32) | payload_len as u64,
+                self.ep_max_packet as u64,
+            );
             return Err(UsbError::XferFail(code));
         }
         Ok(None)

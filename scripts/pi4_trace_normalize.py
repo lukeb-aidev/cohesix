@@ -490,6 +490,8 @@ def normalize_wifi_blocker(value: str) -> str:
         or "association-timeout" in lower
     ):
         return "join-timeout"
+    if "join-pending" in lower or "association-pending" in lower:
+        return "join-pending"
     if "wifi-association-failed" in lower or (
         "association" in lower and "failed" in lower
     ):
@@ -628,6 +630,18 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, 7)
                 blocker = "set-config"
                 continue
+        if "usb device-desc ready" in raw or "hub child device-desc ready" in raw:
+            gate = max(gate, 7)
+            if blocker == "unknown":
+                blocker = "none"
+        if "usb config-desc ready" in raw or "hub child config-desc ready" in raw:
+            gate = max(gate, 7)
+            if blocker == "unknown":
+                blocker = "none"
+        if "usb set-config ready" in raw or "hub child set-config ready" in raw:
+            gate = max(gate, 7)
+            if blocker == "unknown":
+                blocker = "none"
         if "usb hid keyboard ready" in raw:
             gate = max(gate, 8)
             blocker = "none"
@@ -638,6 +652,23 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "usb hid queue-read failed" in raw:
             gate = max(gate, 7)
             blocker = "hid-queue-read-failed"
+            continue
+        if tag == "usb-hid-report-event":
+            gate = max(gate, 8)
+            if blocker in {"unknown", "none"}:
+                blocker = "hid-report-event"
+            continue
+        if tag == "usb-hid-report-decode-fail":
+            gate = max(gate, 8)
+            blocker = "hid-report-decode-fail"
+            continue
+        if tag == "usb-hid-report-empty":
+            gate = max(gate, 8)
+            blocker = "hid-first-report"
+            continue
+        if tag == "usb-hid-report-transfer-fail":
+            gate = max(gate, 8)
+            blocker = "hid-interrupt-in"
             continue
         if "usb hid first report pending" in raw:
             gate = max(gate, 8)
@@ -813,19 +844,33 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 6)
         if "firmware-ready" in raw and "timeout" not in raw and "fail" not in raw:
             gate = max(gate, 7)
+        if "control-plane reply" in raw:
+            gate = max(gate, 7)
         if "control-plane step=init-complete action=ready" in raw or "[cyw43] ready:" in raw:
             gate = max(gate, 7)
             blocker = "none"
-        if "control-plane step=" in raw and " action=fail" in raw:
+        if (
+            "control-plane step=" in raw or "control-plane preinit step=" in raw
+        ) and " action=fail" in raw:
             gate = max(gate, 7)
             blocker = explicit_blocker or "control-plane"
             continue
         if "join complete" in raw:
             gate = max(gate, 8)
             blocker = "none"
+        if "join pending" in raw or "join armed" in raw:
+            gate = max(gate, 7)
+            blocker = "join-pending"
+            continue
         if "join failed" in raw:
             gate = max(gate, 7)
             blocker = normalize_wifi_blocker(raw)
+            continue
+        if fields.get("address_source") == "wifi-associating" or fields.get(
+            "src"
+        ) == "wifi-associating":
+            gate = max(gate, 7)
+            blocker = "join-pending"
             continue
         if (
             "dhcp] lease bound" in raw
@@ -834,6 +879,22 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         ):
             gate = max(gate, 9)
             blocker = "none"
+        if "[dhcp] tx queued" in raw:
+            gate = max(gate, 8)
+            blocker = "dhcp-pending"
+            continue
+        if "[dhcp] rx transition" in raw:
+            gate = max(gate, 8)
+            blocker = "dhcp-pending"
+            continue
+        if "[dhcp] rx ignored" in raw:
+            gate = max(gate, 8)
+            blocker = "dhcp-invalid-packet"
+            continue
+        if "[dhcp] rx failed" in raw:
+            gate = max(gate, 8)
+            blocker = "dhcp-failed"
+            continue
         if "[dhcp] failed" in raw or "[dhcp] send failed" in raw:
             gate = max(gate, 8)
             blocker = "dhcp-failed"

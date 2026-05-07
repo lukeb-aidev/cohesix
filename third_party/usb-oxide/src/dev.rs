@@ -328,9 +328,9 @@ fn recycle_slot_after_address_failure<H: Dma>(
 
     let old_slot = *slot_id;
     *slot_recycles = slot_recycles.saturating_add(1);
-    ctrl.emit_diag(0x0313, old_slot as u64, *slot_recycles as u64, 0);
+    ctrl.emit_diag(0x0383, old_slot as u64, *slot_recycles as u64, 0);
     ctrl.emit_diag(
-        0x0326,
+        0x0396,
         old_slot as u64,
         ctrl.device_context_entry(old_slot),
         *slot_recycles as u64,
@@ -352,9 +352,9 @@ fn recycle_slot_after_address_failure<H: Dma>(
     ctrl.set_device_context(*slot_id, device_ctx.phys(ctrl.host()));
     compiler_fence(Ordering::Release);
 
-    ctrl.emit_diag(0x0314, old_slot as u64, *slot_id as u64, 0);
+    ctrl.emit_diag(0x0384, old_slot as u64, *slot_id as u64, 0);
     ctrl.emit_diag(
-        0x0327,
+        0x0397,
         ((old_slot as u64) << 32) | *slot_id as u64,
         ctrl.device_context_entry(old_slot),
         ctrl.device_context_entry(*slot_id),
@@ -529,7 +529,7 @@ impl<H: Dma> UsbDevice<H> {
         let ep0_state = (ep0_ctx.dw0 & 0x7) as u64;
         let waited_clamped = core::cmp::min(waited, u32::MAX as usize) as u64;
         self.ctrl.emit_diag(
-            0x033b,
+            0x03ab,
             completion_ptr,
             ((completion_code as u64) << 56)
                 | ((stage as u64) << 48)
@@ -542,19 +542,19 @@ impl<H: Dma> UsbDevice<H> {
                 | (setup.index as u64),
         );
         self.ctrl.emit_diag(
-            0x033c,
+            0x03ac,
             ((setup.length as u64) << 48) | (data_len as u64),
             self.ctrl.device_context_entry(self.slot_id),
             ((ep0_ctx.tr_dequeue_hi as u64) << 32) | ep0_ctx.tr_dequeue_lo as u64,
         );
         self.ctrl.emit_diag(
-            0x033d,
+            0x03ad,
             ((slot_ctx.dw0 as u64) << 32) | slot_ctx.dw1 as u64,
             ((slot_ctx.dw2 as u64) << 32) | slot_ctx.dw3 as u64,
             ((ep0_ctx.dw0 as u64) << 32) | ep0_ctx.dw1 as u64,
         );
         self.ctrl.emit_diag(
-            0x033e,
+            0x03ae,
             ep0_ctx.dw4 as u64,
             self.device_ctx.phys(self.ctrl.host()),
             self.input_ctx.phys(self.ctrl.host()),
@@ -579,7 +579,7 @@ impl<H: Dma> UsbDevice<H> {
         };
 
         self.ctrl.emit_diag(
-            0x033f,
+            0x03af,
             completion_ptr,
             ((completion_code as u64) << 56)
                 | ((stage as u64) << 48)
@@ -595,7 +595,7 @@ impl<H: Dma> UsbDevice<H> {
         // transfer error.
         if !should_attempt_ep0_hardware_recovery(completion_code, stage) {
             self.ctrl.emit_diag(
-                0x0340,
+                0x03b0,
                 ((self.slot_id as u64) << 32) | 1u64,
                 dequeue_ptr,
                 4u64 << 32,
@@ -605,7 +605,7 @@ impl<H: Dma> UsbDevice<H> {
 
         let reset_result = self.ctrl.reset_endpoint(self.slot_id, 1);
         self.ctrl.emit_diag(
-            0x0340,
+            0x03b0,
             ((self.slot_id as u64) << 32) | 1u64,
             dequeue_ptr,
             match reset_result {
@@ -624,7 +624,7 @@ impl<H: Dma> UsbDevice<H> {
             .ctrl
             .set_tr_dequeue(self.slot_id, 1, dequeue_ptr, producer_cycle);
         self.ctrl.emit_diag(
-            0x0341,
+            0x03b1,
             ((self.slot_id as u64) << 32) | 1u64,
             dequeue_ptr,
             match dequeue_result {
@@ -709,7 +709,7 @@ impl<H: Dma> UsbDevice<H> {
         ctrl.set_device_context(slot_id, device_ctx.phys(host));
         compiler_fence(Ordering::Release);
         ctrl.emit_diag(
-            0x0320,
+            0x0390,
             ((slot_id as u64) << 32) | port as u64,
             device_ctx.phys(host),
             ctrl.device_context_entry(slot_id),
@@ -797,19 +797,19 @@ impl<H: Dma> UsbDevice<H> {
                 let ep0_ctx =
                     unsafe { *(input_base.add(ctx_stride * 2) as *const EndpointContext) };
                 ctrl.emit_diag(
-                    0x0310,
+                    0x0380,
                     ((attempt_idx as u64) << 32) | enumerated_speed as u64,
                     ((slot_id as u64) << 32) | max_packet as u64,
                     slot_recycles as u64,
                 );
                 ctrl.emit_diag(
-                    0x0311,
+                    0x0381,
                     ((slot_ctx.dw0 as u64) << 32) | slot_ctx.dw1 as u64,
                     ((slot_ctx.dw2 as u64) << 32) | slot_ctx.dw3 as u64,
                     0,
                 );
                 ctrl.emit_diag(
-                    0x0312,
+                    0x0382,
                     ((ep0_ctx.dw0 as u64) << 32) | ep0_ctx.dw1 as u64,
                     ((ep0_ctx.tr_dequeue_hi as u64) << 32) | ep0_ctx.tr_dequeue_lo as u64,
                     ep0_ctx.dw4 as u64,
@@ -817,19 +817,19 @@ impl<H: Dma> UsbDevice<H> {
                 let input_ctrl = unsafe { core::slice::from_raw_parts(input_base as *const u32, 8) };
                 let portsc_before_addr = ctrl.port_status(port);
                 ctrl.emit_diag(
-                    0x0315,
+                    0x0385,
                     input_ctx.phys(host),
                     device_ctx.phys(host),
                     ep0_ring.phys(host),
                 );
                 ctrl.emit_diag(
-                    0x0316,
+                    0x0386,
                     ((input_ctrl[0] as u64) << 32) | input_ctrl[1] as u64,
                     ((input_ctrl[2] as u64) << 32) | input_ctrl[3] as u64,
                     ((input_ctrl[4] as u64) << 32) | input_ctrl[5] as u64,
                 );
                 ctrl.emit_diag(
-                    0x0317,
+                    0x0387,
                     ((input_ctrl[6] as u64) << 32) | input_ctrl[7] as u64,
                     ((portsc_before_addr as u64) << 32) | slot_id as u64,
                     ((route as u64) << 32)
@@ -838,13 +838,13 @@ impl<H: Dma> UsbDevice<H> {
                         | port as u64,
                 );
                 ctrl.emit_diag(
-                    0x0322,
+                    0x0392,
                     port as u64,
                     encode_port_state(portsc_before_addr),
                     ((slot_id as u64) << 32) | attempt_idx as u64,
                 );
                 ctrl.emit_diag(
-                    0x0321,
+                    0x0391,
                     input_ctx.phys(host),
                     device_ctx.phys(host),
                     ctrl.device_context_entry(slot_id),
@@ -868,7 +868,7 @@ impl<H: Dma> UsbDevice<H> {
                     {
                         let tt_encode = active_tt_ctx.map(encode_address_tt_info).unwrap_or(0);
                         ctrl.emit_diag(
-                            0x032f,
+                            0x039f,
                             ((slot_id as u64) << 32) | attempt_idx as u64,
                             ((slot_recycles as u64) << 48)
                                 | ((max_packet as u64) << 32)
@@ -886,7 +886,7 @@ impl<H: Dma> UsbDevice<H> {
                         if let Some(tt) = active_tt_ctx {
                             let clamped_tt = clamp_tt_context(tt);
                             ctrl.emit_diag(
-                                0x0328,
+                                0x0398,
                                 ((slot_id as u64) << 32) | attempt_idx as u64,
                                 encode_tt_info(tt) as u64,
                                 ((encode_tt_info(clamped_tt) as u64) << 32)
@@ -918,7 +918,7 @@ impl<H: Dma> UsbDevice<H> {
                     {
                         let tt_encode = active_tt_ctx.map(encode_address_tt_info).unwrap_or(0);
                         ctrl.emit_diag(
-                            0x032f,
+                            0x039f,
                             ((slot_id as u64) << 32) | attempt_idx as u64,
                             ((slot_recycles as u64) << 48)
                                 | ((max_packet as u64) << 32)
@@ -936,7 +936,7 @@ impl<H: Dma> UsbDevice<H> {
                         if let Some(tt) = active_tt_ctx {
                             let single_tt = single_tt_profile(tt);
                             ctrl.emit_diag(
-                                0x032a,
+                                0x039a,
                                 ((slot_id as u64) << 32) | attempt_idx as u64,
                                 encode_tt_info(tt) as u64,
                                 ((encode_tt_info(single_tt) as u64) << 32)
@@ -968,7 +968,7 @@ impl<H: Dma> UsbDevice<H> {
                     {
                         let tt_encode = active_tt_ctx.map(encode_address_tt_info).unwrap_or(0);
                         ctrl.emit_diag(
-                            0x032f,
+                            0x039f,
                             ((slot_id as u64) << 32) | attempt_idx as u64,
                             ((slot_recycles as u64) << 48)
                                 | ((max_packet as u64) << 32)
@@ -986,7 +986,7 @@ impl<H: Dma> UsbDevice<H> {
                         if let Some(tt) = active_tt_ctx {
                             if let Some(reduced_tt) = reduced_tt_think_time_profile(tt) {
                                 ctrl.emit_diag(
-                                    0x032e,
+                                    0x039e,
                                     ((slot_id as u64) << 32) | attempt_idx as u64,
                                     encode_tt_info(tt) as u64,
                                     ((encode_tt_info(reduced_tt) as u64) << 32)
@@ -1020,7 +1020,7 @@ impl<H: Dma> UsbDevice<H> {
                     {
                         let tt_encode = active_tt_ctx.map(encode_address_tt_info).unwrap_or(0);
                         ctrl.emit_diag(
-                            0x032f,
+                            0x039f,
                             ((slot_id as u64) << 32) | attempt_idx as u64,
                             ((slot_recycles as u64) << 48)
                                 | ((max_packet as u64) << 32)
@@ -1037,7 +1037,7 @@ impl<H: Dma> UsbDevice<H> {
                         parameter_err_count = parameter_err_count.saturating_add(1);
                         if let Some(tt) = active_tt_ctx {
                             ctrl.emit_diag(
-                                0x032d,
+                                0x039d,
                                 ((slot_id as u64) << 32) | attempt_idx as u64,
                                 encode_tt_info(tt) as u64,
                                 ((max_packet as u64) << 32)
@@ -1072,7 +1072,7 @@ impl<H: Dma> UsbDevice<H> {
                     {
                         let tt_encode = active_tt_ctx.map(encode_address_tt_info).unwrap_or(0);
                         ctrl.emit_diag(
-                            0x032f,
+                            0x039f,
                             ((slot_id as u64) << 32) | attempt_idx as u64,
                             ((slot_recycles as u64) << 48)
                                 | ((max_packet as u64) << 32)
@@ -1088,7 +1088,7 @@ impl<H: Dma> UsbDevice<H> {
                         );
                         if let Some(tt) = active_tt_ctx {
                             ctrl.emit_diag(
-                                0x0329,
+                                0x0399,
                                 ((slot_id as u64) << 32) | attempt_idx as u64,
                                 encode_tt_info(tt) as u64,
                                 ((max_packet as u64) << 32)
@@ -1114,7 +1114,7 @@ impl<H: Dma> UsbDevice<H> {
                     Err(UsbError::CmdFail(code)) if code == completion::CONTEXT_STATE_ERROR => {
                         let tt_encode = active_tt_ctx.map(encode_address_tt_info).unwrap_or(0);
                         ctrl.emit_diag(
-                            0x032f,
+                            0x039f,
                             ((slot_id as u64) << 32) | attempt_idx as u64,
                             ((slot_recycles as u64) << 48)
                                 | ((max_packet as u64) << 32)
@@ -1137,7 +1137,7 @@ impl<H: Dma> UsbDevice<H> {
                         let input_ctrl =
                             unsafe { core::slice::from_raw_parts(input_base as *const u32, 8) };
                         ctrl.emit_diag(
-                            0x0318,
+                            0x0388,
                             ((diag.usbcmd as u64) << 32) | diag.usbsts as u64,
                             ((diag.portsc as u64) << 32)
                                 | ((code as u64) << 16)
@@ -1145,54 +1145,54 @@ impl<H: Dma> UsbDevice<H> {
                             ((slot_id as u64) << 32) | max_packet as u64,
                         );
                         ctrl.emit_diag(
-                            0x0323,
+                            0x0393,
                             port as u64,
                             encode_port_state(diag.portsc),
                             ((slot_id as u64) << 32) | attempt_idx as u64,
                         );
                         ctrl.emit_diag(
-                            0x0319,
+                            0x0389,
                             diag.crcr,
                             diag.dcbaap,
                             ((diag.iman as u64) << 32) | (diag.portsc as u64),
                         );
-                        ctrl.emit_diag(0x031a, diag.erdp, diag.erstba, 0);
+                        ctrl.emit_diag(0x038a, diag.erdp, diag.erstba, 0);
                         let out_slot_state = ((out_slot_ctx.dw3 >> 27) & 0x1f) as u64;
                         let out_ep0_state = (out_ep0_ctx.dw0 & 0x7) as u64;
                         ctrl.emit_diag(
-                            0x0324,
+                            0x0394,
                             ((out_slot_state as u64) << 32) | out_ep0_state as u64,
                             ctrl.device_context_entry(slot_id),
                             ((diag.portsc as u64) << 32) | code as u64,
                         );
                         ctrl.emit_diag(
-                            0x031b,
+                            0x038b,
                             ((out_slot_ctx.dw0 as u64) << 32) | out_slot_ctx.dw1 as u64,
                             ((out_slot_ctx.dw2 as u64) << 32) | out_slot_ctx.dw3 as u64,
                             0,
                         );
                         ctrl.emit_diag(
-                            0x031c,
+                            0x038c,
                             ((out_ep0_ctx.dw0 as u64) << 32) | out_ep0_ctx.dw1 as u64,
                             ((out_ep0_ctx.tr_dequeue_hi as u64) << 32)
                                 | out_ep0_ctx.tr_dequeue_lo as u64,
                             out_ep0_ctx.dw4 as u64,
                         );
                         ctrl.emit_diag(
-                            0x031d,
+                            0x038d,
                             ((input_ctrl[0] as u64) << 32) | input_ctrl[1] as u64,
                             ((input_ctrl[2] as u64) << 32) | input_ctrl[3] as u64,
                             ((input_ctrl[4] as u64) << 32) | input_ctrl[5] as u64,
                         );
                         ctrl.emit_diag(
-                            0x031e,
+                            0x038e,
                             ((input_ctrl[6] as u64) << 32) | input_ctrl[7] as u64,
                             input_ctx.phys(host),
                             device_ctx.phys(host),
                         );
                         let tt_encode = active_tt_ctx.map(encode_address_tt_info).unwrap_or(0);
                         ctrl.emit_diag(
-                            0x032b,
+                            0x039b,
                             ((context_state_err_count as u64) << 32) | parameter_err_count as u64,
                             ((route as u64) << 32)
                                 | ((root_hub_port as u64) << 16)
@@ -1212,7 +1212,7 @@ impl<H: Dma> UsbDevice<H> {
                     Err(UsbError::CmdFail(code)) => {
                         let tt_encode = active_tt_ctx.map(encode_address_tt_info).unwrap_or(0);
                         ctrl.emit_diag(
-                            0x0342,
+                            0x03b2,
                             ((slot_id as u64) << 32) | attempt_idx as u64,
                             ((slot_recycles as u64) << 48)
                                 | ((max_packet as u64) << 32)
@@ -1245,7 +1245,7 @@ impl<H: Dma> UsbDevice<H> {
                     continue;
                 }
                 ctrl.emit_diag(
-                    0x032c,
+                    0x039c,
                     ((context_state_err_count as u64) << 32) | parameter_err_count as u64,
                     ((route as u64) << 32)
                         | ((root_hub_port as u64) << 16)
@@ -1304,7 +1304,7 @@ impl<H: Dma> UsbDevice<H> {
         let data_dir = (setup.request_type & 0x80) != 0; // true = IN
         let data_len = data.as_ref().map(|d| d.len()).unwrap_or(0);
         self.ctrl.emit_diag(
-            0x0339,
+            0x03a9,
             ((setup.request_type as u64) << 56)
                 | ((setup.request as u64) << 48)
                 | ((setup.value as u64) << 32)
@@ -1384,7 +1384,7 @@ impl<H: Dma> UsbDevice<H> {
         let status_trb_addr = ep0_ring.enqueue(host, status_trb);
         ep0_ring.sync_for_device(host, "xhci-ep0-ring-submit")?;
         self.ctrl.emit_diag(
-            0x0334,
+            0x03a4,
             setup_trb_addr,
             data_trb_addr.unwrap_or(0),
             status_trb_addr,
@@ -1416,7 +1416,7 @@ impl<H: Dma> UsbDevice<H> {
                 };
                 let code = evt.completion_code();
                 self.ctrl.emit_diag(
-                    0x0335,
+                    0x03a5,
                     completion_ptr,
                     ((code as u64) << 56)
                         | ((stage as u64) << 48)
@@ -1491,7 +1491,7 @@ impl<H: Dma> UsbDevice<H> {
                                     }
                                 }
                                 self.ctrl.emit_diag(
-                                    0x0336,
+                                    0x03a6,
                                     ((setup.length as u64) << 32)
                                         | (evt.transfer_length() as u64),
                                     remaining as u64,
@@ -1554,7 +1554,7 @@ impl<H: Dma> UsbDevice<H> {
             waited = waited.saturating_add(1);
             if waited >= wait_limit {
                 self.ctrl.emit_diag(
-                    0x033a,
+                    0x03aa,
                     ((setup.request_type as u64) << 56)
                         | ((setup.request as u64) << 48)
                         | ((setup.value as u64) << 32)
@@ -1586,7 +1586,7 @@ impl<H: Dma> UsbDevice<H> {
         let setup = SetupPacket::get_descriptor(desc_type::DEVICE, 0, 18);
         let transferred = self.control_transfer(&setup, Some(&mut buf))?;
         self.ctrl.emit_diag(
-            0x0337,
+            0x03a7,
             transferred as u64,
             u64::from_le_bytes([
                 buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
@@ -1596,7 +1596,7 @@ impl<H: Dma> UsbDevice<H> {
             ]),
         );
         self.ctrl.emit_diag(
-            0x0338,
+            0x03a8,
             ((buf[16] as u64) << 8) | (buf[17] as u64),
             ((buf[0] as u64) << 56)
                 | ((buf[1] as u64) << 48)
@@ -1631,7 +1631,7 @@ impl<H: Dma> UsbDevice<H> {
                 header[7],
             ]);
             self.ctrl.emit_diag(
-                0x0330,
+                0x03a0,
                 ((attempt as u64) << 32) | (header_xfer as u64),
                 header_lo,
                 ((header[8] as u64) << 56)
@@ -1646,7 +1646,7 @@ impl<H: Dma> UsbDevice<H> {
                 && (CONFIG_DESC_MIN_LEN..=CONFIG_DESC_MAX_LEN).contains(&total_len);
             if !header_valid {
                 self.ctrl.emit_diag(
-                    0x0331,
+                    0x03a1,
                     ((attempt as u64) << 32) | (header_xfer as u64),
                     total_len as u64,
                     ((header[0] as u64) << 8) | (header[1] as u64),
@@ -1662,7 +1662,7 @@ impl<H: Dma> UsbDevice<H> {
             let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, total_len as u16);
             let full_xfer = self.control_transfer(&setup, Some(&mut full_buf))?;
             self.ctrl.emit_diag(
-                0x0332,
+                0x03a2,
                 ((full_xfer as u64) << 32) | (total_len as u64),
                 full_buf
                     .get(0)
@@ -1684,7 +1684,7 @@ impl<H: Dma> UsbDevice<H> {
             );
             if full_xfer < CONFIG_DESC_MIN_LEN {
                 self.ctrl.emit_diag(
-                    0x0333,
+                    0x03a3,
                     ((attempt as u64) << 32) | (full_xfer as u64),
                     total_len as u64,
                     0,

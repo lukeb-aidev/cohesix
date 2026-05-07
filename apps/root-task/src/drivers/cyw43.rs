@@ -1065,11 +1065,42 @@ impl Cyw43NetDevice {
     }
 
     fn apply_linux_preinit_defaults(&mut self) -> Result<(), DriverError> {
-        self.set_iovar_u32("mpc", 1)?;
-        self.enable_linux_if_event_message()?;
-        self.ioctl_set_u32(Ioctl::SetScanChannelTime, 0, DEFAULT_SCAN_CHANNEL_TIME_MS)?;
-        self.ioctl_set_u32(Ioctl::SetScanUnassocTime, 0, DEFAULT_SCAN_UNASSOC_TIME_MS)?;
-        let _ = self.set_iovar_u32("txbf", 1);
+        macro_rules! preinit_step {
+            ($name:literal, $expr:expr) => {{
+                info!("[cyw43] control-plane preinit step={} action=begin", $name);
+                match $expr {
+                    Ok(value) => {
+                        info!("[cyw43] control-plane preinit step={} action=ready", $name);
+                        value
+                    }
+                    Err(err) => {
+                        warn!(
+                            "[cyw43] control-plane preinit step={} action=fail err={err}",
+                            $name
+                        );
+                        return Err(err);
+                    }
+                }
+            }};
+        }
+
+        preinit_step!("mpc", self.set_iovar_u32("mpc", 1));
+        preinit_step!("if-event-message", self.enable_linux_if_event_message());
+        preinit_step!(
+            "scan-channel-time",
+            self.ioctl_set_u32(Ioctl::SetScanChannelTime, 0, DEFAULT_SCAN_CHANNEL_TIME_MS)
+        );
+        preinit_step!(
+            "scan-unassoc-time",
+            self.ioctl_set_u32(Ioctl::SetScanUnassocTime, 0, DEFAULT_SCAN_UNASSOC_TIME_MS)
+        );
+        info!("[cyw43] control-plane preinit step=txbf action=begin optional=yes");
+        match self.set_iovar_u32("txbf", 1) {
+            Ok(()) => info!("[cyw43] control-plane preinit step=txbf action=ready optional=yes"),
+            Err(err) => {
+                warn!("[cyw43] control-plane preinit step=txbf action=skip optional=yes err={err}")
+            }
+        }
         Ok(())
     }
 
@@ -1150,7 +1181,7 @@ impl Cyw43NetDevice {
                 polls: 0,
             };
             info!(
-                "[cyw43] join armed mode=deferred ssid_len={} psk_len={}",
+                "[cyw43] join pending mode=deferred polls=0 ssid_len={} psk_len={}",
                 ssid.len(),
                 psk.len(),
             );
@@ -1843,6 +1874,14 @@ impl Cyw43NetDevice {
         );
         self.control_response[..copy_len]
             .copy_from_slice(&payload[CDC_HEADER_LEN..CDC_HEADER_LEN + copy_len]);
+        info!(
+            "[cyw43] control-plane reply id={} status=0x{status:08x} response_len={} copied={} sdpcm_seq={} sdpcm_credit={}",
+            id,
+            response_len,
+            copy_len,
+            self.sdpcm_seq,
+            self.sdpcm_seq_max,
+        );
         Ok(RxFrameResult::Control {
             id,
             status,
@@ -1883,7 +1922,7 @@ impl Cyw43NetDevice {
             }
             _ => {}
         }
-        debug!(
+        info!(
             "[cyw43] event type={} status=0x{:08x} reason=0x{:08x} auth=0x{:08x}",
             event.event_type, event.status, event.reason, event.auth_type
         );

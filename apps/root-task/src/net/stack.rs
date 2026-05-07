@@ -46,7 +46,7 @@ use smoltcp::wire::{
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
-    dhcp::{DhcpClient, DhcpEvent, DhcpLease, DHCP_CLIENT_PORT, DHCP_SERVER_PORT},
+    dhcp::{DhcpClient, DhcpEvent, DhcpLease, DhcpPhase, DHCP_CLIENT_PORT, DHCP_SERVER_PORT},
     outbound::{OutboundCoalescer, OutboundLane, SendError},
     ConsoleLine, ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent,
     NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode, NetPoller,
@@ -2900,7 +2900,50 @@ impl<D: NetDevice> NetStack<D> {
                 break;
             };
             self.counters.udp_rx = self.counters.udp_rx.saturating_add(1);
+            let before_status = client.status();
             let event = client.handle_packet(mac, &rx_packet[..len], now_ms);
+            let after_status = client.status();
+            match event {
+                DhcpEvent::SendQueued => info!(
+                    "[dhcp] rx transition from={} to={} action=send-queued len={} attempts={} rx_packets={} invalid={}",
+                    before_status.phase.as_str(),
+                    after_status.phase.as_str(),
+                    len,
+                    after_status.attempts,
+                    after_status.metrics.rx_packets,
+                    after_status.metrics.invalid_packets,
+                ),
+                DhcpEvent::LeaseAcquired(lease) => info!(
+                    "[dhcp] rx ack ip={}.{}.{}.{} phase={} len={} rx_packets={}",
+                    lease.ip[0],
+                    lease.ip[1],
+                    lease.ip[2],
+                    lease.ip[3],
+                    after_status.phase.as_str(),
+                    len,
+                    after_status.metrics.rx_packets,
+                ),
+                DhcpEvent::Failed(reason) => warn!(
+                    "[dhcp] rx failed reason={} from={} to={} len={} rx_packets={}",
+                    reason.as_str(),
+                    before_status.phase.as_str(),
+                    after_status.phase.as_str(),
+                    len,
+                    after_status.metrics.rx_packets,
+                ),
+                DhcpEvent::None
+                    if after_status.metrics.invalid_packets
+                        != before_status.metrics.invalid_packets =>
+                {
+                    warn!(
+                        "[dhcp] rx ignored reason=invalid phase={} len={} invalid={}",
+                        after_status.phase.as_str(),
+                        len,
+                        after_status.metrics.invalid_packets,
+                    );
+                }
+                DhcpEvent::None => {}
+            }
             activity |= self.apply_dhcp_event(event);
         }
 
@@ -2914,6 +2957,7 @@ impl<D: NetDevice> NetStack<D> {
             let mut tx_packet = [0u8; DHCP_PAYLOAD_CAPACITY];
             let can_send = self.sockets.get::<UdpSocket>(socket).can_send();
             if can_send {
+                let before_status = client.status();
                 match client.build_outbound(mac, &mut tx_packet, now_ms) {
                     Ok(Some(len)) => {
                         let endpoint =
@@ -2925,6 +2969,21 @@ impl<D: NetDevice> NetStack<D> {
                         match send_result {
                             Ok(()) => {
                                 self.counters.udp_tx = self.counters.udp_tx.saturating_add(1);
+                                let after_status = client.status();
+                                let kind = match before_status.phase {
+                                    DhcpPhase::Selecting => "discover",
+                                    DhcpPhase::Requesting => "request",
+                                    _ => "unknown",
+                                };
+                                info!(
+                                    "[dhcp] tx queued kind={} from={} to={} len={} attempts={} tx_packets={}",
+                                    kind,
+                                    before_status.phase.as_str(),
+                                    after_status.phase.as_str(),
+                                    len,
+                                    after_status.attempts,
+                                    after_status.metrics.tx_packets,
+                                );
                                 activity = true;
                             }
                             Err(UdpSendError::BufferFull) => {}

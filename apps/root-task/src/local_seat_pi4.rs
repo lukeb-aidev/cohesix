@@ -3823,6 +3823,8 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0350..=0x035a
             | 0x0360..=0x036f
             | 0x0370..=0x0377
+            | 0x0380..=0x03b2
+            | 0x03c0..=0x03c3
     )
 }
 
@@ -3843,6 +3845,8 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x0350..=0x035a
             | 0x0360..=0x036f
             | 0x0370..=0x0377
+            | 0x0380..=0x03b2
+            | 0x03c0..=0x03c3
     )
 }
 
@@ -3963,6 +3967,23 @@ const fn xhci_diag_stage_value_labels(
         0x0375 => Some(("usbcmd_usbsts", "iman_erstsz", "dcbaap")),
         0x0376 => Some(("erstba", "erdp", "phase")),
         0x0377 => Some(("expected_ptr", "event_syncs", "live_snapshot_deferred")),
+        0x0380 => Some(("attempt_speed", "slot_mps", "slot_recycles")),
+        0x0381 | 0x0382 | 0x038b..=0x038e => Some(("ctx0_ctx1", "ctx2_ctx3", "ctx4_or_phys")),
+        0x0383 | 0x0384 | 0x0396 | 0x0397 => Some(("old_slot", "new_or_entry", "slot_recycles")),
+        0x0385 => Some(("input_ctx", "device_ctx", "ep0_ring")),
+        0x0386 | 0x0387 => Some(("input_or_port", "context_or_slot", "route")),
+        0x0388 | 0x0389 | 0x038a | 0x0394 => Some(("state0", "state1", "state2")),
+        0x0390 | 0x0391 | 0x0392 | 0x0393 => {
+            Some(("slot_port_or_ctx", "state_or_phys", "entry_or_attempt"))
+        }
+        0x0398..=0x039f | 0x03b2 => Some(("slot_attempt", "retry_state", "path_code")),
+        0x03a0..=0x03a3 => Some(("xfer_or_len", "descriptor_prefix", "descriptor_meta")),
+        0x03a4..=0x03a6 => Some(("setup", "xfer_state", "control_state")),
+        0x03a7 | 0x03a8 => Some(("xfer_or_tail", "descriptor_words", "descriptor_tail")),
+        0x03a9 | 0x03aa => Some(("transfer", "status", "context")),
+        0x03ab..=0x03af => Some(("control_state0", "control_state1", "control_state2")),
+        0x03b0 | 0x03b1 => Some(("slot_ep", "dequeue", "result")),
+        0x03c0..=0x03c3 => Some(("slot_ep", "code_payload", "decode_state")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4211,6 +4232,59 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x034a => Some("dcbaap-posted-high-commit-pre-store"),
         0x034b => Some("dcbaap-posted-high-commit-done"),
         0x034c => Some("platform-reset-dcbaap-publish-blocked"),
+        0x0380 => Some("usb-address-attempt"),
+        0x0381 => Some("usb-address-slot-context"),
+        0x0382 => Some("usb-address-ep0-context"),
+        0x0383 => Some("usb-address-slot-recycle-begin"),
+        0x0384 => Some("usb-address-slot-recycle-complete"),
+        0x0385 => Some("usb-address-context-phys"),
+        0x0386 => Some("usb-address-input-control"),
+        0x0387 => Some("usb-address-route-port-state"),
+        0x0388 => Some("usb-address-context-state-error"),
+        0x0389 => Some("usb-address-context-state-regs"),
+        0x038a => Some("usb-address-context-state-event-ring"),
+        0x038b => Some("usb-address-output-slot-context"),
+        0x038c => Some("usb-address-output-ep0-context"),
+        0x038d => Some("usb-address-input-control-detail"),
+        0x038e => Some("usb-address-context-phys-detail"),
+        0x0390 => Some("usb-device-context-publish"),
+        0x0391 => Some("usb-address-dcbaa-entry"),
+        0x0392 => Some("usb-address-port-before-command"),
+        0x0393 => Some("usb-address-port-state-after-error"),
+        0x0394 => Some("usb-address-context-state-output"),
+        0x0396 => Some("usb-address-slot-recycle-old-entry"),
+        0x0397 => Some("usb-address-slot-recycle-new-entry"),
+        0x0398 => Some("usb-address-retry-clamp-tt"),
+        0x0399 => Some("usb-address-retry-drop-tt"),
+        0x039a => Some("usb-address-retry-single-tt"),
+        0x039b => Some("usb-address-retry-summary"),
+        0x039c => Some("usb-address-retry-terminal"),
+        0x039d => Some("usb-address-retry-keep-tt"),
+        0x039e => Some("usb-address-retry-reduce-tt"),
+        0x039f => Some("usb-address-retry-path"),
+        0x03a0 => Some("usb-config-desc-header"),
+        0x03a1 => Some("usb-config-desc-header-invalid"),
+        0x03a2 => Some("usb-config-desc-full"),
+        0x03a3 => Some("usb-config-desc-short"),
+        0x03a4 => Some("usb-control-transfer-submit"),
+        0x03a5 => Some("usb-control-transfer-complete"),
+        0x03a6 => Some("usb-control-transfer-data"),
+        0x03a7 => Some("usb-device-desc-full"),
+        0x03a8 => Some("usb-device-desc-tail"),
+        0x03a9 => Some("usb-control-status"),
+        0x03aa => Some("usb-control-recovery"),
+        0x03ab => Some("usb-control-failure-context"),
+        0x03ac => Some("usb-control-failure-ep0"),
+        0x03ad => Some("usb-control-failure-slot-context"),
+        0x03ae => Some("usb-control-failure-phys"),
+        0x03af => Some("usb-ep0-recovery-begin"),
+        0x03b0 => Some("usb-ep0-recovery-reset"),
+        0x03b1 => Some("usb-ep0-recovery-dequeue"),
+        0x03b2 => Some("usb-address-direct-fail"),
+        0x03c0 => Some("usb-hid-report-event"),
+        0x03c1 => Some("usb-hid-report-decode-fail"),
+        0x03c2 => Some("usb-hid-report-empty"),
+        0x03c3 => Some("usb-hid-report-transfer-fail"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -7819,6 +7893,7 @@ struct UsbKeyboard {
     led_error_logged: bool,
     first_report_logged: bool,
     first_no_report_logged: bool,
+    first_byte_logged: bool,
     pending_display_scroll_rows: i8,
 }
 
@@ -10273,6 +10348,30 @@ impl UsbKeyboard {
                                     continue;
                                 }
                             };
+                            {
+                                let vendor_id = device_desc.vendor_id;
+                                let product_id = device_desc.product_id;
+                                let bcd_usb = device_desc.bcd_usb;
+                                let max_packet = device_desc.max_packet_size0;
+                                let device_class = device_desc.device_class;
+                                let device_subclass = device_desc.device_subclass;
+                                let device_protocol = device_desc.device_protocol;
+                                let num_configurations = device_desc.num_configurations;
+                                let mut line = heapless::String::<224>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] usb device-desc ready port={} vid=0x{vendor_id:04x} pid=0x{product_id:04x} class=0x{:02x} subclass=0x{:02x} proto=0x{:02x} mps0={} configs={} bcd_usb=0x{bcd_usb:04x}",
+                                        port + 1,
+                                        device_class,
+                                        device_subclass,
+                                        device_protocol,
+                                        max_packet,
+                                        num_configurations,
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                            }
 
                             let config_blob = match device.get_config_descriptor(0) {
                                 Ok(config_blob) => config_blob,
@@ -10346,6 +10445,26 @@ impl UsbKeyboard {
                                 boot_log::force_uart_line(line.as_str());
                                 continue;
                             };
+                            {
+                                let total_length = config.total_length;
+                                let num_interfaces = config.num_interfaces;
+                                let config_value = config.configuration_value();
+                                let attributes = config.attributes;
+                                let max_power = config.max_power;
+                                let mut line = heapless::String::<224>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] usb config-desc ready port={} total={} interfaces={} config_value=0x{:02x} attrs=0x{attributes:02x} max_power={}",
+                                        port + 1,
+                                        total_length,
+                                        num_interfaces,
+                                        config_value,
+                                        max_power,
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                            }
                             let Some(config_value) = config_value_for_set(config) else {
                                 let diag_after = read_latest_xhci_diag_snapshot();
                                 usb_probe_pathway_record(
@@ -10399,6 +10518,15 @@ impl UsbKeyboard {
                                 boot_log::force_uart_line(line.as_str());
                                 continue;
                             }
+                            let mut line = heapless::String::<160>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] usb set-config ready port={} value=0x{config_value:02x}",
+                                    port + 1,
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
 
                             let keyboard_init_error_before = saw_keyboard_init_error;
                             let device = Arc::new(device);
@@ -10433,6 +10561,7 @@ impl UsbKeyboard {
                                     led_error_logged: false,
                                     first_report_logged: false,
                                     first_no_report_logged: false,
+                                    first_byte_logged: false,
                                     pending_display_scroll_rows: 0,
                                 });
                             }
@@ -11990,6 +12119,32 @@ impl UsbKeyboard {
                 return HubChildProbeResult::Failed;
             }
         };
+        {
+            let vendor_id = child_desc.vendor_id;
+            let product_id = child_desc.product_id;
+            let max_packet = child_desc.max_packet_size0;
+            let device_class = child_desc.device_class;
+            let device_subclass = child_desc.device_subclass;
+            let device_protocol = child_desc.device_protocol;
+            let num_configurations = child_desc.num_configurations;
+            let mut line = heapless::String::<256>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] hub child device-desc ready slot={} port={} speed={} source={} vid=0x{vendor_id:04x} pid=0x{product_id:04x} class=0x{:02x} subclass=0x{:02x} proto=0x{:02x} mps0={} configs={}",
+                    device.slot_id(),
+                    downstream_port,
+                    child_speed,
+                    source,
+                    device_class,
+                    device_subclass,
+                    device_protocol,
+                    max_packet,
+                    num_configurations,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         let child_config_blob = match child.get_config_descriptor(0) {
             Ok(config_blob) => config_blob,
             Err(err) => {
@@ -12047,6 +12202,29 @@ impl UsbKeyboard {
             Self::log_hub_port_terminal(device.slot_id(), downstream_port, "config-parse-fail");
             return HubChildProbeResult::Failed;
         };
+        {
+            let total_length = config.total_length;
+            let num_interfaces = config.num_interfaces;
+            let config_value = config.configuration_value();
+            let attributes = config.attributes;
+            let max_power = config.max_power;
+            let mut line = heapless::String::<256>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] hub child config-desc ready slot={} port={} speed={} source={} total={} interfaces={} config_value=0x{:02x} attrs=0x{attributes:02x} max_power={}",
+                    device.slot_id(),
+                    downstream_port,
+                    child_speed,
+                    source,
+                    total_length,
+                    num_interfaces,
+                    config_value,
+                    max_power,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         let Some(config_value) = config_value_for_set(config) else {
             let mut line = heapless::String::<272>::new();
             let _ = core::fmt::Write::write_fmt(
@@ -12082,6 +12260,18 @@ impl UsbKeyboard {
             Self::log_hub_port_terminal(device.slot_id(), downstream_port, "set-config-fail");
             return HubChildProbeResult::Failed;
         }
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] hub child set-config ready slot={} port={} speed={} source={} value=0x{config_value:02x}",
+                device.slot_id(),
+                downstream_port,
+                child_speed,
+                source,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
 
         let child = Arc::new(child);
         if let Some(hid) = Self::probe_device_for_keyboard(
@@ -13435,7 +13625,7 @@ impl UsbKeyboard {
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] pi4 keyboard read queue failed detail=usb-queue-read err={err:?}"
+                            "[local-seat] usb hid queue-read failed stage=first-report detail=usb-queue-read err={err:?}"
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
@@ -13490,6 +13680,20 @@ impl UsbKeyboard {
                     } else {
                         effective.to_ascii_uppercase()
                     };
+                }
+                if !self.first_byte_logged {
+                    let mut line = heapless::String::<160>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] runtime keyboard first-byte read=1 ascii=0x{:02x} key=0x{key:02x} shift={} caps={}",
+                            effective as u8,
+                            shift as u8,
+                            self.caps_lock_on as u8,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    self.first_byte_logged = true;
                 }
                 out[written] = effective as u8;
                 written = written.saturating_add(1);
@@ -17079,6 +17283,25 @@ mod tests {
             xhci_diag_stage_label(0x034c),
             Some("platform-reset-dcbaap-publish-blocked")
         );
+        assert_eq!(xhci_diag_stage_label(0x0380), Some("usb-address-attempt"));
+        assert_eq!(
+            xhci_diag_stage_label(0x0388),
+            Some("usb-address-context-state-error")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x03a0),
+            Some("usb-config-desc-header")
+        );
+        assert_eq!(xhci_diag_stage_label(0x03a7), Some("usb-device-desc-full"));
+        assert_eq!(
+            xhci_diag_stage_label(0x03b2),
+            Some("usb-address-direct-fail")
+        );
+        assert_eq!(xhci_diag_stage_label(0x03c0), Some("usb-hid-report-event"));
+        assert_eq!(
+            xhci_diag_stage_label(0x03c1),
+            Some("usb-hid-report-decode-fail")
+        );
         assert_eq!(
             xhci_diag_stage_label(0x02da),
             Some("erstsz-publish-skip-preserve")
@@ -17281,6 +17504,8 @@ mod tests {
         assert!(super::xhci_diag_stage_after_run(0x032c));
         assert!(super::xhci_diag_stage_after_run(0x0360));
         assert!(super::xhci_diag_stage_after_run(0x0374));
+        assert!(super::xhci_diag_stage_after_run(0x0380));
+        assert!(super::xhci_diag_stage_after_run(0x03c1));
         assert!(!super::xhci_diag_stage_after_run(0x0248));
         assert!(!super::xhci_diag_stage_after_run(0x0213));
     }
@@ -17459,6 +17684,30 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0377),
             Some(("expected_ptr", "event_syncs", "live_snapshot_deferred"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0380),
+            Some(("attempt_speed", "slot_mps", "slot_recycles"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0381),
+            Some(("ctx0_ctx1", "ctx2_ctx3", "ctx4_or_phys"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0398),
+            Some(("slot_attempt", "retry_state", "path_code"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03a0),
+            Some(("xfer_or_len", "descriptor_prefix", "descriptor_meta"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03a7),
+            Some(("xfer_or_tail", "descriptor_words", "descriptor_tail"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03c1),
+            Some(("slot_ep", "code_payload", "decode_state"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),
