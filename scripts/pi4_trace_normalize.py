@@ -26,8 +26,8 @@ KEY_VALUE_RE = re.compile(
     r"(?P<key>[A-Za-z0-9_.:-]+)=(?P<value>\"[^\"]*\"|'[^']*'|[^ \t\r\n]+)"
 )
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat")
-WIFI_HINTS = ("wifi", "cyw", "brcmf", "sdio", "sdhci", "mmc")
+USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
+WIFI_HINTS = ("wifi", "wi-fi", "wlan", "cyw", "brcmf", "sdio", "sdhci", "mmc")
 BOOT_START_MARKERS = (
     "u-boot ",
     "starting kernel ...",
@@ -195,11 +195,17 @@ def classify_domain(line: str) -> str | None:
     lower = line.lower()
     if "[cohesix:usb-trace]" in lower:
         return "usb"
-    if line.startswith("usb:") or "[local-seat]" in lower:
+    if line.startswith("usb:") or line.startswith("USB:") or "[local-seat]" in lower:
         return "usb"
     if line.startswith("Kernel entry via Interrupt"):
         return "usb"
-    if line.startswith("wifi:") or "[pi4-wifi]" in lower or "[cyw43]" in lower:
+    if (
+        line.startswith("wifi:")
+        or line.startswith("WiFi:")
+        or line.startswith("WIFI:")
+        or "[pi4-wifi]" in lower
+        or "[cyw43]" in lower
+    ):
         return "wifi"
     if line.startswith("OK NETTEST") or line.startswith("ERR NETTEST"):
         return "wifi"
