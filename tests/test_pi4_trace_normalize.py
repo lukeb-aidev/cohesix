@@ -244,6 +244,25 @@ def test_gate_summary_tracks_latest_usb_pre_doorbell_timer_halt() -> None:
     assert gates.usb_blocker == "cmd-pre-doorbell-proof-timer-preempted"
 
 
+def test_gate_summary_tracks_usb_cmd_submit_timer_halt_after_policy_skip() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb probe path outcome=enumeration-disabled-bootloader-owned "
+            "progress=no-controller",
+            "[local-seat] xhci root-port command-probe begin "
+            "event_candidate_mask=0x0000 verb=no-op bus=pcie-window",
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-submit-proof-timer-preempted"
+
+
 def test_gate_summary_keeps_usb_timeout_plan_ahead_of_timer_halt() -> None:
     events = normalizer.parse_events(
         [
@@ -337,6 +356,78 @@ def test_gate_summary_resets_usb_timeout_detail_on_later_cmd_submit() -> None:
 
     assert gates.usb_gate == 3
     assert gates.usb_blocker == "cmd-doorbell-proof-timer-preempted"
+
+
+def test_gate_summary_tracks_usb_pcie_timeout_then_raw_phys_timer_halt() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci root-port command-probe begin "
+            "event_candidate_mask=0x0000 verb=no-op bus=pcie-window",
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
+            "waited=0x0000000000000040 expected_ptr=0x0000000404024000 "
+            "event_syncs=0x0000000000000001",
+            "[local-seat] xhci root-port command-probe result=no-op-timeout "
+            "bus=pcie-window action=retry-raw-phys detail=Timeout",
+            "[local-seat] xhci probe fallback mmio=0x0000000600000000 "
+            "from_bus=pcie-window to_bus=phys reason=no-op-timeout",
+            "[local-seat] xhci root-port command-probe begin "
+            "event_candidate_mask=0x0000 verb=no-op bus=phys",
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
+            "doorbell=0x000000000100 target=0x0",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "raw-phys-cmd-doorbell-proof-timer-preempted"
+
+
+def test_gate_summary_tracks_usb_pcie_window_no_op_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci root-port command-probe begin "
+            "event_candidate_mask=0x0000 verb=no-op bus=pcie-window",
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
+            "waited=0x0000000000000040 expected_ptr=0x0000000404024000 "
+            "event_syncs=0x0000000000000001",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "pcie-window-no-op-timeout"
+
+
+def test_gate_summary_tracks_usb_raw_phys_poll_timeout_after_fallback() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci probe fallback mmio=0x0000000600000000 "
+            "from_bus=pcie-window to_bus=phys reason=no-op-timeout",
+            "[local-seat] xhci root-port command-probe begin "
+            "event_candidate_mask=0x0000 verb=no-op bus=phys",
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
+            "waited=0x0000000000000040 expected_ptr=0x0000000004048000 "
+            "event_syncs=0x0000000000000001",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "raw-phys-cmd-poll-only-timeout"
 
 
 def test_gate_summary_latest_boot_drops_stale_usb_timeout() -> None:
@@ -614,6 +705,96 @@ def test_gate_summary_preserves_wifi_ht_recover_cmd5_timeout_over_nettest() -> N
     assert gates.wifi_blocker == "ht-recover-cmd5-timeout"
 
 
+def test_gate_summary_tracks_wifi_linux_probe_pmu_cmd53_r5_rejection() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware stage=linux-probe-attach-state begin",
+            "[pi4-wifi] firmware stage=linux-probe-attach-state "
+            "action=wlanreset cardctrl=0x01->0x03",
+            "[pi4-wifi] sdhci xfer meta stage=command-r5 cmd=53 "
+            "op=write fn=1 addr=0x00603 inc=0 blk=0 count=1 len=1 "
+            "blksz=1 blkcnt=1 flagged=0 trn=0x0002",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x900c0601 len=1 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "linux-probe-pmu-cmd53-r5-rejected"
+
+
+def test_gate_summary_tracks_wifi_linux_probe_pmu_write_skip() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware stage=linux-probe-attach-state "
+            "action=pmu-res-reload-write-skip addr=0x00180600 "
+            "pmu=0x00000000->0x00000001 "
+            "err=unsupported operation: sdio-cmd53-r5-error "
+            "policy=best-effort exact_error=linux-probe-pmu-write-skip",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "linux-probe-pmu-write-skip"
+
+
+def test_gate_summary_tracks_wifi_pmu_write_skip_without_exact_error() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware stage=linux-probe-attach-state "
+            "action=pmu-res-reload-write-skip addr=0x18000600 "
+            "pmu=0x01770181->0x01774181 "
+            "err=unsupported operation: sdio-cmd53-r5-error policy=best-effort",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "linux-probe-pmu-write-skip"
+
+
+def test_gate_summary_tracks_wifi_armcr4_prereset_after_pmu_skip() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware stage=linux-probe-attach-state begin",
+            "[pi4-wifi] sdhci xfer meta stage=command-r5 cmd=53 "
+            "op=write fn=1 addr=0x00603 inc=0 blk=0 count=1 len=1 "
+            "blksz=1 blkcnt=1 flagged=0 trn=0x0002",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x900c0601 len=1 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "[pi4-wifi] firmware stage=linux-probe-attach-state "
+            "action=pmu-res-reload-write-skip addr=0x18000600 "
+            "pmu=0x01770181->0x01774181 "
+            "err=unsupported operation: sdio-cmd53-r5-error policy=best-effort",
+            "[pi4-wifi] firmware stage=pre-core-reset-sdio-clock "
+            "action=core-reset-clock-ready effective=41666666Hz",
+            "[pi4-wifi] firmware core-disable base=0x18103000 "
+            "stage=prereset-fgc-clock value=0x23",
+            "[pi4-wifi] firmware core-ctrl access op=write8 "
+            "base=0x18103000 off=0x408 addr=0x18103408",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x90681001 len=1 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "[pi4-wifi] firmware core-ctrl access stage=prereset-fgc-clock "
+            "op=write8 err=unsupported operation: sdio-cmd53-r5-error "
+            "base=0x18103000 off=0x408",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "armcr4-prereset-fgc-cmd53-r5-rejected"
+
+
 def test_gate_summary_preserves_linux_shape_wifi_cmd53_data_wait() -> None:
     events = normalizer.parse_events(
         [
@@ -752,8 +933,17 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
     cases = {
         "event-ring-missing": "cmd-event-ring-timeout",
         "cmd-fetch-missing": "cmd-fetch-timeout",
+        "cmd-submit-timer-halt": "cmd-submit-proof-timer-preempted",
         "cmd-pre-doorbell-timer-halt": "cmd-pre-doorbell-proof-timer-preempted",
         "cmd-doorbell-vtimer-interrupt": "cmd-doorbell-proof-timer-preempted",
+        "raw-phys-cmd-doorbell-proof-timer-preempted": (
+            "raw-phys-cmd-doorbell-proof-timer-preempted"
+        ),
+        "cmd-raw-phys-doorbell-proof-timer-preempted": (
+            "raw-phys-cmd-doorbell-proof-timer-preempted"
+        ),
+        "pcie-window-no-op-timeout": "pcie-window-no-op-timeout",
+        "raw-phys-cmd-poll-only-timeout": "raw-phys-cmd-poll-only-timeout",
         "pcie-config-replay": "pcie-config-replay",
         "root-port-sample-deferred": "root-port-sample-deferred",
         "no-connected-ports": "no-connected-ports",
@@ -779,6 +969,14 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         "firmware-channel-f2": "firmware-channel-f2",
         "cyw43-control-plane-no-reply-linux-f2-armed": "control-plane-no-reply",
         "ht-retry-sdio-card-not-ready phase=card-ready": "ht-recover-cmd5-timeout",
+        "linux-probe-pmu-write-skip": "linux-probe-pmu-write-skip",
+        "linux-probe-pmu-cmd53-r5-rejected": "linux-probe-pmu-cmd53-r5-rejected",
+        "armcr4-prereset-fgc-cmd53-r5-rejected": (
+            "armcr4-prereset-fgc-cmd53-r5-rejected"
+        ),
+        "sdio cmd53 r5 fail arg=0x90681001": (
+            "armcr4-prereset-fgc-cmd53-r5-rejected"
+        ),
         "cyw43-control-plane-sideband-unreadable": (
             "control-plane-sideband-unreadable"
         ),

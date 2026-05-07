@@ -34,6 +34,8 @@ const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
 const COMMAND_RING_DEBUG_TRBS: usize = 4;
+const LINUX_COMMAND_PROBE_IMOD: u32 = 0x0000_00a0;
+const LINUX_COMMAND_PROBE_USBCMD: u32 = reg::USBCMD_RUN | reg::USBCMD_INTE;
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
 const PORT_ENABLE_WAIT_SPINS: usize = 10_000_000;
 const PORT_SETTLE_SPINS: usize = 100_000;
@@ -149,6 +151,11 @@ const fn disable_interrupter_iman_value(iman: u32) -> u32 {
 #[inline(always)]
 const fn masked_usbcmd(usbcmd: u32) -> u32 {
     usbcmd & !USBCMD_INTERRUPT_DELIVERY_MASK
+}
+
+#[inline(always)]
+const fn linux_command_probe_usbcmd_seed() -> u32 {
+    LINUX_COMMAND_PROBE_USBCMD
 }
 
 #[inline(always)]
@@ -571,8 +578,7 @@ const fn skip_doorbell_readback_after_ring(firmware_handoff: XhciFirmwareHandoff
 const fn skip_config_write_during_init(firmware_handoff: XhciFirmwareHandoff) -> bool {
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::PlatformResetComplete
-            | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::PlatformResetComplete | XhciFirmwareHandoff::PreserveControllerState
     )
 }
 
@@ -3594,8 +3600,10 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Disable device notifications before the first command can observe
         // any stale firmware-originated notification state.
-        let dnctrl_value =
-            polling_command_proof_dnctrl_value(self.firmware_handoff, trusted_runtime_seed_snapshot);
+        let dnctrl_value = polling_command_proof_dnctrl_value(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+        );
         if skip_dnctrl_write {
             emit_xhci_diag(0x0314, reg::DNCTRL as u64, 0, 1);
         } else if !defer_dnctrl_write_until_after_run && !skip_fresh_runtime_ownership_publish {
@@ -4524,8 +4532,7 @@ impl<H: Dma> XhciCtrl<H> {
         let (dequeue, cycle) = event_ring.debug_state();
         for index in 0..COMMAND_EVENT_RING_DEBUG_TRBS {
             let trb = event_ring.debug_trb_at(index).unwrap_or_default();
-            let state =
-                ((index as u64) << 32) | ((dequeue as u64) << 1) | u64::from(cycle);
+            let state = ((index as u64) << 32) | ((dequeue as u64) << 1) | u64::from(cycle);
             emit_xhci_diag(
                 base_stage + index as u16,
                 trb.param,
@@ -4643,7 +4650,7 @@ impl<H: Dma> XhciCtrl<H> {
             let trb = {
                 let mut event_ring = self.event_ring.lock();
                 if command_wait_should_sync_event_ring(waited) {
-                    event_ring.sync_current_for_cpu(&*self.host, "xhci-event-ring-poll")?;
+                    event_ring.sync_current_for_cpu(&*self.host, "xhci-event-ring-poll-fast")?;
                     event_syncs = event_syncs.saturating_add(1);
                 }
                 event_ring.try_dequeue()
@@ -4665,7 +4672,12 @@ impl<H: Dma> XhciCtrl<H> {
                             if ptr_match { 1 } else { 0 },
                         );
                         if !ptr_match {
-                            emit_xhci_diag(0x030c, completion_ptr, expected_ptr, trb.control as u64);
+                            emit_xhci_diag(
+                                0x030c,
+                                completion_ptr,
+                                expected_ptr,
+                                trb.control as u64,
+                            );
                             continue;
                         }
                     }
@@ -4753,6 +4765,42 @@ impl<H: Dma> XhciCtrl<H> {
         trb
     }
 
+    fn enable_linux_command_event_generation_for_probe(&self) {
+        let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        let linux_usbcmd = linux_command_probe_usbcmd_seed();
+
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            self.op_base - self.mmio + reg::USBCMD,
+            linux_usbcmd,
+            0x035b,
+            0x035c,
+            0,
+        );
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            int_base + reg::IMOD,
+            LINUX_COMMAND_PROBE_IMOD,
+            0x035d,
+            0x035d,
+            0,
+        );
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            int_base + reg::IMAN,
+            reg::IMAN_IE,
+            0x035e,
+            0x035e,
+            0,
+        );
+        emit_xhci_diag(
+            0x035f,
+            (linux_usbcmd as u64) << 32,
+            ((reg::IMAN_IE as u64) << 32) | u64::from(LINUX_COMMAND_PROBE_IMOD),
+            1,
+        );
+    }
+
     /// Submit a command TRB
     pub fn submit_command(&self, trb: Trb) -> Result<Trb> {
         if runtime_pollsafe_no_fresh_ownership_handoff(
@@ -4826,9 +4874,54 @@ impl<H: Dma> XhciCtrl<H> {
         self.wait_command_poll_only(Some(cmd_addr))
     }
 
+    fn submit_command_linux_event_generation_poll_only(&self, trb: Trb) -> Result<Trb> {
+        if runtime_pollsafe_no_fresh_ownership_handoff(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+        ) {
+            emit_xhci_diag(
+                0x0336,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
+            );
+            return Err(UsbError::NotSupported);
+        }
+        emit_xhci_diag(
+            0x0300,
+            trb.param,
+            ((trb.status as u64) << 32) | trb.control as u64,
+            2,
+        );
+        self.enable_linux_command_event_generation_for_probe();
+        let mut cmd_ring = self.cmd_ring.lock();
+        let (enqueue_before, cycle_before) = cmd_ring.debug_state();
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let (enqueue_after, cycle_after) = cmd_ring.debug_state();
+        emit_xhci_diag(
+            0x0303,
+            cmd_addr,
+            ((enqueue_before as u64) << 32) | enqueue_after as u64,
+            ((cycle_before as u64) << 1) | (cycle_after as u64),
+        );
+        drop(cmd_ring);
+        self.emit_command_ring_debug_snapshot(0x0360);
+        self.emit_command_event_ring_debug_snapshot(0x0353);
+        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0);
+        self.ring_cmd_doorbell();
+        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1);
+        self.wait_command_poll_only(Some(cmd_addr))
+    }
+
     /// Submit a command-ring No Op probe without touching root-port registers.
     pub fn probe_no_op_command(&self) -> Result<()> {
         self.submit_command_poll_only(no_op_command_trb_for_probe())?;
+        Ok(())
+    }
+
+    /// Probe a No Op command using Linux-shaped event generation registers.
+    pub fn probe_no_op_command_linux_event_generation(&self) -> Result<()> {
+        self.submit_command_linux_event_generation_poll_only(no_op_command_trb_for_probe())?;
         Ok(())
     }
 
@@ -5136,10 +5229,8 @@ mod tests {
     use super::{
         blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, command_timeout_live_snapshot_enabled,
-        command_timeout_live_snapshot_spins, COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS,
-        COMMAND_POLL_ONLY_WAIT_SPINS, COMMAND_WAIT_SPINS,
-        compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base, compose_erst_size,
-        compose_initial_erdp,
+        command_timeout_live_snapshot_spins, compose_brcm_usbaxi_attr, compose_config,
+        compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
         compose_polling_erdp_ack, compose_run_usbcmd, constructor_polling_scrub_mode,
         constructor_polling_scrub_mode_from_params, dcbaap_reg_write_ops,
         defer_crcr_publish_until_after_run_with_snapshot, defer_crcr_publish_with_snapshot,
@@ -5150,11 +5241,12 @@ mod tests {
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, disable_interrupter_iman_value,
         disable_legacy_smi_control_bits, halt_revalidation_needed,
-        initial_live_operational_read_hazard, masked_usbcmd, parse_controller_params,
-        no_op_command_trb_for_probe, platform_reset_dcbaap_publish_blocked_with_snapshot,
-        polling_command_proof_dnctrl_value, polling_event_generation_iman_value,
-        polling_event_generation_run_usbcmd, polling_iman_ack_value, polling_iman_value,
-        port_ready_for_enumeration, post_start_polling_irq_quiesce_pending_bits,
+        initial_live_operational_read_hazard, linux_command_probe_usbcmd_seed, masked_usbcmd,
+        no_op_command_trb_for_probe, parse_controller_params,
+        platform_reset_dcbaap_publish_blocked_with_snapshot, polling_command_proof_dnctrl_value,
+        polling_event_generation_iman_value, polling_event_generation_run_usbcmd,
+        polling_iman_ack_value, polling_iman_value, port_ready_for_enumeration,
+        post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
         pre_halt_source_quiesce_before_live_stop_revalidation, preserve_firmware_handoff_config,
@@ -5203,7 +5295,9 @@ mod tests {
         use_live_post_reset_seed_reads, use_live_post_reset_seed_reads_for_init,
         use_live_post_reset_seed_reads_with_snapshot, ConstructorPollingScrubMode,
         XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
-        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, READY_WAIT_PROGRESS_SPINS,
+        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
+        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
+        COMMAND_WAIT_SPINS, LINUX_COMMAND_PROBE_IMOD, READY_WAIT_PROGRESS_SPINS,
         SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
         TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
     };
@@ -6633,11 +6727,7 @@ mod tests {
             0
         );
         assert_eq!(
-            polling_event_generation_run_usbcmd(
-                reg::USBCMD_RUN,
-                XhciFirmwareHandoff::None,
-                None,
-            ),
+            polling_event_generation_run_usbcmd(reg::USBCMD_RUN, XhciFirmwareHandoff::None, None,),
             reg::USBCMD_RUN
         );
         assert_eq!(
@@ -6647,6 +6737,20 @@ mod tests {
         assert_eq!(
             polling_command_proof_dnctrl_value(XhciFirmwareHandoff::None, None),
             0
+        );
+    }
+
+    #[test]
+    fn linux_command_probe_uses_linux_moderation_seed() {
+        assert_eq!(LINUX_COMMAND_PROBE_IMOD, 0x0000_00a0);
+        assert_eq!(
+            linux_command_probe_usbcmd_seed(),
+            reg::USBCMD_RUN | reg::USBCMD_INTE
+        );
+        assert_eq!(
+            linux_command_probe_usbcmd_seed() & reg::USBCMD_HSEE,
+            0,
+            "Pi 4 command proof must not need a pre-write live USBCMD read to preserve interrupt-delivery bits"
         );
     }
 

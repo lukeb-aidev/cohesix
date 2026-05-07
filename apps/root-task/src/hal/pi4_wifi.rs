@@ -494,6 +494,15 @@ const fn core_ctrl_access_mode_label() -> &'static str {
 }
 
 #[inline]
+const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'static str {
+    if core_ctrl_prereset_write_uses_word_primary(base, offset) {
+        "cmd53-word-windowed-prereset fallback=cmd52-byte-current-window-rewindow"
+    } else {
+        core_ctrl_access_mode_label()
+    }
+}
+
+#[inline]
 const fn core_ctrl_reset_assert_access_mode_label() -> &'static str {
     "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
 }
@@ -575,6 +584,19 @@ fn log_core_ctrl_access(op: &'static str, base: u32, offset: u32, value: Option<
     }
 }
 
+fn log_core_ctrl_prereset_write(base: u32, offset: u32, value: u8) {
+    let addr = base.saturating_add(offset);
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] firmware core-ctrl access op=write8-prereset mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={} value=0x{value:02x}",
+        core_ctrl_prereset_access_mode_label(base, offset),
+        backplane_word_increment_addr() as u8,
+        bus = core_ctrl_trace_function_addr(addr),
+        trace_bus = core_ctrl_trace_function_addr(addr),
+        shift = backplane_word_byte_shift(addr),
+        window = addr & BACKPLANE_WINDOW_MASK,
+    ));
+}
+
 fn log_core_ctrl_reset_write(base: u32, offset: u32, value: u8, mode: &'static str) {
     let addr = base.saturating_add(offset);
     emit_breadcrumb(format_args!(
@@ -639,6 +661,11 @@ fn log_core_ctrl_clear_reset_read(base: u32, offset: u32) {
 
 #[inline]
 const fn core_ctrl_in_reset_write_uses_word_path(base: u32, offset: u32) -> bool {
+    base == CYW43_ARMCR4_CORE_BASE && offset == AI_IOCTRL_OFFSET
+}
+
+#[inline]
+const fn core_ctrl_prereset_write_uses_word_primary(base: u32, offset: u32) -> bool {
     base == CYW43_ARMCR4_CORE_BASE && offset == AI_IOCTRL_OFFSET
 }
 
@@ -1141,6 +1168,22 @@ fn is_sdio_cmd52_access_error(err: &HalError) -> bool {
         err,
         HalError::Unsupported("sdio-cmd52-read") | HalError::Unsupported("sdio-cmd52-write")
     )
+}
+
+#[inline]
+fn is_sdio_cmd53_r5_error(err: &HalError) -> bool {
+    matches!(err, HalError::Unsupported("sdio-cmd53-r5-error"))
+}
+
+#[inline]
+fn core_disable_can_defer_prereset_write_failure(
+    base: u32,
+    stage: &'static str,
+    err: &HalError,
+) -> bool {
+    base == CYW43_ARMCR4_CORE_BASE
+        && stage == "prereset-fgc-clock"
+        && (is_sdio_cmd52_access_error(err) || is_sdio_cmd53_r5_error(err))
 }
 
 #[inline]
@@ -4347,8 +4390,7 @@ fn transport_phase_refresh_preserves_chipclk(stage: &'static str) -> bool {
 
 #[inline]
 const fn should_prime_ht_clock_assist_before_reset(last_chipclkcsr: Option<u8>) -> bool {
-    let _ = last_chipclkcsr;
-    false
+    matches!(last_chipclkcsr, Some(0))
 }
 
 #[inline]
@@ -15236,13 +15278,21 @@ impl SdioHost {
         match self.backplane_read32(pmucontrol_addr) {
             Ok(pmu_before) => {
                 let pmu_after = pmu_before | chipcommon_pmucontrol_res_reload_bits();
+                let mut write_committed = true;
                 if pmu_after != pmu_before {
-                    self.backplane_write32(pmucontrol_addr, pmu_after)?;
+                    if let Err(err) = self.backplane_write32(pmucontrol_addr, pmu_after) {
+                        write_committed = false;
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage=linux-probe-attach-state action=pmu-res-reload-write-skip addr=0x{pmucontrol_addr:08x} pmu=0x{pmu_before:08x}->0x{pmu_after:08x} err={err} policy=best-effort exact_error=linux-probe-pmu-write-skip"
+                        ));
+                        self.recover_command_path("linux-probe-attach-pmu-write-skip");
+                    }
                 }
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=linux-probe-attach-state action=pmu-res-reload addr=0x{pmucontrol_addr:08x} pmu=0x{pmu_before:08x}->0x{pmu_after:08x} readback=skipped"
+                    "[pi4-wifi] firmware stage=linux-probe-attach-state action=pmu-res-reload addr=0x{pmucontrol_addr:08x} pmu=0x{pmu_before:08x}->0x{pmu_after:08x} write_committed={} readback=skipped",
+                    yn(write_committed)
                 ));
-                if linux_probe_attach_uses_live_pmu_readback() {
+                if write_committed && linux_probe_attach_uses_live_pmu_readback() {
                     let pmu_readback = self.backplane_read32(pmucontrol_addr)?;
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage=linux-probe-attach-state action=pmu-res-readback value=0x{pmu_readback:08x}"
@@ -19569,6 +19619,25 @@ impl SdioHost {
         )
     }
 
+    fn core_ctrl_prereset_write8(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+    ) -> Result<(), HalError> {
+        if core_ctrl_prereset_write_uses_word_primary(base, offset) {
+            return self.core_ctrl_word_primary_write8(
+                base,
+                offset,
+                value,
+                "write8-prereset",
+                "core-ctrl-prereset-cmd52-current-window",
+                "core-ctrl-prereset-cmd52-rewindow",
+            );
+        }
+        self.core_ctrl_write8(base, offset, value)
+    }
+
     fn core_ctrl_reset_clear_write8(
         &mut self,
         base: u32,
@@ -19790,6 +19859,24 @@ impl SdioHost {
         if let Err(err) = self.core_ctrl_write8(base, offset, value) {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8 err={err} base=0x{base:08x} off=0x{offset:03x}"
+            ));
+            self.log_transport_shadow(stage);
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn core_ctrl_prereset_write8_logged(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
+        log_core_ctrl_prereset_write(base, offset, value);
+        if let Err(err) = self.core_ctrl_prereset_write8(base, offset, value) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware core-ctrl access stage={stage} op=write8-prereset err={err} base=0x{base:08x} off=0x{offset:03x}"
             ));
             self.log_transport_shadow(stage);
             return Err(err);
@@ -20663,7 +20750,20 @@ impl SdioHost {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware core-disable base=0x{base:08x} stage={prereset_stage} value=0x{prereset_ioctrl:02x}"
             ));
-            self.core_ctrl_write8_logged(base, AI_IOCTRL_OFFSET, prereset_ioctrl, prereset_stage)?;
+            if let Err(err) = self.core_ctrl_prereset_write8_logged(
+                base,
+                AI_IOCTRL_OFFSET,
+                prereset_ioctrl,
+                prereset_stage,
+            ) {
+                if !core_disable_can_defer_prereset_write_failure(base, prereset_stage, &err) {
+                    return Err(err);
+                }
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-disable base=0x{base:08x} stage={prereset_stage} action=defer-prereset-write value=0x{prereset_ioctrl:02x} err={err} next=assert-reset reason=armcr4-prereset-fgc-rejected"
+                ));
+                self.recover_command_path("armcr4-prereset-fgc-deferred");
+            }
             bounded_spin_settle(
                 "cyw43-core-prereset-fgc-clock",
                 core_control_settle_loops(base),
@@ -25357,6 +25457,14 @@ mod tests {
             "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
         );
         assert_eq!(
+            core_ctrl_prereset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
+            "cmd53-word-windowed-prereset fallback=cmd52-byte-current-window-rewindow"
+        );
+        assert_eq!(
+            core_ctrl_prereset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
+            "cmd53-windowed-read32-cmd53-byte-current-window fallback=cmd53-byte-rewindow"
+        );
+        assert_eq!(
             core_ctrl_reset_assert_access_mode_label(),
             "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
         );
@@ -25437,6 +25545,38 @@ mod tests {
         assert!(!core_ctrl_in_reset_write_uses_word_path(
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET
+        ));
+        assert!(core_ctrl_prereset_write_uses_word_primary(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_prereset_write_uses_word_primary(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_prereset_write_uses_word_primary(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_RESETCTRL_OFFSET
+        ));
+        assert!(core_disable_can_defer_prereset_write_failure(
+            CYW43_ARMCR4_CORE_BASE,
+            "prereset-fgc-clock",
+            &HalError::Unsupported("sdio-cmd53-r5-error"),
+        ));
+        assert!(core_disable_can_defer_prereset_write_failure(
+            CYW43_ARMCR4_CORE_BASE,
+            "prereset-fgc-clock",
+            &HalError::Unsupported("sdio-cmd52-write"),
+        ));
+        assert!(!core_disable_can_defer_prereset_write_failure(
+            CYW43_SOCRAM_CORE_BASE,
+            "prereset-fgc-clock",
+            &HalError::Unsupported("sdio-cmd53-r5-error"),
+        ));
+        assert!(!core_disable_can_defer_prereset_write_failure(
+            CYW43_ARMCR4_CORE_BASE,
+            "assert-reset",
+            &HalError::Unsupported("sdio-cmd53-r5-error"),
         ));
         assert!(core_reset_needs_postreset_window_reprime(
             CYW43_SOCRAM_CORE_BASE
@@ -32424,7 +32564,7 @@ mod tests {
     #[test]
     fn pre_reset_ht_assist_prime_follows_cached_chipclk_state() {
         assert!(!should_prime_ht_clock_assist_before_reset(None));
-        assert!(!should_prime_ht_clock_assist_before_reset(Some(0)));
+        assert!(should_prime_ht_clock_assist_before_reset(Some(0)));
         assert!(!should_prime_ht_clock_assist_before_reset(Some(
             backplane_alp_hold_value()
         )));

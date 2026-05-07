@@ -138,7 +138,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
   - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
 
-Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-poll-only-timeout`, `WIFI_BLOCKER=armcr4-release-readback-unavailable`, or `WIFI_BLOCKER=ht-clock-timeout`.
+Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, or `WIFI_BLOCKER=ht-clock-timeout`.
 
 ### 3) QEMU boot + TCP console baseline
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
@@ -500,13 +500,13 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
   - `cargo test -p root-task --no-default-features --features net-console net:: -- --nocapture`
   - Confirms the bounded DHCP core plus runtime policy override plumbing without changing QEMU grammar.
 - Pi 4 image / U-Boot gate:
-  - `scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
+  - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
   - `scripts/uboot/qemu-uboot-smoke.sh --net user`
   - Confirm U-Boot env control remains deterministic (`ipaddr`, `serverip`, `coh_net_mode`, `coh_net_interface`), `CONFIG_PREBOOT` stays on the serial/video console path, the staged Pi 4 boot script owns the first menu/input USB bootstrap, reloads `cohesix.env`, mirrors `coh_net_*` values into the staged padded `bcm2711-rpi-4-b.dtb`, and boots the seL4 elfloader through U-Boot `bootm` with that DTB.
 - QEMU compatibility gate:
   - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
   - Existing QEMU hostfwd defaults (`127.0.0.1:{31337,31338,31339}`) and ACK/ERR/END fixtures must remain unchanged.
-  - Pi 4 runtime evidence gate:
+- Pi 4 runtime evidence gate:
   - Capture boot evidence showing:
     - `manifest.hw.network.mode=<static|dhcp>`
     - `manifest.hw.network.interface=<wired|wifi|auto>`

@@ -6128,9 +6128,9 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 - `cargo check -p root-task`
 - `cargo test -p root-task net:: -- --nocapture`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
-- `cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <STATIC_IP> --tcp-port 31337 --script scripts/cohsh/boot_v0.coh`
 
 ### Checks (DoD)
 - Pi 4 U-Boot boot reaches root-task network init and reports `GENETv5` backend with static IPv4 from manifest-generated config.
@@ -6191,8 +6191,8 @@ Changes:
   - docs/HARDWARE_BRINGUP.md — Pi 4 checklist, expected boot lines, static IPv4 examples.
   - docs/ARCHITECTURE.md + docs/SECURITY.md — backend and threat-model updates.
 Commands:
-  - scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json
-  - cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+  - cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <STATIC_IP> --tcp-port 31337 --script scripts/cohsh/boot_v0.coh
 Checks:
   - Validation includes a before/after proof: Milestone 26 no-NIC transcript and Milestone 26a NIC-enabled transcript for the same board profile family.
   - Console attach/tail/test flows are unchanged except for profile-gated backend/address selection.
@@ -6274,7 +6274,7 @@ Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC
 - `cargo test -p root-task net:: -- --nocapture`
 - `cargo test -p coh-rtc`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
-- `scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
 
@@ -6438,7 +6438,7 @@ Commands:
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
   - minicom -D /dev/cu.usbserial-0001 -b 115200 -o -C pi4-serial.log
   - python3 scripts/pi4_trace_normalize.py pi4-serial.log --summary
-  - python3 scripts/pi4_trace_normalize.py pi4-serial.log --gate-summary --expect USB_GATE=3 --expect USB_BLOCKER=cmd-poll-only-timeout --expect WIFI_GATE=4 --expect WIFI_BLOCKER=armcr4-release-readback-unavailable
+  - python3 scripts/pi4_trace_normalize.py pi4-serial.log --gate-summary --expect USB_GATE=3 --expect USB_BLOCKER=cmd-submit-proof-timer-preempted --expect WIFI_GATE=4 --expect WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected
   - python3 scripts/pi4_trace_normalize.py pi4-linux-known-good.log --domain wifi --summary
   - cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <wifi-lease-ip> --tcp-port 31337 --auth-token bootstrap
 Checks:

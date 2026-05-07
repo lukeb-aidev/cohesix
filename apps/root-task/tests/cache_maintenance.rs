@@ -110,3 +110,42 @@ fn cache_maintenance_dma_sync_for_cpu_invalidates_before_ready() {
     );
     set_test_error(None);
 }
+
+#[test]
+fn cache_maintenance_dma_sync_for_cpu_can_suppress_hot_poll_audit() {
+    let _guard = DMA_TEST_LOCK.lock().expect("cache test lock");
+    let _ = dma::take_audit_log();
+    set_test_error(None);
+
+    let range =
+        dma::sync_for_cpu(0x3000, 0x5000, 0x40, "xhci-event-ring-poll-fast").expect("sync for cpu");
+    assert_eq!(range.label(), "xhci-event-ring-poll-fast");
+
+    let lines = dma::take_audit_log();
+    assert!(
+        lines.is_empty(),
+        "fast xHCI event-ring polling keeps cache maintenance but suppresses UART audit lines"
+    );
+}
+
+#[test]
+fn cache_maintenance_dma_pin_can_suppress_xhci_hot_path_audit() {
+    let _guard = DMA_TEST_LOCK.lock().expect("cache test lock");
+    let _ = dma::take_audit_log();
+    set_test_error(None);
+
+    let range = dma::pin(0x4000, 0x6000, 0x1000, "xhci-scratchpad-page").expect("scratchpad pin");
+    assert_eq!(range.label(), "xhci-scratchpad-page");
+    assert!(
+        dma::take_audit_log().is_empty(),
+        "xHCI scratchpad page sharing keeps cache maintenance but suppresses repetitive UART audit lines"
+    );
+
+    let range =
+        dma::pin(0x5000, 0x7000, 0x1000, "xhci-cmd-ring-submit").expect("command ring submit pin");
+    assert_eq!(range.label(), "xhci-cmd-ring-submit");
+    assert!(
+        dma::take_audit_log().is_empty(),
+        "xHCI command submit sharing keeps cache maintenance but suppresses one-shot hot-path UART audit lines"
+    );
+}

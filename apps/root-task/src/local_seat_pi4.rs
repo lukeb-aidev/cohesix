@@ -3820,7 +3820,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0320..=0x0330
             | 0x0332..=0x0333
             | 0x0340..=0x034c
-            | 0x0350..=0x035a
+            | 0x0350..=0x035f
             | 0x0360..=0x036f
             | 0x0370..=0x0377
             | 0x0380..=0x03b2
@@ -3842,7 +3842,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x031f
             | 0x0315..=0x0319
             | 0x0320..=0x0330
-            | 0x0350..=0x035a
+            | 0x0350..=0x035f
             | 0x0360..=0x036f
             | 0x0370..=0x0377
             | 0x0380..=0x03b2
@@ -3956,6 +3956,10 @@ const fn xhci_diag_stage_value_labels(
         0x0350 => Some(("run_usbcmd", "event_run_usbcmd", "seed_flags")),
         0x0351 | 0x0352 => Some(("iman_off", "iman", "seed_flags")),
         0x0353..=0x035a => Some(("param", "status_control", "index_dequeue_cycle")),
+        0x035b | 0x035c => Some(("usbcmd_off", "usbcmd", "old_usbcmd")),
+        0x035d => Some(("imod_off", "imod", "policy")),
+        0x035e => Some(("iman_off", "iman", "policy")),
+        0x035f => Some(("usbcmd_usbsts", "iman_imod", "policy")),
         0x0360..=0x0367 => Some(("param", "status_control", "index_enqueue_cycle")),
         0x0368 | 0x036c | 0x0370 => {
             Some(("expected_usbcmd_usbsts", "slots_dnctrl", "expected_ptr"))
@@ -4219,6 +4223,11 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0350 => Some("usbcmd-run-event-generation"),
         0x0351 => Some("polling-iman-event-generation-write"),
         0x0352 => Some("polling-iman-event-generation-write-done"),
+        0x035b => Some("cmd-event-generation-usbcmd-write"),
+        0x035c => Some("cmd-event-generation-usbcmd-write-done"),
+        0x035d => Some("cmd-event-generation-imod-write"),
+        0x035e => Some("cmd-event-generation-iman-write"),
+        0x035f => Some("cmd-event-generation-state"),
         0x0340 => Some("dcbaap-posted-high-clear"),
         0x0341 => Some("dcbaap-posted-high-clear-barrier-done"),
         0x0342 => Some("dcbaap-posted-high-clear-pre-store"),
@@ -4570,7 +4579,12 @@ fn xhci_probe_command_ring_after_event_drain(
         );
         boot_log::force_uart_line(line.as_str());
 
-        return match ctrl.probe_no_op_command() {
+        let probe_result = if pcie_dma_window {
+            ctrl.probe_no_op_command_linux_event_generation()
+        } else {
+            ctrl.probe_no_op_command()
+        };
+        return match probe_result {
             Ok(()) => {
                 boot_log::force_uart_line(
                     "[local-seat] xhci root-port command-probe result=no-op-ok",
@@ -16834,6 +16848,10 @@ mod tests {
             Some("cmd-event-ring-timeout-0")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x035f),
+            Some("cmd-event-generation-state")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x0360),
             Some("cmd-ring-after-enqueue-0")
         );
@@ -17729,6 +17747,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0377),
             Some(("expected_ptr", "event_syncs", "live_snapshot_deferred"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x035f),
+            Some(("usbcmd_usbsts", "iman_imod", "policy"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0380),

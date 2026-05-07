@@ -95,6 +95,17 @@ fn cache_ops_requested(policy: CachePolicy) -> bool {
     policy.dma_clean || policy.dma_invalidate || policy.unify_instructions
 }
 
+#[inline]
+fn audit_suppressed_for_label(label: &str) -> bool {
+    matches!(
+        label,
+        "xhci-scratchpad-page"
+            | "xhci-cmd-ring-submit"
+            | "xhci-event-ring-debug-prefix"
+            | "xhci-event-ring-poll-fast"
+    )
+}
+
 #[cfg(not(target_os = "none"))]
 static DMA_AUDIT_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -151,15 +162,18 @@ pub fn pin(
         label,
     };
 
-    let mut line = heapless::String::<192>::new();
-    let _ = core::fmt::write(
-        &mut line,
-        format_args!(
-            "[dma][share] prepare label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
-            range.label, range.vaddr, range.paddr, range.len,
-        ),
-    );
-    emit_audit_line(line.as_str());
+    let suppress_audit = audit_suppressed_for_label(label);
+    if !suppress_audit {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::write(
+            &mut line,
+            format_args!(
+                "[dma][share] prepare label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+                range.label, range.vaddr, range.paddr, range.len,
+            ),
+        );
+        emit_audit_line(line.as_str());
+    }
 
     let policy = cache_policy();
     if cache_ops_requested(policy) {
@@ -172,7 +186,9 @@ pub fn pin(
 
         let maintenance = CacheMaintenance::init_thread();
         if policy.dma_clean {
-            emit_cache_line("clean-before-share", &range);
+            if !suppress_audit {
+                emit_cache_line("clean-before-share", &range);
+            }
             if let Err(err) = maintenance.clean(range.vaddr, range.len) {
                 emit_cache_error("clean-before-share", &range, err);
                 return Err(PinError::CacheFailure(err));
@@ -180,7 +196,9 @@ pub fn pin(
         }
 
         if policy.unify_instructions {
-            emit_cache_line("unify-before-share", &range);
+            if !suppress_audit {
+                emit_cache_line("unify-before-share", &range);
+            }
             if let Err(err) = maintenance.unify_instruction(range.vaddr, range.len) {
                 emit_cache_error("unify-before-share", &range, err);
                 return Err(PinError::CacheFailure(err));
@@ -188,15 +206,17 @@ pub fn pin(
         }
     }
 
-    let mut ready = heapless::String::<192>::new();
-    let _ = core::fmt::write(
-        &mut ready,
-        format_args!(
-            "[dma][share] ready label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
-            range.label, range.vaddr, range.paddr, range.len,
-        ),
-    );
-    emit_audit_line(ready.as_str());
+    if !suppress_audit {
+        let mut ready = heapless::String::<192>::new();
+        let _ = core::fmt::write(
+            &mut ready,
+            format_args!(
+                "[dma][share] ready label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+                range.label, range.vaddr, range.paddr, range.len,
+            ),
+        );
+        emit_audit_line(ready.as_str());
+    }
 
     Ok(range)
 }
@@ -229,15 +249,18 @@ pub fn sync_for_cpu(
         label,
     };
 
-    let mut line = heapless::String::<192>::new();
-    let _ = core::fmt::write(
-        &mut line,
-        format_args!(
-            "[dma][share] sync-for-cpu label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
-            range.label, range.vaddr, range.paddr, range.len,
-        ),
-    );
-    emit_audit_line(line.as_str());
+    let suppress_audit = audit_suppressed_for_label(label);
+    if !suppress_audit {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::write(
+            &mut line,
+            format_args!(
+                "[dma][share] sync-for-cpu label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+                range.label, range.vaddr, range.paddr, range.len,
+            ),
+        );
+        emit_audit_line(line.as_str());
+    }
 
     let policy = cache_policy();
     if cache_ops_requested(policy) && policy.dma_invalidate {
@@ -248,7 +271,9 @@ pub fn sync_for_cpu(
             )));
         }
 
-        emit_cache_line("invalidate-before-cpu-read", &range);
+        if !suppress_audit {
+            emit_cache_line("invalidate-before-cpu-read", &range);
+        }
         let maintenance = CacheMaintenance::init_thread();
         if let Err(err) = maintenance.invalidate(range.vaddr, range.len) {
             emit_cache_error("invalidate-before-cpu-read", &range, err);
@@ -256,15 +281,17 @@ pub fn sync_for_cpu(
         }
     }
 
-    let mut ready = heapless::String::<192>::new();
-    let _ = core::fmt::write(
-        &mut ready,
-        format_args!(
-            "[dma][share] cpu-ready label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
-            range.label, range.vaddr, range.paddr, range.len,
-        ),
-    );
-    emit_audit_line(ready.as_str());
+    if !suppress_audit {
+        let mut ready = heapless::String::<192>::new();
+        let _ = core::fmt::write(
+            &mut ready,
+            format_args!(
+                "[dma][share] cpu-ready label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+                range.label, range.vaddr, range.paddr, range.len,
+            ),
+        );
+        emit_audit_line(ready.as_str());
+    }
 
     Ok(range)
 }

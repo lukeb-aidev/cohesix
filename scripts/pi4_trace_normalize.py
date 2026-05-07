@@ -345,11 +345,28 @@ def normalize_usb_blocker(value: str) -> str:
     if "cmd-live-timeout-snapshot-missing" in lower:
         return "cmd-live-timeout-snapshot-missing"
     if (
+        "cmd-submit-proof-timer-preempted" in lower
+        or "cmd-submit-vtimer-interrupt" in lower
+        or "cmd-submit-timer-halt" in lower
+    ):
+        return "cmd-submit-proof-timer-preempted"
+    if (
         "cmd-pre-doorbell-proof-timer-preempted" in lower
         or "cmd-pre-doorbell-vtimer-interrupt" in lower
         or "cmd-pre-doorbell-timer-halt" in lower
     ):
         return "cmd-pre-doorbell-proof-timer-preempted"
+    if (
+        "raw-phys-cmd-doorbell-proof-timer-preempted" in lower
+        or "cmd-raw-phys-doorbell-proof-timer-preempted" in lower
+    ):
+        return "raw-phys-cmd-doorbell-proof-timer-preempted"
+    if "pcie-window-cmd-doorbell-proof-timer-preempted" in lower:
+        return "pcie-window-cmd-doorbell-proof-timer-preempted"
+    if "raw-phys-cmd-poll-only-timeout" in lower:
+        return "raw-phys-cmd-poll-only-timeout"
+    if "pcie-window-no-op-timeout" in lower:
+        return "pcie-window-no-op-timeout"
     if (
         "cmd-doorbell-proof-timer-preempted" in lower
         or "cmd-doorbell-vtimer-interrupt" in lower
@@ -453,6 +470,19 @@ def normalize_wifi_blocker(value: str) -> str:
         "ht-retry-sdio-card-not-ready" in lower and "phase=card-ready" in lower
     ):
         return "ht-recover-cmd5-timeout"
+    if "linux-probe-pmu-write-skip" in lower or "pmu-res-reload-write-skip" in lower:
+        return "linux-probe-pmu-write-skip"
+    if "linux-probe-pmu-cmd53-r5-rejected" in lower:
+        return "linux-probe-pmu-cmd53-r5-rejected"
+    if (
+        "armcr4-prereset-fgc-cmd53-r5-rejected" in lower
+        or (
+            "prereset-fgc-clock" in lower
+            and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
+        )
+        or "arg=0x90681001" in lower
+    ):
+        return "armcr4-prereset-fgc-cmd53-r5-rejected"
     if "ht-backplane-cmd53-r5-rejected" in lower:
         return "ht-backplane-cmd53-r5-rejected"
     if "sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower:
@@ -599,21 +629,31 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
 
     gate = 1
     blocker = "unknown"
+    saw_command_submit = False
     saw_command_doorbell = False
     saw_command_event_ring_before = False
     saw_command_timeout_plan = False
+    command_probe_bus: str | None = None
     command_timeout_detail: str | None = None
     precise_command_timeout_details = {
         "cmd-poll-only-timeout",
+        "pcie-window-no-op-timeout",
+        "raw-phys-cmd-poll-only-timeout",
         "cmd-fetch-timeout",
         "cmd-event-ring-timeout",
         "cmd-controller-not-running",
         "cmd-controller-halted",
+        "cmd-submit-proof-timer-preempted",
     }
     for event in usb_events:
         raw = event.raw.lower()
         fields = event.fields
         tag = fields.get("tag", "")
+        if "command-probe begin" in raw and fields.get("bus") in {
+            "pcie-window",
+            "phys",
+        }:
+            command_probe_bus = fields["bus"]
         for key in ("progress", "phase", "current", "outcome"):
             progress_gate = usb_progress_gate(fields.get(key))
             if progress_gate is not None:
@@ -703,6 +743,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "controller-ready" in raw or "controller-init-complete" in raw:
             gate = max(gate, 3)
         if tag == "cmd-submit":
+            saw_command_submit = True
             saw_command_doorbell = False
             saw_command_event_ring_before = False
             saw_command_timeout_plan = False
@@ -718,7 +759,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if command_timeout_detail in precise_command_timeout_details:
                 blocker = command_timeout_detail
             else:
-                command_timeout_detail = "cmd-poll-only-timeout"
+                if command_probe_bus == "pcie-window":
+                    command_timeout_detail = "pcie-window-no-op-timeout"
+                elif command_probe_bus == "phys":
+                    command_timeout_detail = "raw-phys-cmd-poll-only-timeout"
+                else:
+                    command_timeout_detail = "cmd-poll-only-timeout"
                 blocker = command_timeout_detail
         elif tag.startswith("cmd-gate-timeout-plan"):
             gate = max(gate, 3)
@@ -779,6 +825,10 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 3)
             if command_timeout_detail in precise_command_timeout_details:
                 blocker = command_timeout_detail
+            elif command_probe_bus == "phys":
+                blocker = "raw-phys-cmd-doorbell-proof-timer-preempted"
+            elif command_probe_bus == "pcie-window":
+                blocker = "pcie-window-cmd-doorbell-proof-timer-preempted"
             else:
                 blocker = "cmd-doorbell-proof-timer-preempted"
         elif (
@@ -789,6 +839,16 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         ):
             gate = max(gate, 3)
             blocker = "cmd-pre-doorbell-proof-timer-preempted"
+        elif (
+            saw_command_submit
+            and not saw_command_event_ring_before
+            and not saw_command_doorbell
+            and command_timeout_detail is None
+            and "kernel entry via interrupt" in raw
+            and "irq 27" in raw
+        ):
+            gate = max(gate, 3)
+            blocker = "cmd-submit-proof-timer-preempted"
         elif (
             fields.get("command_probe", "").endswith("-ok")
             or (
@@ -807,7 +867,21 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             for key in ("blocker", "cause", "exact", "outcome", "result", "verdict"):
                 value = fields.get(key)
                 if value and value not in {"none", "n/a"}:
-                    blocker = normalize_usb_blocker(value)
+                    normalized_value = normalize_usb_blocker(value)
+                    if (
+                        key == "result"
+                        and normalized_value == "cmd-poll-only-timeout"
+                        and fields.get("bus") == "pcie-window"
+                    ):
+                        blocker = "pcie-window-no-op-timeout"
+                    elif (
+                        key == "result"
+                        and normalized_value == "cmd-poll-only-timeout"
+                        and fields.get("bus") == "phys"
+                    ):
+                        blocker = "raw-phys-cmd-poll-only-timeout"
+                    else:
+                        blocker = normalized_value
             focus = fields.get("focus")
             if focus and focus not in {"none", "n/a"} and blocker in {
                 "unknown",
@@ -830,12 +904,18 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     precise_ht_blockers = {
         "devon-timeout",
         "ht-recover-cmd5-timeout",
+        "linux-probe-pmu-write-skip",
+        "linux-probe-pmu-cmd53-r5-rejected",
+        "armcr4-prereset-fgc-cmd53-r5-rejected",
         "ht-backplane-cmd53-r5-rejected",
         "ht-backplane-cmd53-data-wait",
         "ht-backplane-cmd52-r5-rejected",
         "ht-backplane-cmd52-unreadable",
     }
     ht_available_seen = False
+    linux_probe_attach_seen = False
+    linux_probe_pmu_write_active = False
+    armcr4_prereset_ioctrl_active = False
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -859,6 +939,30 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             and "phase=card-ready" in raw
         ):
             explicit_blocker = normalize_wifi_blocker(raw)
+        if "pmu-res-reload-write-skip" in raw:
+            explicit_blocker = "linux-probe-pmu-write-skip"
+        if "linux-probe-attach-state" in raw:
+            linux_probe_attach_seen = True
+        if linux_probe_attach_seen and (
+            fields.get("addr") == "0x00603" or "addr=0x00603" in raw
+        ):
+            linux_probe_pmu_write_active = True
+        if (
+            "pmu-res-reload-write-skip" in raw
+            or "action=pmu-res-reload" in raw
+            or "stage=pre-core-reset-sdio-clock" in raw
+            or "firmware core-ctrl access" in raw
+        ):
+            linux_probe_pmu_write_active = False
+        if (
+            "prereset-fgc-clock" in raw
+            or (
+                "firmware core-ctrl access" in raw
+                and "base=0x18103000" in raw
+                and "off=0x408" in raw
+            )
+        ):
+            armcr4_prereset_ioctrl_active = True
         for key in ("stage", "current", "outcome", "focus", "result", "source"):
             progress_gate = wifi_progress_gate(fields.get(key))
             if progress_gate is not None:
@@ -982,9 +1086,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if "sdio cmd53 r5 fail" in raw:
             gate = max(gate, 4)
-            if blocker not in {
+            if armcr4_prereset_ioctrl_active or fields.get("arg") == "0x90681001":
+                blocker = "armcr4-prereset-fgc-cmd53-r5-rejected"
+            elif linux_probe_pmu_write_active or fields.get("arg") == "0x900c0601":
+                blocker = "linux-probe-pmu-cmd53-r5-rejected"
+            elif blocker not in {
                 "ht-backplane-cmd53-data-wait",
                 "ht-recover-cmd5-timeout",
+                "linux-probe-pmu-write-skip",
+                "linux-probe-pmu-cmd53-r5-rejected",
+                "armcr4-prereset-fgc-cmd53-r5-rejected",
             }:
                 blocker = normalize_wifi_blocker(raw)
             continue
@@ -1017,6 +1128,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = explicit_blocker
             continue
         if explicit_blocker == "ht-recover-cmd5-timeout":
+            gate = max(gate, 4)
+            blocker = explicit_blocker
+            continue
+        if explicit_blocker in {
+            "linux-probe-pmu-write-skip",
+            "linux-probe-pmu-cmd53-r5-rejected",
+            "armcr4-prereset-fgc-cmd53-r5-rejected",
+        }:
             gate = max(gate, 4)
             blocker = explicit_blocker
             continue
