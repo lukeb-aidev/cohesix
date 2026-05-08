@@ -26,7 +26,6 @@ NORMALIZE_ONLY=0
 ALLOW_SUMMARY_ONLY=0
 
 DEFAULT_COMMANDS=(
-    "help"
     "wifi diag"
     "nettest"
     "usb status"
@@ -232,6 +231,29 @@ run_normalizer() {
     require_file "${LOG_PATH}"
     if [[ "${ALLOW_SUMMARY_ONLY}" -eq 0 ]]; then
         args+=("--expect-min" "USB_GATE=1" "--expect-min" "WIFI_GATE=1")
+        args+=("--expect-not" "USB_BLOCKER=policy-skip-before-run")
+        args+=("--expect-not" "USB_BLOCKER=pcie-irq-quiesce-failed")
+        args+=("--expect-not" "USB_BLOCKER=pcie-irq-quiesce-missing")
+        args+=("--expect-not" "USB_BLOCKER=cmd-submit-proof-timer-preempted")
+        args+=("--expect-not" "USB_BLOCKER=cmd-pre-doorbell-proof-timer-preempted")
+        args+=("--expect-not" "USB_BLOCKER=cmd-doorbell-proof-timer-preempted")
+        args+=("--expect-not" "USB_BLOCKER=pcie-window-cmd-doorbell-proof-timer-preempted")
+        args+=("--expect-not" "USB_BLOCKER=raw-phys-cmd-doorbell-proof-timer-preempted")
+        args+=("--expect-not" "USB_BLOCKER=cmd-poll-only-timeout")
+        args+=("--expect-not" "USB_BLOCKER=pcie-window-no-op-timeout")
+        args+=("--expect-not" "USB_BLOCKER=raw-phys-cmd-poll-only-timeout")
+        args+=("--expect-not" "USB_BLOCKER=enumeration-disabled-bootloader-owned")
+        args+=("--expect-not" "USB_BLOCKER=root-port-read-begin")
+        args+=("--expect-not" "USB_BLOCKER=root-port-read-irq27")
+        args+=("--expect-not" "USB_BLOCKER=root-port-sample-deferred")
+        args+=("--expect-not" "WIFI_BLOCKER=ht-recover-cmd5-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=ht-clock-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=function2-disabled")
+        args+=("--expect-not" "WIFI_BLOCKER=linux-probe-pmu-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=sdio-cmd52-write")
+        args+=("--expect-not" "WIFI_BLOCKER=sdio-cmd52-read")
+        args+=("--expect-not" "WIFI_BLOCKER=sdio-cmd53-r5-error")
     fi
     for ((index = 0; index < ${#EXPECTATIONS[@]}; index++)); do
         args+=("--expect" "${EXPECTATIONS[$index]}")

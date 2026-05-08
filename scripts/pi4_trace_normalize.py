@@ -91,6 +91,8 @@ USB_OUTCOME_BLOCKERS = {
     "keyboard-first-byte",
     "no-connected-ports",
     "no-keyboard-found",
+    "root-port-read-begin",
+    "root-port-read-irq27",
     "root-port-sample-deferred",
     "safe-port-event-required",
     "safe-port-state",
@@ -383,10 +385,22 @@ def normalize_usb_blocker(value: str) -> str:
         return "cmd-poll-only-timeout"
     if "command-ring" in lower:
         return "command-ring"
+    if "pcie-irq-quiesce-failed" in lower:
+        return "pcie-irq-quiesce-failed"
+    if "pcie-irq-quiesce-missing" in lower:
+        return "pcie-irq-quiesce-missing"
+    if "controller-gate" in lower:
+        return "controller-gate"
+    if "policy-skip-before-run" in lower:
+        return "policy-skip-before-run"
     if "pcie-config-replay" in lower:
         return "pcie-config-replay"
     if "root-port-sample-deferred" in lower:
         return "root-port-sample-deferred"
+    if "root-port-read-irq27" in lower:
+        return "root-port-read-irq27"
+    if "root-port read-begin" in lower or "root-port-read-begin" in lower:
+        return "root-port-read-begin"
     if "no-connected-ports" in lower:
         return "no-connected-ports"
     if "address-failed" in lower:
@@ -472,6 +486,7 @@ def normalize_wifi_blocker(value: str) -> str:
     """Normalize WiFi blocker strings into stable gate labels."""
 
     lower = value.lower()
+    stripped = lower.strip()
     if "ht-recover-cmd5-timeout" in lower or (
         "ht-retry-sdio-card-not-ready" in lower and "phase=card-ready" in lower
     ):
@@ -480,6 +495,21 @@ def normalize_wifi_blocker(value: str) -> str:
         return "linux-probe-pmu-write-skip"
     if "linux-probe-pmu-cmd53-r5-rejected" in lower:
         return "linux-probe-pmu-cmd53-r5-rejected"
+    if stripped in {
+        "sdio-cmd52-write",
+        "unsupported operation: sdio-cmd52-write",
+    }:
+        return "sdio-cmd52-write"
+    if stripped in {
+        "sdio-cmd52-read",
+        "unsupported operation: sdio-cmd52-read",
+    }:
+        return "sdio-cmd52-read"
+    if stripped in {
+        "sdio-cmd53-r5-error",
+        "unsupported operation: sdio-cmd53-r5-error",
+    }:
+        return "sdio-cmd53-r5-error"
     if (
         "armcr4-prereset-fgc-cmd53-r5-rejected" in lower
         or (
@@ -639,6 +669,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     saw_command_doorbell = False
     saw_command_event_ring_before = False
     saw_command_timeout_plan = False
+    root_port_read_pending = False
     command_probe_bus: str | None = None
     command_timeout_detail: str | None = None
     precise_command_timeout_details = {
@@ -655,6 +686,14 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         raw = event.raw.lower()
         fields = event.fields
         tag = fields.get("tag", "")
+        if "root-port read-begin" in raw:
+            root_port_read_pending = True
+            gate = max(gate, 3)
+            blocker = "root-port-read-begin"
+            continue
+        if "root-port read-done" in raw:
+            root_port_read_pending = False
+            continue
         if "command-probe begin" in raw and fields.get("bus") in {
             "pcie-window",
             "phys",
@@ -817,6 +856,13 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             saw_command_doorbell = True
             gate = max(gate, 3)
         elif (
+            root_port_read_pending
+            and "kernel entry via interrupt" in raw
+            and "irq 27" in raw
+        ):
+            gate = max(gate, 3)
+            blocker = "root-port-read-irq27"
+        elif (
             saw_command_timeout_plan
             and "kernel entry via interrupt" in raw
             and "irq 27" in raw
@@ -870,7 +916,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             else:
                 blocker = "none"
         else:
-            for key in ("blocker", "cause", "exact", "outcome", "result", "verdict"):
+            for key in (
+                "blocker",
+                "cause",
+                "controller_gate",
+                "exact",
+                "outcome",
+                "result",
+                "verdict",
+            ):
                 value = fields.get(key)
                 if value and value not in {"none", "n/a"}:
                     normalized_value = normalize_usb_blocker(value)
@@ -886,8 +940,19 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         and fields.get("bus") == "phys"
                     ):
                         blocker = "raw-phys-cmd-poll-only-timeout"
+                    elif (
+                        key == "verdict"
+                        and normalized_value == "policy-skip-before-run"
+                        and blocker not in {"unknown", "none", "policy-skip-before-run"}
+                    ):
+                        continue
                     else:
                         blocker = normalized_value
+                    if normalized_value in {
+                        "pcie-irq-quiesce-failed",
+                        "pcie-irq-quiesce-missing",
+                    }:
+                        gate = max(gate, 3)
             focus = fields.get("focus")
             if focus and focus not in {"none", "n/a"} and blocker in {
                 "unknown",
@@ -913,6 +978,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "linux-probe-pmu-write-skip",
         "linux-probe-pmu-cmd53-r5-rejected",
         "armcr4-prereset-fgc-cmd53-r5-rejected",
+        "sdio-cmd52-write",
+        "sdio-cmd52-read",
+        "sdio-cmd53-r5-error",
         "ht-backplane-cmd53-r5-rejected",
         "ht-backplane-cmd53-data-wait",
         "ht-backplane-cmd52-r5-rejected",
@@ -1061,7 +1129,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = "none"
             continue
         if raw.startswith("err nettest"):
-            if blocker in precise_ht_blockers:
+            if explicit_blocker in {"sdio-cmd52-write", "sdio-cmd52-read"}:
+                blocker = explicit_blocker
+            elif blocker in precise_ht_blockers:
                 blocker = blocker
             elif explicit_blocker:
                 blocker = explicit_blocker
@@ -1073,10 +1143,20 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 )
             if blocker in {"dhcp-pending", "dhcp-failed"}:
                 gate = max(gate, 8)
+            elif blocker in {"sdio-cmd52-write", "sdio-cmd52-read"}:
+                gate = max(gate, 4)
             elif blocker.startswith("net-not-ready") or blocker.startswith(
                 "nettest-"
             ):
                 gate = max(gate, 9)
+            continue
+        if "sdio-cmd52-write" in raw and "firmware core-ctrl access" in raw:
+            gate = max(gate, 4)
+            blocker = "sdio-cmd52-write"
+            continue
+        if "sdio-cmd52-read" in raw and "firmware core-ctrl access" in raw:
+            gate = max(gate, 4)
+            blocker = "sdio-cmd52-read"
             continue
         if "diagnostic-ht-timeout-backplane-unreadable" in raw:
             gate = max(gate, 4)
@@ -1141,6 +1221,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "linux-probe-pmu-write-skip",
             "linux-probe-pmu-cmd53-r5-rejected",
             "armcr4-prereset-fgc-cmd53-r5-rejected",
+            "sdio-cmd52-write",
+            "sdio-cmd52-read",
+            "sdio-cmd53-r5-error",
         }:
             gate = max(gate, 4)
             blocker = explicit_blocker
@@ -1220,6 +1303,18 @@ def parse_expectations(expectations: Iterable[str]) -> dict[str, str]:
     return parsed
 
 
+def parse_expectation_pairs(expectations: Iterable[str]) -> list[tuple[str, str]]:
+    """Parse KEY=VALUE gate expectations while preserving duplicate keys."""
+
+    parsed: list[tuple[str, str]] = []
+    for expectation in expectations:
+        key, separator, value = expectation.partition("=")
+        if not separator or not key or not value:
+            raise SystemExit(f"invalid expectation, use KEY=VALUE: {expectation}")
+        parsed.append((key, value))
+    return parsed
+
+
 def check_gate_expectations(
     summary: GateSummary, expectations: dict[str, str], stderr: TextIO
 ) -> bool:
@@ -1267,13 +1362,16 @@ def check_gate_min_expectations(
 
 
 def check_gate_not_expectations(
-    summary: GateSummary, expectations: dict[str, str], stderr: TextIO
+    summary: GateSummary,
+    expectations: dict[str, str] | Iterable[tuple[str, str]],
+    stderr: TextIO,
 ) -> bool:
     """Return true when all gate values differ from rejected values."""
 
     actual = {key: str(value) for key, value in summary.to_record().items()}
     ok = True
-    for key, rejected_value in expectations.items():
+    items = expectations.items() if isinstance(expectations, dict) else expectations
+    for key, rejected_value in items:
         if key not in actual:
             print(
                 f"gate assertion failed: unknown key {key}",
@@ -1389,7 +1487,7 @@ def main(argv: list[str] | None = None) -> int:
             gate_summary, parse_expectations(args.expect_min), sys.stderr
         )
         not_ok = check_gate_not_expectations(
-            gate_summary, parse_expectations(args.expect_not), sys.stderr
+            gate_summary, parse_expectation_pairs(args.expect_not), sys.stderr
         )
         if not (exact_ok and min_ok and not_ok):
             return 2

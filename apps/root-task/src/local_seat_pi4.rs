@@ -2731,15 +2731,12 @@ fn xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
         && xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
     {
         if fresh_runtime_ownership_ready {
-            // The mailbox ACK is the platform reset boundary. Once the
-            // high-BAR replay proof exists, enter the platform-reset policy
-            // without repeating the post-mailbox HCRST edge. usb-oxide then
-            // publishes Cohesix-owned DCBAA/rings and keeps the following
-            // controller-ready path poll-driven.
-            return XhciRuntimeInitStrategy::new(
-                XhciFirmwareHandoff::PlatformResetComplete,
-                stop_state_snapshot.is_some(),
-            );
+            // The mailbox ACK is the platform reset boundary. Once live
+            // BAR/COMMAND proof exists after that reset, any pre-reset stopped
+            // seed is stale evidence. Enter the fresh platform-reset lane so
+            // Cohesix publishes its own rings and continues to root-port
+            // enumeration instead of preserving the toxic stop-seeded lane.
+            return XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
         }
         if stop_state_snapshot.is_some() {
             return XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true);
@@ -5240,6 +5237,17 @@ const fn xhci_runtime_init_strategy_skips_root_port_reads(
                 | XhciFirmwareHandoff::None
                 | XhciFirmwareHandoff::PlatformResetComplete
         ))
+}
+
+#[inline]
+const fn xhci_runtime_init_strategy_skips_command_probe_after_toxic_portsc(
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    strategy.seed_stop_state
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::PlatformResetComplete
+        )
 }
 
 #[inline]
@@ -8122,8 +8130,7 @@ const fn xhci_pre_reset_irq_quiesce_required(
 
 #[inline]
 const fn xhci_pre_reset_irq_ack_without_source_clear_allowed(host_mmio_quiesce: bool) -> bool {
-    let _ = host_mmio_quiesce;
-    false
+    !host_mmio_quiesce
 }
 
 fn xhci_quiesce_pcie_irq_sources_before_reset(
@@ -9975,24 +9982,38 @@ impl UsbKeyboard {
                             ) {
                                 ctrl.clear_event_handler_busy_for_polling();
                             }
-                            let drained_event_candidate_mask =
-                                xhci_drain_root_port_change_events(ctrl.as_ref(), max_ports);
-                            event_candidate_mask |= drained_event_candidate_mask;
-                            {
-                                let mut line = heapless::String::<160>::new();
+                            if xhci_runtime_init_strategy_skips_command_probe_after_toxic_portsc(
+                                strategy,
+                            ) {
+                                command_probe = "deferred-platform-reset-stop-seed";
+                                let mut line = heapless::String::<224>::new();
                                 let _ = core::fmt::Write::write_fmt(
                                     &mut line,
                                     format_args!(
-                                        "[local-seat] xhci root-port command-probe mask-flow drained=0x{drained_event_candidate_mask:04x} probe=0x{event_candidate_mask:04x}"
+                                        "[local-seat] xhci root-port command-probe skipped reason=platform-reset-stop-seed-command-toxic probe={command_probe}"
                                     ),
                                 );
                                 boot_log::force_uart_line(line.as_str());
+                            } else {
+                                let drained_event_candidate_mask =
+                                    xhci_drain_root_port_change_events(ctrl.as_ref(), max_ports);
+                                event_candidate_mask |= drained_event_candidate_mask;
+                                {
+                                    let mut line = heapless::String::<160>::new();
+                                    let _ = core::fmt::Write::write_fmt(
+                                        &mut line,
+                                        format_args!(
+                                            "[local-seat] xhci root-port command-probe mask-flow drained=0x{drained_event_candidate_mask:04x} probe=0x{event_candidate_mask:04x}"
+                                        ),
+                                    );
+                                    boot_log::force_uart_line(line.as_str());
+                                }
+                                command_probe = xhci_probe_command_ring_after_event_drain(
+                                    ctrl.as_ref(),
+                                    event_candidate_mask,
+                                    pcie_dma_window,
+                                );
                             }
-                            command_probe = xhci_probe_command_ring_after_event_drain(
-                                ctrl.as_ref(),
-                                event_candidate_mask,
-                                pcie_dma_window,
-                            );
                         } else {
                             {
                                 let mut line = heapless::String::<160>::new();
@@ -15167,7 +15188,7 @@ mod tests {
     fn mailbox_acked_with_config_replay_uses_platform_reset_fresh_ring_lane() {
         let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
         let platform_reset =
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true);
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
         let stop_seed = Some(LocalSeatXhciStopStateSnapshot {
             usbcmd: Some(0),
             usbsts: Some(1),
@@ -15201,18 +15222,15 @@ mod tests {
             ),
             "skip-legacy"
         );
-        assert_eq!(
-            xhci_runtime_init_strategy_seed_label(strategy),
-            "stop-state"
-        );
+        assert_eq!(xhci_runtime_init_strategy_seed_label(strategy), "fresh");
         assert_eq!(
             xhci_runtime_init_strategy_origin_label(strategy),
-            "stop-state-platform-reset-complete"
+            "platform-reset-complete"
         );
     }
 
     #[test]
-    fn mailbox_acked_with_stop_seed_carries_seed_into_controller_params() {
+    fn mailbox_acked_with_config_replay_drops_stale_stop_seed_for_controller_params() {
         let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
         let stop_seed = Some(LocalSeatXhciStopStateSnapshot {
             usbcmd: Some(0),
@@ -15237,11 +15255,47 @@ mod tests {
 
         assert_eq!(
             promoted,
-            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true)
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false)
         );
         assert_eq!(
             params.firmware_handoff,
             XhciFirmwareHandoff::PlatformResetComplete
+        );
+        assert!(params.runtime_seed_snapshot.is_none());
+        assert!(params.apply_brcm_axi_setup);
+    }
+
+    #[test]
+    fn mailbox_acked_without_config_replay_preserves_stop_seed_as_no_touch_guard() {
+        let full_reset = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false);
+        let stop_seed = Some(LocalSeatXhciStopStateSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0),
+        });
+        let promoted = xhci_runtime_init_strategy_after_mailbox_reset_with_ownership(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            full_reset,
+            true,
+            false,
+            stop_seed,
+        );
+        let probe = super::pi4_vl805_linux_capture_capability_probe(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+            .expect("Pi4 high BAR should use Linux-captured caps");
+        let params = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            promoted,
+            stop_seed,
+        );
+
+        assert_eq!(
+            promoted,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true)
+        );
+        assert_eq!(
+            xhci_runtime_init_strategy_origin_label(promoted),
+            "stop-state-platform-reset-complete"
         );
         assert!(params.runtime_seed_snapshot.is_some());
         assert!(!params.apply_brcm_axi_setup);
@@ -16233,7 +16287,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_stop_seed_still_requires_pre_reset_irq_quiesce() {
+    fn platform_reset_stop_seed_uses_trusted_sink_pre_reset_quiesce() {
         let strategy =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true);
 
@@ -17760,6 +17814,16 @@ mod tests {
         assert!(!super::xhci_runtime_init_strategy_skips_root_port_reads(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
         ));
+        assert!(
+            super::xhci_runtime_init_strategy_skips_command_probe_after_toxic_portsc(
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true),
+            )
+        );
+        assert!(
+            !super::xhci_runtime_init_strategy_skips_command_probe_after_toxic_portsc(
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
+            )
+        );
     }
 
     #[test]
@@ -18057,10 +18121,10 @@ mod tests {
     }
 
     #[test]
-    fn pre_reset_irq_quiesce_does_not_ack_bound_sinks_without_source_clear() {
+    fn pre_reset_irq_quiesce_allows_ack_only_for_trusted_bound_sinks() {
         assert!(XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED);
         assert!(!VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN);
-        assert!(!xhci_pre_reset_irq_ack_without_source_clear_allowed(
+        assert!(xhci_pre_reset_irq_ack_without_source_clear_allowed(
             VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN,
         ));
         assert!(!xhci_pre_reset_irq_ack_without_source_clear_allowed(true));

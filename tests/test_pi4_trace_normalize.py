@@ -151,6 +151,24 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
     }
 
 
+def test_gate_summary_preserves_usb_pcie_irq_quiesce_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
+            "usb: irq_contract irq27=no bridge=yes intx=yes "
+            "controller_gate=pcie-irq-quiesce-failed",
+            "usb: contract current=controller-init expected=controller-gate-clear "
+            "blocker=pcie-irq-quiesce-failed strategy=platform-reset-complete",
+            "usb: verdict=policy-skip-before-run focus=controller-gate",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "pcie-irq-quiesce-failed"
+
+
 def test_gate_summary_refines_usb_timeout_with_live_crcr_snapshot() -> None:
     events = normalizer.parse_events(
         [
@@ -464,6 +482,30 @@ def test_gate_summary_latest_boot_drops_stale_usb_timeout() -> None:
 
     assert gates.usb_gate == 3
     assert gates.usb_blocker == "cmd-doorbell-proof-timer-preempted"
+
+
+def test_gate_summary_reports_root_port_read_irq27_after_controller_ready() -> None:
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "[local-seat] xhci probe skipped mmio=0x0000000600000000 "
+        "attempt=1/2 policy=reset-owned-stop-seed origin=reset-owned-stop-seed "
+        "reason=bootloader-owned-no-fresh-ownership action=fallback-next",
+        "usb: golden_path outcome=enumeration-disabled-bootloader-owned pathway=1",
+        "U-Boot 2026.01-dirty",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+        "[local-seat] xhci.diag stage=0x0110 tag=controller-init-complete "
+        "ready=0x00000000",
+        "[local-seat] xhci root-port sample begin ports=5 passes=4",
+        "[local-seat] xhci root-port read-begin index=0 port=1 sample_ports=5",
+        "halting...",
+        "Kernel entry via Interrupt, irq 27",
+    ]
+
+    events = normalizer.parse_events(normalizer.latest_boot_lines(lines))
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "root-port-read-irq27"
 
 
 def test_gate_summary_keeps_usb_poll_timeout_ahead_of_later_timer_halt() -> None:
@@ -805,6 +847,26 @@ def test_gate_summary_tracks_wifi_armcr4_prereset_after_pmu_skip() -> None:
     assert gates.wifi_blocker == "armcr4-prereset-fgc-cmd53-r5-rejected"
 
 
+def test_gate_summary_prefers_terminal_wifi_cmd52_write_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware core-disable base=0x18103000 "
+            "stage=prereset-fgc-clock action=defer-prereset-write "
+            "value=0x23 err=unsupported operation: sdio-cmd53-r5-error "
+            "next=assert-reset reason=armcr4-prereset-fgc-rejected",
+            "[pi4-wifi] firmware core-ctrl access stage=assert-reset "
+            "op=write8 err=unsupported operation: sdio-cmd52-write "
+            "base=0x18103000 off=0x800",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd52-write",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "sdio-cmd52-write"
+
+
 def test_gate_summary_preserves_linux_shape_wifi_cmd53_data_wait() -> None:
     events = normalizer.parse_events(
         [
@@ -953,6 +1015,8 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
             "raw-phys-cmd-doorbell-proof-timer-preempted"
         ),
         "pcie-window-no-op-timeout": "pcie-window-no-op-timeout",
+        "pcie-irq-quiesce-failed": "pcie-irq-quiesce-failed",
+        "pcie-irq-quiesce-missing": "pcie-irq-quiesce-missing",
         "raw-phys-cmd-poll-only-timeout": "raw-phys-cmd-poll-only-timeout",
         "pcie-config-replay": "pcie-config-replay",
         "root-port-sample-deferred": "root-port-sample-deferred",
@@ -1366,6 +1430,29 @@ def test_gate_not_expectation_rejects_stale_blocker(capsys) -> None:
     captured = capsys.readouterr()
     assert not ok
     assert "USB_BLOCKER rejected cmd-poll-only-timeout" in captured.err
+
+
+def test_gate_not_expectation_preserves_duplicate_keys(capsys) -> None:
+    gates = normalizer.GateSummary(
+        usb_gate=3,
+        usb_blocker="pcie-irq-quiesce-failed",
+        wifi_gate=4,
+        wifi_blocker="ht-recover-cmd5-timeout",
+    )
+    rejections = normalizer.parse_expectation_pairs(
+        [
+            "USB_BLOCKER=policy-skip-before-run",
+            "USB_BLOCKER=pcie-irq-quiesce-failed",
+            "WIFI_BLOCKER=ht-recover-cmd5-timeout",
+        ]
+    )
+
+    ok = normalizer.check_gate_not_expectations(gates, rejections, sys.stderr)
+
+    captured = capsys.readouterr()
+    assert not ok
+    assert "USB_BLOCKER rejected pcie-irq-quiesce-failed" in captured.err
+    assert "WIFI_BLOCKER rejected ht-recover-cmd5-timeout" in captured.err
 
 
 def test_gate_not_expectation_rejects_unknown_keys(capsys) -> None:

@@ -496,7 +496,7 @@ const fn core_ctrl_access_mode_label() -> &'static str {
 #[inline]
 const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'static str {
     if core_ctrl_prereset_write_uses_word_primary(base, offset) {
-        "cmd53-word-windowed-prereset fallback=cmd52-byte-current-window-rewindow"
+        "cmd53-word-windowed-prereset fallback=cmd53-byte-current-window-rewindow"
     } else {
         core_ctrl_access_mode_label()
     }
@@ -504,17 +504,17 @@ const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'stati
 
 #[inline]
 const fn core_ctrl_reset_assert_access_mode_label() -> &'static str {
-    "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
+    "cmd53-word-windowed fallback=cmd53-byte-current-window-rewindow"
 }
 
 #[inline]
 const fn core_ctrl_reset_clear_access_mode_label() -> &'static str {
-    "cmd53-word-windowed fallback=cmd52-byte-current-window"
+    "cmd53-word-windowed fallback=cmd53-byte-current-window"
 }
 
 #[inline]
 const fn core_ctrl_reset_clear_retry_access_mode_label() -> &'static str {
-    "cmd52-byte-current-window retry=preserved-cache"
+    "cmd53-byte-current-window retry=preserved-cache"
 }
 
 #[inline]
@@ -553,9 +553,9 @@ const fn core_ctrl_clear_reset_read_access_mode_label(base: u32, offset: u32) ->
 #[inline]
 const fn core_ctrl_in_reset_access_mode_label(base: u32, offset: u32) -> &'static str {
     if core_ctrl_in_reset_write_uses_word_path(base, offset) {
-        "cmd53-word-windowed-in-reset fallback=cmd52-current-window-rewindow"
+        "cmd53-word-windowed-in-reset fallback=cmd53-current-window-rewindow"
     } else {
-        "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
+        "cmd53-byte-current-window fallback=cmd53-byte-rewindow"
     }
 }
 
@@ -1187,6 +1187,29 @@ fn core_disable_can_defer_prereset_write_failure(
 }
 
 #[inline]
+const fn core_disable_prereset_defer_reason(base: u32) -> &'static str {
+    let _ = base;
+    "armcr4-prereset-fgc-rejected"
+}
+
+#[inline]
+const fn core_disable_prereset_recover_label(base: u32) -> &'static str {
+    let _ = base;
+    "armcr4-prereset-fgc-deferred"
+}
+
+#[inline]
+fn d11_passive_disable_rejection_can_continue(base: u32, err: &HalError) -> bool {
+    base == CYW43_D11_CORE_BASES[0]
+        && (is_sdio_cmd52_access_error(err) || is_sdio_cmd53_r5_error(err))
+}
+
+#[inline]
+fn armcr4_passive_reset_rejection_can_continue(err: &HalError) -> bool {
+    is_sdio_cmd52_access_error(err) || is_sdio_cmd53_r5_error(err)
+}
+
+#[inline]
 fn is_armcr4_postreset_fragile_read_error(err: &HalError) -> bool {
     is_sdhci_io_path_error(err)
         || is_sdhci_int_timeout(err)
@@ -1210,7 +1233,12 @@ fn control_plane_startup_link_rescue_exhausted_error(
 
 #[inline]
 const fn io_direct_cmd53_byte_fallback_allowed(function: SdioFunction) -> bool {
-    matches!(function, SdioFunction::Function1)
+    let _ = function;
+    // A failed CMD52 direct register access is stronger transport evidence than
+    // a speculative one-byte CMD53 retry. Linux capture uses explicit CMD53
+    // paths for windowed transfers; generic direct F1 fallback masks the real
+    // failing edge and can return misleading R5 function errors.
+    false
 }
 
 #[inline]
@@ -1461,11 +1489,10 @@ const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transpo
 
 #[inline]
 const fn firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout() -> bool {
-    // The post-release 0x50 CHIPCLKCSR edge proves ALP plus an HT request, not
-    // HT availability. Production must fail before Function 2 until real
-    // HT_AVAIL and IOR2 readiness are visible; no-HT Function 2 probing belongs
-    // only to explicit diagnostics.
-    false
+    // Linux on Pi 4 can leave CHIPCLKCSR at ALP+HT_REQ without ever surfacing
+    // HT_AVAIL. Treat that as a bounded transport only when the selected-card
+    // sideband also proves KSO, wake-till-HT, and the BCM43455 card-cap value.
+    true
 }
 
 #[inline]
@@ -2117,7 +2144,18 @@ fn control_plane_exact_error_is_more_informative(reason: &str) -> bool {
                 | "cyw43-ht-clock-timeout-before-function2"
                 | "cyw43-device-on-timeout-before-ht"
                 | "cyw43-device-on-timeout-before-function2"
+                | "sdio-cmd52-read"
+                | "sdio-cmd52-write"
+                | "sdio-cmd53-r5-error"
         )
+}
+
+#[inline]
+fn control_plane_exact_error_is_direct_sdio_transport_blocker(reason: &str) -> bool {
+    matches!(
+        reason,
+        "sdio-cmd52-read" | "sdio-cmd52-write" | "sdio-cmd53-r5-error"
+    )
 }
 
 #[inline]
@@ -4267,13 +4305,10 @@ const fn function2_accepts_linux_alp_kso_forced_ht_clock(
     last_cardcap: Option<u8>,
     current_clock_hz: u32,
 ) -> bool {
-    let _ = allow_no_ht_function2_probe;
-    let _ = chipclk;
-    let _ = last_wakeupctrl;
-    let _ = last_sleepcsr;
-    let _ = last_cardcap;
-    let _ = current_clock_hz;
-    false
+    allow_no_ht_function2_probe
+        && function2_forced_ht_clock_can_try_ready_poll(current_clock_hz)
+        && ht_clock_timeout_can_continue(true, chipclk)
+        && ht_clock_timeout_has_selected_card_sideband(last_wakeupctrl, last_sleepcsr, last_cardcap)
 }
 
 #[inline]
@@ -5836,7 +5871,10 @@ fn wifi_debug_snapshot_should_be_cached(snapshot: &WifiDebugSnapshot) -> bool {
 #[inline]
 fn promote_cached_wifi_debug_snapshot_exact_error(exact_error: &'static str) {
     let hintless_firstread_no_irq = exact_error == "cyw43-control-plane-hintless-firstread-no-irq";
-    if !exact_error.starts_with("cyw43-function2-reply-") && !hintless_firstread_no_irq {
+    if !exact_error.starts_with("cyw43-function2-reply-")
+        && !hintless_firstread_no_irq
+        && !control_plane_exact_error_is_direct_sdio_transport_blocker(exact_error)
+    {
         return;
     }
 
@@ -5941,12 +5979,23 @@ fn should_use_cached_wifi_debug_snapshot(
             .control_plane_exact_error
             .starts_with("cyw43-control-plane-sideband-")
             || live.control_plane_exact_error == "cyw43-control-plane-sideband-unreadable");
+    let live_is_weaker_than_cached_direct_sdio =
+        control_plane_exact_error_is_direct_sdio_transport_blocker(
+            cached.control_plane_exact_error,
+        ) && matches!(
+            live.control_plane_exact_error,
+            "cyw43-function2-disabled"
+                | "cyw43-function2-enable-latched-not-ready"
+                | "cyw43-control-plane-state-visible-no-reply"
+                | "sdio-function2-ready-timeout"
+        );
 
     (live_is_boot_dead
         || live_is_generic_no_reply
         || live_is_blank_first_reply_recovery
         || live_is_weaker_startup_link_sideband
         || live_snapshot_is_weaker_than_cached_pre_function2_clock_blocker(live, cached)
+        || live_is_weaker_than_cached_direct_sdio
         || live_is_less_informative_sideband)
         && cached_wifi_debug_snapshot_is_more_informative(cached)
 }
@@ -7279,6 +7328,11 @@ impl Pi4WifiState {
 
     pub fn load_cyw43_firmware(&mut self) -> Result<(), HalError> {
         self.host.load_firmware(self.firmware_bundle())
+    }
+
+    pub fn prepare_cyw43_firmware_upload_transport(&mut self) -> Result<u32, HalError> {
+        self.host
+            .prepare_firmware_upload_transport("pre-firmware-upload-transport")
     }
 
     pub fn read_cyw43_frame(&mut self, out: &mut [u8]) -> Result<usize, HalError> {
@@ -14967,11 +15021,19 @@ impl SdioHost {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=d11-disable core={index} base=0x{base:08x} action=upstream-passive"
             ));
-            self.core_disable(
+            if let Err(err) = self.core_disable(
                 base,
                 D11_BCMA_IOCTL_PHYRESET | D11_BCMA_IOCTL_PHYCLOCKEN,
                 D11_BCMA_IOCTL_PHYCLOCKEN,
-            )?;
+            ) {
+                if !d11_passive_disable_rejection_can_continue(base, &err) {
+                    return Err(err);
+                }
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=d11-disable core={index} base=0x{base:08x} action=advisory-skip err={err} reason=pre-upload-f1-reset-write-rejected"
+                ));
+                self.recover_command_path("d11-disable-advisory-skip");
+            }
         }
         Ok(())
     }
@@ -16785,12 +16847,20 @@ impl SdioHost {
             ));
         }
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=armcr4-passive"));
-        self.core_reset(
+        if let Err(err) = self.core_reset(
             CYW43_ARMCR4_CORE_BASE,
             ARMCR4_BCMA_IOCTL_CPUHALT,
             ARMCR4_BCMA_IOCTL_CPUHALT,
             ARMCR4_BCMA_IOCTL_CPUHALT,
-        )?;
+        ) {
+            if !armcr4_passive_reset_rejection_can_continue(&err) {
+                return Err(err);
+            }
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=armcr4-passive action=advisory-reset-skip err={err} reason=pre-upload-f1-reset-write-rejected"
+            ));
+            self.recover_command_path("armcr4-passive-advisory-reset-skip");
+        }
         self.disable_d11_cores_for_firmware()?;
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=socram-disable"));
         self.core_disable(CYW43_SOCRAM_CORE_BASE, 0, 0)?;
@@ -17729,6 +17799,7 @@ impl SdioHost {
                             cyw43_transport_mode_name(true),
                             self.last_chipclkcsr.unwrap_or(0),
                         ));
+                        self.enter_bounded_no_ht_transport(stage)?;
                         self.log_transport_shadow("wait-ht-clock-selected-card-f2-proof");
                         return Ok(false);
                     }
@@ -17772,6 +17843,7 @@ impl SdioHost {
                             cyw43_transport_mode_name(true),
                             self.last_chipclkcsr.unwrap_or(0),
                         ));
+                        self.enter_bounded_no_ht_transport(stage)?;
                         self.log_transport_shadow("wait-ht-clock-ladder-bounded-no-ht");
                         return Ok(false);
                     }
@@ -17786,6 +17858,7 @@ impl SdioHost {
                             cyw43_transport_mode_name(true),
                             self.last_chipclkcsr.unwrap_or(0),
                         ));
+                        self.enter_bounded_no_ht_transport(stage)?;
                         self.log_transport_shadow("wait-ht-clock-bounded-no-ht-first-pass");
                         return Ok(false);
                     }
@@ -17838,6 +17911,7 @@ impl SdioHost {
                             cyw43_transport_mode_name(true),
                             self.last_chipclkcsr.unwrap_or(0),
                         ));
+                        self.enter_bounded_no_ht_transport(stage)?;
                         self.log_transport_shadow("wait-ht-clock-selected-card-f2-proof-retry");
                         return Ok(false);
                     }
@@ -18533,6 +18607,26 @@ impl SdioHost {
             effective_hz
         ));
         Ok(())
+    }
+
+    fn prepare_firmware_upload_transport(&mut self, stage: &'static str) -> Result<u32, HalError> {
+        let high_speed_ready = self.enable_sdio_high_speed_timing_for(stage)?;
+        let target_clock_hz = pre_ht_control_plane_clock_target_hz(CYW43_STARTUP_CLOCK_HZ);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=raise-before-upload request={}Hz from={}Hz high_speed={} reason=linux-high-speed-before-firmware-attach",
+            target_clock_hz,
+            self.current_clock_hz,
+            yn(high_speed_ready),
+        ));
+        let effective_hz = self.set_clock_hz(target_clock_hz)?;
+        self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(effective_hz);
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage={stage} action=upload-transport-ready effective={}Hz width={} high_speed={}",
+            effective_hz,
+            sdio_bus_width_name(self.desired_bus_width),
+            yn(high_speed_ready),
+        ));
+        Ok(effective_hz)
     }
 
     fn ensure_pre_ht_startup_clock(&mut self, stage: &'static str) -> Result<(), HalError> {
@@ -19338,15 +19432,8 @@ impl SdioHost {
         offset: u32,
         value: u8,
     ) -> Result<(), HalError> {
-        let addr = base.saturating_add(offset);
-        self.with_backplane_window_addr(addr, core_ctrl_function_addr(addr), |this, bus_addr| {
-            let _ = bus_addr;
-            this.io_direct_write(
-                SdioFunction::Function1,
-                core_ctrl_current_window_addr(addr),
-                value,
-            )
-        })
+        let mut byte = [value; 1];
+        self.core_ctrl_current_window_transfer8(base, offset, true, &mut byte)
     }
 
     fn core_ctrl_postreset_current_window_transfer8(
@@ -19428,13 +19515,14 @@ impl SdioHost {
         )
     }
 
-    fn core_ctrl_fallback_write8_cmd52_rewindow(
+    fn core_ctrl_fallback_write8_cmd53_rewindow(
         &mut self,
         base: u32,
         offset: u32,
         value: u8,
     ) -> Result<(), HalError> {
-        self.backplane_write8(base.saturating_add(offset), value)
+        let mut byte = [value; 1];
+        self.core_ctrl_current_window_transfer8(base, offset, true, &mut byte)
     }
 
     fn core_ctrl_in_reset_write32(
@@ -19555,14 +19643,14 @@ impl SdioHost {
             Ok(()) => Ok(()),
             Err(err) => {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} from=cmd52-byte-current-window to=cmd52-byte-rewindow err={err}"
+                    "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} from=cmd53-byte-current-window to=cmd53-byte-rewindow err={err}"
                 ));
-                self.recover_command_path("core-ctrl-cmd52-rewindow");
-                match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value) {
+                self.recover_command_path("core-ctrl-cmd53-rewindow");
+                match self.core_ctrl_fallback_write8_cmd53_rewindow(base, offset, value) {
                     Ok(()) => Ok(()),
                     Err(fallback_err) => {
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                            "[pi4-wifi] firmware core-ctrl fallback op=write8 base=0x{base:08x} off=0x{offset:03x} to=cmd53-byte-rewindow err={fallback_err}"
                         ));
                         Err(fallback_err)
                     }
@@ -19584,21 +19672,21 @@ impl SdioHost {
             Ok(()) => Ok(()),
             Err(err) => {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-ctrl fallback op={op} base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd52-byte-current-window err={err}"
+                    "[pi4-wifi] firmware core-ctrl fallback op={op} base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd53-byte-current-window err={err}"
                 ));
                 self.recover_command_path(current_window_stage);
                 match self.core_ctrl_windowed_write8(base, offset, value) {
                     Ok(()) => Ok(()),
                     Err(current_window_err) => {
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware core-ctrl fallback op={op} base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={current_window_err}"
+                            "[pi4-wifi] firmware core-ctrl fallback op={op} base=0x{base:08x} off=0x{offset:03x} to=cmd53-byte-rewindow err={current_window_err}"
                         ));
                         self.recover_command_path(rewindow_stage);
-                        match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value) {
+                        match self.core_ctrl_fallback_write8_cmd53_rewindow(base, offset, value) {
                             Ok(()) => Ok(()),
                             Err(fallback_err) => {
                                 emit_breadcrumb(format_args!(
-                                    "[pi4-wifi] firmware core-ctrl fallback op={op} base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                                    "[pi4-wifi] firmware core-ctrl fallback op={op} base=0x{base:08x} off=0x{offset:03x} to=cmd53-byte-rewindow err={fallback_err}"
                                 ));
                                 Err(fallback_err)
                             }
@@ -19620,8 +19708,8 @@ impl SdioHost {
             offset,
             value,
             "write8-reset-assert",
-            "core-ctrl-reset-assert-cmd52-current-window",
-            "core-ctrl-reset-assert-cmd52-rewindow",
+            "core-ctrl-reset-assert-cmd53-current-window",
+            "core-ctrl-reset-assert-cmd53-rewindow",
         )
     }
 
@@ -19637,8 +19725,8 @@ impl SdioHost {
                 offset,
                 value,
                 "write8-prereset",
-                "core-ctrl-prereset-cmd52-current-window",
-                "core-ctrl-prereset-cmd52-rewindow",
+                "core-ctrl-prereset-cmd53-current-window",
+                "core-ctrl-prereset-cmd53-rewindow",
             );
         }
         self.core_ctrl_write8(base, offset, value)
@@ -19654,35 +19742,35 @@ impl SdioHost {
             Ok(()) => Ok(()),
             Err(err) => {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-clear base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd52-byte-current-window err={err}"
+                    "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-clear base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd53-byte-current-window err={err}"
                 ));
                 if core_reset_clear_preserves_window_cache() {
                     self.recover_command_path_preserve_window(
-                        "core-ctrl-reset-clear-cmd52-current-window",
+                        "core-ctrl-reset-clear-cmd53-current-window",
                     );
                 } else {
-                    self.recover_command_path("core-ctrl-reset-clear-cmd52-current-window");
+                    self.recover_command_path("core-ctrl-reset-clear-cmd53-current-window");
                 }
                 match self.core_ctrl_windowed_write8(base, offset, value) {
                     Ok(()) => {
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware core-ctrl reset-clear stage=cmd52-current-window-ok base=0x{base:08x} off=0x{offset:03x} cache=preserved value=0x{value:02x}"
+                            "[pi4-wifi] firmware core-ctrl reset-clear stage=cmd53-current-window-ok base=0x{base:08x} off=0x{offset:03x} cache=preserved value=0x{value:02x}"
                         ));
                         Ok(())
                     }
                     Err(current_window_err) => {
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-clear base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-current-window err={current_window_err}"
+                            "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-clear base=0x{base:08x} off=0x{offset:03x} to=cmd53-byte-current-window err={current_window_err}"
                         ));
                         if !core_reset_clear_allows_immediate_rewindow_fallback() {
                             return Err(current_window_err);
                         }
-                        self.recover_command_path("core-ctrl-reset-clear-cmd52-rewindow");
-                        match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value) {
+                        self.recover_command_path("core-ctrl-reset-clear-cmd53-rewindow");
+                        match self.core_ctrl_fallback_write8_cmd53_rewindow(base, offset, value) {
                             Ok(()) => Ok(()),
                             Err(fallback_err) => {
                                 emit_breadcrumb(format_args!(
-                                    "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-clear base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                                    "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-clear base=0x{base:08x} off=0x{offset:03x} to=cmd53-byte-rewindow err={fallback_err}"
                                 ));
                                 Err(fallback_err)
                             }
@@ -19702,13 +19790,13 @@ impl SdioHost {
         match self.core_ctrl_windowed_write8(base, offset, value) {
             Ok(()) => {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-ctrl reset-clear stage=cmd52-current-window-ok base=0x{base:08x} off=0x{offset:03x} cache=preserved value=0x{value:02x}"
+                    "[pi4-wifi] firmware core-ctrl reset-clear stage=cmd53-current-window-ok base=0x{base:08x} off=0x{offset:03x} cache=preserved value=0x{value:02x}"
                 ));
                 Ok(())
             }
             Err(err) => {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-clear-retry base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-current-window err={err}"
+                    "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-clear-retry base=0x{base:08x} off=0x{offset:03x} to=cmd53-byte-current-window err={err}"
                 ));
                 Err(err)
             }
@@ -19752,22 +19840,22 @@ impl SdioHost {
                 Ok(()) => return Ok(()),
                 Err(err) => {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd52-byte-current-window err={err}"
+                        "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} from=cmd53-word-windowed to=cmd53-byte-current-window err={err}"
                     ));
-                    self.recover_command_path("core-ctrl-in-reset-cmd52-current-window");
+                    self.recover_command_path("core-ctrl-in-reset-cmd53-current-window");
                     match self.core_ctrl_windowed_write8(base, offset, value) {
                         Ok(()) => return Ok(()),
                         Err(current_window_err) => {
                             emit_breadcrumb(format_args!(
-                                "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={current_window_err}"
+                                "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} to=cmd53-byte-rewindow err={current_window_err}"
                             ));
-                            self.recover_command_path("core-ctrl-in-reset-cmd52-rewindow");
-                            match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value)
+                            self.recover_command_path("core-ctrl-in-reset-cmd53-rewindow");
+                            match self.core_ctrl_fallback_write8_cmd53_rewindow(base, offset, value)
                             {
                                 Ok(()) => return Ok(()),
                                 Err(fallback_err) => {
                                     emit_breadcrumb(format_args!(
-                                        "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                                        "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} to=cmd53-byte-rewindow err={fallback_err}"
                                     ));
                                     return Err(fallback_err);
                                 }
@@ -19781,14 +19869,14 @@ impl SdioHost {
             Ok(()) => Ok(()),
             Err(err) => {
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} from=cmd52-byte-current-window to=cmd52-byte-rewindow err={err}"
+                    "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} from=cmd53-byte-current-window to=cmd53-byte-rewindow err={err}"
                 ));
-                self.recover_command_path("core-ctrl-in-reset-cmd52-rewindow");
-                match self.core_ctrl_fallback_write8_cmd52_rewindow(base, offset, value) {
+                self.recover_command_path("core-ctrl-in-reset-cmd53-rewindow");
+                match self.core_ctrl_fallback_write8_cmd53_rewindow(base, offset, value) {
                     Ok(()) => Ok(()),
                     Err(fallback_err) => {
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} to=cmd52-byte-rewindow err={fallback_err}"
+                            "[pi4-wifi] firmware core-ctrl fallback op=write8-in-reset base=0x{base:08x} off=0x{offset:03x} to=cmd53-byte-rewindow err={fallback_err}"
                         ));
                         Err(fallback_err)
                     }
@@ -20765,10 +20853,11 @@ impl SdioHost {
                 if !core_disable_can_defer_prereset_write_failure(base, prereset_stage, &err) {
                     return Err(err);
                 }
+                let reason = core_disable_prereset_defer_reason(base);
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-disable base=0x{base:08x} stage={prereset_stage} action=defer-prereset-write value=0x{prereset_ioctrl:02x} err={err} next=assert-reset reason=armcr4-prereset-fgc-rejected"
+                    "[pi4-wifi] firmware core-disable base=0x{base:08x} stage={prereset_stage} action=defer-prereset-write value=0x{prereset_ioctrl:02x} err={err} next=assert-reset reason={reason}"
                 ));
-                self.recover_command_path("armcr4-prereset-fgc-deferred");
+                self.recover_command_path(core_disable_prereset_recover_label(base));
             }
             bounded_spin_settle(
                 "cyw43-core-prereset-fgc-clock",
@@ -20979,7 +21068,7 @@ impl SdioHost {
                     self.refresh_ht_clock_assist_from_shadow_for("clear-reset-retry-ht-assist")?;
                 }
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-retry attempt=2 path=cmd52-byte-current-window value=0x00 cache=preserved"
+                    "[pi4-wifi] firmware core-reset base=0x{base:08x} stage=clear-reset-retry attempt=2 path=cmd53-byte-current-window value=0x00 cache=preserved"
                 ));
                 if let Err(retry_err) = self
                     .core_ctrl_reset_clear_retry_current_window_write8_logged(
@@ -25464,7 +25553,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd53-word-windowed-prereset fallback=cmd52-byte-current-window-rewindow"
+            "cmd53-word-windowed-prereset fallback=cmd53-byte-current-window-rewindow"
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
@@ -25472,15 +25561,15 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(),
-            "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
+            "cmd53-word-windowed fallback=cmd53-byte-current-window-rewindow"
         );
         assert_eq!(
             core_ctrl_reset_clear_access_mode_label(),
-            "cmd53-word-windowed fallback=cmd52-byte-current-window"
+            "cmd53-word-windowed fallback=cmd53-byte-current-window"
         );
         assert_eq!(
             core_ctrl_reset_clear_retry_access_mode_label(),
-            "cmd52-byte-current-window retry=preserved-cache"
+            "cmd53-byte-current-window retry=preserved-cache"
         );
         assert_eq!(
             core_ctrl_postreset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
@@ -25534,11 +25623,11 @@ mod tests {
         ));
         assert_eq!(
             core_ctrl_in_reset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd53-word-windowed-in-reset fallback=cmd52-current-window-rewindow"
+            "cmd53-word-windowed-in-reset fallback=cmd53-current-window-rewindow"
         );
         assert_eq!(
             core_ctrl_in_reset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd52-byte-current-window fallback=cmd52-byte-rewindow"
+            "cmd53-byte-current-window fallback=cmd53-byte-rewindow"
         );
         assert!(core_ctrl_in_reset_write_uses_word_path(
             CYW43_ARMCR4_CORE_BASE,
@@ -25575,6 +25664,19 @@ mod tests {
             &HalError::Unsupported("sdio-cmd52-write"),
         ));
         assert!(!core_disable_can_defer_prereset_write_failure(
+            CYW43_D11_CORE_BASES[0],
+            "prereset-fgc-clock",
+            &HalError::Unsupported("sdio-cmd52-write"),
+        ));
+        assert!(d11_passive_disable_rejection_can_continue(
+            CYW43_D11_CORE_BASES[0],
+            &HalError::Unsupported("sdio-cmd53-r5-error"),
+        ));
+        assert!(!d11_passive_disable_rejection_can_continue(
+            CYW43_D11_CORE_BASES[0],
+            &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(!core_disable_can_defer_prereset_write_failure(
             CYW43_SOCRAM_CORE_BASE,
             "prereset-fgc-clock",
             &HalError::Unsupported("sdio-cmd53-r5-error"),
@@ -25583,6 +25685,15 @@ mod tests {
             CYW43_ARMCR4_CORE_BASE,
             "assert-reset",
             &HalError::Unsupported("sdio-cmd53-r5-error"),
+        ));
+        assert!(armcr4_passive_reset_rejection_can_continue(
+            &HalError::Unsupported("sdio-cmd53-r5-error")
+        ));
+        assert!(armcr4_passive_reset_rejection_can_continue(
+            &HalError::Unsupported("sdio-cmd52-write")
+        ));
+        assert!(!armcr4_passive_reset_rejection_can_continue(
+            &HalError::Unsupported("sdhci-int-timeout")
         ));
         assert!(core_reset_needs_postreset_window_reprime(
             CYW43_SOCRAM_CORE_BASE
@@ -26309,11 +26420,11 @@ mod tests {
     }
 
     #[test]
-    fn io_direct_cmd53_byte_fallback_is_function1_only() {
+    fn io_direct_cmd53_byte_fallback_is_disabled_for_direct_registers() {
         assert!(!io_direct_cmd53_byte_fallback_allowed(
             SdioFunction::Function0
         ));
-        assert!(io_direct_cmd53_byte_fallback_allowed(
+        assert!(!io_direct_cmd53_byte_fallback_allowed(
             SdioFunction::Function1
         ));
         assert!(!io_direct_cmd53_byte_fallback_allowed(
@@ -28313,8 +28424,8 @@ mod tests {
     }
 
     #[test]
-    fn firmware_stage_rejects_no_ht_function2_after_soft_ht_timeout() {
-        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
+    fn firmware_stage_allows_bounded_no_ht_function2_after_soft_ht_timeout() {
+        assert!(firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]
@@ -31365,14 +31476,14 @@ mod tests {
     }
 
     #[test]
-    fn required_ht_soft_timeout_stays_strict_with_selected_card_snapshot() {
-        assert!(required_ht_clock_soft_timeout_keeps_strict_transport(
+    fn required_ht_soft_timeout_enters_bounded_no_ht_with_selected_card_snapshot() {
+        assert!(!required_ht_clock_soft_timeout_keeps_strict_transport(
             Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
             Some(cyw43455_cardcap_command_decode_value()),
         ));
-        assert!(!ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+        assert!(ht_clock_retry_can_cutover_to_bounded_no_ht_early(
             true,
             required_ht_clock_bounded_no_ht_shortcut_loops(),
             Some(SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
@@ -31709,7 +31820,7 @@ mod tests {
     }
 
     #[test]
-    fn forced_alp_kso_tuple_cannot_bypass_required_ht_gate() {
+    fn forced_alp_kso_tuple_can_enter_bounded_no_ht_function2_probe() {
         let forced_tuple = SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL;
         let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
         let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK);
@@ -31726,7 +31837,7 @@ mod tests {
             cardcap,
             CYW43_STARTUP_CLOCK_HZ.saturating_sub(1),
         ));
-        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
             true,
             forced_tuple,
             wake,
@@ -32086,7 +32197,7 @@ mod tests {
             Some(cyw43455_cardcap_command_decode_value()),
             CYW43_FIRMWARE_BULK_CLOCK_HZ / 4,
         ));
-        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
             true,
             SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL,
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
@@ -32110,7 +32221,7 @@ mod tests {
             Some(cyw43455_cardcap_command_decode_value()),
             CYW43_STARTUP_CLOCK_HZ,
         ));
-        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
             true,
             SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT | SBSDIO_ALP_AVAIL,
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
@@ -32161,6 +32272,12 @@ mod tests {
         ));
         assert!(control_plane_exact_error_is_more_informative(
             "cyw43-device-on-timeout-before-function2"
+        ));
+        assert!(control_plane_exact_error_is_more_informative(
+            "sdio-cmd52-write"
+        ));
+        assert!(control_plane_exact_error_is_direct_sdio_transport_blocker(
+            "sdio-cmd53-r5-error"
         ));
     }
 
@@ -32512,7 +32629,7 @@ mod tests {
     }
 
     #[test]
-    fn post_download_ht_sideband_prime_does_not_bypass_function2_ht_gate() {
+    fn post_download_ht_sideband_prime_allows_bounded_no_ht_function2_probe() {
         let wake = Some(SBSDIO_WAKE_TILL_HT_AVAIL);
         let sleep = Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK);
         let cardcap = Some(cyw43455_cardcap_command_decode_value());
@@ -32532,7 +32649,7 @@ mod tests {
             cardcap,
             CYW43_FIRMWARE_BULK_CLOCK_HZ / 4,
         ));
-        assert!(!function2_accepts_linux_alp_kso_forced_ht_clock(
+        assert!(function2_accepts_linux_alp_kso_forced_ht_clock(
             true,
             diagnostic_timeout,
             wake,
@@ -32554,7 +32671,7 @@ mod tests {
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
         )));
         assert!(!required_ht_clock_uses_pre_function2_kso_gate());
-        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
+        assert!(firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]

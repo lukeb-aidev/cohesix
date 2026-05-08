@@ -594,6 +594,9 @@ fn preserve_cyw43_init_failure_exact_error(
 fn preserved_cyw43_init_failure_snapshot_is_stronger(snapshot_exact_error: &str) -> bool {
     snapshot_exact_error.starts_with("cyw43-function2-reply-")
         || snapshot_exact_error.starts_with("cyw43-function2-enable-latched-not-ready")
+        || snapshot_exact_error.starts_with("cyw43-ht-clock-timeout")
+        || snapshot_exact_error.starts_with("sdio-cmd52")
+        || snapshot_exact_error.starts_with("sdio-cmd53")
 }
 
 pub(crate) fn debug_load_firmware_from_transport(
@@ -601,7 +604,9 @@ pub(crate) fn debug_load_firmware_from_transport(
 ) -> Result<u32, HalError> {
     info!("[cyw43] debug: set_bus_width(4bit)");
     state.set_bus_width(SdioBusWidth::FourBit)?;
-    info!("[cyw43] debug: load_firmware(startup-clock)");
+    info!("[cyw43] debug: prepare_firmware_upload_transport");
+    state.prepare_cyw43_firmware_upload_transport()?;
+    info!("[cyw43] debug: load_firmware(linux-high-speed)");
     state.load_cyw43_firmware()?;
     info!("[cyw43] debug: set_clock(data)");
     let data_clock_target_hz = SDIO_DATA_CLOCK_HZ.min(state.recommended_data_clock_hz());
@@ -774,10 +779,22 @@ impl Cyw43NetDevice {
             return Err(driver_err);
         }
         progress.tick();
-        info!("[cyw43] step: load_firmware(startup-clock)");
-        // Keep the control path at startup clock, but switch to the final bus
-        // width before bulk upload so the first high-speed CMD53 uses the
-        // stable 4-bit transport configuration.
+        info!("[cyw43] step: prepare_firmware_upload_transport");
+        if let Err(err) = state.prepare_cyw43_firmware_upload_transport() {
+            let driver_err = DriverError::from(err);
+            log_cyw43_init_failure(
+                "cyw43-prepare-firmware-upload-transport-fail",
+                &mut state,
+                &driver_err,
+                false,
+            );
+            return Err(driver_err);
+        }
+        progress.tick();
+        info!("[cyw43] step: load_firmware(linux-high-speed)");
+        // Match the Linux Pi 4 lane before firmware attach: Function 1 is
+        // selected, the bus is already 4-bit, and the SDIO data clock is raised
+        // before the first CYW43 core-control writes.
         if let Err(err) = state.load_cyw43_firmware() {
             let driver_err = DriverError::from(err);
             log_cyw43_init_failure("cyw43-load-firmware-fail", &mut state, &driver_err, false);
@@ -934,6 +951,8 @@ impl Cyw43NetDevice {
         recover_startup_transport(&mut self.state, "init_transport(control-plane-hard-retry)")?;
         info!("[cyw43] step: control_plane_hard_retry(set_bus_width=4bit)");
         self.state.set_bus_width(SdioBusWidth::FourBit)?;
+        info!("[cyw43] step: control_plane_hard_retry(prepare_firmware_upload_transport)");
+        self.state.prepare_cyw43_firmware_upload_transport()?;
         info!("[cyw43] step: control_plane_hard_retry(load_firmware)");
         self.state.load_cyw43_firmware()?;
         let (data_clock_hz, bus_width) = prepare_initial_control_plane_transport(&mut self.state)?;
