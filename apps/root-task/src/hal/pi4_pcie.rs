@@ -112,6 +112,9 @@ const PCIE_POST_PERST_SETTLE_SPINS: usize =
 const PCIE_LINK_POLL_SPINS: usize = PCIE_LINK_POLL_INTERVAL_MS.saturating_mul(PCIE_SPINS_PER_MS);
 const PCIE_EXT_CFG_SELECT_SETTLE_SPINS: usize = 1_024;
 const PCIE_EXT_CFG_SELECTOR_RETRIES: usize = 2;
+const VL805_XHCI_PORTSC_BASE_OFFSET: usize = 0x420;
+const VL805_XHCI_PORTSC_STRIDE: usize = 0x10;
+const VL805_XHCI_PORT_REGISTER_MMIO_LIMIT: usize = 0x1_0000;
 
 static PCIE_STATUS_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_EXT_DATA_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
@@ -193,6 +196,88 @@ pub const fn vl805_post_mailbox_ext_cfg_retry_needed(
     runtime_touch_enabled: bool,
 ) -> bool {
     runtime_touch_enabled && mmio == high_bar_mmio && !fresh_runtime_ready
+}
+
+#[inline]
+const fn vl805_xhci_port_register_offset_valid(offset: usize, port: u8, max_ports: u8) -> bool {
+    if max_ports == 0 || port >= max_ports || (offset & 0x3) != 0 {
+        return false;
+    }
+    let expected = VL805_XHCI_PORTSC_BASE_OFFSET
+        .saturating_add((port as usize).saturating_mul(VL805_XHCI_PORTSC_STRIDE));
+    offset == expected
+        && offset <= VL805_XHCI_PORT_REGISTER_MMIO_LIMIT - core::mem::size_of::<u32>()
+}
+
+#[inline]
+fn vl805_xhci_port_register_addr(mmio_virt: usize, offset: usize) -> Option<usize> {
+    if mmio_virt == 0 {
+        return None;
+    }
+    mmio_virt.checked_add(offset)
+}
+
+/// Reads a VL805 xHCI root-port register through the Pi 4 HAL policy boundary.
+pub fn vl805_xhci_port_read32(mmio_virt: usize, offset: usize, port: u8, max_ports: u8) -> u32 {
+    if !vl805_xhci_port_register_offset_valid(offset, port, max_ports) {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 xhci port read rejected port={} max_ports={} offset=0x{offset:04x}",
+                port.saturating_add(1),
+                max_ports,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return 0;
+    }
+    let Some(addr) = vl805_xhci_port_register_addr(mmio_virt, offset) else {
+        boot_log::force_uart_line("[local-seat] vl805 xhci port read rejected reason=no-mmio");
+        return 0;
+    };
+    fence(Ordering::SeqCst);
+    let ptr = addr as *const u32;
+    // SAFETY: the caller-installed xHCI hook supplies a live device mapping
+    // for the VL805 MMIO window, and the offset was bounded to the root-port
+    // register aperture before this volatile device read.
+    let value = unsafe { ptr::read_volatile(ptr) };
+    fence(Ordering::SeqCst);
+    value
+}
+
+/// Writes a VL805 xHCI root-port register through the Pi 4 HAL policy boundary.
+pub fn vl805_xhci_port_write32(
+    mmio_virt: usize,
+    offset: usize,
+    port: u8,
+    max_ports: u8,
+    value: u32,
+) {
+    if !vl805_xhci_port_register_offset_valid(offset, port, max_ports) {
+        let mut line = heapless::String::<208>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 xhci port write rejected port={} max_ports={} offset=0x{offset:04x} value=0x{value:08x}",
+                port.saturating_add(1),
+                max_ports,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return;
+    }
+    let Some(addr) = vl805_xhci_port_register_addr(mmio_virt, offset) else {
+        boot_log::force_uart_line("[local-seat] vl805 xhci port write rejected reason=no-mmio");
+        return;
+    };
+    fence(Ordering::SeqCst);
+    let ptr = addr as *mut u32;
+    // SAFETY: the caller-installed xHCI hook supplies a live device mapping
+    // for the VL805 MMIO window, and the offset was bounded to the root-port
+    // register aperture before this volatile device write.
+    unsafe { ptr::write_volatile(ptr, value) };
+    fence(Ordering::SeqCst);
 }
 
 fn prove_pi4_vl805_pcie_ownership(
@@ -1282,6 +1367,20 @@ mod tests {
             Some(RPI4_VL805_XHCI_MMIO + 0x1000)
         );
         assert_eq!(translate_vl805_pci_bar_to_cpu_mmio(0xb000_0004, 0), None);
+    }
+
+    #[test]
+    fn vl805_xhci_port_access_is_bounded_to_root_port_window() {
+        assert!(vl805_xhci_port_register_offset_valid(0x420, 0, 5));
+        assert!(vl805_xhci_port_register_offset_valid(0x460, 4, 5));
+        assert!(!vl805_xhci_port_register_offset_valid(0x3fc, 0, 5));
+        assert!(!vl805_xhci_port_register_offset_valid(0x421, 0, 5));
+        assert!(!vl805_xhci_port_register_offset_valid(0x424, 0, 5));
+        assert!(!vl805_xhci_port_register_offset_valid(0x430, 0, 5));
+        assert!(!vl805_xhci_port_register_offset_valid(0x420, 1, 5));
+        assert!(!vl805_xhci_port_register_offset_valid(0x420, 5, 5));
+        assert!(!vl805_xhci_port_register_offset_valid(0x420, 0, 0));
+        assert!(!vl805_xhci_port_register_offset_valid(0x1_0000, 0, 5));
     }
 
     #[test]

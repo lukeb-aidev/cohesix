@@ -55,7 +55,7 @@ pub use crate::{
     ring::{PhysMem, Trb},
     xhci::{
         XhciControllerParams, XhciCtrl, XhciDiagHook, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
-        set_xhci_diag_hook,
+        XhciPortReadHook, XhciPortWriteHook, set_xhci_diag_hook, set_xhci_port_access_hooks,
     },
 };
 

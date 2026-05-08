@@ -24,6 +24,8 @@ SKIP_BUILD=0
 NO_CAPTURE=0
 NORMALIZE_ONLY=0
 ALLOW_SUMMARY_ONLY=0
+REQUIRE_USB_READY=0
+REQUIRE_WIFI_READY=0
 
 DEFAULT_COMMANDS=(
     "wifi diag"
@@ -78,6 +80,9 @@ Options:
                              Example: USB_BLOCKER=cmd-poll-only-timeout.
   --allow-summary-only       Do not require USB/WiFi evidence gates. This is
                              for exploratory summaries only, not proof output.
+  --require-usb-ready        Require USB gate 10 with USB_BLOCKER=none.
+  --require-wifi-ready       Require WiFi gate 10 with WIFI_BLOCKER=none.
+  --require-ready            Require both USB and WiFi gate 10 with no blocker.
   -h, --help                 Show this help
 
 Default proof commands:
@@ -242,18 +247,80 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-only-timeout")
         args+=("--expect-not" "USB_BLOCKER=pcie-window-no-op-timeout")
         args+=("--expect-not" "USB_BLOCKER=raw-phys-cmd-poll-only-timeout")
+        args+=("--expect-not" "USB_BLOCKER=brcm-axi-setup-read")
         args+=("--expect-not" "USB_BLOCKER=enumeration-disabled-bootloader-owned")
+        args+=("--expect-not" "USB_BLOCKER=port-register-access-disabled")
         args+=("--expect-not" "USB_BLOCKER=root-port-read-begin")
         args+=("--expect-not" "USB_BLOCKER=root-port-read-irq27")
+        args+=("--expect-not" "USB_BLOCKER=root-port-read-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=root-port-sample-deferred")
+        args+=("--expect-not" "USB_BLOCKER=no-connected-ports")
+        args+=("--expect-not" "USB_BLOCKER=port-reset-timeout")
+        args+=("--expect-not" "USB_BLOCKER=port-enable-timeout")
+        args+=("--expect-not" "USB_BLOCKER=root-port-device-not-found")
+        args+=("--expect-not" "USB_BLOCKER=address-device-timeout")
+        args+=("--expect-not" "USB_BLOCKER=address-device-pending")
+        args+=("--expect-not" "USB_BLOCKER=address-failed")
+        args+=("--expect-not" "USB_BLOCKER=device-descriptor")
+        args+=("--expect-not" "USB_BLOCKER=config-descriptor")
+        args+=("--expect-not" "USB_BLOCKER=config-parse")
+        args+=("--expect-not" "USB_BLOCKER=set-config")
+        args+=("--expect-not" "USB_BLOCKER=invalid-config-value")
+        args+=("--expect-not" "USB_BLOCKER=hid-init-failed")
+        args+=("--expect-not" "USB_BLOCKER=hid-interrupt-in")
+        args+=("--expect-not" "USB_BLOCKER=hid-queue-read-failed")
+        args+=("--expect-not" "USB_BLOCKER=hid-first-report")
+        args+=("--expect-not" "USB_BLOCKER=keyboard-first-byte")
+        args+=("--expect-not" "USB_BLOCKER=no-keyboard-found")
+        args+=("--expect-not" "USB_BLOCKER=safe-port-event-required")
+        args+=("--expect-not" "USB_BLOCKER=safe-port-state")
         args+=("--expect-not" "WIFI_BLOCKER=ht-recover-cmd5-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=ht-clock-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=devon-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=function2-disabled")
+        args+=("--expect-not" "WIFI_BLOCKER=ht-backplane-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=ht-backplane-cmd53-data-wait")
+        args+=("--expect-not" "WIFI_BLOCKER=ht-backplane-cmd52-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=ht-backplane-cmd52-unreadable")
         args+=("--expect-not" "WIFI_BLOCKER=linux-probe-pmu-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=linux-probe-pmu-write-skip")
         args+=("--expect-not" "WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=armcr4-release-readback-unavailable")
+        args+=("--expect-not" "WIFI_BLOCKER=socram-prereset-zero-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=socram-assert-reset-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=socram-clear-reset-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=socram-postreset-clock-cmd53-r5-rejected")
         args+=("--expect-not" "WIFI_BLOCKER=sdio-cmd52-write")
         args+=("--expect-not" "WIFI_BLOCKER=sdio-cmd52-read")
         args+=("--expect-not" "WIFI_BLOCKER=sdio-cmd53-r5-error")
+        args+=("--expect-not" "WIFI_BLOCKER=firmware-channel-f2")
+        args+=("--expect-not" "WIFI_BLOCKER=firmware-ready-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=mailbox-ready-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=sdpcm-credit-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=ioctl-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane-interrupts-deferred")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane-no-reply")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane-rearm-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane-sideband-unreadable")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane-startup-link-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=join-pending")
+        args+=("--expect-not" "WIFI_BLOCKER=join-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=wifi-association-failed")
+        args+=("--expect-not" "WIFI_BLOCKER=dhcp-pending")
+        args+=("--expect-not" "WIFI_BLOCKER=dhcp-failed")
+        args+=("--expect-not" "WIFI_BLOCKER=dhcp-invalid-packet")
+        args+=("--expect-not" "WIFI_BLOCKER=net-not-ready-ipc-buffer")
+        args+=("--expect-not" "WIFI_BLOCKER=nettest-policy-disabled")
+        args+=("--expect-not" "WIFI_BLOCKER=nettest-selftest-disabled")
+        args+=("--expect-not" "WIFI_BLOCKER=nettest-unsupported")
+        args+=("--expect-not" "WIFI_BLOCKER=nettest-failed")
+    fi
+    if [[ "${REQUIRE_USB_READY}" -eq 1 ]]; then
+        args+=("--expect-min" "USB_GATE=10" "--expect" "USB_BLOCKER=none")
+    fi
+    if [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]; then
+        args+=("--expect-min" "WIFI_GATE=10" "--expect" "WIFI_BLOCKER=none")
     fi
     for ((index = 0; index < ${#EXPECTATIONS[@]}; index++)); do
         args+=("--expect" "${EXPECTATIONS[$index]}")
@@ -354,6 +421,19 @@ while [[ $# -gt 0 ]]; do
             ;;
         --allow-summary-only)
             ALLOW_SUMMARY_ONLY=1
+            shift
+            ;;
+        --require-usb-ready)
+            REQUIRE_USB_READY=1
+            shift
+            ;;
+        --require-wifi-ready)
+            REQUIRE_WIFI_READY=1
+            shift
+            ;;
+        --require-ready)
+            REQUIRE_USB_READY=1
+            REQUIRE_WIFI_READY=1
             shift
             ;;
         -h|--help)

@@ -484,7 +484,7 @@ def test_gate_summary_latest_boot_drops_stale_usb_timeout() -> None:
     assert gates.usb_blocker == "cmd-doorbell-proof-timer-preempted"
 
 
-def test_gate_summary_reports_root_port_read_irq27_after_controller_ready() -> None:
+def test_gate_summary_reports_root_port_read_timer_after_controller_ready() -> None:
     lines = [
         "U-Boot 2026.01-dirty",
         "[local-seat] xhci probe skipped mmio=0x0000000600000000 "
@@ -505,7 +505,83 @@ def test_gate_summary_reports_root_port_read_irq27_after_controller_ready() -> N
     gates = normalizer.summarize_gates(events)
 
     assert gates.usb_gate == 3
-    assert gates.usb_blocker == "root-port-read-irq27"
+    assert gates.usb_blocker == "root-port-read-timer-preempted"
+
+
+def test_gate_summary_reports_brcm_axi_setup_irq27_after_controller_probe() -> None:
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+        "[local-seat] xhci probe begin mmio=0x0000000600000000 "
+        "attempt=2/2 policy=platform-reset-complete",
+        "[local-seat] xhci.diag stage=0x0111 a=0x00000000a06dd000 "
+        "b=0x0000000000000c08 c=0x0000000000000000",
+        "halting...",
+        "Kernel entry via Interrupt, irq 27",
+    ]
+
+    events = normalizer.parse_events(normalizer.latest_boot_lines(lines))
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "brcm-axi-setup-read"
+
+
+def test_gate_summary_reports_platform_reset_port_access_disabled() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0110 tag=controller-init-complete",
+            "[local-seat] xhci root-port sample skipped "
+            "reason=platform-reset-portsc-toxic",
+            "[local-seat] xhci root-port command-probe skipped "
+            "reason=platform-reset-portsc-toxic "
+            "probe=deferred-platform-reset-portsc-toxic",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "port-register-access-disabled"
+
+
+def test_gate_summary_promotes_deferred_capture_after_command_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0110 tag=controller-init-complete",
+            "[local-seat] xhci root-port sample skipped "
+            "reason=platform-reset-portsc-toxic",
+            "[local-seat] xhci root-port command-probe result=no-op-ok",
+            "[local-seat] xhci root-port deferred-capture "
+            "mask=0x0001 source=pi4-linux-capture command_probe=no-op-ok",
+            "[local-seat] usb root-enum deferred-port "
+            "port=1 speed=3 source=pi4-linux-capture reset=skip",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 5
+    assert gates.usb_blocker == "address-device-pending"
+
+
+def test_gate_summary_reports_root_port_reset_timeout_after_connection() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0110 tag=controller-init-complete",
+            "[local-seat] xhci root-port stage=detect-slow-hit port=1 "
+            "portsc=0x00000203 ccs=1 ped=0 speed=3 pls=0",
+            "[local-seat] usb root-enum classify port=1 stage=address "
+            "kind=port-reset-timeout dma=high bus=pcie-window",
+            "[local-seat] usb root-enum failed port=1 stage=address "
+            "dma=high bus=pcie-window detail=PortResetTimeout",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 5
+    assert gates.usb_blocker == "port-reset-timeout"
 
 
 def test_gate_summary_keeps_usb_poll_timeout_ahead_of_later_timer_halt() -> None:
@@ -847,6 +923,110 @@ def test_gate_summary_tracks_wifi_armcr4_prereset_after_pmu_skip() -> None:
     assert gates.wifi_blocker == "armcr4-prereset-fgc-cmd53-r5-rejected"
 
 
+def test_gate_summary_tracks_wifi_socram_prereset_zero_after_advisory_skips() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware core-disable base=0x18103000 "
+            "stage=prereset-fgc-clock action=defer-prereset-write "
+            "value=0x23 err=unsupported operation: sdio-cmd53-r5-error "
+            "next=assert-reset reason=armcr4-prereset-fgc-rejected",
+            "[pi4-wifi] firmware stage=armcr4-passive action=advisory-reset-skip "
+            "err=unsupported operation: sdio-cmd53-r5-error",
+            "[pi4-wifi] firmware stage=d11-disable action=advisory-skip "
+            "err=unsupported operation: sdio-cmd53-r5-error",
+            "[pi4-wifi] firmware stage=socram-disable",
+            "[pi4-wifi] firmware core-disable base=0x18104000 "
+            "stage=prereset-zero-ioctrl value=0x00",
+            "[pi4-wifi] firmware core-ctrl access op=write8-prereset "
+            "base=0x18104000 off=0x408 addr=0x18104408",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x90881001 len=1 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "[pi4-wifi] firmware core-ctrl access stage=prereset-zero-ioctrl "
+            "op=write8-prereset err=unsupported operation: sdio-cmd53-r5-error "
+            "base=0x18104000 off=0x408",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "socram-prereset-zero-cmd53-r5-rejected"
+
+
+def test_gate_summary_tracks_wifi_socram_assert_reset_after_prereset_skip() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware stage=socram-disable",
+            "[pi4-wifi] firmware core-disable base=0x18104000 "
+            "stage=prereset-zero-ioctrl action=skip value=0x00 "
+            "reason=redundant-upstream-socram-zero",
+            "[pi4-wifi] firmware core-disable base=0x18104000 "
+            "stage=assert-reset value=0x01",
+            "[pi4-wifi] firmware core-ctrl access op=write8 "
+            "base=0x18104000 off=0x800 addr=0x18104800",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x90810001 len=1 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "[pi4-wifi] firmware core-ctrl access stage=assert-reset "
+            "op=write8 err=unsupported operation: sdio-cmd53-r5-error "
+            "base=0x18104000 off=0x800",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "socram-assert-reset-cmd53-r5-rejected"
+
+
+def test_gate_summary_tracks_wifi_socram_clear_reset_after_disable() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware core-disable base=0x18104000 "
+            "stage=prereset-zero-ioctrl action=skip value=0x00 "
+            "reason=redundant-upstream-socram-zero",
+            "[pi4-wifi] firmware core-disable base=0x18104000 "
+            "stage=assert-reset-settled detail=upstream-socram-disable-deferred",
+            "[pi4-wifi] firmware core-reset base=0x18104000 "
+            "stage=clear-reset-primary attempt=1 path=cmd53-word-windowed value=0x00",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x90810004 len=4 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "[pi4-wifi] firmware core-ctrl access stage=clear-reset-primary "
+            "op=write8 err=unsupported operation: sdio-cmd53-r5-error "
+            "base=0x18104000 off=0x800",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "socram-clear-reset-cmd53-r5-rejected"
+
+
+def test_gate_summary_tracks_wifi_socram_postreset_clock_write() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware core-reset base=0x18104000 "
+            "stage=clear-reset-readback reset=0x00",
+            "[pi4-wifi] firmware core-reset base=0x18104000 "
+            "stage=postreset-clock-en-write value=0x01",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x90881001 len=1 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "[pi4-wifi] firmware core-ctrl access stage=postreset-clock-en-write "
+            "op=write8 err=unsupported operation: sdio-cmd53-r5-error "
+            "base=0x18104000 off=0x408",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "socram-postreset-clock-cmd53-r5-rejected"
+
+
 def test_gate_summary_prefers_terminal_wifi_cmd52_write_failure() -> None:
     events = normalizer.parse_events(
         [
@@ -1019,7 +1199,15 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
         "pcie-irq-quiesce-missing": "pcie-irq-quiesce-missing",
         "raw-phys-cmd-poll-only-timeout": "raw-phys-cmd-poll-only-timeout",
         "pcie-config-replay": "pcie-config-replay",
+        "brcm-axi-setup-read": "brcm-axi-setup-read",
+        "xhci.diag stage=0x0111": "brcm-axi-setup-read",
         "root-port-sample-deferred": "root-port-sample-deferred",
+        "platform-reset-portsc-toxic": "port-register-access-disabled",
+        "xhci.diag stage=0x03f5": "port-register-access-disabled",
+        "port-reset-timeout": "port-reset-timeout",
+        "port-enable-timeout": "port-enable-timeout",
+        "device-not-found": "root-port-device-not-found",
+        "address-device-timeout": "address-device-timeout",
         "no-connected-ports": "no-connected-ports",
         "address-failed": "address-failed",
         "invalid-config-value": "invalid-config-value",
@@ -1045,6 +1233,30 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         "ht-retry-sdio-card-not-ready phase=card-ready": "ht-recover-cmd5-timeout",
         "linux-probe-pmu-write-skip": "linux-probe-pmu-write-skip",
         "linux-probe-pmu-cmd53-r5-rejected": "linux-probe-pmu-cmd53-r5-rejected",
+        "socram-assert-reset-cmd53-r5-rejected": (
+            "socram-assert-reset-cmd53-r5-rejected"
+        ),
+        "stage=assert-reset base=0x18104000 off=0x800 err=unsupported operation: sdio-cmd53-r5-error": (
+            "socram-assert-reset-cmd53-r5-rejected"
+        ),
+        "socram-clear-reset-cmd53-r5-rejected": (
+            "socram-clear-reset-cmd53-r5-rejected"
+        ),
+        "stage=clear-reset-primary base=0x18104000 err=unsupported operation: sdio-cmd53-r5-error": (
+            "socram-clear-reset-cmd53-r5-rejected"
+        ),
+        "socram-postreset-clock-cmd53-r5-rejected": (
+            "socram-postreset-clock-cmd53-r5-rejected"
+        ),
+        "stage=postreset-clock-en-write base=0x18104000 off=0x408 err=unsupported operation: sdio-cmd53-r5-error": (
+            "socram-postreset-clock-cmd53-r5-rejected"
+        ),
+        "socram-prereset-zero-cmd53-r5-rejected": (
+            "socram-prereset-zero-cmd53-r5-rejected"
+        ),
+        "base=0x18104000 off=0x408 err=unsupported operation: sdio-cmd53-r5-error": (
+            "socram-prereset-zero-cmd53-r5-rejected"
+        ),
         "armcr4-prereset-fgc-cmd53-r5-rejected": (
             "armcr4-prereset-fgc-cmd53-r5-rejected"
         ),
@@ -1165,6 +1377,26 @@ def test_gate_summary_tracks_usb_keyboard_report_and_first_byte() -> None:
             "source=direct layout=boot subclass=0x01 protocol=0x01",
             "[local-seat] usb hid first report shift=0 keys=04,00,00,00,00,00",
             "[local-seat] runtime keyboard first-byte read=1",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 10
+    assert gates.usb_blocker == "none"
+
+
+def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_gate keyboard=yes first_report=no first_byte=no "
+            "proof_gate=8 target_gate=10 next=hid-first-report "
+            "blocker=hid-first-report",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "proof_gate=9 target_gate=10 next=keyboard-first-byte "
+            "blocker=keyboard-first-byte",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "proof_gate=10 target_gate=10 next=none blocker=none",
         ]
     )
 

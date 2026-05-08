@@ -10,7 +10,7 @@ use crate::{
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
-    sync::atomic::{compiler_fence, AtomicUsize, Ordering},
+    sync::atomic::{compiler_fence, Ordering},
 };
 use spin::Mutex;
 
@@ -1400,24 +1400,46 @@ const fn port_ready_for_enumeration(portsc: u32) -> bool {
 /// Callback signature for xHCI probe diagnostics.
 pub type XhciDiagHook = fn(stage: u16, a: u64, b: u64, c: u64);
 
-static XHCI_DIAG_HOOK: AtomicUsize = AtomicUsize::new(0);
+/// Callback signature for platform-owned xHCI root-port register reads.
+pub type XhciPortReadHook = fn(mmio: usize, offset: usize, port: u8, max_ports: u8) -> u32;
+
+/// Callback signature for platform-owned xHCI root-port register writes.
+pub type XhciPortWriteHook =
+    fn(mmio: usize, offset: usize, port: u8, max_ports: u8, value: u32);
+
+static XHCI_DIAG_HOOK: Mutex<Option<XhciDiagHook>> = Mutex::new(None);
+static XHCI_PORT_READ_HOOK: Mutex<Option<XhciPortReadHook>> = Mutex::new(None);
+static XHCI_PORT_WRITE_HOOK: Mutex<Option<XhciPortWriteHook>> = Mutex::new(None);
 
 /// Installs or clears the xHCI probe diagnostic callback.
 pub fn set_xhci_diag_hook(hook: Option<XhciDiagHook>) {
-    let raw = hook.map_or(0usize, |f| f as usize);
-    XHCI_DIAG_HOOK.store(raw, Ordering::Release);
+    *XHCI_DIAG_HOOK.lock() = hook;
+}
+
+/// Installs or clears platform-owned xHCI root-port register access callbacks.
+pub fn set_xhci_port_access_hooks(
+    read: Option<XhciPortReadHook>,
+    write: Option<XhciPortWriteHook>,
+) {
+    *XHCI_PORT_READ_HOOK.lock() = read;
+    *XHCI_PORT_WRITE_HOOK.lock() = write;
 }
 
 #[inline(always)]
 fn emit_xhci_diag(stage: u16, a: u64, b: u64, c: u64) {
-    let raw = XHCI_DIAG_HOOK.load(Ordering::Acquire);
-    if raw == 0 {
-        return;
+    if let Some(hook) = *XHCI_DIAG_HOOK.lock() {
+        hook(stage, a, b, c);
     }
-    // SAFETY: `raw` is written only by `set_xhci_diag_hook` from a function
-    // pointer with the exact `XhciDiagHook` ABI/signature.
-    let hook: XhciDiagHook = unsafe { core::mem::transmute(raw) };
-    hook(stage, a, b, c);
+}
+
+#[inline(always)]
+fn xhci_port_read_hook() -> Option<XhciPortReadHook> {
+    *XHCI_PORT_READ_HOOK.lock()
+}
+
+#[inline(always)]
+fn xhci_port_write_hook() -> Option<XhciPortWriteHook> {
+    *XHCI_PORT_WRITE_HOOK.lock()
 }
 
 #[inline(always)]
@@ -1623,6 +1645,9 @@ pub struct XhciControllerParams {
     /// Skip early operational MMIO reads until after reset/config/RUN rebuild
     /// controller ownership from caller-provided capability evidence.
     pub skip_initial_live_operational_reads: bool,
+    /// Permit direct root-port register access. Platform HALs may disable this
+    /// when PORTSC reads are known to trap before a HAL-owned port path exists.
+    pub port_register_access_allowed: bool,
 }
 
 impl XhciControllerParams {
@@ -1670,6 +1695,7 @@ pub struct XhciCtrl<H: Dma> {
     event_ring: Mutex<Box<EventRing<H>>>,
     host: Arc<H>,
     skip_initial_live_operational_reads: bool,
+    port_register_access_allowed: bool,
 }
 
 /// Snapshot of xHCI command/event ring state for timeout diagnostics.
@@ -2292,6 +2318,7 @@ impl<H: Dma> XhciCtrl<H> {
             apply_brcm_axi_setup: false,
             skip_constructor_live_scrub: false,
             skip_initial_live_operational_reads: false,
+            port_register_access_allowed: true,
         };
 
         // SAFETY: `init_mmio` is the live mapping returned by `map_mmio` above
@@ -2417,6 +2444,7 @@ impl<H: Dma> XhciCtrl<H> {
             event_ring: Mutex::new(event_ring),
             host,
             skip_initial_live_operational_reads: params.skip_initial_live_operational_reads,
+            port_register_access_allowed: params.port_register_access_allowed,
         };
 
         emit_xhci_diag(0x010f, mmio as u64, op_base as u64, rt_base as u64);
@@ -5048,7 +5076,14 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x03f0, port as u64, self.max_ports as u64, 0);
             return 0;
         }
+        if !self.port_register_access_allowed {
+            emit_xhci_diag(0x03f5, port as u64, self.max_ports as u64, 0);
+            return 0;
+        }
         let offset = reg::port_reg_base(self.cap_length, port);
+        if let Some(read_hook) = xhci_port_read_hook() {
+            return read_hook(self.mmio, offset, port, self.max_ports);
+        }
         self.read_reg(offset)
     }
 
@@ -5058,7 +5093,15 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x03f1, port as u64, self.max_ports as u64, val as u64);
             return;
         }
+        if !self.port_register_access_allowed {
+            emit_xhci_diag(0x03f6, port as u64, self.max_ports as u64, val as u64);
+            return;
+        }
         let offset = reg::port_reg_base(self.cap_length, port);
+        if let Some(write_hook) = xhci_port_write_hook() {
+            write_hook(self.mmio, offset, port, self.max_ports, val);
+            return;
+        }
         self.write_reg(offset, val);
     }
 
@@ -5068,8 +5111,11 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x03f2, port as u64, self.max_ports as u64, 0);
             return Err(UsbError::InvPort);
         }
-        let offset = reg::port_reg_base(self.cap_length, port);
-        let mut portsc: u32 = self.read_reg(offset);
+        if !self.port_register_access_allowed {
+            emit_xhci_diag(0x03f7, port as u64, self.max_ports as u64, 0);
+            return Err(UsbError::NotSupported);
+        }
+        let mut portsc: u32 = self.port_status(port);
         emit_xhci_diag(0x0280, port as u64, encode_port_diag(portsc), 0);
         if (portsc & reg::PORTSC_CCS) == 0 {
             emit_xhci_diag(0x028f, port as u64, encode_port_diag(portsc), 0);
@@ -5079,8 +5125,8 @@ impl<H: Dma> XhciCtrl<H> {
         // Clear stale change bits before asserting reset while preserving the
         // controller-owned neutral port state (power/link ownership bits).
         let clear_changes = port_state_neutral(portsc) | PORT_CHANGE_BITS;
-        self.write_reg(offset, clear_changes);
-        portsc = self.read_reg(offset);
+        self.write_port_status(port, clear_changes);
+        portsc = self.port_status(port);
         emit_xhci_diag(
             0x0281,
             port as u64,
@@ -5090,18 +5136,18 @@ impl<H: Dma> XhciCtrl<H> {
 
         // Keep power enabled while requesting reset.
         let reset = port_state_neutral(portsc) | reg::PORTSC_PP | reg::PORTSC_PR;
-        self.write_reg(offset, reset);
+        self.write_port_status(port, reset);
         emit_xhci_diag(
             0x0282,
             port as u64,
             reset as u64,
-            encode_port_diag(self.read_reg(offset)),
+            encode_port_diag(self.port_status(port)),
         );
 
         // Wait for reset to complete
         let mut waited = 0usize;
         loop {
-            portsc = self.read_reg(offset);
+            portsc = self.port_status(port);
             if (portsc & reg::PORTSC_PR) == 0 {
                 break;
             }
@@ -5117,7 +5163,7 @@ impl<H: Dma> XhciCtrl<H> {
         // Wait for the link to settle and expose either PED or speed bits.
         waited = 0;
         loop {
-            portsc = self.read_reg(offset);
+            portsc = self.port_status(port);
             if port_ready_for_enumeration(portsc) {
                 break;
             }
@@ -5134,8 +5180,8 @@ impl<H: Dma> XhciCtrl<H> {
         // then ensure the port remains enumeration-ready.
         let portsc_before_ack = portsc;
         let ack_changes = port_state_neutral(portsc_before_ack) | PORT_CHANGE_BITS;
-        self.write_reg(offset, ack_changes);
-        portsc = self.read_reg(offset);
+        self.write_port_status(port, ack_changes);
+        portsc = self.port_status(port);
         emit_xhci_diag(
             0x0285,
             port as u64,
@@ -5171,7 +5217,7 @@ impl<H: Dma> XhciCtrl<H> {
         let mut transition_logs = 0usize;
         let mut last_post = portsc;
         loop {
-            portsc = self.read_reg(offset);
+            portsc = self.port_status(port);
             let major_change = reg::portsc_speed(portsc) != reg::portsc_speed(last_post)
                 || reg::portsc_pls(portsc) != reg::portsc_pls(last_post)
                 || (portsc & (reg::PORTSC_PED | reg::PORTSC_CCS))
@@ -5211,7 +5257,7 @@ impl<H: Dma> XhciCtrl<H> {
         for _ in 0..PORT_SETTLE_SPINS {
             spin_loop();
         }
-        let settled = self.read_reg(offset);
+        let settled = self.port_status(port);
         emit_xhci_diag(
             0x0287,
             port as u64,
@@ -5280,6 +5326,11 @@ impl<H: Dma> XhciCtrl<H> {
         self.max_ports
     }
 
+    /// Returns whether direct root-port register MMIO is enabled for this controller.
+    pub fn port_register_access_allowed(&self) -> bool {
+        self.port_register_access_allowed
+    }
+
     /// Returns the xHCI context stride in bytes (32 or 64).
     pub fn context_size_bytes(&self) -> usize {
         self.ctx_size_bytes
@@ -5296,7 +5347,12 @@ impl<H: Dma> XhciCtrl<H> {
             iman: self.read_reg::<u32>(int_base + reg::IMAN),
             erdp: self.read_reg_u64(int_base + reg::ERDP),
             erstba: self.read_reg_u64(int_base + reg::ERSTBA),
-            portsc: self.port_status(port),
+            portsc: if self.port_register_access_allowed {
+                self.port_status(port)
+            } else {
+                emit_xhci_diag(0x03f8, port as u64, self.max_ports as u64, 0);
+                0
+            },
         }
     }
 
@@ -5464,6 +5520,7 @@ mod tests {
             apply_brcm_axi_setup: false,
             skip_constructor_live_scrub: false,
             skip_initial_live_operational_reads: false,
+            port_register_access_allowed: true,
         };
         let validated = params.validated().expect("validated controller params");
         assert_eq!(validated.4, 64);
@@ -7281,6 +7338,7 @@ mod tests {
             apply_brcm_axi_setup: false,
             skip_constructor_live_scrub: true,
             skip_initial_live_operational_reads: true,
+            port_register_access_allowed: true,
         };
         assert_eq!(
             constructor_polling_scrub_mode_from_params(params),

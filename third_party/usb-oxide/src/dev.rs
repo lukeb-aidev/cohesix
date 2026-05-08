@@ -42,6 +42,24 @@ const ADDRESS_RETRY_PATH_DIRECT_FAIL: u8 = 6;
 const ADDRESS_RETRY_PATH_DROP_TT_CONTEXT: u8 = 7;
 
 #[inline]
+const fn synthetic_enabled_root_portsc(speed: u8) -> u32 {
+    let speed = if speed == 0 { reg::SPEED_FULL } else { speed };
+    reg::PORTSC_CCS | reg::PORTSC_PED | reg::PORTSC_PP | ((speed as u32) << 10)
+}
+
+const fn root_portsc_for_address_diag(
+    assume_enabled_root_port: bool,
+    enumerated_speed: u8,
+    live_portsc: u32,
+) -> u32 {
+    if assume_enabled_root_port {
+        synthetic_enabled_root_portsc(enumerated_speed)
+    } else {
+        live_portsc
+    }
+}
+
+#[inline]
 const fn encode_retry_state(
     path: u8,
     code: u8,
@@ -459,7 +477,18 @@ impl<H: Dma> UsbDevice<H> {
         ctrl.reset_port(port)?;
         let speed = ctrl.port_speed(port);
         let root_hub_port = port.saturating_add(1);
-        Self::new_with_topology(ctrl, port, 0, root_hub_port, speed, None)
+        Self::new_with_topology(ctrl, port, 0, root_hub_port, speed, None, false)
+    }
+
+    /// Create and address a root-port device when platform firmware already
+    /// left the root port enabled and live PORTSC access is not prompt-safe.
+    pub fn new_assume_enabled_root_port(
+        ctrl: Arc<XhciCtrl<H>>,
+        port: u8,
+        speed: u8,
+    ) -> Result<Self> {
+        let root_hub_port = port.saturating_add(1);
+        Self::new_with_topology(ctrl, port, 0, root_hub_port, speed, None, true)
     }
 
     /// Create and address a new USB device routed behind a hub.
@@ -471,7 +500,7 @@ impl<H: Dma> UsbDevice<H> {
         tt_context: Option<TtContext>,
     ) -> Result<Self> {
         let port = root_hub_port.checked_sub(1).ok_or(UsbError::InvPort)?;
-        Self::new_with_topology(ctrl, port, route, root_hub_port, speed, tt_context)
+        Self::new_with_topology(ctrl, port, route, root_hub_port, speed, tt_context, false)
     }
 
     #[inline]
@@ -645,6 +674,7 @@ impl<H: Dma> UsbDevice<H> {
         root_hub_port: u8,
         speed: u8,
         tt_context: Option<TtContext>,
+        assume_enabled_root_port: bool,
     ) -> Result<Self> {
         if root_hub_port == 0 {
             return Err(UsbError::InvPort);
@@ -829,7 +859,13 @@ impl<H: Dma> UsbDevice<H> {
                 // SAFETY: The Input Control Context is the first eight u32 values
                 // of the owned input-context allocation and was initialized above.
                 let input_ctrl = unsafe { core::slice::from_raw_parts(input_base as *const u32, 8) };
-                let portsc_before_addr = ctrl.port_status(port);
+                let live_portsc = if assume_enabled_root_port {
+                    0
+                } else {
+                    ctrl.port_status(port)
+                };
+                let portsc_before_addr =
+                    root_portsc_for_address_diag(assume_enabled_root_port, enumerated_speed, live_portsc);
                 ctrl.emit_diag(
                     0x0385,
                     input_ctx.phys(host),
@@ -2226,6 +2262,32 @@ mod tests {
         assert_eq!((encoded >> 32) & 0xff, 0);
         assert_eq!((encoded >> 16) & 0xffff, 2);
         assert_eq!(encoded & 0xffff, 1);
+    }
+
+    #[test]
+    fn synthetic_enabled_root_portsc_uses_capture_speed_without_live_portsc() {
+        let high_speed = synthetic_enabled_root_portsc(reg::SPEED_HIGH);
+        assert_eq!(high_speed & reg::PORTSC_CCS, reg::PORTSC_CCS);
+        assert_eq!(high_speed & reg::PORTSC_PED, reg::PORTSC_PED);
+        assert_eq!(high_speed & reg::PORTSC_PP, reg::PORTSC_PP);
+        assert_eq!(reg::portsc_speed(high_speed), reg::SPEED_HIGH);
+
+        let fallback_speed = synthetic_enabled_root_portsc(0);
+        assert_eq!(reg::portsc_speed(fallback_speed), reg::SPEED_FULL);
+    }
+
+    #[test]
+    fn assumed_enabled_root_port_diag_never_uses_live_portsc() {
+        let live_portsc = reg::PORTSC_CCS | ((reg::SPEED_LOW as u32) << 10);
+        let synthetic =
+            root_portsc_for_address_diag(true, reg::SPEED_HIGH, live_portsc);
+        assert_eq!(reg::portsc_speed(synthetic), reg::SPEED_HIGH);
+        assert_ne!(synthetic, live_portsc);
+
+        assert_eq!(
+            root_portsc_for_address_diag(false, reg::SPEED_HIGH, live_portsc),
+            live_portsc
+        );
     }
 
     #[test]

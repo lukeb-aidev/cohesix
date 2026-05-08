@@ -21,9 +21,10 @@ use font8x8::legacy::BASIC_LEGACY;
 use spin::Mutex;
 use usb_oxide::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
-    hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook, ConfigDesc,
-    DeviceDesc, Dma, DmaShareError, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice,
-    UsbError, XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
+    hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook,
+    set_xhci_port_access_hooks, ConfigDesc, DeviceDesc, Dma, DmaShareError, HidDesc, HidDevice,
+    HubDesc, SetupPacket, TtContext, UsbDevice, UsbError, XhciControllerParams, XhciCtrl,
+    XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
 };
 
 use crate::bootstrap::log as boot_log;
@@ -144,9 +145,12 @@ const XHCI_MMIO_CANDIDATE_LIMIT: usize = 8;
 const VL805_PCI_CFG_ATTEMPT_CAP: usize = 512;
 const XHCI_MAX_PROBE_PORTS: usize = 16;
 const XHCI_PORT_DETECT_PASSES: usize = 4;
+const XHCI_PLATFORM_RESET_PORT_DETECT_PASSES: usize = 1;
 const XHCI_PORT_DETECT_SETTLE_SPINS: usize = 200_000;
 const XHCI_PORT_DETECT_FINAL_WAIT_MS: u64 = 100;
 const XHCI_PORT_EVENT_DRAIN_LIMIT: usize = 16;
+const PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK: u32 = 0x0001;
+const PI4_XHCI_LINUX_CAPTURE_PORT0_SPEED: u8 = regs::SPEED_HIGH;
 const HUB_ENUM_MAX_DEPTH: usize = 2;
 const HUB_MAX_DOWNSTREAM_PORTS: usize = 15;
 const HUB_DESC_MAX_BYTES: usize = 12;
@@ -362,6 +366,7 @@ static XHCI_PRESEED_ALREADY_PINNED_LOGGED: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_PRESEED_LOGGED: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_RUNTIME_INIT_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DIAG_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+static XHCI_PORT_ACCESS_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 static VL805_RUNTIME_RESET_STATE: AtomicU8 = AtomicU8::new(VL805_RUNTIME_RESET_STATE_UNATTEMPTED);
 static XHCI_MMIO_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_MMIO_PIN_REUSE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -385,6 +390,9 @@ static XHCI_DIAG_HISTORY_TOTAL: AtomicU32 = AtomicU32::new(0);
 static XHCI_ROOT_PORT_STATUS_COUNT: AtomicU32 = AtomicU32::new(0);
 static XHCI_ROOT_PORT_STATUS_WORDS: [AtomicU32; XHCI_MAX_PROBE_PORTS] =
     [const { AtomicU32::new(0) }; XHCI_MAX_PROBE_PORTS];
+static USB_RUNTIME_KEYBOARD_READY: AtomicBool = AtomicBool::new(false);
+static USB_RUNTIME_FIRST_REPORT: AtomicBool = AtomicBool::new(false);
+static USB_RUNTIME_FIRST_BYTE: AtomicBool = AtomicBool::new(false);
 static VL805_CFG_VIRT: AtomicUsize = AtomicUsize::new(0);
 const VL805_CFG_COMMAND_SHADOW_VALID: u32 = 1 << 31;
 static VL805_CFG_COMMAND_SHADOW: AtomicU32 = AtomicU32::new(0);
@@ -743,6 +751,16 @@ pub(crate) struct UsbProbeRouteStatus {
     pub diag_b: u64,
     pub diag_c: u64,
     pub diag_value_labels: Option<(&'static str, &'static str, &'static str)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbRuntimeProofStatus {
+    pub keyboard_ready: bool,
+    pub first_report: bool,
+    pub first_byte: bool,
+    pub proof_gate: u8,
+    pub next_step: &'static str,
+    pub blocker: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3420,6 +3438,51 @@ fn reset_latest_xhci_diag_snapshot() {
 }
 
 #[inline]
+fn clear_usb_runtime_proof_status() {
+    USB_RUNTIME_KEYBOARD_READY.store(false, Ordering::Release);
+    USB_RUNTIME_FIRST_REPORT.store(false, Ordering::Release);
+    USB_RUNTIME_FIRST_BYTE.store(false, Ordering::Release);
+}
+
+#[inline]
+fn mark_usb_runtime_keyboard_ready() {
+    USB_RUNTIME_KEYBOARD_READY.store(true, Ordering::Release);
+}
+
+#[inline]
+fn mark_usb_runtime_first_report() {
+    USB_RUNTIME_FIRST_REPORT.store(true, Ordering::Release);
+}
+
+#[inline]
+fn mark_usb_runtime_first_byte() {
+    USB_RUNTIME_FIRST_BYTE.store(true, Ordering::Release);
+}
+
+pub(crate) fn latest_usb_runtime_proof_status() -> UsbRuntimeProofStatus {
+    let keyboard_ready = USB_RUNTIME_KEYBOARD_READY.load(Ordering::Acquire);
+    let first_report = USB_RUNTIME_FIRST_REPORT.load(Ordering::Acquire);
+    let first_byte = USB_RUNTIME_FIRST_BYTE.load(Ordering::Acquire);
+    let (proof_gate, next_step, blocker) = if first_byte {
+        (10, "none", "none")
+    } else if first_report {
+        (9, "keyboard-first-byte", "keyboard-first-byte")
+    } else if keyboard_ready {
+        (8, "hid-first-report", "hid-first-report")
+    } else {
+        (0, "keyboard-ready", "keyboard-not-ready")
+    };
+    UsbRuntimeProofStatus {
+        keyboard_ready,
+        first_report,
+        first_byte,
+        proof_gate,
+        next_step,
+        blocker,
+    }
+}
+
+#[inline]
 fn read_latest_xhci_diag_snapshot() -> XhciDiagSnapshot {
     let line_count = XHCI_DIAG_LINE_COUNT.load(Ordering::Acquire) as usize;
     if line_count == 0 {
@@ -4427,33 +4490,20 @@ fn xhci_sample_root_ports(
     }
     let sample_ports = cmp::min(max_ports, port_statuses.len());
     for (port, status) in port_statuses.iter_mut().take(sample_ports).enumerate() {
-        let xhci_port = port.saturating_add(1);
-        {
-            let mut line = heapless::String::<160>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] xhci root-port read-begin index={} port={} sample_ports={}",
-                    port, xhci_port, sample_ports,
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-        }
         *status = ctrl.port_status(port as u8);
-        {
-            let mut line = heapless::String::<160>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] xhci root-port read-done index={} port={} portsc=0x{:08x}",
-                    port, xhci_port, *status,
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-        }
     }
     remember_xhci_root_port_statuses(&port_statuses[..sample_ports]);
-    xhci_connected_mask_from_portsc(&port_statuses[..sample_ports])
+    let connected_mask = xhci_connected_mask_from_portsc(&port_statuses[..sample_ports]);
+    let mut line = heapless::String::<160>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] xhci root-port sample-done ports={} connected_mask=0x{connected_mask:04x}",
+            sample_ports,
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    connected_mask
 }
 
 #[inline]
@@ -4542,6 +4592,33 @@ fn usb_no_op_probe_error_label(err: UsbError) -> &'static str {
 #[inline]
 fn usb_command_probe_proves_ring(label: &str) -> bool {
     matches!(label, "enable-slot-ok" | "no-op-ok")
+}
+
+#[inline]
+const fn xhci_deferred_root_port_capture_speed(port: usize) -> u8 {
+    match port {
+        0 => PI4_XHCI_LINUX_CAPTURE_PORT0_SPEED,
+        _ => 0,
+    }
+}
+
+#[inline]
+fn xhci_deferred_root_port_capture_mask(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+    command_probe: &str,
+) -> u32 {
+    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::PlatformResetComplete
+        )
+        && usb_command_probe_proves_ring(command_probe)
+    {
+        PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK
+    } else {
+        0
+    }
 }
 
 #[inline]
@@ -4884,9 +4961,30 @@ const fn xhci_controller_should_apply_brcm_axi_setup(
     firmware_handoff: XhciFirmwareHandoff,
 ) -> bool {
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
-        return matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete);
+        let _ = firmware_handoff;
+        return false;
     }
     matches!(firmware_handoff, XhciFirmwareHandoff::None)
+}
+
+#[inline]
+const fn xhci_controller_allows_port_register_access(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+) -> bool {
+    // IRQ27 is the seL4 virtual timer, so a halt at the first post-RUN PORTSC
+    // read is a timer-preempted toxic edge, not an xHCI interrupt. The Pi 4
+    // high-BAR platform-reset lane must prove readiness through the poll-only
+    // event/command ring before any live root-port register sampling.
+    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && matches!(
+            strategy.firmware_handoff,
+            XhciFirmwareHandoff::PlatformResetComplete
+        )
+    {
+        return false;
+    }
+    !xhci_runtime_init_strategy_skips_root_port_reads(strategy)
 }
 
 #[inline]
@@ -4955,6 +5053,7 @@ fn xhci_controller_params_from_probe(
         skip_initial_live_operational_reads: xhci_controller_skips_initial_live_operational_reads(
             mmio, strategy,
         ),
+        port_register_access_allowed: xhci_controller_allows_port_register_access(mmio, strategy),
     }
 }
 
@@ -5003,6 +5102,7 @@ fn xhci_controller_params_from_probe_with_strategy(
         skip_initial_live_operational_reads: xhci_controller_skips_initial_live_operational_reads(
             mmio, strategy,
         ),
+        port_register_access_allowed: xhci_controller_allows_port_register_access(mmio, strategy),
     }
 }
 
@@ -5248,6 +5348,30 @@ const fn xhci_runtime_init_strategy_skips_command_probe_after_toxic_portsc(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::PlatformResetComplete
         )
+}
+
+#[inline]
+const fn xhci_root_port_detect_passes(strategy: XhciRuntimeInitStrategy) -> usize {
+    if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::PlatformResetComplete
+    ) && !strategy.seed_stop_state
+    {
+        return XHCI_PLATFORM_RESET_PORT_DETECT_PASSES;
+    }
+    XHCI_PORT_DETECT_PASSES
+}
+
+#[inline]
+const fn xhci_root_port_final_wait_ms(strategy: XhciRuntimeInitStrategy) -> u64 {
+    if matches!(
+        strategy.firmware_handoff,
+        XhciFirmwareHandoff::PlatformResetComplete
+    ) && !strategy.seed_stop_state
+    {
+        return 0;
+    }
+    XHCI_PORT_DETECT_FINAL_WAIT_MS
 }
 
 #[inline]
@@ -8329,6 +8453,14 @@ impl UsbKeyboard {
             set_xhci_diag_hook(Some(xhci_diag_hook));
             boot_log::force_uart_line("[local-seat] xhci diag hook installed");
         }
+        if !XHCI_PORT_ACCESS_HOOK_INSTALLED.swap(true, Ordering::AcqRel) {
+            set_xhci_port_access_hooks(
+                Some(pi4_pcie::vl805_xhci_port_read32),
+                Some(pi4_pcie::vl805_xhci_port_write32),
+            );
+            boot_log::force_uart_line("[local-seat] xhci port access hook installed source=hal");
+        }
+        clear_usb_runtime_proof_status();
         let cfg_window_present = current_vl805_cfg_virt().is_some();
         let runtime_cfg_touch_enabled =
             vl805_runtime_cfg_touch_allowed(VL805_CFG_RUNTIME_TOUCH_ENABLED, cfg_window_present)
@@ -9958,14 +10090,15 @@ impl UsbKeyboard {
                         let mut port_statuses = [0u32; XHCI_MAX_PROBE_PORTS];
                         let mut detect_passes_used = 1usize;
                         let bootloader_port_reads_toxic =
-                            xhci_runtime_init_strategy_skips_root_port_reads(strategy);
+                            xhci_runtime_init_strategy_skips_root_port_reads(strategy)
+                                || !ctrl.port_register_access_allowed();
                         if bootloader_port_reads_toxic {
                             let mut line = heapless::String::<192>::new();
                             let reason = if matches!(
                                 strategy.firmware_handoff,
                                 XhciFirmwareHandoff::PlatformResetComplete
                             ) {
-                                "platform-reset-stop-seed-portsc-toxic"
+                                "platform-reset-portsc-toxic"
                             } else {
                                 "bootloader-owned-portsc-toxic"
                             };
@@ -9976,25 +10109,25 @@ impl UsbKeyboard {
                                 ),
                             );
                             boot_log::force_uart_line(line.as_str());
-                            if matches!(
-                                strategy.firmware_handoff,
-                                XhciFirmwareHandoff::PlatformResetComplete
-                            ) {
-                                ctrl.clear_event_handler_busy_for_polling();
-                            }
                             if xhci_runtime_init_strategy_skips_command_probe_after_toxic_portsc(
                                 strategy,
                             ) {
-                                command_probe = "deferred-platform-reset-stop-seed";
+                                command_probe = "deferred-platform-reset-portsc-toxic";
                                 let mut line = heapless::String::<224>::new();
                                 let _ = core::fmt::Write::write_fmt(
                                     &mut line,
                                     format_args!(
-                                        "[local-seat] xhci root-port command-probe skipped reason=platform-reset-stop-seed-command-toxic probe={command_probe}"
+                                        "[local-seat] xhci root-port command-probe skipped reason=platform-reset-portsc-toxic probe={command_probe}"
                                     ),
                                 );
                                 boot_log::force_uart_line(line.as_str());
                             } else {
+                                if matches!(
+                                    strategy.firmware_handoff,
+                                    XhciFirmwareHandoff::PlatformResetComplete
+                                ) {
+                                    ctrl.clear_event_handler_busy_for_polling();
+                                }
                                 let drained_event_candidate_mask =
                                     xhci_drain_root_port_change_events(ctrl.as_ref(), max_ports);
                                 event_candidate_mask |= drained_event_candidate_mask;
@@ -10015,25 +10148,26 @@ impl UsbKeyboard {
                                 );
                             }
                         } else {
+                            let detect_passes = xhci_root_port_detect_passes(strategy);
                             {
                                 let mut line = heapless::String::<160>::new();
                                 let _ = core::fmt::Write::write_fmt(
                                     &mut line,
                                     format_args!(
-                                        "[local-seat] xhci root-port sample begin ports={} passes={}",
-                                        max_ports, XHCI_PORT_DETECT_PASSES,
+                                        "[local-seat] xhci root-port sample begin ports={} passes={} timer_irq={} timer_role=kernel-vtimer",
+                                        max_ports, detect_passes, PI4_GENERIC_VTIMER_IRQ,
                                     ),
                                 );
                                 boot_log::force_uart_line(line.as_str());
                             }
-                            for pass in 0..XHCI_PORT_DETECT_PASSES {
+                            for pass in 0..detect_passes {
                                 detect_passes_used = pass.saturating_add(1);
                                 connected_mask = xhci_sample_root_ports(
                                     ctrl.as_ref(),
                                     max_ports,
                                     &mut port_statuses,
                                 );
-                                if connected_mask != 0 || pass + 1 >= XHCI_PORT_DETECT_PASSES {
+                                if connected_mask != 0 || pass + 1 >= detect_passes {
                                     break;
                                 }
                                 for _ in 0..XHCI_PORT_DETECT_SETTLE_SPINS {
@@ -10042,9 +10176,14 @@ impl UsbKeyboard {
                             }
                         }
                         let mut slow_recheck_used = false;
-                        if connected_mask == 0 && max_ports != 0 && !bootloader_port_reads_toxic {
+                        let final_wait_ms = xhci_root_port_final_wait_ms(strategy);
+                        if connected_mask == 0
+                            && max_ports != 0
+                            && !bootloader_port_reads_toxic
+                            && final_wait_ms != 0
+                        {
                             log_xhci_root_port_statuses(&port_statuses[..max_ports], "detect-zero");
-                            wait_ms(XHCI_PORT_DETECT_FINAL_WAIT_MS);
+                            wait_ms(final_wait_ms);
                             slow_recheck_used = true;
                             detect_passes_used = detect_passes_used.saturating_add(1);
                             connected_mask = xhci_sample_root_ports(
@@ -10097,17 +10236,63 @@ impl UsbKeyboard {
                         pathway_summary.command_probe = command_probe;
 
                         let mut attempt_recorded = false;
-                        let enumeration_mask = if bootloader_port_reads_toxic {
+                        let deferred_capture_mask = if bootloader_port_reads_toxic {
+                            xhci_deferred_root_port_capture_mask(
+                                effective_mmio,
+                                strategy,
+                                command_probe,
+                            )
+                        } else {
                             0
+                        };
+                        let enumeration_mask = if bootloader_port_reads_toxic {
+                            event_candidate_mask | deferred_capture_mask
                         } else {
                             connected_mask
                         };
+                        if deferred_capture_mask != 0 {
+                            let mut line = heapless::String::<192>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci root-port deferred-capture mask=0x{deferred_capture_mask:04x} source=pi4-linux-capture command_probe={command_probe}"
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                        }
+                        if bootloader_port_reads_toxic && enumeration_mask != 0 {
+                            connected_mask = enumeration_mask;
+                        }
                         for port in 0..max_ports {
                             if (enumeration_mask & (1u32 << port)) == 0 {
                                 continue;
                             }
 
-                            let mut device = match UsbDevice::new(ctrl.clone(), port as u8) {
+                            let root_device = if bootloader_port_reads_toxic {
+                                let speed = xhci_deferred_root_port_capture_speed(port);
+                                if speed == 0 {
+                                    Err(UsbError::DeviceNotFound)
+                                } else {
+                                    let mut line = heapless::String::<192>::new();
+                                    let _ = core::fmt::Write::write_fmt(
+                                        &mut line,
+                                        format_args!(
+                                            "[local-seat] usb root-enum deferred-port port={} speed={} source=pi4-linux-capture reset=skip",
+                                            port + 1,
+                                            speed,
+                                        ),
+                                    );
+                                    boot_log::force_uart_line(line.as_str());
+                                    UsbDevice::new_assume_enabled_root_port(
+                                        ctrl.clone(),
+                                        port as u8,
+                                        speed,
+                                    )
+                                }
+                            } else {
+                                UsbDevice::new(ctrl.clone(), port as u8)
+                            };
+                            let mut device = match root_device {
                                 Ok(device) => device,
                                 Err(err) => {
                                     let diag_after = read_latest_xhci_diag_snapshot();
@@ -10446,6 +10631,7 @@ impl UsbKeyboard {
                                 );
                                 log_usb_probe_pathway_summary(&pathway_summary);
                                 log_usb_probe_best_pathway("keyboard-ready", &pathway_summary);
+                                mark_usb_runtime_keyboard_ready();
                                 hid.device().ctrl().host().seal_runtime();
                                 return Ok(Self {
                                     hid,
@@ -13531,6 +13717,7 @@ impl UsbKeyboard {
                     );
                     boot_log::force_uart_line(line.as_str());
                     self.first_report_logged = true;
+                    mark_usb_runtime_first_report();
                 }
                 report
             }
@@ -13618,6 +13805,7 @@ impl UsbKeyboard {
                     );
                     boot_log::force_uart_line(line.as_str());
                     self.first_byte_logged = true;
+                    mark_usb_runtime_first_byte();
                 }
                 out[written] = effective as u8;
                 written = written.saturating_add(1);
@@ -15262,7 +15450,8 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete
         );
         assert!(params.runtime_seed_snapshot.is_none());
-        assert!(params.apply_brcm_axi_setup);
+        assert!(!params.apply_brcm_axi_setup);
+        assert!(!params.port_register_access_allowed);
     }
 
     #[test]
@@ -15299,6 +15488,7 @@ mod tests {
         );
         assert!(params.runtime_seed_snapshot.is_some());
         assert!(!params.apply_brcm_axi_setup);
+        assert!(!params.port_register_access_allowed);
     }
 
     #[test]
@@ -15330,7 +15520,33 @@ mod tests {
         assert!(params.skip_initial_live_operational_reads);
         assert!(params.skip_constructor_live_scrub);
         assert!(params.runtime_seed_snapshot.is_none());
-        assert!(params.apply_brcm_axi_setup);
+        assert!(!params.apply_brcm_axi_setup);
+        assert!(!params.port_register_access_allowed);
+    }
+
+    #[test]
+    fn platform_reset_high_bar_uses_capture_port_after_command_ring_proof() {
+        let strategy =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
+
+        assert_eq!(
+            xhci_deferred_root_port_capture_mask(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+                "no-op-ok",
+            ),
+            PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK,
+        );
+        assert_eq!(
+            xhci_deferred_root_port_capture_mask(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+                "no-op-timeout",
+            ),
+            0,
+        );
+        assert_eq!(xhci_deferred_root_port_capture_speed(0), regs::SPEED_HIGH,);
+        assert_eq!(xhci_deferred_root_port_capture_speed(1), 0);
     }
 
     #[test]
@@ -15753,6 +15969,33 @@ mod tests {
         assert_eq!(route.diag_value_labels, None);
         assert_eq!(route.event_candidate_mask, 0);
         assert_eq!(route.command_probe, "n/a");
+    }
+
+    #[test]
+    fn usb_runtime_proof_status_tracks_report_and_console_byte_gates() {
+        super::clear_usb_runtime_proof_status();
+        let empty = super::latest_usb_runtime_proof_status();
+        assert_eq!(empty.proof_gate, 0);
+        assert_eq!(empty.next_step, "keyboard-ready");
+        assert_eq!(empty.blocker, "keyboard-not-ready");
+
+        super::mark_usb_runtime_keyboard_ready();
+        let ready = super::latest_usb_runtime_proof_status();
+        assert_eq!(ready.proof_gate, 8);
+        assert_eq!(ready.next_step, "hid-first-report");
+        assert_eq!(ready.blocker, "hid-first-report");
+
+        super::mark_usb_runtime_first_report();
+        let report = super::latest_usb_runtime_proof_status();
+        assert_eq!(report.proof_gate, 9);
+        assert_eq!(report.next_step, "keyboard-first-byte");
+        assert_eq!(report.blocker, "keyboard-first-byte");
+
+        super::mark_usb_runtime_first_byte();
+        let byte = super::latest_usb_runtime_proof_status();
+        assert_eq!(byte.proof_gate, 10);
+        assert_eq!(byte.next_step, "none");
+        assert_eq!(byte.blocker, "none");
     }
 
     #[test]
@@ -16258,7 +16501,7 @@ mod tests {
         assert!(
             !super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, true,)
         );
-        assert!(xhci_controller_should_apply_brcm_axi_setup(
+        assert!(!xhci_controller_should_apply_brcm_axi_setup(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::PlatformResetComplete,
         ));
@@ -17821,8 +18064,39 @@ mod tests {
         );
         assert!(
             !super::xhci_runtime_init_strategy_skips_command_probe_after_toxic_portsc(
+                XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
+            )
+        );
+        assert!(
+            !super::xhci_runtime_init_strategy_skips_command_probe_after_toxic_portsc(
                 XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, true),
             )
+        );
+    }
+
+    #[test]
+    fn fresh_platform_reset_root_port_sample_uses_timer_safe_single_pass() {
+        let fresh = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
+        let stop_seed =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true);
+        let cold = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::ColdStartFromSnapshot, false);
+
+        assert_eq!(
+            super::xhci_root_port_detect_passes(fresh),
+            super::XHCI_PLATFORM_RESET_PORT_DETECT_PASSES
+        );
+        assert_eq!(super::xhci_root_port_final_wait_ms(fresh), 0);
+        assert_eq!(
+            super::xhci_root_port_detect_passes(stop_seed),
+            super::XHCI_PORT_DETECT_PASSES
+        );
+        assert_eq!(
+            super::xhci_root_port_final_wait_ms(stop_seed),
+            super::XHCI_PORT_DETECT_FINAL_WAIT_MS
+        );
+        assert_eq!(
+            super::xhci_root_port_detect_passes(cold),
+            super::XHCI_PORT_DETECT_PASSES
         );
     }
 

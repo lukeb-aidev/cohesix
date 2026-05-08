@@ -2680,6 +2680,20 @@ where
         } else {
             self.emit_console_line("usb: ports cached=no count=0 connected_mask=0x0000");
         }
+        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        {
+            let runtime = crate::local_seat_pi4::latest_usb_runtime_proof_status();
+            let runtime_line = format_message(format_args!(
+                "usb: runtime_gate keyboard={} first_report={} first_byte={} proof_gate={} target_gate=10 next={} blocker={}",
+                Self::yes_no(runtime.keyboard_ready),
+                Self::yes_no(runtime.first_report),
+                Self::yes_no(runtime.first_byte),
+                runtime.proof_gate,
+                runtime.next_step,
+                runtime.blocker,
+            ));
+            self.emit_console_line(runtime_line.as_str());
+        }
     }
 
     #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
