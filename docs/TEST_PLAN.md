@@ -500,6 +500,7 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
   - `cargo test -p root-task --no-default-features --features net-console net:: -- --nocapture`
   - Confirms the bounded DHCP core plus runtime policy override plumbing without changing QEMU grammar.
 - Pi 4 image / U-Boot gate:
+  - `scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
   - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
   - `scripts/uboot/qemu-uboot-smoke.sh --net user`
   - Confirm U-Boot env control remains deterministic (`ipaddr`, `serverip`, `coh_net_mode`, `coh_net_interface`), `CONFIG_PREBOOT` stays on the serial/video console path, the staged Pi 4 boot script owns the first menu/input USB bootstrap, reloads `cohesix.env`, mirrors `coh_net_*` values into the staged padded `bcm2711-rpi-4-b.dtb`, and boots the seL4 elfloader through U-Boot `bootm` with that DTB.

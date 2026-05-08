@@ -5006,6 +5006,27 @@ const fn post_download_devon_before_ht_is_diagnostic() -> bool {
 }
 
 #[inline]
+const fn cccr_function2_ready(io_ready: Option<u8>) -> bool {
+    match io_ready {
+        Some(value) => (value & SDIO_FUNC_READY_2) != 0,
+        None => false,
+    }
+}
+
+#[inline]
+const fn live_function1_diagnostics_allowed(card_ready: bool, io_ready: Option<u8>) -> bool {
+    card_ready && cccr_function2_ready(io_ready)
+}
+
+#[inline]
+const fn pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
+    card_ready: bool,
+    io_ready: Option<u8>,
+) -> bool {
+    card_ready && !live_function1_diagnostics_allowed(card_ready, io_ready)
+}
+
+#[inline]
 fn devon_before_ht_may_be_deferred_for_stage(stage: &'static str) -> bool {
     matches!(stage, "wait-ht-clock" | "debug-probe-ht")
 }
@@ -5294,6 +5315,9 @@ fn post_firmware_ready_function2_strict_repoll_prefers_direct_reply_probe_cutove
     exact_error: &'static str,
 ) -> bool {
     let _ = ienx;
+    if exact_error == "cyw43-control-plane-sideband-unreadable" {
+        return true;
+    }
     experimental_no_ht_transport
         && control_plane_function2_latched_linux_transport_without_iorx(
             ioex, iorx, watermark, devctl, mesbusy,
@@ -7137,7 +7161,8 @@ impl Pi4WifiState {
         } else {
             (None, None)
         };
-        let chipclkcsr = if live_card_ready {
+        let live_function1_allowed = live_function1_diagnostics_allowed(live_card_ready, io_ready);
+        let chipclkcsr = if live_function1_allowed {
             match self
                 .host
                 .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)
@@ -7149,6 +7174,15 @@ impl Pi4WifiState {
                 Err(_) => self.host.last_chipclkcsr,
             }
         } else {
+            if pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(live_card_ready, io_ready) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware contract action=skip-live-chipclkcsr reason=pre-f2-diagnostic-cache-only cached=0x{chipclk:02x}/{} io_ready=0x{iorx:02x}/{}",
+                    yn(self.host.last_chipclkcsr.is_some()),
+                    yn(io_ready.is_some()),
+                    chipclk = self.host.last_chipclkcsr.unwrap_or(0),
+                    iorx = io_ready.unwrap_or(0),
+                ));
+            }
             self.host.last_chipclkcsr
         };
         firmware_contract_trace_from_evidence(
@@ -7208,16 +7242,8 @@ impl Pi4WifiState {
     }
 
     pub fn debug_control_plane_trace(&mut self) -> WifiControlPlaneTrace {
-        let (
-            cccr_io_enable,
-            cccr_io_ready,
-            cccr_int_enable,
-            f1_rframe_lo,
-            f1_rframe_hi,
-            f1_watermark,
-            f1_device_ctl,
-            f1_mesbusyctl,
-        ) = if self.host.card.is_some() {
+        let card_ready = self.host.card.is_some();
+        let (cccr_io_enable, cccr_io_ready, cccr_int_enable) = if card_ready {
             (
                 self.host
                     .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
@@ -7228,25 +7254,42 @@ impl Pi4WifiState {
                 self.host
                     .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
                     .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-                    .ok(),
             )
         } else {
-            (None, None, None, None, None, None, None, None)
+            (None, None, None)
         };
+        let (f1_rframe_lo, f1_rframe_hi, f1_watermark, f1_device_ctl, f1_mesbusyctl) =
+            if live_function1_diagnostics_allowed(card_ready, cccr_io_ready) {
+                (
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
+                        .ok(),
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
+                        .ok(),
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
+                        .ok(),
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
+                        .ok(),
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
+                        .ok(),
+                )
+            } else {
+                if pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
+                    card_ready,
+                    cccr_io_ready,
+                ) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] control-plane trace action=skip-live-f1-sideband reason=pre-f2-diagnostic-cache-only io_ready=0x{iorx:02x}/{}",
+                        yn(cccr_io_ready.is_some()),
+                        iorx = cccr_io_ready.unwrap_or(0),
+                    ));
+                }
+                (None, None, None, None, None)
+            };
         let cached = cached_wifi_debug_snapshot();
         let (
             cached_source,
@@ -7304,6 +7347,76 @@ impl Pi4WifiState {
     }
 
     pub fn debug_probe_ht_clock(&mut self) -> Result<bool, HalError> {
+        if let Some(snapshot) = cached_wifi_debug_snapshot() {
+            if control_plane_exact_error_is_first_reply_blocker(snapshot.control_plane_exact_error)
+                || control_plane_exact_error_is_direct_sdio_transport_blocker(
+                    snapshot.control_plane_exact_error,
+                )
+            {
+                if let Some(chipclk) = snapshot.chipclkcsr {
+                    self.host.remember_chipclkcsr(chipclk);
+                }
+                let ready = snapshot
+                    .chipclkcsr
+                    .is_some_and(function2_has_required_ht_clock);
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=debug-probe-ht action=skip-live-chipclkcsr reason=cached-first-reply-blocker exact_error={} chipclk=0x{chipclk:02x}/{} ready={} production_continue=no",
+                    snapshot.control_plane_exact_error,
+                    yn(snapshot.chipclkcsr.is_some()),
+                    yn(ready),
+                    chipclk = snapshot.chipclkcsr.unwrap_or(0),
+                ));
+                return Ok(ready);
+            }
+        }
+        let card_ready = self.host.card.is_some();
+        if pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
+            card_ready,
+            self.host.last_cccr_io_ready,
+        ) {
+            if self
+                .host
+                .last_chipclkcsr
+                .is_some_and(function2_has_required_ht_clock)
+            {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=debug-probe-ht action=cached-ready csr=0x{:02x} reason=pre-f2-diagnostic-cache-only production_continue=no",
+                    self.host.last_chipclkcsr.unwrap_or(0),
+                ));
+                return Ok(true);
+            }
+            if ht_clock_timeout_can_enter_bounded_no_ht_transport(
+                self.host.last_chipclkcsr,
+                self.host.last_wakeupctrl,
+                self.host.last_sleepcsr,
+                self.host.last_cardcap,
+            ) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=debug-probe-ht action=continue mode={} reason=pre-f2-diagnostic-cache-only csr=0x{chipclk:02x} wake=0x{wake:02x}/{wake_set} sleep=0x{sleep:02x}/{sleep_set} cardcap=0x{cardcap:02x}/{cardcap_set} production_continue=no",
+                    cyw43_transport_mode_name(true),
+                    chipclk = self.host.last_chipclkcsr.unwrap_or(0),
+                    wake = self.host.last_wakeupctrl.unwrap_or(0),
+                    wake_set = yn(self.host.last_wakeupctrl.is_some()),
+                    sleep = self.host.last_sleepcsr.unwrap_or(0),
+                    sleep_set = yn(self.host.last_sleepcsr.is_some()),
+                    cardcap = self.host.last_cardcap.unwrap_or(0),
+                    cardcap_set = yn(self.host.last_cardcap.is_some()),
+                ));
+                self.host.enter_bounded_no_ht_transport("debug-probe-ht")?;
+                self.host
+                    .log_transport_shadow("debug-probe-ht-cached-bounded-no-ht");
+                return Ok(false);
+            }
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=debug-probe-ht action=skip-live-chipclkcsr reason=pre-f2-diagnostic-cache-only csr=0x{chipclk:02x}/{chipclk_set} io_ready=0x{iorx:02x}/{iorx_set} production_continue=no",
+                chipclk = self.host.last_chipclkcsr.unwrap_or(0),
+                chipclk_set = yn(self.host.last_chipclkcsr.is_some()),
+                iorx = self.host.last_cccr_io_ready.unwrap_or(0),
+                iorx_set = yn(self.host.last_cccr_io_ready.is_some()),
+            ));
+            return Ok(false);
+        }
+
         match self
             .host
             .require_ht_clock_ready("debug-probe-ht", "debug-probe-ht assist")
@@ -7483,16 +7596,7 @@ impl Pi4WifiState {
             Some(card) => (true, card.rca, card.ocr),
             None => (false, 0, 0),
         };
-        let (
-            io_enable,
-            io_ready,
-            io_interrupt_enable,
-            rframe_lo,
-            rframe_hi,
-            watermark,
-            devctl,
-            mesbusy,
-        ) = if card_ready {
+        let (io_enable, io_ready, io_interrupt_enable) = if card_ready {
             (
                 self.host
                     .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
@@ -7503,25 +7607,39 @@ impl Pi4WifiState {
                 self.host
                     .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
                     .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-                    .ok(),
             )
         } else {
-            (None, None, None, None, None, None, None, None)
+            (None, None, None)
         };
+        let (rframe_lo, rframe_hi, watermark, devctl, mesbusy) =
+            if live_function1_diagnostics_allowed(card_ready, io_ready) {
+                (
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
+                        .ok(),
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
+                        .ok(),
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
+                        .ok(),
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
+                        .ok(),
+                    self.host
+                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
+                        .ok(),
+                )
+            } else {
+                if pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(card_ready, io_ready) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] debug snapshot stage={stage} action=skip-live-f1-sideband reason=pre-f2-diagnostic-cache-only io_ready=0x{iorx:02x}/{}",
+                        yn(io_ready.is_some()),
+                        iorx = io_ready.unwrap_or(0),
+                    ));
+                }
+                (None, None, None, None, None)
+            };
         let (
             control_plane_reply_mode,
             control_plane_reply_attempts,
@@ -8989,6 +9107,81 @@ impl SdioHost {
         ) && !self.experimental_control_plane_linux_rxskip_pending
     }
 
+    fn read_function1_sideband_if_ready(
+        &mut self,
+        stage: &'static str,
+        io_ready: Option<u8>,
+        reason: &'static str,
+    ) -> (Option<u8>, Option<u8>, Option<u8>) {
+        if live_function1_diagnostics_allowed(self.card.is_some(), io_ready) {
+            (
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
+                    .ok(),
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
+                    .ok(),
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
+                    .ok(),
+            )
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] control-plane snapshot {stage} action=skip-live-f1-sideband reason={reason} io_ready=0x{iorx:02x}/{}",
+                yn(io_ready.is_some()),
+                iorx = io_ready.unwrap_or(0),
+            ));
+            (None, None, None)
+        }
+    }
+
+    fn read_function1_frame_and_sideband_if_ready(
+        &mut self,
+        stage: &'static str,
+        io_ready: Option<u8>,
+        reason: &'static str,
+    ) -> (Option<u8>, Option<u8>, Option<u8>, Option<u8>, Option<u8>) {
+        if live_function1_diagnostics_allowed(self.card.is_some(), io_ready) {
+            (
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
+                    .ok(),
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
+                    .ok(),
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
+                    .ok(),
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
+                    .ok(),
+                self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
+                    .ok(),
+            )
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] control-plane snapshot {stage} action=skip-live-f1-frame-sideband reason={reason} io_ready=0x{iorx:02x}/{}",
+                yn(io_ready.is_some()),
+                iorx = io_ready.unwrap_or(0),
+            ));
+            (None, None, None, None, None)
+        }
+    }
+
+    fn read_sdio_core_u32_with_f1_fallback_if_ready(
+        &mut self,
+        stage: &'static str,
+        name: &'static str,
+        offset: u32,
+        io_ready: Option<u8>,
+        reason: &'static str,
+    ) -> Option<u32> {
+        if live_function1_diagnostics_allowed(self.card.is_some(), io_ready) {
+            self.read_sdio_core_u32_with_f1_fallback(stage, name, offset)
+                .ok()
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] control-plane snapshot {stage} reg={name} action=skip-live-sdio-core-read reason={reason} io_ready=0x{iorx:02x}/{}",
+                yn(io_ready.is_some()),
+                iorx = io_ready.unwrap_or(0),
+            ));
+            None
+        }
+    }
+
     fn should_preserve_function2_enable_latch_for_channel_rearm(
         &mut self,
         stage: &'static str,
@@ -9079,15 +9272,8 @@ impl SdioHost {
         let ienx = self
             .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
             .ok();
-        let watermark = self
-            .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-            .ok();
-        let devctl = self
-            .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-            .ok();
-        let mesbusy = self
-            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-            .ok();
+        let (watermark, devctl, mesbusy) =
+            self.read_function1_sideband_if_ready(stage, iorx, "preserve-function2-enable-latch");
         let preserve_from_live = control_plane_function2_latched_linux_configured_without_iorx(
             ioex, iorx, ienx, watermark, devctl, mesbusy,
         );
@@ -9658,22 +9844,19 @@ impl SdioHost {
                     let final_ienx = self
                         .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
                         .ok();
-                    let final_corecontrol = self
-                        .read_sdio_core_u32_with_f1_fallback(
+                    let final_corecontrol = self.read_sdio_core_u32_with_f1_fallback_if_ready(
+                        "control-plane-passive-startup-link-timeout-no-reply",
+                        "corecontrol",
+                        SDIO_CORECONTROL,
+                        final_ready,
+                        "passive-startup-link-timeout-no-reply",
+                    );
+                    let (final_watermark, final_devctl, final_mesbusy) = self
+                        .read_function1_sideband_if_ready(
                             "control-plane-passive-startup-link-timeout-no-reply",
-                            "corecontrol",
-                            SDIO_CORECONTROL,
-                        )
-                        .ok();
-                    let final_watermark = self
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-                        .ok();
-                    let final_devctl = self
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-                        .ok();
-                    let final_mesbusy = self
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-                        .ok();
+                            final_ready,
+                            "passive-startup-link-timeout-no-reply",
+                        );
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware stage=control-plane-reply action=passive-startup-link-timeout-no-reply current_clock={}Hz width={} chunk_limit={} no_ht={} ioex=0x{ioex:02x}/{} iorx=0x{ready:02x}/{}",
                         self.current_clock_hz,
@@ -9994,15 +10177,11 @@ impl SdioHost {
         let ienx = self
             .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
             .ok();
-        let watermark = self
-            .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-            .ok();
-        let devctl = self
-            .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-            .ok();
-        let mesbusy = self
-            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-            .ok();
+        let (watermark, devctl, mesbusy) = self.read_function1_sideband_if_ready(
+            "control-plane-post-write-rearm-resume",
+            iorx,
+            "post-write-rearm-resume",
+        );
         if startup_link_resume_prefers_direct_reply_probe_cutover(
             self.experimental_no_ht_transport,
             reply_rearm_mode,
@@ -10341,22 +10520,19 @@ impl SdioHost {
                 let ienx_after = self
                     .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
                     .ok();
-                let corecontrol_after = self
-                    .read_sdio_core_u32_with_f1_fallback(
+                let corecontrol_after = self.read_sdio_core_u32_with_f1_fallback_if_ready(
+                    "control-plane-reply-strict-recover-ready",
+                    "corecontrol",
+                    SDIO_CORECONTROL,
+                    Some(ready_after),
+                    "strict-recover-ready",
+                );
+                let (watermark_after, devctl_after, mesbusy_after) = self
+                    .read_function1_sideband_if_ready(
                         "control-plane-reply-strict-recover-ready",
-                        "corecontrol",
-                        SDIO_CORECONTROL,
-                    )
-                    .ok();
-                let watermark_after = self
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-                    .ok();
-                let devctl_after = self
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-                    .ok();
-                let mesbusy_after = self
-                    .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-                    .ok();
+                        Some(ready_after),
+                        "strict-recover-ready",
+                    );
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=control-plane-reply action=strict-recover-state trigger={trigger} mode={} attempt={} ioex=0x{ioex:02x}/{} iorx=0x{ready_after:02x} ienx=0x{ienx:02x}/{} corecontrol=0x{corecontrol:08x}/{} cc_f2rdy={} watermark=0x{watermark:02x}/{} devctl=0x{devctl:02x}/{} mesbusy=0x{mesbusy:02x}/{} f2_linux_state={}",
                     control_plane_reply_rearm_mode_name(reply_rearm_mode),
@@ -10758,23 +10934,29 @@ impl SdioHost {
 
         let attempt = self.experimental_control_plane_reply_rearm_attempts;
         let hint_stage = "control-plane-reply-hint";
-        let skip_backplane_hints = control_plane_reply_skips_backplane_hints(
-            self.experimental_no_ht_transport,
-            reply_rearm_mode,
-            self.experimental_control_plane_hint_reads_unstable,
-            self.experimental_control_plane_startup_link_stabilized,
-            self.current_clock_hz,
-            self.experimental_control_plane_linux_rxskip_pending,
-        );
+        let hint_io_ready = self
+            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
+            .ok();
+        let skip_backplane_hints =
+            control_plane_reply_skips_backplane_hints(
+                self.experimental_no_ht_transport,
+                reply_rearm_mode,
+                self.experimental_control_plane_hint_reads_unstable,
+                self.experimental_control_plane_startup_link_stabilized,
+                self.current_clock_hz,
+                self.experimental_control_plane_linux_rxskip_pending,
+            ) || !live_function1_diagnostics_allowed(self.card.is_some(), hint_io_ready);
         if skip_backplane_hints {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=control-plane-reply action=skip-toxic-f1-frame-hints mode={} attempt={} current_clock={}Hz width={} chunk_limit={} no_ht={} reason=linux-firstread",
+                "[pi4-wifi] firmware stage=control-plane-reply action=skip-toxic-f1-frame-hints mode={} attempt={} current_clock={}Hz width={} chunk_limit={} no_ht={} reason=linux-firstread-or-pre-f2 io_ready=0x{iorx:02x}/{}",
                 control_plane_reply_rearm_mode_name(reply_rearm_mode),
                 attempt,
                 self.current_clock_hz,
                 sdio_bus_width_name(self.desired_bus_width),
                 self.control_plane_chunk_limit(),
                 self.experimental_no_ht_transport,
+                yn(hint_io_ready.is_some()),
+                iorx = hint_io_ready.unwrap_or(0),
             ));
         }
         let int_status = if skip_backplane_hints {
@@ -11982,9 +12164,13 @@ impl SdioHost {
             ));
         }
 
+        let live_function1_snapshot_allowed =
+            live_function1_diagnostics_allowed(self.card.is_some(), iorx);
         let use_live_sdio_core_reads = !pure_f2_diag_mode
+            && live_function1_snapshot_allowed
             && control_plane_snapshot_uses_live_sdio_core_reads(self.experimental_no_ht_transport);
         let use_low_clock_probe = !pure_f2_diag_mode
+            && live_function1_snapshot_allowed
             && control_plane_snapshot_needs_low_clock_sdio_core_probe(
                 stage,
                 self.experimental_no_ht_transport,
@@ -12063,17 +12249,10 @@ impl SdioHost {
         let (rframe_lo, rframe_hi, watermark, devctl, mesbusy) = if pure_f2_diag_mode {
             (None, None, None, None, None)
         } else {
-            (
-                self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
-                    .ok(),
-                self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
-                    .ok(),
-                self.io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-                    .ok(),
-                self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-                    .ok(),
-                self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-                    .ok(),
+            self.read_function1_frame_and_sideband_if_ready(
+                stage,
+                iorx,
+                "control-plane-finish-snapshot",
             )
         };
         emit_breadcrumb(format_args!(
@@ -13340,13 +13519,21 @@ impl SdioHost {
                 self.experimental_no_ht_transport,
             ));
         }
-        let corecontrol = if pure_f2_diag_mode {
+        let sideband_allowed = live_function1_diagnostics_allowed(self.card.is_some(), iorx);
+        let corecontrol = if pure_f2_diag_mode || !sideband_allowed {
+            if !pure_f2_diag_mode {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdio function2 ready-snapshot {stage} action=skip-live-sdio-core-read reason=pre-f2-ready-snapshot io_ready=0x{iorx_value:02x}/{}",
+                    yn(iorx.is_some()),
+                    iorx_value = iorx.unwrap_or(0),
+                ));
+            }
             None
         } else {
             self.read_sdio_core_u32_with_f1_fallback(stage, "corecontrol", SDIO_CORECONTROL)
                 .ok()
         };
-        let corestatus = if pure_f2_diag_mode {
+        let corestatus = if pure_f2_diag_mode || !sideband_allowed {
             None
         } else {
             self.read_sdio_core_u32_with_f1_fallback(stage, "corestatus", SDIO_CORESTATUS)
@@ -17165,15 +17352,26 @@ impl SdioHost {
             let ienx = self
                 .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
                 .ok();
-            let watermark = self
-                .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-                .ok();
-            let devctl = self
-                .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-                .ok();
-            let mesbusy = self
-                .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-                .ok();
+            let (watermark, devctl, mesbusy) = if live_function1_diagnostics_allowed(
+                self.card.is_some(),
+                iorx,
+            ) {
+                (
+                    self.io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
+                        .ok(),
+                    self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
+                        .ok(),
+                    self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
+                        .ok(),
+                )
+            } else {
+                emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=skip-live-f1-sideband reason=pre-f2-strict-repoll io_ready=0x{iorx:02x}/{}",
+                        yn(iorx.is_some()),
+                        iorx = iorx.unwrap_or(0),
+                    ));
+                (None, None, None)
+            };
             let f2_state = control_plane_function2_linux_state_label(
                 ioex, iorx, ienx, watermark, devctl, mesbusy,
             );
@@ -17268,15 +17466,27 @@ impl SdioHost {
                     let ienx = self
                         .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
                         .ok();
-                    let watermark = self
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-                        .ok();
-                    let devctl = self
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-                        .ok();
-                    let mesbusy = self
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-                        .ok();
+                    let (watermark, devctl, mesbusy) =
+                        if live_function1_diagnostics_allowed(self.card.is_some(), iorx) {
+                            (
+                                self.io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
+                                    .ok(),
+                                self.io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
+                                    .ok(),
+                                self.io_direct_read(
+                                    SdioFunction::Function1,
+                                    SBSDIO_FUNC1_MESBUSYCTRL,
+                                )
+                                .ok(),
+                            )
+                        } else {
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware stage=post-firmware-ready-function2-recheck action=skip-live-f1-sideband reason=pre-f2-strict-repoll-fail io_ready=0x{iorx:02x}/{}",
+                                yn(iorx.is_some()),
+                                iorx = iorx.unwrap_or(0),
+                            ));
+                            (None, None, None)
+                        };
                     let f2_state = control_plane_function2_linux_state_label(
                         ioex, iorx, ienx, watermark, devctl, mesbusy,
                     );
@@ -23367,6 +23577,18 @@ mod tests {
                 Some(SBSDIO_DEVCTL_F2WM_ENAB),
                 Some(CY_43455_MESBUSYCTRL),
                 "cyw43-function2-enable-latched-not-ready",
+            )
+        );
+        assert!(
+            post_firmware_ready_function2_strict_repoll_prefers_direct_reply_probe_cutover(
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "cyw43-control-plane-sideband-unreadable",
             )
         );
         assert!(
@@ -31863,6 +32085,29 @@ mod tests {
             wake,
             sleep_kso,
             Some(0),
+        ));
+    }
+
+    #[test]
+    fn pre_function2_diagnostics_use_cached_function1_shadow_only() {
+        let f1_ready = Some(SDIO_FUNC_READY_1);
+        let f2_ready = Some(SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2);
+
+        assert!(cccr_function2_ready(f2_ready));
+        assert!(!cccr_function2_ready(f1_ready));
+        assert!(!live_function1_diagnostics_allowed(false, f2_ready));
+        assert!(live_function1_diagnostics_allowed(true, f2_ready));
+        assert!(pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
+            true, f1_ready,
+        ));
+        assert!(pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
+            true, None,
+        ));
+        assert!(!pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
+            true, f2_ready,
+        ));
+        assert!(!pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
+            false, f1_ready,
         ));
     }
 

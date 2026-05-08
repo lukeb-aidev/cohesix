@@ -22,9 +22,9 @@ use spin::Mutex;
 use usb_oxide::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
     hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook,
-    set_xhci_port_access_hooks, ConfigDesc, DeviceDesc, Dma, DmaShareError, HidDesc, HidDevice,
-    HubDesc, SetupPacket, TtContext, UsbDevice, UsbError, XhciControllerParams, XhciCtrl,
-    XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
+    set_xhci_port_access_hooks, set_xhci_posted_write_flush_hook, ConfigDesc, DeviceDesc, Dma,
+    DmaShareError, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice, UsbError,
+    XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
 };
 
 use crate::bootstrap::log as boot_log;
@@ -367,6 +367,7 @@ static KEYBOARD_PRESEED_LOGGED: AtomicBool = AtomicBool::new(false);
 static KEYBOARD_RUNTIME_INIT_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DIAG_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 static XHCI_PORT_ACCESS_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+static XHCI_POSTED_WRITE_FLUSH_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 static VL805_RUNTIME_RESET_STATE: AtomicU8 = AtomicU8::new(VL805_RUNTIME_RESET_STATE_UNATTEMPTED);
 static XHCI_MMIO_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_MMIO_PIN_REUSE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -1139,6 +1140,8 @@ fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
                 "safe-port-state"
             } else if summary.command_probe == "no-op-ok" {
                 "safe-port-event-required"
+            } else if summary.command_probe == "no-op-deferred" {
+                "deferred-capture-enum"
             } else if summary.command_probe != "n/a" {
                 "command-ring-recovery"
             } else {
@@ -3837,6 +3840,7 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x034c => Some("platform-reset-dcbaap-publish-blocked"),
         0x030b => Some("cmd-poll-only-timeout"),
         0x030d => Some("cmd-poll-only-fail"),
+        0x0378 => Some("cmd-prompt-safe-deferred"),
         0x02eb => Some("usbcmd-run-barrier-wedged"),
         0x02e9 => Some("usbcmd-run-store-wedged"),
         _ => None,
@@ -4393,6 +4397,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0375 => Some("cmd-gate-timeout-live-state"),
         0x0376 => Some("cmd-gate-timeout-live-event-ring"),
         0x0377 => Some("cmd-gate-timeout-live-snapshot-deferred"),
+        0x0378 => Some("cmd-prompt-safe-deferred"),
         _ => None,
     }
 }
@@ -4595,6 +4600,11 @@ fn usb_command_probe_proves_ring(label: &str) -> bool {
 }
 
 #[inline]
+fn usb_command_probe_allows_deferred_capture(label: &str) -> bool {
+    usb_command_probe_proves_ring(label) || matches!(label, "no-op-deferred")
+}
+
+#[inline]
 const fn xhci_deferred_root_port_capture_speed(port: usize) -> u8 {
     match port {
         0 => PI4_XHCI_LINUX_CAPTURE_PORT0_SPEED,
@@ -4613,7 +4623,7 @@ fn xhci_deferred_root_port_capture_mask(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::PlatformResetComplete
         )
-        && usb_command_probe_proves_ring(command_probe)
+        && usb_command_probe_allows_deferred_capture(command_probe)
     {
         PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK
     } else {
@@ -4642,13 +4652,24 @@ fn xhci_probe_command_ring_after_event_drain(
         );
         boot_log::force_uart_line(line.as_str());
 
-        let probe_result = ctrl.probe_no_op_command();
+        let probe_result = ctrl.probe_no_op_command_prompt_safe();
         return match probe_result {
             Ok(()) => {
                 boot_log::force_uart_line(
                     "[local-seat] xhci root-port command-probe result=no-op-ok",
                 );
                 "no-op-ok"
+            }
+            Err(UsbError::Timeout) => {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci root-port command-probe result=no-op-deferred bus={bus} action=defer-to-linux-capture detail=prompt-safe-timeout"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                "no-op-deferred"
             }
             Err(err) => {
                 let result = usb_no_op_probe_error_label(err);
@@ -8459,6 +8480,12 @@ impl UsbKeyboard {
                 Some(pi4_pcie::vl805_xhci_port_write32),
             );
             boot_log::force_uart_line("[local-seat] xhci port access hook installed source=hal");
+        }
+        if !XHCI_POSTED_WRITE_FLUSH_HOOK_INSTALLED.swap(true, Ordering::AcqRel) {
+            set_xhci_posted_write_flush_hook(Some(pi4_pcie::vl805_xhci_flush_posted_write));
+            boot_log::force_uart_line(
+                "[local-seat] xhci posted-write flush hook installed source=hal-ext-cfg",
+            );
         }
         clear_usb_runtime_proof_status();
         let cfg_window_present = current_vl805_cfg_virt().is_some();
@@ -15541,6 +15568,14 @@ mod tests {
             xhci_deferred_root_port_capture_mask(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                 strategy,
+                "no-op-deferred",
+            ),
+            PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK,
+        );
+        assert_eq!(
+            xhci_deferred_root_port_capture_mask(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
                 "no-op-timeout",
             ),
             0,
@@ -16291,6 +16326,15 @@ mod tests {
         assert_eq!(
             super::usb_probe_next_step(no_event_command_ready),
             "safe-port-event-required"
+        );
+
+        let no_event_prompt_safe_deferred = UsbProbePathwaySummary {
+            command_probe: "no-op-deferred",
+            ..no_event_command_ready
+        };
+        assert_eq!(
+            super::usb_probe_next_step(no_event_prompt_safe_deferred),
+            "deferred-capture-enum"
         );
         assert!(
             no_event_command_ready.is_better_than(UsbProbePathwaySummary {
@@ -17046,6 +17090,10 @@ mod tests {
             xhci_diag_stage_label(0x0377),
             Some("cmd-gate-timeout-live-snapshot-deferred")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x0378),
+            Some("cmd-prompt-safe-deferred")
+        );
         assert_eq!(xhci_diag_stage_label(0x0117), Some("init-policy-summary"));
         assert_eq!(
             xhci_diag_stage_label(0x0200),
@@ -17578,6 +17626,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_label(0x030e),
             Some("cmd-poll-only-timeout-last-event")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0378),
+            Some("cmd-prompt-safe-deferred")
         );
         assert_eq!(xhci_diag_stage_label(0x0367), Some("cmd-ring-timeout-3"));
         assert_eq!(xhci_diag_stage_label(0x9999), None);
@@ -19753,6 +19805,10 @@ mod tests {
             "no-op-timeout"
         );
         assert!(!usb_command_probe_proves_ring("no-op-timeout"));
+        assert!(!usb_command_probe_proves_ring("no-op-deferred"));
+        assert!(super::usb_command_probe_allows_deferred_capture(
+            "no-op-deferred"
+        ));
         assert!(usb_command_probe_proves_ring("no-op-ok"));
     }
 

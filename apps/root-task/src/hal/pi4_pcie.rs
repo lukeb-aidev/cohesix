@@ -280,6 +280,47 @@ pub fn vl805_xhci_port_write32(
     fence(Ordering::SeqCst);
 }
 
+/// Flushes posted VL805 xHCI MMIO writes through a HAL-owned PCI config read.
+pub fn vl805_xhci_flush_posted_write(mmio_virt: usize, offset: usize, value: u32, stage: u16) {
+    let config_page = PCIE_EXT_DATA_PAGE_VIRT.load(Ordering::Acquire);
+    let index_page = PCIE_EXT_INDEX_PAGE_VIRT.load(Ordering::Acquire);
+    if config_page == 0 || index_page == 0 {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 posted-write flush skipped stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} reason=no-ext-cfg mmio=0x{mmio_virt:016x}"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return;
+    }
+    let Ok(config_virt) = same_page_reg_virt(config_page, BCM2711_PCIE_EXT_CFG_DATA) else {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 posted-write flush skipped reason=bad-ext-cfg-data",
+        );
+        return;
+    };
+    let Ok(index_reg) = same_page_reg_virt(index_page, BCM2711_PCIE_EXT_CFG_INDEX) else {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 posted-write flush skipped reason=bad-ext-cfg-index",
+        );
+        return;
+    };
+    fence(Ordering::SeqCst);
+    let selected = bcm2711_ext_cfg_select(index_reg);
+    let command_status = pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS);
+    fence(Ordering::SeqCst);
+    let mut line = heapless::String::<224>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 posted-write flush stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} source=hal-ext-cfg"
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+}
+
 fn prove_pi4_vl805_pcie_ownership(
     hal: &mut KernelHal<'_>,
     phase: Pi4PcieProofPhase,

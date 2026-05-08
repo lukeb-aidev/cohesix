@@ -592,12 +592,7 @@ impl<H: Dma> UsbDevice<H> {
         );
     }
 
-    fn recover_ep0_after_failure(
-        &self,
-        completion_ptr: u64,
-        completion_code: u8,
-        stage: u8,
-    ) {
+    fn recover_ep0_after_failure(&self, completion_ptr: u64, completion_code: u8, stage: u8) {
         let host = self.ctrl.host();
         let (enqueue_idx, producer_cycle, dequeue_ptr) = {
             let ep0_ring = self.ep0_ring.lock();
@@ -707,31 +702,23 @@ impl<H: Dma> UsbDevice<H> {
             .checked_mul(ctx_stride)
             .ok_or(UsbError::OoRam)?;
 
-        let device_ctx = PhysMem::alloc(
-            host,
-            device_ctx_bytes,
-            CONTEXT_ALIGN_BYTES,
-        )?;
-        let input_ctx = PhysMem::alloc(
-            host,
-            input_ctx_bytes,
-            CONTEXT_ALIGN_BYTES,
-        )?;
+        let device_ctx = PhysMem::alloc(host, device_ctx_bytes, CONTEXT_ALIGN_BYTES)?;
+        let input_ctx = PhysMem::alloc(host, input_ctx_bytes, CONTEXT_ALIGN_BYTES)?;
 
         // Allocate EP0 transfer ring
         let ep0_ring = Ring::new(host, 256)?;
 
         let input_base = input_ctx.as_ptr::<u8>();
         let build_slot_ctx = |slot_speed: u8, slot_tt_ctx: Option<TtContext>| {
-                let mut slot_ctx = SlotContext::new(route, slot_speed, 1, root_hub_port);
-                if let Some(tt) = slot_tt_ctx {
-                    if tt.multi_tt {
-                        slot_ctx.dw0 |= SLOT_DEV_MTT;
-                    }
-                    slot_ctx.dw2 = encode_address_tt_info(tt);
+            let mut slot_ctx = SlotContext::new(route, slot_speed, 1, root_hub_port);
+            if let Some(tt) = slot_tt_ctx {
+                if tt.multi_tt {
+                    slot_ctx.dw0 |= SLOT_DEV_MTT;
                 }
-                slot_ctx
-            };
+                slot_ctx.dw2 = encode_address_tt_info(tt);
+            }
+            slot_ctx
+        };
 
         // Set device context in DCBAA
         // SAFETY: Both context buffers are owned DMA allocations sized by the
@@ -858,14 +845,18 @@ impl<H: Dma> UsbDevice<H> {
                 );
                 // SAFETY: The Input Control Context is the first eight u32 values
                 // of the owned input-context allocation and was initialized above.
-                let input_ctrl = unsafe { core::slice::from_raw_parts(input_base as *const u32, 8) };
+                let input_ctrl =
+                    unsafe { core::slice::from_raw_parts(input_base as *const u32, 8) };
                 let live_portsc = if assume_enabled_root_port {
                     0
                 } else {
                     ctrl.port_status(port)
                 };
-                let portsc_before_addr =
-                    root_portsc_for_address_diag(assume_enabled_root_port, enumerated_speed, live_portsc);
+                let portsc_before_addr = root_portsc_for_address_diag(
+                    assume_enabled_root_port,
+                    enumerated_speed,
+                    live_portsc,
+                );
                 ctrl.emit_diag(
                     0x0385,
                     input_ctx.phys(host),
@@ -1336,11 +1327,7 @@ impl<H: Dma> UsbDevice<H> {
     }
 
     /// Perform a control transfer
-    pub fn control_transfer(
-        &self,
-        setup: &SetupPacket,
-        data: Option<&mut [u8]>,
-    ) -> Result<usize> {
+    pub fn control_transfer(&self, setup: &SetupPacket, data: Option<&mut [u8]>) -> Result<usize> {
         self.control_transfer_with_wait_spins(setup, data, CONTROL_XFER_WAIT_SPINS)
     }
 
@@ -1553,8 +1540,7 @@ impl<H: Dma> UsbDevice<H> {
                                 }
                                 self.ctrl.emit_diag(
                                     0x03a6,
-                                    ((setup.length as u64) << 32)
-                                        | (evt.transfer_length() as u64),
+                                    ((setup.length as u64) << 32) | (evt.transfer_length() as u64),
                                     remaining as u64,
                                     u64::from_le_bytes(sample),
                                 );
@@ -1725,27 +1711,16 @@ impl<H: Dma> UsbDevice<H> {
 
             // Now read the reported configuration payload.
             let mut full_buf = alloc::vec![0u8; total_len];
-            let setup = SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, total_len as u16);
+            let setup =
+                SetupPacket::get_descriptor(desc_type::CONFIGURATION, index, total_len as u16);
             let full_xfer = self.control_transfer(&setup, Some(&mut full_buf))?;
             self.ctrl.emit_diag(
                 0x03a2,
                 ((full_xfer as u64) << 32) | (total_len as u64),
-                full_buf
-                    .get(0)
-                    .copied()
-                    .map_or(0, |b0| (b0 as u64) << 56)
-                    | full_buf
-                        .get(1)
-                        .copied()
-                        .map_or(0, |b1| (b1 as u64) << 48)
-                    | full_buf
-                        .get(2)
-                        .copied()
-                        .map_or(0, |b2| (b2 as u64) << 40)
-                    | full_buf
-                        .get(3)
-                        .copied()
-                        .map_or(0, |b3| (b3 as u64) << 32),
+                full_buf.get(0).copied().map_or(0, |b0| (b0 as u64) << 56)
+                    | full_buf.get(1).copied().map_or(0, |b1| (b1 as u64) << 48)
+                    | full_buf.get(2).copied().map_or(0, |b2| (b2 as u64) << 40)
+                    | full_buf.get(3).copied().map_or(0, |b3| (b3 as u64) << 32),
                 ((header[0] as u64) << 24) | ((header[1] as u64) << 16) | (index as u64),
             );
             if full_xfer < CONFIG_DESC_MIN_LEN {
@@ -2279,8 +2254,7 @@ mod tests {
     #[test]
     fn assumed_enabled_root_port_diag_never_uses_live_portsc() {
         let live_portsc = reg::PORTSC_CCS | ((reg::SPEED_LOW as u32) << 10);
-        let synthetic =
-            root_portsc_for_address_diag(true, reg::SPEED_HIGH, live_portsc);
+        let synthetic = root_portsc_for_address_diag(true, reg::SPEED_HIGH, live_portsc);
         assert_eq!(reg::portsc_speed(synthetic), reg::SPEED_HIGH);
         assert_ne!(synthetic, live_portsc);
 

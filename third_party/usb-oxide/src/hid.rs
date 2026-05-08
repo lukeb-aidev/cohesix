@@ -163,11 +163,7 @@ fn decode_bitmap_keyboard_bits(
         }
     }
 
-    if count == 0 {
-        None
-    } else {
-        Some(report)
-    }
+    if count == 0 { None } else { Some(report) }
 }
 
 #[inline]
@@ -267,9 +263,17 @@ const fn forced_keyboard_profile(
     report_id_prefixed: bool,
 ) -> (KeyboardProtocolMode, KeyboardDecodeMode, u8) {
     if report_id_prefixed {
-        (KeyboardProtocolMode::Report, KeyboardDecodeMode::BootCompatible, 1)
+        (
+            KeyboardProtocolMode::Report,
+            KeyboardDecodeMode::BootCompatible,
+            1,
+        )
     } else {
-        (KeyboardProtocolMode::Boot, KeyboardDecodeMode::BootCompatible, 0)
+        (
+            KeyboardProtocolMode::Boot,
+            KeyboardDecodeMode::BootCompatible,
+            0,
+        )
     }
 }
 
@@ -1014,12 +1018,7 @@ impl<H: Dma> HidDevice<H> {
                     | ((self.keyboard_decode_mode as u64) << 16)
                     | u64::from(self.keyboard_report_offset),
             );
-            if has_report_payload(
-                code,
-                self.ep_max_packet as usize,
-                evt.transfer_length(),
-                7,
-            ) {
+            if has_report_payload(code, self.ep_max_packet as usize, evt.transfer_length(), 7) {
                 // SAFETY: report_buf is the DMA buffer backing this submitted interrupt-IN
                 // transfer, and payload_len is clamped to the allocated endpoint packet size.
                 let payload = unsafe {
@@ -1029,19 +1028,21 @@ impl<H: Dma> HidDevice<H> {
                     )
                 };
                 let mut report = match self.keyboard_decode_mode {
-                    KeyboardDecodeMode::BootCompatible => decode_keyboard_report_payload_boot_compatible(
-                        payload,
-                        usize::from(self.keyboard_report_offset),
-                    ),
+                    KeyboardDecodeMode::BootCompatible => {
+                        decode_keyboard_report_payload_boot_compatible(
+                            payload,
+                            usize::from(self.keyboard_report_offset),
+                        )
+                    }
                     KeyboardDecodeMode::Flexible => decode_keyboard_report_payload(
                         payload,
                         usize::from(self.keyboard_report_offset),
                     ),
                 };
-                if report.is_none() && self.keyboard_decode_mode == KeyboardDecodeMode::BootCompatible
+                if report.is_none()
+                    && self.keyboard_decode_mode == KeyboardDecodeMode::BootCompatible
                 {
-                    self.keyboard_decode_failures =
-                        self.keyboard_decode_failures.saturating_add(1);
+                    self.keyboard_decode_failures = self.keyboard_decode_failures.saturating_add(1);
                     if self.keyboard_decode_failures >= BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD {
                         if self.advance_keyboard_decode_profile() {
                             report = match self.keyboard_decode_mode {
@@ -1320,7 +1321,12 @@ mod tests {
 
     #[test]
     fn rejects_non_success_completion_codes() {
-        assert!(!has_report_payload(completion::USB_TRANSACTION_ERROR, 8, 0, 8));
+        assert!(!has_report_payload(
+            completion::USB_TRANSACTION_ERROR,
+            8,
+            0,
+            8
+        ));
     }
 
     #[test]
@@ -1401,8 +1407,7 @@ mod tests {
         assert_eq!(report.keys[0], 0x04);
 
         let report_id = [0x01u8, 0x02, 0x00, 0x05, 0, 0, 0, 0, 0];
-        let report =
-            decode_keyboard_report_payload_boot_compatible(&report_id, 1).expect("decode");
+        let report = decode_keyboard_report_payload_boot_compatible(&report_id, 1).expect("decode");
         assert_eq!(report.keys[0], 0x05);
     }
 
@@ -1417,7 +1422,11 @@ mod tests {
     fn forced_keyboard_profile_keeps_boot_layout_strict_by_default() {
         assert_eq!(
             forced_keyboard_profile(false),
-            (KeyboardProtocolMode::Boot, KeyboardDecodeMode::BootCompatible, 0)
+            (
+                KeyboardProtocolMode::Boot,
+                KeyboardDecodeMode::BootCompatible,
+                0
+            )
         );
         assert_eq!(
             forced_keyboard_profile(true),
@@ -1446,10 +1455,7 @@ mod tests {
             KeyboardDecodeTransition::RelaxDecode
         );
         assert_eq!(
-            keyboard_decode_transition(
-                KeyboardProtocolMode::Report,
-                KeyboardDecodeMode::Flexible,
-            ),
+            keyboard_decode_transition(KeyboardProtocolMode::Report, KeyboardDecodeMode::Flexible,),
             KeyboardDecodeTransition::None
         );
     }

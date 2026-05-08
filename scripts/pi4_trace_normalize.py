@@ -101,6 +101,7 @@ USB_OUTCOME_BLOCKERS = {
     "root-port-device-not-found",
     "address-device-timeout",
     "address-device-pending",
+    "cmd-poll-pending",
     "safe-port-event-required",
     "safe-port-state",
     "set-config",
@@ -359,6 +360,8 @@ def normalize_usb_blocker(value: str) -> str:
         return "cmd-fetch-timeout"
     if "cmd-live-timeout-snapshot-missing" in lower:
         return "cmd-live-timeout-snapshot-missing"
+    if "cmd-poll-pending" in lower:
+        return "cmd-poll-pending"
     if (
         "cmd-submit-proof-timer-preempted" in lower
         or "cmd-submit-vtimer-interrupt" in lower
@@ -600,6 +603,37 @@ def normalize_wifi_blocker(value: str) -> str:
         return "ht-backplane-cmd53-data-wait"
     if "ht-backplane-cmd52-r5-rejected" in lower:
         return "ht-backplane-cmd52-r5-rejected"
+    if (
+        "chipclkcsr-cmd52-pre-f2" in lower
+        or (
+            "stage=debug-probe-ht" in lower
+            and "arg=0x12001c00" in lower
+        )
+        or (
+            "cmd=52" in lower
+            and "arg=0x12001c00" in lower
+            and (
+                "sdhci cmd error" in lower
+                or "sdhci xfer error" in lower
+                or "sdio cmd52" in lower
+            )
+        )
+        or (
+            "stage=debug-probe-ht" in lower
+            and "chipclkcsr" in lower
+            and "cmd52" in lower
+            and any(
+                token in lower
+                for token in (
+                    "sdio-cmd52-read",
+                    "sdio-cmd52-write",
+                    "sdhci-command-error",
+                    "sdhci-int-timeout",
+                )
+            )
+        )
+    ):
+        return "chipclkcsr-cmd52-pre-f2"
     if "ht-backplane-cmd52-unreadable" in lower:
         return "ht-backplane-cmd52-unreadable"
     if "diagnostic-ht-timeout-backplane-cmd52-rejected" in lower:
@@ -754,6 +788,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "cmd-event-ring-timeout",
         "cmd-controller-not-running",
         "cmd-controller-halted",
+        "cmd-poll-pending",
         "cmd-submit-proof-timer-preempted",
     }
     for event in usb_events:
@@ -1004,12 +1039,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 3)
             if command_timeout_detail in precise_command_timeout_details:
                 blocker = command_timeout_detail
-            elif command_probe_bus == "phys":
-                blocker = "raw-phys-cmd-doorbell-proof-timer-preempted"
-            elif command_probe_bus == "pcie-window":
-                blocker = "pcie-window-cmd-doorbell-proof-timer-preempted"
             else:
-                blocker = "cmd-doorbell-proof-timer-preempted"
+                blocker = "cmd-poll-pending"
         elif (
             saw_command_event_ring_before
             and not saw_command_doorbell
@@ -1116,6 +1147,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "ht-backplane-cmd53-data-wait",
         "ht-backplane-cmd52-r5-rejected",
         "ht-backplane-cmd52-unreadable",
+        "chipclkcsr-cmd52-pre-f2",
     }
     ht_available_seen = False
     linux_probe_attach_seen = False
@@ -1220,7 +1252,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane step=" in raw or "control-plane preinit step=" in raw
         ) and " action=fail" in raw:
             gate = max(gate, 7)
-            blocker = explicit_blocker or "control-plane"
+            if blocker not in precise_ht_blockers:
+                blocker = explicit_blocker or "control-plane"
             continue
         if "join complete" in raw:
             gate = max(gate, 8)
@@ -1289,7 +1322,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = "none"
             continue
         if raw.startswith("err nettest"):
-            if explicit_blocker in {"sdio-cmd52-write", "sdio-cmd52-read"}:
+            if explicit_blocker in {
+                "sdio-cmd52-write",
+                "sdio-cmd52-read",
+                "chipclkcsr-cmd52-pre-f2",
+            }:
                 blocker = explicit_blocker
             elif blocker in precise_ht_blockers:
                 blocker = blocker
@@ -1303,7 +1340,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 )
             if blocker in {"dhcp-pending", "dhcp-failed"}:
                 gate = max(gate, 8)
-            elif blocker in {"sdio-cmd52-write", "sdio-cmd52-read"}:
+            elif blocker in {
+                "sdio-cmd52-write",
+                "sdio-cmd52-read",
+                "chipclkcsr-cmd52-pre-f2",
+            }:
                 gate = max(gate, 4)
             elif blocker.startswith("net-not-ready") or blocker.startswith(
                 "nettest-"
@@ -1329,6 +1370,41 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "diagnostic-ht-timeout-backplane-cmd52-rejected" in raw:
             gate = max(gate, 4)
             blocker = normalize_wifi_blocker(raw)
+            continue
+        if (
+            ("stage=debug-probe-ht" in raw and "arg=0x12001c00" in raw)
+            or (
+                "cmd=52" in raw
+                and "arg=0x12001c00" in raw
+                and any(
+                    token in raw
+                    for token in (
+                        "sdhci cmd error",
+                        "sdhci xfer error",
+                        "sdio cmd52",
+                    )
+                )
+            )
+        ):
+            gate = max(gate, 4)
+            blocker = "chipclkcsr-cmd52-pre-f2"
+            continue
+        if (
+            "stage=debug-probe-ht" in raw
+            and "chipclkcsr" in raw
+            and "cmd52" in raw
+            and any(
+                token in raw
+                for token in (
+                    "sdio-cmd52-read",
+                    "sdio-cmd52-write",
+                    "sdhci-command-error",
+                    "sdhci-int-timeout",
+                )
+            )
+        ):
+            gate = max(gate, 4)
+            blocker = "chipclkcsr-cmd52-pre-f2"
             continue
         if "sdio cmd53 r5 fail" in raw:
             gate = max(gate, 4)
@@ -1426,7 +1502,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "ioctl-timeout",
         }:
             gate = max(gate, 7)
-            blocker = explicit_blocker
+            if blocker not in precise_ht_blockers:
+                blocker = explicit_blocker
             continue
         if explicit_blocker in {"join-timeout", "wifi-association-failed"}:
             gate = max(gate, 7)

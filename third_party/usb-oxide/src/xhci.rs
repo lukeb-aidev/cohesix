@@ -2,15 +2,14 @@
 // Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
 // Copyright 2026 Lukas Bower
 use crate::{
-    reg,
-    ring::{completion, trb_type, EventRing, PhysMem, Ring, Trb},
-    Dma, Result, UsbError,
+    Dma, Result, UsbError, reg,
+    ring::{EventRing, PhysMem, Ring, Trb, completion, trb_type},
 };
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
-    sync::atomic::{compiler_fence, Ordering},
+    sync::atomic::{Ordering, compiler_fence},
 };
 use spin::Mutex;
 
@@ -29,6 +28,7 @@ const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_POLL_ONLY_WAIT_SPINS: usize = 64;
+const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 1;
 const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
@@ -1404,12 +1404,15 @@ pub type XhciDiagHook = fn(stage: u16, a: u64, b: u64, c: u64);
 pub type XhciPortReadHook = fn(mmio: usize, offset: usize, port: u8, max_ports: u8) -> u32;
 
 /// Callback signature for platform-owned xHCI root-port register writes.
-pub type XhciPortWriteHook =
-    fn(mmio: usize, offset: usize, port: u8, max_ports: u8, value: u32);
+pub type XhciPortWriteHook = fn(mmio: usize, offset: usize, port: u8, max_ports: u8, value: u32);
+
+/// Callback signature for platform-owned xHCI posted-write flushes.
+pub type XhciPostedWriteFlushHook = fn(mmio: usize, offset: usize, value: u32, stage: u16);
 
 static XHCI_DIAG_HOOK: Mutex<Option<XhciDiagHook>> = Mutex::new(None);
 static XHCI_PORT_READ_HOOK: Mutex<Option<XhciPortReadHook>> = Mutex::new(None);
 static XHCI_PORT_WRITE_HOOK: Mutex<Option<XhciPortWriteHook>> = Mutex::new(None);
+static XHCI_POSTED_WRITE_FLUSH_HOOK: Mutex<Option<XhciPostedWriteFlushHook>> = Mutex::new(None);
 
 /// Installs or clears the xHCI probe diagnostic callback.
 pub fn set_xhci_diag_hook(hook: Option<XhciDiagHook>) {
@@ -1423,6 +1426,11 @@ pub fn set_xhci_port_access_hooks(
 ) {
     *XHCI_PORT_READ_HOOK.lock() = read;
     *XHCI_PORT_WRITE_HOOK.lock() = write;
+}
+
+/// Installs or clears a platform-owned posted-write flush callback.
+pub fn set_xhci_posted_write_flush_hook(hook: Option<XhciPostedWriteFlushHook>) {
+    *XHCI_POSTED_WRITE_FLUSH_HOOK.lock() = hook;
 }
 
 #[inline(always)]
@@ -1440,6 +1448,13 @@ fn xhci_port_read_hook() -> Option<XhciPortReadHook> {
 #[inline(always)]
 fn xhci_port_write_hook() -> Option<XhciPortWriteHook> {
     *XHCI_PORT_WRITE_HOOK.lock()
+}
+
+#[inline(always)]
+fn flush_posted_write(mmio: usize, offset: usize, value: u32, stage: u16) {
+    if let Some(hook) = *XHCI_POSTED_WRITE_FLUSH_HOOK.lock() {
+        hook(mmio, offset, value, stage);
+    }
 }
 
 #[inline(always)]
@@ -3914,6 +3929,14 @@ impl<H: Dma> XhciCtrl<H> {
                 0,
             );
         }
+        if !skip_live_run_write {
+            flush_posted_write(
+                self.mmio,
+                self.op_base - self.mmio + reg::USBCMD,
+                run_usbcmd,
+                0x02e5,
+            );
+        }
         let post_run_blind_settle = runtime_stop_state_needs_post_run_settle(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -4324,6 +4347,7 @@ impl<H: Dma> XhciCtrl<H> {
         mmio_write_barrier();
         self.write_reg(db, 0u32);
         mmio_write_barrier();
+        flush_posted_write(self.mmio, db, 0, 0x031f);
         emit_xhci_diag(0x031a, db as u64, 0, u64::from(skip_readback));
         emit_xhci_diag(0x031f, db as u64, 0, u64::from(skip_readback));
         if !skip_readback {
@@ -4336,6 +4360,7 @@ impl<H: Dma> XhciCtrl<H> {
         let db = reg::doorbell(self.db_offset, slot);
         ring_write_barrier();
         self.write_reg(db, target as u32);
+        flush_posted_write(self.mmio, db, target as u32, 0x031f);
         if !skip_doorbell_readback_after_ring(self.firmware_handoff) {
             let _ = self.read_reg::<u32>(db);
         }
@@ -4834,6 +4859,78 @@ impl<H: Dma> XhciCtrl<H> {
         }
     }
 
+    fn wait_command_prompt_safe(&self, expected_cmd_trb: Option<u64>) -> Result<Trb> {
+        let mut event_syncs = 0usize;
+        let mut last_non_command_event = None;
+        for _ in 0..COMMAND_PROMPT_SAFE_WAIT_POLLS {
+            let trb = {
+                let mut event_ring = self.event_ring.lock();
+                event_ring.sync_current_for_cpu(&*self.host, "xhci-event-ring-prompt-safe")?;
+                event_syncs = event_syncs.saturating_add(1);
+                event_ring.try_dequeue()
+            };
+
+            let Some(trb) = trb else {
+                continue;
+            };
+            self.update_erdp();
+
+            if trb.trb_type() == trb_type::COMMAND_COMPLETION as u8 {
+                let code = trb.completion_code();
+                let completion_ptr = trb.param & !0x0f;
+                if let Some(expected_ptr_raw) = expected_cmd_trb {
+                    let expected_ptr = expected_ptr_raw & !0x0f;
+                    let ptr_match = completion_ptr == expected_ptr;
+                    emit_xhci_diag(
+                        0x0304,
+                        completion_ptr,
+                        expected_ptr,
+                        if ptr_match { 1 } else { 0 },
+                    );
+                    if !ptr_match {
+                        emit_xhci_diag(0x030c, completion_ptr, expected_ptr, trb.control as u64);
+                        return Err(UsbError::Timeout);
+                    }
+                }
+                emit_xhci_diag(
+                    0x0301,
+                    trb.param,
+                    ((trb.status as u64) << 32) | trb.control as u64,
+                    code as u64,
+                );
+                if code != completion::SUCCESS {
+                    emit_xhci_diag(0x030d, code as u64, trb.slot_id() as u64, 0);
+                    return Err(UsbError::CmdFail(code));
+                }
+                return Ok(trb);
+            }
+
+            last_non_command_event = Some(trb);
+            emit_xhci_diag(
+                0x0308,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                trb.trb_type() as u64,
+            );
+        }
+
+        emit_xhci_diag(
+            0x0378,
+            expected_cmd_trb.unwrap_or(0) & !0x0f,
+            event_syncs as u64,
+            COMMAND_PROMPT_SAFE_WAIT_POLLS as u64,
+        );
+        if let Some(trb) = last_non_command_event {
+            emit_xhci_diag(
+                0x030e,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                trb.trb_type() as u64,
+            );
+        }
+        Err(UsbError::Timeout)
+    }
+
     /// Poll for transfer events (non-blocking)
     pub fn poll_event(&self) -> Option<Trb> {
         let mut event_ring = self.event_ring.lock();
@@ -4960,6 +5057,44 @@ impl<H: Dma> XhciCtrl<H> {
         self.wait_command_poll_only(Some(cmd_addr))
     }
 
+    fn submit_command_prompt_safe_poll_only(&self, trb: Trb) -> Result<Trb> {
+        if runtime_pollsafe_no_fresh_ownership_handoff(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+        ) {
+            emit_xhci_diag(
+                0x0336,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
+            );
+            return Err(UsbError::NotSupported);
+        }
+        emit_xhci_diag(
+            0x0300,
+            trb.param,
+            ((trb.status as u64) << 32) | trb.control as u64,
+            3,
+        );
+        let mut cmd_ring = self.cmd_ring.lock();
+        let (enqueue_before, cycle_before) = cmd_ring.debug_state();
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let (enqueue_after, cycle_after) = cmd_ring.debug_state();
+        emit_xhci_diag(
+            0x0303,
+            cmd_addr,
+            ((enqueue_before as u64) << 32) | enqueue_after as u64,
+            ((cycle_before as u64) << 1) | (cycle_after as u64),
+        );
+        drop(cmd_ring);
+        self.emit_command_ring_debug_snapshot(0x0360);
+        self.emit_command_event_ring_debug_snapshot(0x0353);
+        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0);
+        self.ring_cmd_doorbell();
+        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1);
+        self.wait_command_prompt_safe(Some(cmd_addr))
+    }
+
     fn submit_command_linux_event_generation_poll_only(&self, trb: Trb) -> Result<Trb> {
         if runtime_pollsafe_no_fresh_ownership_handoff(
             self.firmware_handoff,
@@ -5002,6 +5137,12 @@ impl<H: Dma> XhciCtrl<H> {
     /// Submit a command-ring No Op probe without touching root-port registers.
     pub fn probe_no_op_command(&self) -> Result<()> {
         self.submit_command_poll_only(no_op_command_trb_for_probe())?;
+        Ok(())
+    }
+
+    /// Submit a command-ring No Op probe with no post-doorbell spin wait.
+    pub fn probe_no_op_command_prompt_safe(&self) -> Result<()> {
+        self.submit_command_prompt_safe_poll_only(no_op_command_trb_for_probe())?;
         Ok(())
     }
 
@@ -5365,7 +5506,14 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
+        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
+        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
+        COMMAND_PROMPT_SAFE_WAIT_POLLS, COMMAND_WAIT_SPINS, ConstructorPollingScrubMode,
+        LINUX_COMMAND_PROBE_IMOD, READY_WAIT_PROGRESS_SPINS, SKIP_HCRST_DURING_INIT,
+        TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
+        XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS, XhciControllerParams, XhciCtrl,
+        XhciFirmwareHandoff, XhciRuntimeSeedSnapshot, blind_settle_precedes_live_stop_revalidation,
+        claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, command_timeout_live_snapshot_enabled,
         command_timeout_live_snapshot_spins, compose_brcm_usbaxi_attr, compose_config,
         compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
@@ -5431,16 +5579,9 @@ mod tests {
         use_atomic_runtime_ring_publish_with_snapshot, use_live_config_seed_reads,
         use_live_config_seed_reads_for_init, use_live_config_seed_reads_with_snapshot,
         use_live_post_reset_seed_reads, use_live_post_reset_seed_reads_for_init,
-        use_live_post_reset_seed_reads_with_snapshot, ConstructorPollingScrubMode,
-        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
-        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
-        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
-        COMMAND_WAIT_SPINS, LINUX_COMMAND_PROBE_IMOD, READY_WAIT_PROGRESS_SPINS,
-        SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
-        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
-        xhci_port_in_range, xhci_slot_in_range,
+        use_live_post_reset_seed_reads_with_snapshot, xhci_port_in_range, xhci_slot_in_range,
     };
-    use crate::{reg, ring::trb_type, Dma};
+    use crate::{Dma, reg, ring::trb_type};
     use alloc::vec;
 
     struct MockDma;
@@ -6914,7 +7055,9 @@ mod tests {
         assert!(command_timeout_live_snapshot_spins() > 0);
         assert_eq!(command_timeout_live_snapshot_spins(), 32);
         assert_eq!(COMMAND_POLL_ONLY_WAIT_SPINS, 64);
+        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 1);
         assert!(command_timeout_live_snapshot_spins() < COMMAND_POLL_ONLY_WAIT_SPINS);
+        assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS < COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_WAIT_SPINS);
     }
@@ -7894,8 +8037,8 @@ mod tests {
     }
 
     #[test]
-    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped(
-    ) {
+    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped()
+     {
         assert_eq!(
             post_start_polling_irq_quiesce_pending_bits(reg::USBCMD_RUN, reg::USBSTS_PCD, 0, true),
             0

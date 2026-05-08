@@ -34,6 +34,10 @@ These artifacts define kernel-level truth. Code must align with them exactly.
 1. **Canonical Sources**
    - `AGENTS.md`, `README.md`, and `/docs/*.md` are canonical.
    - Code that diverges from these documents is invalid unless the documents are updated **in the same change**.
+   - Precedence is explicit:
+     - `AGENTS.md` and `docs/BUILD_PLAN.md` govern scope and milestone legality.
+     - `configs/root_task.toml`, resolved manifests, and `coh-rtc` outputs govern generated interfaces, defaults, and system behavior.
+     - Prose documentation must describe generated/as-built truth and must be updated when that truth changes.
 
 2. **Compiler-Defined Reality**
    - Manifests and compiler-generated artifacts (`root_task.toml`, `coh-rtc` outputs) are the **sole authority** on system behavior.
@@ -42,6 +46,8 @@ These artifacts define kernel-level truth. Code must align with them exactly.
 
 3. **No Scope Creep**
    - Only work explicitly sanctioned by the active milestone in `BUILD_PLAN.md` may be implemented.
+   - Every task or PR must cite the exact `docs/BUILD_PLAN.md` milestone and task title/ID that authorizes the change.
+   - If the active milestone is ambiguous, blocked, or contradicted by as-built evidence, stop and resolve scope in `docs/BUILD_PLAN.md` before implementation.
    - “Preparation”, “cleanup”, or “future-proofing” outside the milestone is prohibited.
 
 4. **Atomic Work**
@@ -78,13 +84,16 @@ These artifacts define kernel-level truth. Code must align with them exactly.
    - AVOID memory scribbles.
    - BIAS RE-USE of existing instrumentation, add new instrumentation WITH CARE.
 
- 10. **.coh Script Grammar**
+10. **.coh Script Grammar**
    - All .coh scripts MUST FOLLOW the syntax and grammar defined in docs/USERLAND_AND_CLI.md.
    - If grammar must be modified to support new functionality, you MUST UPDATE docs/USERLAND_AND_CLI.md accordingly.
+
 ---
 
 ## Worker Bring-up
-- The root task spawns **queen**, **worker-heart**, and **worker-gpu** per sequencing in `docs/BUILD_PLAN.md`.
+- Root-task worker behavior must be described as as-built, not aspirational.
+- The root task may be documented as spawning **queen**, **worker-heart**, and **worker-gpu** only when current code, generated manifests, tests, and `docs/BUILD_PLAN.md` all agree.
+- If worker-spawn documentation and implementation diverge, treat the mismatch as drift: fix code, generated artifacts, tests, and docs in the same scoped change.
 - Scheduling contexts and budgets **must** follow `docs/ROLES_AND_SCHEDULING.md`.
 - Workers operate exclusively via their mounted namespaces (e.g. `/worker/<id>`).
 - All coordination is file- and event-driven via Secure9P.
@@ -134,7 +143,8 @@ No other agent roles exist unless explicitly introduced in `BUILD_PLAN.md`.
 - GPU workers never expose raw device access inside the VM.
 - New file types or paths **must be documented before code depends on them**.
 - Documentation must describe the **as-built** system, not intent.
- - Legacy UEFI helper scripts have been removed; any new UEFI tooling must be introduced under the Milestone 25a scope and documented in `docs/BUILD_PLAN.md` and `docs/HARDWARE_BRINGUP.md`.
+- Pi 4 Milestone 26 uses the upstream seL4 U-Boot + binary-image handoff; Pi 4 acceptance must not depend on UEFI firmware settings or `BOOTAA64.EFI`.
+- UEFI tooling is permitted only when explicitly scoped by the active milestone (for example AWS/UEFI work) and documented in `docs/BUILD_PLAN.md`, `docs/HARDWARE_BRINGUP.md`, and `docs/BOOT_REFERENCE.md`.
 
 ---
 
@@ -175,7 +185,10 @@ No other agent roles exist unless explicitly introduced in `BUILD_PLAN.md`.
 - VM artifacts remain `no_std`
 
 ### 5. Regression Pack (Milestone ≥ 8)
-- All changes **MUST** re-run the shared regression pack unchanged.
+- All changes **MUST** use the staged Test Plan runner as the source of truth:
+  - `scripts/ci/test_plan_run.sh --list`
+  - `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`
+- Target- or surface-specific additions (for example `.coh`, REST, Pi 4, release, or hardware bring-up gates) must be run when the touched milestone or `docs/TEST_PLAN.md` requires them.
 - Output drift (ACK/ERR/END grammar, `/proc` layouts, telemetry formats) fails CI.
 - New tests are additive; existing fixtures remain canonical.
 
@@ -194,6 +207,7 @@ All charter rules apply to host tools **except** VM-only constraints.
 
 Host tools MAY use `std` and host OS facilities, but MUST NOT:
 - introduce new control-plane semantics outside Secure9P / documented console grammar,
+- treat REST, gateway, UI, or host-side proxy surfaces as new authority paths; they may only project documented Secure9P/console semantics with bounded, manifest-aligned behavior,
 - bypass manifest/IR-defined schemas, error codes, or namespace layouts,
 - change ACK/ERR/END or NineDoor error semantics without the full breaking-change process,
 - rely on undocumented RPC channels into the VM.
@@ -217,11 +231,14 @@ Host tools MUST remain protocol-faithful: they consume the as-built interfaces a
 - Validate all user-controlled input (9P frames, JSON).
 - No hard-coded secrets; use config or tickets.
 - Behavior changes require updated tests and documented commands.
-- Before merge, run:
+- Before merge, run the generated-artifact drift guard:
+  ```
+  scripts/check-generated.sh
+  ```
+  For intentional regeneration, use `coh-rtc` with every output path required by `scripts/check-generated.sh`; the minimal form below is insufficient for full drift validation:
   ```
   cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
   ```
-  and verify regenerated artifacts hash-match committed versions.
 
 ---
 

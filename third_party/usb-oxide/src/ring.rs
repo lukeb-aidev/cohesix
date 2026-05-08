@@ -7,7 +7,7 @@ use crate::{Dma, Result, UsbError};
 
 use core::{
     marker::PhantomData,
-    sync::atomic::{compiler_fence, Ordering},
+    sync::atomic::{Ordering, compiler_fence},
 };
 
 const EVENT_RING_ERST_SEGMENTS: usize = 8;
@@ -483,12 +483,7 @@ impl<H: Dma> Ring<H> {
     }
 
     /// Enqueues one TRB, then publishes the updated ring contents to the device.
-    pub fn enqueue_and_sync(
-        &mut self,
-        host: &H,
-        trb: Trb,
-        label: &'static str,
-    ) -> Result<u64> {
+    pub fn enqueue_and_sync(&mut self, host: &H, trb: Trb, label: &'static str) -> Result<u64> {
         let addr = self.enqueue(host, trb);
         self.sync_for_device(host, label)?;
         Ok(addr)
@@ -614,12 +609,8 @@ impl<H: Dma> EventRing<H> {
         if bounded_count == 0 {
             return Err(UsbError::DmaSync);
         }
-        self.ring.sync_for_cpu_range(
-            host,
-            0,
-            bounded_count * core::mem::size_of::<Trb>(),
-            label,
-        )
+        self.ring
+            .sync_for_cpu_range(host, 0, bounded_count * core::mem::size_of::<Trb>(), label)
     }
 
     pub fn debug_state(&self) -> (usize, bool) {
@@ -693,10 +684,10 @@ impl<H: Dma> EventRing<H> {
 
 #[cfg(test)]
 mod tests {
-    use super::{trb_type, PhysMem, Ring, Trb};
+    use super::{PhysMem, Ring, Trb, trb_type};
     use crate::{Dma, DmaShareError};
     use core::sync::atomic::{AtomicUsize, Ordering};
-    use std::alloc::{alloc_zeroed, dealloc, Layout};
+    use std::alloc::{Layout, alloc_zeroed, dealloc};
     use std::sync::Mutex;
     use std::vec::Vec;
 
@@ -725,11 +716,12 @@ mod tests {
 
         unsafe fn free(&self, addr: usize, size: usize, align: usize) {
             let mut allocations = self.allocations.lock().expect("allocations mutex");
-            if let Some(index) = allocations
-                .iter()
-                .position(|&(base, stored_size, stored_align)| {
-                    base == addr && stored_size == size && stored_align == align
-                })
+            if let Some(index) =
+                allocations
+                    .iter()
+                    .position(|&(base, stored_size, stored_align)| {
+                        base == addr && stored_size == size && stored_align == align
+                    })
             {
                 let (base, stored_size, stored_align) = allocations.swap_remove(index);
                 let layout =
@@ -816,7 +808,10 @@ mod tests {
 
         assert_eq!(addr, ring.phys(&host));
         assert_eq!(host.share_calls.load(Ordering::Relaxed), 1);
-        assert_eq!(host.last_share_vaddr.load(Ordering::Relaxed), ring.mem.virt());
+        assert_eq!(
+            host.last_share_vaddr.load(Ordering::Relaxed),
+            ring.mem.virt()
+        );
         assert_eq!(
             host.last_share_len.load(Ordering::Relaxed),
             8 * core::mem::size_of::<Trb>()
@@ -890,8 +885,7 @@ mod tests {
     #[test]
     fn event_ring_erst_uses_linux_shaped_segment_count() {
         let host = MockDma::default();
-        let event_ring =
-            super::EventRing::<MockDma>::new(&host, 256).expect("allocate event ring");
+        let event_ring = super::EventRing::<MockDma>::new(&host, 256).expect("allocate event ring");
         let entry = event_ring.erst.as_ptr::<super::ErstEntry>();
 
         assert_eq!(event_ring.erst_entries(), 8);
@@ -899,7 +893,10 @@ mod tests {
             // SAFETY: EventRing::new initialized the bounded eight-entry ERST
             // prefix, and this test reads only that initialized prefix.
             let observed = unsafe { entry.add(index).read() };
-            assert_eq!(observed.base, event_ring.ring.phys(&host) + (index as u64 * 32 * 16));
+            assert_eq!(
+                observed.base,
+                event_ring.ring.phys(&host) + (index as u64 * 32 * 16)
+            );
             assert_eq!(observed.size, 32);
         }
     }
