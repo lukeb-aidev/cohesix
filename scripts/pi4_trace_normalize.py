@@ -102,6 +102,7 @@ USB_OUTCOME_BLOCKERS = {
     "address-device-timeout",
     "address-device-pending",
     "cmd-poll-pending",
+    "cmd-timeout",
     "safe-port-event-required",
     "safe-port-state",
     "set-config",
@@ -788,6 +789,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "cmd-event-ring-timeout",
         "cmd-controller-not-running",
         "cmd-controller-halted",
+        "cmd-timeout",
         "cmd-poll-pending",
         "cmd-submit-proof-timer-preempted",
     }
@@ -1000,6 +1002,10 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 elif (usbsts & 0x1) != 0:
                     command_timeout_detail = "cmd-controller-halted"
                     blocker = command_timeout_detail
+        elif tag == "cmd-timeout":
+            gate = max(gate, 3)
+            command_timeout_detail = "cmd-timeout"
+            blocker = command_timeout_detail
         elif tag.startswith("cmd-event-ring-before"):
             saw_command_event_ring_before = True
             gate = max(gate, 3)

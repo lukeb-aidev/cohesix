@@ -1138,10 +1138,10 @@ fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
                 "command-ring-probe"
             } else if summary.command_probe == "enable-slot-ok" {
                 "safe-port-state"
-            } else if summary.command_probe == "no-op-ok" {
+            } else if summary.command_probe == "no-op-ok"
+                || summary.command_probe == "no-op-linux-event-ok"
+            {
                 "safe-port-event-required"
-            } else if summary.command_probe == "no-op-deferred" {
-                "deferred-capture-enum"
             } else if summary.command_probe != "n/a" {
                 "command-ring-recovery"
             } else {
@@ -3841,6 +3841,7 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x030b => Some("cmd-poll-only-timeout"),
         0x030d => Some("cmd-poll-only-fail"),
         0x0378 => Some("cmd-prompt-safe-deferred"),
+        0x0379 => Some("cmd-prompt-safe-continue-poll"),
         0x02eb => Some("usbcmd-run-barrier-wedged"),
         0x02e9 => Some("usbcmd-run-store-wedged"),
         _ => None,
@@ -4398,6 +4399,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0376 => Some("cmd-gate-timeout-live-event-ring"),
         0x0377 => Some("cmd-gate-timeout-live-snapshot-deferred"),
         0x0378 => Some("cmd-prompt-safe-deferred"),
+        0x0379 => Some("cmd-prompt-safe-continue-poll"),
         _ => None,
     }
 }
@@ -4596,12 +4598,15 @@ fn usb_no_op_probe_error_label(err: UsbError) -> &'static str {
 
 #[inline]
 fn usb_command_probe_proves_ring(label: &str) -> bool {
-    matches!(label, "enable-slot-ok" | "no-op-ok")
+    matches!(
+        label,
+        "enable-slot-ok" | "no-op-ok" | "no-op-linux-event-ok"
+    )
 }
 
 #[inline]
 fn usb_command_probe_allows_deferred_capture(label: &str) -> bool {
-    usb_command_probe_proves_ring(label) || matches!(label, "no-op-deferred")
+    usb_command_probe_proves_ring(label)
 }
 
 #[inline]
@@ -4661,20 +4666,20 @@ fn xhci_probe_command_ring_after_event_drain(
                 "no-op-ok"
             }
             Err(UsbError::Timeout) => {
-                let mut line = heapless::String::<192>::new();
+                let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci root-port command-probe result=no-op-deferred bus={bus} action=defer-to-linux-capture detail=prompt-safe-timeout"
+                        "[local-seat] xhci root-port command-probe result=no-op-unproven bus={bus} action=return-to-shell detail=poll-timeout"
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
-                "no-op-deferred"
+                "no-op-unproven"
             }
             Err(err) => {
                 let result = usb_no_op_probe_error_label(err);
                 let action = "none";
-                let mut line = heapless::String::<224>::new();
+                let mut line = heapless::String::<192>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
@@ -15568,9 +15573,17 @@ mod tests {
             xhci_deferred_root_port_capture_mask(
                 RPI4_XHCI_MMIO_HIGH_CANDIDATE,
                 strategy,
-                "no-op-deferred",
+                "no-op-linux-event-ok",
             ),
             PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK,
+        );
+        assert_eq!(
+            xhci_deferred_root_port_capture_mask(
+                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                strategy,
+                "no-op-deferred",
+            ),
+            0,
         );
         assert_eq!(
             xhci_deferred_root_port_capture_mask(
@@ -16334,7 +16347,16 @@ mod tests {
         };
         assert_eq!(
             super::usb_probe_next_step(no_event_prompt_safe_deferred),
-            "deferred-capture-enum"
+            "command-ring-recovery"
+        );
+
+        let no_event_linux_event_ready = UsbProbePathwaySummary {
+            command_probe: "no-op-linux-event-ok",
+            ..no_event_command_ready
+        };
+        assert_eq!(
+            super::usb_probe_next_step(no_event_linux_event_ready),
+            "safe-port-event-required"
         );
         assert!(
             no_event_command_ready.is_better_than(UsbProbePathwaySummary {
@@ -19806,8 +19828,12 @@ mod tests {
         );
         assert!(!usb_command_probe_proves_ring("no-op-timeout"));
         assert!(!usb_command_probe_proves_ring("no-op-deferred"));
-        assert!(super::usb_command_probe_allows_deferred_capture(
+        assert!(!super::usb_command_probe_allows_deferred_capture(
             "no-op-deferred"
+        ));
+        assert!(usb_command_probe_proves_ring("no-op-linux-event-ok"));
+        assert!(super::usb_command_probe_allows_deferred_capture(
+            "no-op-linux-event-ok"
         ));
         assert!(usb_command_probe_proves_ring("no-op-ok"));
     }

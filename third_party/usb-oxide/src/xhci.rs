@@ -106,6 +106,11 @@ const fn command_wait_should_sync_event_ring(waited: usize) -> bool {
     waited == 0 || waited % COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS == 0
 }
 
+#[inline]
+const fn command_poll_only_should_sync_event_ring(_waited: usize) -> bool {
+    true
+}
+
 // Keep only bits that are safe to mirror back across maintenance writes.
 // PORTSC_PED must not be mirrored: on some USB2 paths it is RW1CS and writing
 // a sampled 1 can clear the enabled state immediately after reset/ACK.
@@ -606,16 +611,12 @@ const fn skip_config_write_during_init_with_snapshot(
 #[inline(always)]
 const fn skip_reset_during_init(firmware_handoff: XhciFirmwareHandoff) -> bool {
     // Resetless and preserve-state handoff modes are only safe when firmware
-    // has already proven the controller halted and interrupt-quiesced. On Pi 4
-    // the mailbox reset is the platform reset boundary; current seL4 hardware
-    // traces trap IRQ 27 at the follow-on HCRST write, so do not repeat the
-    // xHCI reset edge. DCBAAP publication is guarded separately on
-    // PlatformResetComplete.
+    // has already proven the controller halted and interrupt-quiesced.
+    // PlatformResetComplete proves PCIe/VL805 ownership, not that the xHC has
+    // accepted fresh runtime rings, so it must still replay the HCRST lane.
     matches!(
         firmware_handoff,
-        XhciFirmwareHandoff::ResetlessReinit
-            | XhciFirmwareHandoff::PlatformResetComplete
-            | XhciFirmwareHandoff::PreserveControllerState
+        XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
     ) || SKIP_HCRST_DURING_INIT
 }
 
@@ -849,11 +850,11 @@ const fn runtime_handoff_needs_uboot_style_reset_write(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Fresh unseeded paths use the same reset edge as U-Boot/Linux. Stop-state
-    // and platform-reset-complete paths already have reset authority, so they
-    // skip HCRST and keep the U-Boot-style direct write only for RUN.
+    // Fresh unseeded and Pi 4 platform-reset-complete paths use the same
+    // direct HCRST edge as U-Boot/Linux before publishing fresh rings.
     runtime_owned_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_unseeded_full_reset_handoff(firmware_handoff, runtime_seed_snapshot)
+        || matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
 }
 
 #[inline(always)]
@@ -1324,6 +1325,9 @@ const fn skip_reset_completion_poll_for_init(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
     skip_initial_live_operational_reads: bool,
 ) -> bool {
+    if matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete) {
+        return false;
+    }
     initial_live_operational_read_hazard(
         firmware_handoff,
         runtime_seed_snapshot,
@@ -1606,9 +1610,9 @@ pub enum XhciFirmwareHandoff {
     /// runtime should adopt without rewriting preserved firmware-owned
     /// controller state.
     PreserveControllerState = 3,
-    /// Platform firmware or mailbox reset completed outside the xHCI HCRST
-    /// register edge. Runtime treats that as the platform reset boundary and
-    /// performs CONFIG/ring publication locally without repeating HCRST.
+    /// Platform firmware or mailbox reset proved PCIe/VL805 ownership.
+    /// Runtime still replays the xHCI HCRST/CONFIG/ring sequence locally
+    /// before trusting command-ring completion.
     PlatformResetComplete = 4,
 }
 
@@ -2848,6 +2852,38 @@ impl<H: Dma> XhciCtrl<H> {
                 trusted_runtime_seed_snapshot.is_some() as u64,
                 skip_reset_completion_poll as u64,
             );
+            let reset_pre_usbsts = self.read_op::<u32>(reg::USBSTS);
+            emit_xhci_diag(
+                0x0214,
+                reset_pre_usbsts as u64,
+                reg::USBSTS_HCH as u64,
+                1,
+            );
+            if !SKIP_STOP_DURING_INIT && halt_revalidation_needed(reset_pre_usbsts) {
+                let stop_cmd = masked_usbcmd(usbcmd_before_reset) & !reg::USBCMD_RUN;
+                emit_xhci_diag(
+                    0x0221,
+                    stop_cmd as u64,
+                    usbcmd_before_reset as u64,
+                    1,
+                );
+                self.write_op(reg::USBCMD, stop_cmd);
+                let mut waited = 0usize;
+                while halt_revalidation_needed(self.read_op::<u32>(reg::USBSTS)) {
+                    waited = waited.saturating_add(1);
+                    if waited >= STOP_WAIT_SPINS {
+                        emit_xhci_diag(
+                            0x0222,
+                            waited as u64,
+                            self.read_op::<u32>(reg::USBSTS) as u64,
+                            1,
+                        );
+                        return Err(UsbError::Timeout);
+                    }
+                    spin_loop();
+                }
+                emit_xhci_diag(0x0223, self.read_op::<u32>(reg::USBSTS) as u64, 1, 0);
+            }
             let reset_cmd = usbcmd_before_reset | reg::USBCMD_HCRST;
             let uboot_style_reset_write = runtime_handoff_needs_uboot_style_reset_write(
                 self.firmware_handoff,
@@ -4760,7 +4796,7 @@ impl<H: Dma> XhciCtrl<H> {
         loop {
             let trb = {
                 let mut event_ring = self.event_ring.lock();
-                if command_wait_should_sync_event_ring(waited) {
+                if command_poll_only_should_sync_event_ring(waited) {
                     event_ring.sync_current_for_cpu(&*self.host, "xhci-event-ring-poll-fast")?;
                     event_syncs = event_syncs.saturating_add(1);
                 }
@@ -5092,7 +5128,19 @@ impl<H: Dma> XhciCtrl<H> {
         self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0);
         self.ring_cmd_doorbell();
         self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1);
-        self.wait_command_prompt_safe(Some(cmd_addr))
+        match self.wait_command_prompt_safe(Some(cmd_addr)) {
+            Ok(trb) => Ok(trb),
+            Err(UsbError::Timeout) => {
+                emit_xhci_diag(
+                    0x0379,
+                    cmd_addr & !0x0f,
+                    COMMAND_POLL_ONLY_WAIT_SPINS as u64,
+                    COMMAND_PROMPT_SAFE_WAIT_POLLS as u64,
+                );
+                self.wait_command_poll_only(Some(cmd_addr))
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn submit_command_linux_event_generation_poll_only(&self, trb: Trb) -> Result<Trb> {
@@ -5126,11 +5174,7 @@ impl<H: Dma> XhciCtrl<H> {
             ((cycle_before as u64) << 1) | (cycle_after as u64),
         );
         drop(cmd_ring);
-        self.emit_command_ring_debug_snapshot(0x0360);
-        self.emit_command_event_ring_debug_snapshot(0x0353);
-        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0);
         self.ring_cmd_doorbell();
-        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1);
         self.wait_command_poll_only(Some(cmd_addr))
     }
 
@@ -5515,7 +5559,8 @@ mod tests {
         XhciFirmwareHandoff, XhciRuntimeSeedSnapshot, blind_settle_precedes_live_stop_revalidation,
         claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, command_timeout_live_snapshot_enabled,
-        command_timeout_live_snapshot_spins, compose_brcm_usbaxi_attr, compose_config,
+        command_poll_only_should_sync_event_ring, command_timeout_live_snapshot_spins,
+        command_wait_should_sync_event_ring, compose_brcm_usbaxi_attr, compose_config,
         compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
         compose_polling_erdp_ack, compose_run_usbcmd, constructor_polling_scrub_mode,
         constructor_polling_scrub_mode_from_params, dcbaap_reg_write_ops,
@@ -7063,6 +7108,19 @@ mod tests {
     }
 
     #[test]
+    fn command_poll_only_reinvalidates_event_ring_every_bounded_poll() {
+        assert!(command_poll_only_should_sync_event_ring(0));
+        assert!(command_poll_only_should_sync_event_ring(1));
+        assert!(command_poll_only_should_sync_event_ring(
+            COMMAND_POLL_ONLY_WAIT_SPINS - 1
+        ));
+        assert!(!command_wait_should_sync_event_ring(1));
+        assert!(!command_wait_should_sync_event_ring(
+            COMMAND_POLL_ONLY_WAIT_SPINS - 1
+        ));
+    }
+
+    #[test]
     fn halt_revalidation_depends_on_live_halt_bit() {
         assert!(halt_revalidation_needed(0));
         assert!(halt_revalidation_needed(reg::USBSTS_CNR));
@@ -7251,10 +7309,10 @@ mod tests {
 
     #[test]
     fn platform_reset_complete_replays_config_before_fresh_ring_publish() {
-        assert!(skip_reset_during_init(
+        assert!(!skip_reset_during_init(
             XhciFirmwareHandoff::PlatformResetComplete
         ));
-        assert!(skip_reset_during_init_with_snapshot(
+        assert!(!skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -7289,7 +7347,7 @@ mod tests {
             ),
             Some(0),
         );
-        assert!(skip_reset_completion_poll_for_init(
+        assert!(!skip_reset_completion_poll_for_init(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
             true,
@@ -7328,7 +7386,7 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(!runtime_handoff_needs_uboot_style_reset_write(
+        assert!(runtime_handoff_needs_uboot_style_reset_write(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -7359,7 +7417,7 @@ mod tests {
             erstsz0: None,
         });
 
-        assert!(skip_reset_during_init_with_snapshot(
+        assert!(!skip_reset_during_init_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             stop_state_only_snapshot,
         ));

@@ -228,6 +228,24 @@ def test_gate_summary_tracks_usb_command_doorbell_timer_as_poll_pending() -> Non
     assert gates.usb_blocker == "cmd-poll-pending"
 
 
+def test_gate_summary_promotes_usb_command_timeout_over_pending_timer() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x0307 tag=cmd-timeout "
+            "a=0x0000000001312d00 b=0x0000000404024010 c=0x14",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-timeout"
+
+
 def test_gate_summary_treats_usb_doorbell_write_edges_as_poll_pending() -> None:
     for tag in ("cmd-doorbell-write", "cmd-doorbell-write-done"):
         events = normalizer.parse_events(
