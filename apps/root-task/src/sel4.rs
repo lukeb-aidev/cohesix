@@ -478,7 +478,7 @@ pub fn init_cnode_cptr(bi: &seL4_BootInfo) -> seL4_CPtr {
     sel4_view::init_cnode_cptr(bi)
 }
 
-/// Canonical node index used when addressing the init thread's root CNode.
+/// Guard-encoded node index used by legacy init-CNode addressing probes.
 #[inline(always)]
 pub fn init_cnode_index_word() -> seL4_Word {
     0
@@ -2745,11 +2745,7 @@ const DMA_LOW_GUARD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_TABLES: usize = 64;
 const MAX_PAGE_DIRECTORIES: usize = 32;
 const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
-#[cfg(target_os = "none")]
-pub(crate) const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = 1 << 2;
-#[cfg(not(target_os = "none"))]
-pub(crate) const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes =
-    sel4_sys::seL4_ARM_VMAttributes(1 << 2);
+pub(crate) const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = sel4_sys::seL4_ARM_ExecuteNever;
 
 /// Returns the exclusive virtual address range reserved for device page tables and mappings.
 pub const fn device_window_range() -> core::ops::Range<usize> {
@@ -3665,9 +3661,9 @@ pub enum RetypeKind {
 ///
 /// The destination root **must** be the writable init thread CNode capability resident in slot
 /// `seL4_CapInitThreadCNode`. Do not use allocator handles or read-only aliases. The init CSpace is
-/// single-level, so the kernel consumes the supplied root capability directly. Root CNode policy for
-/// this system: direct addressing with `node_depth = initThreadCNodeSizeBits + seL4_WordBits`,
-/// `node_index = 0`, and `dest_offset = dest_slot`.
+/// single-level, so the kernel resolves the init CNode capability by direct CSpace addressing:
+/// `node_depth = seL4_WordBits`, `node_index = seL4_CapInitThreadCNode`, and
+/// `dest_offset = dest_slot`.
 #[derive(Copy, Clone, Debug)]
 pub struct RetypeTrace {
     /// Capability designating the source untyped region.
@@ -3684,11 +3680,10 @@ pub struct RetypeTrace {
     /// Root CNode policy for this system: `dest_offset = dest_slot`.
     pub dest_offset: seL4_Word,
     /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
-    /// Root CNode policy for this system: `cnode_depth = initThreadCNodeSizeBits + seL4_WordBits`
-    /// (single-level traversal with canonical guard width).
+    /// Root CNode policy for this system: `cnode_depth = seL4_WordBits`.
     pub cnode_depth: seL4_Word,
     /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when selecting a sub-CNode below
-    /// `cnode_root`. Root CNode policy for this system: `node_index = 0`.
+    /// `cnode_root`. Root CNode policy for this system: `node_index = seL4_CapInitThreadCNode`.
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -3719,7 +3714,7 @@ pub enum RetypeSanitiseError {
         /// Capability expected by the root-task allocator.
         expected: seL4_CNode,
     },
-    /// The guard depth did not match the canonical `initThreadCNodeSizeBits` traversal for the init CSpace.
+    /// The depth did not match direct init-CNode addressing for the init CSpace.
     DepthMismatch {
         /// Depth supplied in the trace.
         provided: seL4_Word,
@@ -3733,7 +3728,7 @@ pub enum RetypeSanitiseError {
         /// Maximum representable slot index for the init CNode.
         capacity: usize,
     },
-    /// The node index did not match the canonical init thread root traversal (slot-as-radix pointer).
+    /// The node index did not match the init thread root CNode capability slot.
     NodeIndexMismatch {
         /// Node index supplied in the trace.
         provided: seL4_Word,
@@ -4542,7 +4537,7 @@ impl<'a> KernelEnv<'a> {
             );
             boot_log::force_uart_line(line.as_str());
         }
-        let attr_raw: usize = unsafe { core::mem::transmute(attr) };
+        let attr_raw = vm_attributes_raw(attr) as usize;
         record_dma_mapping(paddr, range.start, PAGE_SIZE, attr_raw);
         if trace_verbose {
             boot_log::force_uart_line("[local-seat] dma-frame before hal-log");
@@ -4621,6 +4616,10 @@ impl<'a> KernelEnv<'a> {
                 Err(err) => err.into_sel4_error(),
             }
         } else {
+            // SAFETY: The trace has been sanitised to a caller-owned CNode
+            // destination tuple and requests exactly one 4 KiB ARM page object
+            // from the supplied untyped capability; seL4 validates capability
+            // authority and object availability.
             unsafe {
                 seL4_Untyped_Retype(
                     untyped_cap,
@@ -4669,6 +4668,10 @@ impl<'a> KernelEnv<'a> {
                 Err(err) => err.into_sel4_error(),
             }
         } else {
+            // SAFETY: The trace has been sanitised to a caller-owned CNode
+            // destination tuple and requests exactly one ARM page-table object
+            // from the supplied untyped capability; seL4 validates capability
+            // authority and object availability.
             unsafe {
                 seL4_Untyped_Retype(
                     untyped_cap,
@@ -4851,6 +4854,10 @@ impl<'a> KernelEnv<'a> {
         }
         let vaddr_word =
             sel4_sys::seL4_Word::try_from(vaddr).expect("virtual address must fit in seL4_Word");
+        // SAFETY: `frame_cap` names an ARM page capability allocated by this
+        // HAL, `vaddr` was checked page-aligned, and the init VSpace cap is the
+        // kernel-provided root-task VSpace. The kernel validates page-table
+        // presence and mapping authority.
         unsafe {
             seL4_ARM_Page_Map(
                 frame_cap,
@@ -5202,8 +5209,9 @@ impl<'a> KernelEnv<'a> {
         // Target the root CNode directly and describe the destination slot explicitly.
         // seL4 resolves the `(root, node_index, node_depth)` triple to select the CNode that will
         // receive the new capability. Init-root retypes rely on the canonical
-        // `(node_index = 0, node_depth = initBits + wordBits, dest_offset = slot)` tuple so that
-        // the kernel addresses the slot directly within the root CNode.
+        // `(node_index = seL4_CapInitThreadCNode, node_depth = seL4_WordBits,
+        // dest_offset = slot)` tuple so that the kernel resolves the root CNode
+        // capability and then places the child cap at the slot offset.
         let cnode_root = self.bootinfo.init_cnode_cap();
         let node_index: seL4_Word = cspace_sys::init_root_index();
         let cnode_depth: seL4_Word = cspace_sys::canonical_depth_word();
@@ -5753,6 +5761,19 @@ mod tests {
     }
 
     #[test]
+    fn device_mappings_use_uncached_execute_never_attributes() {
+        assert_eq!(
+            vm_attributes_raw(DEVICE_VM_ATTRIBUTES),
+            vm_attributes_raw(sel4_sys::seL4_ARM_ExecuteNever)
+        );
+        assert_eq!(
+            vm_attributes_raw(DEVICE_VM_ATTRIBUTES) & vm_attributes_raw(seL4_ARM_Page_Default),
+            0,
+            "device MMIO must not request cacheable normal-memory attributes",
+        );
+    }
+
+    #[test]
     fn canonical_cnode_bits_accepts_word_width() {
         let mut bi = blank_bootinfo_for_tests();
         bi.initThreadCNodeSizeBits = sel4_sys::seL4_WordBits as u8;
@@ -5806,7 +5827,7 @@ mod tests {
             RetypeKind::DevicePage { paddr: 0 },
         );
         assert_eq!(trace.cnode_root, bootinfo_ref.init_cnode_cap());
-        let expected_index: seL4_Word = 0;
+        let expected_index: seL4_Word = cspace_sys::init_root_index();
         let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         assert_eq!(trace.node_index, expected_index);
         assert_eq!(trace.cnode_depth, expected_depth);
@@ -5843,7 +5864,7 @@ mod tests {
             sanitised.cnode_depth,
             bootinfo_ref.init_cnode_depth() as seL4_Word
         );
-        assert_eq!(sanitised.node_index, 0);
+        assert_eq!(sanitised.node_index, cspace_sys::init_root_index());
         assert_eq!(sanitised.dest_offset, slot as seL4_Word);
     }
 
@@ -5874,7 +5895,7 @@ mod tests {
 
         let slot: seL4_CPtr = 0x00c8;
         let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
-        let canonical_index: seL4_Word = 0;
+        let canonical_index: seL4_Word = cspace_sys::init_root_index();
         let trace = RetypeTrace {
             untyped_cap: 0x200,
             untyped_paddr: 0,
@@ -5910,7 +5931,7 @@ mod tests {
         let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x0097;
-        let canonical_index: seL4_Word = 0;
+        let canonical_index: seL4_Word = cspace_sys::init_root_index();
         let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         let trace = RetypeTrace {
             untyped_cap: 0x100,

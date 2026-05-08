@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the uart/pl011 module for root-task.
 // Author: Lukas Bower
@@ -8,15 +8,7 @@
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::cspace::tuples::RetypeTuple;
-use sel4_sys::{
-    seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_CPtr,
-    seL4_CapRights_ReadWrite, seL4_DebugPutChar, seL4_Error, seL4_Word,
-};
-
-pub const PL011_PADDR: u64 = 0x0900_0000;
-/// Virtual address used for the bootstrap console mapping.
-pub const PL011_VADDR: usize = 0xA000_0000;
+use sel4_sys::seL4_DebugPutChar;
 
 const DR: usize = 0x00;
 const FR: usize = 0x18;
@@ -58,6 +50,9 @@ fn base_ptr() -> *mut u8 {
 
 #[inline(always)]
 unsafe fn read_reg(offset: usize) -> u32 {
+    // SAFETY: `base_ptr` is installed only after the UART page has been mapped
+    // by HAL. Offsets are constants for 32-bit PL011 registers in the mapped
+    // page, and volatile access is required for MMIO.
     unsafe {
         let ptr = base_ptr().add(offset) as *const u32;
         core::ptr::read_volatile(ptr)
@@ -66,6 +61,9 @@ unsafe fn read_reg(offset: usize) -> u32 {
 
 #[inline(always)]
 unsafe fn write_reg(offset: usize, value: u32) {
+    // SAFETY: `base_ptr` is installed only after the UART page has been mapped
+    // by HAL. Offsets are constants for 32-bit PL011 registers in the mapped
+    // page, and volatile access is required for MMIO.
     unsafe {
         let ptr = base_ptr().add(offset) as *mut u32;
         core::ptr::write_volatile(ptr, value);
@@ -73,6 +71,8 @@ unsafe fn write_reg(offset: usize, value: u32) {
 }
 
 fn wait_tx_ready() {
+    // SAFETY: Polls the PL011 flag register through the HAL-installed MMIO
+    // base; the register offset is within the mapped page.
     unsafe {
         while read_reg(FR) & FR_TXFF != 0 {
             core::hint::spin_loop();
@@ -81,6 +81,8 @@ fn wait_tx_ready() {
 }
 
 fn wait_rx_ready() {
+    // SAFETY: Polls the PL011 flag register through the HAL-installed MMIO
+    // base; the register offset is within the mapped page.
     unsafe {
         while read_reg(FR) & FR_RXFE != 0 {
             core::hint::spin_loop();
@@ -90,6 +92,8 @@ fn wait_rx_ready() {
 
 /// Initialise the PL011 UART for 115200 8N1 polled operation.
 pub fn init_pl011() {
+    // SAFETY: Programs documented PL011 control registers through the
+    // HAL-installed MMIO base before enabling TX/RX.
     unsafe {
         write_reg(CR, 0);
         write_reg(ICR, 0x7ff);
@@ -102,6 +106,8 @@ pub fn init_pl011() {
 
 fn putc(byte: u8) {
     wait_tx_ready();
+    // SAFETY: Writes one byte to the PL011 data register after confirming the
+    // transmit FIFO is not full.
     unsafe {
         write_reg(DR, byte as u32);
     }
@@ -109,6 +115,8 @@ fn putc(byte: u8) {
 
 fn getc_blocking() -> u8 {
     wait_rx_ready();
+    // SAFETY: Reads one byte from the PL011 data register after confirming the
+    // receive FIFO is not empty.
     unsafe { read_reg(DR) as u8 }
 }
 
@@ -119,6 +127,8 @@ pub fn write_byte(byte: u8) {
 
 /// Poll for a pending byte without blocking.
 pub fn poll_byte() -> Option<u8> {
+    // SAFETY: Reads the PL011 flag/data registers through the HAL-installed
+    // MMIO base and only consumes data when RXFE is clear.
     unsafe {
         if read_reg(FR) & FR_RXFE != 0 {
             None
@@ -179,49 +189,6 @@ fn read_line_blocking(buffer: &mut [u8]) -> usize {
     written
 }
 
-/// Maps the PL011 UART MMIO page into the root VSpace with uncached attributes.
-pub fn map_pl011_smallpage(
-    dev_ut: seL4_CPtr,
-    page_slot: seL4_Word,
-    cnode: &RetypeTuple,
-    vspace: seL4_CPtr,
-) -> seL4_Error {
-    let retype = unsafe {
-        sel4_sys::seL4_Untyped_Retype(
-            dev_ut,
-            seL4_ARM_SmallPageObject as seL4_Word,
-            12,
-            cnode.node_root,
-            cnode.node_index,
-            u64::from(cnode.node_depth),
-            page_slot as seL4_CPtr,
-            1,
-        )
-    };
-    log::info!(
-        "[pl011] retype -> slot=0x{slot:04x} err={err}",
-        slot = page_slot,
-        err = retype,
-    );
-    if retype != sel4_sys::seL4_NoError {
-        return retype;
-    }
-
-    let map_err = unsafe {
-        let pl011_vaddr = sel4_sys::seL4_Word::try_from(PL011_VADDR)
-            .expect("PL011 virtual address must fit in seL4_Word");
-        seL4_ARM_Page_Map(
-            page_slot as seL4_CPtr,
-            vspace,
-            pl011_vaddr,
-            seL4_CapRights_ReadWrite,
-            seL4_ARM_Page_Uncached,
-        )
-    };
-    log::info!("[pl011] map  -> err={err}", err = map_err);
-    map_err
-}
-
 /// Simple console loop servicing the bootstrap REPL.
 pub fn console_main() -> ! {
     init_pl011();
@@ -251,14 +218,10 @@ pub fn console_main() -> ! {
     }
 }
 
-/// Returns the physical address targeted by the PL011 map helper.
-#[must_use]
-pub const fn pl011_paddr() -> u64 {
-    PL011_PADDR
-}
-
 /// Emits a heartbeat byte to the seL4 debug console for diagnostics.
 pub fn heartbeat(byte: u8) {
+    // SAFETY: `seL4_DebugPutChar` is a byte-oriented kernel debug syscall and
+    // does not dereference user memory.
     unsafe {
         seL4_DebugPutChar(byte);
     }

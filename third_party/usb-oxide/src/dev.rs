@@ -346,6 +346,8 @@ fn recycle_slot_after_address_failure<H: Dma>(
     };
     slot_cleanup.set_slot(*slot_id);
 
+    // SAFETY: `device_ctx` owns a DMA allocation of `device_ctx_bytes` bytes,
+    // and this reset happens before the context is republished to the xHC.
     unsafe {
         core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, device_ctx_bytes);
     }
@@ -702,6 +704,8 @@ impl<H: Dma> UsbDevice<H> {
             };
 
         // Set device context in DCBAA
+        // SAFETY: Both context buffers are owned DMA allocations sized by the
+        // validated xHCI context stride; zeroing them happens before publication.
         unsafe {
             core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, device_ctx_bytes);
             core::ptr::write_bytes(input_base, 0, input_ctx_bytes);
@@ -769,6 +773,9 @@ impl<H: Dma> UsbDevice<H> {
                 .enumerate()
             {
                 let slot_ctx_template = build_slot_ctx(enumerated_speed, active_tt_ctx);
+                // SAFETY: `device_ctx` and `input_ctx` are owned DMA allocations sized
+                // above for their context layouts; all pointer writes stay within those
+                // allocations and publish a clean Address Device input context.
                 unsafe {
                     // Reinitialize both output and input contexts before each
                     // Address Device submission so stale controller state
@@ -793,7 +800,12 @@ impl<H: Dma> UsbDevice<H> {
                 compiler_fence(Ordering::Release);
 
                 // xHCI diagnostics: address-attempt and programmed slot/ep0 context.
+                // SAFETY: The preceding context writes initialized the Slot and EP0
+                // entries within `input_ctx`; `ctx_stride` was derived from the
+                // controller context-size bit and the reads are by-value snapshots.
                 let slot_ctx = unsafe { *(input_base.add(ctx_stride) as *const SlotContext) };
+                // SAFETY: Same initialized input-context allocation as `slot_ctx`;
+                // EP0 lives at context index 2 by xHCI layout.
                 let ep0_ctx =
                     unsafe { *(input_base.add(ctx_stride * 2) as *const EndpointContext) };
                 ctrl.emit_diag(
@@ -814,6 +826,8 @@ impl<H: Dma> UsbDevice<H> {
                     ((ep0_ctx.tr_dequeue_hi as u64) << 32) | ep0_ctx.tr_dequeue_lo as u64,
                     ep0_ctx.dw4 as u64,
                 );
+                // SAFETY: The Input Control Context is the first eight u32 values
+                // of the owned input-context allocation and was initialized above.
                 let input_ctrl = unsafe { core::slice::from_raw_parts(input_base as *const u32, 8) };
                 let portsc_before_addr = ctrl.port_status(port);
                 ctrl.emit_diag(
@@ -1131,9 +1145,16 @@ impl<H: Dma> UsbDevice<H> {
                         context_state_err_count = context_state_err_count.saturating_add(1);
                         let diag = ctrl.command_diag_for_port(port);
                         let out_base = device_ctx.as_ptr::<u8>();
+                        // SAFETY: Address Device completion has written the output
+                        // context allocation; these are by-value diagnostic snapshots
+                        // of the Slot/EP0 entries and initialized input-control words.
                         let out_slot_ctx = unsafe { *(out_base as *const SlotContext) };
+                        // SAFETY: Same initialized output-context allocation as
+                        // `out_slot_ctx`; EP0 lives at context index 1.
                         let out_ep0_ctx =
                             unsafe { *(out_base.add(ctx_stride) as *const EndpointContext) };
+                        // SAFETY: The first eight u32 values are the initialized
+                        // Input Control Context for this retry.
                         let input_ctrl =
                             unsafe { core::slice::from_raw_parts(input_base as *const u32, 8) };
                         ctrl.emit_diag(
@@ -1320,6 +1341,8 @@ impl<H: Dma> UsbDevice<H> {
             if !data_dir {
                 // OUT: copy data to buffer
                 if let Some(ref d) = data {
+                    // SAFETY: `buf` is an owned DMA allocation with at least
+                    // `data_len` bytes and `d.len() <= data_len` for OUT transfers.
                     unsafe {
                         core::ptr::copy_nonoverlapping(d.as_ptr(), buf.as_ptr(), d.len());
                     }
@@ -1482,6 +1505,8 @@ impl<H: Dma> UsbDevice<H> {
                                 let mut sample = [0u8; 8];
                                 let sample_len = core::cmp::min(sample.len(), data_len);
                                 if let Some(buf) = &data_buf {
+                                    // SAFETY: `sample_len` is capped to both the
+                                    // stack sample and DMA buffer lengths.
                                     unsafe {
                                         core::ptr::copy_nonoverlapping(
                                             buf.as_ptr::<u8>(),
@@ -1505,6 +1530,9 @@ impl<H: Dma> UsbDevice<H> {
 
                         // Copy data back for IN transfers
                         if data_dir && let (Some(buf), Some(d)) = (&data_buf, &mut data) {
+                            // SAFETY: `transferred.min(d.len())` bounds the copy to
+                            // the destination slice and the DMA buffer was allocated
+                            // for the original setup length.
                             unsafe {
                                 core::ptr::copy_nonoverlapping(
                                     buf.as_ptr::<u8>(),
@@ -1609,6 +1637,8 @@ impl<H: Dma> UsbDevice<H> {
             0,
         );
 
+        // SAFETY: The descriptor request filled `buf` with exactly
+        // `size_of::<DeviceDesc>()` bytes before this by-value copy.
         let desc = unsafe { *(buf.as_ptr() as *const DeviceDesc) };
         self.device_desc = Some(desc);
         Ok(desc)
@@ -1731,6 +1761,8 @@ impl<H: Dma> UsbDevice<H> {
         let input_ctx_bytes = INPUT_CONTEXT_ENTRIES
             .checked_mul(ctx_stride)
             .ok_or(UsbError::OoRam)?;
+        // SAFETY: `input_ctx` is owned DMA memory; helper pointers address fields
+        // inside that allocation and the block rebuilds a clean Slot-only update.
         unsafe {
             // Rebuild a clean input context containing only Slot Context updates.
             core::ptr::write_bytes(self.input_ctx.as_ptr::<u8>(), 0, input_ctx_bytes);
@@ -1769,7 +1801,10 @@ impl<H: Dma> UsbDevice<H> {
         let ring = Ring::new(host, 256)?;
         let ring_phys = ring.phys(host);
 
-        // Update input context
+        // Update input context.
+        // SAFETY: The input-context allocation belongs to this device and is large
+        // enough for the DCI being configured; endpoint descriptors are validated
+        // by the caller before programming the xHCI context fields below.
         unsafe {
             *self.input_drop_flags_ptr() = 0; // Drop flags
             *self.input_add_flags_ptr() = (1 << dci) | 1; // Add flags: this EP + Slot
@@ -1898,8 +1933,12 @@ impl<H: Dma> Drop for UsbDevice<H> {
         }
         drop(ep_rings);
 
-        // Free EP0 ring
-        let ep0_ring = core::mem::replace(&mut *self.ep0_ring.lock(), Ring::new(host, 2).unwrap());
+        // Free EP0 ring. Drop cannot allocate a fallible replacement, so move
+        // the real ring out and leave a non-owning sentinel behind.
+        let ep0_ring = core::mem::replace(
+            &mut *self.ep0_ring.lock(),
+            Ring::empty_for_drop_replacement(),
+        );
         ep0_ring.free(host);
     }
 }

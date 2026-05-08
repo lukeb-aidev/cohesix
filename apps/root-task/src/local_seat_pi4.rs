@@ -106,11 +106,6 @@ const RPI4_PCIE_CPU_MMIO_WINDOW_BASE: usize = RPI4_XHCI_MMIO_HIGH_CANDIDATE;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BASE: usize = 0xC000_0000;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BYTES: usize = 0x0010_0000;
 const BCM2711_PCIE_HOST_PHYS_BASE: usize = 0xFD50_0000;
-const BCM2711_PCIE_MISC_PCIE_STATUS: usize = 0x4068;
-const BCM2711_PCIE_INTR2_CPU_CLR: usize = 0x4308;
-const BCM2711_PCIE_INTR2_CPU_MASK_SET: usize = 0x4310;
-const BCM2711_PCIE_MSI_INTR2_CLR: usize = 0x4508;
-const BCM2711_PCIE_MSI_INTR2_MASK_SET: usize = 0x4510;
 const RPI4_XHCI_MMIO_PRIMARY_CANDIDATE: usize = 0x0000_0000_FE98_0000;
 const RPI4_XHCI_MMIO_SECONDARY_CANDIDATE: usize = 0x0000_0000_7E98_0000;
 const BCM2711_COMMON_PERIPH_BUS_BASE: usize = 0x7E00_0000;
@@ -344,12 +339,6 @@ const RPI4_PCIE_DMA_BUS_ALIAS_BASE: usize = 0x4_0000_0000;
 // Per-allocation DMA tracing is useful for bring-up debugging but can add
 // heavy UART latency during normal keyboard enumeration.
 const XHCI_DMA_VERBOSE_LOGS: bool = false;
-// Keep the Linux-observed PCIe bus alias as the primary path, but run one
-// bounded raw-physical command-ring proof after the alias path. Current
-// hardware reaches doorbell publication and then times out waiting for the
-// no-op completion, so the next gate must rule DMA address interpretation in
-// or out without advancing into HID enumeration.
-const XHCI_TRY_RAW_PHYS_DMA_FALLBACK: bool = true;
 const XHCI_DMA_MAX_BYTES: usize = 8 * 1024 * 1024;
 // BCM2711 PCIe cannot DMA above the first 3 GiB (see upstream bcm2711.dtsi
 // pcie0 dma-ranges). Keep VL805/xHCI buffers under this ceiling.
@@ -4579,11 +4568,7 @@ fn xhci_probe_command_ring_after_event_drain(
         );
         boot_log::force_uart_line(line.as_str());
 
-        let probe_result = if pcie_dma_window {
-            ctrl.probe_no_op_command_linux_event_generation()
-        } else {
-            ctrl.probe_no_op_command()
-        };
+        let probe_result = ctrl.probe_no_op_command();
         return match probe_result {
             Ok(()) => {
                 boot_log::force_uart_line(
@@ -4593,14 +4578,7 @@ fn xhci_probe_command_ring_after_event_drain(
             }
             Err(err) => {
                 let result = usb_no_op_probe_error_label(err);
-                let action = if pcie_dma_window
-                    && XHCI_TRY_RAW_PHYS_DMA_FALLBACK
-                    && result == "no-op-timeout"
-                {
-                    "retry-raw-phys"
-                } else {
-                    "none"
-                };
+                let action = "none";
                 let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
@@ -4658,6 +4636,24 @@ fn xhci_probe_command_ring_after_event_drain(
             boot_log::force_uart_line(line.as_str());
             result
         }
+    }
+}
+
+#[inline]
+const fn xhci_dma_bus_modes() -> &'static [bool] {
+    if XHCI_PCIE_DMA_WINDOW_ENABLED {
+        &[true]
+    } else {
+        &[false]
+    }
+}
+
+#[inline]
+const fn xhci_dma_bus_policy_label() -> &'static str {
+    if XHCI_PCIE_DMA_WINDOW_ENABLED {
+        "pcie-window-only"
+    } else {
+        "phys-only"
     }
 }
 
@@ -7223,125 +7219,6 @@ fn translate_vl805_pci_bar_to_cpu_mmio(bar0: u32, bar1: u32) -> Option<usize> {
     RPI4_PCIE_CPU_MMIO_WINDOW_BASE.checked_add(bus_offset)
 }
 
-fn bcm2711_pcie_reg_page(offset: usize) -> Option<(usize, usize)> {
-    let paddr = BCM2711_PCIE_HOST_PHYS_BASE.checked_add(offset)?;
-    Some((paddr & !PAGE_MASK, paddr & PAGE_MASK))
-}
-
-fn bcm2711_pcie_same_page_reg_virt(
-    page_virt: usize,
-    page_offset: usize,
-    reg_offset: usize,
-) -> Option<usize> {
-    let (page, offset) = bcm2711_pcie_reg_page(reg_offset)?;
-    let (mapped_page, _) = bcm2711_pcie_reg_page(page_offset)?;
-    if page != mapped_page {
-        return None;
-    }
-    page_virt.checked_add(offset)
-}
-
-fn bcm2711_pcie_map_reg_page(
-    hal: &mut KernelHal<'_>,
-    prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
-    offset: usize,
-    label: &'static str,
-) -> Option<(crate::sel4::DeviceFrame, usize)> {
-    let (page, page_offset) = bcm2711_pcie_reg_page(offset)?;
-    if hal.device_coverage(page, crate::sel4::PAGE_BITS).is_none() {
-        let mut line = heapless::String::<184>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie skip reg=0x{offset:04x} page=0x{page:016x} reason=no-device-coverage"
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
-        return None;
-    }
-    let frame = match map_device_exact(
-        hal,
-        page,
-        VL805_PCI_CFG_ATTEMPT_CAP,
-        label,
-        Pi4SeatError::XhciInit,
-        prefix_maps,
-    ) {
-        Ok(frame) => frame,
-        Err(_) => {
-            let mut line = heapless::String::<184>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] vl805 bcm2711-pcie skip reg=0x{offset:04x} page=0x{page:016x} reason=map-exact-failed"
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-            return None;
-        }
-    };
-    let virt = frame.ptr().as_ptr() as usize;
-    Some((frame, virt.checked_add(page_offset)?))
-}
-
-#[inline]
-fn mmio_write_u32(base: usize, offset: usize, value: u32) {
-    let Some(addr) = base.checked_add(offset) else {
-        return;
-    };
-    // SAFETY: `base` points at a mapped BCM2711 PCIe MMIO page selected by
-    // `prepare_vl805_pci_bcm2711`; volatile access is required for device regs.
-    unsafe {
-        ptr::write_volatile(addr as *mut u32, value);
-    }
-}
-
-fn bcm2711_pcie_mask_and_clear_irq_sources(status_reg: usize, source: &'static str) {
-    let Some(status_page_virt) = status_reg.checked_sub(BCM2711_PCIE_MISC_PCIE_STATUS & PAGE_MASK)
-    else {
-        return;
-    };
-    let Some(cpu_mask_set) = bcm2711_pcie_same_page_reg_virt(
-        status_page_virt,
-        BCM2711_PCIE_MISC_PCIE_STATUS,
-        BCM2711_PCIE_INTR2_CPU_MASK_SET,
-    ) else {
-        return;
-    };
-    let Some(cpu_clr) = bcm2711_pcie_same_page_reg_virt(
-        status_page_virt,
-        BCM2711_PCIE_MISC_PCIE_STATUS,
-        BCM2711_PCIE_INTR2_CPU_CLR,
-    ) else {
-        return;
-    };
-    let Some(msi_mask_set) = bcm2711_pcie_same_page_reg_virt(
-        status_page_virt,
-        BCM2711_PCIE_MISC_PCIE_STATUS,
-        BCM2711_PCIE_MSI_INTR2_MASK_SET,
-    ) else {
-        return;
-    };
-    let Some(msi_clr) = bcm2711_pcie_same_page_reg_virt(
-        status_page_virt,
-        BCM2711_PCIE_MISC_PCIE_STATUS,
-        BCM2711_PCIE_MSI_INTR2_CLR,
-    ) else {
-        return;
-    };
-
-    mmio_write_u32(cpu_mask_set, 0, u32::MAX);
-    mmio_write_u32(cpu_clr, 0, u32::MAX);
-    mmio_write_u32(msi_mask_set, 0, u32::MAX);
-    mmio_write_u32(msi_clr, 0, u32::MAX);
-    let mut line = heapless::String::<176>::new();
-    let _ = core::fmt::Write::write_fmt(
-        &mut line,
-        format_args!("[local-seat] vl805 bcm2711-pcie irq sources masked source={source}"),
-    );
-    boot_log::force_uart_line(line.as_str());
-}
-
 fn ensure_vl805_config_replay_irq_sinks(hal: &mut KernelHal<'_>) -> bool {
     let mmio = RPI4_XHCI_MMIO_HIGH_CANDIDATE;
     if cached_xhci_irq_guard().as_ref().is_some_and(|guard| {
@@ -7475,19 +7352,9 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
         return None;
     }
     if VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN {
-        let mut host_irq_maps = Vec::new();
-        if let Some((_status_frame, status_reg)) = bcm2711_pcie_map_reg_page(
-            hal,
-            &mut host_irq_maps,
-            BCM2711_PCIE_MISC_PCIE_STATUS,
-            "pcie-capture-status",
-        ) {
-            bcm2711_pcie_mask_and_clear_irq_sources(status_reg, "capture-witness");
-        } else {
-            boot_log::force_uart_line(
-                "[local-seat] vl805 capture cfg witness irq-mask skipped reason=pcie-status-unavailable",
-            );
-        }
+        boot_log::force_uart_line(
+            "[local-seat] vl805 capture cfg witness irq-mask skipped reason=host-mmio-quiesce-requires-hal",
+        );
     } else {
         boot_log::force_uart_line(
             "[local-seat] vl805 capture cfg witness irq-mask skipped reason=host-mmio-quiesce-opt-in-disabled",
@@ -8255,7 +8122,8 @@ const fn xhci_pre_reset_irq_quiesce_required(
 
 #[inline]
 const fn xhci_pre_reset_irq_ack_without_source_clear_allowed(host_mmio_quiesce: bool) -> bool {
-    host_mmio_quiesce
+    let _ = host_mmio_quiesce;
+    false
 }
 
 fn xhci_quiesce_pcie_irq_sources_before_reset(
@@ -8277,32 +8145,22 @@ fn xhci_quiesce_pcie_irq_sources_before_reset(
     boot_log::force_uart_line(begin_line.as_str());
 
     if host_mmio_quiesce {
-        let mut host_irq_maps = Vec::new();
-        let Some((_status_frame, status_reg)) = bcm2711_pcie_map_reg_page(
-            hal,
-            &mut host_irq_maps,
-            BCM2711_PCIE_MISC_PCIE_STATUS,
-            "pcie-xhci-pre-reset-status",
-        ) else {
-            let mut line = heapless::String::<240>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] xhci irq pre-reset quiesce failed mmio=0x{mmio:016x} handoff={} reason=pcie-status-unavailable",
-                    xhci_firmware_handoff_mode_label(firmware_handoff),
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-            return false;
-        };
-
-        bcm2711_pcie_mask_and_clear_irq_sources(status_reg, "pre-xhci-reset");
+        let mut line = heapless::String::<240>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci irq pre-reset quiesce failed mmio=0x{mmio:016x} handoff={} reason=host-mmio-quiesce-requires-hal",
+                xhci_firmware_handoff_mode_label(firmware_handoff),
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return false;
     } else if !xhci_pre_reset_irq_ack_without_source_clear_allowed(host_mmio_quiesce) {
         let mut line = heapless::String::<288>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci irq pre-reset host-mmio quiesce skipped mmio=0x{mmio:016x} handoff={} reason=host-mmio-quiesce-opt-in-disabled action=bind-only-no-ack",
+                "[local-seat] xhci irq pre-reset quiesce failed mmio=0x{mmio:016x} handoff={} reason=host-mmio-quiesce-opt-in-disabled action=fail-closed",
                 xhci_firmware_handoff_mode_label(firmware_handoff),
             ),
         );
@@ -8311,13 +8169,13 @@ fn xhci_quiesce_pcie_irq_sources_before_reset(
         let _ = core::fmt::Write::write_fmt(
             &mut complete_line,
             format_args!(
-                "[local-seat] xhci irq pre-reset quiesce mmio=0x{mmio:016x} handoff={} host_mmio=no acked=0 expected={} complete=1",
+                "[local-seat] xhci irq pre-reset quiesce mmio=0x{mmio:016x} handoff={} host_mmio=no acked=0 expected={} complete=0",
                 xhci_firmware_handoff_mode_label(firmware_handoff),
                 TRUSTED_XHCI_PCIE_SINK_IRQS.len(),
             ),
         );
         boot_log::force_uart_line(complete_line.as_str());
-        return true;
+        return false;
     }
 
     let mut acked = 0usize;
@@ -9022,13 +8880,7 @@ impl UsbKeyboard {
                     } else {
                         "low-then-high"
                     },
-                    if XHCI_PCIE_DMA_WINDOW_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
-                        "pcie-window-then-phys"
-                    } else if XHCI_PCIE_DMA_WINDOW_ENABLED {
-                        "pcie-window-only"
-                    } else {
-                        "phys-only"
-                    }
+                    xhci_dma_bus_policy_label()
                 ),
             );
             boot_log::force_uart_line(line.as_str());
@@ -9803,14 +9655,7 @@ impl UsbKeyboard {
                     continue;
                 }
                 for &prefer_high in dma_probe_order {
-                    let dma_bus_modes: &[bool] =
-                        if XHCI_PCIE_DMA_WINDOW_ENABLED && XHCI_TRY_RAW_PHYS_DMA_FALLBACK {
-                            &[true, false]
-                        } else if XHCI_PCIE_DMA_WINDOW_ENABLED {
-                            &[true]
-                        } else {
-                            &[false]
-                        };
+                    let dma_bus_modes = xhci_dma_bus_modes();
                     for (bus_mode_idx, &pcie_dma_window) in dma_bus_modes.iter().enumerate() {
                         pathway_idx = pathway_idx.saturating_add(1);
                         let policy_label = xhci_runtime_init_strategy_policy_label(strategy);
@@ -14209,7 +14054,7 @@ impl SeatDma {
         Some(virt)
     }
 
-    fn virt_to_phys_locked(state: &SeatDmaState, va: usize) -> usize {
+    fn try_virt_to_phys_locked(state: &SeatDmaState, va: usize) -> Option<usize> {
         for region in &state.regions {
             let start = region.virt_start;
             let Some(end) = start.checked_add(region.length) else {
@@ -14221,17 +14066,40 @@ impl SeatDma {
                     return match &region.backing {
                         RegionBacking::Dma(_) => {
                             if state.pcie_dma_window {
-                                pcie_dma_bus_addr(phys).unwrap_or(usize::MAX)
+                                pcie_dma_bus_addr(phys)
                             } else {
-                                phys
+                                Some(phys)
                             }
                         }
-                        RegionBacking::Mmio(_) => phys,
+                        RegionBacking::Mmio(_) => Some(phys),
                     };
                 }
             }
         }
-        va
+        if state.pcie_dma_window {
+            None
+        } else {
+            Some(va)
+        }
+    }
+
+    fn virt_to_phys_locked(state: &SeatDmaState, va: usize) -> usize {
+        match Self::try_virt_to_phys_locked(state, va) {
+            Some(addr) => addr,
+            None => {
+                if !USB_DMA_RANGE_WARNED.swap(true, Ordering::AcqRel) {
+                    let mut line = heapless::String::<192>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci dma translate reject vaddr=0x{va:016x} reason=pcie-window"
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                }
+                0
+            }
+        }
     }
 
     fn share_for_device_locked(
@@ -14326,6 +14194,11 @@ impl Dma for SeatDma {
     fn virt_to_phys(&self, va: usize) -> usize {
         let state = self.state.lock();
         Self::virt_to_phys_locked(&state, va)
+    }
+
+    fn try_virt_to_phys(&self, va: usize) -> Option<usize> {
+        let state = self.state.lock();
+        Self::try_virt_to_phys_locked(&state, va)
     }
 
     fn share_for_device(
@@ -18190,7 +18063,7 @@ mod tests {
         assert!(!xhci_pre_reset_irq_ack_without_source_clear_allowed(
             VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN,
         ));
-        assert!(xhci_pre_reset_irq_ack_without_source_clear_allowed(true));
+        assert!(!xhci_pre_reset_irq_ack_without_source_clear_allowed(true));
         assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
@@ -19502,9 +19375,41 @@ mod tests {
     }
 
     #[test]
-    fn pi4_xhci_command_ring_proof_tries_raw_phys_after_pcie_alias() {
+    fn seat_dma_translation_rejects_unknown_addresses_when_pcie_windowed() {
+        let state = SeatDmaState {
+            hal_ptr: 0,
+            prefer_high: false,
+            pcie_dma_window: true,
+            sealed: false,
+            regions: Vec::new(),
+        };
+        assert_eq!(SeatDma::try_virt_to_phys_locked(&state, PAGE_SIZE), None);
+    }
+
+    #[test]
+    fn seat_dma_translation_rejects_pcie_dma_out_of_window_region() {
+        let state = SeatDmaState {
+            hal_ptr: 0,
+            prefer_high: false,
+            pcie_dma_window: true,
+            sealed: false,
+            regions: Vec::from([PhysRegion {
+                virt_start: PAGE_SIZE,
+                phys_start: RPI4_PCIE_DMA_LIMIT,
+                length: PAGE_SIZE,
+                size: PAGE_SIZE,
+                align: PAGE_SIZE,
+                backing: RegionBacking::Dma(Vec::new()),
+            }]),
+        };
+        assert_eq!(SeatDma::try_virt_to_phys_locked(&state, PAGE_SIZE), None);
+    }
+
+    #[test]
+    fn pi4_xhci_dma_policy_never_tries_raw_phys_after_pcie_alias() {
         assert!(XHCI_PCIE_DMA_WINDOW_ENABLED);
-        assert!(XHCI_TRY_RAW_PHYS_DMA_FALLBACK);
+        assert_eq!(xhci_dma_bus_modes(), &[true]);
+        assert_eq!(xhci_dma_bus_policy_label(), "pcie-window-only");
         assert_eq!(
             usb_no_op_probe_error_label(UsbError::Timeout),
             "no-op-timeout"

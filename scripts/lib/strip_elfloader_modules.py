@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
+# Purpose: Prepare a staging elfloader image with Cohesix boot payloads.
+# Copyright 2026 Lukas Bower
 """Prepare a staging copy of seL4's elfloader with Cohesix payloads.
 
 The upstream elfloader binary embeds the kernel image, DTB, and default C
@@ -7,6 +9,11 @@ rootserver inside an archiveSection. Cohesix supplies its own root task at
 build time, so this helper rewrites the archived rootserver payload while
 keeping the kernel artefacts untouched. The rewritten image is emitted to the
 destination path without mutating the seL4 build tree.
+
+The embedded rootserver payload is a boot-only ELF. Section headers and symbol
+tables are not consumed by the seL4 elfloader, so they are removed from the
+archive copy when present. The separately staged rootserver remains unchanged
+for diagnostics and external QEMU loader use.
 """
 
 from __future__ import annotations
@@ -31,8 +38,8 @@ class ElfloaderError(RuntimeError):
     """Raised when the elfloader image cannot be processed."""
 
 
-def _load_segment_base(data: bytes) -> tuple[int, int]:
-    """Return (file_offset, vaddr) for the primary PT_LOAD segment."""
+def _elf64_layout(data: bytes) -> tuple[str, tuple[int, ...]]:
+    """Return ELF byte order and decoded 64-bit header fields."""
 
     if len(data) < len(ELF_MAGIC) or data[:4] != ELF_MAGIC:
         raise ElfloaderError("Input is not a valid ELF image")
@@ -40,23 +47,37 @@ def _load_segment_base(data: bytes) -> tuple[int, int]:
     ei_class = data[4]
     ei_data = data[5]
     if ei_class != 2:  # 64-bit
-        raise ElfloaderError("Only 64-bit elfloader images are supported")
+        raise ElfloaderError("Only 64-bit ELF images are supported")
     if ei_data not in (1, 2):
         raise ElfloaderError(f"Unsupported ELF endianness {ei_data}")
 
     endian = "<" if ei_data == 1 else ">"
     header_fmt = endian + "HHIQQQIHHHHHH"
-    ph_fmt = endian + "IIQQQQQQ"
+    header_size = 16 + struct.calcsize(header_fmt)
+    if len(data) < header_size:
+        raise ElfloaderError("ELF header is truncated")
+    return endian, struct.unpack_from(header_fmt, data, 16)
 
-    header = struct.unpack_from(header_fmt, data, 16)
+
+def _load_segment_base(data: bytes) -> tuple[int, int]:
+    """Return (file_offset, vaddr) for the primary PT_LOAD segment."""
+
+    endian, header = _elf64_layout(data)
+    ph_fmt = endian + "IIQQQQQQ"
+    ph_size = struct.calcsize(ph_fmt)
+
     e_phoff = header[4]
-    e_phentsize = header[7]
-    e_phnum = header[8]
+    e_phentsize = header[8]
+    e_phnum = header[9]
     if e_phoff == 0 or e_phnum == 0:
         raise ElfloaderError("Elfloader image has no program headers")
+    if e_phentsize < ph_size:
+        raise ElfloaderError("Elfloader program header entries are truncated")
 
     for index in range(e_phnum):
         offset = e_phoff + index * e_phentsize
+        if offset + ph_size > len(data):
+            raise ElfloaderError("Elfloader program header table exceeds file bounds")
         p_type, _, p_offset, p_vaddr, _, p_filesz, _, _ = struct.unpack_from(ph_fmt, data, offset)
         if p_type == 1 and p_filesz > 0:  # PT_LOAD
             return p_offset, p_vaddr
@@ -164,10 +185,54 @@ def _rewrite_rootserver(entries: list[dict[str, object]], payload: bytes) -> tup
     raise ElfloaderError("rootserver entry not found in elfloader archive")
 
 
-def prepare_elfloader(source: Path, destination: Path, rootserver: Path) -> tuple[int, int, int]:
+def _minimize_elf_for_boot(payload: bytes) -> tuple[bytes, int]:
+    """Remove ELF section metadata that the boot path does not consume."""
+
+    endian, header = _elf64_layout(payload)
+    ph_fmt = endian + "IIQQQQQQ"
+    ph_size = struct.calcsize(ph_fmt)
+
+    e_phoff = header[4]
+    e_shoff = header[5]
+    e_phentsize = header[8]
+    e_phnum = header[9]
+    if e_phoff == 0 or e_phnum == 0:
+        raise ElfloaderError("Rootserver ELF has no program headers")
+    if e_phentsize < ph_size:
+        raise ElfloaderError("Rootserver program header entries are truncated")
+
+    retain_end = max(64, e_phoff + e_phentsize * e_phnum)
+    for index in range(e_phnum):
+        offset = e_phoff + index * e_phentsize
+        if offset + ph_size > len(payload):
+            raise ElfloaderError("Rootserver program header table exceeds file bounds")
+        p_type, _, p_offset, _, _, p_filesz, _, _ = struct.unpack_from(ph_fmt, payload, offset)
+        if p_type == 0 or p_filesz == 0:
+            continue
+        segment_end = p_offset + p_filesz
+        if segment_end > len(payload):
+            raise ElfloaderError("Rootserver program segment exceeds file bounds")
+        retain_end = max(retain_end, segment_end)
+
+    if retain_end > len(payload):
+        raise ElfloaderError("Rootserver retained payload exceeds file bounds")
+
+    minimized = bytearray(payload[:retain_end])
+    if e_shoff != 0:
+        struct.pack_into(endian + "Q", minimized, 40, 0)  # e_shoff
+        struct.pack_into(endian + "H", minimized, 58, 0)  # e_shentsize
+        struct.pack_into(endian + "H", minimized, 60, 0)  # e_shnum
+        struct.pack_into(endian + "H", minimized, 62, 0)  # e_shstrndx
+
+    removed = len(payload) - len(minimized)
+    return bytes(minimized), removed
+
+
+def prepare_elfloader(source: Path, destination: Path, rootserver: Path) -> tuple[int, int, int, int]:
     """Copy elfloader, replace the rootserver payload, and persist result.
 
-    Returns a tuple of (original_archive_bytes, new_archive_bytes, rootserver_delta).
+    Returns a tuple of
+    (original_archive_bytes, new_archive_bytes, rootserver_delta, rootserver_bytes_removed).
     """
 
     if not source.is_file():
@@ -187,7 +252,7 @@ def prepare_elfloader(source: Path, destination: Path, rootserver: Path) -> tupl
     archive = bytes(data[archive_start:archive_end])
     entries = _parse_cpio(archive)
 
-    payload = rootserver.read_bytes()
+    payload, removed_rootserver_bytes = _minimize_elf_for_boot(rootserver.read_bytes())
     old_size, new_size = _rewrite_rootserver(entries, payload)
     rebuilt = _build_cpio(entries)
 
@@ -207,7 +272,7 @@ def prepare_elfloader(source: Path, destination: Path, rootserver: Path) -> tupl
     destination.write_bytes(data)
     src_mode = source.stat().st_mode
     os.chmod(destination, stat.S_IMODE(src_mode) or 0o755)
-    return original_len, rebuilt_len, new_size - old_size
+    return original_len, rebuilt_len, new_size - old_size, removed_rootserver_bytes
 
 
 def main(argv: list[str]) -> int:
@@ -223,7 +288,11 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     try:
-        original_len, rebuilt_len, delta = prepare_elfloader(args.source, args.destination, args.rootserver)
+        original_len, rebuilt_len, delta, removed_rootserver_bytes = prepare_elfloader(
+            args.source,
+            args.destination,
+            args.rootserver,
+        )
     except ElfloaderError as exc:
         parser.error(str(exc))
         return 1  # pragma: no cover - argparse error path
@@ -231,7 +300,8 @@ def main(argv: list[str]) -> int:
     print(
         "[cohesix-build] Sanitised elfloader copied to "
         f"{args.destination} (archive {original_len} -> {rebuilt_len} bytes, "
-        f"rootserver delta {delta:+d} bytes)",
+        f"rootserver delta {delta:+d} bytes, "
+        f"rootserver boot ELF stripped {removed_rootserver_bytes} bytes)",
         file=sys.stderr,
     )
     return 0

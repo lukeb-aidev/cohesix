@@ -15,7 +15,6 @@ use core::arch::asm;
 use core::fmt;
 use core::hint::spin_loop;
 use core::ops::Range;
-use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{compiler_fence, fence, Ordering};
 
 use heapless::Vec as HeaplessVec;
@@ -29,24 +28,20 @@ use smoltcp::wire::EthernetAddress;
     feature = "cache-maintenance"
 ))]
 use crate::hal::cache::{cache_clean, cache_invalidate};
-use crate::hal::{DeviceHal, HalError};
+use crate::hal::{bcmgenet as genet_hal, DeviceHal, HalError};
 use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError};
 #[cfg(any(
     all(feature = "kernel", target_os = "none"),
     feature = "cache-maintenance"
 ))]
 use crate::sel4::seL4_CapInitThreadVSpace;
-use crate::sel4::{DeviceFrame, RamFrame, PAGE_BITS};
+use crate::sel4::{RamFrame, PAGE_BITS};
 
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
 const MAX_FRAME_LEN: usize = crate::net_consts::MAX_FRAME_LEN;
 const RX_RING_DESCS: usize = HW_TOTAL_DESCS;
 const TX_RING_DESCS: usize = HW_TOTAL_DESCS;
 const RX_READY_CAP: usize = 8;
-const MMIO_PAGE_COUNT: usize = 6;
-
-// GENETv5 MMIO candidates observed across Pi4 firmware/alias mappings.
-const GENET_MMIO_CANDIDATES: [usize; 3] = [0xFD58_0000, 0x7D58_0000, 0xFE58_0000];
 
 const GENET_SYS_OFF: usize = 0x0000;
 const GENET_EXT_OFF: usize = 0x0080;
@@ -172,11 +167,6 @@ const TX_STALL_LOG_POLL_THRESHOLD: u32 = 8_192;
 const TX_BACKPRESSURE_LOG_POLL_THRESHOLD: u32 = 8_192;
 const TX_DROP_LOG_INTERVAL: u32 = 512;
 const RX_IDLE_LOG_POLL_THRESHOLD: u32 = 65_536;
-const BCMGENET_DMA_UNCACHED: bool = true;
-// Pi4 UEFI + bcmgenet on this path expects physical DMA addresses (no VC alias).
-const GENET_DMA_USE_BUS_ALIAS: bool = false;
-const GENET_DMA_BUS_ALIAS_BASE: u64 = 0xC000_0000;
-const GENET_DMA_ALIAS_WINDOW_BYTES: u64 = 0x4000_0000;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct DmaDesc {
@@ -284,7 +274,7 @@ impl NetDriverError for DriverError {
 }
 
 pub struct BcmGenetDevice {
-    regs: HeaplessVec<DeviceFrame, MMIO_PAGE_COUNT>,
+    regs: genet_hal::BcmGenetRegisters,
     mmio_base: usize,
     rx_frames: HeaplessVec<RamFrame, RX_RING_DESCS>,
     tx_frames: HeaplessVec<RamFrame, TX_RING_DESCS>,
@@ -322,13 +312,17 @@ impl BcmGenetDevice {
     where
         H: DeviceHal<Error = HalError>,
     {
-        let (mmio_base, regs) = Self::map_registers(hal)?;
-        let dma_attr = if BCMGENET_DMA_UNCACHED {
+        let regs = genet_hal::map_registers(hal).map_err(|err| match err {
+            HalError::Unsupported("bcmgenet-mmio-not-covered") => DriverError::NoDevice,
+            other => DriverError::from(other),
+        })?;
+        let mmio_base = regs.base_paddr();
+        let dma_attr = if genet_hal::dma_uncached() {
             sel4_sys::seL4_ARM_Page_Uncached
         } else {
             sel4_sys::seL4_ARM_Page_Default
         };
-        let dma_cacheable = !BCMGENET_DMA_UNCACHED;
+        let dma_cacheable = !genet_hal::dma_uncached();
         let mut rx_frames = HeaplessVec::new();
         let mut tx_frames = HeaplessVec::new();
         for _ in 0..RX_RING_DESCS {
@@ -387,16 +381,12 @@ impl BcmGenetDevice {
         info!(
             "[bcmgenet] init complete mmio=0x{:016x} pages={} ring_frames={} mac={} tx_idx={} rx_idx={} dma_alias={} dma_cacheable={}",
             device.mmio_base,
-            MMIO_PAGE_COUNT,
+            genet_hal::BCMGENET_MMIO_PAGE_COUNT,
             TX_RING_DESCS,
             device.mac,
             device.tx_prod_index,
             device.rx_cons_index,
-            if GENET_DMA_USE_BUS_ALIAS {
-                "vc-0xc0000000"
-            } else {
-                "physical"
-            },
+            genet_hal::dma_address_policy_name(),
             device.dma_cacheable,
         );
         Ok(device)
@@ -478,80 +468,6 @@ impl BcmGenetDevice {
             }
         }
         Ok(())
-    }
-
-    fn map_registers<H>(
-        hal: &mut H,
-    ) -> Result<(usize, HeaplessVec<DeviceFrame, MMIO_PAGE_COUNT>), DriverError>
-    where
-        H: DeviceHal<Error = HalError>,
-    {
-        for candidate in GENET_MMIO_CANDIDATES {
-            if !Self::candidate_covered(hal, candidate) {
-                continue;
-            }
-
-            let mut regs = HeaplessVec::new();
-            let mut failed = false;
-            for page in 0..MMIO_PAGE_COUNT {
-                let Some(offset) = page.checked_mul(PAGE_SIZE) else {
-                    failed = true;
-                    break;
-                };
-                let Some(paddr) = candidate.checked_add(offset) else {
-                    failed = true;
-                    break;
-                };
-                match hal.map_device(paddr) {
-                    Ok(frame) => {
-                        if regs.push(frame).is_err() {
-                            failed = true;
-                            break;
-                        }
-                    }
-                    Err(err) => {
-                        failed = true;
-                        warn!(
-                            "[bcmgenet] map_device failed mmio=0x{:016x} page={} err={}",
-                            candidate, page, err
-                        );
-                        break;
-                    }
-                }
-            }
-
-            if !failed && regs.len() == MMIO_PAGE_COUNT {
-                return Ok((candidate, regs));
-            }
-
-            if failed {
-                warn!(
-                    "[bcmgenet] candidate 0x{:016x} mapping incomplete; trying next alias",
-                    candidate
-                );
-            } else {
-                return Err(DriverError::QueueInit);
-            }
-        }
-        Err(DriverError::NoDevice)
-    }
-
-    fn candidate_covered<H>(hal: &H, base: usize) -> bool
-    where
-        H: DeviceHal<Error = HalError>,
-    {
-        for page in 0..MMIO_PAGE_COUNT {
-            let Some(offset) = page.checked_mul(PAGE_SIZE) else {
-                return false;
-            };
-            let Some(paddr) = base.checked_add(offset) else {
-                return false;
-            };
-            if hal.device_coverage(paddr, PAGE_BITS).is_none() {
-                return false;
-            }
-        }
-        true
     }
 
     fn init_hardware(&mut self) {
@@ -1205,7 +1121,7 @@ impl BcmGenetDevice {
         };
         let frame_ptr = frame.ptr().as_ptr() as usize;
         self.clean_cache_for_device(frame_ptr, RX_BUF_LENGTH);
-        let frame_dma = dma_phys_to_bus_addr(frame.paddr() as u64);
+        let frame_dma = genet_hal::dma_bus_addr(frame.paddr() as u64);
         self.write_rx_desc(slot, frame_dma, rx_owned_len_status());
     }
 
@@ -1252,7 +1168,7 @@ impl BcmGenetDevice {
         buf[..packet.len()].copy_from_slice(packet);
         self.clean_cache_for_device(frame_ptr, packet.len());
 
-        let frame_dma = dma_phys_to_bus_addr(frame_paddr);
+        let frame_dma = genet_hal::dma_bus_addr(frame_paddr);
         self.write_tx_desc(slot, frame_dma, encode_tx_len_status(packet.len()));
         tx_doorbell_barrier();
         self.tx_prod_index = self.tx_prod_index.wrapping_add(1);
@@ -1356,23 +1272,22 @@ impl BcmGenetDevice {
         }
     }
 
-    fn reg_ptr(&self, offset: usize) -> *mut u32 {
-        let page = offset / PAGE_SIZE;
-        let page_offset = offset % PAGE_SIZE;
-        debug_assert!(page_offset + core::mem::size_of::<u32>() <= PAGE_SIZE);
-        let frame = self
-            .regs
-            .get(page)
-            .expect("GENET MMIO page missing for register access");
-        unsafe { frame.ptr().as_ptr().add(page_offset).cast::<u32>() }
-    }
-
     fn read_reg32(&self, offset: usize) -> u32 {
-        unsafe { read_volatile(self.reg_ptr(offset).cast_const()) }
+        match self.regs.read_u32(offset) {
+            Ok(value) => value,
+            Err(err) => {
+                debug_assert!(false, "invalid GENET register read offset 0x{offset:x}");
+                warn!("[bcmgenet] invalid HAL register read offset=0x{offset:x} err={err}");
+                0
+            }
+        }
     }
 
     fn write_reg32(&self, offset: usize, value: u32) {
-        unsafe { write_volatile(self.reg_ptr(offset), value) };
+        if let Err(err) = self.regs.write_u32(offset, value) {
+            debug_assert!(false, "invalid GENET register write offset 0x{offset:x}");
+            warn!("[bcmgenet] invalid HAL register write offset=0x{offset:x} err={err}");
+        }
     }
 }
 
@@ -1390,14 +1305,6 @@ const fn ring_distance(newer: u16, older: u16) -> u16 {
 
 const fn desc_dma_addr(addr_hi: u32, addr_lo: u32) -> u64 {
     ((addr_hi as u64) << 32) | (addr_lo as u64)
-}
-
-const fn dma_phys_to_bus_addr(phys: u64) -> u64 {
-    if GENET_DMA_USE_BUS_ALIAS && phys < GENET_DMA_ALIAS_WINDOW_BYTES {
-        phys | GENET_DMA_BUS_ALIAS_BASE
-    } else {
-        phys
-    }
 }
 
 const fn should_log_tx_drop(tx_drops: u32) -> bool {
@@ -1638,13 +1545,14 @@ impl NetDevice for BcmGenetDevice {
 
 #[cfg(test)]
 mod tests {
+    use crate::hal::bcmgenet as genet_hal;
+
     use super::{
-        decode_bmcr_speed, decode_rx_length, dma_phys_to_bus_addr, encode_tx_len_status,
-        ring_distance, ring_slot, rx_owned_len_status, should_emit_repeated_breadcrumb,
-        should_log_rx_idle, should_log_tx_drop, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP,
-        DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, GENET_DMA_USE_BUS_ALIAS,
-        MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH, UMAC_SPEED_10, UMAC_SPEED_100,
-        UMAC_SPEED_1000,
+        decode_bmcr_speed, decode_rx_length, encode_tx_len_status, ring_distance, ring_slot,
+        rx_owned_len_status, should_emit_repeated_breadcrumb, should_log_rx_idle,
+        should_log_tx_drop, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP, DMA_OWN, DMA_SOP,
+        DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH,
+        UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
     };
 
     #[test]
@@ -1728,15 +1636,15 @@ mod tests {
 
     #[test]
     fn dma_phys_addresses_use_pi4_bus_alias_window() {
-        if GENET_DMA_USE_BUS_ALIAS {
-            assert_eq!(dma_phys_to_bus_addr(0x0000_0000), 0xC000_0000);
-            assert_eq!(dma_phys_to_bus_addr(0x0400_0000), 0xC400_0000);
-            assert_eq!(dma_phys_to_bus_addr(0x3FFF_FFFF), 0xFFFF_FFFF);
+        if genet_hal::dma_address_policy_name() == "vc-0xc0000000" {
+            assert_eq!(genet_hal::dma_bus_addr(0x0000_0000), 0xC000_0000);
+            assert_eq!(genet_hal::dma_bus_addr(0x0400_0000), 0xC400_0000);
+            assert_eq!(genet_hal::dma_bus_addr(0x3FFF_FFFF), 0xFFFF_FFFF);
         } else {
-            assert_eq!(dma_phys_to_bus_addr(0x0000_0000), 0x0000_0000);
-            assert_eq!(dma_phys_to_bus_addr(0x0400_0000), 0x0400_0000);
-            assert_eq!(dma_phys_to_bus_addr(0x3FFF_FFFF), 0x3FFF_FFFF);
+            assert_eq!(genet_hal::dma_bus_addr(0x0000_0000), 0x0000_0000);
+            assert_eq!(genet_hal::dma_bus_addr(0x0400_0000), 0x0400_0000);
+            assert_eq!(genet_hal::dma_bus_addr(0x3FFF_FFFF), 0x3FFF_FFFF);
         }
-        assert_eq!(dma_phys_to_bus_addr(0x4000_0000), 0x4000_0000);
+        assert_eq!(genet_hal::dma_bus_addr(0x4000_0000), 0x4000_0000);
     }
 }

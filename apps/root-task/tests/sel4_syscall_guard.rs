@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines tests for root-task sel4_syscall_guard.
 // Author: Lukas Bower
@@ -8,7 +8,8 @@ use std::process::Command;
 
 #[test]
 fn no_direct_sel4_syscall_invocations() {
-    let pattern = "sel4_sys::seL4_(Send|NBSend|Call|Reply|ReplyRecv|Signal|Wait|Recv|Yield)";
+    let pattern =
+        "sel4_sys::seL4_(Send|NBSend|Call|CallWithMRs|Reply|ReplyRecv|Signal|Wait|Recv|NBRecv|Poll|Yield)";
     let output = Command::new("rg")
         .args(["-n", pattern, "src"])
         .output()

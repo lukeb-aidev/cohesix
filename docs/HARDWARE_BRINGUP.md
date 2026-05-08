@@ -38,6 +38,7 @@
 `scripts/pi4-image-build.sh --clean --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - `--clean` removes `root-task` Cargo artifacts, cleans and rebuilds the Pi 4 seL4 U-Boot build tree, and runs a fresh `rpi_4_defconfig` U-Boot rebuild before staging/flashing.
 - On macOS ARM64, `--clean` also injects the Homebrew OpenSSL include/lib paths into the U-Boot host-tool build so `mkimage` and the other host utilities rebuild against the expected OpenSSL installation.
+- `scripts/pi4-image-build.sh` validates that the external seL4 Pi 4 overlay and any generated `kernel/kernel.dts` expose `device-untypes@600000000` for the VL805 BAR0 window. It refuses to patch seL4 kernel sources during proof runs; missing device-untyped coverage must be fixed intentionally in the external seL4 tree and then rebuilt.
 4. Prepare FAT boot partition with:
 - Pi firmware files (`start4.elf`, `fixup4.dat`, required DTB/overlay files),
 - `u-boot.bin`,
@@ -72,14 +73,15 @@
 - The Pi 4 U-Boot build stays on the seL4-aligned `usbkbd` interrupt-polling baseline (`CONFIG_SYS_USB_EVENT_POLL=y`) so the HDMI wizard matches the previously working Pi 4 input path.
 - The SD staging step also writes Linux comparison helpers `brcmfmac-dyndbg.cmdline` and `brcmfmac-dyndbg.sh` to the FAT partition. Use the `.cmdline` contents when booting a Linux known-good image to capture brcmfmac/MMC/SDHCI debug from module load, or run the shell helper after boot to enable the same dynamic-debug selectors through debugfs. These files are diagnostics only; the Cohesix U-Boot path does not append Linux bootargs to the seL4 handoff.
 - `scripts/pi4-image-build.sh` deliberately does not run `scripts/pi4_trace_normalize.py`. The build script owns deterministic image staging/flashing and has no authoritative post-boot serial input; trace normalization is a post-capture evidence step. A future hardware-in-the-loop wrapper may call build, flash, serial capture, and normalization in sequence, but the staging script itself should remain artifact-only.
+- `scripts/pi4_gate_proof.sh` is the hardware-in-the-loop wrapper for proof captures. By default it requires at least one USB and one Wi-Fi gate event (`USB_GATE>=1`, `WIFI_GATE>=1`) before succeeding. Use `--allow-summary-only` only for exploratory summaries that must not be treated as proof evidence.
 - Optional Cohesix net-policy overrides mirrored into DTB `/chosen` by the staged boot script:
 - `setenv coh_net_mode <off|static|dhcp>`
 - `setenv coh_net_interface <wired|wifi|auto>`
 - `setenv coh_static_ip <ipv4>` (mirrored into DTB `/chosen/cohesix,static-ipv4`; only applied when the effective mode is `static`)
 - `setenv coh_static_prefix_len <1..32>` (mirrored into DTB `/chosen/cohesix,static-prefix-len`; only applied when the effective mode is `static`)
 - `setenv coh_static_gateway <ipv4>` (mirrored into DTB `/chosen/cohesix,static-gateway`; optional and only applied when the effective mode is `static`)
-- `setenv coh_wifi_ssid <ssid>` (mirrored into DTB `/chosen/cohesix,wifi-ssid`; used by the CYW43455 path when `coh_net_interface=wifi` or when `auto` prefers Wi-Fi)
-- `setenv coh_wifi_psk <psk>` (mirrored into DTB `/chosen/cohesix,wifi-psk`; used by the CYW43455 path for open/WPA2-PSK join)
+- `setenv coh_wifi_ssid <ssid>` (mirrored into DTB `/chosen/cohesix,wifi-ssid`; used by the CYW43455 path when `coh_net_interface=wifi` or when `auto` prefers Wi-Fi; root-task accepts 1-32 printable ASCII bytes)
+- `setenv coh_wifi_psk <psk>` (mirrored into DTB `/chosen/cohesix,wifi-psk`; used by the CYW43455 path for open/WPA2-PSK join; root-task accepts empty for open networks, 8-63 printable ASCII bytes for WPA2 passphrases, or exactly 64 ASCII hex digits)
 - The staged boot script now hands the saved `coh_wifi_*` variables directly to `fdt set` without mutating or persisting escaped shadow copies, so repeated boots and policy-file writes do not grow backslashes or corrupt WPA2 credentials. If an older card reports `Wi-Fi credential handoff overflow`, clear the saved `coh_wifi_ssid` / `coh_wifi_psk` values once and re-enter them through the wizard.
 - The staged `bcm2711-rpi-4-b.dtb` is padded to 128 KiB before flashing, so U-Boot can add `/chosen/cohesix,*` properties in place without `fdt resize`.
 - `setenv coh_show_logo <0|1>` (controls whether the staged `boot.bmp` splash is displayed on HDMI before the menu)
@@ -191,7 +193,7 @@ Capture only these operator-facing lines from that session:
 - `nettest` targets the active wired address only.
 6. Current limitation:
 - explicit `policy=wifi` now supports both `dhcp` and `static` when credentials are present.
-- `auto` remains DHCP-only and still tries Wi-Fi first when credentials are present, but Milestone 26b is not complete until on-device Pi 4 serial logs prove join + DHCP and `auto` fallback behavior.
+- `auto` remains DHCP-only and still tries Wi-Fi first when credentials are present. Its wired fallback is limited to CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack; Milestone 26b is not complete until on-device Pi 4 serial logs prove join + DHCP and that attach/join fallback behavior.
 
 ## macOS U-Boot debug harness (fast iteration)
 - Purpose: validate U-Boot scripts/env/network setup behavior quickly before hardware retest.

@@ -59,6 +59,15 @@ pub trait Dma: Send + Sync {
     /// Translates a virtual address to a physical address.
     fn virt_to_phys(&self, va: usize) -> usize;
 
+    /// Translates a virtual address to a device-visible physical or bus address.
+    ///
+    /// Implementations should return `None` when the range cannot be represented
+    /// on the device bus. The legacy infallible [`Dma::virt_to_phys`] method is
+    /// retained for callers that cannot yet surface a typed error.
+    fn try_virt_to_phys(&self, va: usize) -> Option<usize> {
+        Some(self.virt_to_phys(va))
+    }
+
     /// Prepares a DMA-backed memory range for device access after CPU writes.
     ///
     /// Implementations may clean caches, emit share diagnostics, or perform

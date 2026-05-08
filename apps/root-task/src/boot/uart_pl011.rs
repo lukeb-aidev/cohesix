@@ -1,17 +1,12 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Defines the boot/uart_pl011 module for root-task.
+// Purpose: Publish the UART frame slot selected by the HAL-backed bootstrap mapper.
 // Author: Lukas Bower
-//! Bootstrap helpers for mapping the PL011 UART console.
-#![allow(unsafe_code)]
+//! Bootstrap helpers for publishing the HAL-mapped UART console frame slot.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::cspace::tuples::RetypeTuple;
-use crate::cspace::CSpace;
-use crate::uart::pl011;
-use log::warn;
-use sel4_sys::{self, seL4_CPtr, seL4_CapInitThreadVSpace, seL4_Error, seL4_NoError};
+use sel4_sys::{self, seL4_CPtr};
 
 static UART_FRAME_SLOT: AtomicUsize = AtomicUsize::new(sel4_sys::seL4_CapNull as usize);
 
@@ -27,89 +22,5 @@ pub fn uart_slot() -> Option<seL4_CPtr> {
         None
     } else {
         Some(slot)
-    }
-}
-
-/// Locate the device untyped that backs the PL011 UART MMIO page.
-#[must_use]
-pub fn find_pl011_device_ut(bi: &sel4_sys::seL4_BootInfo) -> Option<seL4_CPtr> {
-    let ut_start = bi.untyped.start;
-    let ut_end = bi.untyped.end;
-    let total = ut_end.saturating_sub(ut_start) as usize;
-    for (index, desc) in bi.untypedList.iter().take(total).enumerate() {
-        if desc.isDevice == 0 {
-            continue;
-        }
-        let base = desc.paddr as u64;
-        let span = 1u64 << desc.sizeBits;
-        let limit = base.saturating_add(span);
-        if base <= pl011::PL011_PADDR && pl011::PL011_PADDR + 0x1000 <= limit {
-            return Some(ut_start + index as seL4_CPtr);
-        }
-    }
-    None
-}
-
-/// Best-effort mapping for the PL011 UART into the init VSpace. Assumes the
-/// mapping destination slot lives inside the bootinfo empty window and reuses the
-/// canonical init CNode root (slot 0x0002) with `initBits = 13` for the retype
-/// tuple.
-pub fn bootstrap_map_pl011(
-    bi: &sel4_sys::seL4_BootInfo,
-    cs: &mut CSpace,
-    tuple: &RetypeTuple,
-) -> Result<seL4_CPtr, seL4_Error> {
-    let Some(device_ut) = find_pl011_device_ut(bi) else {
-        warn!("[pl011] device untyped not found; continuing without MMIO console");
-        return Ok(sel4_sys::seL4_CapNull);
-    };
-
-    let page_slot = cs.alloc_slot()?;
-    log::info!(
-        "[cs] win root=0x{root:04x} bits={bits} first_free=0x{slot:04x}",
-        root = cs.root(),
-        bits = cs.depth(),
-        slot = page_slot,
-    );
-
-    if let Err(err) =
-        crate::bootstrap::cspace_sys::verify_root_cnode_slot(bi, page_slot as sel4_sys::seL4_Word)
-    {
-        warn!(
-            "[pl011] init CNode path probe failed slot=0x{slot:04x} err={err} ({name})",
-            slot = page_slot,
-            err = err,
-            name = crate::sel4::error_name(err),
-        );
-        return Err(err);
-    }
-
-    log::info!(
-        "[pl011] map attempt root=0x{root:04x} depth={depth} slot=0x{slot:04x} ut=0x{ut:04x}",
-        root = tuple.node_root,
-        depth = tuple.node_depth,
-        slot = page_slot,
-        ut = device_ut,
-    );
-
-    let map_err = pl011::map_pl011_smallpage(
-        device_ut,
-        page_slot as sel4_sys::seL4_Word,
-        tuple,
-        seL4_CapInitThreadVSpace,
-    );
-    if map_err == seL4_NoError {
-        log::info!("[cs] first_free=0x{slot:04x}", slot = cs.next_free_slot());
-        publish_uart_slot(page_slot);
-        Ok(page_slot)
-    } else {
-        warn!(
-            "[pl011] map failed root=0x{root:04x} depth={depth} slot=0x{slot:04x} err={err}",
-            root = tuple.node_root,
-            depth = tuple.node_depth,
-            slot = page_slot,
-            err = map_err
-        );
-        Err(map_err)
     }
 }

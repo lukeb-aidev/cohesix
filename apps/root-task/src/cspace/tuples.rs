@@ -1,6 +1,6 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Defines the cspace/tuples module for root-task.
+// Purpose: Define canonical CSpace tuple helpers for root-task bootstrap.
 // Author: Lukas Bower
 //! Canonical tuple helpers for seL4 CSpace operations during early bootstrap.
 #![allow(unsafe_code)]
@@ -41,7 +41,7 @@ pub struct RetypeTuple {
     pub node_root: seL4_CPtr,
     /// Capability pointer supplied as `nodeIndex` (raw slot number for the init CNode root).
     pub node_index: seL4_Word,
-    /// Destination depth supplied as `nodeDepth` (must match the init CNode radix width).
+    /// Destination depth supplied as `nodeDepth` while resolving the init CNode root.
     pub node_depth: u8,
     /// Radix width (in bits) of the init thread CNode as reported by bootinfo.
     pub init_bits: u8,
@@ -62,16 +62,16 @@ pub fn make_cnode_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> CNodeTuple {
 pub fn make_retype_tuple(canonical_root: seL4_CPtr, init_bits: u8) -> RetypeTuple {
     RetypeTuple {
         node_root: canonical_root,
-        node_index: 0,
-        // Use the init CNode radix width with zero guard depth so destination
-        // paths match the kernel-advertised layout from bootinfo.
-        node_depth: init_bits,
+        node_index: sel4_sys::seL4_CapInitThreadCNode,
+        node_depth: crate::sel4::word_bits() as u8,
         init_bits,
     }
 }
 
 fn debug_puts(message: &str) {
     for &byte in message.as_bytes() {
+        // SAFETY: `seL4_DebugPutChar` is the kernel debug console syscall and
+        // accepts any byte value without dereferencing user memory.
         unsafe {
             seL4_DebugPutChar(byte);
         }
@@ -85,6 +85,8 @@ fn debug_hex(label: &str, value: seL4_Word) {
 }
 
 fn heartbeat(tag: u8) {
+    // SAFETY: `seL4_DebugPutChar` is used as a byte-oriented diagnostic
+    // heartbeat and does not depend on any borrowed memory.
     unsafe {
         seL4_DebugPutChar(tag);
     }
@@ -94,6 +96,10 @@ fn heartbeat(tag: u8) {
 pub fn retype_endpoint_into_slot(ut: seL4_CPtr, slot: seL4_Word, rt: &RetypeTuple) -> seL4_Error {
     heartbeat(b'r');
     let encoded_slot = slot;
+    // SAFETY: The tuple is constructed for the init CNode root, `slot` is
+    // supplied as the destination offset, and the call requests one endpoint
+    // object from the caller-provided untyped capability. The kernel validates
+    // capability authority and slot availability.
     let result = unsafe {
         seL4_Untyped_Retype(
             ut,
@@ -122,6 +128,9 @@ pub fn retype_endpoint_into_slot(ut: seL4_CPtr, slot: seL4_Word, rt: &RetypeTupl
 
 /// Validate that the kernel-reported IPC buffer matches the runtime accessor.
 pub fn assert_ipc_buffer_matches_bootinfo(bootinfo: &sel4_sys::seL4_BootInfo) {
+    // SAFETY: `seL4_GetIPCBuffer` returns the kernel-installed IPC buffer for
+    // the current thread. This function only compares its address with the
+    // bootinfo record and does not dereference the returned pointer.
     unsafe {
         let ipc_ptr = sel4_sys::seL4_GetIPCBuffer() as *const seL4_IPCBuffer as usize;
         let bi_ptr = bootinfo

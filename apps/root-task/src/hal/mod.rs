@@ -10,12 +10,20 @@
 //! current driver set depends on. This keeps the surface area small while
 //! providing a structured location for future peripherals.
 
+#![allow(unsafe_code)]
+
 use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "kernel")]
-use core::{fmt, ptr::NonNull};
+use core::{
+    fmt,
+    ptr::{self, NonNull},
+};
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod cache;
+
+#[cfg(feature = "kernel")]
+pub mod bcmgenet;
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod dma;
@@ -26,6 +34,10 @@ pub mod pci;
 pub mod pi4_pcie;
 #[cfg(feature = "kernel")]
 pub mod pi4_wifi;
+#[cfg(feature = "kernel")]
+pub mod uart;
+#[cfg(feature = "kernel")]
+pub mod virtio_mmio;
 
 #[cfg(feature = "kernel")]
 use crate::drivers::cyw43;
@@ -627,6 +639,219 @@ impl MappedRegion {
     #[must_use]
     pub fn paddr(&self) -> usize {
         self.frame.paddr()
+    }
+
+    fn checked_register_ptr<T>(&self, offset: usize, write: bool) -> Result<*mut T, HalError> {
+        if write && !self.perms.write {
+            return Err(HalError::Unsupported("mapped-region-write-denied"));
+        }
+        if !write && !self.perms.read {
+            return Err(HalError::Unsupported("mapped-region-read-denied"));
+        }
+        let width = core::mem::size_of::<T>();
+        let align = core::mem::align_of::<T>();
+        let Some(end) = offset.checked_add(width) else {
+            return Err(HalError::Unsupported("mapped-region-register-overflow"));
+        };
+        if width == 0 || end > self.size || offset % align != 0 {
+            return Err(HalError::Unsupported("mapped-region-register-out-of-range"));
+        }
+        // SAFETY: `end <= self.size` bounds the register to the HAL-owned
+        // mapping, and the caller receives only a typed pointer for volatile
+        // register access inside this module.
+        Ok(unsafe { self.ptr().as_ptr().add(offset).cast::<T>() })
+    }
+
+    /// Reads an 8-bit register from the mapped region.
+    pub fn read_u8(&self, offset: usize) -> Result<u8, HalError> {
+        let ptr = self.checked_register_ptr::<u8>(offset, false)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        Ok(unsafe { ptr::read_volatile(ptr.cast_const()) })
+    }
+
+    /// Reads a 16-bit register from the mapped region.
+    pub fn read_u16(&self, offset: usize) -> Result<u16, HalError> {
+        let ptr = self.checked_register_ptr::<u16>(offset, false)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        Ok(unsafe { ptr::read_volatile(ptr.cast_const()) })
+    }
+
+    /// Reads a 32-bit register from the mapped region.
+    pub fn read_u32(&self, offset: usize) -> Result<u32, HalError> {
+        let ptr = self.checked_register_ptr::<u32>(offset, false)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        Ok(unsafe { ptr::read_volatile(ptr.cast_const()) })
+    }
+
+    /// Writes an 8-bit register in the mapped region.
+    pub fn write_u8(&self, offset: usize, value: u8) -> Result<(), HalError> {
+        let ptr = self.checked_register_ptr::<u8>(offset, true)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        unsafe { ptr::write_volatile(ptr, value) };
+        Ok(())
+    }
+
+    /// Writes a 16-bit register in the mapped region.
+    pub fn write_u16(&self, offset: usize, value: u16) -> Result<(), HalError> {
+        let ptr = self.checked_register_ptr::<u16>(offset, true)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        unsafe { ptr::write_volatile(ptr, value) };
+        Ok(())
+    }
+
+    /// Writes a 32-bit register in the mapped region.
+    pub fn write_u32(&self, offset: usize, value: u32) -> Result<(), HalError> {
+        let ptr = self.checked_register_ptr::<u32>(offset, true)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        unsafe { ptr::write_volatile(ptr, value) };
+        Ok(())
+    }
+}
+
+#[cfg(feature = "kernel")]
+const HAL_PAGE_SIZE: usize = 1 << sel4_sys::seL4_PageBits;
+
+/// HAL-owned contiguous device register pages.
+#[cfg(feature = "kernel")]
+#[derive(Clone)]
+pub struct MappedRegisterPages<const N: usize> {
+    base_paddr: usize,
+    pages: heapless::Vec<DeviceFrame, N>,
+}
+
+#[cfg(feature = "kernel")]
+impl<const N: usize> MappedRegisterPages<N> {
+    /// Constructs a register mapping from already mapped contiguous pages.
+    pub fn new(base_paddr: usize, pages: heapless::Vec<DeviceFrame, N>) -> Result<Self, HalError> {
+        if pages.is_empty() {
+            return Err(HalError::Unsupported("empty-register-pages"));
+        }
+        Ok(Self { base_paddr, pages })
+    }
+
+    /// Constructs a single-page register mapping.
+    pub fn single(frame: DeviceFrame) -> Result<Self, HalError> {
+        let base_paddr = frame.paddr();
+        let mut pages = heapless::Vec::new();
+        pages
+            .push(frame)
+            .map_err(|_| HalError::Unsupported("register-page-capacity"))?;
+        Ok(Self { base_paddr, pages })
+    }
+
+    /// Returns the physical base address for the first register page.
+    #[must_use]
+    pub const fn base_paddr(&self) -> usize {
+        self.base_paddr
+    }
+
+    /// Returns the virtual base pointer for the first register page.
+    #[must_use]
+    pub fn base_ptr(&self) -> NonNull<u8> {
+        self.pages[0].ptr()
+    }
+
+    /// Returns the mapped register span in bytes.
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.pages.len() * HAL_PAGE_SIZE
+    }
+
+    /// Returns the virtual address corresponding to a register offset.
+    #[must_use]
+    pub fn vaddr_for_offset(&self, offset: usize) -> Option<usize> {
+        self.checked_register_ptr::<u8>(offset, false)
+            .ok()
+            .map(|ptr| ptr as usize)
+    }
+
+    /// Returns the physical address corresponding to a register offset.
+    #[must_use]
+    pub fn paddr_for_offset(&self, offset: usize) -> Option<usize> {
+        if offset >= self.size() {
+            None
+        } else {
+            self.base_paddr.checked_add(offset)
+        }
+    }
+
+    fn checked_register_ptr<T>(&self, offset: usize, _write: bool) -> Result<*mut T, HalError> {
+        let width = core::mem::size_of::<T>();
+        let align = core::mem::align_of::<T>();
+        let Some(end) = offset.checked_add(width) else {
+            return Err(HalError::Unsupported("register-pages-offset-overflow"));
+        };
+        if width == 0 || offset % align != 0 {
+            return Err(HalError::Unsupported("register-pages-offset-unaligned"));
+        }
+        let page = offset / HAL_PAGE_SIZE;
+        let page_offset = offset % HAL_PAGE_SIZE;
+        if end > self.size() || page_offset + width > HAL_PAGE_SIZE {
+            return Err(HalError::Unsupported("register-pages-offset-out-of-range"));
+        }
+        let Some(frame) = self.pages.get(page) else {
+            return Err(HalError::Unsupported("register-pages-page-missing"));
+        };
+        // SAFETY: offset arithmetic is bounded to a single HAL-owned mapped
+        // page above, so the returned pointer addresses only mapped MMIO.
+        Ok(unsafe { frame.ptr().as_ptr().add(page_offset).cast::<T>() })
+    }
+
+    /// Reads an 8-bit register from the mapped pages.
+    pub fn read_u8(&self, offset: usize) -> Result<u8, HalError> {
+        let ptr = self.checked_register_ptr::<u8>(offset, false)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        Ok(unsafe { ptr::read_volatile(ptr.cast_const()) })
+    }
+
+    /// Reads a 16-bit register from the mapped pages.
+    pub fn read_u16(&self, offset: usize) -> Result<u16, HalError> {
+        let ptr = self.checked_register_ptr::<u16>(offset, false)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        Ok(unsafe { ptr::read_volatile(ptr.cast_const()) })
+    }
+
+    /// Reads a 32-bit register from the mapped pages.
+    pub fn read_u32(&self, offset: usize) -> Result<u32, HalError> {
+        let ptr = self.checked_register_ptr::<u32>(offset, false)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        Ok(unsafe { ptr::read_volatile(ptr.cast_const()) })
+    }
+
+    /// Writes an 8-bit register to the mapped pages.
+    pub fn write_u8(&self, offset: usize, value: u8) -> Result<(), HalError> {
+        let ptr = self.checked_register_ptr::<u8>(offset, true)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        unsafe { ptr::write_volatile(ptr, value) };
+        Ok(())
+    }
+
+    /// Writes a 16-bit register to the mapped pages.
+    pub fn write_u16(&self, offset: usize, value: u16) -> Result<(), HalError> {
+        let ptr = self.checked_register_ptr::<u16>(offset, true)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        unsafe { ptr::write_volatile(ptr, value) };
+        Ok(())
+    }
+
+    /// Writes a 32-bit register to the mapped pages.
+    pub fn write_u32(&self, offset: usize, value: u32) -> Result<(), HalError> {
+        let ptr = self.checked_register_ptr::<u32>(offset, true)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned mapping.
+        unsafe { ptr::write_volatile(ptr, value) };
+        Ok(())
     }
 }
 

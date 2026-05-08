@@ -307,10 +307,24 @@ pub struct PhysMem<H: Dma> {
 }
 
 impl<H: Dma> PhysMem<H> {
+    fn empty_for_drop_replacement() -> Self {
+        Self {
+            addr: 0,
+            size: 0,
+            align: 1,
+            _host: PhantomData,
+        }
+    }
+
     /// Allocates a new physical memory region with the specified alignment.
     pub fn alloc(host: &H, size: usize, align: usize) -> Result<Self> {
+        // SAFETY: `Dma::alloc` is the HAL-owned allocator for coherent USB DMA
+        // memory. The returned address is accepted only when non-null and is
+        // tracked with the same size/alignment for later `free`.
         let addr = unsafe { host.alloc(size, align) }.ok_or(UsbError::OoRam)?;
 
+        // SAFETY: `addr` names the `size` bytes just returned by `Dma::alloc`,
+        // so zeroing the whole allocation cannot alias other live Rust objects.
         unsafe {
             core::ptr::write_bytes(addr as *mut u8, 0, size);
         }
@@ -329,14 +343,16 @@ impl<H: Dma> PhysMem<H> {
 
     /// Returns the physical address.
     pub fn phys(&self, host: &H) -> u64 {
-        host.virt_to_phys(self.addr) as u64
+        host.try_virt_to_phys(self.addr).unwrap_or(0) as u64
     }
 
     /// Prepares the region for device access and returns its bus address.
     pub fn share_for_device(&self, host: &H, label: &'static str) -> Result<u64> {
         host.share_for_device(self.addr, self.size, label)
             .map_err(|_| UsbError::DmaSync)?;
-        Ok(host.virt_to_phys(self.addr) as u64)
+        host.try_virt_to_phys(self.addr)
+            .map(|addr| addr as u64)
+            .ok_or(UsbError::DmaSync)
     }
 
     /// Makes a device-written subrange visible before CPU reads.
@@ -375,6 +391,9 @@ impl<H: Dma> PhysMem<H> {
 
     /// Frees the memory region.
     pub fn free(self, host: &H) {
+        // SAFETY: `self.addr/size/align` are the exact allocation tuple
+        // returned by `Dma::alloc` for this `PhysMem`, and `self` is consumed so
+        // the region cannot be freed twice.
         unsafe {
             host.free(self.addr, self.size, self.align);
         }
@@ -410,6 +429,15 @@ impl<H: Dma> Ring<H> {
         Ok(ring)
     }
 
+    pub(crate) fn empty_for_drop_replacement() -> Self {
+        Self {
+            mem: PhysMem::empty_for_drop_replacement(),
+            enqueue: 0,
+            cycle: true,
+            size: 0,
+        }
+    }
+
     /// Returns the device-visible physical address for the ring.
     pub fn phys(&self, host: &H) -> u64 {
         self.mem.phys(host)
@@ -428,6 +456,9 @@ impl<H: Dma> Ring<H> {
     }
 
     fn trbs(&self) -> &mut [Trb] {
+        // SAFETY: `Ring::new` allocates `self.size * size_of::<Trb>()` bytes
+        // aligned for `Trb`, and all mutable access to the ring goes through
+        // the owning `Ring` under the caller's lock.
         unsafe { core::slice::from_raw_parts_mut(self.mem.as_ptr(), self.size) }
     }
 
@@ -609,6 +640,8 @@ impl<H: Dma> EventRing<H> {
         // controller combinations, software can observe an event entry while
         // the xHC is still writing fields; consuming such a transient entry can
         // surface as a spurious "Invalid completion code" command failure.
+        // SAFETY: `self.dequeue` is maintained modulo `self.size`; `ring`
+        // points at DMA memory for exactly `self.size` TRBs.
         let first = unsafe {
             (self.ring.as_ptr::<Trb>())
                 .add(self.dequeue)
@@ -618,6 +651,8 @@ impl<H: Dma> EventRing<H> {
             return None;
         }
 
+        // SAFETY: Same bounded ring slot as the first read; this second volatile
+        // read checks that the controller has stopped mutating the event entry.
         let second = unsafe {
             (self.ring.as_ptr::<Trb>())
                 .add(self.dequeue)
@@ -676,6 +711,7 @@ mod tests {
     impl Dma for MockDma {
         unsafe fn alloc(&self, size: usize, align: usize) -> Option<usize> {
             let layout = Layout::from_size_align(size, align).ok()?;
+            // SAFETY: `layout` was constructed by `Layout::from_size_align`.
             let ptr = unsafe { alloc_zeroed(layout) };
             if ptr.is_null() {
                 return None;
@@ -698,6 +734,8 @@ mod tests {
                 let (base, stored_size, stored_align) = allocations.swap_remove(index);
                 let layout =
                     Layout::from_size_align(stored_size, stored_align).expect("valid layout");
+                // SAFETY: The allocation record proves `base`, `stored_size`,
+                // and `stored_align` match the original allocation layout.
                 unsafe {
                     dealloc(base as *mut u8, layout);
                 }

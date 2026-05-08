@@ -1,6 +1,6 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Defines the bootstrap/tests/retype_args module for root-task.
+// Purpose: Verify root-task retype syscall argument packing against seL4 CSpace tuples.
 // Author: Lukas Bower
 
 use crate::bootstrap::cspace::DestCNode;
@@ -26,8 +26,8 @@ fn packs_correct_args_for_root_level_insert() {
     assert_eq!(last.obj, 0x1);
     assert_eq!(last.size_bits, 0);
     assert_eq!(last.root, 0x2);
-    assert_eq!(last.idx, 0);
-    assert_eq!(last.depth, 0);
+    assert_eq!(last.idx, sys::seL4_CapInitThreadCNode);
+    assert_eq!(last.depth, sys::seL4_WordBits as u8);
     assert_eq!(last.off, 0x0103);
     assert_eq!(last.n, 1);
 }

@@ -23,6 +23,7 @@ COMMAND_DELAY_SECONDS=2
 SKIP_BUILD=0
 NO_CAPTURE=0
 NORMALIZE_ONLY=0
+ALLOW_SUMMARY_ONLY=0
 
 DEFAULT_COMMANDS=(
     "help"
@@ -76,6 +77,8 @@ Options:
                              Example: USB_GATE=3 accepts USB_GATE=4.
   --expect-not <KEY=VALUE>   Fail if a gate summary value still equals VALUE.
                              Example: USB_BLOCKER=cmd-poll-only-timeout.
+  --allow-summary-only       Do not require USB/WiFi evidence gates. This is
+                             for exploratory summaries only, not proof output.
   -h, --help                 Show this help
 
 Default proof commands:
@@ -97,9 +100,21 @@ fail() {
     exit 1
 }
 
+require_arg() {
+    local option="$1"
+    local argc="$2"
+    [[ "${argc}" -ge 2 ]] || fail "${option} requires a value"
+}
+
 require_file() {
     local path="$1"
     [[ -f "${path}" ]] || fail "required file missing: ${path}"
+}
+
+require_nonnegative_integer() {
+    local name="$1"
+    local value="$2"
+    [[ "${value}" =~ ^[0-9]+$ ]] || fail "${name} must be a non-negative integer: ${value}"
 }
 
 detect_flash_disk() {
@@ -215,6 +230,9 @@ run_normalizer() {
 
     require_file "${TRACE_NORMALIZER}"
     require_file "${LOG_PATH}"
+    if [[ "${ALLOW_SUMMARY_ONLY}" -eq 0 ]]; then
+        args+=("--expect-min" "USB_GATE=1" "--expect-min" "WIFI_GATE=1")
+    fi
     for ((index = 0; index < ${#EXPECTATIONS[@]}; index++)); do
         args+=("--expect" "${EXPECTATIONS[$index]}")
     done
@@ -231,39 +249,48 @@ run_normalizer() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --manifest)
+            require_arg "$1" "$#"
             MANIFEST_PATH="$2"
             shift 2
             ;;
         --venv)
+            require_arg "$1" "$#"
             VENV_DIR="$2"
             PYTHON="${VENV_DIR}/bin/python"
             shift 2
             ;;
         --flash-disk)
+            require_arg "$1" "$#"
             FLASH_DISK="$2"
             shift 2
             ;;
         --disk-label)
+            require_arg "$1" "$#"
             DISK_LABEL="$2"
             shift 2
             ;;
         --serial-device)
+            require_arg "$1" "$#"
             SERIAL_DEVICE="$2"
             shift 2
             ;;
         --log)
+            require_arg "$1" "$#"
             LOG_PATH="$2"
             shift 2
             ;;
         --boot-wait)
+            require_arg "$1" "$#"
             BOOT_WAIT_SECONDS="$2"
             shift 2
             ;;
         --capture-seconds)
+            require_arg "$1" "$#"
             CAPTURE_SECONDS="$2"
             shift 2
             ;;
         --command-delay)
+            require_arg "$1" "$#"
             COMMAND_DELAY_SECONDS="$2"
             shift 2
             ;;
@@ -284,20 +311,28 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --command)
+            require_arg "$1" "$#"
             EXTRA_COMMANDS+=("$2")
             shift 2
             ;;
         --expect)
+            require_arg "$1" "$#"
             EXPECTATIONS+=("$2")
             shift 2
             ;;
         --expect-min)
+            require_arg "$1" "$#"
             MIN_EXPECTATIONS+=("$2")
             shift 2
             ;;
         --expect-not)
+            require_arg "$1" "$#"
             NOT_EXPECTATIONS+=("$2")
             shift 2
+            ;;
+        --allow-summary-only)
+            ALLOW_SUMMARY_ONLY=1
+            shift
             ;;
         -h|--help)
             usage
@@ -309,6 +344,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+require_nonnegative_integer "--boot-wait" "${BOOT_WAIT_SECONDS}"
+require_nonnegative_integer "--capture-seconds" "${CAPTURE_SECONDS}"
+require_nonnegative_integer "--command-delay" "${COMMAND_DELAY_SECONDS}"
 require_file "${PYTHON}"
 
 if [[ "${NORMALIZE_ONLY}" -eq 0 ]]; then

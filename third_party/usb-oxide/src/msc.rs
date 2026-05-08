@@ -375,6 +375,8 @@ impl<H: Dma> MscDevice<H> {
         let cbw = Cbw::new(self.tag, data_len as u32, direction_in, lun, cdb);
         self.tag = self.tag.wrapping_add(1);
 
+        // SAFETY: `cbw_buf` is an owned DMA buffer sized for `Cbw`; BOT CBW
+        // transfers are exactly 31 bytes by specification.
         unsafe {
             core::ptr::copy_nonoverlapping(&cbw as *const Cbw as *const u8, cbw_buf.as_ptr(), 31);
         }
@@ -390,6 +392,8 @@ impl<H: Dma> MscDevice<H> {
                 self.device
                     .queue_transfer(self.ep_in, true, buf, data_len)?;
                 let len = self.wait_transfer()?;
+                // SAFETY: `len.min(d.len())` bounds the destination slice and
+                // `buf` was allocated for `data_len` bytes for this transfer.
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         buf.as_ptr::<u8>(),
@@ -400,6 +404,8 @@ impl<H: Dma> MscDevice<H> {
                 len
             } else {
                 // OUT: host to device
+                // SAFETY: For OUT transfers `d` is the source payload and
+                // `buf` is the owned DMA buffer allocated for `data_len`.
                 unsafe {
                     core::ptr::copy_nonoverlapping(d.as_ptr(), buf.as_ptr(), d.len());
                 }
@@ -415,6 +421,8 @@ impl<H: Dma> MscDevice<H> {
         self.device.queue_transfer(self.ep_in, true, &csw_buf, 13)?;
         self.wait_transfer()?;
 
+        // SAFETY: The CSW transfer above filled the 13-byte BOT status buffer
+        // before this by-value copy.
         let csw = unsafe { *(csw_buf.as_ptr::<Csw>()) };
 
         // Free buffers
@@ -464,6 +472,7 @@ impl<H: Dma> MscDevice<H> {
         let cdb = [scsi_op::INQUIRY, 0, 0, 0, 36, 0];
         let mut data = [0u8; 36];
         self.scsi_command(lun, &cdb, Some(&mut data), true)?;
+        // SAFETY: INQUIRY requested exactly the fixed 36-byte response layout.
         Ok(unsafe { *(data.as_ptr() as *const InquiryData) })
     }
 
@@ -472,6 +481,7 @@ impl<H: Dma> MscDevice<H> {
         let cdb = [scsi_op::READ_CAPACITY_10, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let mut data = [0u8; 8];
         self.scsi_command(lun, &cdb, Some(&mut data), true)?;
+        // SAFETY: READ CAPACITY (10) requested exactly the fixed 8-byte response layout.
         Ok(unsafe { *(data.as_ptr() as *const ReadCapacity10Data) })
     }
 
@@ -480,6 +490,7 @@ impl<H: Dma> MscDevice<H> {
         let cdb = [scsi_op::REQUEST_SENSE, 0, 0, 0, 18, 0];
         let mut data = [0u8; 18];
         self.scsi_command(lun, &cdb, Some(&mut data), true)?;
+        // SAFETY: REQUEST SENSE requested exactly the fixed 18-byte response layout.
         Ok(unsafe { *(data.as_ptr() as *const RequestSenseData) })
     }
 
@@ -562,6 +573,8 @@ pub fn find_msc_interfaces(
                     result.push((iface, ein, eout));
                 }
 
+                // SAFETY: The descriptor walker checked `len >= 9` and bounds
+                // `offset + len` before this by-value interface descriptor copy.
                 let iface = unsafe { *(config_data.as_ptr().add(offset) as *const InterfaceDesc) };
                 if iface.interface_class == class::MASS_STORAGE
                     && iface.interface_protocol == msc_protocol::BBB
@@ -575,6 +588,8 @@ pub fn find_msc_interfaces(
             }
             desc_type::ENDPOINT if len >= 7 => {
                 if current_iface.is_some() {
+                    // SAFETY: The descriptor walker checked `len >= 7` and
+                    // bounds before this by-value endpoint descriptor copy.
                     let ep = unsafe { *(config_data.as_ptr().add(offset) as *const EndpointDesc) };
                     if ep.transfer_type() == ep_type::BULK {
                         if ep.is_in() {

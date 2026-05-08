@@ -42,14 +42,14 @@ use crate::debug::watched_write_bytes;
 use crate::guards;
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::dma::{self, PinnedDmaRange};
-use crate::hal::{DeviceHal, HalError, Hardware};
+use crate::hal::{virtio_mmio, DeviceHal, HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetStage, CONSOLE_TCP_PORT,
     NET_DIAG, NET_STAGE,
 };
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{
-    seL4_CapInitThreadVSpace, DeviceFrame, RamFrame, BOOTINFO_WINDOW_GUARD, DEVICE_VM_ATTRIBUTES,
+    seL4_CapInitThreadVSpace, RamFrame, BOOTINFO_WINDOW_GUARD, DEVICE_VM_ATTRIBUTES,
 };
 
 const FORENSICS: bool = true;
@@ -90,7 +90,7 @@ struct VirtqMetadataAttr {
 }
 
 fn vm_attr_raw(attr: seL4_ARM_VMAttributes) -> usize {
-    unsafe { core::mem::transmute(attr) }
+    crate::sel4::vm_attributes_raw(attr) as usize
 }
 
 fn virtq_metadata_attr() -> VirtqMetadataAttr {
@@ -117,9 +117,6 @@ fn virtq_metadata_attr() -> VirtqMetadataAttr {
     }
 }
 
-const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
-const VIRTIO_MMIO_STRIDE: usize = 0x200;
-const VIRTIO_MMIO_SLOTS: usize = 8;
 const TX_WRAP_TRIPWIRE_LIMIT: u32 = 4;
 const VIRTQ_DIAG_QUEUE_MAX: usize = 2;
 const VIRTQ_DIAG_ENTRY_COUNT: usize = 8;
@@ -129,8 +126,6 @@ const VIRTIO_MMIO_MAGIC: u32 = 0x7472_6976;
 const VIRTIO_MMIO_VERSION_LEGACY: u32 = 1;
 const VIRTIO_MMIO_VERSION_MODERN: u32 = 2;
 const VIRTIO_DEVICE_ID_NET: u32 = 1;
-
-const DEVICE_FRAME_BITS: usize = 12;
 
 const STATUS_ACKNOWLEDGE: u32 = 1 << 0;
 const STATUS_DRIVER: u32 = 1 << 1;
@@ -217,10 +212,10 @@ static USED_LEN_ZERO_VISIBILITY_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_POP_INVARIANT_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_FORCE_LOGGED: AtomicBool = AtomicBool::new(false);
-static VQ_ADDRESS_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
-    [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
-static RING_SLOT_CANARY_LOGGED: [AtomicBool; VIRTIO_MMIO_SLOTS] =
-    [const { AtomicBool::new(false) }; VIRTIO_MMIO_SLOTS];
+static VQ_ADDRESS_LOGGED: [AtomicBool; virtio_mmio::VIRTIO_MMIO_SLOTS] =
+    [const { AtomicBool::new(false) }; virtio_mmio::VIRTIO_MMIO_SLOTS];
+static RING_SLOT_CANARY_LOGGED: [AtomicBool; virtio_mmio::VIRTIO_MMIO_SLOTS] =
+    [const { AtomicBool::new(false) }; virtio_mmio::VIRTIO_MMIO_SLOTS];
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -2446,9 +2441,9 @@ impl VirtioNet {
         info!("[net-console] init: probing virtio-mmio bus");
         info!(
             "[net-console] expecting virtio-net on virtio-mmio base=0x{base:08x}, slots=0-{max_slot}, stride=0x{stride:03x}",
-            base = VIRTIO_MMIO_BASE,
-            max_slot = VIRTIO_MMIO_SLOTS - 1,
-            stride = VIRTIO_MMIO_STRIDE,
+            base = virtio_mmio::VIRTIO_MMIO_BASE,
+            max_slot = virtio_mmio::VIRTIO_MMIO_SLOTS - 1,
+            stride = virtio_mmio::VIRTIO_MMIO_STRIDE,
         );
         let mut regs = VirtioRegs::probe(hal)?;
         let mmio_mode = regs.mode;
@@ -2714,7 +2709,7 @@ impl VirtioNet {
             let tx_len = queue_mem_tx.as_slice().len();
             let rx_paddr = queue_mem_rx.paddr();
             let tx_paddr = queue_mem_tx.paddr();
-            let map_attr_raw: usize = unsafe { core::mem::transmute(queue_map_attr) };
+            let map_attr_raw = vm_attr_raw(queue_map_attr);
             info!(
                 target: "virtio-net",
                 "[virtio-net][dma] qmem mapping cacheable={} map_attr=0x{map_attr_raw:08x} rx_vaddr=0x{rx_vaddr:016x}..0x{rx_vend:016x} rx_paddr=0x{rx_paddr:016x}..0x{rx_pend:016x} tx_vaddr=0x{tx_vaddr:016x}..0x{tx_vend:016x} tx_paddr=0x{tx_paddr:016x}..0x{tx_pend:016x}",
@@ -9264,7 +9259,7 @@ impl TxToken for VirtioTxToken {
 }
 
 struct VirtioRegs {
-    mmio: DeviceFrame,
+    mmio: virtio_mmio::VirtioMmioRegisters,
     mode: VirtioMmioMode,
 }
 
@@ -9273,18 +9268,18 @@ impl VirtioRegs {
     where
         H: DeviceHal<Error = HalError>,
     {
-        for slot in 0..VIRTIO_MMIO_SLOTS {
-            let base = VIRTIO_MMIO_BASE + slot * VIRTIO_MMIO_STRIDE;
+        for slot in 0..virtio_mmio::VIRTIO_MMIO_SLOTS {
+            let Some(base) = virtio_mmio::slot_paddr(slot) else {
+                continue;
+            };
             info!(
                 "[net-console] probing virtio-mmio slot={} paddr=0x{base:08x}",
                 slot,
                 base = base
             );
-            if hal.device_coverage(base, DEVICE_FRAME_BITS).is_none() {
-                continue;
-            }
-            let frame = match hal.map_device(base) {
+            let mmio = match virtio_mmio::map_registers(hal, slot) {
                 Ok(frame) => frame,
+                Err(HalError::Unsupported("virtio-mmio-slot-uncovered")) => continue,
                 Err(HalError::Sel4(err)) if err == seL4_NotEnoughMemory => {
                     log::trace!(
                         "virtio-mmio: slot {slot} @ 0x{base:08x} unavailable (no device coverage)",
@@ -9294,7 +9289,7 @@ impl VirtioRegs {
                 Err(err) => return Err(DriverError::from(err)),
             };
             let regs = VirtioRegs {
-                mmio: frame,
+                mmio,
                 mode: VirtioMmioMode::Modern,
             };
             let identifiers = regs.read_identifiers();
@@ -9341,7 +9336,7 @@ impl VirtioRegs {
     }
 
     fn base(&self) -> NonNull<u8> {
-        self.mmio.ptr()
+        self.mmio.base_ptr()
     }
 
     fn mmio_base_vaddr(&self) -> usize {
@@ -9349,7 +9344,7 @@ impl VirtioRegs {
     }
 
     fn mmio_base_paddr(&self) -> usize {
-        self.mmio.paddr()
+        self.mmio.base_paddr()
     }
 
     fn notify_register_info(&self) -> (usize, usize, usize) {
@@ -9360,15 +9355,28 @@ impl VirtioRegs {
     }
 
     fn read32(&self, offset: Registers) -> u32 {
-        unsafe { read_volatile(self.base().as_ptr().add(offset as usize) as *const u32) }
+        match self.mmio.read_u32(offset as usize) {
+            Ok(value) => value,
+            Err(err) => {
+                debug_assert!(false, "invalid virtio-mmio register read {offset:?}");
+                warn!("[virtio-net] invalid HAL register read offset={offset:?} err={err}");
+                0
+            }
+        }
     }
 
     fn write32(&mut self, offset: Registers, value: u32) {
-        unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u32, value) };
+        if let Err(err) = self.mmio.write_u32(offset as usize, value) {
+            debug_assert!(false, "invalid virtio-mmio register write {offset:?}");
+            warn!("[virtio-net] invalid HAL register write offset={offset:?} err={err}");
+        }
     }
 
     fn write16(&mut self, offset: Registers, value: u16) {
-        unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u16, value) };
+        if let Err(err) = self.mmio.write_u16(offset as usize, value) {
+            debug_assert!(false, "invalid virtio-mmio register write {offset:?}");
+            warn!("[virtio-net] invalid HAL register write offset={offset:?} err={err}");
+        }
     }
 
     fn reset_status(&mut self) {
@@ -9519,7 +9527,14 @@ impl VirtioRegs {
         let mut bytes = [0u8; 6];
         let base = Registers::Config as usize;
         for (idx, byte) in bytes.iter_mut().enumerate() {
-            *byte = unsafe { read_volatile(self.base().as_ptr().add(base + idx) as *const u8) };
+            let offset = base + idx;
+            *byte = match self.mmio.read_u8(offset) {
+                Ok(value) => value,
+                Err(err) => {
+                    warn!("[virtio-net] invalid HAL config read offset=0x{offset:x} err={err}");
+                    return None;
+                }
+            };
         }
         if bytes.iter().all(|&b| b == 0) {
             None
@@ -9902,7 +9917,7 @@ mod tests {
 }
 
 #[repr(u32)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Registers {
     MagicValue = 0x000,
     Version = 0x004,
@@ -10171,7 +10186,7 @@ impl VirtQueue {
             base_paddr + layout.used_offset,
             layout.used_len,
         );
-        let addr_slot = (index as usize) % VIRTIO_MMIO_SLOTS;
+        let addr_slot = (index as usize) % virtio_mmio::VIRTIO_MMIO_SLOTS;
         if !VQ_ADDRESS_LOGGED[addr_slot].swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "net-console",

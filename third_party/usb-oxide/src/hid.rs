@@ -1128,6 +1128,8 @@ impl<H: Dma> HidDevice<H> {
                 evt.transfer_length(),
                 core::mem::size_of::<MouseReport>(),
             ) {
+                // SAFETY: `has_report_payload` proved the completed transfer
+                // contains a full boot-protocol mouse report in `report_buf`.
                 let report = unsafe { *(self.report_buf.as_ptr::<MouseReport>()) };
                 let _ = self.queue_read();
                 return Some(report);
@@ -1219,6 +1221,8 @@ impl<H: Dma> Drop for HidDevice<H> {
         let host = self.device.ctrl().host();
         // Note: report_buf will be freed when PhysMem is dropped
         // but we need to explicitly free it since PhysMem doesn't auto-free
+        // SAFETY: `report_buf` was allocated from this DMA host with the same
+        // size/alignment and is freed exactly once during `HidDevice` drop.
         unsafe {
             host.free(
                 self.report_buf.virt(),

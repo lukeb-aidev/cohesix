@@ -256,11 +256,17 @@ impl WifiCredentials {
         if ssid.len() > 32 {
             return Err("wifi-ssid-too-long");
         }
+        if !ssid.as_bytes().iter().copied().all(wifi_text_byte_valid) {
+            return Err("wifi-ssid-invalid");
+        }
         if psk.len() > 64 {
             return Err("wifi-psk-too-long");
         }
         if !psk.is_empty() && psk.len() < 8 {
             return Err("wifi-psk-too-short");
+        }
+        if !psk.is_empty() && !wifi_psk_valid(psk.as_bytes()) {
+            return Err("wifi-psk-invalid");
         }
 
         let mut credentials = Self::empty();
@@ -288,6 +294,24 @@ impl WifiCredentials {
     pub fn psk(&self) -> Result<&str, &'static str> {
         core::str::from_utf8(&self.psk[..usize::from(self.psk_len)]).map_err(|_| "wifi-psk-utf8")
     }
+}
+
+#[must_use]
+const fn wifi_text_byte_valid(byte: u8) -> bool {
+    matches!(byte, 0x20..=0x7e)
+}
+
+#[must_use]
+const fn wifi_hex_byte(byte: u8) -> bool {
+    byte.is_ascii_hexdigit()
+}
+
+#[must_use]
+fn wifi_psk_valid(bytes: &[u8]) -> bool {
+    if bytes.len() == 64 {
+        return bytes.iter().copied().all(wifi_hex_byte);
+    }
+    bytes.iter().copied().all(wifi_text_byte_valid)
 }
 
 impl Default for WifiCredentials {
@@ -1145,6 +1169,19 @@ mod tests {
         assert!(WifiCredentials::new("ssid", "short").is_err());
         assert!(WifiCredentials::new("ssid", "12345678").is_ok());
         assert!(WifiCredentials::new("open-network", "").is_ok());
+        assert!(WifiCredentials::new("ssid with spaces", "printable passphrase").is_ok());
+        assert!(WifiCredentials::new("ssid\n", "12345678").is_err());
+        assert!(WifiCredentials::new("ssid", "pass\nword").is_err());
+        assert!(WifiCredentials::new(
+            "ssid",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        )
+        .is_ok());
+        assert!(WifiCredentials::new(
+            "ssid",
+            "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+        )
+        .is_err());
     }
 
     #[test]

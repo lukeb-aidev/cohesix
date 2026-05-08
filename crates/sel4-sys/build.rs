@@ -575,9 +575,9 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         .size_t_is_usize(true)
         .blocklist_function("seL4_InitBootInfo")
         .allowlist_function("seL4_.*")
-        .allowlist_type("seL4_.*|invocation_label|arch_invocation_label")
+        .allowlist_type("seL4_.*|invocation_label|sel4_arch_invocation_label|arch_invocation_label")
         .allowlist_var(
-            "seL4_.*|CNode.*|UntypedRetype|ARMPageTableMap|ARMPageMap|InvalidInvocation|ARMVSpace.*",
+            "seL4_.*|CNode.*|UntypedRetype|ARMPageTableMap|ARMPageMap|InvalidInvocation|ARMVSpace.*|nSeL4ArchInvocationLabels",
         );
 
     for fault_symbol in [

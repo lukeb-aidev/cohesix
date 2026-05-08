@@ -986,7 +986,7 @@ mod imp {
 
     #[inline(always)]
     fn encode_depth(depth: seL4_Uint8) -> seL4_Word {
-        (depth & 0xff) as seL4_Word
+        depth as seL4_Word
     }
 
     fn set_error_mrs(mr0: seL4_Word, mr1: seL4_Word, mr2: seL4_Word, mr3: seL4_Word) {
@@ -1275,12 +1275,29 @@ mod imp {
 
     #[inline(always)]
     pub unsafe fn seL4_TCB_SetIPCBuffer(
-        _tcb_cap: seL4_TCB,
-        buffer_word: seL4_Word,
-        _buffer_frame: seL4_CPtr,
+        service: seL4_TCB,
+        buffer: seL4_Word,
+        buffer_frame: seL4_CPtr,
     ) -> seL4_Error {
-        seL4_SetIPCBuffer(buffer_word as *mut seL4_IPCBuffer);
-        seL4_NoError
+        seL4_SetCap(0, buffer_frame);
+
+        let mut mr0: seL4_Word = buffer;
+        let mut mr1: seL4_Word = 0;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
+
+        let tag = seL4_MessageInfo::new(invocation_label_TCBSetIPCBuffer as seL4_Word, 0, 1, 1);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
     }
 
     #[inline(always)]
@@ -1427,12 +1444,34 @@ mod imp {
 
     pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes =
         seL4_ARM_VMAttributes_seL4_ARM_Default_VMAttributes;
+    pub const seL4_ARM_PageCacheable: seL4_ARM_VMAttributes =
+        seL4_ARM_VMAttributes_seL4_ARM_PageCacheable;
+    pub const seL4_ARM_ParityEnabled: seL4_ARM_VMAttributes =
+        seL4_ARM_VMAttributes_seL4_ARM_ParityEnabled;
+    pub const seL4_ARM_ExecuteNever: seL4_ARM_VMAttributes =
+        seL4_ARM_VMAttributes_seL4_ARM_ExecuteNever;
     pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = 0;
+    pub const ARMVSpaceClean_Data: seL4_Word =
+        sel4_arch_invocation_label_ARMVSpaceClean_Data as seL4_Word;
+    pub const ARMVSpaceInvalidate_Data: seL4_Word =
+        sel4_arch_invocation_label_ARMVSpaceInvalidate_Data as seL4_Word;
+    pub const ARMVSpaceCleanInvalidate_Data: seL4_Word =
+        sel4_arch_invocation_label_ARMVSpaceCleanInvalidate_Data as seL4_Word;
+    pub const ARMVSpaceUnify_Instruction: seL4_Word =
+        sel4_arch_invocation_label_ARMVSpaceUnify_Instruction as seL4_Word;
+    pub const nSeL4ArchInvocationLabels: seL4_Word =
+        sel4_arch_invocation_label_nSeL4ArchInvocationLabels as seL4_Word;
     pub use seL4_DebugCapIdentify as seL4_CapIdentify;
 
     #[repr(C, align(16))]
     pub struct TlsImage {
         ipc_buffer: *mut seL4_IPCBuffer,
+    }
+
+    impl Default for TlsImage {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl TlsImage {
@@ -1641,6 +1680,7 @@ mod imp {
     pub const seL4_CapDomain: seL4_CPtr = 11;
     pub const seL4_CapSMMUSIDControl: seL4_CPtr = 12;
     pub const seL4_CapSMMUCBControl: seL4_CPtr = 13;
+    pub const invocation_label_TCBSetIPCBuffer: seL4_Word = 9;
     pub const seL4_CapInitThreadSC: seL4_CPtr = 14;
     pub const seL4_CapSMC: seL4_CPtr = 15;
     pub const seL4_NumInitialCaps: seL4_CPtr = seL4_CapSMC + 1;
@@ -1848,8 +1888,18 @@ mod imp {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct seL4_ARM_VMAttributes(pub seL4_Word);
 
+    pub const seL4_ARM_PageCacheable: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0x01);
+    pub const seL4_ARM_ParityEnabled: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0x02);
+    pub const seL4_ARM_ExecuteNever: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0x04);
     pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
     pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0x03);
+
+    pub const invocation_label_nInvocationLabels: seL4_Word = 31;
+    pub const ARMVSpaceClean_Data: seL4_Word = invocation_label_nInvocationLabels;
+    pub const ARMVSpaceInvalidate_Data: seL4_Word = ARMVSpaceClean_Data + 1;
+    pub const ARMVSpaceCleanInvalidate_Data: seL4_Word = ARMVSpaceClean_Data + 2;
+    pub const ARMVSpaceUnify_Instruction: seL4_Word = ARMVSpaceClean_Data + 3;
+    pub const nSeL4ArchInvocationLabels: seL4_Word = ARMVSpaceClean_Data + 5;
 
     pub type seL4_CapData_t = seL4_CNode_CapData;
 
@@ -2101,6 +2151,14 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_SetCap(index: i32, cptr: seL4_CPtr) {
+        let ipc = ensure_ipc_buffer();
+        if let Some(slot) = (*ipc).caps_or_badges.get_mut(index as usize) {
+            *slot = cptr;
+        }
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_SetMR(index: seL4_Word, value: seL4_Word) {
         let ipc = ensure_ipc_buffer();
         if let Some(slot) = (*ipc).msg.get_mut(index as usize) {
@@ -2141,9 +2199,13 @@ mod imp {
     #[inline(always)]
     pub unsafe fn seL4_TCB_SetIPCBuffer(
         _tcb: seL4_TCB,
-        _buffer_addr: seL4_Word,
-        _buffer_frame: seL4_CPtr,
+        buffer_addr: seL4_Word,
+        buffer_frame: seL4_CPtr,
     ) -> seL4_Error {
+        seL4_SetCap(0, buffer_frame);
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBSetIPCBuffer, 0, 1, 1);
+        (*ipc).msg[0] = buffer_addr;
         seL4_NoError
     }
 
@@ -2202,3 +2264,22 @@ mod imp {
 
 #[cfg(not(target_os = "none"))]
 pub use imp::*;
+
+#[cfg(all(test, not(target_os = "none")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tcb_set_ipc_buffer_uses_v13_invocation_shape() {
+        let result = unsafe { seL4_TCB_SetIPCBuffer(0x44, 0x8000_0000, 0x55) };
+        assert_eq!(result, seL4_NoError);
+
+        let ipc = unsafe { seL4_GetIPCBuffer() };
+        let tag = unsafe { (*ipc).tag };
+        assert_eq!(tag.label(), invocation_label_TCBSetIPCBuffer);
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 1);
+        assert_eq!(unsafe { (*ipc).caps_or_badges[0] }, 0x55);
+        assert_eq!(unsafe { (*ipc).msg[0] }, 0x8000_0000);
+    }
+}

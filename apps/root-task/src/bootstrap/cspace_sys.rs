@@ -1,6 +1,6 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Defines the bootstrap/cspace_sys module for root-task.
+// Purpose: Validate and issue canonical seL4 CSpace syscall tuples for root-task bootstrap.
 // Author: Lukas Bower
 //! Thin wrappers around seL4 CSpace syscalls with argument validation helpers.
 #![allow(unsafe_code)]
@@ -45,13 +45,13 @@ pub fn root_cnode() -> seL4_CNode {
 }
 
 #[inline(always)]
-pub fn path_depth(bi: &sys::seL4_BootInfo) -> u8 {
-    init_cnode_bits_u8(bi)
+pub fn path_depth(_bi: &sys::seL4_BootInfo) -> u8 {
+    sys::seL4_WordBits as u8
 }
 
 #[inline(always)]
-pub fn path_depth_word(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    init_cspace_depth_word(bi)
+pub fn path_depth_word(_bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
+    canonical_depth_word()
 }
 
 #[inline(always)]
@@ -59,11 +59,11 @@ pub fn slot_index(slot: sys::seL4_Word) -> sys::seL4_CPtr {
     slot as sys::seL4_CPtr
 }
 
-/// TupleStyle selects whether the init CNode paths are expressed as raw slot indices
-/// (as expected when `initBits` is 13 and the guard depth is zero) or using encoded
-/// tuples that shift the index left by `(WordBits - initBits)`. The root task relies
-/// on the boot-time `initThreadCNode` root (slot 0x0002) and the kernel-advertised
-/// empty window without adjusting depths, so Raw is the default.
+/// TupleStyle selects whether init CNode paths are expressed as full-word raw
+/// CPtrs or guard-encoded slot tuples. The root task relies on the boot-time
+/// `initThreadCNode` root (slot 0x0002) and `seL4_WordBits` path depth so low
+/// slot bits are consumed by the init CNode radix, matching libsel4's initial
+/// `cspacepath_t` convention.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TupleStyle {
     Raw = 0,
@@ -84,19 +84,14 @@ impl TupleStyle {
 }
 
 /// Returns the tuple style used to address the init CNode. Our seL4 configuration
-/// exposes a flat `initThreadCNode` with `initBits = 13`, guard depth zero, and an
-/// empty window `[empty_start..empty_end)` that we must not shift when passing slot
-/// indices to syscalls.
+/// exposes an init CNode capability whose full-word CPtr lookup consumes the
+/// high guard bits and then the low raw slot bits. Slot indices are therefore
+/// passed unshifted with `seL4_WordBits` depth.
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    // The init CNode guard depth is zero on our target configurations, so the kernel
-    // expects raw (unshifted) slot indices when addressing the root CSpace. Upstream
-    // libsel4 constructs the initial `cspacepath_t` for `initThreadCNode` with
-    // `capDepth = seL4_WordBits`, so we mirror that convention here rather than
-    // shifting or truncating the slot. Using a guard-encoded tuple inflates the guard
-    // width to `WordBits - initBits`, causing the kernel to reject otherwise valid
-    // slots as out of range. Default to the raw tuple to ensure bootstrap operations
-    // target the correct slots.
+    // Upstream libsel4 constructs the initial `cspacepath_t` for
+    // `initThreadCNode` with `capDepth = seL4_WordBits`, so mirror that
+    // convention here rather than shifting or truncating the slot.
     TupleStyle::Raw
 }
 
@@ -576,6 +571,9 @@ fn cnode_copy_with_style(
 
     let result = {
         #[cfg(target_os = "none")]
+        // SAFETY: The style-specific indices and full-word depths were derived
+        // from bootinfo for the init CNode; the kernel validates both source
+        // and destination capabilities.
         unsafe {
             debug_log(format_args!(
                 "[cs] op=copy style={style} dst_slot=0x{dst_slot:04x} src_slot=0x{src_slot:04x} depth={depth} root=0x{dst_root:04x}",
@@ -639,6 +637,8 @@ pub fn cnode_delete_with_style(
     let depth_word = path_depth_word(bi);
 
     #[cfg(target_os = "none")]
+    // SAFETY: `root` names the init CNode and `index/depth_word` are computed
+    // from the canonical init-CNode CPtr tuple. seL4 validates the target slot.
     unsafe {
         sys::seL4_CNode_Delete(root, index as sys::seL4_Word, depth_word)
     }
@@ -666,6 +666,8 @@ fn cnode_mint_with_style(
     let depth_word = path_depth_word(bi);
 
     #[cfg(target_os = "none")]
+    // SAFETY: Debug capability identification queries kernel metadata for
+    // existing CPtrs and does not dereference user memory.
     unsafe {
         let dst_ty = sys::seL4_DebugCapIdentify(dst_root);
         let src_ty = sys::seL4_DebugCapIdentify(src_root);
@@ -676,6 +678,9 @@ fn cnode_mint_with_style(
 
     let result = {
         #[cfg(target_os = "none")]
+        // SAFETY: The style-specific source/destination CPtrs and full-word
+        // depths were derived from bootinfo for the init CNode. The kernel
+        // validates rights, badges, and capability authority.
         unsafe {
             debug_log(format_args!(
                 "[cs] op=mint style={style} dst_slot=0x{dst:04x} src_slot=0x{src:04x} depth={depth} badge=0x{badge:04x}",
@@ -754,6 +759,9 @@ fn cnode_move_with_style(
     let depth_word = path_depth_word(bi);
 
     #[cfg(target_os = "none")]
+    // SAFETY: The style-specific source/destination CPtrs and full-word depths
+    // were derived from bootinfo for the init CNode. The kernel validates
+    // capability authority and slot state.
     unsafe {
         debug_log(format_args!(
             "[cs] op=move style={style} dst_slot=0x{dst:04x} src_slot=0x{src:04x} depth={depth}",
@@ -1180,7 +1188,7 @@ pub enum RetypeArgsError {
     NodeIndexMismatch {
         /// Node index supplied by the caller.
         provided: sys::seL4_CPtr,
-        /// Expected canonical guard index.
+        /// Expected init-root CNode index.
         expected: sys::seL4_CPtr,
     },
     /// Destination depth must match the architectural word width used for guard resolution.
@@ -1565,15 +1573,15 @@ pub(crate) fn canonical_depth_word() -> sys::seL4_Word {
     encode_cnode_depth(sys::seL4_WordBits as u8)
 }
 
-/// Depth (in bits) used when traversing the init CNode for syscall arguments.
+/// Full-word CPtr depth used when traversing the init CNode for syscall arguments.
 #[inline(always)]
-fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    encode_cnode_depth(init_cnode_bits_u8(bi))
+fn init_cspace_depth_words(_bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
+    canonical_depth_word()
 }
 
 #[inline(always)]
-fn init_cspace_depth_word(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    encode_cnode_depth(init_cnode_bits_u8(bi))
+fn init_cspace_depth_word(_bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
+    canonical_depth_word()
 }
 
 #[inline(always)]
@@ -1746,9 +1754,9 @@ pub fn cnode_mint(
     );
 
     let style = tuple_style();
-    let depth_bits = init_cnode_bits_u8(bi);
-    let (dst_index, depth_word) = encode_direct_slot(dst_slot_raw as u64, depth_bits);
-    let (src_index, _) = encode_direct_slot(src_slot_raw as u64, depth_bits);
+    let depth_word = cnode_depth(bi, style);
+    let dst_index = enc_index(dst_slot_raw, bi, style);
+    let src_index = enc_index(src_slot_raw, bi, style);
     let style_label = tuple_style_label(style);
 
     ::log::info!(
@@ -1785,9 +1793,9 @@ pub fn cnode_move(
     debug_assert!((src_slot_raw as usize) < limit);
 
     let style = tuple_style();
-    let depth_bits = init_cnode_bits_u8(bi);
-    let (dst_index, depth_word) = encode_direct_slot(dst_slot_raw as u64, depth_bits);
-    let (src_index, _) = encode_direct_slot(src_slot_raw as u64, depth_bits);
+    let depth_word = cnode_depth(bi, style);
+    let dst_index = enc_index(dst_slot_raw, bi, style);
+    let src_index = enc_index(src_slot_raw, bi, style);
     let style_label = tuple_style_label(style);
 
     ::log::info!(
@@ -1831,6 +1839,8 @@ pub fn canonical_cnode_copy(
         src_depth = depth,
         rights_word = rights_word,
     );
+    // SAFETY: `dst_index/src_index` and `depth` are the canonical full-word
+    // init-CNode CPtr tuple. seL4 validates source/destination caps and rights.
     unsafe {
         sys::seL4_CNode_Copy(
             dest_root,
@@ -2047,6 +2057,8 @@ pub mod canonical {
         let depth_word = super::init_cspace_depth_words(bi);
 
         #[cfg(target_os = "none")]
+        // SAFETY: `raw_offset` was validated against the bootinfo empty window
+        // and `depth_word` is the canonical full-word init-CNode path depth.
         let err = unsafe { sys::seL4_CNode_Delete(root, slot_index(raw_offset), depth_word) };
 
         #[cfg(not(target_os = "none"))]
@@ -2081,8 +2093,7 @@ pub mod canonical {
         let offset = dst_slot as sys::seL4_Word;
         let init_cnode_bits = sel4::init_cnode_bits(bi);
         super::check_slot_in_range(init_cnode_bits, dst_slot as sys::seL4_CPtr);
-        let depth_bits = super::bits_as_u8(init_cnode_bits as usize);
-        let depth = super::encode_cnode_depth(depth_bits);
+        let depth = super::canonical_depth_word();
         debug_log(format_args!(
             "[retype:call] ut=0x{ut:x} obj={obj} sz={sz} -> (root,index,depth,raw)=(0x{root:x},{index},{depth},0x{raw:04x})",
             ut = ut,
@@ -2095,6 +2106,9 @@ pub mod canonical {
         ));
 
         #[cfg(target_os = "none")]
+        // SAFETY: `idx/depth` are the canonical init-CNode destination tuple,
+        // `offset` was range-checked against the bootinfo CNode capacity, and
+        // the kernel validates untyped authority and slot state.
         let err = unsafe {
             sys::seL4_Untyped_Retype(
                 ut,
@@ -2102,7 +2116,7 @@ pub mod canonical {
                 sz_bits as sys::seL4_Word,
                 root,
                 idx,
-                sys::seL4_Word::from(depth_bits),
+                depth,
                 offset,
                 1,
             )
@@ -2155,7 +2169,7 @@ pub fn cnode_copy_into_root(dst_slot: u32, bi: &sys::seL4_BootInfo) -> Result<()
     )
 }
 
-/// Issues `seL4_Untyped_Retype` directly into the root CNode using canonical guard parameters.
+/// Issues `seL4_Untyped_Retype` directly into the root CNode using direct init-CSpace addressing.
 pub fn retype_into_root(
     untyped: sys::seL4_CPtr,
     obj_type: sys::seL4_Word,
@@ -2170,16 +2184,21 @@ pub fn retype_into_root(
 
     let style = tuple_style();
     let index = init_root_index();
-    let depth_bits = bits_as_u8(init_cnode_bits as usize);
-    let depth = encode_cnode_depth(depth_bits);
+    let depth = canonical_depth_word();
+    #[cfg(target_os = "none")]
+    let depth_bits = bits_as_u8(depth as usize);
 
     #[cfg(all(target_os = "none", debug_assertions))]
     {
+        // SAFETY: Debug capability identification queries kernel metadata for
+        // the known init CNode cap and does not dereference user memory.
         let ident = unsafe { sys::seL4_DebugCapIdentify(root) };
         debug_log(format_args!(
             "[debug] Identify(root CNode) = {}",
             ident as u64
         ));
+        // SAFETY: This is a debug-only negative probe against `seL4_CapNull`.
+        // It is expected to fail without mutating a valid destination.
         let rc = unsafe {
             sys::seL4_CNode_Move(
                 root,
@@ -2234,16 +2253,7 @@ pub fn retype_into_root(
 
     #[cfg(target_os = "none")]
     let err = unsafe {
-        sys::seL4_Untyped_Retype(
-            untyped,
-            obj_type,
-            size_bits,
-            root,
-            index,
-            encode_cnode_depth(depth_bits),
-            offset,
-            1,
-        )
+        sys::seL4_Untyped_Retype(untyped, obj_type, size_bits, root, index, depth, offset, 1)
     };
 
     #[cfg(not(target_os = "none"))]
@@ -2428,6 +2438,7 @@ pub fn untyped_retype_into_init_root(
         node_offset,
         1,
     );
+    #[cfg(target_os = "none")]
     let node_depth_bits = args.cnode_depth;
 
     log_retype_args(&args);
@@ -2452,6 +2463,9 @@ pub fn untyped_retype_into_init_root(
 
         let num_objects = sys::seL4_Word::try_from(args.num_objects)
             .expect("num_objects must fit within seL4_Word");
+        // SAFETY: `args` was validated against the init-CNode bootinfo window,
+        // uses `seL4_CapInitThreadCNode` with full-word depth, and requests the
+        // caller-specified object count from the supplied untyped capability.
         let err = unsafe {
             sys::seL4_Untyped_Retype(
                 args.ut,
@@ -2510,6 +2524,9 @@ pub fn untyped_retype_into_cnode(
 
     #[cfg(target_os = "none")]
     {
+        // SAFETY: This path targets a non-init destination CNode supplied by
+        // the caller. The caller provides the path depth, and seL4 validates
+        // the destination CNode cap, untyped authority, and slot state.
         let err = unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
@@ -2572,14 +2589,15 @@ pub fn init_cnode_direct_destination_words_for_test(
 
 #[cfg(test)]
 mod tests {
-    use core::convert::TryFrom;
-
     use super::{
-        bi_init_cnode_bits, bi_init_cnode_cptr, canonical, canonical_depth_word,
-        encode_cnode_depth, init_cnode_dest, init_cnode_direct_destination_words_for_test,
-        init_root_index, path_depth, sel4, sys, untyped_retype_into_init_root,
+        bi_init_cnode_cptr, canonical, canonical_depth_word, encode_cnode_depth, init_cnode_dest,
+        init_cnode_direct_destination_words_for_test, init_root_index, sys,
+        untyped_retype_into_init_root,
     };
     use crate::sel4::{blank_bootinfo_for_tests, store_bootinfo_empty_region};
+    use spin::Mutex;
+
+    static BOOTINFO_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn encode_slot_aligns_to_word_bits() {
@@ -2603,6 +2621,7 @@ mod tests {
 
     #[test]
     fn init_cnode_dest_radix_depth_is_valid() {
+        let _guard = BOOTINFO_TEST_LOCK.lock();
         #[cfg(not(target_os = "none"))]
         unsafe {
             let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
@@ -2619,7 +2638,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_depth_tracks_bootinfo_bits() {
+    fn canonical_depth_is_full_word_cptr_depth() {
         #[cfg(not(target_os = "none"))]
         unsafe {
             let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
@@ -2627,12 +2646,13 @@ mod tests {
             super::install_test_bootinfo_for_tests(bootinfo);
         }
 
-        let expected_depth = encode_cnode_depth(bi_init_cnode_bits() as u8);
+        let expected_depth = encode_cnode_depth(sys::seL4_WordBits as u8);
         assert_eq!(canonical_depth_word(), expected_depth);
     }
 
     #[test]
     fn retype_into_init_root_uses_canonical_tuple() {
+        let _guard = BOOTINFO_TEST_LOCK.lock();
         #[cfg(not(target_os = "none"))]
         unsafe {
             let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
@@ -2666,16 +2686,17 @@ mod tests {
                 panic!("expected host trace for init-root retype");
             }
         }
+    }
 
-        #[test]
-        fn bits_helper_reexport_available() {
-            let value = super::super_bits_as_u8_for_test(13usize);
-            assert_eq!(value, 13);
-        }
+    #[test]
+    fn bits_helper_reexport_available() {
+        let value = super::super_bits_as_u8_for_test(13usize);
+        assert_eq!(value, 13);
     }
 
     #[test]
     fn init_cnode_retype_dest_matches_canonical_tuple() {
+        let _guard = BOOTINFO_TEST_LOCK.lock();
         #[cfg(not(target_os = "none"))]
         unsafe {
             let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
@@ -2767,6 +2788,7 @@ mod tests {
     fn init_cnode_dest_rejects_out_of_range_slot() {
         use std::panic;
 
+        let _guard = BOOTINFO_TEST_LOCK.lock();
         unsafe {
             let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
             bootinfo.initThreadCNodeSizeBits = 5;
@@ -2791,7 +2813,7 @@ mod tests {
         let bootinfo = mock_bootinfo(0x20, 0x40, 6);
         let path = super::RootPath::from_bootinfo(0x22 as sys::seL4_CPtr, &bootinfo);
         assert_eq!(path.root, sys::seL4_CapInitThreadCNode);
-        assert_eq!(path.index, 0);
+        assert_eq!(path.index, init_root_index());
         assert_eq!(path.depth, canonical_depth_word());
         assert_eq!(path.offset(), 0x22);
     }
@@ -2851,16 +2873,13 @@ mod tests {
     #[test]
     fn canonical_retype_records_host_trace() {
         while super::host_trace::take_last().is_some() {}
-        let bootinfo = mock_bootinfo(0x100, 0x180, 8);
+        let bootinfo = mock_bootinfo(0x100, 0x180, 9);
         let result = canonical::retype_into_root(0xAA, 4, 12, 0x120, &bootinfo);
         assert!(result.is_ok());
         let trace = super::host_trace::take_last().expect("expected host trace entry");
         assert_eq!(trace.root, sys::seL4_CapInitThreadCNode);
         assert_eq!(trace.node_index, init_root_index());
-        assert_eq!(
-            trace.node_depth,
-            bootinfo.initThreadCNodeSizeBits as sys::seL4_Word
-        );
+        assert_eq!(trace.node_depth, canonical_depth_word());
         assert_eq!(trace.node_offset, 0x120);
         assert_eq!(trace.object_type, 4);
         assert_eq!(trace.size_bits, 12);

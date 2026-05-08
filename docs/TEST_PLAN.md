@@ -522,7 +522,7 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
     - `detail=dhcp-pending`
     - `detail=not-ready:<root-ep|ipc-buffer|cspace-window|bootstrap-commit>`
     - `detail=policy-disabled` or `detail=selftest-disabled` when the profile/runtime disables self-test
-  - explicit `wifi` now supports both `static` and `dhcp` through the HAL-backed CYW43455 path; `auto` remains DHCP-only, and final 26b completion still requires Pi 4 hardware captures proving join + DHCP and `auto` fallback behavior.
+  - explicit `wifi` now supports both `static` and `dhcp` through the HAL-backed CYW43455 path; `auto` remains DHCP-only with wired fallback limited to CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack, and final 26b completion still requires Pi 4 hardware captures proving join + DHCP and that attach/join fallback behavior.
 
 ### 7) Release bundle validation (macOS + Ubuntu)
 Run Sections 3–5 using the extracted bundle in a clean temp directory (not the repo checkout).

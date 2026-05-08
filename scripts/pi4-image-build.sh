@@ -211,16 +211,16 @@ resolve_sel4_source_dir() {
     printf "%s\n" "$inferred"
 }
 
-ensure_pi4_sel4_xhci_overlay() {
+verify_pi4_sel4_xhci_device_untyped() {
     local sel4_source_dir="$1"
     local overlay_path=""
+    local generated_dts="${SEL4_BUILD_DIR}/kernel/kernel.dts"
     local candidate=""
     local -a overlay_candidates=(
         "${sel4_source_dir}/kernel/src/plat/bcm2711/overlay-rpi4.dts"
         "${sel4_source_dir}/../kernel/src/plat/bcm2711/overlay-rpi4.dts"
         "${sel4_source_dir}/../../kernel/src/plat/bcm2711/overlay-rpi4.dts"
     )
-    local python_bin=""
 
     for candidate in "${overlay_candidates[@]}"; do
         if [[ -f "${candidate}" ]]; then
@@ -230,42 +230,16 @@ ensure_pi4_sel4_xhci_overlay() {
     done
     [[ -n "${overlay_path}" ]] || \
       fail "required file missing: Pi4 seL4 overlay-rpi4.dts under ${sel4_source_dir}"
-    if grep -q 'device-untypes@600000000' "${overlay_path}"; then
-        log "Verified Pi4 seL4 overlay exposes device-untypes@600000000 (${overlay_path})"
-        return 0
-    fi
-
-    python_bin="$(command -v python3 || true)"
-    [[ -n "${python_bin}" ]] || fail "python3 is required to update ${overlay_path}"
-
-    "${python_bin}" - "${overlay_path}" <<'PY'
-from pathlib import Path
-import sys
-
-overlay_path = Path(sys.argv[1])
-text = overlay_path.read_text()
-needle = '\t};\n\n\t/*\n'
-block = '''\tdevice-untypes@600000000 {
-\t\t/*
-\t\t * Pi 4 U-Boot discovers the VL805 xHCI controller behind PCIe and
-\t\t * maps BAR0 at 0x600000000. Expose that controller window as a
-\t\t * device untyped so userspace can rediscover and map xHCI after the
-\t\t * bootloader quiesces USB for handoff.
-\t\t */
-\t\treg = <0x00000006 0x00000000 0x00040000>;
-\t};
-
-'''
-if 'device-untypes@600000000' in text:
-    raise SystemExit(0)
-if needle not in text:
-    raise SystemExit('overlay insert anchor not found')
-overlay_path.write_text(text.replace(needle, '\t};\n\n' + block + '\t/*\n', 1))
-PY
 
     grep -q 'device-untypes@600000000' "${overlay_path}" || \
-      fail "failed to patch ${overlay_path} with device-untypes@600000000"
-    log "Patched Pi4 seL4 overlay with device-untypes@600000000 (${overlay_path})"
+      fail "Pi4 seL4 overlay is missing device-untypes@600000000 (${overlay_path}); update the external seL4 tree intentionally and rebuild. This proof script does not patch kernel sources."
+
+    if [[ -f "${generated_dts}" ]]; then
+        grep -q 'device-untypes@600000000' "${generated_dts}" || \
+          fail "generated seL4 kernel.dts is missing device-untypes@600000000 (${generated_dts}); reconfigure/rebuild ${SEL4_BUILD_DIR}"
+    fi
+
+    log "Verified Pi4 seL4 device-untyped source/artifact for VL805 BAR0 (${overlay_path})"
 }
 
 configure_pi4_sel4_build() {
@@ -498,7 +472,7 @@ rebuild_sel4_pi4_uboot_tree() {
     local jobs=""
 
     sel4_source_dir="$(resolve_sel4_source_dir)"
-    ensure_pi4_sel4_xhci_overlay "${sel4_source_dir}"
+    verify_pi4_sel4_xhci_device_untyped "${sel4_source_dir}"
     configure_pi4_sel4_build "${sel4_source_dir}"
 
     jobs="$(sysctl -n hw.ncpu)"
@@ -698,7 +672,7 @@ build_pi4_image() {
     export SEL4_LD="${ROOT_DIR}/apps/root-task/sel4.ld"
 
     sel4_source_dir="$(resolve_sel4_source_dir)"
-    ensure_pi4_sel4_xhci_overlay "$sel4_source_dir"
+    verify_pi4_sel4_xhci_device_untyped "$sel4_source_dir"
     configure_pi4_sel4_build "$sel4_source_dir"
 
     if [[ "${MANIFEST_PATH}" == *.toml ]]; then
@@ -1205,6 +1179,9 @@ main() {
     if [[ "$SKIP_BUILD" -eq 0 ]]; then
         build_pi4_image
     else
+        local sel4_source_dir
+        sel4_source_dir="$(resolve_sel4_source_dir)"
+        verify_pi4_sel4_xhci_device_untyped "$sel4_source_dir"
         log "Skipping build (--skip-build)"
     fi
 

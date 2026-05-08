@@ -1,6 +1,6 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Defines the bootstrap/cspace module for root-task.
+// Purpose: Manage root-task bootstrap CSpace windows and canonical seL4 CNode paths.
 // Author: Lukas Bower
 #![allow(unsafe_code)]
 
@@ -32,7 +32,7 @@ const MAX_DIAGNOSTIC_LEN: usize = 224;
 pub struct CSpaceWindow {
     /// Root CNode capability designating the init thread's CSpace.
     pub root: sel4::seL4_CPtr,
-    /// Canonical guard-less root capability that can address kernel slots below the advertised window.
+    /// Canonical init CNode root capability that can address kernel slots below the advertised window.
     pub canonical_root: sel4::seL4_CPtr,
     /// Radix width (in bits) of the init CNode as reported by bootinfo.
     pub bits: u8,
@@ -111,7 +111,7 @@ impl CSpaceWindow {
     }
 }
 
-/// Ensures the init CSpace exposes a guard-encoded alias that accepts canonical tuples.
+/// Publishes the init CNode capability as the canonical root used for seL4 CSpace tuples.
 pub fn ensure_canonical_root_alias(
     _bi: &seL4_BootInfo,
 ) -> Result<sel4::seL4_CPtr, sel4::seL4_Error> {
@@ -204,7 +204,7 @@ impl InitCNode {
         let root = seL4_CapInitThreadCNode;
         let bits = sel4::canonical_cnode_bits(bi);
         let depth = sel4::canonical_cnode_depth(bits, sel4::WORD_BITS as u8) as seL4_Word;
-        let index = 0;
+        let index = seL4_CapInitThreadCNode;
         let empty = SlotRange::new(bi.empty.start as seL4_Word, bi.empty.end as seL4_Word);
         Self {
             path: CNodePath::new(root, index, depth),
@@ -250,7 +250,7 @@ pub fn root_cnode_path(
     dst_slot: seL4_Word,
 ) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
     let depth = sel4::canonical_cnode_depth(init_cnode_bits, sel4::WORD_BITS as u8) as seL4_Word;
-    let path = CNodePath::new(root_cnode(), 0, depth);
+    let path = CNodePath::new(root_cnode(), seL4_CapInitThreadCNode, depth);
     guard_root_path(
         init_cnode_bits,
         path.index as seL4_Word,
@@ -269,8 +269,8 @@ pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, 
         "depth must equal canonical init cnode depth"
     );
     assert_eq!(
-        index, 0,
-        "node index must be zero for init CNode direct path"
+        index, seL4_CapInitThreadCNode as seL4_Word,
+        "node index must address seL4_CapInitThreadCNode for init CNode direct path"
     );
     let limit = if init_cnode_bits as usize >= usize::BITS as usize {
         usize::MAX
@@ -473,8 +473,8 @@ pub fn first_endpoint_retype(
     slot: seL4_CPtr,
 ) -> Result<(), seL4_Error> {
     let dst_root = root_cnode();
-    let node_index = sel4::init_cnode_index_word() as u32;
-    let node_depth = sel4::init_cnode_depth(bi) as seL4_Word;
+    let node_index = cspace_sys::init_root_index() as u32;
+    let node_depth = cspace_sys::canonical_depth_word();
     let node_off = slot as seL4_Word;
 
     log::info!(
@@ -1324,4 +1324,42 @@ impl CSpaceCtx {
 impl CSpaceCtx {
     #[inline(always)]
     fn debug_identify_destinations(&self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sel4::blank_bootinfo_for_tests;
+
+    fn mock_bootinfo(empty_start: u32, empty_end: u32, bits: u8) -> seL4_BootInfo {
+        let mut bootinfo = blank_bootinfo_for_tests();
+        bootinfo.empty = sel4_sys::seL4_SlotRegion {
+            start: empty_start as seL4_Word,
+            end: empty_end as seL4_Word,
+        };
+        bootinfo.initThreadCNodeSizeBits = bits;
+        bootinfo
+    }
+
+    #[test]
+    fn root_cnode_path_uses_init_cnode_slot_and_word_depth() {
+        let (root, index, depth, offset) = root_cnode_path(13, 0x120);
+
+        assert_eq!(root, seL4_CapInitThreadCNode);
+        assert_eq!(index, seL4_CapInitThreadCNode as seL4_Word);
+        assert_eq!(depth, sel4_sys::seL4_WordBits as seL4_Word);
+        assert_eq!(offset, 0x120);
+    }
+
+    #[test]
+    fn init_cnode_from_bootinfo_matches_sel4_full_word_tuple() {
+        let bootinfo = mock_bootinfo(0x100, 0x200, 13);
+        let init = InitCNode::from_bootinfo(&bootinfo);
+
+        assert_eq!(init.path.root, seL4_CapInitThreadCNode);
+        assert_eq!(init.path.index, seL4_CapInitThreadCNode);
+        assert_eq!(init.path.depth, sel4_sys::seL4_WordBits as seL4_Word);
+        assert_eq!(init.empty, SlotRange::new(0x100, 0x200));
+        assert_eq!(init.bits, 13);
+    }
 }

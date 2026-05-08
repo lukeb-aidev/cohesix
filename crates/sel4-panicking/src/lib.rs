@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the sel4-panicking library and public module surface.
 // Author: Lukas Bower
@@ -88,6 +88,10 @@ mod fallback {
             SINK_CONTEXT.store(core::ptr::null_mut(), Ordering::SeqCst);
             return None;
         }
+        // SAFETY: `emit_ptr` is written only by `install_sink` from a
+        // `unsafe extern "C" fn(*mut (), u8)` value. The round trip preserves
+        // the function pointer ABI and is rejected above if the stored address
+        // is null, unexpectedly low, or misaligned.
         let emit =
             unsafe { core::mem::transmute::<usize, unsafe extern "C" fn(*mut (), u8)>(emit_ptr) };
         Some(DebugSink { context, emit })

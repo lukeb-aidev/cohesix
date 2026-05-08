@@ -1424,6 +1424,8 @@ fn emit_xhci_diag(stage: u16, a: u64, b: u64, c: u64) {
 fn ring_write_barrier() {
     compiler_fence(Ordering::Release);
     #[cfg(target_arch = "aarch64")]
+    // SAFETY: This emits a store-only data memory barrier and does not touch
+    // registers, memory operands, or the stack.
     unsafe {
         core::arch::asm!("dmb oshst", options(nostack, preserves_flags));
     }
@@ -1435,6 +1437,8 @@ fn ring_write_barrier() {
 fn mmio_write_relaxed_barrier() {
     compiler_fence(Ordering::Release);
     #[cfg(target_arch = "aarch64")]
+    // SAFETY: This emits a store-only data memory barrier and does not touch
+    // registers, memory operands, or the stack.
     unsafe {
         // The cold-start mailbox-reset runtime handoff still benefits from a
         // device-visible store barrier before touching live operational state,
@@ -1457,6 +1461,8 @@ fn mmio_write_release_only_barrier() {
 #[inline(always)]
 fn mmio_write_barrier() {
     compiler_fence(Ordering::Release);
+    // SAFETY: Emits a single architectural barrier instruction, does not touch
+    // memory or registers, and preserves flags/stack.
     #[cfg(target_arch = "aarch64")]
     unsafe {
         // Match U-Boot's ARM `writel()` ordering exactly on the trusted Pi 4
@@ -1470,6 +1476,8 @@ fn mmio_write_barrier() {
 #[inline(always)]
 fn mmio_read_barrier() {
     compiler_fence(Ordering::Acquire);
+    // SAFETY: Emits a single architectural barrier instruction, does not touch
+    // memory or registers, and preserves flags/stack.
     #[cfg(target_arch = "aarch64")]
     unsafe {
         // Match U-Boot's ARM `readl()` ordering exactly on the trusted Pi 4
@@ -1704,6 +1712,8 @@ impl<H: Dma> ScratchpadSet<H> {
             // Scratchpad buffers are page-sized and page-aligned.
             let page = PhysMem::alloc(host, host.page_size(), host.page_size())?;
             let phys = page.phys(host);
+            // SAFETY: `array_ptr` points at the owned scratchpad pointer array
+            // allocation and `index < count` by loop construction.
             unsafe {
                 array_ptr.add(index).write_volatile(phys);
             }
@@ -1853,9 +1863,31 @@ const fn compose_brcm_usbaxi_attr(current: u32) -> u32 {
     (current & !BRCM_XHCI_USBAXI_SA_UA_MASK) | BRCM_XHCI_USBAXI_SA_UA_VAL
 }
 
+#[inline(always)]
+const fn xhci_port_in_range(port: u8, max_ports: u8) -> bool {
+    port < max_ports
+}
+
+#[inline(always)]
+const fn xhci_slot_in_range(slot: u8, max_slots: u8) -> bool {
+    slot <= max_slots
+}
+
 impl<H: Dma> XhciCtrl<H> {
     #[inline(always)]
+    fn port_in_range(&self, port: u8) -> bool {
+        xhci_port_in_range(port, self.max_ports)
+    }
+
+    #[inline(always)]
+    fn slot_in_range(&self, slot: u8) -> bool {
+        xhci_slot_in_range(slot, self.max_slots)
+    }
+
+    #[inline(always)]
     fn read_reg_at<T: Copy>(mmio: usize, offset: usize) -> T {
+        // SAFETY: Callers pass offsets within the mapped xHCI MMIO aperture and
+        // `T` is only used for register-width volatile loads.
         let val = unsafe { ((mmio + offset) as *const T).read_volatile() };
         mmio_read_barrier();
         val
@@ -1866,6 +1898,8 @@ impl<H: Dma> XhciCtrl<H> {
         // Match U-Boot's `readl`/`writel` ordering discipline on ARM before
         // touching live controller registers after firmware handoff.
         mmio_write_barrier();
+        // SAFETY: Callers pass offsets within the mapped xHCI MMIO aperture and
+        // `T` is only used for register-width volatile stores.
         unsafe {
             ((mmio + offset) as *mut T).write_volatile(val);
         }
@@ -1905,6 +1939,8 @@ impl<H: Dma> XhciCtrl<H> {
             val as u64,
             diag_ctx,
         );
+        // SAFETY: The register offset is within the mapped xHCI MMIO aperture;
+        // this helper performs one volatile u32 store after the selected barrier.
         unsafe {
             ((mmio + offset) as *mut u32).write_volatile(val);
         }
@@ -1931,6 +1967,8 @@ impl<H: Dma> XhciCtrl<H> {
             val as u64,
             diag_ctx,
         );
+        // SAFETY: The register offset is within the mapped xHCI MMIO aperture;
+        // this helper performs one volatile u32 store after the selected barrier.
         unsafe {
             ((mmio + offset) as *mut u32).write_volatile(val);
         }
@@ -1957,6 +1995,8 @@ impl<H: Dma> XhciCtrl<H> {
             val as u64,
             diag_ctx,
         );
+        // SAFETY: The register offset is within the mapped xHCI MMIO aperture;
+        // this helper performs one volatile u32 store after the selected barrier.
         unsafe {
             ((mmio + offset) as *mut u32).write_volatile(val);
         }
@@ -2211,17 +2251,25 @@ impl<H: Dma> XhciCtrl<H> {
         let host = Arc::new(host);
 
         // Initial map to read capability registers
+        // SAFETY: The HAL maps the requested xHCI capability page as device
+        // memory; the returned virtual address is unmapped before full remap.
         let init_mmio =
             unsafe { host.map_mmio(mmio_phys, MMIO_INIT_SIZE) }.ok_or(UsbError::MapFail)?;
         emit_xhci_diag(0x0101, init_mmio as u64, MMIO_INIT_SIZE as u64, 0);
 
+        // SAFETY: The initial mapping covers the fixed xHCI capability header.
         let cap_length = unsafe { (init_mmio as *const u8).read_volatile() };
+        // SAFETY: The initial mapping covers the fixed xHCI capability header.
         let hcs1: u32 = unsafe { ((init_mmio + reg::HCSPARAMS1) as *const u32).read_volatile() };
+        // SAFETY: The initial mapping covers the fixed xHCI capability header.
         let hcs2: u32 = unsafe { ((init_mmio + reg::HCSPARAMS2) as *const u32).read_volatile() };
+        // SAFETY: The initial mapping covers the fixed xHCI capability header.
         let hccparams1: u32 =
             unsafe { ((init_mmio + reg::HCCPARAMS1) as *const u32).read_volatile() };
+        // SAFETY: The initial mapping covers the xHCI capability DBOFF register.
         let db_offset_raw: u32 =
             unsafe { ((init_mmio + reg::DBOFF) as *const u32).read_volatile() };
+        // SAFETY: The initial mapping covers the xHCI capability RTSOFF register.
         let rts_offset_raw: u32 =
             unsafe { ((init_mmio + reg::RTSOFF) as *const u32).read_volatile() };
         let db_offset = xhci_dboff_offset(db_offset_raw);
@@ -2246,6 +2294,8 @@ impl<H: Dma> XhciCtrl<H> {
             skip_initial_live_operational_reads: false,
         };
 
+        // SAFETY: `init_mmio` is the live mapping returned by `map_mmio` above
+        // with the same size.
         unsafe {
             host.unmap_mmio(init_mmio, MMIO_INIT_SIZE);
         }
@@ -2282,6 +2332,8 @@ impl<H: Dma> XhciCtrl<H> {
         );
 
         // Remap with full size
+        // SAFETY: `mmio_size` is derived from validated xHCI capability
+        // offsets and maps the full controller aperture through the HAL.
         let mmio = unsafe { host.map_mmio(mmio_phys, mmio_size) }.ok_or(UsbError::MapFail)?;
         emit_xhci_diag(0x0105, mmio as u64, mmio_size as u64, 0);
         Self::apply_brcm_axi_setup(mmio, params.apply_brcm_axi_setup);
@@ -2323,6 +2375,8 @@ impl<H: Dma> XhciCtrl<H> {
         emit_xhci_diag(0x010a, max_scratchpad as u64, host.page_size() as u64, 0);
         let scratchpad = if max_scratchpad > 0 {
             let set = ScratchpadSet::build(&*host, max_scratchpad as usize)?;
+            // SAFETY: DCBAA entry 0 is the scratchpad array pointer; `dcbaa`
+            // is the owned controller DCBAA allocation.
             unsafe {
                 dcbaa.as_ptr::<u64>().write_volatile(set.array.phys(&*host));
             }
@@ -2885,10 +2939,8 @@ impl<H: Dma> XhciCtrl<H> {
             scratchpad.share_for_device(&*self.host)?;
         }
         if deferred_scratchpad_array_phys.is_some() {
-            // SAFETY: DCBAA entry 0 is the scratchpad array pointer owned by
-            // controller init. On the trusted mailbox-reset path we keep it
-            // clear until after DCBAAP / CRCR / ERST are published so runtime
-            // matches U-Boot's safer handoff ordering more closely.
+            // SAFETY: DCBAA entry 0 is the controller-owned scratchpad pointer;
+            // it is intentionally kept clear until DCBAAP/CRCR/ERST are live.
             unsafe {
                 self.dcbaa.as_ptr::<u64>().write_volatile(0);
             }
@@ -3585,10 +3637,8 @@ impl<H: Dma> XhciCtrl<H> {
 
         if let Some(scratchpad_array_phys) = deferred_scratchpad_array_phys {
             if !skip_fresh_runtime_ownership_publish {
-                // SAFETY: DCBAA entry 0 remains controller-init-owned state. Once
-                // runtime has published DCBAAP / CRCR / ERST on the trusted
-                // mailbox-reset path, republishing the scratchpad array pointer
-                // restores the standard xHCI layout before the controller runs.
+                // SAFETY: DCBAA entry 0 remains controller-init-owned state and
+                // is republished only after DCBAAP/CRCR/ERST are live.
                 unsafe {
                     self.dcbaa
                         .as_ptr::<u64>()
@@ -3809,6 +3859,8 @@ impl<H: Dma> XhciCtrl<H> {
                 run_usbcmd as u64,
                 3,
             );
+            // SAFETY: This is the trusted handoff RUN write to the live xHCI
+            // USBCMD register inside the mapped operational register aperture.
             unsafe {
                 ((self.op_base + reg::USBCMD) as *mut u32).write_volatile(run_usbcmd);
             }
@@ -4531,8 +4583,11 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let (dequeue, cycle) = event_ring.debug_state();
         for index in 0..COMMAND_EVENT_RING_DEBUG_TRBS {
-            let trb = event_ring.debug_trb_at(index).unwrap_or_default();
             let state = ((index as u64) << 32) | ((dequeue as u64) << 1) | u64::from(cycle);
+            let Some(trb) = event_ring.debug_trb_at(index) else {
+                emit_xhci_diag(base_stage + index as u16, 0, 0, state | (1u64 << 63));
+                continue;
+            };
             emit_xhci_diag(
                 base_stage + index as u16,
                 trb.param,
@@ -4546,8 +4601,11 @@ impl<H: Dma> XhciCtrl<H> {
         let cmd_ring = self.cmd_ring.lock();
         let (enqueue, cycle) = cmd_ring.debug_state();
         for index in 0..COMMAND_RING_DEBUG_TRBS {
-            let trb = cmd_ring.debug_trb_at(index).unwrap_or_default();
             let state = ((index as u64) << 32) | ((enqueue as u64) << 1) | u64::from(cycle);
+            let Some(trb) = cmd_ring.debug_trb_at(index) else {
+                emit_xhci_diag(base_stage + index as u16, 0, 0, state | (1u64 << 63));
+                continue;
+            };
             emit_xhci_diag(
                 base_stage + index as u16,
                 trb.param,
@@ -4986,18 +5044,30 @@ impl<H: Dma> XhciCtrl<H> {
 
     /// Read port status
     pub fn port_status(&self, port: u8) -> u32 {
+        if !self.port_in_range(port) {
+            emit_xhci_diag(0x03f0, port as u64, self.max_ports as u64, 0);
+            return 0;
+        }
         let offset = reg::port_reg_base(self.cap_length, port);
         self.read_reg(offset)
     }
 
     /// Write port status (for clearing change bits, reset, etc.)
     pub fn write_port_status(&self, port: u8, val: u32) {
+        if !self.port_in_range(port) {
+            emit_xhci_diag(0x03f1, port as u64, self.max_ports as u64, val as u64);
+            return;
+        }
         let offset = reg::port_reg_base(self.cap_length, port);
         self.write_reg(offset, val);
     }
 
     /// Reset a port
     pub fn reset_port(&self, port: u8) -> Result<()> {
+        if !self.port_in_range(port) {
+            emit_xhci_diag(0x03f2, port as u64, self.max_ports as u64, 0);
+            return Err(UsbError::InvPort);
+        }
         let offset = reg::port_reg_base(self.cap_length, port);
         let mut portsc: u32 = self.read_reg(offset);
         emit_xhci_diag(0x0280, port as u64, encode_port_diag(portsc), 0);
@@ -5165,6 +5235,12 @@ impl<H: Dma> XhciCtrl<H> {
 
     /// Set device context in DCBAA
     pub fn set_device_context(&self, slot: u8, phys: u64) {
+        if !self.slot_in_range(slot) {
+            emit_xhci_diag(0x03f3, slot as u64, self.max_slots as u64, phys);
+            return;
+        }
+        // SAFETY: `slot` is allocated by the controller and indexes the owned
+        // DCBAA; the caller supplies the DMA address for that slot's context.
         unsafe {
             self.dcbaa
                 .as_ptr::<u64>()
@@ -5175,6 +5251,12 @@ impl<H: Dma> XhciCtrl<H> {
 
     /// Reads the current DCBAA slot entry for diagnostics.
     pub fn device_context_entry(&self, slot: u8) -> u64 {
+        if !self.slot_in_range(slot) {
+            emit_xhci_diag(0x03f4, slot as u64, self.max_slots as u64, 0);
+            return 0;
+        }
+        // SAFETY: `slot` is bounded by controller slot allocation when this
+        // diagnostic is called; this performs a by-value volatile read.
         unsafe {
             self.dcbaa
                 .as_ptr::<u64>()
@@ -5300,6 +5382,7 @@ mod tests {
         COMMAND_WAIT_SPINS, LINUX_COMMAND_PROBE_IMOD, READY_WAIT_PROGRESS_SPINS,
         SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
         TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
+        xhci_port_in_range, xhci_slot_in_range,
     };
     use crate::{reg, ring::trb_type, Dma};
     use alloc::vec;
@@ -5347,6 +5430,16 @@ mod tests {
         let hcs1 = 32u32 | (8u32 << 24);
         let parsed = parse_controller_params(0x40, hcs1, 0, 0x1000, 0x2000);
         assert!(parsed.is_some());
+    }
+
+    #[test]
+    fn xhci_port_and_slot_bounds_are_controller_derived() {
+        assert!(xhci_port_in_range(0, 4));
+        assert!(xhci_port_in_range(3, 4));
+        assert!(!xhci_port_in_range(4, 4));
+        assert!(xhci_slot_in_range(0, 32));
+        assert!(xhci_slot_in_range(32, 32));
+        assert!(!xhci_slot_in_range(33, 32));
     }
 
     #[test]
@@ -8322,6 +8415,8 @@ impl<H: Dma> Drop for XhciCtrl<H> {
         }
 
         // Unmap MMIO
+        // SAFETY: `self.mmio` is the mapping created during controller
+        // construction with `self.mmio_size`, and drop runs exactly once.
         unsafe {
             self.host.unmap_mmio(self.mmio, self.mmio_size);
         }

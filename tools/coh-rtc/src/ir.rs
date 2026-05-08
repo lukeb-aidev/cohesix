@@ -549,8 +549,18 @@ impl Manifest {
                 if !has_wifi_device {
                     bail!("profile.name={profile_name} wifi mode requires hw.devices[] kind=wifi");
                 }
-                if self.hw.network.mode != NetworkMode::Dhcp {
-                    bail!("profile.name={profile_name} wifi mode requires hw.network.mode=dhcp");
+                if self.hw.network.backend != NetworkBackendKind::BcmGenetV5 {
+                    bail!(
+                        "profile.name={profile_name} wifi mode requires hw.network.backend=bcmgenet-v5"
+                    );
+                }
+                if !matches!(
+                    self.hw.network.mode,
+                    NetworkMode::Dhcp | NetworkMode::Static
+                ) {
+                    bail!(
+                        "profile.name={profile_name} wifi mode requires hw.network.mode=dhcp|static"
+                    );
                 }
             }
             NetworkInterfacePolicy::Auto => {
@@ -2565,6 +2575,7 @@ mod tests {
         manifest.hw.no_nic = false;
         manifest.features.net_console = true;
         manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
         manifest.hw.network.mode = NetworkMode::Dhcp;
         manifest.hw.network.interface = NetworkInterfacePolicy::Wifi;
         let err = manifest
@@ -2600,6 +2611,7 @@ mod tests {
         manifest.hw.no_nic = false;
         manifest.features.net_console = true;
         manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
         manifest.hw.network.mode = NetworkMode::Dhcp;
         manifest.hw.network.interface = NetworkInterfacePolicy::Wifi;
         manifest.hw.devices.push(HardwareDevice {
@@ -2610,6 +2622,28 @@ mod tests {
         manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect("valid pi4 wifi DHCP manifest should validate");
+    }
+
+    #[test]
+    fn pi4_profile_accepts_wifi_static_configuration() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.no_nic = false;
+        manifest.features.net_console = true;
+        manifest.hw.network.enabled = true;
+        manifest.hw.network.backend = NetworkBackendKind::BcmGenetV5;
+        manifest.hw.network.mode = NetworkMode::Static;
+        manifest.hw.network.interface = NetworkInterfacePolicy::Wifi;
+        manifest.hw.network.static_ipv4.ip = "192.168.20.42".to_owned();
+        manifest.hw.network.static_ipv4.prefix_len = 24;
+        manifest.hw.network.static_ipv4.gateway = Some("192.168.20.1".to_owned());
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Wifi,
+            id: "cyw43xx0".to_owned(),
+            required: false,
+        });
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("valid pi4 wifi static manifest should validate");
     }
 
     #[test]

@@ -529,8 +529,8 @@ fn log_text_span() {
         { DEFAULT_RX_CAPACITY },
         { DEFAULT_TX_CAPACITY },
         { DEFAULT_LINE_CAPACITY },
-    >::handle_command as usize;
-    let retype_ptr = cspace_sys::untyped_retype_into_init_root as usize;
+    >::handle_command as *const () as usize;
+    let retype_ptr = cspace_sys::untyped_retype_into_init_root as *const () as usize;
     log::info!(
         "[dbg] anchors: handle_cmd={:#x} retype_call={:#x}",
         handle_ptr,
@@ -830,6 +830,9 @@ fn parse_dtb_ipv4_address(value: &[u8]) -> Option<[u8; 4]> {
         *octet = parse_dtb_decimal_u8(segments.next()?)?;
     }
     if segments.next().is_some() {
+        return None;
+    }
+    if octets == [0; 4] {
         return None;
     }
     Some(octets)
@@ -6505,7 +6508,7 @@ impl KernelIpc {
             self.debug_uart_announced = true;
         }
         let mut badge: sel4_sys::seL4_Word = 0;
-        let info = unsafe { sel4_sys::seL4_Poll(self.control_ep.raw(), &mut badge) };
+        let info = sel4::poll(self.control_ep.raw(), &mut badge);
         if !Self::message_present(&info, badge) {
             if bootstrap {
                 log::trace!(
@@ -6952,6 +6955,34 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn resolve_pi4_boot_net_policy_rejects_unspecified_static_gateway_override() {
+        let dtb = build_test_pi4_net_policy_dtb(&[
+            (super::COHESIX_DTB_NET_MODE_PROP, b"static\0"),
+            (super::COHESIX_DTB_STATIC_IP_PROP, b"192.168.10.42\0"),
+            (super::COHESIX_DTB_STATIC_PREFIX_PROP, b"24\0"),
+            (super::COHESIX_DTB_STATIC_GATEWAY_PROP, b"0.0.0.0\0"),
+        ]);
+        let mut hardware = crate::generated::hardware_config();
+        hardware.network.enabled = true;
+        hardware.network.backend = crate::generated::NetworkBackendKind::BcmGenetV5;
+        hardware.network.mode = crate::generated::NetworkMode::Static;
+        hardware.network.interface = crate::generated::NetworkInterfacePolicy::Wired;
+
+        let resolution =
+            super::resolve_pi4_boot_net_policy(dtb.as_slice(), test_extra_range(&dtb), hardware);
+
+        assert_eq!(
+            resolution.source,
+            super::Pi4BootNetPolicySource::DtbRejected("invalid-static-gateway")
+        );
+        assert_eq!(
+            resolution.policy,
+            crate::net::RuntimeNetPolicyOverride::default()
+        );
+    }
+
     #[test]
     fn staged_message_reports_empty() {
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
@@ -7096,6 +7127,12 @@ mod tests {
     fn parse_dtb_ipv4_address_rejects_invalid_octets() {
         assert_eq!(super::parse_dtb_ipv4_address(b"10.0.300.1\0"), None);
         assert_eq!(super::parse_dtb_ipv4_address(b"10.0.1\0"), None);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn parse_dtb_ipv4_address_rejects_unspecified() {
+        assert_eq!(super::parse_dtb_ipv4_address(b"0.0.0.0\0"), None);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

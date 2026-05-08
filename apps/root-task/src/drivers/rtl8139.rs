@@ -11,7 +11,7 @@
 //! without relying on virtio.
 #![allow(unsafe_code)]
 
-use core::ptr::{read_volatile, write_volatile};
+use core::ptr::read_volatile;
 
 use heapless::Vec as HeaplessVec;
 use log::{debug, error, info, warn};
@@ -124,7 +124,7 @@ impl Rtl8139Device {
             bar0.base,
             bar0.size
         );
-        let mac = Self::read_mac(&regs);
+        let mac = Self::read_mac(&regs)?;
         info!("[rtl8139] mac address: {mac}");
 
         let rx_buffer = hal.alloc_dma_frame()?;
@@ -170,97 +170,74 @@ impl Rtl8139Device {
             })
     }
 
-    fn read_mac(regs: &MappedRegion) -> EthernetAddress {
-        let ptr = regs.ptr().as_ptr();
+    fn read_mac(regs: &MappedRegion) -> Result<EthernetAddress, DriverError> {
         let mut bytes = [0u8; 6];
         for i in 0..6 {
-            bytes[i] = unsafe { read_volatile(ptr.add(RTL_REG_IDR0 + i)) };
+            bytes[i] = regs.read_u8(RTL_REG_IDR0 + i)?;
         }
-        EthernetAddress(bytes)
+        Ok(EthernetAddress(bytes))
     }
 
     fn reset(&mut self) {
-        unsafe {
-            write_volatile(self.regs.ptr().as_ptr().add(RTL_REG_CMD), RTL_CMD_RESET);
-        }
+        self.write_reg8(RTL_REG_CMD, RTL_CMD_RESET);
         for _ in 0..1000 {
-            let val = unsafe { read_volatile(self.regs.ptr().as_ptr().add(RTL_REG_CMD)) };
+            let val = self.read_reg8(RTL_REG_CMD);
             if val & RTL_CMD_RESET == 0 {
                 break;
             }
         }
-        unsafe {
-            write_volatile(self.regs.ptr().as_ptr().add(RTL_REG_CONFIG1), 0);
-        }
+        self.write_reg8(RTL_REG_CONFIG1, 0);
     }
 
     fn configure_rx(&mut self) {
-        unsafe {
-            write_volatile(
-                self.regs.ptr().as_ptr().add(RTL_REG_RBSTART) as *mut u32,
-                self.rx_buffer.paddr() as u32,
-            );
-            write_volatile(
-                self.regs.ptr().as_ptr().add(RTL_REG_RCR) as *mut u32,
-                RTL_RCR_RBLEN_32K
-                    | RTL_RCR_ACCEPT_BROADCAST
-                    | RTL_RCR_ACCEPT_PHYS
-                    | RTL_RCR_ACCEPT_ALL_MULTICAST
-                    | RTL_RCR_WRAP,
-            );
-            write_volatile(
-                self.regs.ptr().as_ptr().add(RTL_REG_IMR) as *mut u16,
-                RTL_ISR_ROK | RTL_ISR_RER,
-            );
-            write_volatile(
-                self.regs.ptr().as_ptr().add(RTL_REG_CMD),
-                RTL_CMD_RX_ENABLE | RTL_CMD_TX_ENABLE,
-            );
-        }
+        self.write_reg32(RTL_REG_RBSTART, self.rx_buffer.paddr() as u32);
+        self.write_reg32(
+            RTL_REG_RCR,
+            RTL_RCR_RBLEN_32K
+                | RTL_RCR_ACCEPT_BROADCAST
+                | RTL_RCR_ACCEPT_PHYS
+                | RTL_RCR_ACCEPT_ALL_MULTICAST
+                | RTL_RCR_WRAP,
+        );
+        self.write_reg16(RTL_REG_IMR, RTL_ISR_ROK | RTL_ISR_RER);
+        self.write_reg8(RTL_REG_CMD, RTL_CMD_RX_ENABLE | RTL_CMD_TX_ENABLE);
         self.rx_offset = 0;
     }
 
     fn configure_tx(&mut self) {
         for (idx, buffer) in self.tx_buffers.iter().enumerate() {
-            unsafe {
-                write_volatile(
-                    self.regs.ptr().as_ptr().add(RTL_REG_TSAD0 + idx * 4) as *mut u32,
-                    buffer.paddr() as u32,
-                );
-            }
+            self.write_reg32(RTL_REG_TSAD0 + idx * 4, buffer.paddr() as u32);
         }
     }
 
     fn poll_rx(&mut self) -> Option<HeaplessVec<u8, MAX_FRAME_LEN>> {
-        let isr = unsafe { read_volatile(self.regs.ptr().as_ptr().add(RTL_REG_ISR) as *const u16) };
+        let isr = self.read_reg16(RTL_REG_ISR);
         if isr & (RTL_ISR_ROK | RTL_ISR_RER) == 0 {
             return None;
         }
-        unsafe {
-            write_volatile(self.regs.ptr().as_ptr().add(RTL_REG_ISR) as *mut u16, isr);
-        }
-        let cbr = unsafe { read_volatile(self.regs.ptr().as_ptr().add(RTL_REG_CBR) as *const u16) }
-            as usize;
+        self.write_reg16(RTL_REG_ISR, isr);
+        let cbr = self.read_reg16(RTL_REG_CBR) as usize;
         if cbr == self.rx_offset {
             return None;
         }
         let buf_ptr = self.rx_buffer.ptr().as_ptr();
         let offset = self.rx_offset % RX_BUFFER_LEN;
+        // SAFETY: the RX buffer is HAL-allocated DMA memory and the RTL8139
+        // offset is folded into the configured ring window before each access.
         let status = unsafe { read_volatile(buf_ptr.add(offset) as *const u16) } as usize;
+        // SAFETY: the descriptor length field immediately follows the status
+        // word in the HAL-allocated RX ring slot.
         let len = unsafe { read_volatile(buf_ptr.add(offset + 2) as *const u16) } as usize;
         if len == 0 || len > MAX_FRAME_LEN {
             warn!("[rtl8139] rx frame len out of range: {len}");
             self.rx_offset = (self.rx_offset + 4 + len + 3) & !3;
-            unsafe {
-                write_volatile(
-                    self.regs.ptr().as_ptr().add(RTL_REG_CAPR) as *mut u16,
-                    (self.rx_offset as u16).wrapping_sub(16),
-                );
-            }
+            self.write_reg16(RTL_REG_CAPR, (self.rx_offset as u16).wrapping_sub(16));
             return None;
         }
         let mut packet = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
         for i in 0..len {
+            // SAFETY: `len <= MAX_FRAME_LEN` and the RX ring offset is bounded
+            // by the device-managed RX ring window above.
             let byte = unsafe { read_volatile(buf_ptr.add(offset + 4 + i)) };
             packet.push(byte).ok();
         }
@@ -275,12 +252,7 @@ impl Rtl8139Device {
             );
         }
         self.rx_offset = (self.rx_offset + 4 + len + 3) & !3;
-        unsafe {
-            write_volatile(
-                self.regs.ptr().as_ptr().add(RTL_REG_CAPR) as *mut u16,
-                (self.rx_offset as u16).wrapping_sub(16),
-            );
-        }
+        self.write_reg16(RTL_REG_CAPR, (self.rx_offset as u16).wrapping_sub(16));
         Some(packet)
     }
 
@@ -292,15 +264,14 @@ impl Rtl8139Device {
         }
         let slot = self.tx_cursor % TX_SLOT_COUNT;
         let buffer = &self.tx_buffers[slot];
+        // SAFETY: the TX buffer is a HAL-allocated DMA frame and the copy is
+        // bounded by `TX_BUFFER_LEN`.
         unsafe {
             let dst = buffer.ptr().as_ptr();
             watched_write_bytes(dst, 0, TX_BUFFER_LEN, "rtl8139.tx.zero");
             watched_copy_nonoverlapping(packet.as_ptr(), dst, packet.len(), "rtl8139.tx.copy");
-            write_volatile(
-                self.regs.ptr().as_ptr().add(RTL_REG_TSD0 + slot * 4) as *mut u32,
-                packet.len() as u32,
-            );
         }
+        self.write_reg32(RTL_REG_TSD0 + slot * 4, packet.len() as u32);
         self.tx_cursor = self.tx_cursor.wrapping_add(1);
         debug!(
             "[rtl8139] TX len={} slot={} first={:02x?}",
@@ -320,12 +291,55 @@ impl Rtl8139Device {
     }
 
     pub fn debug_snapshot(&self) {
-        let isr = unsafe { read_volatile(self.regs.ptr().as_ptr().add(RTL_REG_ISR) as *const u16) };
-        let cbr = unsafe { read_volatile(self.regs.ptr().as_ptr().add(RTL_REG_CBR) as *const u16) };
+        let isr = self.read_reg16(RTL_REG_ISR);
+        let cbr = self.read_reg16(RTL_REG_CBR);
         debug!(
             "[rtl8139] snapshot: isr=0x{isr:04x} cbr={cbr} rx_offset={}",
             self.rx_offset
         );
+    }
+
+    fn read_reg8(&self, offset: usize) -> u8 {
+        match self.regs.read_u8(offset) {
+            Ok(value) => value,
+            Err(err) => {
+                debug_assert!(false, "invalid RTL8139 register read offset 0x{offset:x}");
+                warn!("[rtl8139] invalid HAL register read offset=0x{offset:x} err={err}");
+                0
+            }
+        }
+    }
+
+    fn read_reg16(&self, offset: usize) -> u16 {
+        match self.regs.read_u16(offset) {
+            Ok(value) => value,
+            Err(err) => {
+                debug_assert!(false, "invalid RTL8139 register read offset 0x{offset:x}");
+                warn!("[rtl8139] invalid HAL register read offset=0x{offset:x} err={err}");
+                0
+            }
+        }
+    }
+
+    fn write_reg8(&self, offset: usize, value: u8) {
+        if let Err(err) = self.regs.write_u8(offset, value) {
+            debug_assert!(false, "invalid RTL8139 register write offset 0x{offset:x}");
+            warn!("[rtl8139] invalid HAL register write offset=0x{offset:x} err={err}");
+        }
+    }
+
+    fn write_reg16(&self, offset: usize, value: u16) {
+        if let Err(err) = self.regs.write_u16(offset, value) {
+            debug_assert!(false, "invalid RTL8139 register write offset 0x{offset:x}");
+            warn!("[rtl8139] invalid HAL register write offset=0x{offset:x} err={err}");
+        }
+    }
+
+    fn write_reg32(&self, offset: usize, value: u32) {
+        if let Err(err) = self.regs.write_u32(offset, value) {
+            debug_assert!(false, "invalid RTL8139 register write offset 0x{offset:x}");
+            warn!("[rtl8139] invalid HAL register write offset=0x{offset:x} err={err}");
+        }
     }
 }
 

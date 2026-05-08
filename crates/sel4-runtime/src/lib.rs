@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: seL4 runtime entry glue and bootstrap stack provisioning.
 // Author: Lukas Bower
@@ -42,6 +42,9 @@ struct BootInfoCell {
     init: UnsafeCell<bool>,
 }
 
+// SAFETY: seL4 enters the root task on one bootstrap thread. `set_once` runs
+// during that single-threaded entry path, and later readers only observe the
+// immutable bootinfo pointer published by the kernel.
 unsafe impl Sync for BootInfoCell {}
 
 impl BootInfoCell {

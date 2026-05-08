@@ -10,17 +10,12 @@ use core::ptr::NonNull;
 
 use embedded_io::ErrorType;
 
+use crate::hal::uart::{PI4_MINI_UART_PADDR, PI4_PL011_PADDR, QEMU_PL011_PADDR};
+
 use super::bcm2711_mini_uart::{Bcm2711MiniUart, Bcm2711MiniUartMmio};
 use super::pl011::{Pl011, Pl011Mmio};
 use super::{SerialDriver, SerialError};
 use sel4_sys::seL4_CPtr;
-
-/// QEMU `virt` PL011 UART physical base.
-pub const QEMU_PL011_PADDR: usize = 0x0900_0000;
-/// Raspberry Pi 4 mini-UART physical base.
-pub const PI4_MINI_UART_PADDR: usize = 0xFE21_5000;
-/// Raspberry Pi 4 PL011 UART0 physical base (fallback path).
-pub const PI4_PL011_PADDR: usize = 0xFE20_1000;
 
 /// Ordered UART candidates for runtime probing.
 pub const UART_CANDIDATES: [KernelUartCandidate; 3] = [

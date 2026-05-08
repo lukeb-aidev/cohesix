@@ -1461,11 +1461,11 @@ const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transpo
 
 #[inline]
 const fn firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout() -> bool {
-    // The post-release 0x50 CHIPCLKCSR edge proves ALP plus an HT request, but
-    // not HT availability. Entering this lane does not mark HT ready; it only
-    // allows the following firmware-channel setup to prove real Function 2
-    // enable/readiness on the still-selected SDIO card.
-    true
+    // The post-release 0x50 CHIPCLKCSR edge proves ALP plus an HT request, not
+    // HT availability. Production must fail before Function 2 until real
+    // HT_AVAIL and IOR2 readiness are visible; no-HT Function 2 probing belongs
+    // only to explicit diagnostics.
+    false
 }
 
 #[inline]
@@ -1571,8 +1571,8 @@ const fn firmware_channel_uses_linux_minimal_setup(experimental_no_ht_transport:
 const fn firmware_channel_defers_function2_interrupts(experimental_no_ht_transport: bool) -> bool {
     // Linux arms the dongle-side interrupt path because brcmfmac has an MMC
     // IRQ/DPC service loop. Keep the default firmware channel U-Boot-style
-    // poll-only, but arm the explicit bounded no-HT lane now that the Pi 4
-    // trace proves Function 2 reaches Linux transport state without IENX.
+    // poll-only. The bounded no-HT lane remains diagnostic-only and does not
+    // authorize production Function 2 traffic.
     !experimental_no_ht_transport
 }
 
@@ -7751,6 +7751,8 @@ impl Mailbox {
         let _mailbox_call_lock = MAILBOX_CALL_LOCK.lock();
         let original_payload = payload.to_vec();
         let words = {
+            // SAFETY: `self.request` is the locked, page-sized and word-aligned
+            // mailbox DMA page; the mutable slice stays within that allocation.
             unsafe {
                 core::slice::from_raw_parts_mut(self.request.vaddr() as *mut u32, PAGE_SIZE / 4)
             }
@@ -7849,10 +7851,10 @@ impl Mailbox {
 
     fn post_tag(&self, tag: u32, request_len_bytes: u32, payload: &[u32]) -> Result<(), HalError> {
         let _mailbox_call_lock = MAILBOX_CALL_LOCK.lock();
+        // SAFETY: `request` is a permanently pinned uncached DMA page dedicated
+        // to fire-and-forget property traffic and is not reused for acknowledged
+        // mailbox requests.
         let request = unsafe {
-            // SAFETY: `request` is a permanently pinned uncached DMA page dedicated
-            // to fire-and-forget property traffic and is not reused for
-            // acknowledged mailbox requests.
             core::slice::from_raw_parts_mut(
                 self.request.vaddr() as *mut u32,
                 PAGE_SIZE / core::mem::size_of::<u32>(),
@@ -7983,11 +7985,15 @@ impl Mailbox {
 
     fn read_reg(&self, offset: usize) -> u32 {
         let base = self.regs.vaddr();
+        // SAFETY: `self.regs` maps the mailbox register page and callers pass
+        // offsets for 32-bit mailbox registers inside that page.
         unsafe { ptr::read_volatile((base + offset) as *const u32) }
     }
 
     fn write_reg(&self, offset: usize, value: u32) {
         let base = self.regs.vaddr();
+        // SAFETY: `self.regs` maps the mailbox register page and callers pass
+        // offsets for writable 32-bit mailbox registers inside that page.
         unsafe { ptr::write_volatile((base + offset) as *mut u32, value) };
     }
 }
@@ -28307,8 +28313,8 @@ mod tests {
     }
 
     #[test]
-    fn firmware_stage_allows_strict_function2_proof_after_soft_ht_timeout() {
-        assert!(firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
+    fn firmware_stage_rejects_no_ht_function2_after_soft_ht_timeout() {
+        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]
@@ -31359,8 +31365,8 @@ mod tests {
     }
 
     #[test]
-    fn required_ht_soft_timeout_enters_strict_function2_proof_with_selected_card_snapshot() {
-        assert!(!required_ht_clock_soft_timeout_keeps_strict_transport(
+    fn required_ht_soft_timeout_stays_strict_with_selected_card_snapshot() {
+        assert!(required_ht_clock_soft_timeout_keeps_strict_transport(
             Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
@@ -32548,7 +32554,7 @@ mod tests {
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
         )));
         assert!(!required_ht_clock_uses_pre_function2_kso_gate());
-        assert!(firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
+        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]

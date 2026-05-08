@@ -23,22 +23,14 @@ use spin::Mutex;
 use crate::hal;
 
 #[cfg(all(feature = "kernel", target_os = "none"))]
-use sel4_sys::{
-    invocation_label_nInvocationLabels, seL4_CallWithMRs, seL4_MessageInfo_get_label,
-    seL4_MessageInfo_new, seL4_SetMR,
-};
-
-#[cfg(all(feature = "kernel", target_os = "none"))]
-const INVOCATION_LABEL_BASE: seL4_Word = invocation_label_nInvocationLabels as seL4_Word;
-
-#[cfg(not(all(feature = "kernel", target_os = "none")))]
-const INVOCATION_LABEL_BASE: seL4_Word = 0;
+use sel4_sys::{seL4_CallWithMRs, seL4_MessageInfo_get_label, seL4_MessageInfo_new, seL4_SetMR};
 
 const CACHE_LINE_BYTES: usize = 64;
-const ARMVSPACE_CLEAN_LABEL: seL4_Word = INVOCATION_LABEL_BASE;
-const ARMVSPACE_INVALIDATE_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 1;
-const ARMVSPACE_CLEAN_INVALIDATE_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 2;
-const ARMVSPACE_UNIFY_LABEL: seL4_Word = ARMVSPACE_CLEAN_LABEL + 3;
+const ARMVSPACE_CLEAN_LABEL: seL4_Word = sel4_sys::ARMVSpaceClean_Data as seL4_Word;
+const ARMVSPACE_INVALIDATE_LABEL: seL4_Word = sel4_sys::ARMVSpaceInvalidate_Data as seL4_Word;
+const ARMVSPACE_CLEAN_INVALIDATE_LABEL: seL4_Word =
+    sel4_sys::ARMVSpaceCleanInvalidate_Data as seL4_Word;
+const ARMVSPACE_UNIFY_LABEL: seL4_Word = sel4_sys::ARMVSpaceUnify_Instruction as seL4_Word;
 
 // Logging policy: per-op traces are gated to TRACE (or the `cache-trace` feature).
 // DEBUG emits rate-limited summaries only when trace logging is enabled;
@@ -563,6 +555,8 @@ fn call_cache_op(
     let end_word =
         seL4_Word::try_from(aligned_end).map_err(|_| CacheError::new(seL4_RangeError))?;
 
+    // SAFETY: `range_for_cache` aligned and bounded the start/end words, and
+    // the label is one of the seL4 AArch64 VSpace cache-maintenance labels.
     let err = unsafe { call_arm_vspace_op(label, vspace, start_word, end_word) };
 
     let timestamp_ms = hal::timebase().now_ms();
@@ -693,10 +687,15 @@ unsafe fn call_arm_vspace_op(
     let mut mr3 = 0;
 
     let tag = seL4_MessageInfo_new(label, 0, 0, 2);
+    // SAFETY: The generated seL4 v13 AArch64 VSpace cache operations take two
+    // message registers (`start`, `end`) and no extra caps; `vspace` is the
+    // caller-supplied VSpace capability.
     let out_tag = unsafe { seL4_CallWithMRs(vspace, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3) };
     let result_word = seL4_MessageInfo_get_label(out_tag);
 
     if result_word != seL4_NoError as seL4_Word {
+        // SAFETY: On error, mirror the generated libsel4 stub behavior by
+        // writing returned message words back into the thread IPC buffer.
         unsafe {
             seL4_SetMR(0, mr0);
             seL4_SetMR(1, mr1);
@@ -723,4 +722,32 @@ unsafe fn call_arm_vspace_op(
         }
     }
     seL4_NoError
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_labels_use_sel4_aarch64_vspace_invocations() {
+        assert_eq!(
+            ARMVSPACE_CLEAN_LABEL,
+            sel4_sys::ARMVSpaceClean_Data as seL4_Word
+        );
+        assert_eq!(
+            ARMVSPACE_INVALIDATE_LABEL,
+            sel4_sys::ARMVSpaceInvalidate_Data as seL4_Word
+        );
+        assert_eq!(
+            ARMVSPACE_CLEAN_INVALIDATE_LABEL,
+            sel4_sys::ARMVSpaceCleanInvalidate_Data as seL4_Word
+        );
+        assert_eq!(
+            ARMVSPACE_UNIFY_LABEL,
+            sel4_sys::ARMVSpaceUnify_Instruction as seL4_Word
+        );
+        assert_eq!(ARMVSPACE_INVALIDATE_LABEL, ARMVSPACE_CLEAN_LABEL + 1);
+        assert_eq!(ARMVSPACE_CLEAN_INVALIDATE_LABEL, ARMVSPACE_CLEAN_LABEL + 2);
+        assert_eq!(ARMVSPACE_UNIFY_LABEL, ARMVSPACE_CLEAN_LABEL + 3);
+    }
 }

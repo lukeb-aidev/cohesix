@@ -651,6 +651,7 @@ main() {
     if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
         fail "seL4 build directory not found: $SEL4_BUILD_DIR"
     fi
+    SEL4_BUILD_DIR="$(cd "$SEL4_BUILD_DIR" && pwd)"
 
     export SEL4_BUILD_DIR
     export SEL4_BUILD="$SEL4_BUILD_DIR"
