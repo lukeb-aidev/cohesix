@@ -38,6 +38,10 @@ const BCM2711_PCIE_MSI_INTR2_CLR: usize = 0x4508;
 const BCM2711_PCIE_MSI_INTR2_MASK_SET: usize = 0x4510;
 const BCM2711_PCIE_EXT_CFG_DATA: usize = 0x8000;
 const BCM2711_PCIE_EXT_CFG_INDEX: usize = 0x9000;
+const VL805_XHCI_DOORBELL0_OFFSET: usize = 0x0100;
+const VL805_XHCI_DOORBELL_STRIDE: usize = 4;
+const VL805_XHCI_DOORBELL_FLUSH_STAGE: u16 = 0x031f;
+const VL805_XHCI_USBSTS_DRAIN_OFFSET: usize = 0x0024;
 const BCM2711_PCIE_RGR1_SW_INIT_1: usize = 0x9210;
 
 const PCIE_MISC_MISC_CTRL_SCB_ACCESS_EN_MASK: u32 = 0x1000;
@@ -94,7 +98,7 @@ const RPI4_PCIE_BUS_MMIO_WINDOW_BASE: usize = 0xC000_0000;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BASE_U32: u32 = 0xC000_0000;
 const RPI4_PCIE_CPU_MMIO_WINDOW_BASE: usize = RPI4_VL805_XHCI_MMIO;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BYTES: usize = 0x4000_0000;
-const RPI4_PCIE_DMA_BUS_BASE: u64 = 0;
+const RPI4_PCIE_DMA_BUS_BASE: u64 = 0x0000_0004_0000_0000;
 const RPI4_PCIE_DMA_CPU_BASE: u64 = 0;
 const RPI4_PCIE_DMA_WINDOW_BYTES: u64 = 0x0000_0001_0000_0000;
 const RPI4_PCIE_MMIO_WINDOW_SIZE: u64 = 0x4000_0000;
@@ -122,6 +126,7 @@ static PCIE_EXT_INDEX_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_ROOT_INIT_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
 static PCIE_ROOT_INIT_POST_MAILBOX_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
 static PCIE_LINK_AND_RC_READY_PROVEN: AtomicUsize = AtomicUsize::new(0);
+static PCIE_IRQ_SOURCES_MASKED_PROVEN: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Pi4PcieProofPhase {
@@ -186,6 +191,11 @@ impl<'a> KernelHal<'a> {
 #[must_use]
 pub fn pi4_pcie_link_and_rc_ready_proven() -> bool {
     PCIE_LINK_AND_RC_READY_PROVEN.load(Ordering::Acquire) != 0
+}
+
+#[must_use]
+pub fn pi4_pcie_irq_sources_masked_proven() -> bool {
+    PCIE_IRQ_SOURCES_MASKED_PROVEN.load(Ordering::Acquire) != 0
 }
 
 #[must_use]
@@ -280,7 +290,27 @@ pub fn vl805_xhci_port_write32(
     fence(Ordering::SeqCst);
 }
 
-/// Flushes posted VL805 xHCI MMIO writes through a HAL-owned PCI config read.
+const fn vl805_xhci_flush_needs_bar_drain(stage: u16, offset: usize) -> bool {
+    stage == VL805_XHCI_DOORBELL_FLUSH_STAGE
+        && offset >= VL805_XHCI_DOORBELL0_OFFSET
+        && (offset - VL805_XHCI_DOORBELL0_OFFSET) % VL805_XHCI_DOORBELL_STRIDE == 0
+}
+
+fn vl805_xhci_bar_drain_read32(mmio_virt: usize) -> Option<u32> {
+    let addr = mmio_virt.checked_add(VL805_XHCI_USBSTS_DRAIN_OFFSET)?;
+    fence(Ordering::SeqCst);
+    let value = {
+        let ptr = addr as *const u32;
+        // SAFETY: the xHCI hook supplies the live VL805 BAR mapping, and
+        // USBSTS is a stable operational register used here only as a posted
+        // write drain after a doorbell store.
+        unsafe { ptr::read_volatile(ptr) }
+    };
+    fence(Ordering::SeqCst);
+    Some(value)
+}
+
+/// Flushes posted VL805 xHCI MMIO writes through HAL-owned read drains.
 pub fn vl805_xhci_flush_posted_write(mmio_virt: usize, offset: usize, value: u32, stage: u16) {
     let config_page = PCIE_EXT_DATA_PAGE_VIRT.load(Ordering::Acquire);
     let index_page = PCIE_EXT_INDEX_PAGE_VIRT.load(Ordering::Acquire);
@@ -310,14 +340,28 @@ pub fn vl805_xhci_flush_posted_write(mmio_virt: usize, offset: usize, value: u32
     fence(Ordering::SeqCst);
     let selected = bcm2711_ext_cfg_select(index_reg);
     let command_status = pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS);
+    let bar_drain = if vl805_xhci_flush_needs_bar_drain(stage, offset) {
+        vl805_xhci_bar_drain_read32(mmio_virt)
+    } else {
+        None
+    };
     fence(Ordering::SeqCst);
-    let mut line = heapless::String::<224>::new();
-    let _ = core::fmt::Write::write_fmt(
-        &mut line,
-        format_args!(
-            "[local-seat] vl805 posted-write flush stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} source=hal-ext-cfg"
-        ),
-    );
+    let mut line = heapless::String::<256>::new();
+    if let Some(usb_status) = bar_drain {
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 posted-write flush stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} bar_drain=usb_status:0x{usb_status:08x} source=hal-ext-cfg+xhci-bar"
+            ),
+        );
+    } else {
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 posted-write flush stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} source=hal-ext-cfg"
+            ),
+        );
+    }
     boot_log::force_uart_line(line.as_str());
 }
 
@@ -1013,6 +1057,7 @@ fn mask_and_clear_pcie_irq_sources(status_page_virt: usize) {
         mmio_write_u32(cpu_clr, u32::MAX);
         mmio_write_u32(msi_mask_set, u32::MAX);
         mmio_write_u32(msi_clr, u32::MAX);
+        PCIE_IRQ_SOURCES_MASKED_PROVEN.store(1, Ordering::Release);
         boot_log::force_uart_line(
             "[local-seat] vl805 bcm2711-pcie irq sources masked source=hal-ext-cfg",
         );
@@ -1499,6 +1544,15 @@ mod tests {
     }
 
     #[test]
+    fn vl805_posted_write_bar_drain_is_limited_to_doorbells() {
+        assert!(vl805_xhci_flush_needs_bar_drain(0x031f, 0x0100));
+        assert!(vl805_xhci_flush_needs_bar_drain(0x031f, 0x0104));
+        assert!(!vl805_xhci_flush_needs_bar_drain(0x02e5, 0x0020));
+        assert!(!vl805_xhci_flush_needs_bar_drain(0x031f, 0x00fc));
+        assert!(!vl805_xhci_flush_needs_bar_drain(0x031f, 0x0102));
+    }
+
+    #[test]
     fn bcm2711_root_window_values_match_pi4_dt_ranges() {
         assert_eq!(
             pcie_outbound_base_limit_value(
@@ -1539,7 +1593,7 @@ mod tests {
             replace_u32_field(0, PCIE_MISC_MISC_CTRL_SCB0_SIZE_MASK, 17),
             0x8800_0000
         );
-        assert_eq!(RPI4_PCIE_DMA_BUS_BASE, 0);
+        assert_eq!(RPI4_PCIE_DMA_BUS_BASE, 0x0000_0004_0000_0000);
         assert_eq!(RPI4_PCIE_DMA_CPU_BASE, 0);
     }
 }

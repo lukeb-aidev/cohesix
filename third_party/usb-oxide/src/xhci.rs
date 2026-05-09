@@ -28,15 +28,22 @@ const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_POLL_ONLY_WAIT_SPINS: usize = 64;
-const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 16;
-const COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL: usize = 10_000;
+const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 64;
+const COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL: usize = 250_000;
+const COMMAND_PROMPT_SAFE_REDOORBELL_POLL: usize = 4;
 const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
 const COMMAND_RING_DEBUG_TRBS: usize = 4;
+const LINUX_COMMAND_PROBE_DNCTRL: u32 = 0x0000_0002;
 const LINUX_COMMAND_PROBE_IMOD: u32 = 0x0000_00a0;
 const LINUX_COMMAND_PROBE_USBCMD: u32 = reg::USBCMD_RUN | reg::USBCMD_INTE;
+const USBCMD_RUN_SEED_CLEAR_MASK: u32 = USBCMD_INTERRUPT_DELIVERY_MASK
+    | reg::USBCMD_HCRST
+    | reg::USBCMD_LHCRST
+    | reg::USBCMD_CSS
+    | reg::USBCMD_CRS;
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
 const PORT_ENABLE_WAIT_SPINS: usize = 10_000_000;
 const PORT_SETTLE_SPINS: usize = 100_000;
@@ -178,6 +185,11 @@ const fn masked_usbcmd(usbcmd: u32) -> u32 {
 }
 
 #[inline(always)]
+const fn run_seed_usbcmd(usbcmd: u32) -> u32 {
+    usbcmd & !USBCMD_RUN_SEED_CLEAR_MASK
+}
+
+#[inline(always)]
 const fn linux_command_probe_usbcmd_seed() -> u32 {
     LINUX_COMMAND_PROBE_USBCMD
 }
@@ -238,7 +250,7 @@ const fn post_start_polling_irq_quiesce_skip_usbsts_clear(preserve_firmware_stat
 #[inline(always)]
 const fn compose_run_usbcmd(current_usbcmd: u32, merge_existing_bits: bool) -> u32 {
     if merge_existing_bits {
-        masked_usbcmd(current_usbcmd) | reg::USBCMD_RUN
+        run_seed_usbcmd(current_usbcmd) | reg::USBCMD_RUN
     } else {
         reg::USBCMD_RUN
     }
@@ -271,6 +283,11 @@ const fn command_timeout_live_snapshot_enabled() -> bool {
 }
 
 #[inline(always)]
+const fn prompt_safe_command_timeout_live_snapshot_enabled() -> bool {
+    false
+}
+
+#[inline(always)]
 const fn command_timeout_live_snapshot_spins() -> usize {
     COMMAND_WAIT_LIVE_SNAPSHOT_SPINS
 }
@@ -280,8 +297,9 @@ const fn polling_command_proof_dnctrl_value(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    let _ = firmware_handoff;
-    let _ = runtime_seed_snapshot;
+    if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot) {
+        return LINUX_COMMAND_PROBE_DNCTRL;
+    }
     0
 }
 
@@ -491,7 +509,7 @@ const fn use_live_post_reset_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The weaker stop-state snapshots now replay the U-Boot-style reset/config
+    // The weaker stop-state snapshots now replay the cold-boot reset/config
     // sequence again, but they still keep post-reset ring seed reads
     // suppressed. Use zero/snapshot seeds there instead of touching live
     // runtime ring registers before ownership has been rebuilt.
@@ -617,9 +635,9 @@ const fn skip_config_write_during_init_with_snapshot(
     if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot) {
         return false;
     }
-    // Other stop-state lanes keep CONFIG untouched. On those paths, U-Boot's
-    // stopped xHCI state has already programmed MaxSlotsEn, while runtime does
-    // not have enough ownership to republish fresh rings.
+    // Generic diagnostic stop-state lanes keep CONFIG untouched. Pi 4
+    // local-seat does not select them as runtime authority; they exist only so
+    // old traces can be decoded without touching fresh ownership state.
     snapshot_resetless_reinit_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -645,10 +663,10 @@ const fn skip_reset_during_init_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Pi 4 has two distinct stop-state lanes. The bootloader-owned
-    // ColdStartFromSnapshot lane stays no-touch. The reset-owned None+stop-state
-    // lane also skips HCRST: the stopped seed already proves HCH/USBCMD quiesce,
-    // and current Pi 4/seL4 hardware traps IRQ 27 immediately after HCRST.
+    // Pi 4 local-seat no longer selects U-Boot handoff lanes. These generic
+    // snapshot modes remain diagnostic/no-touch helpers for old traces; the
+    // active Pi 4 lane is PlatformResetComplete after a mailbox reset plus live
+    // HAL PCIe/VL805 proof.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_mailbox_reset_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -688,9 +706,8 @@ const fn runtime_bootloader_owned_pollsafe_handoff(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // ColdStartFromSnapshot + stop-state-only is the diagnostic
-    // bootloader-owned lane. The reset-owned None + stop-state-only lane is
-    // handled separately because it has a different authority label.
+    // ColdStartFromSnapshot + stop-state-only is a disabled diagnostic lane.
+    // Pi 4 local-seat must not use it as runtime authority.
     runtime_stop_state_only_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -699,10 +716,10 @@ const fn runtime_pollsafe_no_fresh_ownership_handoff(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Stop-state-only seeds prove a bounded poll-safe state, but not enough
-    // runtime ring ownership to publish a fresh DCBAAP on seL4. The Pi 4
-    // platform-reset-complete witness is mailbox-reset ownership, so it stays
-    // outside this poll-safe stop-seed set.
+    // Stop-state-only seeds are diagnostic on Pi 4 and are not enough runtime
+    // ring ownership to publish a fresh DCBAAP on seL4. The Pi 4
+    // platform-reset-complete witness is mailbox-reset plus HAL ownership proof,
+    // so it stays outside this poll-safe stop-seed set.
     runtime_bootloader_owned_pollsafe_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_seeded_full_reset_start_handoff(firmware_handoff, runtime_seed_snapshot)
 }
@@ -859,7 +876,7 @@ const fn runtime_handoff_needs_relaxed_run_write(
     // `USBCMD.RUN` ownership edge as the runtime-ring handoff, after all of
     // the earlier controller-visible publishes were moved out of the way.
     // Keep the lighter helper only on the runtime-ring path; the weaker
-    // stop-state path now switches back to the plain U-Boot-style `write_op`
+    // stop-state path now switches back to the plain cold-boot `write_op`
     // sequence so the next hardware trace tells us whether VL805 still dies
     // on the live RUN store when the helper machinery is removed entirely.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -883,7 +900,7 @@ const fn runtime_handoff_needs_release_only_run_write(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     // The release-only helper isolated the failure to the live RUN edge
-    // itself; the next corrective step is to replay the plain U-Boot-style
+    // itself; the next corrective step is to replay the plain cold-boot
     // store sequence instead of keeping preserve-state on an experimental
     // helper branch.
     let _ = firmware_handoff;
@@ -925,10 +942,8 @@ const fn replay_staged_dcbaap_snapshot_before_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The preserve-state bootloader-handoff lane has now proven the staged
-    // current-value replay to be the first live DCBAAP edge that still wedges
-    // under degraded IRQ27. Keep the replay on the other trusted snapshot
-    // paths, but let preserve-state go straight to the real publish.
+    // Preserve-state is not selected by Pi 4 local-seat. Keep this generic
+    // snapshot helper from replaying a stale current value before a real publish.
     !runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -992,9 +1007,9 @@ const fn runtime_handoff_skips_live_run_write(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Preserve-state handoff adopts firmware-owned runtime state and avoids a
-    // redundant RUN store. Stop-state-only seeds without runtime-ring pointers
-    // stay poll-safe until stronger ownership evidence exists.
+    // Preserve-state handoff is generic diagnostic machinery. Pi 4 local-seat
+    // no longer selects it; active Pi 4 cold boot publishes fresh rings and
+    // owns the RUN store after live HAL proof.
     runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_pollsafe_no_fresh_ownership_handoff(firmware_handoff, runtime_seed_snapshot)
 }
@@ -1005,11 +1020,9 @@ const fn runtime_handoff_skips_live_drop_stop(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     // A controller instance that did not publish fresh runtime ownership must
-    // not acquire ownership later from Drop. The Pi 4 stop-seed path uses this
-    // temporary controller only as a poll-safe progress witness before the
-    // next live cold-start strategy is attempted. The platform-reset stop-seed
-    // lane also avoids an implicit Drop-time stop because the live post-RUN
-    // operational reads are intentionally kept behind explicit breadcrumbs.
+    // not acquire ownership later from Drop. Pi 4 cold boot uses the
+    // PlatformResetComplete lane; these weaker diagnostic lanes remain no-touch
+    // and cannot acquire ownership during drop.
     runtime_pollsafe_no_fresh_ownership_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_platform_reset_stop_seed_handoff(firmware_handoff, runtime_seed_snapshot)
 }
@@ -1125,8 +1138,12 @@ const fn defer_erdp_publish_with_snapshot(
     // edges stay isolated. Stop-state-only seeds without runtime-ring pointers
     // now defer here too, then skip the fresh publish through the no-ownership
     // policy gate.
+    // The Pi 4 mailbox-reset platform lane owns fresh Cohesix rings, but still
+    // needs Linux/U-Boot table-first event-ring publication: ERSTSZ/ERSTBA must
+    // be visible before ERDP hands the dequeue pointer to VL805.
     runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_owned_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -1228,10 +1245,8 @@ const fn skip_dnctrl_write_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // The trusted preserve-state Pi 4 lane now consistently reaches DNCTRL as
-    // the first remaining controller-visible ownership edge. Preserve that
-    // bootloader-owned notification state as-is instead of replaying another
-    // redundant zero on the degraded IRQ27 path.
+    // Preserve-state is diagnostic-only on Pi 4; avoid a redundant DNCTRL write
+    // when a caller explicitly asks to keep a staged snapshot.
     runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -1652,24 +1667,27 @@ pub enum XhciFirmwareHandoff {
     PlatformResetComplete = 4,
 }
 
-/// Bootloader-exported xHCI stop/ring seed snapshot for trusted handoff.
+/// Diagnostic xHCI stop/ring seed snapshot from firmware or old boot logs.
+///
+/// Pi 4 local-seat treats this data as non-authoritative; the active cold-boot
+/// path rebuilds rings after mailbox reset plus live HAL proof.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct XhciRuntimeSeedSnapshot {
-    /// Operational `USBCMD` captured before handoff.
+    /// Operational `USBCMD` captured before root-task ownership.
     pub usbcmd: Option<u32>,
-    /// Operational `USBSTS` captured before handoff.
+    /// Operational `USBSTS` captured before root-task ownership.
     pub usbsts: Option<u32>,
-    /// Interrupter 0 `IMAN` captured before handoff.
+    /// Interrupter 0 `IMAN` captured before root-task ownership.
     pub iman0: Option<u32>,
-    /// Operational `DCBAAP` captured before handoff.
+    /// Operational `DCBAAP` captured before root-task ownership.
     pub dcbaap: Option<u64>,
-    /// Operational `CRCR` captured before handoff.
+    /// Operational `CRCR` captured before root-task ownership.
     pub crcr: Option<u64>,
-    /// Runtime interrupter 0 `ERSTBA` captured before handoff.
+    /// Runtime interrupter 0 `ERSTBA` captured before root-task ownership.
     pub erstba0: Option<u64>,
-    /// Runtime interrupter 0 `ERDP` captured before handoff.
+    /// Runtime interrupter 0 `ERDP` captured before root-task ownership.
     pub erdp0: Option<u64>,
-    /// Runtime interrupter 0 `ERSTSZ` captured before handoff.
+    /// Runtime interrupter 0 `ERSTSZ` captured before root-task ownership.
     pub erstsz0: Option<u32>,
 }
 
@@ -1688,9 +1706,9 @@ pub struct XhciControllerParams {
     pub db_offset: u32,
     /// Runtime space offset.
     pub rts_offset: u32,
-    /// Firmware ownership contract selected by platform bring-up.
+    /// Runtime ownership contract selected by platform bring-up.
     pub firmware_handoff: XhciFirmwareHandoff,
-    /// Optional bootloader stop/ring seed snapshot for trusted handoff.
+    /// Optional diagnostic stop/ring seed snapshot.
     pub runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
     /// Apply the Broadcom generic xHCI-wrapper AXI attribute quirk.
     pub apply_brcm_axi_setup: bool,
@@ -3236,14 +3254,14 @@ impl<H: Dma> XhciCtrl<H> {
             publish_dcbaap(self);
         }
 
-        // Setup command ring. On the trusted mailbox-reset snapshot path, keep
+        // Setup command ring. On the mailbox-reset platform path, keep
         // CRCR from becoming the first live runtime ownership store: seed it
         // here, then publish it only after ERDP / ERST and deferred DCBAAP.
         let cmd_ring = self.cmd_ring.lock();
         // Avoid live CRCR reads before reset. Once the controller has reached
-        // the post-reset U-Boot-style path, reuse the live reserved bits as
+        // the post-reset cold-boot path, reuse the live reserved bits as
         // the seed for our CRCR publish while still skipping extra verification
-        // reads on the trusted snapshot path.
+        // reads on diagnostic snapshot paths.
         let current_crcr = if preserve_firmware_state {
             0
         } else if !probe_live_crcr_before_staged_publish_with_snapshot(
@@ -3642,12 +3660,10 @@ impl<H: Dma> XhciCtrl<H> {
             && !publish_deferred_erdp_before_erst
             && !skip_fresh_event_ring_publish
         {
-            // The trusted mailbox-reset snapshot path no longer lets ERSTSZ /
-            // ERSTBA / ERDP become the first live runtime event-ring
-            // ownership stores. Publish the table first, then hand ERDP to
-            // the controller with the live dequeue pointer only. If the
-            // trusted preserve-state seed already matches the desired queue
-            // pointer, skip the write entirely and keep the lane no-touch.
+            // The mailbox-reset platform path must not let ERDP become the
+            // first live event-ring ownership store. Publish the table first,
+            // then hand ERDP to the controller with the live dequeue pointer
+            // only. Preserve-state remains a generic diagnostic lane.
             if preserve_firmware_state
                 && preserve_state_erdp_write_is_redundant(current_erdp_publish, erdp)
             {
@@ -3774,8 +3790,9 @@ impl<H: Dma> XhciCtrl<H> {
             }
         }
 
-        // Disable device notifications before the first command can observe
-        // any stale firmware-originated notification state.
+        // Seed device notifications from the Linux-captured VL805 state on the
+        // live platform-reset lane; weaker lanes still keep DNCTRL untouched or
+        // quiesced according to their ownership contract.
         let dnctrl_value = polling_command_proof_dnctrl_value(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -3832,9 +3849,8 @@ impl<H: Dma> XhciCtrl<H> {
             live_post_reset_seed_reads,
             trusted_runtime_seed_snapshot,
         ) {
-            // Match U-Boot's RUN edge more closely on the preserved firmware
-            // handoff path when no trusted stop-state seed exists, and keep
-            // the generic live-seed path for fully unseeded controller bring-up.
+            // Generic preserved-state support can still choose a live RUN seed;
+            // Pi 4 local-seat does not select that path for runtime authority.
             emit_xhci_diag(
                 0x0275,
                 reg::USBCMD as u64,
@@ -3985,7 +4001,7 @@ impl<H: Dma> XhciCtrl<H> {
                 run_usbcmd as u64,
                 3,
             );
-            // SAFETY: This is the trusted handoff RUN write to the live xHCI
+            // SAFETY: This is the selected runtime RUN write to the live xHCI
             // USBCMD register inside the mapped operational register aperture.
             unsafe {
                 ((self.op_base + reg::USBCMD) as *mut u32).write_volatile(run_usbcmd);
@@ -4777,6 +4793,11 @@ impl<H: Dma> XhciCtrl<H> {
         } else {
             polling_iman_value()
         };
+        let expected_imod = if linux_event_generation {
+            LINUX_COMMAND_PROBE_IMOD
+        } else {
+            0
+        };
         let expected_dnctrl =
             polling_command_proof_dnctrl_value(self.firmware_handoff, self.runtime_seed_snapshot);
         let (expected_erstba, expected_erstsz, expected_erdp) = {
@@ -4804,7 +4825,7 @@ impl<H: Dma> XhciCtrl<H> {
 
         emit_xhci_diag(
             base_stage + 2,
-            (expected_iman as u64) << 32,
+            ((expected_iman as u64) << 32) | u64::from(expected_imod),
             expected_erstsz as u64,
             phase,
         );
@@ -4975,7 +4996,8 @@ impl<H: Dma> XhciCtrl<H> {
     ) -> Result<Trb> {
         let mut event_syncs = 0usize;
         let mut last_non_command_event = None;
-        for _ in 0..COMMAND_PROMPT_SAFE_WAIT_POLLS {
+        let mut replayed_doorbell = false;
+        for poll in 0..COMMAND_PROMPT_SAFE_WAIT_POLLS {
             let trb = {
                 let mut event_ring = self.event_ring.lock();
                 event_ring.sync_current_for_cpu(&*self.host, "xhci-event-ring-prompt-safe")?;
@@ -4984,6 +5006,18 @@ impl<H: Dma> XhciCtrl<H> {
             };
 
             let Some(trb) = trb else {
+                if !replayed_doorbell
+                    && poll.saturating_add(1) >= COMMAND_PROMPT_SAFE_REDOORBELL_POLL
+                {
+                    emit_xhci_diag(
+                        0x037a,
+                        expected_cmd_trb.unwrap_or(0) & !0x0f,
+                        event_syncs as u64,
+                        u64::from(linux_event_generation),
+                    );
+                    self.ring_cmd_doorbell();
+                    replayed_doorbell = true;
+                }
                 for _ in 0..COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL {
                     spin_loop();
                 }
@@ -5042,12 +5076,16 @@ impl<H: Dma> XhciCtrl<H> {
         self.emit_command_ring_debug_snapshot(0x0364);
         self.emit_command_event_ring_debug_snapshot(0x0357);
         self.emit_command_gate_plan_snapshot(0x036c, expected_cmd_trb, 2, linux_event_generation);
-        emit_xhci_diag(
-            0x0377,
-            expected_cmd_trb.unwrap_or(0) & !0x0f,
-            event_syncs as u64,
-            1,
-        );
+        if prompt_safe_command_timeout_live_snapshot_enabled() {
+            self.emit_command_gate_live_timeout_snapshot(expected_cmd_trb);
+        } else {
+            emit_xhci_diag(
+                0x0377,
+                expected_cmd_trb.unwrap_or(0) & !0x0f,
+                event_syncs as u64,
+                1,
+            );
+        }
         if let Some(trb) = last_non_command_event {
             emit_xhci_diag(
                 0x030e,
@@ -5344,7 +5382,7 @@ impl<H: Dma> XhciCtrl<H> {
         Ok(evt.slot_id())
     }
 
-    /// Disable a slot using the same U-Boot-first bounded command proof lane.
+    /// Disable a slot using the same cold-boot-first bounded command proof lane.
     pub fn disable_slot_command_prompt_safe(&self, slot_id: u8) -> Result<()> {
         self.submit_command_prompt_safe_poll_only(disable_slot_command_trb_for_probe(slot_id))?;
         Ok(())
@@ -5716,12 +5754,13 @@ mod tests {
     use super::{
         BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
         COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
-        COMMAND_PROMPT_SAFE_WAIT_POLLS, COMMAND_WAIT_SPINS, ConstructorPollingScrubMode,
-        LINUX_COMMAND_PROBE_IMOD, READY_WAIT_PROGRESS_SPINS, SKIP_HCRST_DURING_INIT,
-        TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
-        XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS, XhciControllerParams, XhciCtrl,
-        XhciFirmwareHandoff, XhciRuntimeSeedSnapshot, blind_settle_precedes_live_stop_revalidation,
-        claim_legacy_ownership_before_reset_for_init,
+        COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
+        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, ConstructorPollingScrubMode,
+        LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD, READY_WAIT_PROGRESS_SPINS,
+        SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
+        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
+        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
+        blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot,
         command_poll_only_should_sync_event_ring, command_timeout_live_snapshot_enabled,
         command_timeout_live_snapshot_spins, command_wait_should_sync_event_ring,
@@ -5754,8 +5793,9 @@ mod tests {
         preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
+        prompt_safe_command_timeout_live_snapshot_enabled,
         replay_staged_dcbaap_snapshot_before_publish_with_snapshot, reset_usbcmd_seed_before_hcrst,
-        reset_usbcmd_seed_before_hcrst_for_init, run_usbcmd_needs_live_seed_read,
+        reset_usbcmd_seed_before_hcrst_for_init, run_seed_usbcmd, run_usbcmd_needs_live_seed_read,
         run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed, run_wait_observable_usbsts,
         run_wait_progress_due, runtime_bootloader_owned_pollsafe_handoff,
         runtime_deferred_ring_handoff, runtime_handoff_needs_pre_run_settle,
@@ -7180,6 +7220,23 @@ mod tests {
     }
 
     #[test]
+    fn run_usbcmd_seed_drops_stale_controller_command_bits() {
+        let current = reg::USBCMD_EWE
+            | reg::USBCMD_INTE
+            | reg::USBCMD_HSEE
+            | reg::USBCMD_HCRST
+            | reg::USBCMD_LHCRST
+            | reg::USBCMD_CSS
+            | reg::USBCMD_CRS;
+
+        assert_eq!(run_seed_usbcmd(current), reg::USBCMD_EWE);
+        assert_eq!(
+            compose_run_usbcmd(current, true),
+            reg::USBCMD_EWE | reg::USBCMD_RUN
+        );
+    }
+
+    #[test]
     fn platform_reset_stop_seed_keeps_command_proof_poll_only() {
         let stop_seed = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
@@ -7227,7 +7284,7 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            0
+            LINUX_COMMAND_PROBE_DNCTRL
         );
         assert_eq!(
             polling_event_generation_run_usbcmd(reg::USBCMD_RUN, XhciFirmwareHandoff::None, None,),
@@ -7245,6 +7302,7 @@ mod tests {
 
     #[test]
     fn linux_command_probe_uses_linux_moderation_seed() {
+        assert_eq!(LINUX_COMMAND_PROBE_DNCTRL, 0x0000_0002);
         assert_eq!(LINUX_COMMAND_PROBE_IMOD, 0x0000_00a0);
         assert_eq!(
             linux_command_probe_usbcmd_seed(),
@@ -7279,11 +7337,19 @@ mod tests {
     }
 
     #[test]
+    fn prompt_safe_command_timeout_live_snapshot_is_deferred_for_operational_regs() {
+        assert!(!prompt_safe_command_timeout_live_snapshot_enabled());
+    }
+
+    #[test]
     fn command_timeout_live_snapshot_runs_before_final_timeout() {
         assert!(command_timeout_live_snapshot_spins() > 0);
         assert_eq!(command_timeout_live_snapshot_spins(), 32);
         assert_eq!(COMMAND_POLL_ONLY_WAIT_SPINS, 64);
-        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 16);
+        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 64);
+        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, 250_000);
+        assert_eq!(COMMAND_PROMPT_SAFE_REDOORBELL_POLL, 4);
+        assert!(COMMAND_PROMPT_SAFE_REDOORBELL_POLL < COMMAND_PROMPT_SAFE_WAIT_POLLS);
         assert!(command_timeout_live_snapshot_spins() < COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS <= COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);
@@ -7561,6 +7627,26 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
+        assert_eq!(
+            polling_command_proof_dnctrl_value(XhciFirmwareHandoff::PlatformResetComplete, None),
+            LINUX_COMMAND_PROBE_DNCTRL
+        );
+        assert!(defer_erdp_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!defer_erst_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!deferred_erdp_publish_precedes_erst_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
         assert!(!platform_reset_dcbaap_publish_blocked_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
@@ -7637,6 +7723,25 @@ mod tests {
             stop_state_only_snapshot,
         ));
         assert!(runtime_stop_state_needs_post_run_settle(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            stop_state_only_snapshot,
+        ));
+        assert_eq!(
+            polling_command_proof_dnctrl_value(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                stop_state_only_snapshot,
+            ),
+            LINUX_COMMAND_PROBE_DNCTRL
+        );
+        assert!(defer_erdp_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            stop_state_only_snapshot,
+        ));
+        assert!(!defer_erst_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            stop_state_only_snapshot,
+        ));
+        assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             stop_state_only_snapshot,
         ));

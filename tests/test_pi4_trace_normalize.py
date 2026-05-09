@@ -92,6 +92,18 @@ def test_pi4_wifi_mailbox_usb_power_lines_are_usb_platform_evidence() -> None:
     assert event.fields["action"] == "begin"
 
 
+def test_pi4_wifi_mailbox_module3_power_on_line_is_usb_platform_evidence() -> None:
+    event = normalizer.parse_line(
+        "[pi4-wifi] mailbox power-on module=0x00000003",
+        32,
+    )
+
+    assert event is not None
+    assert event.domain == "usb"
+    assert event.source == "cohesix"
+    assert event.fields["module"] == "0x00000003"
+
+
 def test_parse_events_splits_interleaved_uart_segments() -> None:
     events = normalizer.parse_events(
         [
@@ -218,6 +230,10 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_GATE": 4,
         "WIFI_BLOCKER": "ht-clock-timeout",
         "SERIAL_CLEAN": "yes",
+        "BOOT_HALTED": "no",
+        "TIMER_IRQ27_SEEN": "no",
+        "BOOT_HALT_REASON": "none",
+        "USB_BOOTLOADER_HANDOFF_SEEN": "no",
     }
 
 
@@ -371,6 +387,101 @@ def test_gate_summary_tracks_usb_command_doorbell_timer_as_poll_pending() -> Non
     assert gates.usb_blocker == "cmd-poll-pending"
 
 
+def test_gate_summary_does_not_classify_irq27_as_usb_without_usb_edge() -> None:
+    events = normalizer.parse_events(["Kernel entry via Interrupt, irq 27"])
+
+    gates = normalizer.summarize_gates(events)
+
+    assert len(events) == 1
+    assert events[0].domain == "kernel"
+    assert events[0].stage == "timer-irq"
+    assert events[0].fields["irq"] == "27"
+    assert gates.usb_gate == 0
+    assert gates.usb_blocker == "missing"
+    assert gates.timer_irq27_seen
+    assert gates.boot_halt_reason == "timer-irq27-without-halt"
+
+
+def test_gate_summary_reports_kernel_halt_and_timer_irq27() -> None:
+    events = normalizer.parse_events(
+        [
+            "halting...",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record()["BOOT_HALTED"] == "yes"
+    assert gates.to_record()["TIMER_IRQ27_SEEN"] == "yes"
+    assert gates.to_record()["BOOT_HALT_REASON"] == "kernel-halt+timer-irq27"
+
+
+def test_gate_summary_flags_usb_bootloader_handoff_evidence() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci probe params attempt=1/2 "
+            "policy=reset-owned-stop-seed origin=reset-owned-stop-seed "
+            "mode=none run=run-skip",
+            "[local-seat] xhci probe params attempt=2/2 "
+            "policy=platform-reset-complete origin=mailbox-reset-complete "
+            "mode=platform-reset-complete run=run-cold",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "yes"
+
+
+def test_gate_summary_keeps_cold_usb_path_handoff_clean() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci boot contract raw_hint=0x0/0 mmio=0x0/0 "
+            "pci_cmd=0x0000/0 handoff=0 irq_quiesced=0 reset_auth=0 "
+            "cap_snapshot=0 stop_snapshot=1 "
+            "irq_policy=fw-handoff-cold-start-from-snapshot poll_only=1",
+            "[local-seat] xhci probe params attempt=1/1 "
+            "policy=full-reset-start origin=live-runtime-default "
+            "mode=none pre=mailbox-reset-required run=run-default",
+            "[local-seat] xhci probe params promoted attempt=1/1 "
+            "policy=platform-reset-complete origin=mailbox-reset-complete "
+            "mode=platform-reset-complete run=run-cold",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "no"
+
+
+def test_gate_summary_preserves_proof_summary_timeout_over_deferred_root_port() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000 status=0x00000000 control=0x00002401",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x0357 "
+            "tag=cmd-event-ring-timeout-0 param=0x0000000000000000",
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-linux-event-unproven bus=pcie-window "
+            "detail=cmd-event-ring-timeout irq27_role=timer-only",
+            "[local-seat] usb proof_summary gate=3 "
+            "blocker=cmd-event-ring-timeout controller=ready "
+            "command=enable-slot-linux-event-unproven event=missing",
+            "[local-seat] usb probe path pathway=1 attempt=1/1 "
+            "outcome=root-port-sample-deferred progress=controller-ready "
+            "command_probe=enable-slot-linux-event-unproven",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-event-ring-timeout"
+
+
 def test_gate_summary_promotes_usb_command_timeout_over_pending_timer() -> None:
     events = normalizer.parse_events(
         [
@@ -449,7 +560,7 @@ def test_gate_summary_tracks_latest_usb_pre_doorbell_timer_halt() -> None:
     gates = normalizer.summarize_gates(events)
 
     assert gates.usb_gate == 3
-    assert gates.usb_blocker == "cmd-pre-doorbell-proof-timer-preempted"
+    assert gates.usb_blocker == "cmd-poll-pending"
 
 
 def test_gate_summary_tracks_usb_cmd_submit_timer_halt_after_policy_skip() -> None:
@@ -468,7 +579,7 @@ def test_gate_summary_tracks_usb_cmd_submit_timer_halt_after_policy_skip() -> No
     gates = normalizer.summarize_gates(events)
 
     assert gates.usb_gate == 3
-    assert gates.usb_blocker == "cmd-submit-proof-timer-preempted"
+    assert gates.usb_blocker == "enumeration-disabled-bootloader-owned"
 
 
 def test_gate_summary_keeps_usb_timeout_plan_ahead_of_timer_halt() -> None:
@@ -901,6 +1012,26 @@ def test_gate_summary_promotes_usb_event_ring_timeout_from_live_crcr_snapshot() 
     assert gates.usb_blocker == "cmd-event-ring-timeout"
 
 
+def test_gate_summary_preserves_usbcmd_reset_bit_over_event_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x02e5 "
+            "tag=usbcmd-run-write-done reg=0x0000000000000003",
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x0357 "
+            "tag=cmd-event-ring-timeout-0 param=0x0000000000000000",
+            "[local-seat] usb proof_summary gate=3 "
+            "blocker=cmd-event-ring-timeout controller=ready",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "usbcmd-run-preserved-reset-bit"
+
+
 def test_gate_summary_classifies_wifi_pre_f2_core_control_failure() -> None:
     events = normalizer.parse_events(
         [
@@ -939,6 +1070,27 @@ def test_gate_summary_preserves_armcr4_reset_exact_over_pre_f2_phase() -> None:
     assert gates.wifi_blocker == "armcr4-reset-assert-cmd53-r5-rejected"
 
 
+def test_gate_summary_classifies_armcr4_reset_assert_cmd52_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware core-ctrl reset-write "
+            "mode=cmd52-byte-transfer-window-reset-assert "
+            "base=0x18103000 off=0x800 addr=0x18103800 "
+            "window=0x18100000 bus=0x0b800 trace_bus=0x0b800 "
+            "shift=0 inc=1 value=0x01",
+            "[pi4-wifi] sdio cmd52 fail op=write-no-cmd53-fallback "
+            "fn=1 addr=0x0b800 val=0x01 resp=0x00001823 r5=0x0800",
+            "wifi: f2_gate policy=pre-f2-core-control "
+            "gate=core-control-blocked-before-f2 f2_enabled=no",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "armcr4-reset-assert-cmd52-r5-rejected"
+
+
 def test_gate_summary_preserves_no_op_event_timeout_without_summary() -> None:
     events = normalizer.parse_events(
         [
@@ -954,6 +1106,40 @@ def test_gate_summary_preserves_no_op_event_timeout_without_summary() -> None:
 
     assert gates.usb_gate == 3
     assert gates.usb_blocker == "cmd-event-ring-timeout"
+
+
+def test_gate_summary_preserves_enable_slot_event_timeout_without_summary() -> None:
+    for result in ("enable-slot-unproven", "enable-slot-linux-event-unproven"):
+        events = normalizer.parse_events(
+            [
+                "[local-seat] xhci root-port command-probe "
+                f"result={result} bus=pcie-window "
+                "action=return-to-shell detail=cmd-event-ring-timeout "
+                "irq27_role=timer-only pcie_irqs=175,180",
+                "Kernel entry via Interrupt, irq 27",
+            ]
+        )
+
+        gates = normalizer.summarize_gates(events)
+
+        assert gates.usb_gate == 3
+        assert gates.usb_blocker == "cmd-event-ring-timeout"
+
+
+def test_gate_summary_treats_enable_slot_cleanup_failure_as_command_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-linux-event-ok-cleanup-failed "
+            "bus=pcie-window slot=1 cleanup=disable-slot-timeout "
+            "event_generation=linux-shaped-bounded",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "none"
 
 
 def test_gate_summary_promotes_usb_controller_not_running_from_live_state() -> None:
@@ -1217,6 +1403,31 @@ def test_gate_summary_tracks_wifi_armcr4_prereset_after_pmu_skip() -> None:
             "phase=command-r5 resp=0x00001800 r5=0x0800",
             "[pi4-wifi] firmware core-ctrl access stage=prereset-fgc-clock "
             "op=write8 err=unsupported operation: sdio-cmd53-r5-error "
+            "base=0x18103000 off=0x408",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "armcr4-prereset-fgc-cmd53-r5-rejected"
+
+
+def test_gate_summary_tracks_wifi_armcr4_prereset_current_r5_arg() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: clock=41666666Hz preferred=50000000Hz width=4bit "
+            "ioex=0x02 iordy=0x02",
+            "[pi4-wifi] firmware core-disable base=0x18103000 "
+            "stage=prereset-fgc-clock value=0x23",
+            "[pi4-wifi] firmware core-ctrl access op=write8-prereset "
+            "mode=cmd53-word-windowed fallback=cmd52-byte-transfer-window-prereset "
+            "base=0x18103000 off=0x408 addr=0x18103408",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x95681001 len=1 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "[pi4-wifi] firmware core-ctrl access stage=prereset-fgc-clock "
+            "op=write8-prereset err=unsupported operation: sdio-cmd53-r5-error "
             "base=0x18103000 off=0x408",
             "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
         ]
@@ -1607,7 +1818,7 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
         "pcie-config-replay": "pcie-config-replay",
         "brcm-axi-setup-read": "brcm-axi-setup-read",
         "xhci.diag stage=0x0111": "brcm-axi-setup-read",
-        "reset-pre-usbcmd-source-irq27": "reset-pre-usbcmd-source",
+        "reset-pre-usbcmd-source-timer-preempted": "reset-pre-usbcmd-source",
         "xhci.diag stage=0x0226": "reset-pre-usbcmd-source",
         "root-port-sample-deferred": "root-port-sample-deferred",
         "platform-reset-portsc-toxic": "port-register-access-disabled",
@@ -1646,6 +1857,9 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         ),
         "current=firmware-core-control expected=f1-backplane-core-control": (
             "firmware-core-control"
+        ),
+        "sdio cmd52 fail op=write-no-cmd53-fallback fn=1 addr=0x0b800 val=0x01": (
+            "armcr4-reset-assert-cmd52-r5-rejected"
         ),
         "stage=assert-reset base=0x18103000 off=0x800 err=unsupported operation: sdio-cmd53-r5-error": (
             "armcr4-reset-assert-cmd53-r5-rejected"

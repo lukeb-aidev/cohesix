@@ -86,7 +86,6 @@ Options:
   -h, --help                 Show this help
 
 Default proof commands:
-  help
   wifi diag
   nettest
   usb status
@@ -237,6 +236,9 @@ run_normalizer() {
     if [[ "${ALLOW_SUMMARY_ONLY}" -eq 0 ]]; then
         args+=("--expect-min" "USB_GATE=1" "--expect-min" "WIFI_GATE=1")
         args+=("--expect" "SERIAL_CLEAN=yes")
+        args+=("--expect" "BOOT_HALTED=no")
+        args+=("--expect" "TIMER_IRQ27_SEEN=no")
+        args+=("--expect" "USB_BOOTLOADER_HANDOFF_SEEN=no")
         args+=("--expect-not" "USB_BLOCKER=unknown")
         args+=("--expect-not" "USB_BLOCKER=policy-skip-before-run")
         args+=("--expect-not" "USB_BLOCKER=pcie-irq-quiesce-failed")
@@ -251,6 +253,7 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=cmd-live-timeout-snapshot-missing")
         args+=("--expect-not" "USB_BLOCKER=cmd-timeout")
         args+=("--expect-not" "USB_BLOCKER=cmd-event-ring-timeout")
+        args+=("--expect-not" "USB_BLOCKER=usbcmd-run-preserved-reset-bit")
         args+=("--expect-not" "USB_BLOCKER=pcie-window-no-op-timeout")
         args+=("--expect-not" "USB_BLOCKER=raw-phys-cmd-poll-only-timeout")
         args+=("--expect-not" "USB_BLOCKER=brcm-axi-setup-read")
@@ -259,7 +262,6 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=reset-pre-usbcmd-source-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=port-register-access-disabled")
         args+=("--expect-not" "USB_BLOCKER=root-port-read-begin")
-        args+=("--expect-not" "USB_BLOCKER=root-port-read-irq27")
         args+=("--expect-not" "USB_BLOCKER=root-port-read-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=root-port-sample-deferred")
         args+=("--expect-not" "USB_BLOCKER=no-connected-ports")
@@ -295,6 +297,7 @@ run_normalizer() {
         args+=("--expect-not" "WIFI_BLOCKER=linux-probe-pmu-cmd53-r5-rejected")
         args+=("--expect-not" "WIFI_BLOCKER=linux-probe-pmu-write-skip")
         args+=("--expect-not" "WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=armcr4-reset-assert-cmd52-r5-rejected")
         args+=("--expect-not" "WIFI_BLOCKER=armcr4-reset-assert-cmd53-r5-rejected")
         args+=("--expect-not" "WIFI_BLOCKER=firmware-core-control")
         args+=("--expect-not" "WIFI_BLOCKER=pre-f2-core-control")

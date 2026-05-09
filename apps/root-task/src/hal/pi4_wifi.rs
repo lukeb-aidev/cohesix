@@ -466,7 +466,7 @@ const fn backplane_word_aligned_addr(addr: u32) -> u32 {
 
 #[inline]
 const fn backplane_word_increment_addr() -> bool {
-    false
+    true
 }
 
 #[inline]
@@ -501,6 +501,16 @@ const fn core_ctrl_unflagged_byte_function_addr(addr: u32) -> u32 {
 #[inline]
 const fn core_ctrl_cmd52_write_function_addr(addr: u32) -> u32 {
     core_ctrl_byte_function_addr(addr)
+}
+
+#[inline]
+const fn core_ctrl_reset_assert_cmd52_function_addr(base: u32, offset: u32) -> u32 {
+    let addr = base.wrapping_add(offset);
+    if core_ctrl_reset_assert_uses_cmd52_primary(base, offset) {
+        core_ctrl_trace_function_addr(addr)
+    } else {
+        core_ctrl_cmd52_write_function_addr(addr)
+    }
 }
 
 #[inline]
@@ -562,15 +572,19 @@ const fn core_ctrl_write_access_mode_label() -> &'static str {
 #[inline]
 const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'static str {
     if core_ctrl_prereset_write_uses_word_primary(base, offset) {
-        "cmd53-word-windowed fallback=cmd52-byte-transfer-window-prereset"
+        "cmd52-byte-transfer-window-prereset fallback=cmd53-word-windowed"
     } else {
         core_ctrl_write_access_mode_label()
     }
 }
 
 #[inline]
-const fn core_ctrl_reset_assert_access_mode_label(_base: u32, _offset: u32) -> &'static str {
-    "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
+const fn core_ctrl_reset_assert_access_mode_label(base: u32, offset: u32) -> &'static str {
+    if core_ctrl_reset_assert_uses_cmd52_primary(base, offset) {
+        "cmd52-byte-transfer-window-reset-assert fallback=cmd53-word-windowed"
+    } else {
+        "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
+    }
 }
 
 #[inline]
@@ -673,7 +687,7 @@ fn log_core_ctrl_reset_write(base: u32, offset: u32, value: u8, mode: &'static s
     emit_breadcrumb(format_args!(
         "[pi4-wifi] firmware core-ctrl reset-write mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={inc} value=0x{value:02x}",
         mode,
-        bus = core_ctrl_cmd52_write_function_addr(addr),
+        bus = core_ctrl_reset_assert_cmd52_function_addr(base, offset),
         trace_bus = core_ctrl_trace_function_addr(addr),
         shift = backplane_word_byte_shift(addr),
         inc = backplane_word_increment_addr() as u8,
@@ -750,6 +764,11 @@ const fn core_ctrl_prereset_write_uses_word_primary(base: u32, offset: u32) -> b
 #[inline]
 const fn core_ctrl_write8_uses_word_primary(_base: u32, offset: u32) -> bool {
     offset == AI_IOCTRL_OFFSET || offset == AI_RESETCTRL_OFFSET
+}
+
+#[inline]
+const fn core_ctrl_reset_assert_uses_cmd52_primary(base: u32, offset: u32) -> bool {
+    base == CYW43_ARMCR4_CORE_BASE && offset == AI_RESETCTRL_OFFSET
 }
 
 #[inline]
@@ -4547,11 +4566,8 @@ const fn pre_function2_shadow_chipclk_refresh_allowed(chipclk: u8) -> bool {
 }
 
 #[inline]
-const fn should_prime_ht_clock_assist_before_reset(last_chipclkcsr: Option<u8>) -> bool {
-    match last_chipclkcsr {
-        Some(value) => (value & SBSDIO_HT_AVAIL) == 0,
-        None => true,
-    }
+const fn should_prime_ht_clock_assist_before_reset(_last_chipclkcsr: Option<u8>) -> bool {
+    false
 }
 
 #[inline]
@@ -4968,6 +4984,10 @@ const SDHCI_INT_DATA_MASK: u32 = SDHCI_INT_DATA_END
     | SDHCI_INT_DATA_TIMEOUT
     | SDHCI_INT_DATA_CRC
     | SDHCI_INT_DATA_END_BIT;
+const SDHCI_INT_DATA_READY_MASK: u32 = SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_AVAIL;
+const SDHCI_INT_DATA_ERROR_MASK: u32 =
+    SDHCI_INT_ERROR | SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC | SDHCI_INT_DATA_END_BIT;
+const SDHCI_INT_DATA_FINISH_MASK: u32 = SDHCI_INT_DATA_END | SDHCI_INT_DATA_ERROR_MASK;
 
 const SDIO_CMD5: u16 = 5;
 const SDIO_CMD3: u16 = 3;
@@ -7986,7 +8006,24 @@ impl Mailbox {
         // has a dedicated posted fallback path, so reuse the long-lived
         // acknowledged request page instead of allocating another uncached page
         // late in boot.
-        Self::new(hal)
+        Self::new_with_request_slot(
+            hal,
+            &PINNED_MAILBOX_REQUEST,
+            "reuse-shared owner=xhci-reset-notify",
+            "alloc-shared owner=xhci-reset-notify",
+        )
+    }
+
+    fn new_vl805_power<H>(hal: &mut H) -> Result<Self, HalError>
+    where
+        H: DeviceHal<Error = HalError>,
+    {
+        Self::new_with_request_slot(
+            hal,
+            &PINNED_MAILBOX_REQUEST,
+            "reuse-shared owner=vl805-usb-hcd-power",
+            "alloc-shared owner=vl805-usb-hcd-power",
+        )
     }
 
     fn power_on_module(&mut self, module: u32) -> Result<(), HalError> {
@@ -8411,7 +8448,7 @@ where
     emit_breadcrumb(format_args!(
         "[pi4-wifi] mailbox vl805-usb-hcd-power action=begin module=0x{POWER_DEVID_USB_HCD:08x}"
     ));
-    let mut mailbox = Mailbox::new(hal)?;
+    let mut mailbox = Mailbox::new_vl805_power(hal)?;
     mailbox.power_on_module(POWER_DEVID_USB_HCD)?;
     emit_breadcrumb(format_args!(
         "[pi4-wifi] mailbox vl805-usb-hcd-power action=complete"
@@ -15823,10 +15860,18 @@ impl SdioHost {
             }
         }
 
-        self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, 0)?;
-        self.remember_chipclkcsr(0);
+        let chipclk_request = backplane_alp_request_value();
+        self.io_direct_write(
+            SdioFunction::Function1,
+            SBSDIO_FUNC1_CHIPCLKCSR,
+            chipclk_request,
+        )?;
+        self.remember_chipclkcsr(chipclk_request);
+        let chipclk = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)?;
+        self.remember_chipclkcsr(chipclk);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=linux-probe-attach-state action=chipclk-sdonly value=0x00"
+            "[pi4-wifi] firmware stage=linux-probe-attach-state action=chipclk-alp-request request=0x{chipclk_request:02x} readback=0x{chipclk:02x} alp_avail={}",
+            yn((chipclk & SBSDIO_ALP_AVAIL) != 0),
         ));
         Ok(())
     }
@@ -19947,6 +19992,22 @@ impl SdioHost {
         )
     }
 
+    fn core_ctrl_reset_assert_cmd52_current_window_write8(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+    ) -> Result<(), HalError> {
+        let addr = base.saturating_add(offset);
+        self.with_backplane_window_addr(
+            addr,
+            core_ctrl_reset_assert_cmd52_function_addr(base, offset),
+            |this, bus_addr| {
+                this.io_direct_write_no_cmd53_fallback(SdioFunction::Function1, bus_addr, value)
+            },
+        )
+    }
+
     fn core_ctrl_cmd52_unflagged_current_window_write8(
         &mut self,
         base: u32,
@@ -20213,12 +20274,33 @@ impl SdioHost {
                 "core-ctrl-reset-assert-cmd53-rewindow",
             );
         }
+        if core_ctrl_reset_assert_uses_cmd52_primary(base, offset) {
+            return match self
+                .core_ctrl_reset_assert_cmd52_current_window_write8(base, offset, value)
+            {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-assert base=0x{base:08x} off=0x{offset:03x} from=cmd52-byte-transfer-window-reset-assert to=cmd53-word-windowed err={err}"
+                    ));
+                    self.recover_command_path("core-ctrl-reset-assert-cmd53-current-window");
+                    self.core_ctrl_word_primary_write8(
+                        base,
+                        offset,
+                        value,
+                        "write8-reset-assert",
+                        "core-ctrl-reset-assert-cmd52-transfer-window",
+                        "core-ctrl-reset-assert-cmd53-rewindow",
+                    )
+                }
+            };
+        }
         self.core_ctrl_word_primary_write8(
             base,
             offset,
             value,
             "write8-reset-assert",
-            "core-ctrl-reset-assert-cmd53-current-window",
+            "core-ctrl-reset-assert-cmd52-transfer-window",
             "core-ctrl-reset-assert-cmd53-rewindow",
         )
     }
@@ -20240,14 +20322,23 @@ impl SdioHost {
             );
         }
         if core_ctrl_prereset_write_uses_word_primary(base, offset) {
-            return self.core_ctrl_word_primary_write8(
-                base,
-                offset,
-                value,
-                "write8-prereset",
-                "core-ctrl-prereset-cmd53-current-window",
-                "core-ctrl-prereset-cmd53-rewindow",
-            );
+            return match self.core_ctrl_cmd52_current_window_write8(base, offset, value) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware core-ctrl fallback op=write8-prereset base=0x{base:08x} off=0x{offset:03x} from=cmd52-byte-transfer-window-prereset to=cmd53-word-windowed err={err}"
+                    ));
+                    self.recover_command_path("core-ctrl-prereset-cmd53-current-window");
+                    self.core_ctrl_word_primary_write8(
+                        base,
+                        offset,
+                        value,
+                        "write8-prereset",
+                        "core-ctrl-prereset-cmd52-transfer-window",
+                        "core-ctrl-prereset-cmd53-rewindow",
+                    )
+                }
+            };
         }
         self.core_ctrl_write8(base, offset, value)
     }
@@ -22233,9 +22324,8 @@ impl SdioHost {
             }
         }
 
-        let data_status = match self
-            .wait_int(SDHCI_INT_DATA_END | SDHCI_INT_ERROR | SDHCI_INT_DATA_MASK)
-        {
+        self.write32(SDHCI_INT_STATUS, SDHCI_INT_DATA_READY_MASK);
+        let data_status = match self.wait_int(SDHCI_INT_DATA_FINISH_MASK) {
             Ok(status) => status,
             Err(err) => {
                 self.remember_last_data_wait_diag(cmd, arg, None);
@@ -22850,11 +22940,12 @@ mod tests {
         control_plane_zero_frame_needs_reply_rearm, core_ctrl_access_mode_label,
         core_ctrl_byte_function_addr, core_ctrl_cmd52_write_function_addr,
         core_ctrl_current_window_addr, core_ctrl_postreset_access_mode_label,
-        core_ctrl_reset_assert_access_mode_label, core_ctrl_reset_clear_access_mode_label,
-        core_ctrl_trace_function_addr, core_ctrl_write8_uses_word_primary,
-        core_disable_uses_upstream_socram_disable, core_reset_can_skip_postreset_verify,
-        core_reset_prepare_hold_value, core_wait_can_defer_after_read_error,
-        core_wait_should_raise_control_plane_clock, cyw43_transport_mode_name,
+        core_ctrl_reset_assert_access_mode_label, core_ctrl_reset_assert_cmd52_function_addr,
+        core_ctrl_reset_clear_access_mode_label, core_ctrl_trace_function_addr,
+        core_ctrl_write8_uses_word_primary, core_disable_uses_upstream_socram_disable,
+        core_reset_can_skip_postreset_verify, core_reset_prepare_hold_value,
+        core_wait_can_defer_after_read_error, core_wait_should_raise_control_plane_clock,
+        cyw43_transport_mode_name,
         experimental_control_plane_post_write_timeout_prefers_passive_startup_link,
         experimental_control_plane_reply_rearm_empty_poll_limit,
         experimental_control_plane_write_can_assume_committed,
@@ -26206,7 +26297,23 @@ mod tests {
         assert!(!backplane_write32_uses_word_path(
             CYW43_CHIPCOMMON_BASE + 0x11
         ));
-        assert!(!backplane_word_increment_addr());
+        assert!(backplane_word_increment_addr());
+        assert_eq!(
+            core_ctrl_prereset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
+            "cmd52-byte-transfer-window-prereset fallback=cmd53-word-windowed"
+        );
+        let core_ctrl_word_plan =
+            sdio_transfer_plan(SdioFunction::Function1, 4, true).expect("word-write plan");
+        assert_eq!(
+            cmd53_argument(
+                SdioFunction::Function1,
+                core_ctrl_function_addr(CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET),
+                backplane_word_increment_addr(),
+                true,
+                core_ctrl_word_plan,
+            ),
+            0x9568_1004
+        );
         assert_eq!(
             core_ctrl_function_addr(CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET),
             0x0b408
@@ -26226,6 +26333,10 @@ mod tests {
         assert_eq!(
             core_ctrl_cmd52_write_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET),
             0x03800
+        );
+        assert_eq!(
+            core_ctrl_reset_assert_cmd52_function_addr(CYW43_ARMCR4_CORE_BASE, AI_RESETCTRL_OFFSET),
+            0x0b800
         );
         assert_eq!(
             core_ctrl_unflagged_byte_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET),
@@ -26257,7 +26368,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd53-word-windowed fallback=cmd52-byte-transfer-window-prereset"
+            "cmd52-byte-transfer-window-prereset fallback=cmd53-word-windowed"
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
@@ -26265,7 +26376,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_RESETCTRL_OFFSET),
-            "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
+            "cmd52-byte-transfer-window-reset-assert fallback=cmd53-word-windowed"
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_RESETCTRL_OFFSET),
@@ -31675,6 +31786,13 @@ mod tests {
     }
 
     #[test]
+    fn sdhci_finish_wait_excludes_buffer_ready_interrupts() {
+        assert_eq!(SDHCI_INT_DATA_FINISH_MASK & SDHCI_INT_DATA_READY_MASK, 0);
+        assert_ne!(SDHCI_INT_DATA_FINISH_MASK & SDHCI_INT_DATA_END, 0);
+        assert_ne!(SDHCI_INT_DATA_FINISH_MASK & SDHCI_INT_DATA_ERROR_MASK, 0);
+    }
+
+    #[test]
     fn ht_clock_request_requests_ht_only() {
         assert_eq!(ht_clock_request_value(), SBSDIO_HT_AVAIL_REQ);
     }
@@ -33537,22 +33655,22 @@ mod tests {
     }
 
     #[test]
-    fn pre_reset_ht_assist_prime_follows_cached_chipclk_state() {
-        assert!(should_prime_ht_clock_assist_before_reset(None));
-        assert!(should_prime_ht_clock_assist_before_reset(Some(0)));
-        assert!(should_prime_ht_clock_assist_before_reset(Some(
+    fn pre_reset_ht_assist_prime_is_disabled_before_firmware_core_control() {
+        assert!(!should_prime_ht_clock_assist_before_reset(None));
+        assert!(!should_prime_ht_clock_assist_before_reset(Some(0)));
+        assert!(!should_prime_ht_clock_assist_before_reset(Some(
             backplane_alp_hold_value()
         )));
-        assert!(should_prime_ht_clock_assist_before_reset(Some(
+        assert!(!should_prime_ht_clock_assist_before_reset(Some(
             backplane_alp_request_value()
         )));
-        assert!(should_prime_ht_clock_assist_before_reset(Some(
+        assert!(!should_prime_ht_clock_assist_before_reset(Some(
             SBSDIO_ALP_AVAIL
         )));
-        assert!(should_prime_ht_clock_assist_before_reset(Some(
+        assert!(!should_prime_ht_clock_assist_before_reset(Some(
             SBSDIO_FORCE_HT
         )));
-        assert!(should_prime_ht_clock_assist_before_reset(Some(
+        assert!(!should_prime_ht_clock_assist_before_reset(Some(
             SBSDIO_HT_AVAIL_REQ
         )));
         assert!(!should_prime_ht_clock_assist_before_reset(Some(
@@ -33663,11 +33781,23 @@ mod tests {
         assert_eq!(
             cmd52_argument(
                 SdioFunction::Function1,
-                core_ctrl_cmd52_write_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET),
+                core_ctrl_reset_assert_cmd52_function_addr(
+                    CYW43_ARMCR4_CORE_BASE,
+                    AI_RESETCTRL_OFFSET
+                ),
                 true,
                 AI_RESETCTRL_BIT_RESET,
             ),
-            0x9070_0001
+            0x9170_0001
+        );
+        assert_eq!(
+            decode(0x9170_0001),
+            (
+                true,
+                SdioFunction::Function1.number(),
+                0x0b800,
+                AI_RESETCTRL_BIT_RESET,
+            )
         );
     }
 

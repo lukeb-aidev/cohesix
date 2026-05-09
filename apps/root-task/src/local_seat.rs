@@ -676,7 +676,7 @@ mod tests {
         assert!(!usb_runtime_command_replay_ready(
             true,
             true,
-            "bootloader-handoff",
+            "firmware-command-snapshot",
         ));
         assert!(!usb_runtime_command_replay_ready(
             false,

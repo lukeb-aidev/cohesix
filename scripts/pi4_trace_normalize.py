@@ -111,7 +111,6 @@ USB_OUTCOME_BLOCKERS = {
     "no-connected-ports",
     "no-keyboard-found",
     "root-port-read-begin",
-    "root-port-read-irq27",
     "root-port-read-timer-preempted",
     "root-port-sample-deferred",
     "reset-pre-usbcmd-source",
@@ -168,6 +167,10 @@ class GateSummary:
     wifi_gate: int
     wifi_blocker: str
     serial_clean: bool = True
+    boot_halted: bool = False
+    timer_irq27_seen: bool = False
+    boot_halt_reason: str = "none"
+    usb_bootloader_handoff_seen: bool = False
 
     def to_record(self) -> dict[str, object]:
         """Return a JSON-serializable gate summary."""
@@ -178,6 +181,12 @@ class GateSummary:
             "WIFI_GATE": self.wifi_gate,
             "WIFI_BLOCKER": self.wifi_blocker,
             "SERIAL_CLEAN": "yes" if self.serial_clean else "no",
+            "BOOT_HALTED": "yes" if self.boot_halted else "no",
+            "TIMER_IRQ27_SEEN": "yes" if self.timer_irq27_seen else "no",
+            "BOOT_HALT_REASON": self.boot_halt_reason,
+            "USB_BOOTLOADER_HANDOFF_SEEN": (
+                "yes" if self.usb_bootloader_handoff_seen else "no"
+            ),
         }
 
     def to_env_lines(self) -> list[str]:
@@ -276,10 +285,19 @@ def classify_domain(line: str) -> str | None:
         return "usb"
     if line.startswith("usb:") or line.startswith("USB:") or "[local-seat]" in lower:
         return "usb"
+    if line == "halting...":
+        return "kernel"
     if line.startswith("Kernel entry via Interrupt"):
-        return "usb"
+        return "kernel"
     if "[pi4-wifi]" in lower and (
-        "vl805-usb-hcd-power" in lower or "xhci-reset-notify" in lower
+        "vl805-usb-hcd-power" in lower
+        or "xhci-reset-notify" in lower
+        or "owner=vl805-usb-hcd-power" in lower
+        or "owner=xhci-reset-notify" in lower
+        or (
+            "mailbox power-on" in lower
+            and "module=0x00000003" in lower
+        )
     ):
         return "usb"
     if (
@@ -360,10 +378,25 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
         return None
     source = classify_source(line, domain)
     fields = parse_fields(line)
+    stage = choose_stage(fields)
+    message = extract_message(line, domain, source)
+    if line == "halting...":
+        fields = {**fields, "halt": "yes", "reason": "kernel-halt"}
+        stage = "halt"
+        message = "halt reason=kernel-halt"
+    elif line.startswith("Kernel entry via Interrupt"):
+        irq = line.rsplit("irq ", 1)[-1] if "irq " in line else "unknown"
+        fields = {
+            **fields,
+            "interrupt": "kernel-entry",
+            "irq": irq,
+            "timer_irq": "yes" if irq == "27" else "no",
+        }
+        stage = "timer-irq" if irq == "27" else "interrupt"
+        message = f"kernel-entry irq={irq}"
     late_reason = serial_corruption_reason(line, fields)
     if late_reason is not None:
         fields = {**fields, "serial_error": late_reason}
-    message = extract_message(line, domain, source)
     return TraceEvent(
         line=line_number,
         domain=domain,
@@ -371,7 +404,7 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
         message=message,
         raw=line,
         fields=fields,
-        stage=choose_stage(fields),
+        stage=stage,
     )
 
 
@@ -435,7 +468,7 @@ def summarize_events(events: Iterable[TraceEvent]) -> dict[str, object]:
         "domains": dict(sorted(domain_counts.items())),
         "stages": dict(sorted(stage_counts.items())),
         "latest": latest,
-        "blockers": blockers[-16:],
+        "blockers": blockers[-32:],
         "serial_clean": serial_clean(event_list),
         "gates": summarize_gates(event_list).to_record(),
     }
@@ -449,6 +482,8 @@ def normalize_usb_blocker(value: str) -> str:
         return "cmd-controller-not-running"
     if "cmd-controller-halted" in lower:
         return "cmd-controller-halted"
+    if "usbcmd-run-preserved-reset-bit" in lower:
+        return "usbcmd-run-preserved-reset-bit"
     if "cmd-event-ring-timeout" in lower or "event-ring-missing" in lower:
         return "cmd-event-ring-timeout"
     if "cmd-ring-timeout" in lower:
@@ -459,7 +494,12 @@ def normalize_usb_blocker(value: str) -> str:
         return "cmd-live-timeout-snapshot-missing"
     if "cmd-poll-pending" in lower:
         return "cmd-poll-pending"
-    if "no-op-unproven" in lower or "cmd-prompt-safe-return-to-shell" in lower:
+    if (
+        "no-op-unproven" in lower
+        or "enable-slot-unproven" in lower
+        or "enable-slot-linux-event-unproven" in lower
+        or "cmd-prompt-safe-return-to-shell" in lower
+    ):
         return "cmd-poll-pending"
     if (
         "cmd-submit-proof-timer-preempted" in lower
@@ -517,12 +557,9 @@ def normalize_usb_blocker(value: str) -> str:
         or "stage=0x03f7" in lower
     ):
         return "port-register-access-disabled"
-    if "root-port-read-timer-preempted" in lower or "root-port-read-irq27" in lower:
+    if "root-port-read-timer-preempted" in lower:
         return "root-port-read-begin"
-    if (
-        "reset-pre-usbcmd-source-timer-preempted" in lower
-        or "reset-pre-usbcmd-source-irq27" in lower
-    ):
+    if "reset-pre-usbcmd-source-timer-preempted" in lower:
         return "reset-pre-usbcmd-source"
     if "reset-pre-usbcmd-source" in lower or "stage=0x0226" in lower:
         return "reset-pre-usbcmd-source"
@@ -639,6 +676,21 @@ def normalize_wifi_blocker(value: str) -> str:
     ):
         return "firmware-core-control"
     if (
+        "armcr4-reset-assert-cmd52-r5-rejected" in lower
+        or (
+            "sdio cmd52 fail" in lower
+            and "op=write-no-cmd53-fallback" in lower
+            and "addr=0x0b800" in lower
+        )
+        or (
+            "sdio-cmd52-write" in lower
+            and "mode=cmd52-byte-transfer-window-reset-assert" in lower
+            and "base=0x18103000" in lower
+            and "off=0x800" in lower
+        )
+    ):
+        return "armcr4-reset-assert-cmd52-r5-rejected"
+    if (
         "armcr4-reset-assert-cmd53-r5-rejected" in lower
         or (
             "stage=assert-reset" in lower
@@ -728,6 +780,7 @@ def normalize_wifi_blocker(value: str) -> str:
             and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
         )
         or "arg=0x90681001" in lower
+        or "arg=0x95681001" in lower
     ):
         return "armcr4-prereset-fgc-cmd53-r5-rejected"
     if "ht-backplane-cmd53-r5-rejected" in lower:
@@ -916,6 +969,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     reset_pre_usbcmd_pending = False
     command_probe_bus: str | None = None
     command_timeout_detail: str | None = None
+    run_usbcmd_preserved_reset_bit = False
+    usbcmd_controller_command_bits = 0x0000_0382
     precise_command_timeout_details = {
         "cmd-poll-only-timeout",
         "pcie-window-no-op-timeout",
@@ -924,10 +979,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "cmd-event-ring-timeout",
         "cmd-controller-not-running",
         "cmd-controller-halted",
+        "usbcmd-run-preserved-reset-bit",
         "cmd-timeout",
         "cmd-poll-pending",
         "cmd-submit-proof-timer-preempted",
     }
+    stale_command_timeout_details = precise_command_timeout_details - {"cmd-poll-pending"}
     for event in usb_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -969,14 +1026,27 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, proof_gate)
             proof_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
             if proof_blocker != "none":
-                blocker = proof_blocker
-            elif fields.get("command") == "no-op-unproven":
+                if (
+                    command_timeout_detail == "usbcmd-run-preserved-reset-bit"
+                    and proof_blocker == "cmd-event-ring-timeout"
+                ):
+                    blocker = command_timeout_detail
+                else:
+                    blocker = proof_blocker
+            elif fields.get("command") in {
+                "no-op-unproven",
+                "enable-slot-unproven",
+                "enable-slot-linux-event-unproven",
+            }:
                 blocker = "cmd-poll-pending"
             else:
                 blocker = "none"
             continue
         if "root-port sample skipped" in raw:
             gate = max(gate, 3)
+            if command_timeout_detail in stale_command_timeout_details:
+                blocker = command_timeout_detail
+                continue
             reason = normalize_usb_blocker(fields.get("reason", "root-port-sample-deferred"))
             if reason in USB_OUTCOME_BLOCKERS:
                 blocker = reason
@@ -1100,12 +1170,29 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 2)
         if "controller-ready" in raw or "controller-init-complete" in raw:
             gate = max(gate, 3)
+        if tag in {"usbcmd-run-write", "usbcmd-run-write-done"}:
+            run_cmd = parse_hex_int(fields.get("reg"))
+            if run_cmd is None:
+                run_cmd = parse_hex_int(fields.get("b"))
+            if run_cmd is not None and (run_cmd & usbcmd_controller_command_bits) != 0:
+                run_usbcmd_preserved_reset_bit = True
+                command_timeout_detail = "usbcmd-run-preserved-reset-bit"
+                blocker = command_timeout_detail
+                gate = max(gate, 3)
         if tag == "cmd-submit":
             saw_command_submit = True
             saw_command_doorbell = False
             saw_command_event_ring_before = False
             saw_command_timeout_plan = False
-            command_timeout_detail = None
+            command_timeout_detail = (
+                "usbcmd-run-preserved-reset-bit"
+                if run_usbcmd_preserved_reset_bit
+                else None
+            )
+            if blocker in stale_command_timeout_details:
+                blocker = "unknown"
+            if run_usbcmd_preserved_reset_bit:
+                blocker = "usbcmd-run-preserved-reset-bit"
             gate = max(gate, 3)
         if (
             "cmd-poll-only-timeout" in raw
@@ -1131,7 +1218,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = command_timeout_detail
         elif tag.startswith("cmd-event-ring-timeout"):
             gate = max(gate, 3)
-            command_timeout_detail = "cmd-event-ring-timeout"
+            if command_timeout_detail != "usbcmd-run-preserved-reset-bit":
+                command_timeout_detail = "cmd-event-ring-timeout"
             blocker = command_timeout_detail
         elif tag.startswith("cmd-gate-timeout-plan"):
             gate = max(gate, 3)
@@ -1187,6 +1275,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         }:
             saw_command_doorbell = True
             gate = max(gate, 3)
+            if (
+                command_timeout_detail is None
+                and blocker in {"unknown", "none"}
+            ):
+                blocker = "cmd-poll-pending"
         elif (
             brcm_axi_read_pending
             and "kernel entry via interrupt" in raw
@@ -1245,8 +1338,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = "cmd-submit-proof-timer-preempted"
         elif (
             fields.get("command_probe", "").endswith("-ok")
+            or fields.get("command_probe", "").endswith("-ok-cleanup-failed")
             or (
-                fields.get("result", "").endswith("-ok")
+                (
+                    fields.get("result", "").endswith("-ok")
+                    or fields.get("result", "").endswith("-ok-cleanup-failed")
+                )
                 and "command-probe" in raw
             )
             or fields.get("verdict", "").startswith("command-ring-ready")
@@ -1274,6 +1371,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         key == "result"
                         and value
                         in {
+                            "enable-slot-unproven",
+                            "enable-slot-linux-event-unproven",
                             "enable-slot-uboot-first-unproven",
                             "no-op-unproven",
                         }
@@ -1282,11 +1381,19 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         gate = max(gate, 3)
                         blocker = "cmd-event-ring-timeout"
                     elif (
+                        normalized_value in USB_OUTCOME_BLOCKERS
+                        and command_timeout_detail in stale_command_timeout_details
+                    ):
+                        blocker = command_timeout_detail
+                    elif (
                         key == "result"
                         and normalized_value == "cmd-poll-only-timeout"
                         and fields.get("bus") == "pcie-window"
                     ):
-                        blocker = "pcie-window-no-op-timeout"
+                        if command_timeout_detail in precise_command_timeout_details:
+                            blocker = command_timeout_detail
+                        else:
+                            blocker = "pcie-window-no-op-timeout"
                     elif (
                         key == "result"
                         and normalized_value == "cmd-poll-only-timeout"
@@ -1313,6 +1420,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             }:
                 blocker = normalize_usb_blocker(focus)
 
+    if (
+        command_timeout_detail in stale_command_timeout_details
+        and blocker in USB_OUTCOME_BLOCKERS
+    ):
+        blocker = command_timeout_detail
+
     return gate, blocker
 
 
@@ -1332,6 +1445,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "linux-probe-pmu-cmd53-r5-rejected",
         "pre-f2-core-control",
         "firmware-core-control",
+        "armcr4-reset-assert-cmd52-r5-rejected",
         "armcr4-reset-assert-cmd53-r5-rejected",
         "socram-assert-reset-cmd53-r5-rejected",
         "socram-clear-reset-cmd53-r5-rejected",
@@ -1353,11 +1467,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "sdio-cmd53-r5-error",
     }
     specific_sdio_blockers = precise_ht_blockers - direct_sdio_blockers
+    exact_reset_blockers = specific_sdio_blockers - {
+        "pre-f2-core-control",
+        "firmware-core-control",
+    }
     reset_phase_blockers = {
         "linux-probe-pmu-write-skip",
         "linux-probe-pmu-cmd53-r5-rejected",
         "pre-f2-core-control",
         "firmware-core-control",
+        "armcr4-reset-assert-cmd52-r5-rejected",
         "armcr4-reset-assert-cmd53-r5-rejected",
         "socram-assert-reset-cmd53-r5-rejected",
         "socram-clear-reset-cmd53-r5-rejected",
@@ -1370,10 +1489,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     }
     ht_available_seen = False
     post_f2_progress_seen = False
+    firmware_release_seen = False
     linux_probe_attach_seen = False
     linux_probe_pmu_write_active = False
     armcr4_prereset_ioctrl_active = False
     socram_core_ctrl_stage: str | None = None
+    specific_reset_blocker: str | None = None
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -1396,9 +1517,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if raw_contract_blocker in {
             "pre-f2-core-control",
             "firmware-core-control",
+            "armcr4-reset-assert-cmd52-r5-rejected",
             "armcr4-reset-assert-cmd53-r5-rejected",
         }:
             explicit_blocker = raw_contract_blocker
+        if (
+            fields.get("policy") == "pre-f2-core-control"
+            or fields.get("blocker_phase") == "pre-f2-core-control"
+            or fields.get("gate") == "core-control-blocked-before-f2"
+        ):
+            explicit_blocker = "pre-f2-core-control"
         if (
             "base=0x18104000" in raw
             and "sdio-cmd53-r5-error" in raw
@@ -1419,6 +1547,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             explicit_blocker = "linux-probe-pmu-write-skip"
         if cached_only_evidence:
             if gate >= 4 and explicit_blocker in precise_ht_blockers | {"ht-clock-timeout"}:
+                blocker = explicit_blocker
+            continue
+        if explicit_blocker == "pre-f2-core-control":
+            gate = max(gate, 4)
+            if specific_reset_blocker is not None:
+                blocker = specific_reset_blocker
+            elif blocker == "firmware-core-control" or blocker not in specific_sdio_blockers:
                 blocker = explicit_blocker
             continue
         if "linux-probe-attach-state" in raw:
@@ -1676,7 +1811,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = "socram-clear-reset-cmd53-r5-rejected"
             elif socram_core_ctrl_stage == "postreset-clock-en-write":
                 blocker = "socram-postreset-clock-cmd53-r5-rejected"
-            elif armcr4_prereset_ioctrl_active or fields.get("arg") == "0x90681001":
+            elif armcr4_prereset_ioctrl_active or fields.get("arg") in {
+                "0x90681001",
+                "0x95681001",
+            }:
                 blocker = "armcr4-prereset-fgc-cmd53-r5-rejected"
             elif linux_probe_pmu_write_active or fields.get("arg") == "0x900c0601":
                 blocker = "linux-probe-pmu-cmd53-r5-rejected"
@@ -1687,6 +1825,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "linux-probe-pmu-cmd53-r5-rejected",
                 "pre-f2-core-control",
                 "firmware-core-control",
+                "armcr4-reset-assert-cmd52-r5-rejected",
                 "armcr4-reset-assert-cmd53-r5-rejected",
                 "socram-assert-reset-cmd53-r5-rejected",
                 "socram-clear-reset-cmd53-r5-rejected",
@@ -1694,6 +1833,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "armcr4-prereset-fgc-cmd53-r5-rejected",
             }:
                 blocker = normalize_wifi_blocker(raw)
+            if blocker in exact_reset_blockers:
+                specific_reset_blocker = blocker
             continue
         if (
             (
@@ -1720,6 +1861,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             or "rstvec=" in raw
         ):
             gate = max(gate, 3)
+            if "armcr4_release=1" in raw:
+                firmware_release_seen = True
         if explicit_blocker == "devon-timeout":
             gate = max(gate, 4)
             blocker = explicit_blocker
@@ -1733,6 +1876,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "linux-probe-pmu-cmd53-r5-rejected",
             "pre-f2-core-control",
             "firmware-core-control",
+            "armcr4-reset-assert-cmd52-r5-rejected",
             "armcr4-reset-assert-cmd53-r5-rejected",
             "socram-assert-reset-cmd53-r5-rejected",
             "socram-clear-reset-cmd53-r5-rejected",
@@ -1745,16 +1889,29 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         }:
             gate = max(gate, 4)
             if explicit_blocker == "pre-f2-core-control":
-                if blocker == "firmware-core-control" or blocker not in specific_sdio_blockers:
+                if specific_reset_blocker is not None:
+                    blocker = specific_reset_blocker
+                elif blocker == "firmware-core-control" or blocker not in specific_sdio_blockers:
                     blocker = explicit_blocker
             elif explicit_blocker == "firmware-core-control":
-                if blocker not in specific_sdio_blockers:
+                if specific_reset_blocker is not None:
+                    blocker = specific_reset_blocker
+                elif blocker not in specific_sdio_blockers:
                     blocker = explicit_blocker
+            elif explicit_blocker in direct_sdio_blockers and specific_reset_blocker is not None:
+                blocker = specific_reset_blocker
+            elif explicit_blocker in direct_sdio_blockers and blocker in {
+                "pre-f2-core-control",
+                "firmware-core-control",
+            }:
+                pass
             elif (
                 explicit_blocker not in direct_sdio_blockers
                 or blocker not in specific_sdio_blockers
             ):
                 blocker = explicit_blocker
+            if blocker in exact_reset_blockers:
+                specific_reset_blocker = blocker
             continue
         if explicit_blocker == "armcr4-release-readback-unavailable":
             gate = max(gate, 4)
@@ -1797,6 +1954,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 4)
             if (
                 explicit_blocker == "ht-clock-timeout"
+                and firmware_release_seen
+                and blocker in reset_phase_blockers
+                and blocker not in direct_sdio_blockers
+            ) or (
+                explicit_blocker == "ht-clock-timeout"
                 and blocker in reset_phase_blockers
                 and blocker not in direct_sdio_blockers
                 and blocker not in specific_sdio_blockers
@@ -1822,12 +1984,50 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     event_list = list(events)
     usb_gate, usb_blocker = summarize_usb_gate(event_list)
     wifi_gate, wifi_blocker = summarize_wifi_gate(event_list)
+    boot_halted = any(
+        event.domain == "kernel" and event.fields.get("halt") == "yes"
+        for event in event_list
+    )
+    timer_irq27_seen = any(
+        event.domain == "kernel"
+        and event.fields.get("irq") == "27"
+        and event.fields.get("timer_irq") == "yes"
+        for event in event_list
+    )
+    if boot_halted and timer_irq27_seen:
+        boot_halt_reason = "kernel-halt+timer-irq27"
+    elif boot_halted:
+        boot_halt_reason = "kernel-halt"
+    elif timer_irq27_seen:
+        boot_halt_reason = "timer-irq27-without-halt"
+    else:
+        boot_halt_reason = "none"
+    usb_bootloader_handoff_seen = any(
+        event.domain == "usb"
+        and any(
+            token in event.raw.lower()
+            for token in (
+                "bootloader-owned",
+                "bootloader-authorized",
+                "preserve-controller-state",
+                "reset-owned-stop-seed",
+                "run-uboot",
+                "seeded-cold-start",
+                "uboot-first",
+            )
+        )
+        for event in event_list
+    )
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
         wifi_gate=wifi_gate,
         wifi_blocker=wifi_blocker,
         serial_clean=serial_clean(event_list),
+        boot_halted=boot_halted,
+        timer_irq27_seen=timer_irq27_seen,
+        boot_halt_reason=boot_halt_reason,
+        usb_bootloader_handoff_seen=usb_bootloader_handoff_seen,
     )
 
 
