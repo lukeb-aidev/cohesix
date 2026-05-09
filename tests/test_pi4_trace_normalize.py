@@ -80,6 +80,18 @@ def test_parse_events_filters_unrelated_lines() -> None:
     assert events[1].fields["tag"] == "reset-write"
 
 
+def test_pi4_wifi_mailbox_usb_power_lines_are_usb_platform_evidence() -> None:
+    event = normalizer.parse_line(
+        "[pi4-wifi] mailbox vl805-usb-hcd-power action=begin module=0x00000003",
+        31,
+    )
+
+    assert event is not None
+    assert event.domain == "usb"
+    assert event.source == "cohesix"
+    assert event.fields["action"] == "begin"
+
+
 def test_parse_events_splits_interleaved_uart_segments() -> None:
     events = normalizer.parse_events(
         [
@@ -496,7 +508,11 @@ def test_gate_summary_promotes_prompt_safe_event_ring_timeout_snapshot() -> None
             "expected_usbcmd_usbsts=0x0000000500000000",
             "[local-seat] xhci.diag stage=0x0377 "
             "tag=cmd-gate-timeout-live-snapshot-deferred "
-            "expected_ptr=0x0000000404024000 event_syncs=0x0000000000000004",
+            "expected_ptr=0x0000000404024000 event_syncs=0x0000000000000010",
+            "[local-seat] xhci.diag stage=0x0379 "
+            "tag=cmd-prompt-safe-return-to-shell "
+            "a=0x0000000404024000 b=0x0000000000000000 "
+            "c=0x0000000000000100",
             "Kernel entry via Interrupt, irq 27",
         ]
     )
@@ -905,11 +921,29 @@ def test_gate_summary_classifies_wifi_pre_f2_core_control_failure() -> None:
     assert gates.wifi_blocker == "pre-f2-core-control"
 
 
-def test_gate_summary_preserves_enable_slot_event_timeout_without_summary() -> None:
+def test_gate_summary_preserves_armcr4_reset_exact_over_pre_f2_phase() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware core-ctrl access stage=assert-reset op=write8 "
+            "err=unsupported operation: sdio-cmd53-r5-error base=0x18103000 off=0x800",
+            "wifi: contract current=firmware-core-control "
+            "expected=f1-backplane-core-control observed=cmd53-r5",
+            "wifi: f2_gate policy=pre-f2-core-control "
+            "gate=core-control-blocked-before-f2 f2_enabled=no",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "armcr4-reset-assert-cmd53-r5-rejected"
+
+
+def test_gate_summary_preserves_no_op_event_timeout_without_summary() -> None:
     events = normalizer.parse_events(
         [
             "[local-seat] xhci root-port command-probe "
-            "result=enable-slot-uboot-first-unproven bus=pcie-window "
+            "result=no-op-unproven bus=pcie-window "
             "action=return-to-shell detail=cmd-event-ring-timeout "
             "irq27_role=timer-only pcie_irqs=175,180",
             "Kernel entry via Interrupt, irq 27",
@@ -1318,6 +1352,26 @@ def test_gate_summary_prefers_terminal_wifi_cmd52_write_failure() -> None:
     assert gates.wifi_blocker == "sdio-cmd52-write"
 
 
+def test_gate_summary_caps_wifi_diag_control_plane_after_pre_f2_cmd52_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: snapshot source=live stage=cyw43-load-firmware-fail "
+            "exact=cyw43-control-plane-sideband-unreadable",
+            "wifi: contract current=function1-sideband "
+            "expected=f1-sideband-readable observed=blocked",
+            "wifi: f2_state=unproven "
+            "exact_error=cyw43-control-plane-sideband-unreadable",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=sdio-cmd52-write",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "sdio-cmd52-write"
+
+
 def test_gate_summary_preserves_linux_shape_wifi_cmd53_data_wait() -> None:
     events = normalizer.parse_events(
         [
@@ -1441,7 +1495,7 @@ def test_gate_summary_keeps_chipclkcsr_pre_f2_over_generic_control_plane_error()
 
     gates = normalizer.summarize_gates(events)
 
-    assert gates.wifi_gate == 7
+    assert gates.wifi_gate == 4
     assert gates.wifi_blocker == "chipclkcsr-cmd52-pre-f2"
 
 

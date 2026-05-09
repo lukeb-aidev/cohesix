@@ -486,7 +486,11 @@ const fn core_ctrl_current_window_addr(addr: u32) -> u32 {
 
 #[inline]
 const fn core_ctrl_byte_function_addr(addr: u32) -> u32 {
-    backplane_transfer_function_addr(addr)
+    if (addr & 0x0fff) == AI_RESETCTRL_OFFSET {
+        backplane_byte_function_addr(addr)
+    } else {
+        backplane_transfer_function_addr(addr)
+    }
 }
 
 #[inline]
@@ -566,7 +570,7 @@ const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'stati
 
 #[inline]
 const fn core_ctrl_reset_assert_access_mode_label(_base: u32, _offset: u32) -> &'static str {
-    "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
+    "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
 }
 
 #[inline]
@@ -1267,11 +1271,6 @@ fn is_sdio_cmd52_access_error(err: &HalError) -> bool {
 }
 
 #[inline]
-fn is_sdio_cmd53_r5_error(err: &HalError) -> bool {
-    matches!(err, HalError::Unsupported("sdio-cmd53-r5-error"))
-}
-
-#[inline]
 fn core_disable_can_defer_prereset_write_failure(
     base: u32,
     stage: &'static str,
@@ -1279,7 +1278,7 @@ fn core_disable_can_defer_prereset_write_failure(
 ) -> bool {
     base == CYW43_ARMCR4_CORE_BASE
         && stage == "prereset-fgc-clock"
-        && (is_sdio_cmd52_access_error(err) || is_sdio_cmd53_r5_error(err))
+        && is_sdio_cmd52_access_error(err)
 }
 
 #[inline]
@@ -1416,8 +1415,7 @@ const fn pre_ht_control_plane_clock_target_hz(current_clock_hz: u32) -> u32 {
 
 #[inline]
 const fn firmware_core_reset_clock_target_hz(current_clock_hz: u32) -> u32 {
-    let _ = current_clock_hz;
-    CYW43_STARTUP_CLOCK_HZ
+    control_plane_clock_target_hz(current_clock_hz, CYW43_CONTROL_PLANE_CLOCK_HZ)
 }
 
 #[inline]
@@ -1595,11 +1593,10 @@ const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transpo
 
 #[inline]
 const fn firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout() -> bool {
-    // Linux on Pi 4 can leave CHIPCLKCSR at ALP+HT_REQ without ever surfacing
-    // HT_AVAIL. Treat that as a bounded transport only when the selected-card
-    // sideband proves the full tuple or cached SLEEPCSR proves KSO without
-    // issuing new pre-F2 Function 1 sideband writes.
-    true
+    // Missing HT proof is a production stop condition. Bounded no-HT transport
+    // stays diagnostic-only because Function 2 and the control-plane channel
+    // are not a proven runtime surface until HT_AVAIL is observed.
+    false
 }
 
 #[inline]
@@ -1847,7 +1844,8 @@ fn diagnostic_ht_clock_ladder_enabled(stage: &'static str) -> bool {
 
 #[inline]
 fn required_ht_clock_soft_timeout_fails_without_ladder(stage: &'static str) -> bool {
-    !diagnostic_ht_clock_ladder_enabled(stage)
+    stage == "wait-ht-clock"
+        && !diagnostic_ht_clock_ladder_enabled(stage)
         && !required_ht_clock_uses_force_ht_timeout_retry()
         && !firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout()
 }
@@ -3363,7 +3361,8 @@ fn core_wait_can_defer_after_read_error(
 
 #[inline]
 fn armcr4_release_can_continue_after_readback_error(err: &HalError) -> bool {
-    is_armcr4_postreset_fragile_read_error(err)
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -4549,7 +4548,10 @@ const fn pre_function2_shadow_chipclk_refresh_allowed(chipclk: u8) -> bool {
 
 #[inline]
 const fn should_prime_ht_clock_assist_before_reset(last_chipclkcsr: Option<u8>) -> bool {
-    matches!(last_chipclkcsr, Some(0))
+    match last_chipclkcsr {
+        Some(value) => (value & SBSDIO_HT_AVAIL) == 0,
+        None => true,
+    }
 }
 
 #[inline]
@@ -21452,7 +21454,7 @@ impl SdioHost {
         } else {
             let ioctrl = prereset | AI_CORE_PRERESET_IOCTRL;
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=entry-read-deferred io=0x{ioctrl:02x} reset=0x{reset:02x} reason=armcr4-linux-style-write-first"
+                "[pi4-wifi] firmware core-disable base=0x{base:08x} stage=entry-read-deferred io=0x{ioctrl:02x} reset=0x{reset:02x} reason=write-first-no-entry-read"
             ));
             self.log_transport_shadow("core-disable-entry-read-deferred");
             (ioctrl, 0)
@@ -21887,13 +21889,6 @@ impl SdioHost {
         ) {
             Ok(value) => value,
             Err(err) => {
-                if armcr4_release_can_continue_after_readback_error(&err) {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=ioctrl err={err} action=continue-to-ht reason=linux-release-path"
-                    ));
-                    self.restore_window_cache_from_shadow("armcr4-release-proof-ioctrl-deferred");
-                    return Ok(());
-                }
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=ioctrl err={err} action=fail-before-ht"
                 ));
@@ -21915,17 +21910,6 @@ impl SdioHost {
         ) {
             Ok(value) => value,
             Err(err) => {
-                if (ioctrl & ARMCR4_BCMA_IOCTL_CPUHALT) == 0
-                    && armcr4_release_can_continue_after_readback_error(&err)
-                {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=resetctrl io=0x{ioctrl:02x} err={err} action=continue-to-ht reason=linux-release-path"
-                    ));
-                    self.restore_window_cache_from_shadow(
-                        "armcr4-release-proof-resetctrl-deferred",
-                    );
-                    return Ok(());
-                }
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} armcr4-release-proof=unavailable which=resetctrl io=0x{ioctrl:02x} err={err} action=fail-before-ht"
                 ));
@@ -26241,7 +26225,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_cmd52_write_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET),
-            0x0b800
+            0x03800
         );
         assert_eq!(
             core_ctrl_unflagged_byte_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET),
@@ -26253,7 +26237,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_byte_function_addr(CYW43_D11_CORE_BASES[0] + AI_RESETCTRL_OFFSET),
-            0x09800
+            0x01800
         );
         assert_eq!(
             core_ctrl_byte_function_addr(CYW43_SOCRAM_CORE_BASE + AI_IOCTRL_OFFSET),
@@ -26261,7 +26245,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_byte_function_addr(CYW43_SOCRAM_CORE_BASE + AI_RESETCTRL_OFFSET),
-            0x0c800
+            0x04800
         );
         assert_eq!(
             core_ctrl_trace_function_addr(CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET),
@@ -26281,11 +26265,11 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_RESETCTRL_OFFSET),
-            "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
+            "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_RESETCTRL_OFFSET),
-            "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
+            "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
         );
         assert_eq!(
             core_ctrl_reset_clear_access_mode_label(),
@@ -26397,7 +26381,7 @@ mod tests {
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET
         ));
-        assert!(core_disable_can_defer_prereset_write_failure(
+        assert!(!core_disable_can_defer_prereset_write_failure(
             CYW43_ARMCR4_CORE_BASE,
             "prereset-fgc-clock",
             &HalError::Unsupported("sdio-cmd53-r5-error"),
@@ -26776,10 +26760,10 @@ mod tests {
             CYW43_CONTROL_PLANE_CLOCK_HZ,
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
-        assert!(armcr4_release_can_continue_after_readback_error(
+        assert!(!armcr4_release_can_continue_after_readback_error(
             &HalError::Unsupported("sdhci-int-timeout"),
         ));
-        assert!(armcr4_release_can_continue_after_readback_error(
+        assert!(!armcr4_release_can_continue_after_readback_error(
             &HalError::Unsupported("sdio-cmd52-read"),
         ));
         assert!(!armcr4_release_can_continue_after_readback_error(
@@ -29218,8 +29202,8 @@ mod tests {
     }
 
     #[test]
-    fn firmware_stage_allows_bounded_no_ht_function2_after_soft_ht_timeout() {
-        assert!(firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
+    fn firmware_stage_keeps_bounded_no_ht_diagnostic_only_after_soft_ht_timeout() {
+        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]
@@ -32190,11 +32174,11 @@ mod tests {
         );
         assert_eq!(
             firmware_core_reset_clock_target_hz(CYW43_STARTUP_CLOCK_HZ),
-            CYW43_STARTUP_CLOCK_HZ
+            CYW43_CONTROL_PLANE_CLOCK_HZ
         );
         assert_eq!(
             firmware_core_reset_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ),
-            CYW43_STARTUP_CLOCK_HZ
+            CYW43_FIRMWARE_BULK_CLOCK_HZ
         );
         assert_eq!(
             post_download_ht_clock_target_hz(400_000, CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ),
@@ -32310,14 +32294,14 @@ mod tests {
     }
 
     #[test]
-    fn required_ht_soft_timeout_enters_bounded_no_ht_with_selected_card_snapshot() {
-        assert!(!required_ht_clock_soft_timeout_keeps_strict_transport(
+    fn required_ht_soft_timeout_stays_strict_for_production_wait() {
+        assert!(required_ht_clock_soft_timeout_keeps_strict_transport(
             Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
             Some(SBSDIO_WAKE_TILL_HT_AVAIL),
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
             Some(cyw43455_cardcap_command_decode_value()),
         ));
-        assert!(ht_clock_retry_can_cutover_to_bounded_no_ht_early(
+        assert!(!ht_clock_retry_can_cutover_to_bounded_no_ht_early(
             true,
             required_ht_clock_bounded_no_ht_shortcut_loops(),
             Some(SBSDIO_FORCE_HT | SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
@@ -32325,7 +32309,7 @@ mod tests {
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
             Some(cyw43455_cardcap_command_decode_value()),
         ));
-        assert!(!required_ht_clock_soft_timeout_keeps_strict_transport(
+        assert!(required_ht_clock_soft_timeout_keeps_strict_transport(
             Some(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
             None,
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
@@ -32394,7 +32378,7 @@ mod tests {
         assert!(!required_ht_clock_soft_timeout_fails_without_ladder(
             "debug-probe-ht"
         ));
-        assert!(!required_ht_clock_soft_timeout_fails_without_ladder(
+        assert!(required_ht_clock_soft_timeout_fails_without_ladder(
             "wait-ht-clock"
         ));
         assert!(!post_download_forced_alp_kso_direct_path_enabled(
@@ -33539,7 +33523,7 @@ mod tests {
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK
         )));
         assert!(!required_ht_clock_uses_pre_function2_kso_gate());
-        assert!(firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
+        assert!(!firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout());
     }
 
     #[test]
@@ -33554,21 +33538,21 @@ mod tests {
 
     #[test]
     fn pre_reset_ht_assist_prime_follows_cached_chipclk_state() {
-        assert!(!should_prime_ht_clock_assist_before_reset(None));
+        assert!(should_prime_ht_clock_assist_before_reset(None));
         assert!(should_prime_ht_clock_assist_before_reset(Some(0)));
-        assert!(!should_prime_ht_clock_assist_before_reset(Some(
+        assert!(should_prime_ht_clock_assist_before_reset(Some(
             backplane_alp_hold_value()
         )));
-        assert!(!should_prime_ht_clock_assist_before_reset(Some(
+        assert!(should_prime_ht_clock_assist_before_reset(Some(
             backplane_alp_request_value()
         )));
-        assert!(!should_prime_ht_clock_assist_before_reset(Some(
+        assert!(should_prime_ht_clock_assist_before_reset(Some(
             SBSDIO_ALP_AVAIL
         )));
-        assert!(!should_prime_ht_clock_assist_before_reset(Some(
+        assert!(should_prime_ht_clock_assist_before_reset(Some(
             SBSDIO_FORCE_HT
         )));
-        assert!(!should_prime_ht_clock_assist_before_reset(Some(
+        assert!(should_prime_ht_clock_assist_before_reset(Some(
             SBSDIO_HT_AVAIL_REQ
         )));
         assert!(!should_prime_ht_clock_assist_before_reset(Some(
@@ -33683,7 +33667,7 @@ mod tests {
                 true,
                 AI_RESETCTRL_BIT_RESET,
             ),
-            0x9170_0001
+            0x9070_0001
         );
     }
 

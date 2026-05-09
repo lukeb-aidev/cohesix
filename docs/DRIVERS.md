@@ -21,6 +21,21 @@ Do not start at the full driver. Do not debug protocol behavior until the
 seL4 resource path, MMIO mapping, IRQ line, DMA range, and reset/power state
 are independently proven.
 
+## Methodology Contract
+
+The risk this guide addresses is not a missing register definition. The risk is
+that a driver change can appear to make progress while skipping a lower-level
+seL4 proof obligation. That creates wasted board time: protocol retries hide an
+unproven IRQ, interrupt experiments hide an unproven device-clear path, DMA
+debugging hides an unproven bus address, and feature work hides a missing HAL
+boundary.
+
+For Pi 4 work, progress means moving one step up the evidence ladder with a
+durable proof. A workaround is acceptable only when it preserves the ladder and
+narrows the unknown. A workaround that creates a second control path, bypasses
+HAL, depends on an undocumented bootloader side effect, or weakens a bounded
+failure condition is not progress.
+
 ## Scope
 
 This document is scoped to active Pi 4 work in `docs/BUILD_PLAN.md`:

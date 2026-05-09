@@ -278,6 +278,10 @@ def classify_domain(line: str) -> str | None:
         return "usb"
     if line.startswith("Kernel entry via Interrupt"):
         return "usb"
+    if "[pi4-wifi]" in lower and (
+        "vl805-usb-hcd-power" in lower or "xhci-reset-notify" in lower
+    ):
+        return "usb"
     if (
         line.startswith("wifi:")
         or line.startswith("WiFi:")
@@ -1170,7 +1174,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = command_timeout_detail
         elif tag == "cmd-prompt-safe-return-to-shell":
             gate = max(gate, 3)
-            command_timeout_detail = "cmd-poll-pending"
+            if command_timeout_detail not in precise_command_timeout_details:
+                command_timeout_detail = "cmd-poll-pending"
             blocker = command_timeout_detail
         elif tag.startswith("cmd-event-ring-before"):
             saw_command_event_ring_before = True
@@ -1267,6 +1272,17 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     normalized_value = normalize_usb_blocker(value)
                     if (
                         key == "result"
+                        and value
+                        in {
+                            "enable-slot-uboot-first-unproven",
+                            "no-op-unproven",
+                        }
+                        and fields.get("detail") == "cmd-event-ring-timeout"
+                    ):
+                        gate = max(gate, 3)
+                        blocker = "cmd-event-ring-timeout"
+                    elif (
+                        key == "result"
                         and normalized_value == "cmd-poll-only-timeout"
                         and fields.get("bus") == "pcie-window"
                     ):
@@ -1283,13 +1299,6 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         and blocker not in {"unknown", "none", "policy-skip-before-run"}
                     ):
                         continue
-                    elif (
-                        key == "result"
-                        and normalized_value == "enable-slot-uboot-first-unproven"
-                        and fields.get("detail") == "cmd-event-ring-timeout"
-                    ):
-                        gate = max(gate, 3)
-                        blocker = "cmd-event-ring-timeout"
                     else:
                         blocker = normalized_value
                     if normalized_value in {
@@ -1360,6 +1369,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "unknown",
     }
     ht_available_seen = False
+    post_f2_progress_seen = False
     linux_probe_attach_seen = False
     linux_probe_pmu_write_active = False
     armcr4_prereset_ioctrl_active = False
@@ -1455,20 +1465,29 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             progress_gate = wifi_progress_gate(fields.get(key))
             if progress_gate is not None:
                 gate = max(gate, progress_gate)
+                if progress_gate >= 6:
+                    post_f2_progress_seen = True
         if "sdio function-ready" in raw and fields.get("fn") == "2":
             gate = max(gate, 6)
+            post_f2_progress_seen = True
         if "function2 ready-snapshot" in raw:
             gate = max(gate, 6)
+            post_f2_progress_seen = True
         if fields.get("f2_enabled") == "yes" and fields.get("f2_ready") == "yes":
             gate = max(gate, 6)
+            post_f2_progress_seen = True
         if "setup-firmware-channel-ready" in raw:
             gate = max(gate, 6)
+            post_f2_progress_seen = True
         if "firmware-ready" in raw and "timeout" not in raw and "fail" not in raw:
             gate = max(gate, 7)
+            post_f2_progress_seen = True
         if "control-plane reply" in raw:
             gate = max(gate, 7)
+            post_f2_progress_seen = True
         if "control-plane step=init-complete action=ready" in raw or "[cyw43] ready:" in raw:
             gate = max(gate, 7)
+            post_f2_progress_seen = True
             blocker = "none"
         if (
             "control-plane step=" in raw or "control-plane preinit step=" in raw
@@ -1479,19 +1498,23 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if "join complete" in raw:
             gate = max(gate, 8)
+            post_f2_progress_seen = True
             blocker = "none"
         if "join pending" in raw or "join armed" in raw:
             gate = max(gate, 7)
+            post_f2_progress_seen = True
             blocker = "join-pending"
             continue
         if "join failed" in raw:
             gate = max(gate, 7)
+            post_f2_progress_seen = True
             blocker = normalize_wifi_blocker(raw)
             continue
         if fields.get("address_source") == "wifi-associating" or fields.get(
             "src"
         ) == "wifi-associating":
             gate = max(gate, 7)
+            post_f2_progress_seen = True
             blocker = "join-pending"
             continue
         if (
@@ -1500,33 +1523,41 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             or fields.get("src") == "dhcp-lease"
         ):
             gate = max(gate, 9)
+            post_f2_progress_seen = True
             blocker = "none"
         if "[dhcp] tx queued" in raw:
             gate = max(gate, 8)
+            post_f2_progress_seen = True
             blocker = "dhcp-pending"
             continue
         if "[dhcp] rx transition" in raw:
             gate = max(gate, 8)
+            post_f2_progress_seen = True
             blocker = "dhcp-pending"
             continue
         if "[dhcp] rx ignored" in raw:
             gate = max(gate, 8)
+            post_f2_progress_seen = True
             blocker = "dhcp-invalid-packet"
             continue
         if "[dhcp] rx failed" in raw:
             gate = max(gate, 8)
+            post_f2_progress_seen = True
             blocker = "dhcp-failed"
             continue
         if "[dhcp] failed" in raw or "[dhcp] send failed" in raw:
             gate = max(gate, 8)
+            post_f2_progress_seen = True
             blocker = "dhcp-failed"
             continue
         if explicit_blocker in {"dhcp-pending", "dhcp-failed"}:
             gate = max(gate, 8)
+            post_f2_progress_seen = True
             blocker = explicit_blocker
             continue
         if "[net-selftest] starting run" in raw:
             gate = max(gate, 9)
+            post_f2_progress_seen = True
         if "[net-selftest] result" in raw:
             tx_ok = fields.get("tx_ok")
             udp_ok = fields.get("udp_echo_ok")
@@ -1534,13 +1565,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             console_ok = fields.get("console_ok")
             if {tx_ok, udp_ok, tcp_ok, console_ok} <= {"true", "1"}:
                 gate = max(gate, 10)
+                post_f2_progress_seen = True
                 blocker = "none"
             else:
                 gate = max(gate, 9)
+                post_f2_progress_seen = True
                 blocker = "nettest-failed"
             continue
         if raw.startswith("ok nettest"):
             gate = max(gate, 10)
+            post_f2_progress_seen = True
             blocker = "none"
             continue
         if raw.startswith("err nettest"):
@@ -1675,6 +1709,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 2)
         if fields.get("ht_avail") in {"yes", "ready"} or "ht_avail=ready" in raw:
             ht_available_seen = True
+            post_f2_progress_seen = True
             gate = max(gate, 5)
             if blocker in {"unknown", "ht-clock-timeout"} or blocker in precise_ht_blockers:
                 blocker = "none"
@@ -1709,7 +1744,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "sdio-cmd53-r5-error",
         }:
             gate = max(gate, 4)
-            if explicit_blocker not in direct_sdio_blockers or blocker not in specific_sdio_blockers:
+            if explicit_blocker == "pre-f2-core-control":
+                if blocker == "firmware-core-control" or blocker not in specific_sdio_blockers:
+                    blocker = explicit_blocker
+            elif explicit_blocker == "firmware-core-control":
+                if blocker not in specific_sdio_blockers:
+                    blocker = explicit_blocker
+            elif (
+                explicit_blocker not in direct_sdio_blockers
+                or blocker not in specific_sdio_blockers
+            ):
                 blocker = explicit_blocker
             continue
         if explicit_blocker == "armcr4-release-readback-unavailable":
@@ -1734,7 +1778,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-startup-link-timeout",
             "ioctl-timeout",
         }:
-            gate = max(gate, 7)
+            if blocker in precise_ht_blockers and not ht_available_seen:
+                gate = max(gate, 4)
+            else:
+                gate = max(gate, 7)
             if blocker not in precise_ht_blockers:
                 blocker = explicit_blocker
             continue
@@ -1752,6 +1799,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 explicit_blocker == "ht-clock-timeout"
                 and blocker in reset_phase_blockers
                 and blocker not in direct_sdio_blockers
+                and blocker not in specific_sdio_blockers
             ) or blocker not in precise_ht_blockers:
                 blocker = "ht-clock-timeout"
         elif "firmware-verify-readback" in raw:
@@ -1763,6 +1811,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
 
     if blocker == "function2-disabled" and gate >= 4 and not ht_available_seen:
         blocker = "ht-clock-timeout"
+    if blocker in precise_ht_blockers and not ht_available_seen and not post_f2_progress_seen:
+        gate = min(gate, 4)
     return gate, blocker
 
 

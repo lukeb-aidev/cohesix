@@ -1240,9 +1240,9 @@ const fn use_atomic_erstba_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Pi 4 ERSTBA uses the 0x4_0000_0000 PCIe DMA alias. Keep the atomic write
-    // only on runtime-ring snapshots; stop-state-only seeds now avoid fresh
-    // event-ring publication entirely.
+    // Pi 4 ERSTBA uses the HAL-provided PCIe DMA bus address. Keep the atomic
+    // write only on runtime-ring snapshots; stop-state-only seeds now avoid
+    // fresh event-ring publication entirely.
     runtime_mailbox_reset_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
@@ -2903,12 +2903,7 @@ impl<H: Dma> XhciCtrl<H> {
                 reg::USBSTS_HCH
             } else {
                 let reset_pre_usbsts = self.read_op::<u32>(reg::USBSTS);
-                emit_xhci_diag(
-                    0x0214,
-                    reset_pre_usbsts as u64,
-                    reg::USBSTS_HCH as u64,
-                    1,
-                );
+                emit_xhci_diag(0x0214, reset_pre_usbsts as u64, reg::USBSTS_HCH as u64, 1);
                 reset_pre_usbsts
             };
             if !skip_reset_pre_usbsts_read
@@ -2916,12 +2911,7 @@ impl<H: Dma> XhciCtrl<H> {
                 && halt_revalidation_needed(reset_pre_usbsts)
             {
                 let stop_cmd = masked_usbcmd(usbcmd_before_reset) & !reg::USBCMD_RUN;
-                emit_xhci_diag(
-                    0x0221,
-                    stop_cmd as u64,
-                    usbcmd_before_reset as u64,
-                    1,
-                );
+                emit_xhci_diag(0x0221, stop_cmd as u64, usbcmd_before_reset as u64, 1);
                 self.write_op(reg::USBCMD, stop_cmd);
                 let mut waited = 0usize;
                 while halt_revalidation_needed(self.read_op::<u32>(reg::USBSTS)) {
@@ -4978,7 +4968,11 @@ impl<H: Dma> XhciCtrl<H> {
         }
     }
 
-    fn wait_command_prompt_safe(&self, expected_cmd_trb: Option<u64>) -> Result<Trb> {
+    fn wait_command_prompt_safe(
+        &self,
+        expected_cmd_trb: Option<u64>,
+        linux_event_generation: bool,
+    ) -> Result<Trb> {
         let mut event_syncs = 0usize;
         let mut last_non_command_event = None;
         for _ in 0..COMMAND_PROMPT_SAFE_WAIT_POLLS {
@@ -5047,7 +5041,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         self.emit_command_ring_debug_snapshot(0x0364);
         self.emit_command_event_ring_debug_snapshot(0x0357);
-        self.emit_command_gate_plan_snapshot(0x036c, expected_cmd_trb, 2, false);
+        self.emit_command_gate_plan_snapshot(0x036c, expected_cmd_trb, 2, linux_event_generation);
         emit_xhci_diag(
             0x0377,
             expected_cmd_trb.unwrap_or(0) & !0x0f,
@@ -5226,7 +5220,7 @@ impl<H: Dma> XhciCtrl<H> {
         self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
         self.ring_cmd_doorbell();
         self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, false);
-        match self.wait_command_prompt_safe(Some(cmd_addr)) {
+        match self.wait_command_prompt_safe(Some(cmd_addr), false) {
             Ok(trb) => Ok(trb),
             Err(UsbError::Timeout) => {
                 emit_xhci_diag(
@@ -5312,7 +5306,7 @@ impl<H: Dma> XhciCtrl<H> {
         self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, true);
         self.ring_cmd_doorbell();
         self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, true);
-        self.wait_command_prompt_safe(Some(cmd_addr))
+        self.wait_command_prompt_safe(Some(cmd_addr), true)
     }
 
     /// Submit a command-ring No Op probe without touching root-port registers.
@@ -5370,9 +5364,9 @@ impl<H: Dma> XhciCtrl<H> {
 
     /// Disable a slot using the same bounded command proof lane.
     pub fn disable_slot_linux_event_generation_prompt_safe(&self, slot_id: u8) -> Result<()> {
-        self.submit_command_linux_event_generation_prompt_safe(disable_slot_command_trb_for_probe(
-            slot_id,
-        ))?;
+        self.submit_command_linux_event_generation_prompt_safe(
+            disable_slot_command_trb_for_probe(slot_id),
+        )?;
         Ok(())
     }
 
@@ -5728,16 +5722,17 @@ mod tests {
         XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS, XhciControllerParams, XhciCtrl,
         XhciFirmwareHandoff, XhciRuntimeSeedSnapshot, blind_settle_precedes_live_stop_revalidation,
         claim_legacy_ownership_before_reset_for_init,
-        claim_legacy_ownership_before_reset_with_snapshot, command_timeout_live_snapshot_enabled,
-        command_poll_only_should_sync_event_ring, command_timeout_live_snapshot_spins,
-        command_wait_should_sync_event_ring, compose_brcm_usbaxi_attr, compose_config,
-        compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
-        compose_polling_erdp_ack, compose_run_usbcmd, constructor_polling_scrub_mode,
-        constructor_polling_scrub_mode_from_params, dcbaap_reg_write_ops,
-        defer_crcr_publish_until_after_run_with_snapshot, defer_crcr_publish_with_snapshot,
-        defer_dcbaap_publish_until_after_run_with_snapshot, defer_dcbaap_publish_with_snapshot,
-        defer_dnctrl_write_until_after_run_with_snapshot, defer_erdp_publish_with_snapshot,
-        defer_erst_publish_with_snapshot, defer_event_ring_publish_until_after_run_with_snapshot,
+        claim_legacy_ownership_before_reset_with_snapshot,
+        command_poll_only_should_sync_event_ring, command_timeout_live_snapshot_enabled,
+        command_timeout_live_snapshot_spins, command_wait_should_sync_event_ring,
+        compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base,
+        compose_erst_size, compose_initial_erdp, compose_polling_erdp_ack, compose_run_usbcmd,
+        constructor_polling_scrub_mode, constructor_polling_scrub_mode_from_params,
+        dcbaap_reg_write_ops, defer_crcr_publish_until_after_run_with_snapshot,
+        defer_crcr_publish_with_snapshot, defer_dcbaap_publish_until_after_run_with_snapshot,
+        defer_dcbaap_publish_with_snapshot, defer_dnctrl_write_until_after_run_with_snapshot,
+        defer_erdp_publish_with_snapshot, defer_erst_publish_with_snapshot,
+        defer_event_ring_publish_until_after_run_with_snapshot,
         defer_scratchpad_array_publish_with_snapshot,
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, disable_interrupter_iman_value,
@@ -5788,15 +5783,15 @@ mod tests {
         skip_live_post_reset_verification_readbacks,
         skip_live_post_reset_verification_readbacks_with_snapshot,
         skip_post_reset_cnr_poll_with_snapshot, skip_post_run_interrupter_zeroing_with_snapshot,
-        skip_preinit_polling_scrub, skip_reset_completion_poll_for_init,
-        skip_reset_during_init, skip_reset_during_init_with_snapshot,
-        skip_reset_pre_usbsts_read_for_init, skip_usbsts_clear_before_run_with_snapshot,
-        snapshot_resetless_reinit_handoff, split_u64_reg_write_ops, u64_register_change_mask,
-        usbcmd_interrupt_delivery_enabled, use_atomic_erstba_publish_with_snapshot,
-        use_atomic_runtime_ring_publish_with_snapshot, use_live_config_seed_reads,
-        use_live_config_seed_reads_for_init, use_live_config_seed_reads_with_snapshot,
-        use_live_post_reset_seed_reads, use_live_post_reset_seed_reads_for_init,
-        use_live_post_reset_seed_reads_with_snapshot, xhci_port_in_range, xhci_slot_in_range,
+        skip_preinit_polling_scrub, skip_reset_completion_poll_for_init, skip_reset_during_init,
+        skip_reset_during_init_with_snapshot, skip_reset_pre_usbsts_read_for_init,
+        skip_usbsts_clear_before_run_with_snapshot, snapshot_resetless_reinit_handoff,
+        split_u64_reg_write_ops, u64_register_change_mask, usbcmd_interrupt_delivery_enabled,
+        use_atomic_erstba_publish_with_snapshot, use_atomic_runtime_ring_publish_with_snapshot,
+        use_live_config_seed_reads, use_live_config_seed_reads_for_init,
+        use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
+        use_live_post_reset_seed_reads_for_init, use_live_post_reset_seed_reads_with_snapshot,
+        xhci_port_in_range, xhci_slot_in_range,
     };
     use crate::{Dma, reg, ring::trb_type};
     use alloc::vec;

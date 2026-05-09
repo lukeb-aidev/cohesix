@@ -336,10 +336,11 @@ const XHCI_RTSOFF_MASK: u32 = !0x1f;
 // fully resolved.
 const XHCI_FORCE_LOW_DMA_PROBE: bool = true;
 // VL805 on Pi4 expects xHCI DMA pointers in the PCIe DMA bus address space.
-// Linux proves the same low RAM pages appear to the endpoint as `0x4_XXXXXXXX`
-// (`/proc/device-tree/.../dma-ranges` and xHCI debugfs DCBAAP/ERSTBA dumps).
+// The BCM2711 `dma-ranges` entry maps PCIe DMA bus addresses 1:1 to the first
+// 3 GiB of RAM; Cohesix publishes low physical addresses and keeps allocation
+// below that ceiling.
 const XHCI_PCIE_DMA_WINDOW_ENABLED: bool = true;
-const RPI4_PCIE_DMA_BUS_ALIAS_BASE: usize = 0x4_0000_0000;
+const RPI4_PCIE_DMA_BUS_ALIAS_BASE: usize = 0;
 // Per-allocation DMA tracing is useful for bring-up debugging but can add
 // heavy UART latency during normal keyboard enumeration.
 const XHCI_DMA_VERBOSE_LOGS: bool = false;
@@ -1136,9 +1137,12 @@ fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
         {
             if summary.event_candidate_mask != 0 && summary.command_probe == "n/a" {
                 "command-ring-probe"
-            } else if summary.command_probe == "enable-slot-ok" {
+            } else if matches!(
+                summary.command_probe,
+                "enable-slot-ok" | "enable-slot-linux-event-ok"
+            ) {
                 "safe-port-state"
-            } else if summary.command_probe == "no-op-ok" {
+            } else if matches!(summary.command_probe, "no-op-ok" | "no-op-linux-event-ok") {
                 "safe-port-event-required"
             } else if summary.command_probe != "n/a" {
                 "command-ring-recovery"
@@ -3222,7 +3226,7 @@ const fn vl805_runtime_cfg_replay_ready(
     bcm2711_ext_enabled: bool,
     has_cfg_window: bool,
 ) -> bool {
-    (runtime_enabled && has_cfg_window) || bcm2711_ext_enabled
+    (runtime_enabled || bcm2711_ext_enabled) && has_cfg_window
 }
 
 #[inline]
@@ -4606,7 +4610,10 @@ fn usb_no_op_probe_error_label(err: UsbError) -> &'static str {
 
 #[inline]
 fn usb_command_probe_proves_ring(label: &str) -> bool {
-    matches!(label, "enable-slot-ok" | "no-op-ok")
+    matches!(
+        label,
+        "enable-slot-ok" | "no-op-ok" | "no-op-linux-event-ok" | "enable-slot-linux-event-ok"
+    )
 }
 
 #[inline]
@@ -4653,25 +4660,47 @@ fn xhci_probe_command_ring_after_event_drain(
         "phys"
     };
     if event_candidate_mask == 0 {
-        let mut line = heapless::String::<192>::new();
+        let use_linux_event_generation = pcie_dma_window;
+        let verb = if use_linux_event_generation {
+            "no-op-linux-event"
+        } else {
+            "no-op"
+        };
+        let event_generation = if use_linux_event_generation {
+            "linux-shaped-poll-only"
+        } else {
+            "poll-only"
+        };
+        let mut line = heapless::String::<256>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x0000 verb=no-op bus={bus}"
+                "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x0000 verb={verb} bus={bus} event_generation={event_generation} pci_intx_masked=yes irq27_role=timer-only"
             ),
         );
         boot_log::force_uart_line(line.as_str());
 
-        let probe_result = ctrl.probe_no_op_command_prompt_safe();
+        let probe_result = if use_linux_event_generation {
+            ctrl.probe_no_op_command_linux_event_generation_prompt_safe()
+        } else {
+            ctrl.probe_no_op_command_prompt_safe()
+        };
         return match probe_result {
             Ok(()) => {
-                let mut line = heapless::String::<128>::new();
+                let result = if use_linux_event_generation {
+                    "no-op-linux-event-ok"
+                } else {
+                    "no-op-ok"
+                };
+                let mut line = heapless::String::<192>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
-                    format_args!("[local-seat] xhci root-port command-probe result=no-op-ok bus={bus}"),
+                    format_args!(
+                        "[local-seat] xhci root-port command-probe result={result} bus={bus} event_generation={event_generation}"
+                    ),
                 );
                 boot_log::force_uart_line(line.as_str());
-                "no-op-ok"
+                result
             }
             Err(UsbError::Timeout) => {
                 let mut line = heapless::String::<224>::new();
@@ -15289,7 +15318,7 @@ mod tests {
     fn vl805_runtime_cfg_replay_accepts_bcm2711_ext_window() {
         assert!(vl805_runtime_cfg_replay_ready(false, true, true));
         assert!(vl805_runtime_cfg_replay_ready(true, false, true));
-        assert!(vl805_runtime_cfg_replay_ready(false, true, false));
+        assert!(!vl805_runtime_cfg_replay_ready(false, true, false));
         assert!(!vl805_runtime_cfg_replay_ready(false, false, true));
     }
 
@@ -16798,8 +16827,8 @@ mod tests {
         assert_eq!(status.command, Some(super::RPI4_VL805_LINUX_COMMAND));
         assert_eq!(status.command_source, "linux-capture-static");
         assert_eq!(status.fresh_ownership, "blocked");
-        assert_eq!(status.blocker, "vl805-command-replay-missing");
-        assert_eq!(status.next_step, "export-vl805-command-ready");
+        assert_eq!(status.blocker, "pcie-vl805-config-contract-missing");
+        assert_eq!(status.next_step, "live-ext-cfg-disabled-stay-pollsafe");
     }
 
     #[test]
@@ -18560,7 +18589,7 @@ mod tests {
             VL805_CFG_RUNTIME_TOUCH_ENABLED,
             false,
         ));
-        assert!(vl805_runtime_cfg_replay_ready(
+        assert!(!vl805_runtime_cfg_replay_ready(
             VL805_CFG_RUNTIME_TOUCH_ENABLED,
             VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED,
             false,
@@ -19799,11 +19828,11 @@ mod tests {
     }
 
     #[test]
-    fn pi4_pcie_dma_window_uses_linux_observed_bus_alias() {
-        assert_eq!(pcie_dma_bus_addr(0x0400_3000), Some(0x4_0400_3000));
+    fn pi4_pcie_dma_window_uses_bcm2711_dt_dma_range() {
+        assert_eq!(pcie_dma_bus_addr(0x0400_3000), Some(0x0400_3000));
         assert_eq!(
             pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT - PAGE_SIZE),
-            Some(0x4_BFFF_F000)
+            Some(0xBFFF_F000)
         );
         assert_eq!(pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT), None);
     }
@@ -19861,8 +19890,8 @@ mod tests {
         assert!(super::usb_command_probe_allows_deferred_capture(
             "enable-slot-linux-event-ok"
         ));
-        assert!(usb_command_probe_proves_ring("enable-slot-uboot-first-ok"));
-        assert!(super::usb_command_probe_allows_deferred_capture(
+        assert!(!usb_command_probe_proves_ring("enable-slot-uboot-first-ok"));
+        assert!(!super::usb_command_probe_allows_deferred_capture(
             "enable-slot-uboot-first-ok"
         ));
         assert!(usb_command_probe_proves_ring("no-op-ok"));
