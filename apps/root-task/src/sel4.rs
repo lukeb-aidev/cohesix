@@ -1246,36 +1246,42 @@ pub fn debug_put_char_raw(byte: u8) {
     debug_put_bytes_raw(core::slice::from_ref(&byte));
 }
 
+/// Emits a byte slice to the seL4 debug console without taking the UART TX lock.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub(crate) fn debug_put_bytes_unlocked(bytes: &[u8]) {
+    for &byte in bytes {
+        // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
+        // syscall and accepts any byte value.
+        unsafe { seL4_DebugPutChar(byte) }
+    }
+}
+
+/// Emits a line to the seL4 debug console without taking the UART TX lock.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub(crate) fn debug_put_line_unlocked(line: &[u8]) {
+    debug_put_bytes_unlocked(line);
+    // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
+    // syscall and accepts any byte value.
+    unsafe {
+        seL4_DebugPutChar(b'\r');
+        seL4_DebugPutChar(b'\n');
+    }
+}
+
 /// Emits a byte slice to the seL4 debug console using the raw debug syscall.
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn debug_put_bytes_raw(bytes: &[u8]) {
-    serial::with_uart_tx_lock(|| {
-        for &byte in bytes {
-            // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
-            // syscall and accepts any byte value.
-            unsafe { seL4_DebugPutChar(byte) }
-        }
-    });
+    serial::with_uart_tx_lock(|| debug_put_bytes_unlocked(bytes));
 }
 
 /// Emits a line (with CRLF) to the seL4 debug console using the raw debug syscall.
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn debug_put_line_raw(line: &[u8]) {
-    serial::with_uart_tx_lock(|| {
-        for &byte in line {
-            // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
-            // syscall and accepts any byte value.
-            unsafe { seL4_DebugPutChar(byte) }
-        }
-        // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
-        // syscall and accepts any byte value.
-        unsafe {
-            seL4_DebugPutChar(b'\r');
-            seL4_DebugPutChar(b'\n');
-        }
-    });
+    serial::with_uart_tx_lock(|| debug_put_line_unlocked(line));
 }
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
@@ -1360,6 +1366,20 @@ pub fn debug_put_bytes_raw(bytes: &[u8]) {
 pub fn debug_put_line_raw(line: &[u8]) {
     debug_put_bytes_raw(line);
     debug_put_bytes_raw(b"\r\n");
+}
+
+/// Emits bytes without an extra UART lock in host builds.
+#[cfg(all(not(feature = "kernel")))]
+#[inline(always)]
+pub(crate) fn debug_put_bytes_unlocked(bytes: &[u8]) {
+    debug_put_bytes_raw(bytes);
+}
+
+/// Emits a line without an extra UART lock in host builds.
+#[cfg(all(not(feature = "kernel")))]
+#[inline(always)]
+pub(crate) fn debug_put_line_unlocked(line: &[u8]) {
+    debug_put_line_raw(line);
 }
 
 /// Clears the captured UART buffer in host tests.

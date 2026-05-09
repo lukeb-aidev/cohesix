@@ -95,6 +95,8 @@ pub const DEFAULT_TX_CAPACITY: usize = 256;
 /// Maximum number of UTF-8 codepoints retained in a console line.
 pub const DEFAULT_LINE_CAPACITY: usize = 256;
 
+const BLOCKING_TX_SPIN_LIMIT: usize = 1_000_000;
+
 /// Error type surfaced by the serial subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SerialError {
@@ -199,6 +201,33 @@ where
         }
     }
 
+    /// Flush currently staged TX bytes without polling RX.
+    pub fn flush_tx(&mut self) {
+        self.flush_tx_locked();
+    }
+
+    /// Emit bytes directly to the device while holding the shared UART TX lock.
+    pub fn write_bytes_blocking(&mut self, data: &[u8]) {
+        with_uart_tx_lock(|| {
+            self.flush_tx_blocking_unlocked();
+            for &byte in data {
+                self.write_byte_blocking_unlocked(byte);
+            }
+        });
+    }
+
+    /// Emit a complete console line without allowing other UART producers to interleave.
+    pub fn write_line_blocking(&mut self, line: &str) {
+        with_uart_tx_lock(|| {
+            self.flush_tx_blocking_unlocked();
+            for &byte in line.as_bytes() {
+                self.write_byte_blocking_unlocked(byte);
+            }
+            self.write_byte_blocking_unlocked(b'\r');
+            self.write_byte_blocking_unlocked(b'\n');
+        });
+    }
+
     /// Attempt to move data between the driver and staging buffers.
     pub fn poll_io(&mut self) {
         // Drain RX side first so newly available bytes can be processed in the
@@ -218,40 +247,67 @@ where
             }
         }
 
-        self.flush_tx();
+        self.flush_tx_locked();
     }
 
-    fn flush_tx(&mut self) {
+    fn flush_tx_locked(&mut self) {
         with_uart_tx_lock(|| {
-            // Flush staged TX bytes to the device until it reports back-pressure.
-            if let Some(byte) = self.pending_tx.take() {
-                match self.driver.write_byte(byte) {
-                    Ok(()) => {}
-                    Err(NbError::WouldBlock) => {
-                        self.pending_tx = Some(byte);
-                        return;
-                    }
-                    Err(NbError::Other(_)) => {
-                        self.telemetry.tx_overflow();
-                        return;
-                    }
-                }
-            }
-
-            while let Some(byte) = self.tx.dequeue() {
-                match self.driver.write_byte(byte) {
-                    Ok(()) => {}
-                    Err(NbError::WouldBlock) => {
-                        self.pending_tx = Some(byte);
-                        return;
-                    }
-                    Err(NbError::Other(_)) => {
-                        self.telemetry.tx_overflow();
-                        return;
-                    }
-                }
-            }
+            self.flush_tx_unlocked();
         });
+    }
+
+    fn flush_tx_unlocked(&mut self) {
+        // Flush staged TX bytes to the device until it reports back-pressure.
+        if let Some(byte) = self.pending_tx.take() {
+            match self.driver.write_byte(byte) {
+                Ok(()) => {}
+                Err(NbError::WouldBlock) => {
+                    self.pending_tx = Some(byte);
+                    return;
+                }
+                Err(NbError::Other(_)) => {
+                    self.telemetry.tx_overflow();
+                    return;
+                }
+            }
+        }
+
+        while let Some(byte) = self.tx.dequeue() {
+            match self.driver.write_byte(byte) {
+                Ok(()) => {}
+                Err(NbError::WouldBlock) => {
+                    self.pending_tx = Some(byte);
+                    return;
+                }
+                Err(NbError::Other(_)) => {
+                    self.telemetry.tx_overflow();
+                    return;
+                }
+            }
+        }
+    }
+
+    fn flush_tx_blocking_unlocked(&mut self) {
+        if let Some(byte) = self.pending_tx.take() {
+            self.write_byte_blocking_unlocked(byte);
+        }
+        while let Some(byte) = self.tx.dequeue() {
+            self.write_byte_blocking_unlocked(byte);
+        }
+    }
+
+    fn write_byte_blocking_unlocked(&mut self, byte: u8) {
+        for _ in 0..BLOCKING_TX_SPIN_LIMIT {
+            match self.driver.write_byte(byte) {
+                Ok(()) => return,
+                Err(NbError::WouldBlock) => core::hint::spin_loop(),
+                Err(NbError::Other(_)) => {
+                    self.telemetry.tx_overflow();
+                    return;
+                }
+            }
+        }
+        self.telemetry.tx_overflow();
     }
 
     /// Retrieve the next sanitised console line, if available.
@@ -453,5 +509,18 @@ mod tests {
         port.poll_io();
         let echoed = port.driver_mut().drain_tx();
         assert_eq!(echoed.as_slice(), b"ab\x08 \x08c\r\n");
+    }
+
+    #[test]
+    fn blocking_line_output_preserves_full_line_after_staged_tx() {
+        let driver = LoopbackSerial::<128>::new();
+        let mut port: SerialPort<_, 8, 8, 32> = SerialPort::new(driver);
+
+        port.enqueue_tx(b"ab");
+        port.write_line_blocking("0123456789abcdef");
+
+        let emitted = port.driver_mut().drain_tx();
+        assert_eq!(emitted.as_slice(), b"ab0123456789abcdef\r\n");
+        assert_eq!(port.telemetry().tx_backpressure, 0);
     }
 }

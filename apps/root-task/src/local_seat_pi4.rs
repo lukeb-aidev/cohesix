@@ -2783,7 +2783,7 @@ fn xhci_linux_capture_full_reset_mailbox_reset_required(
     // of the endpoint after a cold boot. Any unseeded high-BAR full-reset lane
     // must first pass through the mailbox reset boundary; without live config
     // COMMAND proof, the promoted platform-reset lane is stopped by the local
-    // publication gate before usb-oxide can issue USBCMD.HCRST.
+    // publication gate before usb-oxide can publish fresh xHCI ownership state.
     xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
 }
 
@@ -3808,6 +3808,7 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x0213 => Some("live-usbsts-read-before-run"),
         0x0215 => Some("live-usbcmd-read-before-run"),
         0x0222 => Some("halt-revalidation-timeout"),
+        0x022c => Some("reset-pre-usbsts-live-read-skipped"),
         0x0238 => Some("pre-run-config-store-wedged"),
         0x023b => Some("fresh-rings-reset-required"),
         0x0248 | 0x029e => Some("pre-run-dcbaap-low-store-wedged"),
@@ -3841,7 +3842,10 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x030b => Some("cmd-poll-only-timeout"),
         0x030d => Some("cmd-poll-only-fail"),
         0x0378 => Some("cmd-prompt-safe-deferred"),
-        0x0379 => Some("cmd-prompt-safe-continue-poll"),
+        0x0379 => Some("cmd-prompt-safe-return-to-shell"),
+        0x037a => Some("cmd-prompt-safe-linux-event-retry"),
+        0x037b => Some("cmd-poll-only-first-sync-begin"),
+        0x037c => Some("cmd-poll-only-first-sync-done"),
         0x02eb => Some("usbcmd-run-barrier-wedged"),
         0x02e9 => Some("usbcmd-run-store-wedged"),
         _ => None,
@@ -3871,6 +3875,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x031f
             | 0x0312
             | 0x0315..=0x0319
+            | 0x022c
             | 0x0320..=0x0330
             | 0x0332..=0x0333
             | 0x0340..=0x034c
@@ -3984,6 +3989,7 @@ const fn xhci_diag_stage_value_labels(
         0x020f => Some(("iman_off", "value", "trusted")),
         0x0212 => Some(("handoff", "seed_flags", "skip")),
         0x0217 | 0x0218 => Some(("handoff", "seed_flags", "skip")),
+        0x022c => Some(("usbsts_off", "seed_usbsts", "handoff")),
         0x023b => Some(("handoff", "seed_flags", "reset_done")),
         0x02f0 => Some(("dcbaa", "cmd_ring", "event_ring")),
         0x02f1 => Some(("erstba", "crcr", "erdp")),
@@ -4091,6 +4097,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0224 => Some("fw-handoff-skip-stop-revalidation"),
         0x0225 => Some("stop-revalidation-ready"),
         0x0226 => Some("reset-pre-usbcmd-source"),
+        0x022c => Some("reset-pre-usbsts-read-skip"),
         0x0227 => Some("reset-post-settle-begin"),
         0x0228 => Some("reset-post-settle-done"),
         0x0229 => Some("reset-post-cnr-poll-skip"),
@@ -4399,7 +4406,10 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0376 => Some("cmd-gate-timeout-live-event-ring"),
         0x0377 => Some("cmd-gate-timeout-live-snapshot-deferred"),
         0x0378 => Some("cmd-prompt-safe-deferred"),
-        0x0379 => Some("cmd-prompt-safe-continue-poll"),
+        0x0379 => Some("cmd-prompt-safe-return-to-shell"),
+        0x037a => Some("cmd-prompt-safe-linux-event-retry"),
+        0x037b => Some("cmd-poll-only-first-sync-begin"),
+        0x037c => Some("cmd-poll-only-first-sync-done"),
         _ => None,
     }
 }
@@ -4652,28 +4662,31 @@ fn xhci_probe_command_ring_after_event_drain(
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x0000 verb=no-op bus={bus}"
+                "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x0000 verb=no-op-linux-event bus={bus}"
             ),
         );
         boot_log::force_uart_line(line.as_str());
 
-        let probe_result = ctrl.probe_no_op_command_prompt_safe();
+        let probe_result = ctrl.probe_no_op_command_linux_event_generation_prompt_safe();
         return match probe_result {
             Ok(()) => {
                 boot_log::force_uart_line(
-                    "[local-seat] xhci root-port command-probe result=no-op-ok",
+                    "[local-seat] xhci root-port command-probe result=no-op-linux-event-ok",
                 );
-                "no-op-ok"
+                "no-op-linux-event-ok"
             }
             Err(UsbError::Timeout) => {
                 let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci root-port command-probe result=no-op-unproven bus={bus} action=return-to-shell detail=poll-timeout"
+                        "[local-seat] xhci root-port command-probe result=no-op-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27=timer-only"
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
+                boot_log::force_uart_line(
+                    "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-linux-event-unproven event=missing irq27=timer-only",
+                );
                 "no-op-unproven"
             }
             Err(err) => {
@@ -17116,6 +17129,10 @@ mod tests {
             xhci_diag_stage_label(0x0378),
             Some("cmd-prompt-safe-deferred")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x0379),
+            Some("cmd-prompt-safe-return-to-shell")
+        );
         assert_eq!(xhci_diag_stage_label(0x0117), Some("init-policy-summary"));
         assert_eq!(
             xhci_diag_stage_label(0x0200),
@@ -17652,6 +17669,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_label(0x0378),
             Some("cmd-prompt-safe-deferred")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0379),
+            Some("cmd-prompt-safe-return-to-shell")
         );
         assert_eq!(xhci_diag_stage_label(0x0367), Some("cmd-ring-timeout-3"));
         assert_eq!(xhci_diag_stage_label(0x9999), None);

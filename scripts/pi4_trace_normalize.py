@@ -25,7 +25,26 @@ from typing import Iterable, TextIO
 KEY_VALUE_RE = re.compile(
     r"(?P<key>[A-Za-z0-9_.:-]+)=(?P<value>\"[^\"]*\"|'[^']*'|[^ \t\r\n]+)"
 )
+UNSUPPORTED_OPERATION_FIELD_RE = re.compile(
+    r"(?P<key>[A-Za-z0-9_.:-]+)=unsupported operation: "
+    r"(?P<value>[A-Za-z0-9_.:-]+)"
+)
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+TRACE_SEGMENT_RE = re.compile(
+    r"(?=(?:"
+    r"\[cohesix:usb-trace\]"
+    r"|\[local-seat\]"
+    r"|\[pi4-wifi\]"
+    r"|\[cyw43\]"
+    r"|\[dhcp\]"
+    r"|\[net-selftest\]"
+    r"|\[net\]"
+    r"|(?<![A-Za-z0-9_.:-])(?:usb:|USB:|wifi:|WiFi:|WIFI:)"
+    r"|(?<![A-Za-z0-9_.:-])(?:OK|ERR) NETTEST"
+    r"|Kernel entry via Interrupt"
+    r"))"
+)
+MALFORMED_WIFI_PREFIX_RE = re.compile(r"(?<![A-Za-z0-9_.:-])(?:wif|wi):")
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
 WIFI_HINTS = ("wifi", "wi-fi", "wlan", "cyw", "brcmf", "sdio", "sdhci", "mmc")
 BOOT_START_MARKERS = (
@@ -95,6 +114,8 @@ USB_OUTCOME_BLOCKERS = {
     "root-port-read-irq27",
     "root-port-read-timer-preempted",
     "root-port-sample-deferred",
+    "reset-pre-usbcmd-source",
+    "reset-pre-usbcmd-source-timer-preempted",
     "port-register-access-disabled",
     "port-reset-timeout",
     "port-enable-timeout",
@@ -146,6 +167,7 @@ class GateSummary:
     usb_blocker: str
     wifi_gate: int
     wifi_blocker: str
+    serial_clean: bool = True
 
     def to_record(self) -> dict[str, object]:
         """Return a JSON-serializable gate summary."""
@@ -155,6 +177,7 @@ class GateSummary:
             "USB_BLOCKER": self.usb_blocker,
             "WIFI_GATE": self.wifi_gate,
             "WIFI_BLOCKER": self.wifi_blocker,
+            "SERIAL_CLEAN": "yes" if self.serial_clean else "no",
         }
 
     def to_env_lines(self) -> list[str]:
@@ -173,6 +196,30 @@ def sanitize_line(line: str) -> str:
     return clean
 
 
+def split_trace_segments(line: str) -> list[str]:
+    """Split physical UART lines that contain multiple trace producers."""
+
+    clean = sanitize_line(line)
+    if not clean:
+        return []
+    matches = [match.start() for match in TRACE_SEGMENT_RE.finditer(clean)]
+    if not matches:
+        return [clean]
+
+    positions: list[int] = []
+    if matches[0] > 0:
+        positions.append(0)
+    positions.extend(matches)
+    positions.append(len(clean))
+
+    segments: list[str] = []
+    for start, end in zip(positions, positions[1:]):
+        segment = clean[start:end].strip()
+        if segment:
+            segments.append(segment)
+    return segments
+
+
 def parse_fields(text: str) -> dict[str, str]:
     """Extract key=value fields from one trace line."""
 
@@ -184,7 +231,28 @@ def parse_fields(text: str) -> dict[str, str]:
         ):
             value = value[1:-1]
         fields[match.group("key")] = value
+    for match in UNSUPPORTED_OPERATION_FIELD_RE.finditer(text):
+        fields[match.group("key")] = match.group("value")
     return fields
+
+
+def serial_corruption_reason(line: str, fields: dict[str, str] | None = None) -> str | None:
+    """Return a stable reason when a trace segment looks byte-interleaved."""
+
+    lower = line.lower()
+    if lower.startswith("wifi:") and len(line) > len("wifi:") and not line[len("wifi:")].isspace():
+        return "wifi-prefix-glued"
+    if lower.startswith("usb:") and len(line) > len("usb:") and not line[len("usb:")].isspace():
+        return "usb-prefix-glued"
+    if lower.count("wifi:") > 1:
+        return "repeated-wifi-prefix"
+    if lower.count("usb:") > 1:
+        return "repeated-usb-prefix"
+    if MALFORMED_WIFI_PREFIX_RE.search(lower):
+        return "malformed-wifi-prefix"
+    if lower.startswith("wifi:") and fields is not None and not fields:
+        return "wifi-line-unparsed"
+    return None
 
 
 def classify_source(line: str, domain: str) -> str:
@@ -269,21 +337,35 @@ def choose_stage(fields: dict[str, str]) -> str | None:
 def parse_line(line: str, line_number: int) -> TraceEvent | None:
     """Parse one serial line into a normalized trace event."""
 
-    clean = sanitize_line(line)
-    if not clean:
+    if not line:
         return None
-    domain = classify_domain(clean)
+    early_reason = serial_corruption_reason(line)
+    if early_reason is not None:
+        domain = "usb" if "usb" in early_reason else "wifi"
+        return TraceEvent(
+            line=line_number,
+            domain=domain,
+            source="cohesix",
+            message=f"serial-corruption reason={early_reason}",
+            raw=line,
+            fields={"serial_error": early_reason},
+            stage="serial-corrupt",
+        )
+    domain = classify_domain(line)
     if domain is None:
         return None
-    source = classify_source(clean, domain)
-    fields = parse_fields(clean)
-    message = extract_message(clean, domain, source)
+    source = classify_source(line, domain)
+    fields = parse_fields(line)
+    late_reason = serial_corruption_reason(line, fields)
+    if late_reason is not None:
+        fields = {**fields, "serial_error": late_reason}
+    message = extract_message(line, domain, source)
     return TraceEvent(
         line=line_number,
         domain=domain,
         source=source,
         message=message,
-        raw=clean,
+        raw=line,
         fields=fields,
         stage=choose_stage(fields),
     )
@@ -294,9 +376,10 @@ def parse_events(lines: Iterable[str]) -> list[TraceEvent]:
 
     events: list[TraceEvent] = []
     for line_number, line in enumerate(lines, start=1):
-        event = parse_line(line, line_number)
-        if event is not None:
-            events.append(event)
+        for segment in split_trace_segments(line):
+            event = parse_line(segment, line_number)
+            if event is not None:
+                events.append(event)
     return events
 
 
@@ -306,6 +389,12 @@ def filter_events(events: Iterable[TraceEvent], domains: set[str]) -> list[Trace
     if not domains:
         return list(events)
     return [event for event in events if event.domain in domains]
+
+
+def serial_clean(events: Iterable[TraceEvent]) -> bool:
+    """Return false when parsed proof evidence includes corrupted serial segments."""
+
+    return all("serial_error" not in event.fields for event in events)
 
 
 def summarize_events(events: Iterable[TraceEvent]) -> dict[str, object]:
@@ -343,6 +432,7 @@ def summarize_events(events: Iterable[TraceEvent]) -> dict[str, object]:
         "stages": dict(sorted(stage_counts.items())),
         "latest": latest,
         "blockers": blockers[-16:],
+        "serial_clean": serial_clean(event_list),
         "gates": summarize_gates(event_list).to_record(),
     }
 
@@ -357,11 +447,15 @@ def normalize_usb_blocker(value: str) -> str:
         return "cmd-controller-halted"
     if "cmd-event-ring-timeout" in lower or "event-ring-missing" in lower:
         return "cmd-event-ring-timeout"
+    if "cmd-ring-timeout" in lower:
+        return "cmd-timeout"
     if "cmd-fetch-timeout" in lower or "cmd-fetch-missing" in lower:
         return "cmd-fetch-timeout"
     if "cmd-live-timeout-snapshot-missing" in lower:
         return "cmd-live-timeout-snapshot-missing"
     if "cmd-poll-pending" in lower:
+        return "cmd-poll-pending"
+    if "no-op-unproven" in lower or "cmd-prompt-safe-return-to-shell" in lower:
         return "cmd-poll-pending"
     if (
         "cmd-submit-proof-timer-preempted" in lower
@@ -420,7 +514,14 @@ def normalize_usb_blocker(value: str) -> str:
     ):
         return "port-register-access-disabled"
     if "root-port-read-timer-preempted" in lower or "root-port-read-irq27" in lower:
-        return "root-port-read-timer-preempted"
+        return "root-port-read-begin"
+    if (
+        "reset-pre-usbcmd-source-timer-preempted" in lower
+        or "reset-pre-usbcmd-source-irq27" in lower
+    ):
+        return "reset-pre-usbcmd-source"
+    if "reset-pre-usbcmd-source" in lower or "stage=0x0226" in lower:
+        return "reset-pre-usbcmd-source"
     if "root-port read-begin" in lower or "root-port-read-begin" in lower:
         return "root-port-read-begin"
     if "port-reset-timeout" in lower or "portresettimeout" in lower:
@@ -519,6 +620,35 @@ def normalize_wifi_blocker(value: str) -> str:
 
     lower = value.lower()
     stripped = lower.strip()
+    if (
+        "blocker_phase=pre-f2-core-control" in lower
+        or "policy=pre-f2-core-control" in lower
+        or "gate=core-control-blocked-before-f2" in lower
+        or "pre-upload-f1-reset-write-rejected" in lower
+    ):
+        return "pre-f2-core-control"
+    if (
+        "firmware-core-control-edge" in lower
+        or "current=firmware-core-control" in lower
+        or "focus=firmware-core-control" in lower
+        or "expected=f1-backplane-core-control" in lower
+    ):
+        return "firmware-core-control"
+    if (
+        "armcr4-reset-assert-cmd53-r5-rejected" in lower
+        or (
+            "stage=assert-reset" in lower
+            and "base=0x18103000" in lower
+            and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
+        )
+        or (
+            "base=0x18103000" in lower
+            and "off=0x800" in lower
+            and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
+        )
+        or "arg=0x91700004" in lower
+    ):
+        return "armcr4-reset-assert-cmd53-r5-rejected"
     if "ht-recover-cmd5-timeout" in lower or (
         "ht-retry-sdio-card-not-ready" in lower and "phase=card-ready" in lower
     ):
@@ -779,6 +909,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     saw_command_timeout_plan = False
     root_port_read_pending = False
     brcm_axi_read_pending = False
+    reset_pre_usbcmd_pending = False
     command_probe_bus: str | None = None
     command_timeout_detail: str | None = None
     precise_command_timeout_details = {
@@ -804,6 +935,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if "xhci.diag stage=0x0112" in raw or "xhci.diag stage=0x0113" in raw:
             brcm_axi_read_pending = False
+        if tag == "reset-pre-usbcmd-source" or "xhci.diag stage=0x0226" in raw:
+            reset_pre_usbcmd_pending = True
+            gate = max(gate, 3)
+            blocker = "reset-pre-usbcmd-source"
+            continue
+        if "xhci.diag" in raw:
+            reset_pre_usbcmd_pending = False
+            if blocker == "reset-pre-usbcmd-source":
+                blocker = "unknown"
         if "root-port read-begin" in raw:
             root_port_read_pending = True
             gate = max(gate, 3)
@@ -818,6 +958,18 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, proof_gate)
                 runtime_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
                 blocker = "none" if runtime_blocker == "none" else runtime_blocker
+            continue
+        if "usb proof_summary" in raw:
+            proof_gate = parse_hex_int(fields.get("gate"))
+            if proof_gate is not None and proof_gate > 0:
+                gate = max(gate, proof_gate)
+            proof_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
+            if proof_blocker != "none":
+                blocker = proof_blocker
+            elif fields.get("command") == "no-op-unproven":
+                blocker = "cmd-poll-pending"
+            else:
+                blocker = "none"
             continue
         if "root-port sample skipped" in raw:
             gate = max(gate, 3)
@@ -968,6 +1120,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 else:
                     command_timeout_detail = "cmd-poll-only-timeout"
                 blocker = command_timeout_detail
+        elif tag.startswith("cmd-ring-timeout"):
+            gate = max(gate, 3)
+            if command_timeout_detail != "cmd-event-ring-timeout":
+                command_timeout_detail = "cmd-timeout"
+                blocker = command_timeout_detail
+        elif tag.startswith("cmd-event-ring-timeout"):
+            gate = max(gate, 3)
+            command_timeout_detail = "cmd-event-ring-timeout"
+            blocker = command_timeout_detail
         elif tag.startswith("cmd-gate-timeout-plan"):
             gate = max(gate, 3)
             saw_command_timeout_plan = True
@@ -1006,6 +1167,10 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 3)
             command_timeout_detail = "cmd-timeout"
             blocker = command_timeout_detail
+        elif tag == "cmd-prompt-safe-return-to-shell":
+            gate = max(gate, 3)
+            command_timeout_detail = "cmd-poll-pending"
+            blocker = command_timeout_detail
         elif tag.startswith("cmd-event-ring-before"):
             saw_command_event_ring_before = True
             gate = max(gate, 3)
@@ -1022,14 +1187,21 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             and "irq 27" in raw
         ):
             gate = max(gate, 3)
-            blocker = "brcm-axi-setup-read"
+            continue
         elif (
             root_port_read_pending
             and "kernel entry via interrupt" in raw
             and "irq 27" in raw
         ):
             gate = max(gate, 3)
-            blocker = "root-port-read-timer-preempted"
+            continue
+        elif (
+            reset_pre_usbcmd_pending
+            and "kernel entry via interrupt" in raw
+            and "irq 27" in raw
+        ):
+            gate = max(gate, 3)
+            continue
         elif (
             saw_command_timeout_plan
             and "kernel entry via interrupt" in raw
@@ -1141,6 +1313,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "ht-recover-cmd5-timeout",
         "linux-probe-pmu-write-skip",
         "linux-probe-pmu-cmd53-r5-rejected",
+        "pre-f2-core-control",
+        "firmware-core-control",
+        "armcr4-reset-assert-cmd53-r5-rejected",
         "socram-assert-reset-cmd53-r5-rejected",
         "socram-clear-reset-cmd53-r5-rejected",
         "socram-postreset-clock-cmd53-r5-rejected",
@@ -1155,6 +1330,27 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "ht-backplane-cmd52-unreadable",
         "chipclkcsr-cmd52-pre-f2",
     }
+    direct_sdio_blockers = {
+        "sdio-cmd52-write",
+        "sdio-cmd52-read",
+        "sdio-cmd53-r5-error",
+    }
+    specific_sdio_blockers = precise_ht_blockers - direct_sdio_blockers
+    reset_phase_blockers = {
+        "linux-probe-pmu-write-skip",
+        "linux-probe-pmu-cmd53-r5-rejected",
+        "pre-f2-core-control",
+        "firmware-core-control",
+        "armcr4-reset-assert-cmd53-r5-rejected",
+        "socram-assert-reset-cmd53-r5-rejected",
+        "socram-clear-reset-cmd53-r5-rejected",
+        "socram-postreset-clock-cmd53-r5-rejected",
+        "socram-prereset-zero-cmd53-r5-rejected",
+        "armcr4-prereset-fgc-cmd53-r5-rejected",
+        "sdio-cmd53-r5-error",
+        "function2-disabled",
+        "unknown",
+    }
     ht_available_seen = False
     linux_probe_attach_seen = False
     linux_probe_pmu_write_active = False
@@ -1163,6 +1359,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
+        cached_only_evidence = fields.get("source", "").lower() == "cached"
         explicit_blocker = None
         for key in (
             "reason",
@@ -1177,6 +1374,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             value = fields.get(key)
             if value and value not in {"none", "n/a"}:
                 explicit_blocker = normalize_wifi_blocker(value)
+        raw_contract_blocker = normalize_wifi_blocker(raw)
+        if raw_contract_blocker in {
+            "pre-f2-core-control",
+            "firmware-core-control",
+            "armcr4-reset-assert-cmd53-r5-rejected",
+        }:
+            explicit_blocker = raw_contract_blocker
         if (
             "base=0x18104000" in raw
             and "sdio-cmd53-r5-error" in raw
@@ -1195,6 +1399,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             explicit_blocker = normalize_wifi_blocker(raw)
         if "pmu-res-reload-write-skip" in raw:
             explicit_blocker = "linux-probe-pmu-write-skip"
+        if cached_only_evidence:
+            if gate >= 4 and explicit_blocker in precise_ht_blockers | {"ht-clock-timeout"}:
+                blocker = explicit_blocker
+            continue
         if "linux-probe-attach-state" in raw:
             linux_probe_attach_seen = True
         if linux_probe_attach_seen and (
@@ -1328,12 +1536,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = "none"
             continue
         if raw.startswith("err nettest"):
-            if explicit_blocker in {
-                "sdio-cmd52-write",
-                "sdio-cmd52-read",
+            if explicit_blocker in direct_sdio_blockers | {
                 "chipclkcsr-cmd52-pre-f2",
             }:
-                blocker = explicit_blocker
+                if blocker not in specific_sdio_blockers:
+                    blocker = explicit_blocker
+            elif (
+                blocker == "ht-clock-timeout"
+                and explicit_blocker == "sdio-cmd53-r5-error"
+            ):
+                blocker = blocker
             elif blocker in precise_ht_blockers:
                 blocker = blocker
             elif explicit_blocker:
@@ -1346,11 +1558,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 )
             if blocker in {"dhcp-pending", "dhcp-failed"}:
                 gate = max(gate, 8)
-            elif blocker in {
-                "sdio-cmd52-write",
-                "sdio-cmd52-read",
-                "chipclkcsr-cmd52-pre-f2",
-            }:
+            elif blocker in direct_sdio_blockers | {"chipclkcsr-cmd52-pre-f2"}:
                 gate = max(gate, 4)
             elif blocker.startswith("net-not-ready") or blocker.startswith(
                 "nettest-"
@@ -1414,7 +1622,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if "sdio cmd53 r5 fail" in raw:
             gate = max(gate, 4)
-            if socram_core_ctrl_stage == "prereset-zero-ioctrl":
+            if "base=0x18103000" in raw and (
+                "stage=assert-reset" in raw or "off=0x800" in raw
+            ):
+                blocker = "armcr4-reset-assert-cmd53-r5-rejected"
+            elif socram_core_ctrl_stage == "prereset-zero-ioctrl":
                 blocker = "socram-prereset-zero-cmd53-r5-rejected"
             elif socram_core_ctrl_stage == "assert-reset":
                 blocker = "socram-assert-reset-cmd53-r5-rejected"
@@ -1431,6 +1643,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "ht-recover-cmd5-timeout",
                 "linux-probe-pmu-write-skip",
                 "linux-probe-pmu-cmd53-r5-rejected",
+                "pre-f2-core-control",
+                "firmware-core-control",
+                "armcr4-reset-assert-cmd53-r5-rejected",
                 "socram-assert-reset-cmd53-r5-rejected",
                 "socram-clear-reset-cmd53-r5-rejected",
                 "socram-postreset-clock-cmd53-r5-rejected",
@@ -1473,6 +1688,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if explicit_blocker in {
             "linux-probe-pmu-write-skip",
             "linux-probe-pmu-cmd53-r5-rejected",
+            "pre-f2-core-control",
+            "firmware-core-control",
+            "armcr4-reset-assert-cmd53-r5-rejected",
             "socram-assert-reset-cmd53-r5-rejected",
             "socram-clear-reset-cmd53-r5-rejected",
             "socram-postreset-clock-cmd53-r5-rejected",
@@ -1483,7 +1701,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "sdio-cmd53-r5-error",
         }:
             gate = max(gate, 4)
-            blocker = explicit_blocker
+            if explicit_blocker not in direct_sdio_blockers or blocker not in specific_sdio_blockers:
+                blocker = explicit_blocker
             continue
         if explicit_blocker == "armcr4-release-readback-unavailable":
             gate = max(gate, 4)
@@ -1521,13 +1740,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             or ht_evidence
         ):
             gate = max(gate, 4)
-            if blocker not in precise_ht_blockers:
+            if (
+                explicit_blocker == "ht-clock-timeout"
+                and blocker in reset_phase_blockers
+                and blocker not in direct_sdio_blockers
+            ) or blocker not in precise_ht_blockers:
                 blocker = "ht-clock-timeout"
         elif "firmware-verify-readback" in raw:
             gate = max(gate, 3)
             blocker = "firmware-verify-readback"
         elif explicit_blocker:
-            if blocker not in precise_ht_blockers:
+            if blocker not in precise_ht_blockers and blocker != "ht-clock-timeout":
                 blocker = explicit_blocker
 
     if blocker == "function2-disabled" and gate >= 4 and not ht_available_seen:
@@ -1546,6 +1769,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_blocker=usb_blocker,
         wifi_gate=wifi_gate,
         wifi_blocker=wifi_blocker,
+        serial_clean=serial_clean(event_list),
     )
 
 
@@ -1695,7 +1919,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--summary",
         action="store_true",
-        help="emit a compact JSON summary instead of JSON Lines",
+        help="emit a compact JSON summary for the latest boot instead of JSON Lines",
     )
     parser.add_argument(
         "--gate-summary",
@@ -1732,7 +1956,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     lines = read_input(args.log)
-    if args.gate_summary:
+    if args.gate_summary or args.summary:
         lines = latest_boot_lines(lines)
     events = filter_events(parse_events(lines), set(args.domain))
     if args.gate_summary:

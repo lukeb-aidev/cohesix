@@ -220,7 +220,7 @@ run_capture() {
     sleep "${BOOT_WAIT_SECONDS}"
     for command in "${commands[@]}"; do
         log "console command: ${command}"
-        printf '\r%s\r' "${command}" > "${SERIAL_DEVICE}"
+        printf '%s\r' "${command}" > "${SERIAL_DEVICE}"
         sleep "${COMMAND_DELAY_SECONDS}"
     done
     sleep "${CAPTURE_SECONDS}"
@@ -236,6 +236,8 @@ run_normalizer() {
     require_file "${LOG_PATH}"
     if [[ "${ALLOW_SUMMARY_ONLY}" -eq 0 ]]; then
         args+=("--expect-min" "USB_GATE=1" "--expect-min" "WIFI_GATE=1")
+        args+=("--expect" "SERIAL_CLEAN=yes")
+        args+=("--expect-not" "USB_BLOCKER=unknown")
         args+=("--expect-not" "USB_BLOCKER=policy-skip-before-run")
         args+=("--expect-not" "USB_BLOCKER=pcie-irq-quiesce-failed")
         args+=("--expect-not" "USB_BLOCKER=pcie-irq-quiesce-missing")
@@ -246,10 +248,15 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=raw-phys-cmd-doorbell-proof-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-pending")
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-only-timeout")
+        args+=("--expect-not" "USB_BLOCKER=cmd-live-timeout-snapshot-missing")
+        args+=("--expect-not" "USB_BLOCKER=cmd-timeout")
+        args+=("--expect-not" "USB_BLOCKER=cmd-event-ring-timeout")
         args+=("--expect-not" "USB_BLOCKER=pcie-window-no-op-timeout")
         args+=("--expect-not" "USB_BLOCKER=raw-phys-cmd-poll-only-timeout")
         args+=("--expect-not" "USB_BLOCKER=brcm-axi-setup-read")
         args+=("--expect-not" "USB_BLOCKER=enumeration-disabled-bootloader-owned")
+        args+=("--expect-not" "USB_BLOCKER=reset-pre-usbcmd-source")
+        args+=("--expect-not" "USB_BLOCKER=reset-pre-usbcmd-source-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=port-register-access-disabled")
         args+=("--expect-not" "USB_BLOCKER=root-port-read-begin")
         args+=("--expect-not" "USB_BLOCKER=root-port-read-irq27")
@@ -276,6 +283,7 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=safe-port-event-required")
         args+=("--expect-not" "USB_BLOCKER=safe-port-state")
         args+=("--expect-not" "WIFI_BLOCKER=ht-recover-cmd5-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=unknown")
         args+=("--expect-not" "WIFI_BLOCKER=ht-clock-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=devon-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=function2-disabled")
@@ -287,6 +295,9 @@ run_normalizer() {
         args+=("--expect-not" "WIFI_BLOCKER=linux-probe-pmu-cmd53-r5-rejected")
         args+=("--expect-not" "WIFI_BLOCKER=linux-probe-pmu-write-skip")
         args+=("--expect-not" "WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=armcr4-reset-assert-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=firmware-core-control")
+        args+=("--expect-not" "WIFI_BLOCKER=pre-f2-core-control")
         args+=("--expect-not" "WIFI_BLOCKER=armcr4-release-readback-unavailable")
         args+=("--expect-not" "WIFI_BLOCKER=socram-prereset-zero-cmd53-r5-rejected")
         args+=("--expect-not" "WIFI_BLOCKER=socram-assert-reset-cmd53-r5-rejected")

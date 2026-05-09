@@ -9,7 +9,7 @@ use core::cmp;
 use core::hint::spin_loop;
 use core::mem;
 use core::ptr;
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{fence, AtomicU32, Ordering};
 
 use super::{
     DeviceHal, HalError, Irq, IrqServiceOutcome, IrqTrigger, KernelIrqBinding, SdioBusWidth,
@@ -108,6 +108,8 @@ static LAST_WIFI_FIRMWARE_PROOF: Mutex<Option<WifiFirmwareProofTrace>> = Mutex::
 static LAST_WIFI_HT_PHASES: Mutex<WifiHtPhaseRing> = Mutex::new(WifiHtPhaseRing::new());
 static LAST_WIFI_BOUNDED_PHASES: Mutex<WifiBoundedPhaseRing> =
     Mutex::new(WifiBoundedPhaseRing::new());
+static LAST_WIFI_DRIVER_FAILURE_EXACT: Mutex<Option<&'static str>> = Mutex::new(None);
+static WIFI_BREADCRUMB_UART_SUPPRESSION_DEPTH: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WifiFirmwareContractEvidence {
@@ -373,9 +375,43 @@ fn update_bcm2711_gpio_pull(word: u32, gpio: u32, pull: u32) -> u32 {
     (word & !mask) | ((pull & BCM2711_GPIO_PULL_MASK) << shift)
 }
 
+pub(crate) struct WifiBreadcrumbUartSuppression {
+    _private: (),
+}
+
+#[must_use]
+pub(crate) fn suppress_wifi_breadcrumb_uart() -> WifiBreadcrumbUartSuppression {
+    WIFI_BREADCRUMB_UART_SUPPRESSION_DEPTH.fetch_add(1, Ordering::AcqRel);
+    WifiBreadcrumbUartSuppression { _private: () }
+}
+
+impl Drop for WifiBreadcrumbUartSuppression {
+    fn drop(&mut self) {
+        let previous = WIFI_BREADCRUMB_UART_SUPPRESSION_DEPTH.fetch_sub(1, Ordering::AcqRel);
+        if previous == 0 {
+            WIFI_BREADCRUMB_UART_SUPPRESSION_DEPTH.store(0, Ordering::Release);
+        }
+    }
+}
+
+#[inline]
+fn wifi_breadcrumb_uart_suppressed() -> bool {
+    WIFI_BREADCRUMB_UART_SUPPRESSION_DEPTH.load(Ordering::Acquire) != 0
+}
+
+#[cfg(test)]
+pub(crate) fn wifi_breadcrumb_uart_suppression_depth_for_test() -> u32 {
+    WIFI_BREADCRUMB_UART_SUPPRESSION_DEPTH.load(Ordering::Acquire)
+}
+
 fn emit_breadcrumb(args: core::fmt::Arguments<'_>) {
     let mut line = heapless::String::<224>::new();
     let _ = core::fmt::Write::write_fmt(&mut line, args);
+    if wifi_breadcrumb_uart_suppressed() {
+        #[cfg(feature = "kernel")]
+        crate::log_buffer::append_log_line(line.as_str());
+        return;
+    }
     boot_log::force_uart_line(line.as_str());
 }
 
@@ -454,6 +490,11 @@ const fn core_ctrl_byte_function_addr(addr: u32) -> u32 {
 }
 
 #[inline]
+const fn core_ctrl_unflagged_byte_function_addr(addr: u32) -> u32 {
+    backplane_byte_function_addr(addr)
+}
+
+#[inline]
 const fn core_ctrl_cmd52_write_function_addr(addr: u32) -> u32 {
     core_ctrl_byte_function_addr(addr)
 }
@@ -516,21 +557,27 @@ const fn core_ctrl_write_access_mode_label() -> &'static str {
 
 #[inline]
 const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'static str {
-    if core_ctrl_prereset_write_uses_word_primary(base, offset) {
-        "cmd52-byte-transfer-window-prereset fallback=cmd53-word-windowed"
+    if core_ctrl_uses_unflagged_byte_primary(base, offset) {
+        "cmd52-byte-unflagged-prereset fallback=cmd53-word-windowed"
+    } else if core_ctrl_prereset_write_uses_word_primary(base, offset) {
+        "cmd53-word-windowed fallback=cmd52-byte-transfer-window-prereset"
     } else {
         core_ctrl_write_access_mode_label()
     }
 }
 
 #[inline]
-const fn core_ctrl_reset_assert_access_mode_label() -> &'static str {
-    "cmd52-byte-transfer-window fallback=cmd53-word-windowed"
+const fn core_ctrl_reset_assert_access_mode_label(base: u32, offset: u32) -> &'static str {
+    if core_ctrl_uses_unflagged_byte_primary(base, offset) {
+        "cmd52-byte-unflagged-reset-assert fallback=cmd53-word-windowed"
+    } else {
+        "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
+    }
 }
 
 #[inline]
 const fn core_ctrl_reset_clear_access_mode_label() -> &'static str {
-    "cmd52-byte-transfer-window fallback=cmd53-word-windowed"
+    "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
 }
 
 #[inline]
@@ -540,7 +587,11 @@ const fn core_ctrl_reset_clear_retry_access_mode_label() -> &'static str {
 
 #[inline]
 const fn core_ctrl_postreset_access_mode_label(_base: u32, _offset: u32) -> &'static str {
-    "cmd52-byte-transfer-window fallback=cmd53-byte-transfer-window"
+    if core_ctrl_uses_unflagged_byte_primary(_base, _offset) {
+        "cmd52-byte-unflagged-postreset fallback=cmd53-word-windowed"
+    } else {
+        "cmd52-byte-transfer-window fallback=cmd53-byte-transfer-window"
+    }
 }
 
 #[inline]
@@ -573,7 +624,9 @@ const fn core_ctrl_clear_reset_read_access_mode_label(base: u32, offset: u32) ->
 
 #[inline]
 const fn core_ctrl_in_reset_access_mode_label(base: u32, offset: u32) -> &'static str {
-    if core_ctrl_in_reset_write_uses_word_path(base, offset) {
+    if core_ctrl_uses_unflagged_byte_primary(base, offset) {
+        "cmd52-byte-unflagged-in-reset fallback=cmd53-word-windowed"
+    } else if core_ctrl_in_reset_write_uses_word_path(base, offset) {
         "cmd52-byte-transfer-window-in-reset fallback=cmd53-word-windowed"
     } else {
         core_ctrl_write_access_mode_label()
@@ -691,8 +744,15 @@ const fn core_ctrl_in_reset_write_uses_word_path(base: u32, offset: u32) -> bool
 }
 
 #[inline]
+const fn core_ctrl_uses_unflagged_byte_primary(base: u32, offset: u32) -> bool {
+    base == CYW43_ARMCR4_CORE_BASE && (offset == AI_IOCTRL_OFFSET || offset == AI_RESETCTRL_OFFSET)
+}
+
+#[inline]
 const fn core_ctrl_prereset_write_uses_word_primary(base: u32, offset: u32) -> bool {
-    base == CYW43_ARMCR4_CORE_BASE && offset == AI_IOCTRL_OFFSET
+    base == CYW43_ARMCR4_CORE_BASE
+        && offset == AI_IOCTRL_OFFSET
+        && !core_ctrl_uses_unflagged_byte_primary(base, offset)
 }
 
 #[inline]
@@ -1248,13 +1308,15 @@ const fn core_disable_prereset_recover_label(base: u32) -> &'static str {
 
 #[inline]
 fn d11_passive_disable_rejection_can_continue(base: u32, err: &HalError) -> bool {
-    base == CYW43_D11_CORE_BASES[0]
-        && (is_sdio_cmd52_access_error(err) || is_sdio_cmd53_r5_error(err))
+    let _ = base;
+    let _ = err;
+    false
 }
 
 #[inline]
 fn armcr4_passive_reset_rejection_can_continue(err: &HalError) -> bool {
-    is_sdio_cmd52_access_error(err) || is_sdio_cmd53_r5_error(err)
+    let _ = err;
+    false
 }
 
 #[inline]
@@ -1366,7 +1428,8 @@ const fn pre_ht_control_plane_clock_target_hz(current_clock_hz: u32) -> u32 {
 
 #[inline]
 const fn firmware_core_reset_clock_target_hz(current_clock_hz: u32) -> u32 {
-    pre_ht_control_plane_clock_target_hz(current_clock_hz)
+    let _ = current_clock_hz;
+    CYW43_STARTUP_CLOCK_HZ
 }
 
 #[inline]
@@ -5752,6 +5815,7 @@ fn preserve_cached_first_reply_blocker_in_snapshot(
                 | "sdio-function2-ready-timeout"
         )
     {
+        mark_snapshot_uses_cached_diagnostic_fields(&mut snapshot);
         snapshot.control_plane_exact_error = cached.control_plane_exact_error;
         if cached.control_plane_sdhci_read_diag != "none" {
             snapshot.control_plane_sdhci_read_diag = cached.control_plane_sdhci_read_diag;
@@ -5767,6 +5831,7 @@ fn preserve_cached_first_reply_blocker_in_snapshot(
                 && snapshot_is_same_startup_link_first_reply_lane
                 && snapshot_is_weaker_first_reply_result))
     {
+        mark_snapshot_uses_cached_diagnostic_fields(&mut snapshot);
         snapshot.control_plane_exact_error = cached.control_plane_exact_error;
         if cached.control_plane_sdhci_read_diag != "none" {
             snapshot.control_plane_sdhci_read_diag = cached.control_plane_sdhci_read_diag;
@@ -5792,12 +5857,20 @@ fn preserve_cached_first_reply_blocker_in_snapshot(
                             || reason.starts_with("cyw43-function2-enable-latched-not-ready")
                 )))
     {
+        mark_snapshot_uses_cached_diagnostic_fields(&mut snapshot);
         snapshot.control_plane_f2_state = cached.control_plane_f2_state;
         if same_direct_reply_blocker && cached.control_plane_sdhci_read_diag != "none" {
             snapshot.control_plane_sdhci_read_diag = cached.control_plane_sdhci_read_diag;
         }
     }
     snapshot
+}
+
+#[inline]
+fn mark_snapshot_uses_cached_diagnostic_fields(snapshot: &mut WifiDebugSnapshot) {
+    if snapshot.debug_snapshot_source != "cached" {
+        snapshot.debug_snapshot_source = "live+cached";
+    }
 }
 
 #[inline]
@@ -5966,6 +6039,50 @@ fn wifi_debug_snapshot_should_be_cached(snapshot: &WifiDebugSnapshot) -> bool {
 }
 
 #[inline]
+fn remember_wifi_driver_failure_exact_error(exact_error: &'static str) {
+    if control_plane_exact_error_is_direct_sdio_transport_blocker(exact_error) {
+        *LAST_WIFI_DRIVER_FAILURE_EXACT.lock() = Some(exact_error);
+    }
+}
+
+#[inline]
+fn cached_wifi_driver_failure_exact_error() -> Option<&'static str> {
+    *LAST_WIFI_DRIVER_FAILURE_EXACT.lock()
+}
+
+#[inline]
+fn clear_wifi_driver_failure_exact_error() {
+    *LAST_WIFI_DRIVER_FAILURE_EXACT.lock() = None;
+}
+
+#[inline]
+fn control_plane_exact_error_preserving_driver_failure(
+    exact_error: &'static str,
+    driver_failure: Option<&'static str>,
+) -> &'static str {
+    let Some(driver_failure) = driver_failure else {
+        return exact_error;
+    };
+    if !control_plane_exact_error_is_direct_sdio_transport_blocker(driver_failure) {
+        return exact_error;
+    }
+    if exact_error.is_empty()
+        || matches!(
+            exact_error,
+            "cyw43-function2-disabled"
+                | "cyw43-pre-function2-cardcap-unreadable"
+                | "cyw43-control-plane-state-visible-no-reply"
+        )
+        || exact_error.starts_with("cyw43-function2-disabled")
+        || exact_error.starts_with("cyw43-ht-clock-timeout")
+    {
+        driver_failure
+    } else {
+        exact_error
+    }
+}
+
+#[inline]
 fn promote_cached_wifi_debug_snapshot_exact_error(exact_error: &'static str) {
     let hintless_firstread_no_irq = exact_error == "cyw43-control-plane-hintless-firstread-no-irq";
     if !exact_error.starts_with("cyw43-function2-reply-")
@@ -5974,6 +6091,7 @@ fn promote_cached_wifi_debug_snapshot_exact_error(exact_error: &'static str) {
     {
         return;
     }
+    remember_wifi_driver_failure_exact_error(exact_error);
 
     let mut last_snapshot = LAST_WIFI_DEBUG_SNAPSHOT.lock();
     let Some(snapshot) = last_snapshot.as_mut() else {
@@ -6488,11 +6606,11 @@ const CYW43_HT_CLOCK_INITIAL_WAIT_LOOPS: usize = 2_048;
 const CYW43_HT_CLOCK_SOFT_WAIT_LOOPS: usize = 8_192;
 // Linux brcmfmac polls CHIPCLKCSR for up to PMU_MAX_TRANSITION_DLY with
 // 5-10 ms sleeps before treating a missing post-release HT clock as terminal.
-// Production boot mirrors that bounded proof window. Manual diagnostics keep a
-// shorter poll budget so a shell probe can characterize the stable 0x50
-// HT_REQ|ALP_AVAIL timeout shape without adding the full boot wait.
+// Production boot and the shell HT diagnostic now use the same bounded proof
+// window; an abbreviated diagnostic poll was hiding whether the board ever
+// reached Linux's HT_AVAIL budget.
 const CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS: usize = 160;
-const CYW43_HT_CLOCK_DEBUG_ACTIVE_WAIT_POLLS: usize = 8;
+const CYW43_HT_CLOCK_DEBUG_ACTIVE_WAIT_POLLS: usize = CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS;
 const CYW43_HT_CLOCK_LINUX_ACTIVE_STABLE_TIMEOUT_POLLS: usize =
     CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS;
 const CYW43_HT_CLOCK_LINUX_ACTIVE_SETTLE_LOOPS: usize = 8_000_000;
@@ -7126,7 +7244,8 @@ impl Pi4WifiState {
         }
         cache_wifi_debug_snapshot_if_informative(snapshot);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] debug snapshot stage={stage} source=live exact_error={} sdhci_read_diag={} f2_state={}",
+            "[pi4-wifi] debug snapshot stage={stage} source={} exact_error={} sdhci_read_diag={} f2_state={}",
+            snapshot.debug_snapshot_source,
             snapshot.control_plane_exact_error,
             snapshot.control_plane_sdhci_read_diag,
             snapshot.control_plane_f2_state,
@@ -7379,14 +7498,12 @@ impl Pi4WifiState {
 
     pub fn debug_probe_ht_clock(&mut self) -> Result<bool, HalError> {
         if let Some(snapshot) = cached_wifi_debug_snapshot() {
+            self.host.hydrate_debug_snapshot_shadow(&snapshot);
             if control_plane_exact_error_is_first_reply_blocker(snapshot.control_plane_exact_error)
                 || control_plane_exact_error_is_direct_sdio_transport_blocker(
                     snapshot.control_plane_exact_error,
                 )
             {
-                if let Some(chipclk) = snapshot.chipclkcsr {
-                    self.host.remember_chipclkcsr(chipclk);
-                }
                 let ready = snapshot
                     .chipclkcsr
                     .is_some_and(function2_has_required_ht_clock);
@@ -7727,6 +7844,10 @@ impl Pi4WifiState {
             io_enable,
             io_ready,
             control_plane_exact_error,
+        );
+        let control_plane_exact_error = control_plane_exact_error_preserving_driver_failure(
+            control_plane_exact_error,
+            cached_wifi_driver_failure_exact_error(),
         );
         Ok(WifiDebugSnapshot {
             power_state: self.power_state,
@@ -8667,6 +8788,23 @@ impl SdioHost {
 
     fn remember_cardcap(&mut self, value: u8) {
         self.last_cardcap = Some(value);
+    }
+
+    fn hydrate_debug_snapshot_shadow(&mut self, snapshot: &WifiDebugSnapshot) {
+        if let Some(value) = snapshot.chipclkcsr {
+            self.remember_chipclkcsr(value);
+        }
+        if let Some(value) = snapshot.wakeupctrl {
+            self.remember_wakeupctrl(value);
+        }
+        if let Some(value) = snapshot.sleepcsr {
+            self.remember_sleepcsr(value);
+        }
+        if let Some(value) = snapshot.cardcap {
+            self.remember_cardcap(value);
+        }
+        self.last_cccr_io_enable = snapshot.io_enable;
+        self.last_cccr_io_ready = snapshot.io_ready;
     }
 
     fn clear_sdio_register_cache(&mut self) {
@@ -15313,6 +15451,9 @@ impl SdioHost {
                 D11_BCMA_IOCTL_PHYCLOCKEN,
             ) {
                 if !d11_passive_disable_rejection_can_continue(base, &err) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=d11-disable core={index} base=0x{base:08x} action=terminal-disable-fail err={err} reason=pre-upload-f1-reset-write-rejected"
+                    ));
                     return Err(err);
                 }
                 emit_breadcrumb(format_args!(
@@ -17078,6 +17219,7 @@ impl SdioHost {
     }
 
     fn load_firmware(&mut self, bundle: WifiFirmwareBundle<'static>) -> Result<(), HalError> {
+        clear_wifi_driver_failure_exact_error();
         let ram_base = self.firmware_ram_base();
         let ram_size = self.ram_size()?;
         self.post_release_sdonly_clock_fenced = false;
@@ -17110,6 +17252,9 @@ impl SdioHost {
             ARMCR4_BCMA_IOCTL_CPUHALT,
         ) {
             if !armcr4_passive_reset_rejection_can_continue(&err) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=armcr4-passive action=terminal-reset-fail err={err} reason=pre-upload-f1-reset-write-rejected"
+                ));
                 return Err(err);
             }
             emit_breadcrumb(format_args!(
@@ -18946,7 +19091,7 @@ impl SdioHost {
         let target_clock_hz = firmware_core_reset_clock_target_hz(self.current_clock_hz);
         if target_clock_hz == self.current_clock_hz {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} action=hold-core-reset-clock current={}Hz preferred={}Hz reason=linux-high-speed-before-armcr4-socram-reset",
+                "[pi4-wifi] firmware stage={stage} action=hold-core-reset-clock current={}Hz preferred={}Hz reason=pre-firmware-core-control-startup-clock",
                 self.current_clock_hz, self.preferred_data_clock_hz
             ));
             self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(self.current_clock_hz);
@@ -18954,10 +19099,12 @@ impl SdioHost {
         }
         if target_clock_hz >= CYW43_CONTROL_PLANE_CLOCK_HZ {
             self.enable_sdio_high_speed_timing_for(stage)?;
+        } else {
+            self.apply_host_high_speed_timing(false);
         }
 
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action={} request={}Hz from={}Hz preferred={}Hz reason=linux-high-speed-before-armcr4-socram-reset",
+            "[pi4-wifi] firmware stage={stage} action={} request={}Hz from={}Hz preferred={}Hz reason=pre-firmware-core-control-startup-clock",
             if target_clock_hz < self.current_clock_hz {
                 "lower-core-reset-clock"
             } else {
@@ -19810,6 +19957,22 @@ impl SdioHost {
         )
     }
 
+    fn core_ctrl_cmd52_unflagged_current_window_write8(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+    ) -> Result<(), HalError> {
+        let addr = base.saturating_add(offset);
+        self.with_backplane_window_addr(
+            addr,
+            core_ctrl_unflagged_byte_function_addr(addr),
+            |this, bus_addr| {
+                this.io_direct_write_no_cmd53_fallback(SdioFunction::Function1, bus_addr, value)
+            },
+        )
+    }
+
     fn core_ctrl_cmd53_current_window_write8(
         &mut self,
         base: u32,
@@ -19822,6 +19985,34 @@ impl SdioHost {
 
     fn core_ctrl_word_write8(&mut self, base: u32, offset: u32, value: u8) -> Result<(), HalError> {
         self.backplane_word_write32(base.saturating_add(offset), u32::from(value))
+    }
+
+    fn core_ctrl_unflagged_byte_primary_write8(
+        &mut self,
+        base: u32,
+        offset: u32,
+        value: u8,
+        op: &'static str,
+        word_current_window_stage: &'static str,
+        word_rewindow_stage: &'static str,
+    ) -> Result<(), HalError> {
+        match self.core_ctrl_cmd52_unflagged_current_window_write8(base, offset, value) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware core-ctrl fallback op={op} base=0x{base:08x} off=0x{offset:03x} from=cmd52-byte-unflagged to=cmd53-word-windowed err={err}"
+                ));
+                self.recover_command_path(word_current_window_stage);
+                self.core_ctrl_word_primary_write8(
+                    base,
+                    offset,
+                    value,
+                    op,
+                    word_current_window_stage,
+                    word_rewindow_stage,
+                )
+            }
+        }
     }
 
     fn core_ctrl_in_reset_write32(
@@ -19938,6 +20129,16 @@ impl SdioHost {
     }
 
     fn core_ctrl_write8(&mut self, base: u32, offset: u32, value: u8) -> Result<(), HalError> {
+        if core_ctrl_uses_unflagged_byte_primary(base, offset) {
+            return self.core_ctrl_unflagged_byte_primary_write8(
+                base,
+                offset,
+                value,
+                "write8",
+                "core-ctrl-cmd53-current-window",
+                "core-ctrl-cmd53-rewindow",
+            );
+        }
         if core_ctrl_write8_uses_word_primary(base, offset) {
             return self.core_ctrl_word_primary_write8(
                 base,
@@ -20012,6 +20213,16 @@ impl SdioHost {
         offset: u32,
         value: u8,
     ) -> Result<(), HalError> {
+        if core_ctrl_uses_unflagged_byte_primary(base, offset) {
+            return self.core_ctrl_unflagged_byte_primary_write8(
+                base,
+                offset,
+                value,
+                "write8-reset-assert",
+                "core-ctrl-reset-assert-cmd53-current-window",
+                "core-ctrl-reset-assert-cmd53-rewindow",
+            );
+        }
         self.core_ctrl_word_primary_write8(
             base,
             offset,
@@ -20028,6 +20239,16 @@ impl SdioHost {
         offset: u32,
         value: u8,
     ) -> Result<(), HalError> {
+        if core_ctrl_uses_unflagged_byte_primary(base, offset) {
+            return self.core_ctrl_unflagged_byte_primary_write8(
+                base,
+                offset,
+                value,
+                "write8-prereset",
+                "core-ctrl-prereset-cmd53-current-window",
+                "core-ctrl-prereset-cmd53-rewindow",
+            );
+        }
         if core_ctrl_prereset_write_uses_word_primary(base, offset) {
             return self.core_ctrl_word_primary_write8(
                 base,
@@ -20161,6 +20382,16 @@ impl SdioHost {
         offset: u32,
         value: u8,
     ) -> Result<(), HalError> {
+        if core_ctrl_uses_unflagged_byte_primary(base, offset) {
+            return self.core_ctrl_unflagged_byte_primary_write8(
+                base,
+                offset,
+                value,
+                "write8-postreset",
+                "core-ctrl-postreset-cmd53-current-window",
+                "core-ctrl-postreset-cmd53-rewindow",
+            );
+        }
         if core_ctrl_write8_uses_word_primary(base, offset) {
             return self.core_ctrl_word_primary_write8(
                 base,
@@ -20197,6 +20428,16 @@ impl SdioHost {
         offset: u32,
         value: u8,
     ) -> Result<(), HalError> {
+        if core_ctrl_uses_unflagged_byte_primary(base, offset) {
+            return self.core_ctrl_unflagged_byte_primary_write8(
+                base,
+                offset,
+                value,
+                "write8-in-reset",
+                "core-ctrl-in-reset-cmd53-current-window",
+                "core-ctrl-in-reset-cmd53-rewindow",
+            );
+        }
         if core_ctrl_write8_uses_word_primary(base, offset) {
             match self.core_ctrl_word_write8(base, offset, value) {
                 Ok(()) => return Ok(()),
@@ -20370,7 +20611,7 @@ impl SdioHost {
             base,
             offset,
             value,
-            core_ctrl_reset_assert_access_mode_label(),
+            core_ctrl_reset_assert_access_mode_label(base, offset),
         );
         if let Err(err) = self.core_ctrl_reset_assert_write8(base, offset, value) {
             emit_breadcrumb(format_args!(
@@ -26007,15 +26248,23 @@ mod tests {
             0x0b408
         );
         assert_eq!(
+            core_ctrl_unflagged_byte_function_addr(CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET),
+            0x03408
+        );
+        assert_eq!(
             core_ctrl_cmd52_write_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET),
             0x0b800
         );
         assert_eq!(
-            core_ctrl_byte_function_addr(CYW43_D11_CORE_BASE + AI_IOCTRL_OFFSET),
+            core_ctrl_unflagged_byte_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET),
+            0x03800
+        );
+        assert_eq!(
+            core_ctrl_byte_function_addr(CYW43_D11_CORE_BASES[0] + AI_IOCTRL_OFFSET),
             0x09408
         );
         assert_eq!(
-            core_ctrl_byte_function_addr(CYW43_D11_CORE_BASE + AI_RESETCTRL_OFFSET),
+            core_ctrl_byte_function_addr(CYW43_D11_CORE_BASES[0] + AI_RESETCTRL_OFFSET),
             0x09800
         );
         assert_eq!(
@@ -26036,19 +26285,23 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd52-byte-transfer-window-prereset fallback=cmd53-word-windowed"
+            "cmd52-byte-unflagged-prereset fallback=cmd53-word-windowed"
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
             "cmd52-byte-transfer-window fallback=cmd53-byte-transfer-window"
         );
         assert_eq!(
-            core_ctrl_reset_assert_access_mode_label(),
-            "cmd52-byte-transfer-window fallback=cmd53-word-windowed"
+            core_ctrl_reset_assert_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_RESETCTRL_OFFSET),
+            "cmd52-byte-unflagged-reset-assert fallback=cmd53-word-windowed"
+        );
+        assert_eq!(
+            core_ctrl_reset_assert_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_RESETCTRL_OFFSET),
+            "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
         );
         assert_eq!(
             core_ctrl_reset_clear_access_mode_label(),
-            "cmd52-byte-transfer-window fallback=cmd53-word-windowed"
+            "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
         );
         assert_eq!(
             core_ctrl_reset_clear_retry_access_mode_label(),
@@ -26060,7 +26313,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_postreset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd52-byte-transfer-window fallback=cmd53-byte-transfer-window"
+            "cmd52-byte-unflagged-postreset fallback=cmd53-word-windowed"
         );
         assert_eq!(
             core_ctrl_postreset_read_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
@@ -26106,7 +26359,7 @@ mod tests {
         ));
         assert_eq!(
             core_ctrl_in_reset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd52-byte-transfer-window-in-reset fallback=cmd53-word-windowed"
+            "cmd52-byte-unflagged-in-reset fallback=cmd53-word-windowed"
         );
         assert_eq!(
             core_ctrl_in_reset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
@@ -26132,7 +26385,19 @@ mod tests {
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET
         ));
-        assert!(core_ctrl_prereset_write_uses_word_primary(
+        assert!(core_ctrl_uses_unflagged_byte_primary(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(core_ctrl_uses_unflagged_byte_primary(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_RESETCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_uses_unflagged_byte_primary(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_prereset_write_uses_word_primary(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
@@ -26159,7 +26424,7 @@ mod tests {
             "prereset-fgc-clock",
             &HalError::Unsupported("sdio-cmd52-write"),
         ));
-        assert!(d11_passive_disable_rejection_can_continue(
+        assert!(!d11_passive_disable_rejection_can_continue(
             CYW43_D11_CORE_BASES[0],
             &HalError::Unsupported("sdio-cmd53-r5-error"),
         ));
@@ -26177,10 +26442,10 @@ mod tests {
             "assert-reset",
             &HalError::Unsupported("sdio-cmd53-r5-error"),
         ));
-        assert!(armcr4_passive_reset_rejection_can_continue(
+        assert!(!armcr4_passive_reset_rejection_can_continue(
             &HalError::Unsupported("sdio-cmd53-r5-error")
         ));
-        assert!(armcr4_passive_reset_rejection_can_continue(
+        assert!(!armcr4_passive_reset_rejection_can_continue(
             &HalError::Unsupported("sdio-cmd52-write")
         ));
         assert!(!armcr4_passive_reset_rejection_can_continue(
@@ -29585,6 +29850,7 @@ mod tests {
             preserved.control_plane_sdhci_read_diag,
             "f2-reply-read-stalled-no-buffer-ready",
         );
+        assert_eq!(preserved.debug_snapshot_source, "live+cached");
         assert_eq!(preserved.control_plane_startup_link_rescue_cycles, 2);
         assert_eq!(preserved.debug_snapshot_stage, "console-dump-state");
     }
@@ -31398,6 +31664,31 @@ mod tests {
     }
 
     #[test]
+    fn driver_failure_exact_error_preserves_direct_sdio_blocker() {
+        assert_eq!(
+            control_plane_exact_error_preserving_driver_failure(
+                "cyw43-function2-disabled",
+                Some("sdio-cmd53-r5-error"),
+            ),
+            "sdio-cmd53-r5-error"
+        );
+        assert_eq!(
+            control_plane_exact_error_preserving_driver_failure(
+                "cyw43-ht-clock-timeout-before-function2",
+                Some("sdio-cmd52-write"),
+            ),
+            "sdio-cmd52-write"
+        );
+        assert_eq!(
+            control_plane_exact_error_preserving_driver_failure(
+                "cyw43-function2-reply-read-stall-no-buffer-ready",
+                Some("sdio-cmd53-r5-error"),
+            ),
+            "cyw43-function2-reply-read-stall-no-buffer-ready"
+        );
+    }
+
+    #[test]
     fn sdhci_buffer_ready_masks_follow_transfer_direction() {
         assert_eq!(sdhci_present_buffer_ready_mask(true), SDHCI_SPACE_AVAILABLE);
         assert_eq!(sdhci_present_buffer_ready_mask(false), SDHCI_DATA_AVAILABLE);
@@ -31896,7 +32187,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_ht_control_plane_clock_target_preserves_linux_high_speed_lane() {
+    fn pre_ht_control_plane_clock_target_preserves_linux_high_speed_lane_until_core_reset() {
         assert_eq!(
             pre_ht_control_plane_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ),
             CYW43_FIRMWARE_BULK_CLOCK_HZ
@@ -31911,11 +32202,11 @@ mod tests {
         );
         assert_eq!(
             firmware_core_reset_clock_target_hz(CYW43_STARTUP_CLOCK_HZ),
-            CYW43_CONTROL_PLANE_CLOCK_HZ
+            CYW43_STARTUP_CLOCK_HZ
         );
         assert_eq!(
             firmware_core_reset_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ),
-            CYW43_FIRMWARE_BULK_CLOCK_HZ
+            CYW43_STARTUP_CLOCK_HZ
         );
         assert_eq!(
             post_download_ht_clock_target_hz(400_000, CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ),
@@ -32226,9 +32517,9 @@ mod tests {
             required_ht_clock_linux_active_wait_loops_for_stage("wait-ht-clock")
                 == required_ht_clock_linux_active_wait_loops()
         );
-        assert!(
-            super::CYW43_HT_CLOCK_DEBUG_ACTIVE_WAIT_POLLS
-                < super::CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS
+        assert_eq!(
+            super::CYW43_HT_CLOCK_DEBUG_ACTIVE_WAIT_POLLS,
+            super::CYW43_HT_CLOCK_LINUX_ACTIVE_WAIT_POLLS
         );
         assert!(super::CYW43_HT_CLOCK_LINUX_ACTIVE_SETTLE_LOOPS > 0);
         assert!(
@@ -33402,7 +33693,7 @@ mod tests {
                 SdioFunction::Function1,
                 core_ctrl_cmd52_write_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET),
                 true,
-                AI_RESETCTRL_ASSERT,
+                AI_RESETCTRL_BIT_RESET,
             ),
             0x9170_0001
         );

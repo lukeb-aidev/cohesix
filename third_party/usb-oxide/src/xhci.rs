@@ -28,7 +28,7 @@ const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_POLL_ONLY_WAIT_SPINS: usize = 64;
-const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 1;
+const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 4;
 const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
@@ -612,8 +612,9 @@ const fn skip_config_write_during_init_with_snapshot(
 const fn skip_reset_during_init(firmware_handoff: XhciFirmwareHandoff) -> bool {
     // Resetless and preserve-state handoff modes are only safe when firmware
     // has already proven the controller halted and interrupt-quiesced.
-    // PlatformResetComplete proves PCIe/VL805 ownership, not that the xHC has
-    // accepted fresh runtime rings, so it must still replay the HCRST lane.
+    // PlatformResetComplete proves the Pi mailbox/VL805 reset boundary, but
+    // fresh Cohesix-owned rings still need a local xHC HCRST before command
+    // doorbells can be trusted.
     matches!(
         firmware_handoff,
         XhciFirmwareHandoff::ResetlessReinit | XhciFirmwareHandoff::PreserveControllerState
@@ -1320,19 +1321,35 @@ const fn reset_usbcmd_seed_before_hcrst_for_init(
 }
 
 #[inline(always)]
-const fn skip_reset_completion_poll_for_init(
+const fn skip_reset_pre_usbsts_read_for_init(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
     skip_initial_live_operational_reads: bool,
 ) -> bool {
-    if matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete) {
-        return false;
-    }
     initial_live_operational_read_hazard(
         firmware_handoff,
         runtime_seed_snapshot,
         skip_initial_live_operational_reads,
     )
+}
+
+#[inline(always)]
+const fn skip_reset_completion_poll_for_init(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+    skip_initial_live_operational_reads: bool,
+) -> bool {
+    if skip_reset_pre_usbsts_read_for_init(
+        firmware_handoff,
+        runtime_seed_snapshot,
+        skip_initial_live_operational_reads,
+    ) {
+        return true;
+    }
+    if matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete) {
+        return false;
+    }
+    false
 }
 
 #[inline(always)]
@@ -1611,8 +1628,8 @@ pub enum XhciFirmwareHandoff {
     /// controller state.
     PreserveControllerState = 3,
     /// Platform firmware or mailbox reset proved PCIe/VL805 ownership.
-    /// Runtime still replays the xHCI HCRST/CONFIG/ring sequence locally
-    /// before trusting command-ring completion.
+    /// Runtime uses a blind local xHC HCRST after that boundary, then replays
+    /// CONFIG/ring ownership locally before trusting command-ring completion.
     PlatformResetComplete = 4,
 }
 
@@ -2852,14 +2869,33 @@ impl<H: Dma> XhciCtrl<H> {
                 trusted_runtime_seed_snapshot.is_some() as u64,
                 skip_reset_completion_poll as u64,
             );
-            let reset_pre_usbsts = self.read_op::<u32>(reg::USBSTS);
-            emit_xhci_diag(
-                0x0214,
-                reset_pre_usbsts as u64,
-                reg::USBSTS_HCH as u64,
-                1,
+            let skip_reset_pre_usbsts_read = skip_reset_pre_usbsts_read_for_init(
+                self.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+                self.skip_initial_live_operational_reads,
             );
-            if !SKIP_STOP_DURING_INIT && halt_revalidation_needed(reset_pre_usbsts) {
+            let reset_pre_usbsts = if skip_reset_pre_usbsts_read {
+                emit_xhci_diag(
+                    0x022c,
+                    reg::USBSTS as u64,
+                    reg::USBSTS_HCH as u64,
+                    self.firmware_handoff as u64,
+                );
+                reg::USBSTS_HCH
+            } else {
+                let reset_pre_usbsts = self.read_op::<u32>(reg::USBSTS);
+                emit_xhci_diag(
+                    0x0214,
+                    reset_pre_usbsts as u64,
+                    reg::USBSTS_HCH as u64,
+                    1,
+                );
+                reset_pre_usbsts
+            };
+            if !skip_reset_pre_usbsts_read
+                && !SKIP_STOP_DURING_INIT
+                && halt_revalidation_needed(reset_pre_usbsts)
+            {
                 let stop_cmd = masked_usbcmd(usbcmd_before_reset) & !reg::USBCMD_RUN;
                 emit_xhci_diag(
                     0x0221,
@@ -2883,6 +2919,8 @@ impl<H: Dma> XhciCtrl<H> {
                     spin_loop();
                 }
                 emit_xhci_diag(0x0223, self.read_op::<u32>(reg::USBSTS) as u64, 1, 0);
+            } else if skip_reset_pre_usbsts_read {
+                emit_xhci_diag(0x0225, reset_pre_usbsts as u64, reg::USBSTS_HCH as u64, 1);
             }
             let reset_cmd = usbcmd_before_reset | reg::USBCMD_HCRST;
             let uboot_style_reset_write = runtime_handoff_needs_uboot_style_reset_write(
@@ -4709,17 +4747,27 @@ impl<H: Dma> XhciCtrl<H> {
         base_stage: u16,
         expected_cmd_trb: Option<u64>,
         phase: u64,
+        linux_event_generation: bool,
     ) {
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         let db = reg::doorbell(self.db_offset, 0);
         let expected_ptr = expected_cmd_trb.unwrap_or(0) & !0x0f;
         let expected_cmd_ring = expected_ptr & !((self.host.page_size() as u64).saturating_sub(1));
         let expected_dcbaap = self.dcbaa.phys(&*self.host);
-        let expected_usbcmd = polling_event_generation_run_usbcmd(
-            reg::USBCMD_RUN,
-            self.firmware_handoff,
-            self.runtime_seed_snapshot,
-        );
+        let expected_usbcmd = if linux_event_generation {
+            linux_command_probe_usbcmd_seed()
+        } else {
+            polling_event_generation_run_usbcmd(
+                reg::USBCMD_RUN,
+                self.firmware_handoff,
+                self.runtime_seed_snapshot,
+            )
+        };
+        let expected_iman = if linux_event_generation {
+            reg::IMAN_IE
+        } else {
+            polling_iman_value()
+        };
         let expected_dnctrl =
             polling_command_proof_dnctrl_value(self.firmware_handoff, self.runtime_seed_snapshot);
         let (expected_erstba, expected_erstsz, expected_erdp) = {
@@ -4747,7 +4795,7 @@ impl<H: Dma> XhciCtrl<H> {
 
         emit_xhci_diag(
             base_stage + 2,
-            (polling_iman_value() as u64) << 32,
+            (expected_iman as u64) << 32,
             expected_erstsz as u64,
             phase,
         );
@@ -4797,8 +4845,24 @@ impl<H: Dma> XhciCtrl<H> {
             let trb = {
                 let mut event_ring = self.event_ring.lock();
                 if command_poll_only_should_sync_event_ring(waited) {
+                    if event_syncs == 0 {
+                        emit_xhci_diag(
+                            0x037b,
+                            expected_cmd_trb.unwrap_or(0) & !0x0f,
+                            waited as u64,
+                            0,
+                        );
+                    }
                     event_ring.sync_current_for_cpu(&*self.host, "xhci-event-ring-poll-fast")?;
                     event_syncs = event_syncs.saturating_add(1);
+                    if event_syncs == 1 {
+                        emit_xhci_diag(
+                            0x037c,
+                            expected_cmd_trb.unwrap_or(0) & !0x0f,
+                            waited as u64,
+                            event_syncs as u64,
+                        );
+                    }
                 }
                 event_ring.try_dequeue()
             };
@@ -4864,7 +4928,7 @@ impl<H: Dma> XhciCtrl<H> {
             if waited >= COMMAND_POLL_ONLY_WAIT_SPINS {
                 self.emit_command_ring_debug_snapshot(0x0364);
                 self.emit_command_event_ring_debug_snapshot(0x0357);
-                self.emit_command_gate_plan_snapshot(0x036c, expected_cmd_trb, 2);
+                self.emit_command_gate_plan_snapshot(0x036c, expected_cmd_trb, 2, false);
                 emit_xhci_diag(
                     0x030b,
                     waited as u64,
@@ -4955,6 +5019,15 @@ impl<H: Dma> XhciCtrl<H> {
             expected_cmd_trb.unwrap_or(0) & !0x0f,
             event_syncs as u64,
             COMMAND_PROMPT_SAFE_WAIT_POLLS as u64,
+        );
+        self.emit_command_ring_debug_snapshot(0x0364);
+        self.emit_command_event_ring_debug_snapshot(0x0357);
+        self.emit_command_gate_plan_snapshot(0x036c, expected_cmd_trb, 2, false);
+        emit_xhci_diag(
+            0x0377,
+            expected_cmd_trb.unwrap_or(0) & !0x0f,
+            event_syncs as u64,
+            1,
         );
         if let Some(trb) = last_non_command_event {
             emit_xhci_diag(
@@ -5087,9 +5160,9 @@ impl<H: Dma> XhciCtrl<H> {
         drop(cmd_ring);
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
-        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0);
+        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
         self.ring_cmd_doorbell();
-        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1);
+        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, false);
         self.wait_command_poll_only(Some(cmd_addr))
     }
 
@@ -5125,19 +5198,24 @@ impl<H: Dma> XhciCtrl<H> {
         drop(cmd_ring);
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
-        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0);
+        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
         self.ring_cmd_doorbell();
-        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1);
+        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, false);
         match self.wait_command_prompt_safe(Some(cmd_addr)) {
             Ok(trb) => Ok(trb),
             Err(UsbError::Timeout) => {
+                emit_xhci_diag(0x037a, cmd_addr & !0x0f, 0, 0);
+                self.enable_linux_command_event_generation_for_probe();
+                if let Ok(trb) = self.wait_command_poll_only(Some(cmd_addr)) {
+                    return Ok(trb);
+                }
                 emit_xhci_diag(
                     0x0379,
                     cmd_addr & !0x0f,
-                    COMMAND_POLL_ONLY_WAIT_SPINS as u64,
+                    0,
                     COMMAND_PROMPT_SAFE_WAIT_POLLS as u64,
                 );
-                self.wait_command_poll_only(Some(cmd_addr))
+                Err(UsbError::Timeout)
             }
             Err(err) => Err(err),
         }
@@ -5178,6 +5256,45 @@ impl<H: Dma> XhciCtrl<H> {
         self.wait_command_poll_only(Some(cmd_addr))
     }
 
+    fn submit_command_linux_event_generation_prompt_safe(&self, trb: Trb) -> Result<Trb> {
+        if runtime_pollsafe_no_fresh_ownership_handoff(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+        ) {
+            emit_xhci_diag(
+                0x0336,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
+            );
+            return Err(UsbError::NotSupported);
+        }
+        emit_xhci_diag(
+            0x0300,
+            trb.param,
+            ((trb.status as u64) << 32) | trb.control as u64,
+            4,
+        );
+        self.enable_linux_command_event_generation_for_probe();
+        let mut cmd_ring = self.cmd_ring.lock();
+        let (enqueue_before, cycle_before) = cmd_ring.debug_state();
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let (enqueue_after, cycle_after) = cmd_ring.debug_state();
+        emit_xhci_diag(
+            0x0303,
+            cmd_addr,
+            ((enqueue_before as u64) << 32) | enqueue_after as u64,
+            ((cycle_before as u64) << 1) | (cycle_after as u64),
+        );
+        drop(cmd_ring);
+        self.emit_command_ring_debug_snapshot(0x0360);
+        self.emit_command_event_ring_debug_snapshot(0x0353);
+        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, true);
+        self.ring_cmd_doorbell();
+        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, true);
+        self.wait_command_prompt_safe(Some(cmd_addr))
+    }
+
     /// Submit a command-ring No Op probe without touching root-port registers.
     pub fn probe_no_op_command(&self) -> Result<()> {
         self.submit_command_poll_only(no_op_command_trb_for_probe())?;
@@ -5193,6 +5310,12 @@ impl<H: Dma> XhciCtrl<H> {
     /// Probe a No Op command using Linux-shaped event generation registers.
     pub fn probe_no_op_command_linux_event_generation(&self) -> Result<()> {
         self.submit_command_linux_event_generation_poll_only(no_op_command_trb_for_probe())?;
+        Ok(())
+    }
+
+    /// Probe a No Op command with Linux-shaped event generation and bounded prompt-safe polling.
+    pub fn probe_no_op_command_linux_event_generation_prompt_safe(&self) -> Result<()> {
+        self.submit_command_linux_event_generation_prompt_safe(no_op_command_trb_for_probe())?;
         Ok(())
     }
 
@@ -5617,8 +5740,9 @@ mod tests {
         skip_live_post_reset_verification_readbacks,
         skip_live_post_reset_verification_readbacks_with_snapshot,
         skip_post_reset_cnr_poll_with_snapshot, skip_post_run_interrupter_zeroing_with_snapshot,
-        skip_preinit_polling_scrub, skip_reset_completion_poll_for_init, skip_reset_during_init,
-        skip_reset_during_init_with_snapshot, skip_usbsts_clear_before_run_with_snapshot,
+        skip_preinit_polling_scrub, skip_reset_completion_poll_for_init,
+        skip_reset_during_init, skip_reset_during_init_with_snapshot,
+        skip_reset_pre_usbsts_read_for_init, skip_usbsts_clear_before_run_with_snapshot,
         snapshot_resetless_reinit_handoff, split_u64_reg_write_ops, u64_register_change_mask,
         usbcmd_interrupt_delivery_enabled, use_atomic_erstba_publish_with_snapshot,
         use_atomic_runtime_ring_publish_with_snapshot, use_live_config_seed_reads,
@@ -7100,9 +7224,9 @@ mod tests {
         assert!(command_timeout_live_snapshot_spins() > 0);
         assert_eq!(command_timeout_live_snapshot_spins(), 32);
         assert_eq!(COMMAND_POLL_ONLY_WAIT_SPINS, 64);
-        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 1);
+        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 4);
         assert!(command_timeout_live_snapshot_spins() < COMMAND_POLL_ONLY_WAIT_SPINS);
-        assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS < COMMAND_POLL_ONLY_WAIT_SPINS);
+        assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS <= COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_WAIT_SPINS);
     }
@@ -7301,6 +7425,9 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState
         ));
         assert!(skip_reset_during_init(XhciFirmwareHandoff::ResetlessReinit));
+        assert!(!skip_reset_during_init(
+            XhciFirmwareHandoff::PlatformResetComplete
+        ));
         assert_eq!(
             skip_reset_during_init(XhciFirmwareHandoff::None),
             SKIP_HCRST_DURING_INIT
@@ -7313,6 +7440,10 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete
         ));
         assert!(!skip_reset_during_init_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(runtime_handoff_needs_uboot_style_reset_write(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -7347,7 +7478,12 @@ mod tests {
             ),
             Some(0),
         );
-        assert!(!skip_reset_completion_poll_for_init(
+        assert!(skip_reset_pre_usbsts_read_for_init(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+            true,
+        ));
+        assert!(skip_reset_completion_poll_for_init(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
             true,
@@ -7434,6 +7570,10 @@ mod tests {
             stop_state_only_snapshot,
         ));
         assert!(runtime_handoff_needs_uboot_style_run_write(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            stop_state_only_snapshot,
+        ));
+        assert!(runtime_handoff_needs_uboot_style_reset_write(
             XhciFirmwareHandoff::PlatformResetComplete,
             stop_state_only_snapshot,
         ));
@@ -7583,6 +7723,11 @@ mod tests {
             reset_usbcmd_seed_before_hcrst_for_init(XhciFirmwareHandoff::None, None, true),
             Some(0)
         );
+        assert!(skip_reset_pre_usbsts_read_for_init(
+            XhciFirmwareHandoff::None,
+            None,
+            true,
+        ));
         assert!(skip_reset_completion_poll_for_init(
             XhciFirmwareHandoff::None,
             None,

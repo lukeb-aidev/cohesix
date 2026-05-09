@@ -147,7 +147,7 @@ fn format_record_line(record: &Record<'_>) -> HeaplessVec<u8, MAX_FRAME_LEN> {
 
 impl BootstrapLogger {
     fn emit(&self, line: &[u8], use_log_buffer: bool) {
-        if use_log_buffer {
+        if use_log_buffer || uart_log_output_suppressed() {
             log_buffer::append_log_bytes(line);
             return;
         }
@@ -188,6 +188,7 @@ static EP_ATTACH_WAIT_LOGGED: AtomicBool = AtomicBool::new(false);
 static POST_COMMIT_IPC_UNLOCKED: AtomicBool = AtomicBool::new(false);
 static PRECOMMIT_IPC_FORBIDDEN: AtomicU32 = AtomicU32::new(0);
 static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
+static UART_LOG_SUPPRESSION_DEPTH: AtomicU32 = AtomicU32::new(0);
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -206,18 +207,34 @@ static PING_ACK: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "kernel")]
 static SEND_LOCK: Mutex<()> = Mutex::new(());
-#[cfg(feature = "kernel")]
-static UART_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(feature = "kernel")]
 pub(crate) fn with_raw_uart_lock<R>(f: impl FnOnce() -> R) -> R {
-    let _guard = UART_WRITE_LOCK.lock();
-    f()
+    crate::serial::with_uart_tx_lock(f)
 }
 
 #[cfg(not(feature = "kernel"))]
 pub(crate) fn with_raw_uart_lock<R>(f: impl FnOnce() -> R) -> R {
     f()
+}
+
+pub(crate) struct UartLogSuppression {
+    _private: (),
+}
+
+pub(crate) fn suppress_uart_log_output() -> UartLogSuppression {
+    UART_LOG_SUPPRESSION_DEPTH.fetch_add(1, Ordering::AcqRel);
+    UartLogSuppression { _private: () }
+}
+
+fn uart_log_output_suppressed() -> bool {
+    UART_LOG_SUPPRESSION_DEPTH.load(Ordering::Acquire) != 0
+}
+
+impl Drop for UartLogSuppression {
+    fn drop(&mut self) {
+        UART_LOG_SUPPRESSION_DEPTH.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 fn latched_ep() -> sel4_sys::seL4_CPtr {
@@ -300,7 +317,7 @@ fn record_drop() {
 }
 
 fn emit_uart(payload: &[u8]) {
-    with_raw_uart_lock(|| sel4::debug_put_bytes_raw(payload));
+    with_raw_uart_lock(|| sel4::debug_put_bytes_unlocked(payload));
 }
 
 /// Emit a UART line regardless of the current logger transport.
@@ -325,7 +342,7 @@ pub fn force_uart_line(line: &str) {
         return;
     }
 
-    with_raw_uart_lock(|| sel4::debug_put_line_raw(line.as_bytes()));
+    with_raw_uart_lock(|| sel4::debug_put_line_unlocked(line.as_bytes()));
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
@@ -541,6 +558,22 @@ mod tests {
         assert!(line.len() <= MAX_FRAME_LEN);
         assert!(line.ends_with(b"\r\n"));
         assert!(core::str::from_utf8(&line).is_ok());
+    }
+
+    #[test]
+    fn uart_log_suppression_guard_tracks_depth() {
+        UART_LOG_SUPPRESSION_DEPTH.store(0, Ordering::Release);
+        assert!(!uart_log_output_suppressed());
+        {
+            let _outer = suppress_uart_log_output();
+            assert!(uart_log_output_suppressed());
+            {
+                let _inner = suppress_uart_log_output();
+                assert!(uart_log_output_suppressed());
+            }
+            assert!(uart_log_output_suppressed());
+        }
+        assert!(!uart_log_output_suppressed());
     }
 
     #[cfg(not(feature = "kernel"))]

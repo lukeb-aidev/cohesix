@@ -16,7 +16,7 @@ pub fn debug_uart_str(s: &str) {
             return;
         }
         crate::bootstrap::log::with_raw_uart_lock(|| {
-            crate::sel4::debug_put_bytes_raw(s.as_bytes())
+            crate::sel4::debug_put_bytes_unlocked(s.as_bytes())
         });
     }
 
@@ -31,9 +31,9 @@ pub fn debug_uart_line(line: &str) {
     #[cfg(feature = "kernel")]
     {
         crate::bootstrap::log::with_raw_uart_lock(|| {
-            crate::sel4::debug_put_line_raw(line.as_bytes());
+            crate::sel4::debug_put_line_unlocked(line.as_bytes());
             if line.starts_with("audit ") {
-                crate::sel4::debug_put_bytes_raw(b"cohesix> ");
+                crate::sel4::debug_put_bytes_unlocked(b"cohesix> ");
             }
         });
     }
