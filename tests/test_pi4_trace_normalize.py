@@ -494,6 +494,9 @@ def test_gate_summary_promotes_prompt_safe_event_ring_timeout_snapshot() -> None
             "param=0x0000000000000000 status_control=0x0000000000000000",
             "[local-seat] xhci.diag stage=0x036c tag=cmd-gate-timeout-plan-0 "
             "expected_usbcmd_usbsts=0x0000000500000000",
+            "[local-seat] xhci.diag stage=0x0377 "
+            "tag=cmd-gate-timeout-live-snapshot-deferred "
+            "expected_ptr=0x0000000404024000 event_syncs=0x0000000000000004",
             "Kernel entry via Interrupt, irq 27",
         ]
     )
@@ -900,6 +903,23 @@ def test_gate_summary_classifies_wifi_pre_f2_core_control_failure() -> None:
 
     assert gates.wifi_gate == 4
     assert gates.wifi_blocker == "pre-f2-core-control"
+
+
+def test_gate_summary_preserves_enable_slot_event_timeout_without_summary() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-uboot-first-unproven bus=pcie-window "
+            "action=return-to-shell detail=cmd-event-ring-timeout "
+            "irq27_role=timer-only pcie_irqs=175,180",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-event-ring-timeout"
 
 
 def test_gate_summary_promotes_usb_controller_not_running_from_live_state() -> None:

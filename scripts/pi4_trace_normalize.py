@@ -1137,7 +1137,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = command_timeout_detail
         elif tag == "cmd-gate-timeout-live-snapshot-deferred":
             gate = max(gate, 3)
-            command_timeout_detail = "cmd-poll-only-timeout"
+            if command_timeout_detail not in precise_command_timeout_details:
+                command_timeout_detail = "cmd-poll-only-timeout"
             blocker = command_timeout_detail
         elif tag == "cmd-gate-timeout-live-crcr":
             gate = max(gate, 3)
@@ -1282,6 +1283,13 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         and blocker not in {"unknown", "none", "policy-skip-before-run"}
                     ):
                         continue
+                    elif (
+                        key == "result"
+                        and normalized_value == "enable-slot-uboot-first-unproven"
+                        and fields.get("detail") == "cmd-event-ring-timeout"
+                    ):
+                        gate = max(gate, 3)
+                        blocker = "cmd-event-ring-timeout"
                     else:
                         blocker = normalized_value
                     if normalized_value in {

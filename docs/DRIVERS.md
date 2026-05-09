@@ -1,0 +1,448 @@
+<!-- Copyright 2026 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Provide a proven seL4/Pi 4 driver-development methodology and guardrails for Cohesix. -->
+<!-- Author: Lukas Bower -->
+# Driver Development Guide (seL4 13, Pi 4/aarch64)
+
+This guide exists because Pi 4 driver bring-up is expensive when we discover
+methodology edge-to-edge. For Cohesix, driver work must follow a repeatable
+evidence ladder:
+
+1. Prove the seL4 capability path.
+2. Prove the platform description and address/IRQ truth.
+3. Prove the HAL ownership boundary.
+4. Prove one minimal polled device path.
+5. Add IRQ delivery only after the device-clear path is known.
+6. Add DMA only after cache, address, and ownership rules are explicit.
+7. Bind the device into Cohesix semantics only after the hardware contract is
+   stable.
+
+Do not start at the full driver. Do not debug protocol behavior until the
+seL4 resource path, MMIO mapping, IRQ line, DMA range, and reset/power state
+are independently proven.
+
+## Scope
+
+This document is scoped to active Pi 4 work in `docs/BUILD_PLAN.md`:
+
+- Milestone 26: `m26-hal-boundary`, local diagnostics, and the U-Boot handoff.
+- Milestone 26a: `m26a-bcmgenet-driver` and Pi 4 static IPv4.
+- Milestone 26b: DHCP plus the profile-gated CYW43455 Wi-Fi path.
+
+It targets seL4 13 behavior on AArch64/Pi 4 while preserving Cohesix's current
+as-built constraints. `docs/BUILD_PLAN.md` currently records a future seL4 15
+refresh under Milestone 26d; until that refresh lands, check local generated
+headers under `seL4/build/` before assuming an API label, object type, IRQ
+constant, or platform layout.
+
+## Source Authority
+
+Use this order when sources disagree:
+
+1. Local generated seL4 build artifacts: `seL4/build/kernel/gen_config/*`,
+   `seL4/build/kernel/gen_headers/*`, `seL4/build/libsel4/include/*`,
+   and `seL4/build/kernel/generated/invocations_all.json`.
+2. Cohesix manifest IR and generated artifacts: `configs/root_task*.toml`,
+   `apps/root-task/src/generated/*`, and `out/manifests/*`.
+3. Cohesix normative docs: `AGENTS.md`, `docs/BUILD_PLAN.md`,
+   `docs/HARDWARE_BRINGUP.md`, `docs/ARCHITECTURE.md`,
+   `docs/INTERFACES.md`, and `docs/SECURITY.md`.
+4. Official seL4 sources:
+   - seL4 Reference Manual 13.0.0:
+     <https://sel4.systems/Info/Docs/seL4-manual-13.0.0.pdf>
+   - seL4 13.0.0 release notes:
+     <https://docs.sel4.systems/releases/sel4/13.0.0.html>
+   - seL4 Raspberry Pi 4 platform page:
+     <https://docs.sel4.systems/Hardware/Rpi4.html>
+   - seL4 Rust root-task serial-device tutorial:
+     <https://docs.sel4.systems/projects/rust/tutorial/root-task/serial-device.html>
+   - seL4 interrupts, notifications, untyped, and mapping tutorials:
+     <https://docs.sel4.systems/Tutorials/interrupts>,
+     <https://docs.sel4.systems/Tutorials/notifications.html>,
+     <https://docs.sel4.systems/Tutorials/untyped.html>,
+     <https://docs.sel4.systems/Tutorials/mapping.html>
+5. Hardware/vendor or OS implementation references:
+   - Raspberry Pi BCM2711 ARM peripherals:
+     <https://datasheets.raspberrypi.org/bcm2711/bcm2711-peripherals.pdf>
+   - Mainline Linux BCM2711 DTS:
+     <https://github.com/torvalds/linux/blob/master/arch/arm/boot/dts/broadcom/bcm2711.dtsi>
+   - Mainline Linux Pi 4 board DTS:
+     <https://github.com/torvalds/linux/blob/master/arch/arm/boot/dts/broadcom/bcm2711-rpi-4-b.dts>
+   - Mainline Linux `bcmgenet`:
+     <https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/broadcom/genet/bcmgenet.c>
+   - U-Boot `bcmgenet`:
+     <https://github.com/u-boot/u-boot/blob/master/drivers/net/bcmgenet.c>
+   - OpenBSD `bwfm(4)`:
+     <https://man.openbsd.org/bwfm.4>
+   - Infineon WHD architecture:
+     <https://infineon.github.io/wifi-host-driver/html/index.html>
+   - Linux `brcmfmac` SDIO:
+     <https://github.com/torvalds/linux/blob/master/drivers/net/wireless/broadcom/brcm80211/brcmfmac/sdio.c>
+
+Linux, U-Boot, OpenBSD, and WHD are design references only. They may define
+probe order, register contracts, recovery ladders, and expected evidence, but
+their source code must not be copied into Cohesix.
+
+## seL4 Driver Model
+
+seL4 does not provide Linux-style in-kernel drivers. The root task receives
+authority over remaining resources and must deliberately delegate or retain
+that authority through capabilities. The kernel provides the mechanisms:
+
+- device memory can be exposed to user-level code by retyping device untyped
+  memory into frames and mapping those frames into a VSpace;
+- IRQs can be represented by IRQHandler capabilities and delivered as
+  notification signals;
+- CPU time is controlled by TCBs, priorities, domains, and scheduling context
+  policy;
+- DMA safety is outside the standard verified proof unless an IOMMU/SMMU
+  configuration constrains device writes.
+
+For Cohesix, the root task remains the privileged driver owner. Drivers must
+depend on the narrow HAL trait that represents the resource they need:
+
+- `DeviceHal`: MMIO, device coverage, DMA frames, IRQ binding.
+- `PciHal`: PCI discovery/configuration.
+- `Cyw43Hal`: SDIO, power/reset, firmware, and Wi-Fi transport support.
+
+The compatibility `Hardware` facade may remain where legacy call sites span
+several domains, but new driver logic should prefer the narrowest trait.
+
+## Evidence Ladder
+
+Every new driver or risky driver change must climb this ladder in order. A
+failure at any step means stop and fix that step; do not compensate at a later
+layer.
+
+### 1. Platform And Kernel Evidence
+
+Record the exact local seL4 build facts before touching driver code:
+
+```sh
+rg -n "ARCH_AARCH64|PLAT_|ARM_GIC|SMMU|AARCH64_USER_CACHE|IRQ" \
+  seL4/build/kernel/gen_config/kernel/gen_config.yaml \
+  seL4/build/kernel/gen_headers/plat/platform_gen.h
+```
+
+For Pi 4, verify that the boot path is `Pi firmware -> U-Boot -> seL4 image ->
+root-task`, matching `docs/HARDWARE_BRINGUP.md`. The upstream seL4 Pi 4 flow
+uses `rpi_4_defconfig`, `fatload`, and `go`; Cohesix may use a staged `bootm`
+DTB handoff where documented, but runtime driver authority still starts only
+after seL4 transfers control to root-task.
+
+Stop conditions:
+
+- The target platform is not the expected Pi 4/aarch64 build.
+- The local generated seL4 headers do not expose the object/API labels the
+  driver code intends to invoke.
+- Required device-untyped coverage is missing for the MMIO or PCIe aperture.
+
+### 2. Device Description Evidence
+
+Prove the physical address range, size, IRQ line, DMA addressing, reset/power
+dependencies, and clock dependencies from source authority before mapping
+anything.
+
+For Pi 4 GENET:
+
+- Mainline Linux declares `ethernet@7d580000` with compatible
+  `brcm,bcm2711-genet-v5`, 64 KiB register span, SPI IRQs 157 and 158, and
+  MDIO child `mdio@e14`.
+- The Pi 4 board DTS enables GENET with PHY handle `phy1`, PHY address `1`,
+  and mode `rgmii-rxid`.
+- Cohesix HAL currently maps aliases around `0xfd58_0000`, `0x7d58_0000`,
+  and `0xfe58_0000`; the HAL owns alias selection.
+
+For Pi 4 Wi-Fi:
+
+- Treat CYW43455 as an SDIO device behind the Pi 4 SDHCI path.
+- WHD is useful for architecture: resource download, bus abstraction, SDPCM,
+  CDC/BDC headers, and strict HAL split.
+- OpenBSD `bwfm` is the first design reference for minimal SDIO Wi-Fi shape.
+- Linux `brcmfmac` is a recovery and edge-case reference, especially firmware,
+  NVRAM, Function 1/2, clock, and SDPCM behavior.
+
+For Pi 4 xHCI/VL805:
+
+- Treat PCIe/xHCI ownership as a separate HAL proof. A captured BAR or
+  bootloader stop-state is not enough to touch runtime rings.
+- Live PCI config, BAR translation, COMMAND state, MSI/INTx policy, and reset
+  state must be proved through HAL before controller ownership is published.
+
+Stop conditions:
+
+- Address provenance is only a captured log with no DT/generated-header tie-in.
+- An IRQ number collides with a known seL4/kernel source such as the Pi 4 timer.
+- A bootloader state snapshot is being treated as runtime authority.
+
+### 3. HAL Ownership Evidence
+
+All direct MMIO, physical-address selection, IRQHandler creation, PCI config,
+SDIO host access, firmware power/reset, and DMA frame allocation belong in HAL
+modules. Driver modules may manipulate device registers only through mapped
+regions returned by HAL.
+
+The HAL must prove:
+
+- `device_coverage(paddr, PAGE_BITS)` succeeds before `map_device(paddr)`;
+- mapping code preserves page alignment and maps every page in the aperture;
+- IRQ bindings are created through `bind_irq_notification`;
+- IRQ ack happens only after the device source is cleared;
+- DMA buffers are allocated through HAL and pinned through `hal::dma`;
+- cache maintenance is tied to the generated cache policy;
+- all `unsafe` blocks document the invariant with `SAFETY:`.
+
+Stop conditions:
+
+- A driver owns raw physical address discovery.
+- A driver retypes untyped memory directly.
+- A driver creates IRQHandler capabilities directly.
+- A driver calls firmware or boot services after seL4 handoff.
+- DMA uses ordinary stack/global buffers or untracked heap memory.
+
+### 4. Minimal Polled Bring-Up
+
+Start with polling, not interrupts. The first device proof should do the least
+that can distinguish "mapped and alive" from "wrong address or unowned".
+
+Examples:
+
+- UART: read/write status and one byte path.
+- GENET: read version/status, configure MAC/PHY minimally, prove link poll,
+  and emit bounded register breadcrumbs before network stack integration.
+- SDIO Wi-Fi: enumerate card, prove CCCR/FBR values, prove Function 1 register
+  windowing, and stop before Function 2 traffic until firmware gate evidence is
+  valid.
+- xHCI: prove live PCI config/BAR/COMMAND and a no-touch ownership verdict
+  before any ring or RUN writes.
+
+Stop conditions:
+
+- The code needs an interrupt to prove the register block exists.
+- The code enters a protocol stack before a hardware-status proof exists.
+- The first proof can hang indefinitely or lacks a bounded timeout.
+
+### 5. IRQ Delivery
+
+Use seL4's proven interrupt pattern:
+
+1. Derive an IRQHandler from `seL4_CapIRQControl`.
+2. Bind it to a notification.
+3. Wait or poll the notification.
+4. Clear the device's interrupt source.
+5. Acknowledge the IRQHandler.
+
+The seL4 tutorials and Microkit manual both document that further interrupt
+delivery is blocked until the handler is acknowledged. For level-triggered Pi 4
+device IRQs, acknowledging before clearing the device source can immediately
+redeliver or wedge the line.
+
+Cohesix guardrails:
+
+- Use `IrqTrigger::Level` for Pi 4 SDIO and PCIe INTx-style lines unless the
+  platform description proves an edge line.
+- Badge notifications by IRQ number so one notification object can be audited.
+- Keep the device-clear callback bounded and nonblocking.
+- Do not add background IRQ workers unless the active milestone explicitly
+  allows them.
+
+### 6. DMA And Cache Coherency
+
+DMA is where seL4's verification assumptions can stop helping us. The seL4 FAQ
+is explicit that DMA can overwrite memory unless separately constrained; without
+SMMU/IOMMU proof, the DMA-capable driver and device must be trusted.
+
+Cohesix rules:
+
+- Allocate device-visible frames through HAL only.
+- Pin every shared range through `hal::dma::pin`.
+- Use `seL4_ARM_Page_Uncached` where the driver contract requires uncached
+  mappings.
+- For cached mappings, run generated-policy cache maintenance before device
+  ownership transfer and after reclaim.
+- Use AArch64 VSpace cache operations only through `hal::cache`.
+- Never DMA into stack memory, unbounded heap buffers, or protocol parser
+  storage.
+- Keep descriptor rings and packet buffers fixed-size and auditable.
+
+seL4 13 notes for AArch64:
+
+- Check `CONFIG_AARCH64_USER_CACHE_ENABLE` in local generated config. seL4 13
+  documents user-level VA cache maintenance access for AArch64 when enabled.
+- seL4 13 changed AArch64 VSpace object naming and behavior relative to older
+  releases; do not use old `PageDirectory`/`PageUpperDirectory` assumptions.
+- Use local `seL4/build/libsel4/include` and generated invocation labels as the
+  final API contract.
+
+Stop conditions:
+
+- A device-visible address is guessed from a CPU physical address without a bus
+  address policy.
+- Cache clean/invalidate is ad hoc at individual call sites.
+- A ring can be advanced without proving descriptor ownership and memory
+  visibility.
+
+### 7. Protocol And Cohesix Integration
+
+Only after the hardware path is stable may the driver join higher-level
+Cohesix behavior:
+
+- Network devices implement existing `NetDevice`/smoltcp integration.
+- The authenticated TCP console remains the only in-VM TCP listener.
+- DHCP is client-only and bounded.
+- Wi-Fi policy is `off|static|dhcp` plus `wired|wifi|auto` only where the
+  manifest and U-Boot DTB handoff allow it.
+- Console grammar, ACK/ERR/END behavior, `/proc` layouts, and NineDoor errors
+  do not change unless the breaking-change process is followed.
+
+Stop conditions:
+
+- A hardware workaround adds a new command grammar or hidden RPC path.
+- A driver-specific debug surface is available on nonmatching profiles.
+- A protocol parser accepts unbounded user-controlled input.
+
+## Driver-Specific Guardrails
+
+### GENETv5 Wired NIC
+
+Source order: Linux `bcmgenet` behavior, Linux BCM2711/Pi 4 DT bindings,
+then U-Boot `bcmgenet` sanity checks.
+
+Required Cohesix shape:
+
+- HAL owns MMIO alias selection and maps the whole register aperture.
+- Driver owns GENET register programming only after HAL returns mapped pages.
+- MDIO polling is bounded; PHY address is validated against platform evidence.
+- TX/RX descriptors are fixed-size; RX buffers are preallocated.
+- TX completion and RX producer/consumer movement have breadcrumbs for stalls.
+- DMA address policy is explicit (`physical` vs VC/bus alias) and logged.
+- No DHCP logic is inside the GENET driver; DHCP belongs above `NetDevice`.
+
+Do not proceed to smoltcp until link and one bounded RX/TX smoke path are
+observable.
+
+### CYW43455 Wi-Fi
+
+Source order: OpenBSD `bwfm`, Infineon WHD HAL split, Linux `brcmfmac` SDIO
+edge behavior.
+
+Required Cohesix shape:
+
+- HAL owns SDHCI/MMIO, GPIO/power/reset, firmware bundle access, and SDIO
+  CMD52/CMD53 transport.
+- Driver owns CYW43 protocol state: firmware/NVRAM/CLM staging, SDPCM, CDC/BDC,
+  association, and Ethernet dataplane.
+- Function 2 traffic is forbidden until firmware release, HT/readiness proof,
+  and Function 2 readiness are live.
+- NVRAM normalization is deterministic and logged.
+- Firmware upload proof distinguishes proven byte mismatch from readback
+  unavailable.
+- Diagnostic no-HT or forced clock paths must be explicit and must not become
+  production gates.
+- Wi-Fi credentials remain bounded: SSID 1-32 printable ASCII bytes; PSK empty,
+  8-63 printable ASCII bytes, or 64 ASCII hex digits.
+
+Do not debug DHCP over Wi-Fi until association and the first CYW43 Ethernet
+frame path are proven independently.
+
+### xHCI/VL805 Local Seat
+
+Required Cohesix shape:
+
+- PCIe root-complex and VL805 BAR/COMMAND proof belongs to HAL.
+- Bootloader stop-state evidence is diagnostic unless the manifest/profile
+  explicitly enables a handoff path.
+- MSI remains disabled unless the milestone explicitly proves it.
+- Poll-only command/event-ring proof comes before keyboard enumeration.
+- Root-port reads known to be toxic must stay behind explicit HAL gates.
+- USB keyboard feeds only the existing root-console parser.
+
+Do not use xHCI as a general USB stack. Milestone 26 local seat is keyboard
+input plus primitive HDMI text output only.
+
+### UART
+
+Required Cohesix shape:
+
+- UART is the minimal debug lifeline, so it must initialize early and fail
+  explicitly.
+- Mini-UART and PL011 selection is profile/platform-derived.
+- RX/TX buffering is bounded and parser input is sanitized.
+- UART debug output must not mask hardware proof failure with excessive logs.
+
+### Future Devices
+
+Before implementing a new device, add its manifest device declaration and update
+docs describing:
+
+- role and milestone authorization;
+- physical address and IRQ source;
+- HAL trait surface;
+- DMA/cache policy;
+- reset/power/clock authority;
+- operator-visible evidence;
+- tests and hardware proof commands.
+
+## Review Checklist
+
+Use this before merging any driver change:
+
+- The exact `docs/BUILD_PLAN.md` milestone/task authorizes the work.
+- The driver cites source provenance in docs or comments when behavior follows
+  Linux/U-Boot/OpenBSD/WHD.
+- Local `seL4/build/` generated artifacts were checked for object/API/IRQ truth.
+- MMIO, IRQ, DMA, PCI, SDIO, power/reset, and firmware service calls are HAL
+  owned.
+- Polled proof exists before IRQ use.
+- Device source is cleared before IRQHandler ack.
+- DMA buffers are HAL-allocated, pinned, and cache-maintained.
+- All loops that wait for hardware are bounded and emit exact blocker labels.
+- No new in-VM listener, RPC path, shell grammar, or POSIX facade was added.
+- QEMU behavior remains compatible unless a profile gate explicitly changes it.
+- Pi 4 hardware evidence is not claimed from QEMU.
+- Tests cover touched logic paths; hardware-only behavior has deterministic
+  capture commands and expected evidence lines.
+
+## Standard Task Template
+
+Use this template for driver tasks:
+
+```text
+Title/ID: <build-plan task id>
+Goal: <one sentence>
+Inputs: <seL4 generated artifacts, manifest, DT/source references, local files>
+Changes:
+  - <file> -- <summary>
+Commands:
+  - rg -n "ARCH_AARCH64|PLAT_|ARM_GIC|SMMU|AARCH64_USER_CACHE|IRQ" seL4/build/kernel/gen_config/kernel/gen_config.yaml seL4/build/kernel/gen_headers/plat/platform_gen.h
+  - cargo check -p root-task
+  - cargo test -p root-task <module-or-feature>
+  - scripts/ci/test_plan_run.sh --list
+  - scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>
+Checks:
+  - <capability/MMIO/IRQ/DMA proof>
+  - <driver-specific bounded proof>
+  - <no protocol drift>
+Deliverables:
+  - <code/tests/docs/logs>
+```
+
+## Practical Debug Order
+
+When a Pi 4 driver stalls, debug in this order:
+
+1. Boot path and manifest profile.
+2. seL4 generated platform config and device-untyped coverage.
+3. HAL map/probe breadcrumb.
+4. Single register read from the expected block.
+5. Reset/power/clock prerequisite.
+6. Polled hardware status with bounded timeout.
+7. IRQ binding and notification delivery.
+8. Device-source clear plus IRQ ack ordering.
+9. DMA address, descriptor ownership, and cache maintenance.
+10. Protocol state machine.
+11. Cohesix console/NineDoor/net integration.
+
+If a later step fails, preserve the last known-good proof and add the narrowest
+breadcrumb needed to distinguish the next frontier. Do not add broad logging,
+new protocol surfaces, or speculative alternate paths.

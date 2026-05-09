@@ -557,9 +557,7 @@ const fn core_ctrl_write_access_mode_label() -> &'static str {
 
 #[inline]
 const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'static str {
-    if core_ctrl_uses_unflagged_byte_primary(base, offset) {
-        "cmd52-byte-unflagged-prereset fallback=cmd53-word-windowed"
-    } else if core_ctrl_prereset_write_uses_word_primary(base, offset) {
+    if core_ctrl_prereset_write_uses_word_primary(base, offset) {
         "cmd53-word-windowed fallback=cmd52-byte-transfer-window-prereset"
     } else {
         core_ctrl_write_access_mode_label()
@@ -567,12 +565,8 @@ const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'stati
 }
 
 #[inline]
-const fn core_ctrl_reset_assert_access_mode_label(base: u32, offset: u32) -> &'static str {
-    if core_ctrl_uses_unflagged_byte_primary(base, offset) {
-        "cmd52-byte-unflagged-reset-assert fallback=cmd53-word-windowed"
-    } else {
-        "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
-    }
+const fn core_ctrl_reset_assert_access_mode_label(_base: u32, _offset: u32) -> &'static str {
+    "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
 }
 
 #[inline]
@@ -587,11 +581,7 @@ const fn core_ctrl_reset_clear_retry_access_mode_label() -> &'static str {
 
 #[inline]
 const fn core_ctrl_postreset_access_mode_label(_base: u32, _offset: u32) -> &'static str {
-    if core_ctrl_uses_unflagged_byte_primary(_base, _offset) {
-        "cmd52-byte-unflagged-postreset fallback=cmd53-word-windowed"
-    } else {
-        "cmd52-byte-transfer-window fallback=cmd53-byte-transfer-window"
-    }
+    "cmd52-byte-transfer-window fallback=cmd53-byte-transfer-window"
 }
 
 #[inline]
@@ -624,9 +614,7 @@ const fn core_ctrl_clear_reset_read_access_mode_label(base: u32, offset: u32) ->
 
 #[inline]
 const fn core_ctrl_in_reset_access_mode_label(base: u32, offset: u32) -> &'static str {
-    if core_ctrl_uses_unflagged_byte_primary(base, offset) {
-        "cmd52-byte-unflagged-in-reset fallback=cmd53-word-windowed"
-    } else if core_ctrl_in_reset_write_uses_word_path(base, offset) {
+    if core_ctrl_in_reset_write_uses_word_path(base, offset) {
         "cmd52-byte-transfer-window-in-reset fallback=cmd53-word-windowed"
     } else {
         core_ctrl_write_access_mode_label()
@@ -744,8 +732,8 @@ const fn core_ctrl_in_reset_write_uses_word_path(base: u32, offset: u32) -> bool
 }
 
 #[inline]
-const fn core_ctrl_uses_unflagged_byte_primary(base: u32, offset: u32) -> bool {
-    base == CYW43_ARMCR4_CORE_BASE && (offset == AI_IOCTRL_OFFSET || offset == AI_RESETCTRL_OFFSET)
+const fn core_ctrl_uses_unflagged_byte_primary(_base: u32, _offset: u32) -> bool {
+    false
 }
 
 #[inline]
@@ -26285,7 +26273,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd52-byte-unflagged-prereset fallback=cmd53-word-windowed"
+            "cmd53-word-windowed fallback=cmd52-byte-transfer-window-prereset"
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
@@ -26293,7 +26281,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_RESETCTRL_OFFSET),
-            "cmd52-byte-unflagged-reset-assert fallback=cmd53-word-windowed"
+            "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_RESETCTRL_OFFSET),
@@ -26313,7 +26301,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_postreset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd52-byte-unflagged-postreset fallback=cmd53-word-windowed"
+            "cmd52-byte-transfer-window fallback=cmd53-byte-transfer-window"
         );
         assert_eq!(
             core_ctrl_postreset_read_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
@@ -26359,7 +26347,7 @@ mod tests {
         ));
         assert_eq!(
             core_ctrl_in_reset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd52-byte-unflagged-in-reset fallback=cmd53-word-windowed"
+            "cmd52-byte-transfer-window-in-reset fallback=cmd53-word-windowed"
         );
         assert_eq!(
             core_ctrl_in_reset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
@@ -26385,11 +26373,11 @@ mod tests {
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET
         ));
-        assert!(core_ctrl_uses_unflagged_byte_primary(
+        assert!(!core_ctrl_uses_unflagged_byte_primary(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
-        assert!(core_ctrl_uses_unflagged_byte_primary(
+        assert!(!core_ctrl_uses_unflagged_byte_primary(
             CYW43_ARMCR4_CORE_BASE,
             AI_RESETCTRL_OFFSET
         ));
@@ -26397,7 +26385,7 @@ mod tests {
             CYW43_SOCRAM_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
-        assert!(!core_ctrl_prereset_write_uses_word_primary(
+        assert!(core_ctrl_prereset_write_uses_word_primary(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));

@@ -28,7 +28,8 @@ const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_POLL_ONLY_WAIT_SPINS: usize = 64;
-const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 4;
+const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 16;
+const COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL: usize = 10_000;
 const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
@@ -98,6 +99,24 @@ pub const fn no_op_command_trb_for_probe() -> Trb {
         param: 0,
         status: 0,
         control: trb_type::NO_OP_CMD << 10,
+    }
+}
+
+/// Build an Enable Slot TRB for bounded controller liveness probes.
+pub const fn enable_slot_command_trb_for_probe() -> Trb {
+    Trb {
+        param: 0,
+        status: 0,
+        control: trb_type::ENABLE_SLOT << 10,
+    }
+}
+
+/// Build a Disable Slot TRB for bounded controller liveness cleanup.
+pub const fn disable_slot_command_trb_for_probe(slot_id: u8) -> Trb {
+    Trb {
+        param: 0,
+        status: 0,
+        control: (trb_type::DISABLE_SLOT << 10) | ((slot_id as u32) << 24),
     }
 }
 
@@ -4971,6 +4990,9 @@ impl<H: Dma> XhciCtrl<H> {
             };
 
             let Some(trb) = trb else {
+                for _ in 0..COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL {
+                    spin_loop();
+                }
                 continue;
             };
             self.update_erdp();
@@ -5012,6 +5034,9 @@ impl<H: Dma> XhciCtrl<H> {
                 ((trb.status as u64) << 32) | trb.control as u64,
                 trb.trb_type() as u64,
             );
+            for _ in 0..COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL {
+                spin_loop();
+            }
         }
 
         emit_xhci_diag(
@@ -5204,11 +5229,6 @@ impl<H: Dma> XhciCtrl<H> {
         match self.wait_command_prompt_safe(Some(cmd_addr)) {
             Ok(trb) => Ok(trb),
             Err(UsbError::Timeout) => {
-                emit_xhci_diag(0x037a, cmd_addr & !0x0f, 0, 0);
-                self.enable_linux_command_event_generation_for_probe();
-                if let Ok(trb) = self.wait_command_poll_only(Some(cmd_addr)) {
-                    return Ok(trb);
-                }
                 emit_xhci_diag(
                     0x0379,
                     cmd_addr & !0x0f,
@@ -5319,14 +5339,46 @@ impl<H: Dma> XhciCtrl<H> {
         Ok(())
     }
 
+    /// Probe command-ring completion with U-Boot's first real xHCI command.
+    pub fn probe_enable_slot_command_prompt_safe(&self) -> Result<u8> {
+        let evt =
+            match self.submit_command_prompt_safe_poll_only(enable_slot_command_trb_for_probe()) {
+                Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
+                Err(err) => return Err(err),
+                Ok(evt) => evt,
+            };
+        Ok(evt.slot_id())
+    }
+
+    /// Disable a slot using the same U-Boot-first bounded command proof lane.
+    pub fn disable_slot_command_prompt_safe(&self, slot_id: u8) -> Result<()> {
+        self.submit_command_prompt_safe_poll_only(disable_slot_command_trb_for_probe(slot_id))?;
+        Ok(())
+    }
+
+    /// Probe command-ring completion with U-Boot's first real xHCI command.
+    pub fn probe_enable_slot_linux_event_generation_prompt_safe(&self) -> Result<u8> {
+        let evt = match self
+            .submit_command_linux_event_generation_prompt_safe(enable_slot_command_trb_for_probe())
+        {
+            Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
+            Err(err) => return Err(err),
+            Ok(evt) => evt,
+        };
+        Ok(evt.slot_id())
+    }
+
+    /// Disable a slot using the same bounded command proof lane.
+    pub fn disable_slot_linux_event_generation_prompt_safe(&self, slot_id: u8) -> Result<()> {
+        self.submit_command_linux_event_generation_prompt_safe(disable_slot_command_trb_for_probe(
+            slot_id,
+        ))?;
+        Ok(())
+    }
+
     /// Enable a device slot
     pub fn enable_slot(&self) -> Result<u8> {
-        let trb = Trb {
-            param: 0,
-            status: 0,
-            control: trb_type::ENABLE_SLOT << 10,
-        };
-        let evt = match self.submit_command(trb) {
+        let evt = match self.submit_command(enable_slot_command_trb_for_probe()) {
             Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
             Err(err) => return Err(err),
             Ok(evt) => evt,
@@ -5336,12 +5388,7 @@ impl<H: Dma> XhciCtrl<H> {
 
     /// Disable a device slot
     pub fn disable_slot(&self, slot_id: u8) -> Result<()> {
-        let trb = Trb {
-            param: 0,
-            status: 0,
-            control: (trb_type::DISABLE_SLOT << 10) | ((slot_id as u32) << 24),
-        };
-        self.submit_command(trb)?;
+        self.submit_command(disable_slot_command_trb_for_probe(slot_id))?;
         Ok(())
     }
 
@@ -5694,7 +5741,8 @@ mod tests {
         defer_scratchpad_array_publish_with_snapshot,
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, disable_interrupter_iman_value,
-        disable_legacy_smi_control_bits, halt_revalidation_needed,
+        disable_legacy_smi_control_bits, disable_slot_command_trb_for_probe,
+        enable_slot_command_trb_for_probe, halt_revalidation_needed,
         initial_live_operational_read_hazard, linux_command_probe_usbcmd_seed, masked_usbcmd,
         no_op_command_trb_for_probe, parse_controller_params,
         platform_reset_dcbaap_publish_blocked_with_snapshot, polling_command_proof_dnctrl_value,
@@ -7215,6 +7263,22 @@ mod tests {
     }
 
     #[test]
+    fn enable_slot_probe_trbs_match_u_boot_command_shape() {
+        let enable = enable_slot_command_trb_for_probe();
+        assert_eq!(enable.param, 0);
+        assert_eq!(enable.status, 0);
+        assert_eq!(enable.control, trb_type::ENABLE_SLOT << 10);
+
+        let disable = disable_slot_command_trb_for_probe(7);
+        assert_eq!(disable.param, 0);
+        assert_eq!(disable.status, 0);
+        assert_eq!(
+            disable.control,
+            (trb_type::DISABLE_SLOT << 10) | (7u32 << 24)
+        );
+    }
+
+    #[test]
     fn command_timeout_live_snapshot_is_enabled_for_command_ring_edge() {
         assert!(command_timeout_live_snapshot_enabled());
     }
@@ -7224,7 +7288,7 @@ mod tests {
         assert!(command_timeout_live_snapshot_spins() > 0);
         assert_eq!(command_timeout_live_snapshot_spins(), 32);
         assert_eq!(COMMAND_POLL_ONLY_WAIT_SPINS, 64);
-        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 4);
+        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 16);
         assert!(command_timeout_live_snapshot_spins() < COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS <= COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);

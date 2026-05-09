@@ -1138,9 +1138,7 @@ fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
                 "command-ring-probe"
             } else if summary.command_probe == "enable-slot-ok" {
                 "safe-port-state"
-            } else if summary.command_probe == "no-op-ok"
-                || summary.command_probe == "no-op-linux-event-ok"
-            {
+            } else if summary.command_probe == "no-op-ok" {
                 "safe-port-event-required"
             } else if summary.command_probe != "n/a" {
                 "command-ring-recovery"
@@ -4608,10 +4606,7 @@ fn usb_no_op_probe_error_label(err: UsbError) -> &'static str {
 
 #[inline]
 fn usb_command_probe_proves_ring(label: &str) -> bool {
-    matches!(
-        label,
-        "enable-slot-ok" | "no-op-ok" | "no-op-linux-event-ok"
-    )
+    matches!(label, "enable-slot-ok" | "no-op-ok")
 }
 
 #[inline]
@@ -4662,30 +4657,33 @@ fn xhci_probe_command_ring_after_event_drain(
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x0000 verb=no-op-linux-event bus={bus}"
+                "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x0000 verb=no-op bus={bus}"
             ),
         );
         boot_log::force_uart_line(line.as_str());
 
-        let probe_result = ctrl.probe_no_op_command_linux_event_generation_prompt_safe();
+        let probe_result = ctrl.probe_no_op_command_prompt_safe();
         return match probe_result {
             Ok(()) => {
-                boot_log::force_uart_line(
-                    "[local-seat] xhci root-port command-probe result=no-op-linux-event-ok",
+                let mut line = heapless::String::<128>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!("[local-seat] xhci root-port command-probe result=no-op-ok bus={bus}"),
                 );
-                "no-op-linux-event-ok"
+                boot_log::force_uart_line(line.as_str());
+                "no-op-ok"
             }
             Err(UsbError::Timeout) => {
                 let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci root-port command-probe result=no-op-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27=timer-only"
+                        "[local-seat] xhci root-port command-probe result=no-op-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=175,180"
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
                 boot_log::force_uart_line(
-                    "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-linux-event-unproven event=missing irq27=timer-only",
+                    "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-unproven event=missing irq27_role=timer-only pcie_irqs=175,180",
                 );
                 "no-op-unproven"
             }
@@ -10172,6 +10170,9 @@ impl UsbKeyboard {
                                     XhciFirmwareHandoff::PlatformResetComplete
                                 ) {
                                     ctrl.clear_event_handler_busy_for_polling();
+                                    boot_log::force_uart_line(
+                                        "[local-seat] xhci event-handler-busy pre-command ack action=clear-once reason=poll-only-command-proof",
+                                    );
                                 }
                                 let drained_event_candidate_mask =
                                     xhci_drain_root_port_change_events(ctrl.as_ref(), max_ports);
@@ -19855,6 +19856,14 @@ mod tests {
         assert!(usb_command_probe_proves_ring("no-op-linux-event-ok"));
         assert!(super::usb_command_probe_allows_deferred_capture(
             "no-op-linux-event-ok"
+        ));
+        assert!(usb_command_probe_proves_ring("enable-slot-linux-event-ok"));
+        assert!(super::usb_command_probe_allows_deferred_capture(
+            "enable-slot-linux-event-ok"
+        ));
+        assert!(usb_command_probe_proves_ring("enable-slot-uboot-first-ok"));
+        assert!(super::usb_command_probe_allows_deferred_capture(
+            "enable-slot-uboot-first-ok"
         ));
         assert!(usb_command_probe_proves_ring("no-op-ok"));
     }
