@@ -117,3 +117,39 @@ def test_gate_proof_rejects_unknown_default_gate_evidence(
     assert "WIFI_BLOCKER=unknown" in result.stdout
     assert "USB_BLOCKER rejected unknown" in result.stderr
     assert "WIFI_BLOCKER rejected unknown" in result.stderr
+
+
+def test_gate_proof_rejects_summary_only_ready_requirements(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Ready gates must keep safety expectations enabled."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text("", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--allow-summary-only",
+            "--require-usb-ready",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert (
+        "--allow-summary-only cannot be combined with ready-gate requirements"
+        in result.stderr
+    )

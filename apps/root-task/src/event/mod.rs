@@ -2831,7 +2831,7 @@ where
 
     #[cfg(feature = "kernel")]
     fn usb_ownership_cfg_live_proven(cfg_source: &str) -> &'static str {
-        if matches!(cfg_source, "runtime-mapped" | "pinned-ecam") {
+        if cfg_source == "hal-ext-cfg-proof" {
             "yes"
         } else {
             "no"
@@ -2840,7 +2840,7 @@ where
 
     #[cfg(feature = "kernel")]
     fn usb_ownership_command_live_proven(command_source: &str) -> &'static str {
-        if command_source == "runtime-mapped" {
+        if command_source == "hal-ext-cfg-proof" {
             "yes"
         } else {
             "no"
@@ -2850,12 +2850,10 @@ where
     #[cfg(feature = "kernel")]
     fn usb_publish_guard_for_origin(origin: &str) -> &'static str {
         match origin {
-            "reset-owned-stop-seed" | "seeded-cold-start" => "rings-skip",
+            "reset-owned-stop-seed" | "seeded-cold-start" => "block-legacy-handoff",
             "stop-state-resetless-reinit" => "rings-post-run",
-            "live-runtime-default"
-            | "uboot-fresh-init"
-            | "stop-state-preserve"
-            | "mailbox-reset-complete" => "rings-pre-run",
+            "live-runtime-default" | "mailbox-reset-complete" => "rings-pre-run",
+            "uboot-fresh-init" | "stop-state-preserve" => "block-legacy-handoff",
             _ => "unknown",
         }
     }
@@ -2942,10 +2940,11 @@ where
         route: &crate::local_seat_pi4::UsbProbeRouteStatus,
     ) -> &'static str {
         match route.origin {
-            "stop-state-preserve" => "no-touch-after-ready",
-            "seeded-cold-start" => "no-fresh-ownership",
-            "uboot-fresh-init" => "fresh-init-before-run",
+            "stop-state-preserve" | "seeded-cold-start" | "uboot-fresh-init" => {
+                "legacy-handoff-blocked"
+            }
             "stop-state-resetless-reinit" => "resetless-reinit",
+            "live-runtime-default" | "mailbox-reset-complete" => "cold-boot-owned",
             _ => "diagnostic-fallback",
         }
     }
@@ -7991,11 +7990,11 @@ mod tests {
             "no"
         );
         assert_eq!(
-            TestPump::usb_ownership_cfg_live_proven("runtime-mapped"),
+            TestPump::usb_ownership_cfg_live_proven("hal-ext-cfg-proof"),
             "yes"
         );
         assert_eq!(
-            TestPump::usb_ownership_command_live_proven("runtime-mapped"),
+            TestPump::usb_ownership_command_live_proven("hal-ext-cfg-proof"),
             "yes"
         );
     }
@@ -8016,7 +8015,7 @@ mod tests {
 
         assert_eq!(
             TestPump::usb_publish_guard_for_origin("reset-owned-stop-seed"),
-            "rings-skip"
+            "block-legacy-handoff"
         );
         assert_eq!(
             TestPump::usb_publish_guard_for_origin("stop-state-resetless-reinit"),
@@ -8025,6 +8024,10 @@ mod tests {
         assert_eq!(
             TestPump::usb_publish_guard_for_origin("mailbox-reset-complete"),
             "rings-pre-run"
+        );
+        assert_eq!(
+            TestPump::usb_publish_guard_for_origin("uboot-fresh-init"),
+            "block-legacy-handoff"
         );
         assert_eq!(TestPump::usb_publish_guard_for_origin("unknown"), "unknown");
     }

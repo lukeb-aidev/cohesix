@@ -142,7 +142,6 @@ const RPI4_XHCI_MMIO_PRESEED_CANDIDATES: [usize; 3] = [
 // window is supplied; deriving one from BAR0 can pin an unrelated device page.
 const VL805_ECAM_BASE_CANDIDATES: [usize; 0] = [];
 const XHCI_MMIO_CANDIDATE_LIMIT: usize = 8;
-const VL805_PCI_CFG_ATTEMPT_CAP: usize = 512;
 const XHCI_MAX_PROBE_PORTS: usize = 16;
 const XHCI_PORT_DETECT_PASSES: usize = 4;
 const XHCI_PLATFORM_RESET_PORT_DETECT_PASSES: usize = 1;
@@ -304,11 +303,6 @@ const VL805_PCI_VENDOR_ID: u16 = 0x1106;
 const VL805_PCI_DEVICE_ID: u16 = 0x3483;
 const VL805_EXPECTED_CLASS_CODE: u32 = 0x000C_0330;
 const VL805_ECAM_WINDOW_BYTES: usize = 0x0100_0000;
-const PCI_CFG_VENDOR_DEVICE: usize = 0x00;
-const PCI_CFG_COMMAND_STATUS: usize = 0x04;
-const PCI_CFG_CLASS_REVISION: usize = 0x08;
-const PCI_CFG_BAR0: usize = 0x10;
-const PCI_CFG_BAR1: usize = 0x14;
 #[cfg(test)]
 const PCI_MSI_CONTROL_ENABLE: u16 = 1 << 0;
 const PCI_BAR_IO_SPACE: u32 = 1 << 0;
@@ -335,19 +329,18 @@ const XHCI_RTSOFF_MASK: u32 = !0x1f;
 // bring-up. Force low DMA pool probing until high-path allocator faults are
 // fully resolved.
 const XHCI_FORCE_LOW_DMA_PROBE: bool = true;
-// VL805 on Pi4 expects xHCI DMA pointers in the PCIe DMA bus address space.
-// The BCM2711 `dma-ranges` entry maps PCIe DMA bus address 0x4_0000_0000 to
-// CPU physical 0 for a 4 GiB window; Cohesix publishes that bus alias and keeps
-// allocation below the conservative low-memory ceiling.
+// VL805 on Pi4 expects xHCI DMA pointers in the BCM2711 PCIe DMA bus
+// address space. The Linux capture's pcie0 dma-ranges map PCIe bus
+// 0x00000004_00000000 to CPU physical 0 for a 4 GiB inbound window, so
+// Cohesix publishes the same bus alias while keeping backing allocations low.
 const XHCI_PCIE_DMA_WINDOW_ENABLED: bool = true;
 const RPI4_PCIE_DMA_BUS_ALIAS_BASE: usize = 0x0000_0004_0000_0000;
 // Per-allocation DMA tracing is useful for bring-up debugging but can add
 // heavy UART latency during normal keyboard enumeration.
 const XHCI_DMA_VERBOSE_LOGS: bool = false;
 const XHCI_DMA_MAX_BYTES: usize = 8 * 1024 * 1024;
-// BCM2711 PCIe cannot DMA above the first 3 GiB (see upstream bcm2711.dtsi
-// pcie0 dma-ranges). Keep VL805/xHCI buffers under this ceiling.
-const RPI4_PCIE_DMA_LIMIT: usize = 0xC000_0000;
+// Keep VL805/xHCI buffers inside the captured 4 GiB inbound DMA window.
+const RPI4_PCIE_DMA_LIMIT: usize = 0x0000_0001_0000_0000;
 // Pi4 mailbox framebuffers should live in upper low-memory carveouts. Treat
 // lower addresses as unsafe to avoid scribbling userspace/kernel RAM when
 // firmware returns an unexpected bus alias.
@@ -395,7 +388,7 @@ static XHCI_ROOT_PORT_STATUS_WORDS: [AtomicU32; XHCI_MAX_PROBE_PORTS] =
 static USB_RUNTIME_KEYBOARD_READY: AtomicBool = AtomicBool::new(false);
 static USB_RUNTIME_FIRST_REPORT: AtomicBool = AtomicBool::new(false);
 static USB_RUNTIME_FIRST_BYTE: AtomicBool = AtomicBool::new(false);
-static VL805_CFG_VIRT: AtomicUsize = AtomicUsize::new(0);
+static VL805_CFG_PROOF_READY: AtomicBool = AtomicBool::new(false);
 const VL805_CFG_COMMAND_SHADOW_VALID: u32 = 1 << 31;
 static VL805_CFG_COMMAND_SHADOW: AtomicU32 = AtomicU32::new(0);
 static VL805_MSI_DISABLED_PROOF: AtomicBool = AtomicBool::new(false);
@@ -403,7 +396,6 @@ static VL805_XHCI_MMIO_HINT: AtomicUsize = AtomicUsize::new(0);
 static LATEST_USB_PROBE_ROUTE: Mutex<Option<UsbProbePathwaySummary>> = Mutex::new(None);
 static RETAINED_XHCI_IRQ_GUARD: Mutex<Option<XhciIrqGuard>> = Mutex::new(None);
 static PINNED_XHCI_MMIO: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
-static PINNED_VL805_CFG: Mutex<Option<PinnedMmioWindow>> = Mutex::new(None);
 static USB_PROGRESS_ACTIVE: AtomicBool = AtomicBool::new(false);
 static USB_PROGRESS_DISPLAY_PTR: AtomicUsize = AtomicUsize::new(0);
 static USB_PROGRESS_ELAPSED_MS: AtomicUsize = AtomicUsize::new(0);
@@ -417,7 +409,8 @@ static WIFI_PROGRESS_TICKS: AtomicUsize = AtomicUsize::new(0);
 const fn xhci_runtime_init_strategy_prompt_safe(strategy: XhciRuntimeInitStrategy) -> bool {
     match strategy.firmware_handoff {
         // Manual probes use the same poll-only xHCI model as boot-time
-        // Cohesix-owned initialization; U-Boot handoff is only a fallback.
+        // Cohesix-owned cold-boot initialization; firmware snapshots are
+        // diagnostic layout evidence, not runtime ownership.
         XhciFirmwareHandoff::ColdStartFromSnapshot => true,
         XhciFirmwareHandoff::ResetlessReinit
         | XhciFirmwareHandoff::PlatformResetComplete
@@ -619,17 +612,17 @@ pub struct Pi4FramebufferHint {
 pub struct Pi4LocalSeatHints {
     /// Optional MMIO base for Pi4 xHCI.
     pub xhci_mmio_hint: Option<usize>,
-    /// Optional PCI command state exported by the bootloader for xHCI handoff.
+    /// Legacy diagnostic PCI command hint from older boot scripts.
     pub xhci_pci_cmd: Option<u16>,
-    /// Whether the bootloader marked the Pi4 xHCI BAR ready for local-seat handoff.
+    /// Legacy diagnostic flag from older xHCI handoff scripts.
     pub xhci_handoff_ready: bool,
-    /// Whether the bootloader masked legacy/MSI/MSI-X interrupt delivery before handoff.
+    /// Legacy diagnostic flag from older xHCI handoff scripts.
     pub xhci_irq_quiesced: bool,
-    /// Whether bootloader post-stop evidence authorizes runtime VL805 reset ownership.
+    /// Legacy diagnostic flag from older xHCI handoff scripts.
     pub xhci_bootloader_reset_authorized: bool,
-    /// Optional xHCI capability snapshot exported by the bootloader handoff.
+    /// Optional diagnostic xHCI capability snapshot from older boot scripts.
     pub xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
-    /// Optional xHCI stop-state snapshot exported by the bootloader handoff.
+    /// Optional non-authoritative xHCI stop-state seed from the boot script.
     pub xhci_stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
     /// Optional DT/firmware framebuffer hint.
     pub framebuffer_hint: Option<Pi4FramebufferHint>,
@@ -1132,12 +1125,9 @@ fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
         {
             if summary.event_candidate_mask != 0 && summary.command_probe == "n/a" {
                 "command-ring-probe"
-            } else if matches!(
-                summary.command_probe,
-                "enable-slot-ok" | "enable-slot-linux-event-ok"
-            ) {
+            } else if matches!(summary.command_probe, "enable-slot-ok") {
                 "safe-port-state"
-            } else if matches!(summary.command_probe, "no-op-ok" | "no-op-linux-event-ok") {
+            } else if matches!(summary.command_probe, "no-op-ok") {
                 "safe-port-event-required"
             } else if summary.command_probe != "n/a" {
                 "command-ring-recovery"
@@ -1262,8 +1252,7 @@ const fn vl805_command_ownership_ready(command: u16) -> bool {
 
 #[inline]
 fn usb_ownership_cfg_window_contract() -> (&'static str, &'static str, &'static str, bool) {
-    let cfg_window_present = current_vl805_cfg_virt().is_some();
-    let cfg_pinned = PINNED_VL805_CFG.lock().is_some();
+    let cfg_window_present = vl805_cfg_proof_ready();
     let capture_witness = vl805_linux_capture_cfg_witness_available();
     let capture_witness_ready = vl805_capture_cfg_witness_ready();
     let cfg_replay_ready = vl805_runtime_cfg_replay_ready(
@@ -1272,7 +1261,7 @@ fn usb_ownership_cfg_window_contract() -> (&'static str, &'static str, &'static 
         cfg_window_present,
     );
     let cfg_window = if cfg_window_present {
-        "mapped"
+        "hal-ext-cfg-proven"
     } else if capture_witness_ready {
         "linux-capture-witness"
     } else if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
@@ -1284,10 +1273,8 @@ fn usb_ownership_cfg_window_contract() -> (&'static str, &'static str, &'static 
     } else {
         "absent"
     };
-    let cfg_source = if cfg_pinned {
-        "pinned-ecam"
-    } else if cfg_window_present {
-        "runtime-mapped"
+    let cfg_source = if cfg_window_present {
+        "hal-ext-cfg-proof"
     } else if capture_witness_ready {
         "linux-capture-witness"
     } else if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
@@ -1318,17 +1305,18 @@ fn usb_ownership_command_contract(xhci_pci_cmd: Option<u16>) -> (Option<u16>, &'
     let (command, source) = if let Some(command) = xhci_pci_cmd {
         (Some(command), "firmware-command-snapshot")
     } else if let Some(command) = vl805_cfg_command() {
-        (Some(command), "runtime-mapped")
+        (Some(command), "hal-ext-cfg-proof")
     } else if let Some(command) = current_vl805_cfg_command_shadow() {
         (Some(command), "linux-capture-replay")
     } else if linux_captured_vl805_cfg_matches_high_bar() {
         (Some(RPI4_VL805_LINUX_COMMAND), "linux-capture-static")
-    } else if current_vl805_cfg_virt().is_some() {
-        (None, "cfg-window-present-unread")
+    } else if vl805_cfg_proof_ready() {
+        (None, "cfg-proof-present-unread")
     } else {
         (None, "absent")
     };
-    let ready = command.is_some_and(vl805_command_ownership_ready);
+    let ready =
+        command.is_some_and(vl805_command_ownership_ready) && matches!(source, "hal-ext-cfg-proof");
     (command, source, ready)
 }
 
@@ -1353,7 +1341,7 @@ fn usb_ownership_bar0_contract(
     xhci_irq_quiesced: bool,
 ) -> (Option<usize>, &'static str) {
     if let Some(mmio) = current_vl805_xhci_mmio_hint() {
-        let source = if current_vl805_cfg_virt().is_none() && vl805_capture_cfg_witness_ready() {
+        let source = if !vl805_cfg_proof_ready() && vl805_capture_cfg_witness_ready() {
             "linux-capture-replay"
         } else {
             "vl805-cfg-verified"
@@ -2358,28 +2346,13 @@ fn promote_pinned_xhci_mmio_window_trusted(phys_start: usize, min_length: usize)
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci preseed trust-promote mmio=0x{phys_start:016x} bytes=0x{bytes:05x} source=linux-capture-replay",
+                "[local-seat] xhci preseed layout-promote mmio=0x{phys_start:016x} bytes=0x{bytes:05x} authority=layout-only source=linux-capture-replay",
                 bytes = window.length,
             ),
         );
         boot_log::force_uart_line(line.as_str());
     }
     true
-}
-
-fn pinned_vl805_cfg_lookup(phys: usize, size: usize) -> Option<usize> {
-    if size == 0 {
-        return None;
-    }
-    let request_end = phys.checked_add(size)?;
-    let pinned = PINNED_VL805_CFG.lock();
-    let window = pinned.as_ref()?;
-    let window_end = window.phys_start.checked_add(window.length)?;
-    if phys < window.phys_start || request_end > window_end {
-        return None;
-    }
-    let offset = phys.checked_sub(window.phys_start)?;
-    window.virt_start.checked_add(offset)
 }
 
 #[inline]
@@ -2415,25 +2388,23 @@ fn xhci_mmio_candidate_valid(mmio: usize) -> bool {
     true
 }
 
-fn remember_vl805_cfg_virt(config_virt: usize) {
-    if config_virt != 0 {
-        VL805_CFG_VIRT.store(config_virt, Ordering::Release);
-    }
+fn remember_vl805_cfg_proof(command: u16) {
+    remember_vl805_cfg_command_shadow(command);
+    VL805_CFG_PROOF_READY.store(true, Ordering::Release);
 }
 
-fn current_vl805_cfg_virt() -> Option<usize> {
-    let cfg = VL805_CFG_VIRT.load(Ordering::Acquire);
-    if cfg == 0 {
-        None
-    } else {
-        Some(cfg)
-    }
+#[inline]
+fn vl805_cfg_proof_ready() -> bool {
+    VL805_CFG_PROOF_READY.load(Ordering::Acquire)
 }
 
 #[inline]
 fn vl805_cfg_command() -> Option<u16> {
-    let cfg_virt = current_vl805_cfg_virt()?;
-    Some((pci_cfg_read_u32(cfg_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16)
+    if vl805_cfg_proof_ready() {
+        current_vl805_cfg_command_shadow()
+    } else {
+        None
+    }
 }
 
 #[inline]
@@ -2983,23 +2954,6 @@ struct Vl805PciCfgSnapshot {
     bar0: u32,
     bar1: u32,
     bar_mmio: Option<usize>,
-}
-
-fn read_vl805_pci_cfg_snapshot(config_virt: usize) -> Vl805PciCfgSnapshot {
-    let vendor_device = pci_cfg_read_u32(config_virt, PCI_CFG_VENDOR_DEVICE);
-    let class_revision = pci_cfg_read_u32(config_virt, PCI_CFG_CLASS_REVISION);
-    let command = (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
-    let bar0 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR0);
-    let bar1 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR1);
-    let bar_mmio = translate_vl805_pci_bar_to_cpu_mmio(bar0, bar1);
-    Vl805PciCfgSnapshot {
-        vendor_device,
-        class_revision,
-        command,
-        bar0,
-        bar1,
-        bar_mmio,
-    }
 }
 
 const fn linux_captured_vl805_pci_cfg_snapshot() -> Vl805PciCfgSnapshot {
@@ -3821,7 +3775,7 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x030d => Some("cmd-poll-only-fail"),
         0x0378 => Some("cmd-prompt-safe-deferred"),
         0x0379 => Some("cmd-prompt-safe-return-to-shell"),
-        0x037a => Some("cmd-prompt-safe-linux-event-retry"),
+        0x037a => Some("cmd-prompt-safe-poll-retry"),
         0x037b => Some("cmd-poll-only-first-sync-begin"),
         0x037c => Some("cmd-poll-only-first-sync-done"),
         0x02eb => Some("usbcmd-run-barrier-wedged"),
@@ -4385,7 +4339,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0377 => Some("cmd-gate-timeout-live-snapshot-deferred"),
         0x0378 => Some("cmd-prompt-safe-deferred"),
         0x0379 => Some("cmd-prompt-safe-return-to-shell"),
-        0x037a => Some("cmd-prompt-safe-linux-event-retry"),
+        0x037a => Some("cmd-prompt-safe-poll-retry"),
         0x037b => Some("cmd-poll-only-first-sync-begin"),
         0x037c => Some("cmd-poll-only-first-sync-done"),
         _ => None,
@@ -4588,12 +4542,7 @@ fn usb_no_op_probe_error_label(err: UsbError) -> &'static str {
 fn usb_command_probe_proves_ring(label: &str) -> bool {
     matches!(
         label,
-        "enable-slot-ok"
-            | "enable-slot-ok-cleanup-failed"
-            | "no-op-ok"
-            | "no-op-linux-event-ok"
-            | "enable-slot-linux-event-ok"
-            | "enable-slot-linux-event-ok-cleanup-failed"
+        "enable-slot-ok" | "enable-slot-ok-cleanup-failed" | "no-op-ok"
     )
 }
 
@@ -4647,11 +4596,7 @@ fn xhci_probe_command_ring_after_event_drain(
         } else {
             "no-op"
         };
-        let event_generation = if use_enable_slot {
-            "linux-shaped-bounded"
-        } else {
-            "poll-only"
-        };
+        let event_generation = "poll-only";
         let mut line = heapless::String::<256>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -4662,9 +4607,9 @@ fn xhci_probe_command_ring_after_event_drain(
         boot_log::force_uart_line(line.as_str());
 
         if use_enable_slot {
-            return match ctrl.probe_enable_slot_linux_event_generation_prompt_safe() {
+            return match ctrl.probe_enable_slot_command_prompt_safe() {
                 Ok(slot) => {
-                    let cleanup = match ctrl.disable_slot_linux_event_generation_prompt_safe(slot) {
+                    let cleanup = match ctrl.disable_slot_command_prompt_safe(slot) {
                         Ok(()) => "disable-slot-ok",
                         Err(UsbError::Timeout | UsbError::EnableSlotTimeout) => {
                             "disable-slot-timeout"
@@ -4673,9 +4618,9 @@ fn xhci_probe_command_ring_after_event_drain(
                         Err(_) => "disable-slot-error",
                     };
                     let result = if cleanup == "disable-slot-ok" {
-                        "enable-slot-linux-event-ok"
+                        "enable-slot-ok"
                     } else {
-                        "enable-slot-linux-event-ok-cleanup-failed"
+                        "enable-slot-ok-cleanup-failed"
                     };
                     let mut line = heapless::String::<224>::new();
                     let _ = core::fmt::Write::write_fmt(
@@ -4693,14 +4638,14 @@ fn xhci_probe_command_ring_after_event_drain(
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] xhci root-port command-probe result=enable-slot-linux-event-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=175,180"
+                            "[local-seat] xhci root-port command-probe result=enable-slot-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout event_generation={event_generation} irq27_role=timer-only pcie_irqs=175,180"
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
                     boot_log::force_uart_line(
-                        "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=enable-slot-linux-event-unproven event=missing irq27_role=timer-only pcie_irqs=175,180",
+                        "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=enable-slot-unproven event=missing event_generation=poll-only irq27_role=timer-only pcie_irqs=175,180",
                     );
-                    "enable-slot-linux-event-unproven"
+                    "enable-slot-unproven"
                 }
                 Err(err) => {
                     let result = usb_command_probe_error_label(err);
@@ -4820,7 +4765,7 @@ const fn xhci_dma_bus_modes() -> &'static [bool] {
 #[inline]
 const fn xhci_dma_bus_policy_label() -> &'static str {
     if XHCI_PCIE_DMA_WINDOW_ENABLED {
-        "pcie-window-only"
+        "pcie-window-high-alias-only"
     } else {
         "phys-only"
     }
@@ -5768,146 +5713,10 @@ fn probe_xhci_capability_with_alias_scan(
     Err("cap-invalid")
 }
 
-fn prime_pinned_vl805_cfg_window(hal: &mut KernelHal<'_>, mode: Vl805CfgPreseedMode) {
-    if PINNED_VL805_CFG.lock().is_some() {
-        return;
-    }
-
-    let mut prefix_frames = Vec::new();
-    for &ecam_base in &VL805_ECAM_BASE_CANDIDATES {
-        let Some(config_paddr) = ecam_base.checked_add(VL805_PCI_DEV_ADDR as usize) else {
-            continue;
-        };
-        let config_page = config_paddr & !PAGE_MASK;
-        let mut begin = heapless::String::<208>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut begin,
-            format_args!(
-                "[local-seat] vl805 cfg preseed stage=map-begin ecam=0x{ecam:016x} cfg=0x{cfg:016x}",
-                ecam = ecam_base,
-                cfg = config_paddr
-            ),
-        );
-        boot_log::force_uart_line(begin.as_str());
-        let frame = match map_device_exact(
-            hal,
-            config_page,
-            VL805_PCI_CFG_ATTEMPT_CAP,
-            "vl805-preseed",
-            Pi4SeatError::XhciInit,
-            &mut prefix_frames,
-        ) {
-            Ok(frame) => frame,
-            Err(_) => continue,
-        };
-        let virt = frame.ptr().as_ptr() as usize;
-        let config_page_offset = (VL805_PCI_DEV_ADDR as usize) & PAGE_MASK;
-        let config_virt = match virt.checked_add(config_page_offset) {
-            Some(cfg) => cfg,
-            None => continue,
-        };
-        let mut mapped = heapless::String::<224>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut mapped,
-            format_args!(
-                "[local-seat] vl805 cfg preseed stage=map-ok ecam=0x{ecam:016x} cfg=0x{cfg:016x} virt=0x{virt:016x}",
-                ecam = ecam_base,
-                cfg = config_paddr,
-                virt = config_virt
-            ),
-        );
-        boot_log::force_uart_line(mapped.as_str());
-        remember_vl805_cfg_virt(config_virt);
-
-        core::mem::forget(frame);
-
-        let mut pinned = PINNED_VL805_CFG.lock();
-        *pinned = Some(PinnedMmioWindow {
-            phys_start: config_page,
-            length: PAGE_SIZE,
-            virt_start: virt,
-            trusted_for_runtime: false,
-        });
-
-        if matches!(mode, Vl805CfgPreseedMode::ReadMostly) {
-            boot_log::force_uart_line("[local-seat] vl805 cfg preseed stage=cfg-read-begin");
-            let snapshot_before = read_vl805_pci_cfg_snapshot(config_virt);
-            let command_before = snapshot_before.command;
-            // Keep VL805 INTx masked during bring-up to avoid fatal interrupt storms
-            // while still enabling memory decode + DMA for xHCI rings.
-            let command_required = command_before
-                | PCI_COMMAND_MEMORY_SPACE
-                | PCI_COMMAND_BUS_MASTER
-                | PCI_COMMAND_INTERRUPT_DISABLE;
-            if command_required != command_before {
-                pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_required);
-            }
-            let snapshot_after = read_vl805_pci_cfg_snapshot(config_virt);
-            let command_after = snapshot_after.command;
-
-            let mut line = heapless::String::<240>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] vl805 pci cfg preseeded ecam=0x{ecam:016x} cfg=0x{cfg:016x} mode=read-mostly cfg_id=0x{cfg_id:08x} class=0x{class:06x} cmd=0x{before:04x}->0x{after:04x} bar0=0x{bar0:08x}",
-                    ecam = ecam_base,
-                    cfg = config_paddr,
-                    cfg_id = snapshot_after.vendor_device,
-                    class = (snapshot_after.class_revision >> 8) & 0x00ff_ffff,
-                    before = command_before,
-                    after = command_after,
-                    bar0 = snapshot_after.bar0,
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-            let mut bar_line = heapless::String::<176>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut bar_line,
-                format_args!(
-                    "[local-seat] vl805 pci cfg bar bar0=0x{bar0:08x} bar1=0x{bar1:08x}",
-                    bar0 = snapshot_after.bar0,
-                    bar1 = snapshot_after.bar1
-                ),
-            );
-            boot_log::force_uart_line(bar_line.as_str());
-            if let Some(mmio) = record_vl805_xhci_mmio_hint(&snapshot_after, "rw-cfg") {
-                let has_coverage = hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_some();
-                let has_pinned = pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_some();
-                let mut handoff_line = heapless::String::<240>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut handoff_line,
-                    format_args!(
-                        "[local-seat] vl805 pci cfg handoff mmio=0x{mmio:016x} coverage={} pinned={} cmd_safe={} source=rw-cfg",
-                        if has_coverage { "yes" } else { "no" },
-                        if has_pinned { "yes" } else { "no" },
-                        xhci_firmware_handoff_safe(Some(command_after)) as u8,
-                    ),
-                );
-                boot_log::force_uart_line(handoff_line.as_str());
-            }
-            if (command_after & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER))
-                != (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
-            {
-                boot_log::force_uart_line(
-                    "[local-seat] vl805 pci cfg warning command bits missing after preseed",
-                );
-            }
-        } else {
-            let mut line = heapless::String::<176>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] vl805 pci cfg preseeded ecam=0x{ecam:016x} cfg=0x{cfg:016x} mode=map-only cfg-read=deferred reason=irq27-on-ecam-read",
-                    ecam = ecam_base,
-                    cfg = config_paddr,
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-        }
-        return;
-    }
-
-    boot_log::force_uart_line("[local-seat] vl805 pci cfg preseed unavailable");
+fn prime_pinned_vl805_cfg_window(_hal: &mut KernelHal<'_>, _mode: Vl805CfgPreseedMode) {
+    boot_log::force_uart_line(
+        "[local-seat] vl805 pci cfg preseed skipped reason=hal-owns-pcie-config",
+    );
 }
 
 fn prime_pinned_xhci_window(
@@ -7551,7 +7360,6 @@ fn prepare_vl805_pci_bcm2711(
     };
     let pi4_pcie::Pi4Vl805PcieProof {
         status,
-        config_virt,
         vendor_id,
         device_id,
         class_code,
@@ -7591,7 +7399,7 @@ fn prepare_vl805_pci_bcm2711(
     );
     boot_log::force_uart_line(line.as_str());
 
-    remember_vl805_cfg_virt(config_virt);
+    remember_vl805_cfg_proof(command_after);
     remember_vl805_xhci_mmio_hint(mmio);
     if pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_none() {
         match pin_xhci_mmio_window(hal, mmio, XHCI_MMIO_PRESEED_BYTES_FALLBACK, true) {
@@ -7640,210 +7448,10 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
             return Some(mmio);
         }
     }
-    for &ecam_base in &VL805_ECAM_BASE_CANDIDATES {
-        let Some(config_paddr) = ecam_base.checked_add(VL805_PCI_DEV_ADDR as usize) else {
-            continue;
-        };
-        let config_page = config_paddr & !PAGE_MASK;
-        let config_page_offset = config_paddr & PAGE_MASK;
-        let mut _config_frame: Option<crate::sel4::DeviceFrame> = None;
-        let mut cfg_src = "mapped";
-        let config_page_virt = if let Some(mapped) = pinned_vl805_cfg_lookup(config_page, PAGE_SIZE)
-        {
-            cfg_src = "pinned";
-            mapped
-        } else {
-            if hal
-                .device_coverage(config_page, crate::sel4::PAGE_BITS)
-                .is_none()
-            {
-                let mut line = heapless::String::<176>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] vl805 pci skip ecam=0x{ecam:016x} cfg=0x{cfg:016x} reason=no-device-coverage",
-                        ecam = ecam_base,
-                        cfg = config_paddr
-                    ),
-                );
-                boot_log::force_uart_line(line.as_str());
-                continue;
-            }
-
-            let frame = match map_device_exact(
-                hal,
-                config_page,
-                VL805_PCI_CFG_ATTEMPT_CAP,
-                "vl805-pci",
-                Pi4SeatError::XhciInit,
-                &mut prefix_maps,
-            ) {
-                Ok(frame) => frame,
-                Err(_) => {
-                    let mut line = heapless::String::<192>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] vl805 pci skip ecam=0x{ecam:016x} cfg=0x{cfg:016x} reason=map-exact-failed",
-                            ecam = ecam_base,
-                            cfg = config_paddr
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    continue;
-                }
-            };
-            let virt = frame.ptr().as_ptr() as usize;
-            _config_frame = Some(frame);
-            virt
-        };
-        let Some(config_virt) = config_page_virt.checked_add(config_page_offset) else {
-            continue;
-        };
-
-        let vendor_device = pci_cfg_read_u32(config_virt, PCI_CFG_VENDOR_DEVICE);
-        let vendor_id = (vendor_device & 0xffff) as u16;
-        let device_id = ((vendor_device >> 16) & 0xffff) as u16;
-        if vendor_id == 0 || vendor_id == 0xffff {
-            continue;
-        }
-
-        if vendor_id != VL805_PCI_VENDOR_ID || device_id != VL805_PCI_DEVICE_ID {
-            let mut id_line = heapless::String::<176>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut id_line,
-                format_args!(
-                    "[local-seat] vl805 pci id mismatch got={vid:04x}:{did:04x} expected={exp_vid:04x}:{exp_did:04x}",
-                    vid = vendor_id,
-                    did = device_id,
-                    exp_vid = VL805_PCI_VENDOR_ID,
-                    exp_did = VL805_PCI_DEVICE_ID
-                ),
-            );
-            boot_log::force_uart_line(id_line.as_str());
-            continue;
-        }
-
-        let class_revision = pci_cfg_read_u32(config_virt, PCI_CFG_CLASS_REVISION);
-        let class_code = (class_revision >> 8) & 0x00ff_ffff;
-
-        if class_code != VL805_EXPECTED_CLASS_CODE {
-            let mut class_line = heapless::String::<176>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut class_line,
-                format_args!(
-                    "[local-seat] vl805 pci class mismatch got=0x{class_code:06x} expected=0x{expected:06x}",
-                    expected = VL805_EXPECTED_CLASS_CODE
-                ),
-            );
-            boot_log::force_uart_line(class_line.as_str());
-            continue;
-        }
-
-        let bar0 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR0);
-        let bar1 = pci_cfg_read_u32(config_virt, PCI_CFG_BAR1);
-        let mmio = decode_pci_mmio_bar(bar0, bar1);
-        let Some(mmio) = mmio else {
-            boot_log::force_uart_line("[local-seat] vl805 pci missing BAR0 MMIO address");
-            continue;
-        };
-
-        if in_vl805_ecam_window(mmio) && mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE {
-            let ecam_end = ecam_base.saturating_add(VL805_ECAM_WINDOW_BYTES);
-            let mut reject_line = heapless::String::<192>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut reject_line,
-                format_args!(
-                    "[local-seat] vl805 pci reject mmio=0x{mmio:016x} reason=bar-points-to-ecam ecam=[0x{base:016x}..0x{end:016x})",
-                    base = ecam_base,
-                    end = ecam_end
-                ),
-            );
-            boot_log::force_uart_line(reject_line.as_str());
-            continue;
-        }
-        if !xhci_mmio_candidate_valid(mmio) {
-            let mut reject_line = heapless::String::<176>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut reject_line,
-                format_args!(
-                    "[local-seat] vl805 pci reject mmio=0x{mmio:016x} reason=invalid-candidate"
-                ),
-            );
-            boot_log::force_uart_line(reject_line.as_str());
-            continue;
-        }
-
-        if (mmio & PAGE_MASK) != 0 {
-            let mut reject_line = heapless::String::<160>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut reject_line,
-                format_args!("[local-seat] vl805 pci reject mmio=0x{mmio:016x} reason=unaligned"),
-            );
-            boot_log::force_uart_line(reject_line.as_str());
-            continue;
-        }
-
-        if hal.device_coverage(mmio, crate::sel4::PAGE_BITS).is_none()
-            && pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_none()
-        {
-            let mut reject_line = heapless::String::<176>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut reject_line,
-                format_args!(
-                    "[local-seat] vl805 pci reject mmio=0x{mmio:016x} reason=no-device-coverage"
-                ),
-            );
-            boot_log::force_uart_line(reject_line.as_str());
-            continue;
-        }
-
-        let command_before =
-            (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
-        // Keep VL805 INTx masked during bring-up to avoid fatal interrupt storms
-        // while still enabling memory decode + DMA for xHCI rings.
-        let command_required = command_before
-            | PCI_COMMAND_MEMORY_SPACE
-            | PCI_COMMAND_BUS_MASTER
-            | PCI_COMMAND_INTERRUPT_DISABLE;
-        if command_required != command_before {
-            pci_cfg_write_u16(config_virt, PCI_CFG_COMMAND_STATUS, command_required);
-        }
-        let command_after = (pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS) & 0xffff) as u16;
-
-        let mut line = heapless::String::<288>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 pci selected ecam=0x{ecam:016x} cfg=0x{cfg:016x} cfg_src={cfg_src} mode=rw-cmd vid:did={vid:04x}:{did:04x} class=0x{class_code:06x} cmd=0x{before:04x}->0x{after:04x} bar0=0x{bar0:08x}",
-                ecam = ecam_base,
-                cfg = config_paddr,
-                vid = vendor_id,
-                did = device_id,
-                before = command_before,
-                after = command_after,
-                cfg_src = cfg_src,
-            ),
+    if !VL805_ECAM_BASE_CANDIDATES.is_empty() {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 pci ecam fallback skipped reason=hal-owns-pcie-config",
         );
-        boot_log::force_uart_line(line.as_str());
-        if (command_after & (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER))
-            != (PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER)
-        {
-            let mut warn_line = heapless::String::<224>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut warn_line,
-                format_args!(
-                    "[local-seat] vl805 pci command bits missing ecam=0x{ecam:016x} cmd=0x{cmd:04x} required=0x{required:04x}",
-                    ecam = ecam_base,
-                    cmd = command_after,
-                    required = PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER
-                ),
-            );
-            boot_log::force_uart_line(warn_line.as_str());
-        }
-        remember_vl805_cfg_virt(config_virt);
-
-        return Some(mmio);
     }
     None
 }
@@ -8458,7 +8066,7 @@ impl UsbKeyboard {
             );
         }
         clear_usb_runtime_proof_status();
-        let cfg_window_present = current_vl805_cfg_virt().is_some();
+        let cfg_window_present = vl805_cfg_proof_ready();
         let runtime_cfg_touch_enabled =
             vl805_runtime_cfg_touch_allowed(VL805_CFG_RUNTIME_TOUCH_ENABLED, cfg_window_present)
                 || VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED;
@@ -8466,7 +8074,9 @@ impl UsbKeyboard {
         let runtime_cfg_replay_enabled = runtime_cfg_touch_enabled || capture_cfg_witness_enabled;
         if runtime_cfg_touch_enabled {
             if cfg_window_present {
-                boot_log::force_uart_line("[local-seat] vl805 cfg present stage=usb-init-entry");
+                boot_log::force_uart_line(
+                    "[local-seat] vl805 cfg proof present stage=usb-init-entry source=hal-ext-cfg",
+                );
             } else if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
                 boot_log::force_uart_line(
                     "[local-seat] vl805 cfg probe stage=usb-init-entry source=bcm2711-pcie-ext-cfg",
@@ -8514,7 +8124,7 @@ impl UsbKeyboard {
         let trusted_pinned_xhci_mmio = pinned_xhci_phys_start_trusted();
         let pinned_xhci_state = pinned_xhci_phys_state();
         let verified_vl805_hint = current_vl805_xhci_mmio_hint();
-        let has_safe_cfg_window = current_vl805_cfg_virt().is_some();
+        let has_safe_cfg_window = vl805_cfg_proof_ready();
         let runtime_vl805_reset_pci_replay_ready =
             xhci_runtime_vl805_mailbox_reset_pci_replay_ready(
                 runtime_cfg_replay_enabled,
@@ -9010,13 +8620,15 @@ impl UsbKeyboard {
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci dma probe policy={} bus_addrs={}",
+                    "[local-seat] xhci dma probe policy={} bus_addrs={} alias=0x{alias:016x} cpu_limit=0x{limit:016x}",
                     if XHCI_FORCE_LOW_DMA_PROBE {
                         "low-only"
                     } else {
                         "low-then-high"
                     },
-                    xhci_dma_bus_policy_label()
+                    xhci_dma_bus_policy_label(),
+                    alias = RPI4_PCIE_DMA_BUS_ALIAS_BASE,
+                    limit = RPI4_PCIE_DMA_LIMIT,
                 ),
             );
             boot_log::force_uart_line(line.as_str());
@@ -14389,55 +14001,6 @@ fn hal_from_ptr(ptr: usize) -> Option<&'static mut KernelHal<'static>> {
 }
 
 #[inline]
-fn pci_cfg_read_u32(base: usize, offset: usize) -> u32 {
-    let Some(addr) = base.checked_add(offset) else {
-        return 0;
-    };
-    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
-    unsafe { ptr::read_volatile(addr as *const u32) }
-}
-
-#[inline]
-fn pci_cfg_read_u16(base: usize, offset: usize) -> u16 {
-    let Some(addr) = base.checked_add(offset) else {
-        return 0;
-    };
-    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
-    unsafe { ptr::read_volatile(addr as *const u16) }
-}
-
-#[inline]
-fn pci_cfg_read_u8(base: usize, offset: usize) -> u8 {
-    let Some(addr) = base.checked_add(offset) else {
-        return 0;
-    };
-    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
-    unsafe { ptr::read_volatile(addr as *const u8) }
-}
-
-#[inline]
-fn pci_cfg_write_u32(base: usize, offset: usize, value: u32) {
-    let Some(addr) = base.checked_add(offset) else {
-        return;
-    };
-    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
-    unsafe {
-        ptr::write_volatile(addr as *mut u32, value);
-    }
-}
-
-#[inline]
-fn pci_cfg_write_u16(base: usize, offset: usize, value: u16) {
-    let Some(addr) = base.checked_add(offset) else {
-        return;
-    };
-    // SAFETY: `base` points to a mapped PCI config page in `prepare_vl805_pci`.
-    unsafe {
-        ptr::write_volatile(addr as *mut u16, value);
-    }
-}
-
-#[inline]
 fn phys_to_bus(phys: usize, alias_base: u32) -> Option<u32> {
     if phys > VC_BUS_MASK as usize {
         return None;
@@ -15475,7 +15038,7 @@ mod tests {
                 strategy,
                 "no-op-linux-event-ok",
             ),
-            PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK,
+            0,
         );
         assert_eq!(
             xhci_deferred_root_port_capture_mask(
@@ -16050,7 +15613,7 @@ mod tests {
             Some(super::RPI4_VL805_LINUX_COMMAND)
         );
         assert_eq!(status.ownership.command_source, "linux-capture-static");
-        assert!(status.ownership.command_ready);
+        assert!(!status.ownership.command_ready);
         assert!(!status.ownership.command_replay_ready);
         assert_eq!(status.ownership.bar0, Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE));
         assert_eq!(
@@ -16252,7 +15815,7 @@ mod tests {
         };
         assert_eq!(
             super::usb_probe_next_step(no_event_linux_event_ready),
-            "safe-port-event-required"
+            "command-ring-recovery"
         );
         assert!(
             no_event_command_ready.is_better_than(UsbProbePathwaySummary {
@@ -16617,17 +16180,17 @@ mod tests {
         assert!(super::usb_ownership_command_replay_ready(
             true,
             true,
-            "runtime-mapped",
+            "hal-ext-cfg-proof",
         ));
         assert!(!super::usb_ownership_command_replay_ready(
             false,
             true,
-            "runtime-mapped",
+            "hal-ext-cfg-proof",
         ));
         assert!(!super::usb_ownership_command_replay_ready(
             true,
             false,
-            "runtime-mapped",
+            "hal-ext-cfg-proof",
         ));
     }
 
@@ -16651,7 +16214,7 @@ mod tests {
         assert!(!status.cfg_replay_ready);
         assert_eq!(status.command, Some(super::RPI4_VL805_LINUX_COMMAND),);
         assert_eq!(status.command_source, "linux-capture-static");
-        assert!(status.command_ready);
+        assert!(!status.command_ready);
         assert!(!status.command_replay_ready);
         assert_eq!(status.bar0, Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE));
         assert_eq!(status.bar0_source, "linux-capture-static");
@@ -19673,11 +19236,11 @@ mod tests {
     }
 
     #[test]
-    fn pi4_pcie_dma_window_uses_bcm2711_dt_dma_range() {
+    fn pi4_pcie_dma_window_uses_linux_captured_bcm2711_dma_range() {
         assert_eq!(pcie_dma_bus_addr(0x0400_3000), Some(0x0000_0004_0400_3000));
         assert_eq!(
             pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT - PAGE_SIZE),
-            Some(0x0000_0004_BFFF_F000)
+            Some(0x0000_0004_FFFF_F000)
         );
         assert_eq!(pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT), None);
     }
@@ -19717,7 +19280,7 @@ mod tests {
     fn pi4_xhci_dma_policy_never_tries_raw_phys_after_pcie_alias() {
         assert!(XHCI_PCIE_DMA_WINDOW_ENABLED);
         assert_eq!(xhci_dma_bus_modes(), &[true]);
-        assert_eq!(xhci_dma_bus_policy_label(), "pcie-window-only");
+        assert_eq!(xhci_dma_bus_policy_label(), "pcie-window-high-alias-only");
         assert_eq!(
             usb_no_op_probe_error_label(UsbError::Timeout),
             "no-op-timeout"
@@ -19727,18 +19290,18 @@ mod tests {
         assert!(!super::usb_command_probe_allows_deferred_capture(
             "no-op-deferred"
         ));
-        assert!(usb_command_probe_proves_ring("no-op-linux-event-ok"));
-        assert!(super::usb_command_probe_allows_deferred_capture(
+        assert!(!usb_command_probe_proves_ring("no-op-linux-event-ok"));
+        assert!(!super::usb_command_probe_allows_deferred_capture(
             "no-op-linux-event-ok"
         ));
-        assert!(usb_command_probe_proves_ring("enable-slot-linux-event-ok"));
-        assert!(super::usb_command_probe_allows_deferred_capture(
+        assert!(!usb_command_probe_proves_ring("enable-slot-linux-event-ok"));
+        assert!(!super::usb_command_probe_allows_deferred_capture(
             "enable-slot-linux-event-ok"
         ));
-        assert!(usb_command_probe_proves_ring(
+        assert!(!usb_command_probe_proves_ring(
             "enable-slot-linux-event-ok-cleanup-failed"
         ));
-        assert!(super::usb_command_probe_allows_deferred_capture(
+        assert!(!super::usb_command_probe_allows_deferred_capture(
             "enable-slot-linux-event-ok-cleanup-failed"
         ));
         assert!(usb_command_probe_proves_ring(

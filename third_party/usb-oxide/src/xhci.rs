@@ -1840,7 +1840,8 @@ fn split_u64_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
 fn dcbaap_reg_write_ops(offset: usize, _current: u64, target: u64) -> [(usize, u32); 2] {
     // Preserve the original usb-oxide split-write order. VL805 observes the
     // low/high pair directly; publishing the high dword first can expose a
-    // transient high-only DCBAAP base on the Pi 4 PCIe DMA alias.
+    // transient high-only DCBAAP base when a platform uses nonzero PCIe DMA
+    // bus addresses.
     split_u64_reg_write_ops(offset, target)
 }
 
@@ -5371,7 +5372,7 @@ impl<H: Dma> XhciCtrl<H> {
         Ok(())
     }
 
-    /// Probe command-ring completion with U-Boot's first real xHCI command.
+    /// Probe command-ring completion with the cold-boot first real xHCI command.
     pub fn probe_enable_slot_command_prompt_safe(&self) -> Result<u8> {
         let evt =
             match self.submit_command_prompt_safe_poll_only(enable_slot_command_trb_for_probe()) {
@@ -5388,7 +5389,7 @@ impl<H: Dma> XhciCtrl<H> {
         Ok(())
     }
 
-    /// Probe command-ring completion with U-Boot's first real xHCI command.
+    /// Probe command-ring completion with the cold-boot first real xHCI command.
     pub fn probe_enable_slot_linux_event_generation_prompt_safe(&self) -> Result<u8> {
         let evt = match self
             .submit_command_linux_event_generation_prompt_safe(enable_slot_command_trb_for_probe())
@@ -6943,11 +6944,7 @@ mod tests {
     }
 
     #[test]
-    fn dcbaap_write_ops_keep_low_before_high_when_high_dword_is_stable() {
-        assert_eq!(
-            dcbaap_reg_write_ops(0x50, 0x0000_0004_0000_0000, 0x0000_0004_0400_3000),
-            [(0x50, 0x0400_3000), (0x54, 0x0000_0004)]
-        );
+    fn dcbaap_write_ops_keep_low_before_high_for_low_dma_bus_address() {
         assert_eq!(
             dcbaap_reg_write_ops(0x50, 0x0000_0000_0000_0000, 0x0000_0000_0400_3000),
             [(0x50, 0x0400_3000), (0x54, 0x0000_0000)]
@@ -7316,7 +7313,7 @@ mod tests {
     }
 
     #[test]
-    fn enable_slot_probe_trbs_match_u_boot_command_shape() {
+    fn enable_slot_probe_trbs_match_cold_boot_command_shape() {
         let enable = enable_slot_command_trb_for_probe();
         assert_eq!(enable.param, 0);
         assert_eq!(enable.status, 0);

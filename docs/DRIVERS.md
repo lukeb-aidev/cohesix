@@ -40,7 +40,7 @@ failure condition is not progress.
 
 This document is scoped to active Pi 4 work in `docs/BUILD_PLAN.md`:
 
-- Milestone 26: `m26-hal-boundary`, local diagnostics, and the U-Boot handoff.
+- Milestone 26: `m26-hal-boundary`, local diagnostics, and the U-Boot boot/DTB handoff.
 - Milestone 26a: `m26a-bcmgenet-driver` and Pi 4 static IPv4.
 - Milestone 26b: DHCP plus the profile-gated CYW43455 Wi-Fi path.
 
@@ -59,10 +59,16 @@ Use this order when sources disagree:
    and `seL4/build/kernel/generated/invocations_all.json`.
 2. Cohesix manifest IR and generated artifacts: `configs/root_task*.toml`,
    `apps/root-task/src/generated/*`, and `out/manifests/*`.
-3. Cohesix normative docs: `AGENTS.md`, `docs/BUILD_PLAN.md`,
+3. Cohesix HAL and driver implementation: `apps/root-task/src/hal/mod.rs`,
+   `apps/root-task/src/hal/dma.rs`, `apps/root-task/src/hal/cache.rs`,
+   `apps/root-task/src/hal/bcmgenet.rs`, `apps/root-task/src/hal/pi4_wifi.rs`,
+   `apps/root-task/src/hal/pi4_pcie.rs`, `apps/root-task/src/sel4.rs`,
+   `apps/root-task/src/local_seat_pi4.rs`, and
+   `third_party/usb-oxide/src/xhci.rs`.
+4. Cohesix normative docs: `AGENTS.md`, `docs/BUILD_PLAN.md`,
    `docs/HARDWARE_BRINGUP.md`, `docs/ARCHITECTURE.md`,
    `docs/INTERFACES.md`, and `docs/SECURITY.md`.
-4. Official seL4 sources:
+5. Official seL4 sources:
    - seL4 Reference Manual 13.0.0:
      <https://sel4.systems/Info/Docs/seL4-manual-13.0.0.pdf>
    - seL4 13.0.0 release notes:
@@ -76,9 +82,12 @@ Use this order when sources disagree:
      <https://docs.sel4.systems/Tutorials/notifications.html>,
      <https://docs.sel4.systems/Tutorials/untyped.html>,
      <https://docs.sel4.systems/Tutorials/mapping.html>
-5. Hardware/vendor or OS implementation references:
+   - seL4 verified configurations and CAmkES DMA reference:
+     <https://docs.sel4.systems/projects/sel4/verified-configurations.html>,
+     <https://docs.sel4.systems/projects/camkes/manual.html#direct-memory-access>
+6. Hardware/vendor or OS implementation references:
    - Raspberry Pi BCM2711 ARM peripherals:
-     <https://datasheets.raspberrypi.org/bcm2711/bcm2711-peripherals.pdf>
+     <https://datasheets.raspberrypi.com/bcm2711/bcm2711-peripherals.pdf>
    - Mainline Linux BCM2711 DTS:
      <https://github.com/torvalds/linux/blob/master/arch/arm/boot/dts/broadcom/bcm2711.dtsi>
    - Mainline Linux Pi 4 board DTS:
@@ -116,12 +125,167 @@ that authority through capabilities. The kernel provides the mechanisms:
 For Cohesix, the root task remains the privileged driver owner. Drivers must
 depend on the narrow HAL trait that represents the resource they need:
 
-- `DeviceHal`: MMIO, device coverage, DMA frames, IRQ binding.
-- `PciHal`: PCI discovery/configuration.
+- `DeviceHal`: MMIO, device-untyped coverage, DMA frames, DMA guard pages,
+  and IRQ notification binding/acknowledgement.
+- `PciHal`: generic PCI discovery/configuration for platforms with a HAL-owned
+  topology. Do not assume this is the active Pi 4 VL805 path; current
+  `KernelHal::pci_topology()` returns `None`, and Pi 4 VL805 ownership is
+  proven by `apps/root-task/src/hal/pi4_pcie.rs`.
 - `Cyw43Hal`: SDIO, power/reset, firmware, and Wi-Fi transport support.
 
 The compatibility `Hardware` facade may remain where legacy call sites span
 several domains, but new driver logic should prefer the narrowest trait.
+
+## HAL, MMIO, DMA, SDIO, And PCIe Contracts
+
+These contracts are the current Cohesix guardrails. If code needs a different
+shape, update the milestone, manifest/IR, implementation, tests, and docs in
+one scoped change before relying on it.
+
+### HAL Boundary
+
+All device access goes through HAL. Drivers may read and write device registers
+only through HAL-returned mapped pages or device-specific HAL transport methods.
+
+- Raw physical-address discovery belongs in HAL, never in a driver.
+- Device-untyped retyping belongs in `KernelEnv::map_device` through
+  `DeviceHal::map_device`.
+- IRQHandler creation, notification badging, and acknowledgement belong in
+  `KernelHal::bind_irq_notification`, `KernelHal::poll_and_service_irq`, or
+  `KernelHal::wait_and_service_irq`.
+- DMA frame allocation, guard-page reservation, pinning, and cache maintenance
+  are HAL-owned.
+- Firmware, mailbox, power, reset, clock, SDHCI, and SDIO CMD52/CMD53 access
+  for CYW43455 belongs behind `Cyw43Hal` / `pi4_wifi`.
+- Pi 4 BCM2711 PCIe root-complex/VL805 config access belongs behind
+  `pi4_pcie`; drivers must not derive config space from the xHCI BAR.
+
+### MMIO Mapping
+
+seL4 exposes device memory by retyping device untyped into frames and mapping
+those frames into the root-task VSpace. The seL4 untyped model has a watermark:
+once allocations move past a physical address within an untyped, exact mapping
+of an earlier page can fail until the children are revoked. Cohesix preserves
+that rule in `KernelEnv::map_device`.
+
+- Check `device_coverage(paddr, PAGE_BITS)` before mapping a device page.
+- Map multi-page apertures in ascending physical-page order.
+- For exact Pi 4 pages that share one device-untyped region, never map a higher
+  page first and then expect a lower page to remain available.
+- HAL must verify `ARMPageGetAddress` / `page_get_address` equals the requested
+  physical address before publishing a mapping.
+- Device mappings use Cohesix `DEVICE_VM_ATTRIBUTES`; drivers must not invent
+  mapping attributes at call sites.
+- MMIO access must be volatile and bounds-checked through `MappedRegion` or
+  `MappedRegisterPages` unless a narrow HAL helper documents why raw volatile
+  access is required.
+
+Current Pi 4 examples:
+
+- GENET maps six 4 KiB pages from one HAL-selected alias and requires all pages
+  to have device coverage before publishing registers.
+- Wi-Fi maps mailbox and SDHCI pages behind `pi4_wifi`; the CYW43 driver sees
+  SDIO transport operations, not SDHCI register ownership.
+- VL805 maps BCM2711 PCIe host pages in ascending order so the EXT_CFG DATA
+  page at `0xfd508000` remains mappable before the EXT_CFG INDEX page and later
+  root-complex registers are touched.
+
+### DMA And Cache
+
+Without an IOMMU/SMMU proof, a DMA-capable device is part of the trusted path:
+seL4 does not prevent the device from writing any address it can bus-master.
+Cohesix therefore treats DMA buffers as explicit shared-memory objects with
+device-specific bus-address policy.
+
+- Allocate DMA memory only through `DeviceHal::alloc_dma_frame*`.
+- Use `alloc_dma_frame_low*` when the device has a low-address window.
+- Use `seL4_ARM_Page_Uncached` when the driver contract requires uncached DMA.
+- Pin every device-shared range with `hal::dma::pin` before publishing it to a
+  device.
+- Use `hal::dma::sync_for_cpu` before CPU reads of device-written cached data,
+  and `hal::dma::unpin` before reclaim.
+- Cache clean/invalidate/unify operations go only through `hal::cache`, whose
+  labels come from the local generated seL4 bindings.
+- Never DMA into stack memory, parser buffers, unbounded heap buffers, or memory
+  whose lifetime is not tied to a HAL frame/ring owner.
+- Descriptor rings and packet buffers must be fixed-size, auditable, and have
+  explicit producer/consumer ownership transitions.
+
+Device-visible address policy is not generic:
+
+- GENET currently uses `bcmgenet::dma_bus_addr`, `dma_uncached() == true`, and
+  the diagnostic policy name `physical`.
+- VL805/xHCI currently publishes `0x00000004_00000000 + CPU physical` for DMA
+  pointers and keeps backing allocations below the 4 GiB inbound PCIe DMA
+  window. A plain CPU physical address is wrong for xHCI rings on Pi 4.
+- Pi 4 mailbox requests use the VideoCore bus aliases selected in `pi4_wifi`.
+  Do not reuse those aliases for unrelated DMA devices.
+- CYW43455 SDIO traffic is host-driven through SDHCI/CMD52/CMD53; the driver
+  must not publish arbitrary DMA addresses to the Wi-Fi firmware path.
+
+### IRQ Ordering
+
+The seL4 interrupt pattern is derive IRQHandler, bind notification, wait/poll
+notification, clear the device source, then acknowledge the IRQHandler. Cohesix
+keeps that sequence in HAL helpers because acknowledging a level-triggered line
+before clearing the device source can immediately redeliver the interrupt or
+leave the line stuck.
+
+- Use `IrqTrigger::Level` for Pi 4 SDIO and PCIe INTx-style lines unless source
+  authority proves an edge-triggered line.
+- Notification badges are IRQ-derived so shared notification objects stay
+  auditable.
+- Device clear callbacks must be bounded and nonblocking.
+- Pi 4 SDIO uses GIC hwirq 158 through HAL binding and SDHCI
+  `INT_STATUS`/`INT_ENABLE`/`SIGNAL_ENABLE`.
+- IRQ 27 is the seL4 timer on this path; never treat it as a USB or Wi-Fi
+  device interrupt.
+- Current Pi 4 USB/VL805 is poll-only with PCI INTx/MSI masked. Do not enable
+  xHCI interrupt delivery until a milestone explicitly proves it.
+
+### SDIO/CYW43455
+
+CYW43455 is an SDIO device, but Cohesix does not expose a generic SDIO host API
+to drivers. The `Cyw43Hal` contract owns SDHCI reset, power, clock, bus width,
+CMD52 direct I/O, CMD53 extended transfers, firmware bundle access, and Wi-Fi
+power/reset state.
+
+- Function 0 is CCCR/FBR control.
+- Function 1 is the Broadcom backplane/control path.
+- Function 2 is the data/control-plane FIFO path after firmware.
+- Function 2 remains disabled before firmware/NVRAM upload.
+- Production Function 2 traffic requires firmware upload/release evidence, real
+  `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness (`IOR2`/ready proof).
+- `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
+  evidence only; they do not authorize strict Function 2 traffic by themselves.
+- No-HT / forced-HT paths are diagnostics unless `docs/BUILD_PLAN.md`,
+  `docs/INTERFACES.md`, generated manifests, and tests all promote them.
+
+### PCIe/VL805
+
+Pi 4 VL805 ownership is a platform proof, not generic PCI enumeration. The
+active path is Cohesix-owned cold start:
+
+- U-Boot USB state, stopped register seeds, old DT trust tokens, and captured
+  COMMAND shadows are diagnostics only.
+- The boot script no longer exports `cohesix,xhci-mmio`, PCI COMMAND, or final
+  xHCI handoff trust tokens as runtime authority.
+- HAL powers the USB HCD domain through the VideoCore mailbox module `3`.
+- HAL masks/clears PCIe host interrupt sources for the poll-only lane.
+- HAL validates link/root-complex state or runs one bounded BCM2711
+  root-complex reset/window init and drains posted writes with same-block
+  readbacks.
+- HAL reselects VL805 `01:00.0` via BCM2711 `EXT_CFG_INDEX` before each
+  `EXT_CFG_DATA` access and rejects selector echoes.
+- Ownership can promote only on exact live `1106:3483`, class `0x0c0330`,
+  BAR0 translation, COMMAND readback, and MSI-disabled poll-only proof.
+- If the exact VL805 tuple appears with an unassigned 64-bit BAR, HAL may assign
+  the Pi 4 outbound-window BAR value through EXT_CFG and read it back. Do not
+  assign BARs for bad IDs, bad class, selector echoes, absent link proof, or
+  any other tuple.
+- Doorbell posted-write flushes use the HAL EXT_CFG selector/COMMAND readback.
+  They must not read the xHCI BAR or `USBSTS` after doorbell publication on the
+  prompt-safe path.
 
 ## Evidence Ladder
 
@@ -247,10 +411,10 @@ Use seL4's proven interrupt pattern:
 4. Clear the device's interrupt source.
 5. Acknowledge the IRQHandler.
 
-The seL4 tutorials and Microkit manual both document that further interrupt
-delivery is blocked until the handler is acknowledged. For level-triggered Pi 4
-device IRQs, acknowledging before clearing the device source can immediately
-redeliver or wedge the line.
+The seL4 interrupts tutorial documents that further interrupt delivery is
+blocked until the handler is acknowledged. For level-triggered Pi 4 device IRQs,
+acknowledging before clearing the device source can immediately redeliver or
+wedge the line.
 
 Cohesix guardrails:
 
@@ -263,9 +427,11 @@ Cohesix guardrails:
 
 ### 6. DMA And Cache Coherency
 
-DMA is where seL4's verification assumptions can stop helping us. The seL4 FAQ
-is explicit that DMA can overwrite memory unless separately constrained; without
-SMMU/IOMMU proof, the DMA-capable driver and device must be trusted.
+DMA is where seL4's verification assumptions can stop helping us. seL4's
+verified-configuration documentation states that current verified configurations
+do not account for device address translation, and the CAmkES DMA reference
+notes that without an IOMMU devices DMA to physical memory. Without SMMU/IOMMU
+proof, the DMA-capable driver and device must be trusted.
 
 Cohesix rules:
 
@@ -365,8 +531,9 @@ frame path are proven independently.
 Required Cohesix shape:
 
 - PCIe root-complex and VL805 BAR/COMMAND proof belongs to HAL.
-- Bootloader stop-state evidence is diagnostic unless the manifest/profile
-  explicitly enables a handoff path.
+- Bootloader stop-state evidence is diagnostic. Current Pi 4 USB profiles have
+  no xHCI ownership handoff opt-in; stop-state, preserve-state, and U-Boot
+  reset-authority evidence must fail gate proof instead of authorizing rings.
 - MSI remains disabled unless the milestone explicitly proves it.
 - Poll-only command/event-ring proof comes before keyboard enumeration.
 - Root-port reads known to be toxic must stay behind explicit HAL gates.

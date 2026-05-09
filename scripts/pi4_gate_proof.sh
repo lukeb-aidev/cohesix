@@ -249,6 +249,7 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=pcie-window-cmd-doorbell-proof-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=raw-phys-cmd-doorbell-proof-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-pending")
+        args+=("--expect-not" "USB_BLOCKER=cmd-doorbell-write-halt")
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-only-timeout")
         args+=("--expect-not" "USB_BLOCKER=cmd-live-timeout-snapshot-missing")
         args+=("--expect-not" "USB_BLOCKER=cmd-timeout")
@@ -466,6 +467,12 @@ require_nonnegative_integer "--boot-wait" "${BOOT_WAIT_SECONDS}"
 require_nonnegative_integer "--capture-seconds" "${CAPTURE_SECONDS}"
 require_nonnegative_integer "--command-delay" "${COMMAND_DELAY_SECONDS}"
 require_file "${PYTHON}"
+
+if [[ "${ALLOW_SUMMARY_ONLY}" -eq 1 ]] \
+    && { [[ "${REQUIRE_USB_READY}" -eq 1 ]] || [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]; }; then
+    echo "[pi4-gate] error: --allow-summary-only cannot be combined with ready-gate requirements" >&2
+    exit 2
+fi
 
 if [[ "${NORMALIZE_ONLY}" -eq 0 ]]; then
     run_image_build

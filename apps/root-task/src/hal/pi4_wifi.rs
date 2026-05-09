@@ -506,11 +506,7 @@ const fn core_ctrl_cmd52_write_function_addr(addr: u32) -> u32 {
 #[inline]
 const fn core_ctrl_reset_assert_cmd52_function_addr(base: u32, offset: u32) -> u32 {
     let addr = base.wrapping_add(offset);
-    if core_ctrl_reset_assert_uses_cmd52_primary(base, offset) {
-        core_ctrl_trace_function_addr(addr)
-    } else {
-        core_ctrl_cmd52_write_function_addr(addr)
-    }
+    core_ctrl_cmd52_write_function_addr(addr)
 }
 
 #[inline]
@@ -579,12 +575,8 @@ const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'stati
 }
 
 #[inline]
-const fn core_ctrl_reset_assert_access_mode_label(base: u32, offset: u32) -> &'static str {
-    if core_ctrl_reset_assert_uses_cmd52_primary(base, offset) {
-        "cmd52-byte-transfer-window-reset-assert fallback=cmd53-word-windowed"
-    } else {
-        "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
-    }
+const fn core_ctrl_reset_assert_access_mode_label(_base: u32, _offset: u32) -> &'static str {
+    "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
 }
 
 #[inline]
@@ -684,11 +676,11 @@ fn log_core_ctrl_prereset_write(base: u32, offset: u32, value: u8) {
 
 fn log_core_ctrl_reset_write(base: u32, offset: u32, value: u8, mode: &'static str) {
     let addr = base.saturating_add(offset);
+    let primary_bus = core_ctrl_trace_function_addr(addr);
+    let fallback_bus = core_ctrl_reset_assert_cmd52_function_addr(base, offset);
     emit_breadcrumb(format_args!(
-        "[pi4-wifi] firmware core-ctrl reset-write mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={inc} value=0x{value:02x}",
+        "[pi4-wifi] firmware core-ctrl reset-write mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{primary_bus:05x} fallback_bus=0x{fallback_bus:05x} shift={shift} inc={inc} value=0x{value:02x}",
         mode,
-        bus = core_ctrl_reset_assert_cmd52_function_addr(base, offset),
-        trace_bus = core_ctrl_trace_function_addr(addr),
         shift = backplane_word_byte_shift(addr),
         inc = backplane_word_increment_addr() as u8,
         window = addr & BACKPLANE_WINDOW_MASK,
@@ -764,11 +756,6 @@ const fn core_ctrl_prereset_write_uses_word_primary(base: u32, offset: u32) -> b
 #[inline]
 const fn core_ctrl_write8_uses_word_primary(_base: u32, offset: u32) -> bool {
     offset == AI_IOCTRL_OFFSET || offset == AI_RESETCTRL_OFFSET
-}
-
-#[inline]
-const fn core_ctrl_reset_assert_uses_cmd52_primary(base: u32, offset: u32) -> bool {
-    base == CYW43_ARMCR4_CORE_BASE && offset == AI_RESETCTRL_OFFSET
 }
 
 #[inline]
@@ -1321,8 +1308,10 @@ fn d11_passive_disable_rejection_can_continue(base: u32, err: &HalError) -> bool
 
 #[inline]
 fn armcr4_passive_reset_rejection_can_continue(err: &HalError) -> bool {
-    let _ = err;
-    false
+    matches!(
+        err,
+        HalError::Unsupported("sdio-cmd53-r5-error") | HalError::Unsupported("sdio-cmd52-write")
+    )
 }
 
 #[inline]
@@ -12992,8 +12981,10 @@ impl SdioHost {
         let status = r5_status(resp);
         if status != 0 {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] sdio cmd52 fail op=read fn={} addr=0x{addr:05x} resp=0x{resp:08x} r5=0x{status:04x}",
-                function.number()
+                "[pi4-wifi] sdio cmd52 fail op=read fn={} addr=0x{addr:05x} resp=0x{resp:08x} r5=0x{status:04x} r5_raw=0x{raw:04x} r5_state={state}",
+                function.number(),
+                raw = r5_raw(resp),
+                state = r5_current_state(resp),
             ));
             if allow_cmd53_fallback && io_direct_cmd53_byte_fallback_allowed(function) {
                 emit_breadcrumb(format_args!(
@@ -13032,8 +13023,10 @@ impl SdioHost {
         let status = r5_status(resp);
         if status != 0 {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] sdio cmd52 fail op=write fn={} addr=0x{addr:05x} val=0x{value:02x} resp=0x{resp:08x} r5=0x{status:04x}",
-                function.number()
+                "[pi4-wifi] sdio cmd52 fail op=write fn={} addr=0x{addr:05x} val=0x{value:02x} resp=0x{resp:08x} r5=0x{status:04x} r5_raw=0x{raw:04x} r5_state={state}",
+                function.number(),
+                raw = r5_raw(resp),
+                state = r5_current_state(resp),
             ));
             if io_direct_cmd53_byte_fallback_allowed(function) {
                 emit_breadcrumb(format_args!(
@@ -13071,8 +13064,10 @@ impl SdioHost {
         let status = r5_status(resp);
         if status != 0 {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] sdio cmd52 fail op=write-no-cmd53-fallback fn={} addr=0x{addr:05x} val=0x{value:02x} resp=0x{resp:08x} r5=0x{status:04x}",
-                function.number()
+                "[pi4-wifi] sdio cmd52 fail op=write-no-cmd53-fallback fn={} addr=0x{addr:05x} val=0x{value:02x} resp=0x{resp:08x} r5=0x{status:04x} r5_raw=0x{raw:04x} r5_state={state}",
+                function.number(),
+                raw = r5_raw(resp),
+                state = r5_current_state(resp),
             ));
             return Err(HalError::Unsupported("sdio-cmd52-write"));
         }
@@ -19992,22 +19987,6 @@ impl SdioHost {
         )
     }
 
-    fn core_ctrl_reset_assert_cmd52_current_window_write8(
-        &mut self,
-        base: u32,
-        offset: u32,
-        value: u8,
-    ) -> Result<(), HalError> {
-        let addr = base.saturating_add(offset);
-        self.with_backplane_window_addr(
-            addr,
-            core_ctrl_reset_assert_cmd52_function_addr(base, offset),
-            |this, bus_addr| {
-                this.io_direct_write_no_cmd53_fallback(SdioFunction::Function1, bus_addr, value)
-            },
-        )
-    }
-
     fn core_ctrl_cmd52_unflagged_current_window_write8(
         &mut self,
         base: u32,
@@ -20273,27 +20252,6 @@ impl SdioHost {
                 "core-ctrl-reset-assert-cmd53-current-window",
                 "core-ctrl-reset-assert-cmd53-rewindow",
             );
-        }
-        if core_ctrl_reset_assert_uses_cmd52_primary(base, offset) {
-            return match self
-                .core_ctrl_reset_assert_cmd52_current_window_write8(base, offset, value)
-            {
-                Ok(()) => Ok(()),
-                Err(err) => {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware core-ctrl fallback op=write8-reset-assert base=0x{base:08x} off=0x{offset:03x} from=cmd52-byte-transfer-window-reset-assert to=cmd53-word-windowed err={err}"
-                    ));
-                    self.recover_command_path("core-ctrl-reset-assert-cmd53-current-window");
-                    self.core_ctrl_word_primary_write8(
-                        base,
-                        offset,
-                        value,
-                        "write8-reset-assert",
-                        "core-ctrl-reset-assert-cmd52-transfer-window",
-                        "core-ctrl-reset-assert-cmd53-rewindow",
-                    )
-                }
-            };
         }
         self.core_ctrl_word_primary_write8(
             base,
@@ -22267,8 +22225,10 @@ impl SdioHost {
             self.remember_last_data_wait_diag(cmd, arg, Some(cmd_status));
             log_sdio_cmd53_shape("command-r5", cmd, arg, buffer.len(), plan);
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] sdio cmd53 r5 fail arg=0x{arg:08x} len={} phase=command-r5 resp=0x{cmd_response:08x} r5=0x{r5:04x}",
+                "[pi4-wifi] sdio cmd53 r5 fail arg=0x{arg:08x} len={} phase=command-r5 resp=0x{cmd_response:08x} r5=0x{r5:04x} r5_raw=0x{raw:04x} r5_state={state}",
                 buffer.len(),
+                raw = r5_raw(cmd_response),
+                state = r5_current_state(cmd_response),
             ));
             self.log_host_state("xfer-command-r5");
             self.recover_command_path("cmd-error");
@@ -22816,6 +22776,14 @@ fn first_mismatch(expected: &[u8], observed: &[u8]) -> Option<(usize, u8, u8)> {
 
 fn r5_status(response: u32) -> u32 {
     response & 0xCB00
+}
+
+fn r5_raw(response: u32) -> u32 {
+    response & 0xFFFF
+}
+
+fn r5_current_state(response: u32) -> u32 {
+    (response >> 12) & 0x3
 }
 
 fn sdio_cmd53_r5_error(cmd: u16, response: u32) -> Option<u32> {
@@ -26336,7 +26304,7 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_reset_assert_cmd52_function_addr(CYW43_ARMCR4_CORE_BASE, AI_RESETCTRL_OFFSET),
-            0x0b800
+            0x03800
         );
         assert_eq!(
             core_ctrl_unflagged_byte_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET),
@@ -26376,11 +26344,11 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_RESETCTRL_OFFSET),
-            "cmd52-byte-transfer-window-reset-assert fallback=cmd53-word-windowed"
+            "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_RESETCTRL_OFFSET),
-            "cmd53-word-windowed fallback=cmd52-byte-current-window-rewindow"
+            "cmd53-word-windowed fallback=cmd52-byte-transfer-window"
         );
         assert_eq!(
             core_ctrl_reset_clear_access_mode_label(),
@@ -26525,10 +26493,10 @@ mod tests {
             "assert-reset",
             &HalError::Unsupported("sdio-cmd53-r5-error"),
         ));
-        assert!(!armcr4_passive_reset_rejection_can_continue(
+        assert!(armcr4_passive_reset_rejection_can_continue(
             &HalError::Unsupported("sdio-cmd53-r5-error")
         ));
-        assert!(!armcr4_passive_reset_rejection_can_continue(
+        assert!(armcr4_passive_reset_rejection_can_continue(
             &HalError::Unsupported("sdio-cmd52-write")
         ));
         assert!(!armcr4_passive_reset_rejection_can_continue(
@@ -33724,6 +33692,9 @@ mod tests {
         assert_eq!(r5_status(0), 0);
         assert_eq!(r5_status(0xCB00), 0xCB00);
         assert_eq!(r5_status(0xFFFF_FFFF), 0xCB00);
+        assert_eq!(r5_status(0x1800), 0x0800);
+        assert_eq!(r5_raw(0x0000_1800), 0x1800);
+        assert_eq!(r5_current_state(0x0000_1800), 1);
     }
 
     #[test]
@@ -33788,14 +33759,14 @@ mod tests {
                 true,
                 AI_RESETCTRL_BIT_RESET,
             ),
-            0x9170_0001
+            0x9070_0001
         );
         assert_eq!(
-            decode(0x9170_0001),
+            decode(0x9070_0001),
             (
                 true,
                 SdioFunction::Function1.number(),
-                0x0b800,
+                0x03800,
                 AI_RESETCTRL_BIT_RESET,
             )
         );

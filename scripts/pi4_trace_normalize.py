@@ -122,10 +122,36 @@ USB_OUTCOME_BLOCKERS = {
     "address-device-timeout",
     "address-device-pending",
     "cmd-poll-pending",
+    "cmd-doorbell-write-halt",
     "cmd-timeout",
     "safe-port-event-required",
     "safe-port-state",
     "set-config",
+}
+USB_BOOTLOADER_HANDOFF_FIELD_KEYS = {
+    "policy",
+    "origin",
+    "seed",
+    "handoff",
+    "run",
+    "route",
+    "outcome",
+    "publish_guard",
+}
+USB_BOOTLOADER_HANDOFF_VALUES = {
+    "bootloader-authorized",
+    "bootloader-owned",
+    "cold-start-from-snapshot",
+    "fw-handoff-cold-start-from-snapshot",
+    "preserve-controller-state",
+    "preserve-state",
+    "reset-owned-stop-seed",
+    "run-uboot",
+    "seeded-cold-start",
+    "stop-seed",
+    "stop-state",
+    "stop-state-preserve",
+    "uboot-first",
 }
 
 
@@ -243,6 +269,19 @@ def parse_fields(text: str) -> dict[str, str]:
     for match in UNSUPPORTED_OPERATION_FIELD_RE.finditer(text):
         fields[match.group("key")] = match.group("value")
     return fields
+
+
+def usb_bootloader_handoff_evidence(event: TraceEvent) -> bool:
+    """Return true when a USB event carries active bootloader handoff state."""
+
+    if event.domain != "usb":
+        return False
+    lowered_fields = {key.lower(): value.lower() for key, value in event.fields.items()}
+    for key in USB_BOOTLOADER_HANDOFF_FIELD_KEYS:
+        value = lowered_fields.get(key)
+        if value in USB_BOOTLOADER_HANDOFF_VALUES:
+            return True
+    return False
 
 
 def serial_corruption_reason(line: str, fields: dict[str, str] | None = None) -> str | None:
@@ -494,6 +533,8 @@ def normalize_usb_blocker(value: str) -> str:
         return "cmd-live-timeout-snapshot-missing"
     if "cmd-poll-pending" in lower:
         return "cmd-poll-pending"
+    if "cmd-doorbell-write-halt" in lower:
+        return "cmd-doorbell-write-halt"
     if (
         "no-op-unproven" in lower
         or "enable-slot-unproven" in lower
@@ -645,6 +686,15 @@ def usb_progress_gate(value: str | None) -> int | None:
     return USB_PROGRESS_GATES.get(label)
 
 
+def usb_command_probe_success(value: str) -> bool:
+    """Return true for command proofs that satisfy the cold-boot poll-only gate."""
+
+    label = value.lower().strip()
+    if "linux-event-ok" in label:
+        return False
+    return label.endswith("-ok") or label.endswith("-ok-cleanup-failed")
+
+
 def parse_hex_int(value: str | None) -> int | None:
     """Parse a decimal or hex integer field value, returning None on absence."""
 
@@ -680,7 +730,8 @@ def normalize_wifi_blocker(value: str) -> str:
         or (
             "sdio cmd52 fail" in lower
             and "op=write-no-cmd53-fallback" in lower
-            and "addr=0x0b800" in lower
+            and ("addr=0x0b800" in lower or "addr=0x03800" in lower)
+            and "val=0x01" in lower
         )
         or (
             "sdio-cmd52-write" in lower
@@ -703,6 +754,7 @@ def normalize_wifi_blocker(value: str) -> str:
             and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
         )
         or "arg=0x91700004" in lower
+        or "arg=0x95700004" in lower
     ):
         return "armcr4-reset-assert-cmd53-r5-rejected"
     if "ht-recover-cmd5-timeout" in lower or (
@@ -954,7 +1006,8 @@ def wifi_ht_runtime_evidence(
 def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     """Summarize the USB xHCI proof gate from normalized events."""
 
-    usb_events = [event for event in events if event.domain == "usb"]
+    event_list = list(events)
+    usb_events = [event for event in event_list if event.domain == "usb"]
     if not usb_events:
         return 0, "missing"
 
@@ -962,6 +1015,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     blocker = "unknown"
     saw_command_submit = False
     saw_command_doorbell = False
+    saw_command_doorbell_write_pending = False
     saw_command_event_ring_before = False
     saw_command_timeout_plan = False
     root_port_read_pending = False
@@ -982,13 +1036,96 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "usbcmd-run-preserved-reset-bit",
         "cmd-timeout",
         "cmd-poll-pending",
+        "cmd-doorbell-write-halt",
         "cmd-submit-proof-timer-preempted",
     }
     stale_command_timeout_details = precise_command_timeout_details - {"cmd-poll-pending"}
-    for event in usb_events:
+    for event in event_list:
         raw = event.raw.lower()
         fields = event.fields
         tag = fields.get("tag", "")
+        if event.domain == "kernel":
+            if (
+                saw_command_doorbell_write_pending
+                and command_timeout_detail is None
+                and blocker in {
+                    "unknown",
+                    "none",
+                    "cmd-poll-pending",
+                    "root-port-sample-deferred",
+                    "port-register-access-disabled",
+                }
+                and ("halting" in raw or "kernel entry via interrupt" in raw)
+            ):
+                gate = max(gate, 3)
+                command_timeout_detail = "cmd-doorbell-write-halt"
+                blocker = command_timeout_detail
+                continue
+            if (
+                brcm_axi_read_pending
+                and "kernel entry via interrupt" in raw
+                and "irq 27" in raw
+            ):
+                gate = max(gate, 3)
+                continue
+            if (
+                root_port_read_pending
+                and "kernel entry via interrupt" in raw
+                and "irq 27" in raw
+            ):
+                gate = max(gate, 3)
+                continue
+            if (
+                reset_pre_usbcmd_pending
+                and "kernel entry via interrupt" in raw
+                and "irq 27" in raw
+            ):
+                gate = max(gate, 3)
+                continue
+            if (
+                saw_command_timeout_plan
+                and "kernel entry via interrupt" in raw
+                and "irq 27" in raw
+            ):
+                gate = max(gate, 3)
+                blocker = command_timeout_detail or "cmd-live-timeout-snapshot-missing"
+                continue
+            if (
+                saw_command_doorbell
+                and "kernel entry via interrupt" in raw
+                and "irq 27" in raw
+            ):
+                gate = max(gate, 3)
+                if command_timeout_detail in precise_command_timeout_details:
+                    blocker = command_timeout_detail
+                else:
+                    blocker = "cmd-poll-pending"
+                continue
+            if (
+                saw_command_event_ring_before
+                and not saw_command_doorbell
+                and blocker in {"unknown", "none", "cmd-poll-pending"}
+                and "kernel entry via interrupt" in raw
+                and "irq 27" in raw
+            ):
+                gate = max(gate, 3)
+                blocker = "cmd-pre-doorbell-proof-timer-preempted"
+                continue
+            if (
+                saw_command_submit
+                and not saw_command_event_ring_before
+                and not saw_command_doorbell
+                and command_timeout_detail is None
+                and blocker in {"unknown", "none", "cmd-poll-pending"}
+                and "kernel entry via interrupt" in raw
+                and "irq 27" in raw
+            ):
+                gate = max(gate, 3)
+                blocker = "cmd-submit-proof-timer-preempted"
+                continue
+            continue
+        if event.domain != "usb":
+            continue
         if "xhci.diag stage=0x0111" in raw or tag == "brcm-axi-setup-read":
             brcm_axi_read_pending = True
             gate = max(gate, 3)
@@ -1166,7 +1303,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "runtime keyboard first-byte" in raw:
             gate = max(gate, 10)
             blocker = "none"
-        if "cfg_window=mapped" in raw or "selected cfg=hal-ext" in raw:
+        if (
+            "cfg_window=mapped" in raw
+            or "cfg_window=hal-ext-cfg-proven" in raw
+            or "selected cfg=hal-ext" in raw
+        ):
             gate = max(gate, 2)
         if "controller-ready" in raw or "controller-init-complete" in raw:
             gate = max(gate, 3)
@@ -1182,6 +1323,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if tag == "cmd-submit":
             saw_command_submit = True
             saw_command_doorbell = False
+            saw_command_doorbell_write_pending = False
             saw_command_event_ring_before = False
             saw_command_timeout_plan = False
             command_timeout_detail = (
@@ -1268,12 +1410,18 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         elif tag.startswith("cmd-event-ring-before"):
             saw_command_event_ring_before = True
             gate = max(gate, 3)
-        elif tag in {
-            "cmd-doorbell-write",
-            "cmd-doorbell-write-done",
-            "cmd-doorbell-post-barrier",
-        }:
+        elif tag == "cmd-doorbell-write":
             saw_command_doorbell = True
+            saw_command_doorbell_write_pending = True
+            gate = max(gate, 3)
+            if (
+                command_timeout_detail is None
+                and blocker in {"unknown", "none"}
+            ):
+                blocker = "cmd-poll-pending"
+        elif tag in {"cmd-doorbell-write-done", "cmd-doorbell-post-barrier"}:
+            saw_command_doorbell = True
+            saw_command_doorbell_write_pending = False
             gate = max(gate, 3)
             if (
                 command_timeout_detail is None
@@ -1281,69 +1429,9 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             ):
                 blocker = "cmd-poll-pending"
         elif (
-            brcm_axi_read_pending
-            and "kernel entry via interrupt" in raw
-            and "irq 27" in raw
-        ):
-            gate = max(gate, 3)
-            continue
-        elif (
-            root_port_read_pending
-            and "kernel entry via interrupt" in raw
-            and "irq 27" in raw
-        ):
-            gate = max(gate, 3)
-            continue
-        elif (
-            reset_pre_usbcmd_pending
-            and "kernel entry via interrupt" in raw
-            and "irq 27" in raw
-        ):
-            gate = max(gate, 3)
-            continue
-        elif (
-            saw_command_timeout_plan
-            and "kernel entry via interrupt" in raw
-            and "irq 27" in raw
-        ):
-            gate = max(gate, 3)
-            blocker = command_timeout_detail or "cmd-live-timeout-snapshot-missing"
-        elif (
-            saw_command_doorbell
-            and "kernel entry via interrupt" in raw
-            and "irq 27" in raw
-        ):
-            gate = max(gate, 3)
-            if command_timeout_detail in precise_command_timeout_details:
-                blocker = command_timeout_detail
-            else:
-                blocker = "cmd-poll-pending"
-        elif (
-            saw_command_event_ring_before
-            and not saw_command_doorbell
-            and "kernel entry via interrupt" in raw
-            and "irq 27" in raw
-        ):
-            gate = max(gate, 3)
-            blocker = "cmd-pre-doorbell-proof-timer-preempted"
-        elif (
-            saw_command_submit
-            and not saw_command_event_ring_before
-            and not saw_command_doorbell
-            and command_timeout_detail is None
-            and "kernel entry via interrupt" in raw
-            and "irq 27" in raw
-        ):
-            gate = max(gate, 3)
-            blocker = "cmd-submit-proof-timer-preempted"
-        elif (
-            fields.get("command_probe", "").endswith("-ok")
-            or fields.get("command_probe", "").endswith("-ok-cleanup-failed")
+            usb_command_probe_success(fields.get("command_probe", ""))
             or (
-                (
-                    fields.get("result", "").endswith("-ok")
-                    or fields.get("result", "").endswith("-ok-cleanup-failed")
-                )
+                usb_command_probe_success(fields.get("result", ""))
                 and "command-probe" in raw
             )
             or fields.get("verdict", "").startswith("command-ring-ready")
@@ -1548,6 +1636,18 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if cached_only_evidence:
             if gate >= 4 and explicit_blocker in precise_ht_blockers | {"ht-clock-timeout"}:
                 blocker = explicit_blocker
+            continue
+        if (
+            "stage=armcr4-passive" in raw
+            and "action=advisory-reset-skip" in raw
+        ):
+            gate = max(gate, 4)
+            if blocker in {
+                "armcr4-reset-assert-cmd52-r5-rejected",
+                "armcr4-reset-assert-cmd53-r5-rejected",
+            }:
+                blocker = "none"
+                specific_reset_blocker = None
             continue
         if explicit_blocker == "pre-f2-core-control":
             gate = max(gate, 4)
@@ -2003,20 +2103,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     else:
         boot_halt_reason = "none"
     usb_bootloader_handoff_seen = any(
-        event.domain == "usb"
-        and any(
-            token in event.raw.lower()
-            for token in (
-                "bootloader-owned",
-                "bootloader-authorized",
-                "preserve-controller-state",
-                "reset-owned-stop-seed",
-                "run-uboot",
-                "seeded-cold-start",
-                "uboot-first",
-            )
-        )
-        for event in event_list
+        usb_bootloader_handoff_evidence(event) for event in event_list
     )
     return GateSummary(
         usb_gate=usb_gate,

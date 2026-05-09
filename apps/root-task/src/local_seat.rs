@@ -39,7 +39,7 @@ pub(crate) fn usb_runtime_command_replay_ready(
     command_ready: bool,
     command_source: &'static str,
 ) -> bool {
-    cfg_replay_ready && command_ready && matches!(command_source, "runtime-mapped")
+    cfg_replay_ready && command_ready && matches!(command_source, "hal-ext-cfg-proof")
 }
 
 /// Deterministic local-seat initialisation outcome.
@@ -133,15 +133,15 @@ pub struct LocalSeatXhciStopStateSnapshot {
 pub struct LocalSeatPlatformHints {
     /// Optional MMIO base for Pi4 xHCI.
     pub xhci_mmio_hint: Option<usize>,
-    /// Optional bootloader-exported PCI command state for Pi4 xHCI handoff.
+    /// Legacy diagnostic PCI command hint from older Pi4 boot scripts.
     pub xhci_pci_cmd: Option<u16>,
-    /// Whether the bootloader marked the Pi4 xHCI BAR safe for cold-start handoff.
+    /// Legacy diagnostic flag from older Pi4 xHCI handoff scripts.
     pub xhci_handoff_ready: bool,
-    /// Whether the bootloader quiesced xHCI interrupt delivery before handoff.
+    /// Legacy diagnostic flag from older Pi4 xHCI handoff scripts.
     pub xhci_irq_quiesced: bool,
-    /// Whether bootloader post-stop evidence authorizes Cohesix to take reset ownership.
+    /// Legacy diagnostic flag from older Pi4 xHCI handoff scripts.
     pub xhci_bootloader_reset_authorized: bool,
-    /// Optional validated capability snapshot exported by the bootloader.
+    /// Optional diagnostic capability snapshot from older Pi4 boot scripts.
     pub xhci_capability_snapshot: Option<LocalSeatXhciCapabilitySnapshot>,
     /// Optional stop-state snapshot exported by the bootloader.
     pub xhci_stop_state_snapshot: Option<LocalSeatXhciStopStateSnapshot>,
@@ -657,11 +657,11 @@ mod tests {
     }
 
     #[test]
-    fn usb_runtime_command_replay_requires_live_runtime_mapping() {
+    fn usb_runtime_command_replay_requires_hal_ext_cfg_proof() {
         assert!(usb_runtime_command_replay_ready(
             true,
             true,
-            "runtime-mapped",
+            "hal-ext-cfg-proof",
         ));
         assert!(!usb_runtime_command_replay_ready(
             true,
@@ -681,12 +681,12 @@ mod tests {
         assert!(!usb_runtime_command_replay_ready(
             false,
             true,
-            "runtime-mapped",
+            "hal-ext-cfg-proof",
         ));
         assert!(!usb_runtime_command_replay_ready(
             true,
             false,
-            "runtime-mapped",
+            "hal-ext-cfg-proof",
         ));
     }
 

@@ -28,7 +28,6 @@ DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net-console"
 SKIP_BUILD=0
 CLEAN_BUILD=0
-PI4_UBOOT_XHCI_HANDOFF="${COHESIX_PI4_UBOOT_XHCI_HANDOFF:-0}"
 PI4_TOTAL_MEM_MB=2048
 RESTORE_CANONICAL_CODEGEN=0
 PI4_DTB_PADDED_SIZE=$((128 * 1024))
@@ -70,10 +69,7 @@ Options:
   -h, --help                Show this help
 
 Environment:
-  COHESIX_PI4_UBOOT_XHCI_HANDOFF=0|1
-                            Controls U-Boot xHCI handoff DTB export.
-                            Default is 0: Cohesix owns VL805/xHCI cold start.
-                            Set 1 only for opt-in halted-stop-state diagnostics.
+  USB is always staged as Cohesix-owned cold boot. U-Boot xHCI handoff export is disabled.
 USAGE
 }
 
@@ -160,7 +156,7 @@ verify_u_boot_pi4_target() {
       fail "u-boot.bin is missing CONFIG_SYS_CONSOLE_IS_IN_ENV; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
 }
 
-verify_boot_cmd_handoff() {
+verify_boot_cmd_usb_cold_boot() {
     local path="$1"
 
     require_file "$path"
@@ -170,28 +166,23 @@ verify_boot_cmd_handoff() {
     grep -q 'run coh_clear_xhci_handoff_live' "$path" || fail "boot.cmd is missing xHCI stale-token clearing before usb stop"
     grep -q 'setenv coh_xhci_mmio;' "$path" || fail "boot.cmd does not clear stale xHCI MMIO before usb stop"
     grep -q 'setenv coh_xhci_pci_cmd;' "$path" || fail "boot.cmd does not clear stale xHCI PCI command before usb stop"
-    grep -q "setenv coh_xhci_handoff_opt_in ${PI4_UBOOT_XHCI_HANDOFF}" "$path" || fail "boot.cmd does not encode the requested xHCI handoff policy"
-    if [[ "${PI4_UBOOT_XHCI_HANDOFF}" == "1" ]]; then
-        grep -q 'cohesix,xhci-mmio' "$path" || fail "boot.cmd is missing xHCI MMIO DT handoff"
-        grep -q 'cohesix,xhci-handoff-ready' "$path" || fail "boot.cmd is missing xHCI handoff-ready DT handoff"
-        grep -q 'cohesix,xhci-irq-quiesced' "$path" || fail "boot.cmd is missing xHCI IRQ quiesce DT handoff"
-        grep -q 'cohesix,xhci-handoff-halted' "$path" || fail "boot.cmd is missing xHCI halted-state DT handoff"
-        grep -q 'cohesix,xhci-handoff-safe' "$path" || fail "boot.cmd is missing xHCI handoff-safe DT handoff"
-        grep -q 'cohesix,xhci-usbcmd' "$path" || fail "boot.cmd is missing xHCI USBCMD DT handoff"
-        grep -q 'cohesix,xhci-usbsts' "$path" || fail "boot.cmd is missing xHCI USBSTS DT handoff"
-        grep -q 'cohesix,xhci-iman0' "$path" || fail "boot.cmd is missing xHCI IMAN0 DT handoff"
-        grep -q 'cohesix,xhci-pci-cmd' "$path" || fail "boot.cmd is missing xHCI PCI command DT handoff"
-        grep -q 'run coh_export_xhci_handoff' "$path" || fail "boot.cmd is missing xHCI post-stop handoff export"
-        grep -q 'setenv coh_xhci_mmio 0x0000000600000000' "$path" || fail "boot.cmd does not export the Pi4 VL805 BAR0 handoff"
-        grep -q 'setenv coh_xhci_pci_cmd 0x0406' "$path" || fail "boot.cmd does not export the Pi4 VL805 PCI command handoff"
-    else
-        grep -q 'run coh_export_xhci_stop_seed' "$path" || fail "boot.cmd is missing default xHCI stop-state seed export"
-        grep -q 'Cohesix owns xHCI stop seed' "$path" || fail "boot.cmd does not keep xHCI handoff export disabled when requested"
-        grep -q 'Cohesix owns xHCI default stop seed' "$path" || fail "boot.cmd does not export a default xHCI seed when no U-Boot USB session is active"
-    fi
+    grep -q 'setenv coh_xhci_handoff_opt_in 0' "$path" || fail "boot.cmd must disable xHCI handoff export"
+    grep -q 'run coh_export_xhci_stop_seed' "$path" || fail "boot.cmd is missing default xHCI stop-state seed export"
+    grep -q 'Cohesix owns xHCI stop seed' "$path" || fail "boot.cmd does not keep xHCI handoff export disabled"
+    grep -q 'Cohesix owns xHCI default stop seed' "$path" || fail "boot.cmd does not export a default xHCI seed when no U-Boot USB session is active"
+    ! grep -q 'run coh_export_xhci_handoff' "$path" || fail "boot.cmd still contains obsolete xHCI handoff export"
+    ! grep -q 'setenv coh_xhci_mmio 0x' "$path" || fail "boot.cmd still exports obsolete xHCI MMIO handoff"
+    ! grep -q 'setenv coh_xhci_pci_cmd 0x' "$path" || fail "boot.cmd still exports obsolete xHCI PCI command handoff"
+    ! grep -q 'setenv coh_xhci_handoff_ready 1' "$path" || fail "boot.cmd still exports obsolete xHCI handoff-ready token"
     ! grep -q '\[cohesix:usb-trace\]' "$path" || fail "boot.cmd still contains obsolete USB trace breadcrumbs"
     ! grep -q 'coh_force_xhci_handoff_reprobe' "$path" || fail "boot.cmd still contains obsolete forced xHCI reprobe logic"
     ! grep -q 'cohesix,xhci-cap-length' "$path" || fail "boot.cmd still mirrors obsolete xHCI capability snapshots"
+    ! grep -q 'cohesix,xhci-mmio' "$path" || fail "boot.cmd still mirrors obsolete xHCI MMIO handoff diagnostics"
+    ! grep -q 'cohesix,xhci-pci-cmd' "$path" || fail "boot.cmd still mirrors obsolete xHCI PCI command diagnostics"
+    ! grep -q 'cohesix,xhci-handoff-ready' "$path" || fail "boot.cmd still mirrors obsolete xHCI handoff-ready diagnostics"
+    ! grep -q 'cohesix,xhci-irq-quiesced' "$path" || fail "boot.cmd still mirrors obsolete xHCI IRQ handoff diagnostics"
+    ! grep -q 'cohesix,xhci-handoff-halted' "$path" || fail "boot.cmd still mirrors obsolete xHCI halted handoff diagnostics"
+    ! grep -q 'cohesix,xhci-handoff-safe' "$path" || fail "boot.cmd still mirrors obsolete xHCI handoff-safe diagnostics"
     ! grep -q 'cohesix,xhci-handoff-source' "$path" || fail "boot.cmd still mirrors obsolete xHCI handoff source diagnostics"
 }
 
@@ -824,22 +815,21 @@ setenv coh_logo_bootstd_file __COH_BOOTSTD_LOGO_FILE__
 setenv coh_logo_delay 0
 setenv coh_logo_x 20
 setenv coh_logo_y 20
-setenv coh_xhci_handoff_opt_in __COH_XHCI_HANDOFF_OPT_IN__
+setenv coh_xhci_handoff_opt_in 0
 setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""'
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
 setenv coh_bootstrap_usb_session 'if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi'
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
 setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_mmio; setenv coh_xhci_pci_cmd; setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
 setenv coh_export_xhci_stop_seed 'setenv coh_xhci_usbcmd 0x00000000; setenv coh_xhci_usbsts 0x00000001; setenv coh_xhci_iman0 0x00000000'
-setenv coh_export_xhci_handoff 'setenv coh_xhci_mmio 0x0000000600000000; setenv coh_xhci_pci_cmd 0x0406; setenv coh_xhci_handoff_ready 1; setenv coh_xhci_irq_quiesced 1; setenv coh_xhci_halted 1; setenv coh_xhci_handoff_safe 1; setenv coh_xhci_usbcmd 0x00000000; setenv coh_xhci_usbsts 0x00000001; setenv coh_xhci_iman0 0x00000000'
-setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if test "${coh_usb_input_ready}" = "1"; then if usb stop; then if test "${coh_xhci_handoff_opt_in}" = "1"; then run coh_export_xhci_handoff; echo "[cohesix] USB host quiesced for opt-in handoff diagnostics"; else run coh_clear_xhci_handoff_live; run coh_export_xhci_stop_seed; echo "[cohesix] USB host stopped; Cohesix owns xHCI stop seed"; fi; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed before Cohesix xHCI ownership"; fi; else run coh_export_xhci_stop_seed; echo "[cohesix] USB host session was not active; Cohesix owns xHCI default stop seed"; fi'
+setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if test "${coh_usb_input_ready}" = "1"; then if usb stop; then run coh_clear_xhci_handoff_live; run coh_export_xhci_stop_seed; echo "[cohesix] USB host stopped; Cohesix owns xHCI stop seed"; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed before Cohesix xHCI ownership"; fi; else run coh_export_xhci_stop_seed; echo "[cohesix] USB host session was not active; Cohesix owns xHCI default stop seed"; fi'
 setenv coh_toggle_logo 'if test "${coh_show_logo}" = "1"; then setenv coh_show_logo 0; echo "[cohesix] HDMI logo disabled"; else setenv coh_show_logo 1; echo "[cohesix] HDMI logo enabled"; fi'
 setenv coh_detect_saved_config 'setenv coh_has_saved_config 0; if test -n "${coh_net_mode}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_net_interface}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_ip}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_prefix_len}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_gateway}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_ssid}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_psk}"; then setenv coh_has_saved_config 1; fi'
 setenv coh_load_saved_policy 'run coh_clear_saved_policy; if fatload mmc 0:1 ${coh_policy_addr} ${coh_policy_file}; then if env import -d -t ${coh_policy_addr} ${filesize} coh_net_mode coh_net_interface coh_static_ip coh_static_prefix_len coh_static_gateway coh_wifi_ssid coh_wifi_psk coh_show_logo; then echo "[cohesix] loaded saved settings from ${coh_policy_file}"; else echo "[cohesix] WARNING: failed to import ${coh_policy_file}; ignoring saved settings"; run coh_clear_saved_policy; fi; fi; if test -z "${coh_show_logo}"; then setenv coh_show_logo 1; fi'
 setenv coh_persist_policy 'if env export -t ${coh_policy_addr} coh_net_mode coh_net_interface coh_static_ip coh_static_prefix_len coh_static_gateway coh_wifi_ssid coh_wifi_psk coh_show_logo; then if fatwrite mmc 0:1 ${coh_policy_addr} ${coh_policy_file} ${filesize}; then echo "[cohesix] saved settings to ${coh_policy_file}"; else echo "[cohesix] ERROR: failed to write ${coh_policy_file}"; fi; else echo "[cohesix] ERROR: failed to export saved settings"; fi'
 setenv coh_show_logo_splash 'if test "${coh_show_logo}" = "1"; then if test "${coh_logo_shown}" != "1"; then cls; if fatload mmc 0:1 ${coh_logo_addr} ${coh_logo_bootstd_file}; then if bmp display ${coh_logo_addr} m m; then echo "[cohesix] loading boot options..."; if test "${coh_logo_delay}" != "0"; then sleep ${coh_logo_delay}; fi; setenv coh_logo_shown 1; else echo "[cohesix] logo draw failed: ${coh_logo_bootstd_file}"; fi; else echo "[cohesix] logo splash skipped: ${coh_logo_bootstd_file}"; fi; fi; fi'
 setenv coh_load_runtime_dtb 'setenv coh_boot_error 0; if fatload mmc 0:1 ${coh_dtb_addr} ${coh_dtb_file}; then if fdt addr ${coh_dtb_addr}; then echo "[cohesix] loaded ${coh_dtb_file} to ${coh_dtb_addr}"; else echo "[cohesix] ERROR: failed to select ${coh_dtb_file}"; setenv coh_boot_error 1; fi; else echo "[cohesix] ERROR: failed to load ${coh_dtb_file}"; setenv coh_boot_error 1; fi'
-setenv coh_apply_dtb_policy 'if test "${coh_boot_error}" != "1" && env exists coh_xhci_mmio; then if fdt set /chosen cohesix,xhci-mmio "${coh_xhci_mmio}"; then echo "[cohesix] dtb chosen cohesix,xhci-mmio=${coh_xhci_mmio}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-mmio"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_pci_cmd; then if fdt set /chosen cohesix,xhci-pci-cmd "${coh_xhci_pci_cmd}"; then echo "[cohesix] dtb chosen cohesix,xhci-pci-cmd=${coh_xhci_pci_cmd}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-pci-cmd"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_usbcmd; then if fdt set /chosen cohesix,xhci-usbcmd "${coh_xhci_usbcmd}"; then echo "[cohesix] dtb chosen cohesix,xhci-usbcmd=${coh_xhci_usbcmd}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-usbcmd"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_usbsts; then if fdt set /chosen cohesix,xhci-usbsts "${coh_xhci_usbsts}"; then echo "[cohesix] dtb chosen cohesix,xhci-usbsts=${coh_xhci_usbsts}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-usbsts"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_iman0; then if fdt set /chosen cohesix,xhci-iman0 "${coh_xhci_iman0}"; then echo "[cohesix] dtb chosen cohesix,xhci-iman0=${coh_xhci_iman0}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-iman0"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_handoff_ready; then if fdt set /chosen cohesix,xhci-handoff-ready "${coh_xhci_handoff_ready}"; then echo "[cohesix] dtb chosen cohesix,xhci-handoff-ready=${coh_xhci_handoff_ready}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-handoff-ready"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_irq_quiesced; then if fdt set /chosen cohesix,xhci-irq-quiesced "${coh_xhci_irq_quiesced}"; then echo "[cohesix] dtb chosen cohesix,xhci-irq-quiesced=${coh_xhci_irq_quiesced}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-irq-quiesced"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_halted; then if fdt set /chosen cohesix,xhci-handoff-halted "${coh_xhci_halted}"; then echo "[cohesix] dtb chosen cohesix,xhci-handoff-halted=${coh_xhci_halted}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-handoff-halted"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_handoff_safe; then if fdt set /chosen cohesix,xhci-handoff-safe "${coh_xhci_handoff_safe}"; then echo "[cohesix] dtb chosen cohesix,xhci-handoff-safe=${coh_xhci_handoff_safe}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-handoff-safe"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_net_mode}"; then if fdt set /chosen cohesix,net-mode "${coh_net_mode}"; then echo "[cohesix] dtb chosen cohesix,net-mode=${coh_net_mode}"; else echo "[cohesix] ERROR: failed to set cohesix,net-mode"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_net_interface}"; then if fdt set /chosen cohesix,net-interface "${coh_net_interface}"; then echo "[cohesix] dtb chosen cohesix,net-interface=${coh_net_interface}"; else echo "[cohesix] ERROR: failed to set cohesix,net-interface"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_ip}"; then if fdt set /chosen cohesix,static-ipv4 "${coh_static_ip}"; then echo "[cohesix] dtb chosen cohesix,static-ipv4=${coh_static_ip}"; else echo "[cohesix] ERROR: failed to set cohesix,static-ipv4"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_prefix_len}"; then if fdt set /chosen cohesix,static-prefix-len "${coh_static_prefix_len}"; then echo "[cohesix] dtb chosen cohesix,static-prefix-len=${coh_static_prefix_len}"; else echo "[cohesix] ERROR: failed to set cohesix,static-prefix-len"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_gateway}"; then if fdt set /chosen cohesix,static-gateway "${coh_static_gateway}"; then echo "[cohesix] dtb chosen cohesix,static-gateway=${coh_static_gateway}"; else echo "[cohesix] ERROR: failed to set cohesix,static-gateway"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_wifi_ssid}"; then if fdt set /chosen cohesix,wifi-ssid "${coh_wifi_ssid}"; then echo "[cohesix] dtb chosen cohesix,wifi-ssid=<set>"; else echo "[cohesix] ERROR: failed to set cohesix,wifi-ssid"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_wifi_psk}"; then if fdt set /chosen cohesix,wifi-psk "${coh_wifi_psk}"; then echo "[cohesix] dtb chosen cohesix,wifi-psk=<set>"; else echo "[cohesix] ERROR: failed to set cohesix,wifi-psk"; setenv coh_boot_error 1; fi; fi'
+setenv coh_apply_dtb_policy 'if test "${coh_boot_error}" != "1" && env exists coh_xhci_usbcmd; then if fdt set /chosen cohesix,xhci-usbcmd "${coh_xhci_usbcmd}"; then echo "[cohesix] dtb chosen cohesix,xhci-usbcmd=${coh_xhci_usbcmd}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-usbcmd"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_usbsts; then if fdt set /chosen cohesix,xhci-usbsts "${coh_xhci_usbsts}"; then echo "[cohesix] dtb chosen cohesix,xhci-usbsts=${coh_xhci_usbsts}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-usbsts"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && env exists coh_xhci_iman0; then if fdt set /chosen cohesix,xhci-iman0 "${coh_xhci_iman0}"; then echo "[cohesix] dtb chosen cohesix,xhci-iman0=${coh_xhci_iman0}"; else echo "[cohesix] ERROR: failed to set cohesix,xhci-iman0"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_net_mode}"; then if fdt set /chosen cohesix,net-mode "${coh_net_mode}"; then echo "[cohesix] dtb chosen cohesix,net-mode=${coh_net_mode}"; else echo "[cohesix] ERROR: failed to set cohesix,net-mode"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_net_interface}"; then if fdt set /chosen cohesix,net-interface "${coh_net_interface}"; then echo "[cohesix] dtb chosen cohesix,net-interface=${coh_net_interface}"; else echo "[cohesix] ERROR: failed to set cohesix,net-interface"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_ip}"; then if fdt set /chosen cohesix,static-ipv4 "${coh_static_ip}"; then echo "[cohesix] dtb chosen cohesix,static-ipv4=${coh_static_ip}"; else echo "[cohesix] ERROR: failed to set cohesix,static-ipv4"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_prefix_len}"; then if fdt set /chosen cohesix,static-prefix-len "${coh_static_prefix_len}"; then echo "[cohesix] dtb chosen cohesix,static-prefix-len=${coh_static_prefix_len}"; else echo "[cohesix] ERROR: failed to set cohesix,static-prefix-len"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_gateway}"; then if fdt set /chosen cohesix,static-gateway "${coh_static_gateway}"; then echo "[cohesix] dtb chosen cohesix,static-gateway=${coh_static_gateway}"; else echo "[cohesix] ERROR: failed to set cohesix,static-gateway"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_wifi_ssid}"; then if fdt set /chosen cohesix,wifi-ssid "${coh_wifi_ssid}"; then echo "[cohesix] dtb chosen cohesix,wifi-ssid=<set>"; else echo "[cohesix] ERROR: failed to set cohesix,wifi-ssid"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_wifi_psk}"; then if fdt set /chosen cohesix,wifi-psk "${coh_wifi_psk}"; then echo "[cohesix] dtb chosen cohesix,wifi-psk=<set>"; else echo "[cohesix] ERROR: failed to set cohesix,wifi-psk"; setenv coh_boot_error 1; fi; fi'
 setenv coh_emit_policy_summary 'if test -n "${coh_net_mode}"; then echo "[cohesix] mode=${coh_net_mode}"; else echo "[cohesix] mode=manifest"; fi; if test -n "${coh_net_interface}"; then echo "[cohesix] interface=${coh_net_interface}"; else echo "[cohesix] interface=manifest"; fi; if test -n "${coh_static_ip}"; then echo "[cohesix] static-ip=${coh_static_ip}/${coh_static_prefix_len} gateway=${coh_static_gateway}"; fi; if test -n "${coh_wifi_ssid}"; then echo "[cohesix] wifi-ssid=${coh_wifi_ssid}"; fi'
 setenv coh_boot_loaded_image 'run coh_load_runtime_dtb; if test "${coh_boot_error}" = "1"; then echo "[cohesix] ERROR: boot aborted before USB quiesce"; else run coh_quiesce_usb; run coh_apply_dtb_policy; if test "${coh_boot_error}" = "1"; then echo "[cohesix] ERROR: boot aborted before kernel handoff"; else echo "[cohesix] loaded ${coh_image} to ${coh_addr}; bootm with ${coh_dtb_file}"; bootm ${coh_addr} - ${coh_dtb_addr}; echo "[cohesix] returned from image"; fi; fi'
 setenv coh_boot_sequence 'run coh_emit_policy_summary; if fatload mmc 0:1 ${coh_addr} ${coh_image}; then run coh_boot_loaded_image; else echo "[cohesix] primary image load failed: ${coh_image}"; if fatload mmc 0:1 ${coh_addr} ${coh_image_fallback}; then setenv coh_image ${coh_image_fallback}; run coh_boot_loaded_image; else echo "[cohesix] ERROR: failed to load ${coh_image} or fallback ${coh_image_fallback} from mmc 0:1"; echo "[cohesix] manual: fatls mmc 0:1"; echo "[cohesix] manual: fatload mmc 0:1 0x10000000 ${coh_image}"; echo "[cohesix] manual: fatload mmc 0:1 0x14000000 ${coh_dtb_file}"; echo "[cohesix] manual: bootm 0x10000000 - 0x14000000"; fi; fi'
@@ -857,7 +847,6 @@ EOF
     sed -i '' "s/__COH_IMAGE_FALLBACK__/${fallback_image}/g" "$out"
     sed -i '' "s/__COH_LOGO_FILE__/${COHESIX_LOGO_STAGE_NAME}/g" "$out"
     sed -i '' "s/__COH_BOOTSTD_LOGO_FILE__/${BOOTSTD_LOGO_STAGE_NAME}/g" "$out"
-    sed -i '' "s/__COH_XHCI_HANDOFF_OPT_IN__/${PI4_UBOOT_XHCI_HANDOFF}/g" "$out"
 }
 
 write_linux_wifi_debug_helpers() {
@@ -947,7 +936,7 @@ total_mem=${PI4_TOTAL_MEM_MB}
 EOF
 
     write_boot_cmd "${STAGE_DIR}/boot.cmd" "${COHESIX_IMAGE_NAME}" "${SEL4_UPSTREAM_IMAGE_NAME}"
-    verify_boot_cmd_handoff "${STAGE_DIR}/boot.cmd"
+    verify_boot_cmd_usb_cold_boot "${STAGE_DIR}/boot.cmd"
     "$mkimage_bin" \
       -A arm64 \
       -T script \
@@ -1143,11 +1132,6 @@ main() {
     if [[ "${CLEAN_BUILD}" -eq 1 && "${SKIP_BUILD}" -eq 1 ]]; then
         fail "--clean cannot be combined with --skip-build"
     fi
-    case "${PI4_UBOOT_XHCI_HANDOFF}" in
-        0|1) ;;
-        *) fail "COHESIX_PI4_UBOOT_XHCI_HANDOFF must be 0 or 1" ;;
-    esac
-
     local manifest_real
     manifest_real="$(realpath_py "${MANIFEST_PATH}")"
     if [[ "${manifest_real}" != "$(realpath_py "${CANONICAL_MANIFEST_PATH}")" ]]; then
