@@ -1783,11 +1783,12 @@ const fn firmware_channel_uses_linux_minimal_setup(experimental_no_ht_transport:
 
 #[inline]
 const fn firmware_channel_defers_function2_interrupts(experimental_no_ht_transport: bool) -> bool {
-    // Linux arms the dongle-side interrupt path because brcmfmac has an MMC
-    // IRQ/DPC service loop. Keep the default firmware channel U-Boot-style
-    // poll-only. The bounded no-HT lane remains diagnostic-only and does not
-    // authorize production Function 2 traffic.
-    !experimental_no_ht_transport
+    // Linux arms the dongle-side interrupt path before post-firmware BCDC/CLM
+    // traffic. The strict Cohesix lane reaches this point only after real HT and
+    // live IOR2 proof, so the HAL-owned clear/ack path is now the production
+    // route rather than a diagnostic bypass.
+    let _ = experimental_no_ht_transport;
+    false
 }
 
 #[inline]
@@ -16705,7 +16706,8 @@ impl SdioHost {
         let _ = self.service_sdio_irq_once_for_firmware_channel_with_idle_log(
             "control-plane-reply",
             true,
-            self.experimental_control_plane_reply_rearm_empty_polls == 0,
+            self.experimental_no_ht_transport
+                && self.experimental_control_plane_reply_rearm_empty_polls == 0,
         )?;
         let low_touch_pure_f2_mode = self.control_plane_uses_low_touch_pure_f2_diagnostics();
         if low_touch_pure_f2_mode && self.experimental_control_plane_reply_rearm_empty_polls == 0 {
@@ -23954,9 +23956,9 @@ mod tests {
     }
 
     #[test]
-    fn firmware_channel_linux_minimal_setup_arms_interrupt_delivery_for_bounded_no_ht() {
+    fn firmware_channel_linux_minimal_setup_arms_interrupt_delivery_after_f2_proof() {
         assert!(!firmware_channel_defers_function2_interrupts(true));
-        assert!(firmware_channel_defers_function2_interrupts(false));
+        assert!(!firmware_channel_defers_function2_interrupts(false));
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(true));
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(false));
     }

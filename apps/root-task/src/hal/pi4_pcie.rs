@@ -653,7 +653,31 @@ fn ensure_pi4_pcie_root_ready(
     phase: Pi4PcieProofPhase,
 ) -> Result<u32, HalError> {
     let status_before = mmio_read_u32(status_reg);
+    let misc_ctrl = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_MISC_CTRL)?;
+    let rc_bar1 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR1_CONFIG_LO)?;
+    let rc_bar2_lo = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_LO)?;
+    let rc_bar2_hi = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_HI)?;
+    let rc_bar3 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR3_CONFIG_LO)?;
     if remember_pi4_pcie_link_and_rc_ready(status_before) {
+        mmio_clear_set_bits_u32_flush(
+            misc_ctrl,
+            PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_MASK,
+            PCIE_MISC_MISC_CTRL_SCB_ACCESS_EN_MASK
+                | PCIE_MISC_MISC_CTRL_CFG_READ_UR_MODE_MASK
+                | PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_128,
+        );
+        configure_pi4_pcie_dma_window(misc_ctrl, rc_bar1, rc_bar2_lo, rc_bar2_hi, rc_bar3);
+        mask_and_clear_pcie_irq_sources(status_page);
+        configure_pi4_pcie_outbound_window(status_page)?;
+        let mut line = heapless::String::<208>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 bcm2711-pcie root-init ready stage={} status=0x{status_before:08x} action=refresh-windows source=hal",
+                phase.label()
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
         return Ok(status_before);
     }
 
@@ -676,12 +700,7 @@ fn ensure_pi4_pcie_root_ready(
 
     let init_page = map_pcie_reg_page_cached(hal, BCM2711_PCIE_RGR1_SW_INIT_1, "pi4-pcie-sw-init")?;
     let sw_init_reg = same_page_reg_virt(init_page, BCM2711_PCIE_RGR1_SW_INIT_1)?;
-    let misc_ctrl = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_MISC_CTRL)?;
     let hard_debug = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_HARD_PCIE_HARD_DEBUG)?;
-    let rc_bar1 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR1_CONFIG_LO)?;
-    let rc_bar2_lo = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_LO)?;
-    let rc_bar2_hi = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_HI)?;
-    let rc_bar3 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR3_CONFIG_LO)?;
 
     let mut begin = heapless::String::<208>::new();
     let _ = core::fmt::Write::write_fmt(

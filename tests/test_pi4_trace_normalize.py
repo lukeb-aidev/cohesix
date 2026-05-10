@@ -2518,6 +2518,25 @@ def test_gate_summary_tracks_wifi_control_plane_step_err_without_snapshot() -> N
     assert gates.wifi_blocker == "ioctl-timeout"
 
 
+def test_gate_summary_preserves_interrupts_deferred_over_cyw43_ioctl_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
+            "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
+            "exact=cyw43-control-plane-linux-interrupts-deferred",
+            "[cyw43] control-plane step=clm-download action=fail "
+            "err=cyw43 protocol error: ioctl-timeout",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43 protocol error: ioctl-timeout",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-interrupts-deferred"
+
+
 def test_gate_summary_tracks_wifi_preinit_substep_failure() -> None:
     events = normalizer.parse_events(
         [

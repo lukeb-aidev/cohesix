@@ -287,12 +287,22 @@ const fn polling_event_generation_iman_value(
 
 #[inline(always)]
 const fn command_timeout_live_snapshot_enabled() -> bool {
-    true
+    false
 }
 
 #[inline(always)]
 const fn prompt_safe_command_timeout_live_snapshot_enabled() -> bool {
     false
+}
+
+#[inline(always)]
+const fn command_diag_live_reads_allowed(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+    skip_initial_live_operational_reads: bool,
+) -> bool {
+    !skip_initial_live_operational_reads
+        && !runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -4697,9 +4707,8 @@ impl<H: Dma> XhciCtrl<H> {
                         if !ptr_match {
                             emit_xhci_diag(
                                 0x0305,
-                                self.read_op_u64(reg::CRCR),
-                                ((self.read_op::<u32>(reg::USBCMD) as u64) << 32)
-                                    | self.read_op::<u32>(reg::USBSTS) as u64,
+                                completion_ptr,
+                                expected_ptr,
                                 trb.control as u64,
                             );
                             continue;
@@ -4714,10 +4723,9 @@ impl<H: Dma> XhciCtrl<H> {
                     if code != completion::SUCCESS {
                         emit_xhci_diag(
                             0x0306,
-                            self.read_op_u64(reg::CRCR),
-                            self.read_op_u64(reg::DCBAAP),
-                            ((self.read_op::<u32>(reg::USBCMD) as u64) << 32)
-                                | self.read_op::<u32>(reg::USBSTS) as u64,
+                            expected_cmd_trb.unwrap_or(0) & !0x0f,
+                            trb.param & !0x0f,
+                            trb.control as u64,
                         );
                         emit_xhci_diag(
                             0x0302,
@@ -4753,11 +4761,9 @@ impl<H: Dma> XhciCtrl<H> {
                 );
                 emit_xhci_diag(
                     0x0309,
-                    ((self.read_op::<u32>(reg::USBCMD) as u64) << 32)
-                        | self.read_op::<u32>(reg::USBSTS) as u64,
-                    ((self.read_reg::<u32>(int_base + reg::IMAN) as u64) << 32)
-                        | self.read_reg::<u32>(int_base + reg::ERSTSZ) as u64,
-                    self.read_op_u64(reg::DCBAAP),
+                    expected_cmd_trb.unwrap_or(0) & !0x0f,
+                    event_syncs as u64,
+                    int_base as u64,
                 );
                 if let Some(trb) = last_non_command_event {
                     emit_xhci_diag(
@@ -6043,6 +6049,23 @@ impl<H: Dma> XhciCtrl<H> {
 
     /// Captures key command/event-ring registers for timeout debugging.
     pub fn command_diag_for_port(&self, port: u8) -> XhciCommandDiag {
+        if !command_diag_live_reads_allowed(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+            self.skip_initial_live_operational_reads,
+        ) {
+            emit_xhci_diag(0x03f9, port as u64, self.firmware_handoff as u64, 1);
+            return XhciCommandDiag {
+                usbcmd: 0,
+                usbsts: 0,
+                crcr: 0,
+                dcbaap: 0,
+                iman: 0,
+                erdp: 0,
+                erstba: 0,
+                portsc: 0,
+            };
+        }
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         XhciCommandDiag {
             usbcmd: self.read_op::<u32>(reg::USBCMD),
@@ -7675,8 +7698,8 @@ mod tests {
     }
 
     #[test]
-    fn command_timeout_live_snapshot_is_enabled_for_command_ring_edge() {
-        assert!(command_timeout_live_snapshot_enabled());
+    fn command_timeout_live_snapshot_is_deferred_for_command_ring_edge() {
+        assert!(!command_timeout_live_snapshot_enabled());
     }
 
     #[test]
@@ -7685,7 +7708,7 @@ mod tests {
     }
 
     #[test]
-    fn command_timeout_live_snapshot_runs_before_final_timeout() {
+    fn command_timeout_live_snapshot_spin_budget_stays_bounded_when_enabled() {
         assert!(command_timeout_live_snapshot_spins() > 0);
         assert_eq!(command_timeout_live_snapshot_spins(), 32);
         assert_eq!(COMMAND_POLL_ONLY_WAIT_SPINS, 64);
@@ -7697,6 +7720,25 @@ mod tests {
         assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS <= COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_WAIT_SPINS);
+    }
+
+    #[test]
+    fn pi4_platform_reset_command_diag_defers_live_register_reads() {
+        assert!(!command_diag_live_reads_allowed(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+            false
+        ));
+        assert!(!command_diag_live_reads_allowed(
+            XhciFirmwareHandoff::None,
+            None,
+            true
+        ));
+        assert!(command_diag_live_reads_allowed(
+            XhciFirmwareHandoff::None,
+            None,
+            false
+        ));
     }
 
     #[test]

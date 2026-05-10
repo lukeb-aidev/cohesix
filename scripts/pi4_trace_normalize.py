@@ -1825,6 +1825,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 explicit_blocker = normalize_wifi_blocker(value)
         raw_contract_blocker = normalize_wifi_blocker(raw)
         if raw_contract_blocker in {
+            "control-plane",
+            "control-plane-interrupts-deferred",
+            "control-plane-no-reply",
+            "control-plane-rearm-timeout",
+            "control-plane-sideband-unreadable",
+            "control-plane-startup-link-timeout",
+            "ioctl-timeout",
+        } and explicit_blocker in {None, "cyw43", "nettest-policy-disabled"}:
+            explicit_blocker = raw_contract_blocker
+        if raw_contract_blocker in {
             "pre-f2-core-control",
             "firmware-core-control",
             "chipcommon-socram-remap-cmd53-r5-rejected",
@@ -1974,7 +1984,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane step=" in raw or "control-plane preinit step=" in raw
         ) and " action=fail" in raw:
             gate = max(gate, 7)
-            if blocker not in precise_ht_blockers:
+            if blocker == "control-plane-interrupts-deferred" and explicit_blocker in {
+                "ioctl-timeout",
+                "cyw43",
+            }:
+                blocker = blocker
+            elif blocker not in precise_ht_blockers:
                 blocker = explicit_blocker or "control-plane"
             continue
         if "join complete" in raw:
@@ -2068,6 +2083,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker == "ht-clock-timeout"
                 and explicit_blocker == "sdio-cmd53-r5-error"
             ):
+                blocker = blocker
+            elif blocker == "control-plane-interrupts-deferred" and explicit_blocker in {
+                "ioctl-timeout",
+                "cyw43",
+            }:
                 blocker = blocker
             elif blocker in precise_ht_blockers:
                 blocker = blocker

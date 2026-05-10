@@ -280,6 +280,11 @@ power/reset state.
   `download_hdr`) and subsequent control frames are padded to the 512-byte
   Function 2 block boundary. The driver queries `clmver` after upload before
   continuing with the remaining preinit commands.
+- After real post-release HT and live Function 2 readiness are proved, the Pi 4
+  firmware channel arms the Linux-shaped Function 2 interrupt path
+  (`FUNCTIONINTMASK`, `CCCR.IENx`, and SDHCI `CARD_INT`) through HAL-owned
+  source clear plus seL4 ack. IRQ 158 is the Wi-Fi SDIO interrupt; IRQ 27 remains
+  the seL4 timer and is never Wi-Fi progress evidence.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
@@ -303,9 +308,10 @@ active path is Cohesix-owned cold start:
   xHCI handoff trust tokens as runtime authority.
 - HAL powers the USB HCD domain through the VideoCore mailbox module `3`.
 - HAL masks/clears PCIe host interrupt sources for the poll-only lane.
-- HAL validates link/root-complex state or runs one bounded BCM2711
-  root-complex reset/window init and drains posted writes with same-block
-  readbacks.
+- HAL validates link/root-complex state and always refreshes the BCM2711 DMA and
+  outbound MMIO windows before EXT_CFG proof; if the link/root state is not
+  already ready, it runs one bounded BCM2711 root-complex reset/window init and
+  drains posted writes with same-block readbacks.
 - HAL maps the BCM2711 root-port config page before higher PCIe pages and
   programs the Linux/U-Boot bridge aperture before endpoint ownership:
   primary/secondary/subordinate buses `00/01/01`, memory window
@@ -328,7 +334,8 @@ active path is Cohesix-owned cold start:
   live `USBCMD`/`USBSTS` polls. The active `platform-reset-complete` path uses
   an extended bounded blind HCRST/CNR settle before publishing fresh rings, and
   command-timeout recovery reuses that extended settle before retrying the
-  first command.
+  first command. Command timeout diagnostics on that lane report deferred state
+  instead of live `CRCR`, `DCBAAP`, interrupter, or `PORTSC` reads.
 - Root-port state is cold-boot live evidence only. After mailbox reset, live
   HAL EXT_CFG proof, local HCRST, and fresh ring publication, direct `PORTSC`
   reads remain gated until command/event-ring proof succeeds; local-seat may
@@ -336,12 +343,12 @@ active path is Cohesix-owned cold start:
   run bounded live settle/sampling passes, and reset root ports through the
   Cohesix-owned controller. Linux or U-Boot captures must not synthesize a
   connected mask, speed, enabled-port state, or skipped root-port reset.
-- When no polled port-status event is present, the Pi 4 prompt-safe high-BAR
-  lane first proves command/event-ring consumption with a Linux-shaped No Op
-  command (`USBCMD.RUN|INTE`, `IMOD=0xa0`, `IMAN.IE`) while PCI INTx/MSI/GIC
-  delivery remains masked. Only a completed command may reopen live root-port
-  sampling; real enumeration still issues `Enable Slot` after current-boot port
-  evidence.
+- The Pi 4 prompt-safe high-BAR lane proves command/event-ring consumption with
+  Linux-shaped command-event state (`USBCMD.RUN|INTE`, `IMOD=0xa0`, `IMAN.IE`)
+  while PCI INTx/MSI/GIC delivery remains masked. With no port-status event it
+  first submits No Op; after current-boot port-status events it submits Enable
+  Slot through the same bounded/re-doorbell/recovery path. Only a completed
+  command may reopen live root-port sampling.
 - The external VL805 high-BAR path must not apply the generic Broadcom xHCI
   wrapper AXI read/write attribute quirk. On Pi 4 that quirk's `0x0c08/0x0c0c`
   offsets are not part of the live VL805 PCI controller contract; the

@@ -4731,28 +4731,44 @@ fn xhci_probe_command_ring_after_event_drain(
         };
     }
 
-    let mut line = heapless::String::<192>::new();
+    let use_linux_event_generation = pcie_dma_window;
+    let event_generation = if use_linux_event_generation {
+        "linux-shaped-bounded"
+    } else {
+        "prompt-safe-poll"
+    };
+    let mut line = heapless::String::<256>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=enable-slot bus={bus}"
+            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=enable-slot bus={bus} event_generation={event_generation} pci_intx_masked=yes irq27_role=timer-only"
         ),
     );
     boot_log::force_uart_line(line.as_str());
 
-    match ctrl.enable_slot() {
+    let enable_slot_result = if use_linux_event_generation {
+        ctrl.probe_enable_slot_linux_event_generation_prompt_safe()
+    } else {
+        ctrl.probe_enable_slot_command_prompt_safe()
+    };
+    match enable_slot_result {
         Ok(slot) => {
-            let cleanup = match ctrl.disable_slot(slot) {
+            let cleanup_result = if use_linux_event_generation {
+                ctrl.disable_slot_linux_event_generation_prompt_safe(slot)
+            } else {
+                ctrl.disable_slot_command_prompt_safe(slot)
+            };
+            let cleanup = match cleanup_result {
                 Ok(()) => "disable-slot-ok",
                 Err(UsbError::Timeout) => "disable-slot-timeout",
                 Err(UsbError::CmdFail(_)) => "disable-slot-cmd-fail",
                 Err(_) => "disable-slot-error",
             };
-            let mut line = heapless::String::<224>::new();
+            let mut line = heapless::String::<256>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci root-port command-probe result=enable-slot-ok bus={bus} slot={} cleanup={cleanup}",
+                    "[local-seat] xhci root-port command-probe result=enable-slot-ok bus={bus} slot={} cleanup={cleanup} event_generation={event_generation}",
                     slot
                 ),
             );
@@ -4765,11 +4781,11 @@ fn xhci_probe_command_ring_after_event_drain(
         }
         Err(err) => {
             let result = usb_command_probe_error_label(err);
-            let mut line = heapless::String::<224>::new();
+            let mut line = heapless::String::<256>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci root-port command-probe result={result} bus={bus} detail={err:?}"
+                    "[local-seat] xhci root-port command-probe result={result} bus={bus} detail={err:?} event_generation={event_generation}"
                 ),
             );
             boot_log::force_uart_line(line.as_str());
