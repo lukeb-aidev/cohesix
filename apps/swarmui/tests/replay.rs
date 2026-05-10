@@ -17,12 +17,14 @@ use swarmui::{
     SwarmUiHiveSnapshot, SwarmUiTransportFactory,
 };
 
+mod support;
+
 struct NoConnectFactory {
     calls: Arc<Mutex<usize>>,
 }
 
 impl SwarmUiTransportFactory for NoConnectFactory {
-    type Transport = cohsh::client::InProcessTransport;
+    type Transport = support::RejectTransport;
 
     fn connect(&self) -> Result<Self::Transport, swarmui::SwarmUiError> {
         let mut guard = self.calls.lock().unwrap();

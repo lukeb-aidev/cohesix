@@ -2802,8 +2802,14 @@ where
         ));
         self.emit_console_line(proof.as_str());
 
+        let current = if status.blocker == "none" {
+            "ownership-ready"
+        } else {
+            status.blocker
+        };
         let blocker = format_message(format_args!(
-            "usb: ownership_blocker current=pcie-config-replay expected=vl805-config-window+command+bar0+mailbox observed={} blocker={} next={}",
+            "usb: ownership_blocker current={} expected=vl805-config-window+command+bar0+mailbox observed={} blocker={} next={}",
+            current,
             if status.cfg_replay_ready {
                 "ready"
             } else {

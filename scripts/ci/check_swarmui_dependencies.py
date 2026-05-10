@@ -4,16 +4,14 @@
 # Purpose: Validate SwarmUI transitive dependency policy outside the Rust test harness.
 # Author: Lukas Bower
 
-"""Check SwarmUI dependency policy for default and minimal feature sets."""
+"""Check active SwarmUI dependency policy for default and minimal feature sets."""
 
 from __future__ import annotations
 
-import json
 import pathlib
 import subprocess
 import sys
 from collections.abc import Sequence
-from typing import Any
 
 
 BANNED_HTTP_DEPS = {
@@ -60,50 +58,32 @@ def host_triple(root: pathlib.Path) -> str:
     raise RuntimeError("rustc -vV did not report a host triple")
 
 
-def cargo_metadata(
+def cargo_tree_names(
     root: pathlib.Path, host: str, feature_args: Sequence[str]
-) -> dict[str, Any]:
+) -> set[str]:
     args = [
         "cargo",
-        "metadata",
-        "--format-version",
-        "1",
-        "--locked",
+        "tree",
         "--manifest-path",
         "apps/swarmui/Cargo.toml",
-        "--filter-platform",
+        "-p",
+        "swarmui",
+        "--target",
         host,
+        "--edges",
+        "normal",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}",
         *feature_args,
     ]
-    return json.loads(run_command(args, root))
-
-
-def swarmui_dependency_names(metadata: dict[str, Any]) -> set[str]:
-    package_name_by_id = {
-        package["id"]: package["name"] for package in metadata["packages"]
-    }
-    swarmui_id = next(
-        package_id
-        for package_id, name in package_name_by_id.items()
-        if name == "swarmui"
-    )
-    node_by_id = {
-        node["id"]: node for node in metadata["resolve"]["nodes"]
-    }
-    pending = [swarmui_id]
-    seen: set[str] = set()
-    while pending:
-        package_id = pending.pop()
-        if package_id in seen:
-            continue
-        seen.add(package_id)
-        node = node_by_id[package_id]
-        pending.extend(dep["pkg"] for dep in node["deps"])
-    return {
-        package_name_by_id[package_id]
-        for package_id in seen
-        if package_id in package_name_by_id
-    }
+    names = set()
+    for line in run_command(args, root).splitlines():
+        line = line.strip()
+        if line:
+            names.add(line.split(maxsplit=1)[0])
+    return names
 
 
 def check_feature_set(
@@ -113,8 +93,7 @@ def check_feature_set(
     feature_args: Sequence[str],
     allowed_banned: set[str],
 ) -> list[str]:
-    metadata = cargo_metadata(root, host, feature_args)
-    names = swarmui_dependency_names(metadata)
+    names = cargo_tree_names(root, host, feature_args)
     found = sorted((BANNED_HTTP_DEPS & names) - allowed_banned)
     if found:
         return [

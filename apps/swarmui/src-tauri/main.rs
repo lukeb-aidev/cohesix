@@ -20,11 +20,13 @@ use cohsh::TcpTransport as CohshTcpTransport;
 use cohsh::COHSH_TCP_PORT;
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{TraceLog, TracePolicy};
+#[cfg(feature = "rest")]
+use swarmui::resolve_rest_auth_token;
 use swarmui::{
     mint_ticket_for_role, parse_mint_args, parse_replay_path, parse_role_label,
-    parse_trace_replay_path, resolve_console_auth_token, resolve_replay_path,
-    resolve_rest_auth_token, SwarmUiBackend, SwarmUiConfig, SwarmUiConsoleBackend,
-    SwarmUiTranscript, TcpTransportFactory, TraceTransportFactory,
+    parse_trace_replay_path, resolve_console_auth_token, resolve_replay_path, SwarmUiBackend,
+    SwarmUiConfig, SwarmUiConsoleBackend, SwarmUiTranscript, TcpTransportFactory,
+    TraceTransportFactory,
 };
 
 enum SwarmUiService {

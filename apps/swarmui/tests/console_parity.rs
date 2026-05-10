@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Compare SwarmUI console prompt output against cohsh transcripts.
 // Author: Lukas Bower
@@ -10,12 +10,15 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::Role;
-use cohsh::client::{CohClient, InProcessTransport};
+use cohsh::client::CohClient;
 use cohsh::queen;
 use cohsh::trace::{TraceAckMode, TraceShellTransport};
 use nine_door::NineDoor;
 use secure9p_codec::OpenMode;
 use swarmui::{SwarmUiConfig, SwarmUiConsoleBackend};
+
+mod support;
+use support::TestInProcessTransport as InProcessTransport;
 
 const SCENARIO: &str = "converge_v0";
 const WORKER_ID: &str = "worker-1";

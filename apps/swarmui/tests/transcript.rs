@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Compare SwarmUI convergence transcript against shared fixtures.
 // Author: Lukas Bower
@@ -10,13 +10,16 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::Role;
-use cohsh::client::{CohClient, InProcessTransport, TailEvent};
+use cohsh::client::{CohClient, TailEvent};
 use cohsh::queen;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::ConsoleVerb;
 use nine_door::NineDoor;
 use secure9p_codec::OpenMode;
 use swarmui::{SwarmUiBackend, SwarmUiConfig, SwarmUiTransportFactory};
+
+mod support;
+use support::TestInProcessTransport as InProcessTransport;
 
 const SCENARIO: &str = "converge_v0";
 const CONSOLE_ACK_FANOUT: usize = 1;

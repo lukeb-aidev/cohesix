@@ -6630,12 +6630,14 @@ const SDHCI_WRITE_GAP_SPIN_LOOPS: usize = SDHCI_WRITE_DELAY_LOOPS * 32;
 const CYW43_READY_LOOPS: usize = 1_000;
 const CYW43_FUNCTION2_READY_IRQ_PROOF_LOOPS: usize = 1;
 const CYW43_TRANSFER_CHUNK: usize = 256;
-// Linux brcmfmac writes CYW43455 firmware in 32 KiB backplane windows on the
-// Pi 4 high-speed SDIO link, then falls back only if the transfer path proves
-// unstable. Keep this larger than the generic transfer chunk without placing it
-// on the stack.
-const CYW43_FIRMWARE_TRANSFER_CHUNK: usize = 32 * 1024;
+// CYW43455 exposes 32 KiB backplane windows. Cohesix keeps the same windowing
+// contract while capping each SDHCI request below the full-window, 512-block
+// CMD53 edge that left the Pi 4 Function 1 command path rejecting the next
+// SBADDRLOW write in hardware captures.
+const CYW43_FIRMWARE_TRANSFER_CHUNK: usize = 16 * 1024;
 const CYW43_FIRMWARE_PROGRESS_INTERVAL: usize = 16 * 1024;
+const CYW43_FIRMWARE_WINDOW_RETARGET_SETTLE_LOOPS: usize =
+    SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2;
 const BCM2711_SDIO_MAILBOX_CLOCK_HZ: u32 = 100_000_000;
 const BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ: u32 = 250_000_000;
 // Linux on the same Pi 4 requests 50 MHz for mmc1 high-speed 4-bit SDIO and
@@ -15393,7 +15395,23 @@ impl SdioHost {
                     },
                 ) {
                     Ok(()) => {
-                        offset += chunk_len;
+                        let next_offset = offset.saturating_add(chunk_len);
+                        if next_offset < data.len() {
+                            let next_chunk_addr = addr
+                                .checked_add(u32::try_from(next_offset).map_err(|_| {
+                                    HalError::Unsupported("backplane-write-overflow")
+                                })?)
+                                .ok_or(HalError::Unsupported("backplane-write-overflow"))?;
+                            if backplane_window_base(next_chunk_addr)
+                                != backplane_window_base(chunk_addr)
+                            {
+                                bounded_spin_settle(
+                                    "firmware-window-retarget-settle",
+                                    CYW43_FIRMWARE_WINDOW_RETARGET_SETTLE_LOOPS,
+                                );
+                            }
+                        }
+                        offset = next_offset;
                         break;
                     }
                     Err(err) if firmware_backplane_write_can_retry(&err, attempt) => {
@@ -16117,13 +16135,6 @@ impl SdioHost {
                 "[pi4-wifi] backplane window program window=0x{window_addr:08x} fn_addr=0x{function_addr:05x} low=0x{window_low:02x} mid=0x{window_mid:02x} high=0x{window_high:02x}"
             ));
         }
-        self.remember_backplane_window(
-            window_addr,
-            function_addr,
-            window_low,
-            window_mid,
-            window_high,
-        );
         if backplane_window_reprogram_needed(self.programmed_backplane_window, window_addr) {
             for (_, register, value) in
                 backplane_window_program_sequence(window_low, window_mid, window_high)
@@ -16136,6 +16147,13 @@ impl SdioHost {
                 "[pi4-wifi] backplane window reuse window=0x{window_base:08x} fn_addr=0x{function_addr:05x}"
             ));
         }
+        self.remember_backplane_window(
+            window_addr,
+            function_addr,
+            window_low,
+            window_mid,
+            window_high,
+        );
         if trace_window {
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] backplane window ready window=0x{window_addr:08x} fn_addr=0x{function_addr:05x}"
@@ -16181,8 +16199,14 @@ impl SdioHost {
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} addr=0x{addr:08x} target_window=0x{window_base:08x} low=0x{window_low:02x} mid=0x{window_mid:02x} high=0x{window_high:02x}"
         ));
-        self.remember_backplane_window(addr, function_addr, window_low, window_mid, window_high);
         if !backplane_window_reprogram_needed(self.programmed_backplane_window, addr) {
+            self.remember_backplane_window(
+                addr,
+                function_addr,
+                window_low,
+                window_mid,
+                window_high,
+            );
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage={stage} target_window=0x{window_base:08x} action=reuse"
             ));
@@ -16216,6 +16240,13 @@ impl SdioHost {
                             "[pi4-wifi] firmware stage={assumed_stage} addr=0x{addr:08x} reg={register_name} value=0x{value:02x} err={err} reason=firmware-window-timeout action=assume-committed attempt={}",
                             attempt + 1
                         ));
+                        self.remember_backplane_window(
+                            addr,
+                            function_addr,
+                            window_low,
+                            window_mid,
+                            window_high,
+                        );
                         self.programmed_backplane_window = Some(window_base);
                         self.recover_command_path_preserve_window_and_refresh_transport(
                             assumed_stage,
@@ -16226,6 +16257,7 @@ impl SdioHost {
             }
         }
         self.programmed_backplane_window = Some(window_base);
+        self.remember_backplane_window(addr, function_addr, window_low, window_mid, window_high);
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} target_window=0x{window_base:08x} action=ready"
         ));
@@ -23706,7 +23738,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_sdio_transfer_chunk_limit_preserves_linux_firmware_window() {
+    fn ordinary_sdio_transfer_chunk_limit_caps_requests_below_full_window() {
         let outer_len = firmware_transfer_chunk_limit(false);
         let inner_limit =
             experimental_function2_fifo_chunk_limit(SdioFunction::Function1, true, true, false);
@@ -23716,10 +23748,11 @@ mod tests {
 
         assert_eq!(outer_len, CYW43_FIRMWARE_TRANSFER_CHUNK);
         assert_eq!(inner_len, CYW43_FIRMWARE_TRANSFER_CHUNK);
+        assert!(outer_len < (BACKPLANE_ADDRESS_MASK as usize + 1));
         assert!(write.block_mode);
         assert_eq!(write.block_size, SDIO_FUNCTION_ENABLE_F1.block_size);
-        assert_eq!(write.block_count, 512);
-        assert_eq!(write.cmd53_count, 0);
+        assert_eq!(write.block_count, 256);
+        assert_eq!(write.cmd53_count, 256);
     }
 
     #[test]
@@ -27234,9 +27267,10 @@ mod tests {
     #[test]
     fn firmware_transfer_stays_fast_until_byte_mode_fallback() {
         assert_eq!(CYW43_TRANSFER_CHUNK, 256);
-        assert_eq!(CYW43_FIRMWARE_TRANSFER_CHUNK, 32 * 1024);
-        assert_eq!(firmware_transfer_chunk_limit(false), 32 * 1024);
+        assert_eq!(CYW43_FIRMWARE_TRANSFER_CHUNK, 16 * 1024);
+        assert_eq!(firmware_transfer_chunk_limit(false), 16 * 1024);
         assert_eq!(firmware_transfer_chunk_limit(true), SDIO_MAX_BYTE_MODE);
+        assert!(CYW43_FIRMWARE_WINDOW_RETARGET_SETTLE_LOOPS > 0);
         assert!(!firmware_transfer_uses_byte_mode(false));
         assert!(firmware_transfer_uses_byte_mode(true));
     }

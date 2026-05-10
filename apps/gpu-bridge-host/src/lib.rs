@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Host-side GPU bridge utilities for Cohesix, including mock/NVML discovery,
 // Author: Lukas Bower
@@ -11,7 +11,7 @@
 //! `/gpu` mount. When built with the `nvml` feature the bridge performs real
 //! discovery through `nvml-wrapper`.
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, ensure, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohsh_core::MAX_ECHO_LEN;
 use serde::Deserialize;
@@ -1121,21 +1121,12 @@ pub fn auto_bridge(mock: bool) -> Result<GpuBridge> {
     if mock {
         Ok(GpuBridge::mock())
     } else {
-        let mut candidates = Vec::new();
-        #[cfg(feature = "nvml")]
-        {
-            candidates.push(InventoryCandidate::new(
-                InventoryBackend::Nvml,
-                Box::new(NvmlInventory),
-            ));
-        }
-        #[cfg(feature = "cuda")]
-        {
-            candidates.push(InventoryCandidate::new(
-                InventoryBackend::Cuda,
-                Box::new(CudaInventory),
-            ));
-        }
+        let candidates = vec![
+            #[cfg(feature = "nvml")]
+            InventoryCandidate::new(InventoryBackend::Nvml, Box::new(NvmlInventory)),
+            #[cfg(feature = "cuda")]
+            InventoryCandidate::new(InventoryBackend::Cuda, Box::new(CudaInventory)),
+        ];
         if candidates.is_empty() {
             return Err(anyhow!(
                 "GPU inventory backends disabled; rebuild gpu-bridge-host with --features nvml or cuda, or use --mock"

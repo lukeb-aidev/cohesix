@@ -70,12 +70,15 @@ use clap::ValueEnum;
 use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus};
-use cohsh_core::{
-    normalize_ticket, role_label, ConsoleVerb, RoleParseMode, TicketPolicy, MAX_ECHO_LEN,
-};
+#[cfg(feature = "in-process")]
+use cohsh_core::{normalize_ticket, role_label, ConsoleVerb, TicketPolicy};
+use cohsh_core::{RoleParseMode, MAX_ECHO_LEN};
 use log::info;
+#[cfg(feature = "in-process")]
 use nine_door::{InProcessConnection, NineDoor};
-use secure9p_codec::{OpenMode, SessionId, MAX_MSIZE};
+#[cfg(feature = "in-process")]
+use secure9p_codec::OpenMode;
+use secure9p_codec::{SessionId, MAX_MSIZE};
 use serde::Serialize;
 
 /// Result of executing a single shell command.
@@ -183,6 +186,7 @@ impl Session {
     }
 }
 
+#[cfg(feature = "in-process")]
 const ROOT_FID: u32 = 1;
 /// Manifest-derived Secure9P maximum message size.
 pub const SECURE9P_MSIZE: u32 = generated_client::SECURE9P_MSIZE;
@@ -667,6 +671,7 @@ where
 }
 
 /// Live transport backed by the in-process NineDoor Secure9P server.
+#[cfg(feature = "in-process")]
 #[derive(Debug)]
 pub struct NineDoorTransport {
     server: NineDoor,
@@ -675,6 +680,7 @@ pub struct NineDoorTransport {
     ack_lines: VecDeque<String>,
 }
 
+#[cfg(feature = "in-process")]
 impl NineDoorTransport {
     /// Create a new transport bound to the supplied server instance.
     pub fn new(server: NineDoor) -> Self {
@@ -740,6 +746,7 @@ impl NineDoorTransport {
     }
 }
 
+#[cfg(feature = "in-process")]
 impl Transport for NineDoorTransport {
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
         let mut connection = self

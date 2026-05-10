@@ -4639,11 +4639,11 @@ fn xhci_probe_command_ring_after_event_drain(
                             let _ = core::fmt::Write::write_fmt(
                                 &mut line,
                                 format_args!(
-                                    "[local-seat] xhci root-port command-probe result={result} bus={bus} event_generation=poll-only-fallback prior=no-op-linux-event-timeout irq27_role=timer-only pcie_irqs=175,180"
+                                    "[local-seat] xhci root-port command-probe precheck={result} bus={bus} event_generation=poll-only-fallback prior=no-op-linux-event-timeout action=continue-to-enable-slot irq27_role=timer-only pcie_irqs=175,180"
                                 ),
                             );
                             boot_log::force_uart_line(line.as_str());
-                            return result;
+                            result
                         }
                         Err(UsbError::Timeout) => "no-op-unproven",
                         Err(err) => {
@@ -4659,23 +4659,20 @@ fn xhci_probe_command_ring_after_event_drain(
                             result
                         }
                     };
+                    let precheck = if fallback == "no-op-ok" {
+                        "no-op-ok"
+                    } else {
+                        "no-op-linux-event-unproven"
+                    };
                     let mut line = heapless::String::<256>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] xhci root-port command-probe result=no-op-linux-event-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout event_generation={event_generation} poll_fallback={fallback} irq27_role=timer-only pcie_irqs=175,180"
+                            "[local-seat] xhci root-port command-probe precheck={precheck} bus={bus} action=continue-to-enable-slot detail=cmd-event-ring-timeout event_generation={event_generation} poll_fallback={fallback} irq27_role=timer-only pcie_irqs=175,180"
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
-                    let mut summary = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut summary,
-                        format_args!(
-                            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-linux-event-unproven event=missing event_generation={event_generation} poll_fallback={fallback} irq27_role=timer-only pcie_irqs=175,180"
-                        ),
-                    );
-                    boot_log::force_uart_line(summary.as_str());
-                    return "no-op-linux-event-unproven";
+                    precheck
                 }
                 Err(err) => {
                     let result = usb_no_op_probe_error_label(err);

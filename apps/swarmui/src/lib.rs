@@ -1465,6 +1465,7 @@ struct SwarmUiConsoleSession {
     session: CohshSession,
 }
 
+#[cfg(feature = "rest")]
 #[derive(Debug, Clone)]
 struct RestParallelConfig {
     base_url: String,
@@ -1472,6 +1473,7 @@ struct RestParallelConfig {
     telemetry_sessions: usize,
 }
 
+#[cfg(feature = "rest")]
 impl RestParallelConfig {
     fn parallel_limit(&self) -> usize {
         self.telemetry_sessions.max(1)
@@ -1493,6 +1495,7 @@ pub struct SwarmUiConsoleBackend<T: CohshTransport> {
     active_tails: usize,
     tail_policy: TailPollPolicy,
     cache: Option<SnapshotCache>,
+    #[cfg(feature = "rest")]
     rest_parallel: Option<RestParallelConfig>,
     transport_warning: Option<String>,
 }
@@ -1551,12 +1554,14 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             active_tails: 0,
             tail_policy,
             cache,
+            #[cfg(feature = "rest")]
             rest_parallel: None,
             transport_warning: None,
         }
     }
 
     /// Construct a SwarmUI console backend for REST transport with parallel settings.
+    #[cfg(feature = "rest")]
     pub fn with_rest_transport(
         config: SwarmUiConfig,
         transport: T,
@@ -2536,28 +2541,17 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             .remove(&key)
             .ok_or_else(|| SwarmUiError::Hive("hive not bootstrapped".to_owned()))?;
         let session = self.session_for(role, ticket)?;
+        #[cfg(feature = "rest")]
         let ingest_result = if let Some(rest_parallel) = self.rest_parallel.as_ref() {
-            #[cfg(feature = "rest")]
-            {
-                state.ingest_rest_parallel(
-                    &worker_root,
-                    &hive_config,
-                    rest_parallel.base_url.as_str(),
-                    rest_parallel.request_auth_token.as_deref(),
-                    rest_parallel.parallel_limit(),
-                    role,
-                    ticket,
-                )
-            }
-            #[cfg(not(feature = "rest"))]
-            {
-                state.ingest(
-                    &mut self.transport,
-                    &session.session,
-                    &worker_root,
-                    &hive_config,
-                )
-            }
+            state.ingest_rest_parallel(
+                &worker_root,
+                &hive_config,
+                rest_parallel.base_url.as_str(),
+                rest_parallel.request_auth_token.as_deref(),
+                rest_parallel.parallel_limit(),
+                role,
+                ticket,
+            )
         } else {
             state.ingest(
                 &mut self.transport,
@@ -2566,6 +2560,13 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 &hive_config,
             )
         };
+        #[cfg(not(feature = "rest"))]
+        let ingest_result = state.ingest(
+            &mut self.transport,
+            &session.session,
+            &worker_root,
+            &hive_config,
+        );
         self.hive_states.insert(key.clone(), state);
         ingest_result?;
         let state = self.hive_states.get_mut(&key).expect("hive state");
@@ -2580,11 +2581,15 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             backlog as f32 / hive_config.lod_event_budget as f32
         };
         let dropped = state.dropped();
+        #[cfg(feature = "rest")]
         let (root, sessions, pressure_counters, schedule, lease) = if self.rest_parallel.is_some() {
             self.read_hive_status_cached(role, ticket, hive_config.status_poll_ms)
         } else {
             self.read_hive_status(role, ticket)
         };
+        #[cfg(not(feature = "rest"))]
+        let (root, sessions, pressure_counters, schedule, lease) =
+            self.read_hive_status(role, ticket);
         Ok(SwarmUiHiveBatch {
             events,
             pressure,
@@ -2692,6 +2697,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         }
     }
 
+    #[cfg(feature = "rest")]
     fn read_hive_status_cached(
         &mut self,
         role: Role,

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide a reusable Secure9P client API for Cohesix host tooling.
 // Author: Lukas Bower
@@ -274,10 +274,12 @@ impl<'a, T: Secure9pTransport> Drop for TailStream<'a, T> {
 }
 
 /// Wrapper transport for in-process NineDoor connections.
+#[cfg(feature = "in-process")]
 pub struct InProcessTransport {
     connection: nine_door::InProcessConnection,
 }
 
+#[cfg(feature = "in-process")]
 impl InProcessTransport {
     /// Wrap a NineDoor in-process connection for use with CohClient.
     pub fn new(connection: nine_door::InProcessConnection) -> Self {
@@ -285,6 +287,7 @@ impl InProcessTransport {
     }
 }
 
+#[cfg(feature = "in-process")]
 impl Secure9pTransport for InProcessTransport {
     type Error = nine_door::NineDoorError;
 

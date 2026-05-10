@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate SwarmUI unauthorized ticket handling and audit logs.
 // Author: Lukas Bower
@@ -7,10 +7,12 @@ use anyhow::Result;
 use cohesix_ticket::{
     BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketQuotas, TicketScope, TicketVerb,
 };
-use cohsh::client::InProcessTransport;
 use nine_door::NineDoor;
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarmui::{SwarmUiBackend, SwarmUiConfig, SwarmUiTransportFactory};
+
+mod support;
+use support::TestInProcessTransport as InProcessTransport;
 
 struct InProcessFactory {
     server: NineDoor,
