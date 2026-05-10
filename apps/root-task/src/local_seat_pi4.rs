@@ -4599,7 +4599,7 @@ fn xhci_probe_command_ring_after_event_drain(
     if event_candidate_mask == 0 {
         let use_enable_slot = pcie_dma_window;
         let verb = if use_enable_slot {
-            "no-op-precheck->enable-slot"
+            "enable-slot"
         } else {
             "no-op"
         };
@@ -4618,76 +4618,15 @@ fn xhci_probe_command_ring_after_event_drain(
         boot_log::force_uart_line(line.as_str());
 
         if use_enable_slot {
-            let precheck = match ctrl.probe_no_op_command_linux_event_generation_prompt_safe() {
-                Ok(()) => {
-                    let result = "no-op-linux-event-ok";
-                    let mut line = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] xhci root-port command-probe precheck={result} bus={bus} event_generation={event_generation}"
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    result
-                }
-                Err(UsbError::Timeout) => {
-                    let fallback = match ctrl.probe_no_op_command_prompt_safe() {
-                        Ok(()) => {
-                            let result = "no-op-ok";
-                            let mut line = heapless::String::<256>::new();
-                            let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
-                                    "[local-seat] xhci root-port command-probe precheck={result} bus={bus} event_generation=poll-only-fallback prior=no-op-linux-event-timeout action=continue-to-enable-slot irq27_role=timer-only pcie_irqs=175,180"
-                                ),
-                            );
-                            boot_log::force_uart_line(line.as_str());
-                            result
-                        }
-                        Err(UsbError::Timeout) => "no-op-unproven",
-                        Err(err) => {
-                            let result = usb_no_op_probe_error_label(err);
-                            let mut line = heapless::String::<256>::new();
-                            let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
-                                    "[local-seat] xhci root-port command-probe poll-only-fallback={result} bus={bus} detail={err:?} prior=no-op-linux-event-timeout irq27_role=timer-only pcie_irqs=175,180"
-                                ),
-                            );
-                            boot_log::force_uart_line(line.as_str());
-                            result
-                        }
-                    };
-                    let precheck = if fallback == "no-op-ok" {
-                        "no-op-ok"
-                    } else {
-                        "no-op-linux-event-unproven"
-                    };
-                    let mut line = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] xhci root-port command-probe precheck={precheck} bus={bus} action=continue-to-enable-slot detail=cmd-event-ring-timeout event_generation={event_generation} poll_fallback={fallback} irq27_role=timer-only pcie_irqs=175,180"
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    precheck
-                }
-                Err(err) => {
-                    let result = usb_no_op_probe_error_label(err);
-                    let action = "none";
-                    let mut line = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] xhci root-port command-probe result={result} bus={bus} action={action} detail={err:?} event_generation={event_generation}"
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    return result;
-                }
-            };
+            let precheck = "skipped-no-op-linux-first-enable-slot";
+            let mut line = heapless::String::<256>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci root-port command-probe precheck={precheck} bus={bus} action=submit-enable-slot-first reason=linux-capture-first-command event_generation={event_generation} irq27_role=timer-only pcie_irqs=175,180"
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
 
             return match ctrl.probe_enable_slot_linux_event_generation_prompt_safe() {
                 Ok(slot) => {

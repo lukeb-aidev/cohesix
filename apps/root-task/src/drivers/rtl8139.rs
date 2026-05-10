@@ -477,3 +477,138 @@ impl NetDevice for Rtl8139Device {
         Rtl8139Device::debug_snapshot(self);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hal::DeviceHal;
+    use crate::hal::pci::{PciBar, PciTopology};
+    use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnvSnapshot, RamFrame};
+
+    struct FakePciHal {
+        topology: Option<PciTopology>,
+    }
+
+    impl DeviceHal for FakePciHal {
+        type Error = HalError;
+
+        fn map_device(&mut self, _paddr: usize) -> Result<DeviceFrame, Self::Error> {
+            Err(HalError::Unsupported("test-map-device-unused"))
+        }
+
+        fn alloc_dma_frame(&mut self) -> Result<RamFrame, Self::Error> {
+            Err(HalError::Unsupported("test-dma-unused"))
+        }
+
+        fn reserve_dma_guard_page(&mut self) -> Result<usize, Self::Error> {
+            Err(HalError::Unsupported("test-guard-unused"))
+        }
+
+        fn device_coverage(&self, _paddr: usize, _size_bits: usize) -> Option<DeviceCoverage> {
+            None
+        }
+
+        fn snapshot(&self) -> KernelEnvSnapshot {
+            panic!("RTL8139 tests do not use HAL snapshots")
+        }
+    }
+
+    impl PciHal for FakePciHal {
+        fn pci_topology(&self) -> Option<&PciTopology> {
+            self.topology.as_ref()
+        }
+    }
+
+    fn rtl8139_device_with_bar(kind: PciBarKind) -> PciDeviceInfo {
+        PciDeviceInfo {
+            addr: crate::hal::PciAddress::new(0, 0, 2, 0),
+            vendor_id: RTL8139_VENDOR_ID,
+            device_id: RTL8139_DEVICE_ID,
+            class_code: 0x02,
+            subclass: 0x00,
+            prog_if: 0x00,
+            bars: [
+                Some(PciBar {
+                    index: 0,
+                    kind,
+                    base: 0x3000_0000,
+                    size: 0x100,
+                }),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+        }
+    }
+
+    #[test]
+    fn locate_pci_device_accepts_only_hal_reported_rtl8139_tuple() {
+        let devices = crate::rust_alloc::boxed::Box::leak(crate::rust_alloc::boxed::Box::new([
+            rtl8139_device_with_bar(PciBarKind::Mmio32),
+        ]));
+        let mut hal = FakePciHal {
+            topology: Some(PciTopology { devices }),
+        };
+
+        let device = Rtl8139Device::locate_pci_device(&mut hal).expect("rtl8139 device");
+
+        assert_eq!(device.vendor_id, RTL8139_VENDOR_ID);
+        assert_eq!(device.device_id, RTL8139_DEVICE_ID);
+        assert!(device.bars[0].expect("bar0").is_mmio());
+    }
+
+    #[test]
+    fn locate_pci_device_reports_absent_without_hal_pci_topology() {
+        let mut hal = FakePciHal { topology: None };
+
+        let err = match Rtl8139Device::locate_pci_device(&mut hal) {
+            Ok(_) => panic!("rtl8139 device unexpectedly found"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, DriverError::Hal(HalError::NoPci)));
+        assert!(err.is_absent());
+    }
+
+    #[test]
+    fn rtl8139_rejects_io_port_bar_before_mapping_or_dma_allocation() {
+        let devices = crate::rust_alloc::boxed::Box::leak(crate::rust_alloc::boxed::Box::new([
+            rtl8139_device_with_bar(PciBarKind::IoPort),
+        ]));
+        let mut hal = FakePciHal {
+            topology: Some(PciTopology { devices }),
+        };
+
+        let err = match Rtl8139Device::new(&mut hal) {
+            Ok(_) => panic!("rtl8139 unexpectedly accepted an I/O BAR"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            DriverError::Hal(HalError::Unsupported(
+                "io-port BARs unsupported on this platform"
+            ))
+        ));
+    }
+
+    #[test]
+    fn rtl8139_register_and_ring_bounds_match_hal_mmio_contract() {
+        assert_eq!(TX_SLOT_COUNT, 4);
+        assert_eq!(RX_BUFFER_LEN, 32 * 1024);
+        assert!(MAX_FRAME_LEN <= TX_BUFFER_LEN);
+        assert!(RTL_REG_TSAD0 + (TX_SLOT_COUNT - 1) * 4 < RTL_REG_RBSTART);
+        assert!(RTL_REG_TSD0 + (TX_SLOT_COUNT - 1) * 4 < RTL_REG_RBSTART);
+        assert!(RTL_REG_CONFIG1 < 0x100);
+        assert_eq!(
+            RTL_RCR_RBLEN_32K
+                | RTL_RCR_ACCEPT_BROADCAST
+                | RTL_RCR_ACCEPT_PHYS
+                | RTL_RCR_ACCEPT_ALL_MULTICAST
+                | RTL_RCR_WRAP,
+            0x0001_880d
+        );
+    }
+}

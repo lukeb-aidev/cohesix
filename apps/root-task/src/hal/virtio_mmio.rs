@@ -41,3 +41,19 @@ where
     }
     VirtioMmioRegisters::single(hal.map_device(paddr)?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slot_paddr_enforces_bounded_qemu_virt_window() {
+        assert_eq!(slot_paddr(0), Some(VIRTIO_MMIO_BASE));
+        assert_eq!(
+            slot_paddr(VIRTIO_MMIO_SLOTS - 1),
+            Some(VIRTIO_MMIO_BASE + (VIRTIO_MMIO_SLOTS - 1) * VIRTIO_MMIO_STRIDE)
+        );
+        assert_eq!(slot_paddr(VIRTIO_MMIO_SLOTS), None);
+        assert_eq!(DEVICE_FRAME_BITS, 12);
+    }
+}

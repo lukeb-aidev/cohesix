@@ -1424,6 +1424,36 @@ const fn firmware_transfer_chunk_limit(byte_mode_fallback: bool) -> usize {
 }
 
 #[inline]
+fn firmware_transfer_chunk_len(
+    byte_mode_fallback: bool,
+    remaining: usize,
+    window_remaining: usize,
+) -> usize {
+    let mut chunk_len = cmp::min(
+        remaining,
+        cmp::min(
+            firmware_transfer_chunk_limit(byte_mode_fallback),
+            window_remaining,
+        ),
+    );
+    if chunk_len <= SDIO_MAX_BYTE_MODE {
+        return chunk_len;
+    }
+    if firmware_transfer_uses_byte_mode(byte_mode_fallback) {
+        return SDIO_MAX_BYTE_MODE;
+    }
+
+    let block_len = SDIO_FUNCTION_ENABLE_F1.block_size as usize;
+    let aligned = chunk_len - (chunk_len % block_len);
+    if aligned >= SDIO_MAX_BYTE_MODE {
+        chunk_len = aligned;
+    } else {
+        chunk_len = SDIO_MAX_BYTE_MODE;
+    }
+    chunk_len
+}
+
+#[inline]
 const fn firmware_verify_transfer_chunk_limit(byte_mode_fallback: bool) -> usize {
     if firmware_transfer_uses_byte_mode(byte_mode_fallback) {
         SDIO_MAX_BYTE_MODE
@@ -15343,12 +15373,10 @@ impl SdioHost {
                 let window_offset = (addr as usize + offset) & BACKPLANE_ADDRESS_MASK as usize;
                 let window_remaining =
                     (BACKPLANE_ADDRESS_MASK as usize + 1).saturating_sub(window_offset);
-                let chunk_len = cmp::min(
+                let chunk_len = firmware_transfer_chunk_len(
+                    byte_mode_fallback,
                     data.len() - offset,
-                    cmp::min(
-                        firmware_transfer_chunk_limit(byte_mode_fallback),
-                        window_remaining,
-                    ),
+                    window_remaining,
                 );
                 if attempt > 0
                     || backplane_window_reprogram_needed(
@@ -22850,6 +22878,9 @@ fn sdio_transfer_plan(
             }
         }
     }
+    if len > SDIO_MAX_BYTE_MODE {
+        return Err(HalError::Unsupported("sdhci-byte-mode-count"));
+    }
     let block_size = u16::try_from(len).map_err(|_| HalError::Unsupported("sdhci-block-size"))?;
     // Linux's MMC SDIO core still presents CMD53 byte-mode transfers to the
     // host as a single data block. Mirroring that host-side shape avoids the
@@ -22886,6 +22917,9 @@ fn sdio_byte_mode_transfer_plan(len: usize, write: bool) -> Result<SdioTransferP
         transfer_mode |= SDHCI_TRNS_READ;
     }
     transfer_mode |= SDHCI_TRNS_BLK_CNT_EN;
+    if len > SDIO_MAX_BYTE_MODE {
+        return Err(HalError::Unsupported("sdhci-byte-mode-count"));
+    }
     let block_size = u16::try_from(len).map_err(|_| HalError::Unsupported("sdhci-block-size"))?;
     Ok(SdioTransferPlan {
         block_size,
@@ -23679,6 +23713,16 @@ mod tests {
     }
 
     #[test]
+    fn sdio_transfer_plan_rejects_oversized_unaligned_byte_mode() {
+        let err = sdio_transfer_plan(SdioFunction::Function1, 3101, true)
+            .expect_err("oversized unaligned transfer cannot be encoded in byte mode");
+        assert!(matches!(
+            err,
+            HalError::Unsupported("sdhci-byte-mode-count")
+        ));
+    }
+
+    #[test]
     fn sdio_transfer_plan_matches_linux_firmware_window_block_write() {
         let write = sdio_transfer_plan(SdioFunction::Function1, 32 * 1024, true)
             .expect("function1 32 KiB firmware transfer plan");
@@ -23753,6 +23797,23 @@ mod tests {
         assert_eq!(write.block_size, SDIO_FUNCTION_ENABLE_F1.block_size);
         assert_eq!(write.block_count, 256);
         assert_eq!(write.cmd53_count, 256);
+    }
+
+    #[test]
+    fn firmware_transfer_chunk_len_splits_unaligned_tail() {
+        let tail_len = 3101usize;
+        let first = firmware_transfer_chunk_len(false, tail_len, tail_len);
+        let second = firmware_transfer_chunk_len(false, tail_len - first, tail_len - first);
+
+        assert_eq!(first, 3072);
+        assert_eq!(second, 29);
+        assert_eq!(first + second, tail_len);
+        assert_eq!(first % usize::from(SDIO_FUNCTION_ENABLE_F1.block_size), 0);
+        assert!(second <= SDIO_MAX_BYTE_MODE);
+        assert_eq!(
+            firmware_transfer_chunk_len(true, tail_len, tail_len),
+            SDIO_MAX_BYTE_MODE
+        );
     }
 
     #[test]
