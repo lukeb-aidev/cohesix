@@ -237,6 +237,8 @@ def test_latest_boot_slice_prefers_later_uboot_chain() -> None:
     gates = normalizer.summarize_gates(events)
 
     assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "no"
+    assert gates.to_record()["USB_COLD_BOOT_SEEN"] == "yes"
+    assert gates.to_record()["USB_COLD_BOOT_SEEN"] == "yes"
     assert gates.to_record()["WIFI_EXACT"] == "new-failure"
 
 
@@ -275,6 +277,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "TIMER_IRQ27_SEEN": "no",
         "BOOT_HALT_REASON": "none",
         "USB_BOOTLOADER_HANDOFF_SEEN": "no",
+        "USB_COLD_BOOT_SEEN": "no",
     }
 
 
@@ -566,6 +569,7 @@ def test_gate_summary_keeps_cold_usb_path_handoff_clean() -> None:
     gates = normalizer.summarize_gates(events)
 
     assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "no"
+    assert gates.to_record()["USB_COLD_BOOT_SEEN"] == "yes"
 
 
 def test_gate_summary_ignores_disabled_handoff_label_fields() -> None:

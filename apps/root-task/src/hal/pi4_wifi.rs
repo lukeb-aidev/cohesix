@@ -1442,7 +1442,8 @@ const fn pre_ht_control_plane_clock_target_hz(current_clock_hz: u32) -> u32 {
 
 #[inline]
 const fn firmware_core_reset_clock_target_hz(current_clock_hz: u32) -> u32 {
-    control_plane_clock_target_hz(current_clock_hz, CYW43_CONTROL_PLANE_CLOCK_HZ)
+    let _ = current_clock_hz;
+    CYW43_STARTUP_CLOCK_HZ
 }
 
 #[inline]
@@ -3395,6 +3396,11 @@ fn armcr4_release_can_continue_after_readback_error(err: &HalError) -> bool {
 #[inline]
 const fn core_reset_can_skip_postreset_verify(base: u32) -> bool {
     base == CYW43_SOCRAM_CORE_BASE
+}
+
+#[inline]
+const fn socram_core_reset_required_before_armcr4_upload() -> bool {
+    false
 }
 
 #[inline]
@@ -15519,6 +15525,21 @@ impl SdioHost {
         Ok(())
     }
 
+    fn prepare_socram_for_armcr4_upload(&mut self) -> Result<(), HalError> {
+        if socram_core_reset_required_before_armcr4_upload() {
+            emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=socram-disable"));
+            self.core_disable(CYW43_SOCRAM_CORE_BASE, 0, 0)?;
+            emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=socram-reset"));
+            self.core_reset(CYW43_SOCRAM_CORE_BASE, 0, 0, 0)?;
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=socram-prepare action=skip-core-reset reason=linux-cr4-upload-ram-target-only"
+            ));
+            self.log_transport_shadow("socram-prepare-skip-core-reset");
+        }
+        Ok(())
+    }
+
     fn ensure_function2_device_on_for(&mut self, stage: &'static str) -> Result<u8, HalError> {
         let sleep_before = self.io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_SLEEPCSR)?;
         self.remember_sleepcsr(sleep_before);
@@ -17354,10 +17375,7 @@ impl SdioHost {
             self.recover_command_path("armcr4-passive-advisory-reset-skip");
         }
         self.disable_d11_cores_for_firmware()?;
-        emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=socram-disable"));
-        self.core_disable(CYW43_SOCRAM_CORE_BASE, 0, 0)?;
-        emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=socram-reset"));
-        self.core_reset(CYW43_SOCRAM_CORE_BASE, 0, 0, 0)?;
+        self.prepare_socram_for_armcr4_upload()?;
         emit_breadcrumb(format_args!("[pi4-wifi] firmware stage=chipcommon-config"));
         self.configure_chipcommon()?;
         let nvram = normalize_nvram(bundle.nvram);
@@ -26587,6 +26605,7 @@ mod tests {
         assert!(!core_reset_can_skip_postreset_verify(
             CYW43_ARMCR4_CORE_BASE
         ));
+        assert!(!socram_core_reset_required_before_armcr4_upload());
         assert!(core_ctrl_can_skip_redundant_in_reset_write(
             CYW43_SOCRAM_CORE_BASE,
             true,
@@ -32335,11 +32354,11 @@ mod tests {
         );
         assert_eq!(
             firmware_core_reset_clock_target_hz(CYW43_STARTUP_CLOCK_HZ),
-            CYW43_CONTROL_PLANE_CLOCK_HZ
+            CYW43_STARTUP_CLOCK_HZ
         );
         assert_eq!(
             firmware_core_reset_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ),
-            CYW43_FIRMWARE_BULK_CLOCK_HZ
+            CYW43_STARTUP_CLOCK_HZ
         );
         assert_eq!(
             post_download_ht_clock_target_hz(400_000, CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ),

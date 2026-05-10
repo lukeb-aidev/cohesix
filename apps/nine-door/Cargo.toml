@@ -1,10 +1,15 @@
 # Author: Lukas Bower
 # Purpose: Configure the NineDoor Secure9P server crate dependencies and metadata.
+# Copyright 2026 Lukas Bower
 [package]
 name = "nine-door"
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+[features]
+default = []
+scale-tests = []
 
 [dependencies]
 

@@ -2,14 +2,15 @@
 // Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
 // Copyright 2026 Lukas Bower
 use crate::{
-    Dma, Result, UsbError, reg,
-    ring::{EventRing, PhysMem, Ring, Trb, completion, trb_type},
+    reg,
+    ring::{completion, trb_type, EventRing, PhysMem, Ring, Trb},
+    Dma, Result, UsbError,
 };
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
-    sync::atomic::{Ordering, compiler_fence},
+    sync::atomic::{compiler_fence, Ordering},
 };
 use spin::Mutex;
 
@@ -5058,7 +5059,10 @@ impl<H: Dma> XhciCtrl<H> {
                     );
                     if !ptr_match {
                         emit_xhci_diag(0x030c, completion_ptr, expected_ptr, trb.control as u64);
-                        return Err(UsbError::Timeout);
+                        for _ in 0..COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL {
+                            spin_loop();
+                        }
+                        continue;
                     }
                 }
                 emit_xhci_diag(
@@ -5776,14 +5780,6 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
-        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
-        COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
-        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, ConstructorPollingScrubMode,
-        LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD, READY_WAIT_PROGRESS_SPINS,
-        SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
-        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
-        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
         blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot,
         command_poll_only_should_sync_event_ring, command_timeout_live_snapshot_enabled,
@@ -5807,8 +5803,7 @@ mod tests {
         polling_event_generation_iman_value, polling_event_generation_run_usbcmd,
         polling_iman_ack_value, polling_iman_value, port_ready_for_enumeration,
         post_start_polling_irq_quiesce_pending_bits,
-        pre_command_event_handler_erdp,
-        post_start_polling_irq_quiesce_skip_usbsts_clear,
+        post_start_polling_irq_quiesce_skip_usbsts_clear, pre_command_event_handler_erdp,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
         pre_halt_source_quiesce_before_live_stop_revalidation, preserve_firmware_handoff_config,
         preserve_state_crcr_publish_seed, preserve_state_crcr_write_is_redundant,
@@ -5856,9 +5851,17 @@ mod tests {
         use_live_config_seed_reads, use_live_config_seed_reads_for_init,
         use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
         use_live_post_reset_seed_reads_for_init, use_live_post_reset_seed_reads_with_snapshot,
-        xhci_port_in_range, xhci_slot_in_range,
+        xhci_port_in_range, xhci_slot_in_range, ConstructorPollingScrubMode, XhciControllerParams,
+        XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot, BRCM_XHCI_USBAXI_SA_UA_MASK,
+        BRCM_XHCI_USBAXI_SA_UA_VAL, COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS,
+        COMMAND_POLL_ONLY_WAIT_SPINS, COMMAND_PROMPT_SAFE_REDOORBELL_POLL,
+        COMMAND_PROMPT_SAFE_WAIT_POLLS, COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL,
+        COMMAND_WAIT_SPINS, LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD,
+        READY_WAIT_PROGRESS_SPINS, SKIP_HCRST_DURING_INIT,
+        TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
+        XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
     };
-    use crate::{Dma, reg, ring::trb_type};
+    use crate::{reg, ring::trb_type, Dma};
     use alloc::vec;
 
     struct MockDma;
@@ -8425,8 +8428,8 @@ mod tests {
     }
 
     #[test]
-    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped()
-     {
+    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped(
+    ) {
         assert_eq!(
             post_start_polling_irq_quiesce_pending_bits(reg::USBCMD_RUN, reg::USBSTS_PCD, 0, true),
             0

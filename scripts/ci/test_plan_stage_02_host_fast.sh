@@ -45,7 +45,7 @@ host_matrix=(
   "cargo run -p coh --features mock -- doctor --mock"
   "cargo test -p hive-gateway"
   "cargo test -p tests"
-  "cargo test -p root-task --no-default-features --features net-console net:: -- --nocapture"
+  "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture"
   "cargo test --workspace"
 )
 

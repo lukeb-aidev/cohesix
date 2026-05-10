@@ -32,6 +32,7 @@ DEFAULT_COMMANDS=(
     "wifi diag"
     "nettest"
     "usb status"
+    "usb probe-kbd"
     "usb diag"
     "usb status"
 )
@@ -77,9 +78,9 @@ Options:
   --no-capture               Do not open serial; normalize the existing log
   --normalize-only           Skip build, flash, and capture; normalize only
   --no-default-commands      Do not send the default proof commands
-  --probe-usb-keyboard       Append the live USB keyboard probe. This can enter
-                             the prompt-safe halt path while command/event-ring
-                             gates are still blocked.
+  --probe-usb-keyboard       Append an extra live USB keyboard probe. The
+                             default proof already probes once so command/event
+                             ring gates are exercised.
   --command <line>           Append a console command to send during capture
   --expect <KEY=VALUE>       Require a gate summary value from the normalizer.
                              Examples: USB_GATE=3, WIFI_BLOCKER=ht-clock-timeout
@@ -98,6 +99,7 @@ Default proof commands:
   wifi diag
   nettest
   usb status
+  usb probe-kbd
   usb diag
   usb status
 USAGE
@@ -270,10 +272,15 @@ run_normalizer() {
         args+=("--expect" "BOOT_HALTED=no")
         args+=("--expect" "TIMER_IRQ27_SEEN=no")
         args+=("--expect" "USB_BOOTLOADER_HANDOFF_SEEN=no")
+        args+=("--expect" "USB_COLD_BOOT_SEEN=yes")
         args+=("--expect-not" "USB_BLOCKER=unknown")
+        args+=("--expect-not" "USB_BLOCKER=no-controller-edge-yet")
         args+=("--expect-not" "USB_BLOCKER=policy-skip-before-run")
+        args+=("--expect-not" "USB_BLOCKER=pcie-config-replay")
         args+=("--expect-not" "USB_BLOCKER=pcie-irq-quiesce-failed")
         args+=("--expect-not" "USB_BLOCKER=pcie-irq-quiesce-missing")
+        args+=("--expect-not" "USB_BLOCKER=cmd-controller-not-running")
+        args+=("--expect-not" "USB_BLOCKER=cmd-controller-halted")
         args+=("--expect-not" "USB_BLOCKER=cmd-submit-proof-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=cmd-pre-doorbell-proof-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=cmd-doorbell-proof-timer-preempted")
@@ -281,11 +288,13 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=raw-phys-cmd-doorbell-proof-timer-preempted")
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-pending")
         args+=("--expect-not" "USB_BLOCKER=cmd-doorbell-write-halt")
+        args+=("--expect-not" "USB_BLOCKER=cmd-fetch-timeout")
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-only-timeout")
         args+=("--expect-not" "USB_BLOCKER=cmd-live-timeout-snapshot-missing")
         args+=("--expect-not" "USB_BLOCKER=cmd-timeout")
         args+=("--expect-not" "USB_BLOCKER=cmd-event-ring-timeout")
         args+=("--expect-not" "USB_BLOCKER=usbcmd-run-preserved-reset-bit")
+        args+=("--expect-not" "USB_BLOCKER=usbcmd-run-posted-flush-halt")
         args+=("--expect-not" "USB_BLOCKER=pcie-window-no-op-timeout")
         args+=("--expect-not" "USB_BLOCKER=raw-phys-cmd-poll-only-timeout")
         args+=("--expect-not" "USB_BLOCKER=brcm-axi-setup-read")

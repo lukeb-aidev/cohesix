@@ -35,6 +35,7 @@ def test_gate_proof_rejects_current_usb_and_wifi_blockers(tmp_path: pathlib.Path
         "\n".join(
             [
                 "U-Boot 2026.01-dirty",
+                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
                 "[cohesix:root-task] Cohesix boot: root-task online",
                 "[local-seat] xhci probe begin mmio=0x0000000600000000 "
                 "attempt=2/2 policy=platform-reset-complete",
@@ -88,6 +89,7 @@ def test_gate_proof_rejects_unknown_default_gate_evidence(
         "\n".join(
             [
                 "U-Boot 2026.01-dirty",
+                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
                 "[cohesix:root-task] Cohesix boot: root-task online",
                 "[local-seat] xhci runtime candidates=1 hint=no pci_cfg_ready=no",
                 "[pi4-wifi] mailbox request page paddr=0x04000000 "

@@ -137,6 +137,8 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - Fixture regen (only when needed):
   - `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
   - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
+- Explicit scale proof (not part of the fast stage):
+  - `cargo test -p nine-door --features scale-tests --test shard_scale sharded_attach_1k_scale_gate_exports_metrics -- --nocapture`
 
 Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `USB_BLOCKER=usbcmd-run-preserved-reset-bit`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, `WIFI_BLOCKER=ht-clock-timeout`, `BOOT_HALTED=yes`, or `TIMER_IRQ27_SEEN=yes`.
 
@@ -497,7 +499,7 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
   - `cargo test -p coh-rtc`
   - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - Host DHCP/policy gate:
-  - `cargo test -p root-task --no-default-features --features net-console net:: -- --nocapture`
+  - `cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture`
   - Confirms the bounded DHCP core plus runtime policy override plumbing without changing QEMU grammar.
 - Pi 4 image / U-Boot gate:
   - `scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json`
@@ -516,7 +518,7 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
     - when saved Cohesix policy exists, the U-Boot wizard defaults to `Continue with existing config`; otherwise it defaults to `Boot with manifest defaults`
     - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`
-    - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
+    - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no` and `USB_COLD_BOOT_SEEN=yes`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
   - `netstats` must report:
     - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`
     - `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`

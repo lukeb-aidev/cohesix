@@ -163,6 +163,10 @@ USB_BOOTLOADER_HANDOFF_VALUES = {
     "stop-state-preserve",
     "uboot-first",
 }
+USB_COLD_BOOT_MARKERS = (
+    "xhci state discarded before cohesix cold boot",
+    "xhci cold boot starts unseeded",
+)
 
 
 @dataclass(frozen=True)
@@ -210,6 +214,7 @@ class GateSummary:
     timer_irq27_seen: bool = False
     boot_halt_reason: str = "none"
     usb_bootloader_handoff_seen: bool = False
+    usb_cold_boot_seen: bool = False
 
     def to_record(self) -> dict[str, object]:
         """Return a JSON-serializable gate summary."""
@@ -229,6 +234,7 @@ class GateSummary:
             "USB_BOOTLOADER_HANDOFF_SEEN": (
                 "yes" if self.usb_bootloader_handoff_seen else "no"
             ),
+            "USB_COLD_BOOT_SEEN": "yes" if self.usb_cold_boot_seen else "no",
         }
 
     def to_env_lines(self) -> list[str]:
@@ -319,6 +325,24 @@ def usb_bootloader_handoff_evidence(event: TraceEvent) -> bool:
         if value and any(marker in value for marker in USB_BOOTLOADER_HANDOFF_VALUES):
             return True
     return False
+
+
+def usb_cold_boot_evidence(event: TraceEvent) -> bool:
+    """Return true when a USB event proves Cohesix-owned cold boot setup."""
+
+    if event.domain != "usb":
+        return False
+    lowered_raw = event.raw.lower()
+    if any(marker in lowered_raw for marker in USB_COLD_BOOT_MARKERS):
+        return True
+    fields = {key.lower(): value.lower() for key, value in event.fields.items()}
+    return (
+        fields.get("policy") in {"full-reset-start", "platform-reset-complete"}
+        and fields.get("origin") in {"live-runtime-default", "mailbox-reset-complete"}
+        and fields.get("handoff", "none") == "none"
+        and fields.get("seed", "none") == "none"
+        and fields.get("run", "run-default") in {"run-default", "run-cold"}
+    )
 
 
 def serial_corruption_reason(line: str, fields: dict[str, str] | None = None) -> str | None:
@@ -2319,6 +2343,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     usb_bootloader_handoff_seen = any(
         usb_bootloader_handoff_evidence(event) for event in event_list
     )
+    usb_cold_boot_seen = any(usb_cold_boot_evidence(event) for event in event_list)
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -2332,6 +2357,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         timer_irq27_seen=timer_irq27_seen,
         boot_halt_reason=boot_halt_reason,
         usb_bootloader_handoff_seen=usb_bootloader_handoff_seen,
+        usb_cold_boot_seen=usb_cold_boot_seen,
     )
 
 

@@ -10,15 +10,14 @@ use std::fs;
 use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cohesix_ticket::{
     BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer, TicketKey, TicketToken,
 };
-use cohsh::queen;
+use cohsh::{queen, Shell, TcpTransport};
 use cohsh_core::wire::{render_ack, AckLine, AckStatus};
 use cohsh_core::{
     parse_role, role_label, Command as ConsoleCommand, CommandParser, ConsoleError, RoleParseMode,
@@ -619,33 +618,19 @@ fn read_frame(reader: &mut BufReader<TcpStream>) -> Option<String> {
 }
 
 fn run_cohsh_tcp(script_path: &Path, port: u16) -> String {
-    let output = ProcessCommand::new("cargo")
-        .current_dir(transcript_support::repo_root())
-        .args([
-            "run",
-            "-p",
-            "cohsh",
-            "--features",
-            "tcp",
-            "--",
-            "--transport",
-            "tcp",
-            "--tcp-host",
-            "127.0.0.1",
-            "--tcp-port",
-            &port.to_string(),
-            "--auth-token",
-            AUTH_TOKEN,
-            "--script",
-            script_path.to_str().expect("script path"),
-        ])
-        .output()
-        .expect("run cohsh tcp");
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!("cohsh tcp failed: {stderr}");
+    let transport = TcpTransport::new("127.0.0.1", port)
+        .with_auth_token(AUTH_TOKEN)
+        .with_max_retries(1)
+        .with_timeout(Duration::from_secs(2));
+    let mut output = Vec::new();
+    {
+        let file = fs::File::open(script_path).expect("open cohsh tcp script");
+        let mut shell = Shell::new(transport, &mut output);
+        shell
+            .run_script(BufReader::new(file))
+            .expect("run cohsh tcp script");
     }
-    String::from_utf8_lossy(&output.stdout).to_string()
+    String::from_utf8(output).expect("cohsh tcp output utf8")
 }
 
 #[test]

@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 build = "build.rs"
+autotests = false
 
 [features]
 default = []   # no debug features by default (always pass --no-default-features)
@@ -153,10 +154,156 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.10"
-trybuild = "1.0"
 [dev-dependencies.sel4-sys]
 version = "0.0.28"
 path = "../../crates/sel4-sys"
+
+[[test]]
+name = "bootinfo_layout"
+path = "tests/bootinfo_layout.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "bootinfo_snapshot_layout"
+path = "tests/bootinfo_snapshot_layout.rs"
+
+[[test]]
+name = "bootstrap_invariants"
+path = "tests/bootstrap_invariants.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "cache_maintenance"
+path = "tests/cache_maintenance.rs"
+required-features = ["cache-maintenance"]
+
+[[test]]
+name = "console_ack_formatter"
+path = "tests/console_ack_formatter.rs"
+
+[[test]]
+name = "console_parser"
+path = "tests/console_parser.rs"
+
+[[test]]
+name = "cnode_bad_params"
+path = "tests/cnode_bad_params.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "cnode_depth"
+path = "tests/cnode_depth.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "console_read_line"
+path = "tests/console_read_line.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "cspace_bits"
+path = "tests/cspace_bits.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "cspace_boot_window"
+path = "tests/cspace_boot_window.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "cspace_encode"
+path = "tests/cspace_encode.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "cspace_encoding"
+path = "tests/cspace_encoding.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "dispatch_invalid_opcode"
+path = "tests/dispatch_invalid_opcode.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "dispatch_staged_ok"
+path = "tests/dispatch_staged_ok.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "dtb_parse"
+path = "tests/dtb_parse.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "event_pump"
+path = "tests/event_pump.rs"
+
+[[test]]
+name = "ipc_compile_guard"
+path = "tests/ipc_compile_guard.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "ipc_guards"
+path = "tests/ipc_guards.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "ipcbuf_dump_bounds"
+path = "tests/ipcbuf_dump_bounds.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "linker_script_classifier"
+path = "tests/linker_script_classifier.rs"
+
+[[test]]
+name = "minimal_console"
+path = "tests/minimal_console.rs"
+
+[[test]]
+name = "net_pump"
+path = "tests/net_pump.rs"
+required-features = ["net-console"]
+
+[[test]]
+name = "observe_metrics"
+path = "tests/observe_metrics.rs"
+
+[[test]]
+name = "pl011_offsets"
+path = "tests/pl011_offsets.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "retype_init_cnode"
+path = "tests/retype_init_cnode.rs"
+required-features = ["mock-sel4"]
+
+[[test]]
+name = "retype_log_format"
+path = "tests/retype_log_format.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "sel4_syscall_guard"
+path = "tests/sel4_syscall_guard.rs"
+
+[[test]]
+name = "slot_alloc"
+path = "tests/slot_alloc.rs"
+required-features = ["kernel"]
+
+[[test]]
+name = "trace_facade"
+path = "tests/trace_facade.rs"
+required-features = ["bootstrap-trace"]
+
+[[test]]
+name = "trace_hex_dump_signature"
+path = "tests/trace_hex_dump_signature.rs"
+required-features = ["net-console"]
 
 [build-dependencies]
 regex = "1.10"

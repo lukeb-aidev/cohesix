@@ -6560,13 +6560,14 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 Refactor and humanize the authored Cohesix code and documentation surfaces without protocol or behavioral regression by:
 1. freezing a refactor map, ownership plan, and risk budget before broad edits begin,
 2. classifying and reviewing every tracked `*.md` file in the main Cohesix repository,
-3. auditing canonical documentation against generated artifacts, manifest outputs, scripts, and observed staged-run evidence before prose cleanup lands,
-4. adding characterization, CI, and staged-run gates before touching cleanup-sensitive host, VM, HAL, or adapter code,
-5. recording the intentional host-`std` / VM-`no_std` runtime boundary and proving parity for overlapping NineDoor semantics across the actual operator-visible path without implying runtime merger,
-6. decomposing high-value Cohesix-owned monoliths and duplicate validation paths only after their current behavior is pinned,
-7. replacing template-heavy comments and test naming with invariant-focused prose,
-8. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
-9. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
+3. inventorying, validating, and refining every Mermaid diagram in tracked Markdown so visuals are as-built, sufficiently detailed, and 100% GitHub-online compatible,
+4. auditing canonical documentation against generated artifacts, manifest outputs, scripts, and observed staged-run evidence before prose cleanup lands,
+5. adding characterization, CI, and staged-run gates before touching cleanup-sensitive host, VM, HAL, or adapter code,
+6. recording the intentional host-`std` / VM-`no_std` runtime boundary and proving parity for overlapping NineDoor semantics across the actual operator-visible path without implying runtime merger,
+7. decomposing high-value Cohesix-owned monoliths and duplicate validation paths only after their current behavior is pinned,
+8. replacing template-heavy comments and test naming with invariant-focused prose,
+9. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
+10. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
 
 ### Markdown review scope (tracked `*.md` only)
 Milestone 26c must inventory every tracked Markdown file returned by:
@@ -6615,6 +6616,13 @@ For each inventory entry, 26c must record one of:
   - Render a human-readable report from that authoritative inventory source.
   - Record which docs are canonical, generated, release-derived, append-only audit evidence, reference-only, or vendored.
   - Ensure release and snippet docs are traced back to their source artifacts instead of receiving ad-hoc prose edits.
+
+- **Mermaid diagram audit and as-built visual model**
+  - Inventory every Mermaid code block in tracked Markdown and tie each diagram to an as-built source of truth, generated artifact, fixture, staged-run evidence path, or explicit reference-only disposition.
+  - Refine stale, under-specified, or presentation-only diagrams so they explain Cohesix authority boundaries, HAL ownership, host/VM splits, Secure9P flows, manifest/codegen authority, Pi 4 boot/network paths, worker roles, and operator-visible control/data paths with enough detail for external review.
+  - Add new Mermaid diagrams where canonical docs lack a clear visual model, including a HAL architecture diagram in `docs/ARCHITECTURE.md` if the as-built audit shows the HAL boundary is not sufficiently visible.
+  - Require every Mermaid block to use the GitHub-supported Mermaid syntax subset and render correctly in GitHub online; diagrams must not depend on local renderer quirks, external assets, custom JavaScript/init directives, raw HTML labels, theme CSS, or unsupported experimental syntax.
+  - Produce checked-in inventory and render-audit evidence for every edited or newly added diagram, including GitHub-online proof or an explicitly documented compatibility check path.
 
 - **Docs-as-built audit and drift ledger before prose cleanup**
   - Audit canonical docs against current generated snippets, resolved manifests, committed fixtures, release artifacts, script behavior, and staged test evidence before rewriting for tone or readability.
@@ -6666,6 +6674,9 @@ For each inventory entry, 26c must record one of:
 - `git ls-files '*.md' | sort > out/audit/m26c_markdown_inventory.txt`
 - `cut -d, -f1 docs/audit/M26C_MARKDOWN_INVENTORY.csv | sed '1d' | sort > out/audit/m26c_markdown_inventory_checked_in.txt`
 - `diff -u out/audit/m26c_markdown_inventory.txt out/audit/m26c_markdown_inventory_checked_in.txt`
+- `scripts/ci/mermaid_inventory.py --markdown-list out/audit/m26c_markdown_inventory.txt --out docs/audit/M26C_MERMAID_INVENTORY.csv`
+- `scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt`
+- `scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt --out out/audit/m26c-mermaid-rendered`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `scripts/check-generated.sh`
 - `cargo fmt --all -- --check`
@@ -6697,6 +6708,9 @@ For each inventory entry, 26c must record one of:
 
 ### Checks (DoD)
 - Every tracked Markdown file returned by `git ls-files '*.md'` is present exactly once in the checked-in 26c inventory with an explicit disposition and update rule.
+- Every Mermaid block in tracked Markdown is present exactly once in the checked-in Mermaid inventory, has an owner/disposition, and is traced to as-built evidence or reference provenance.
+- Every edited or newly added Mermaid diagram renders correctly in GitHub online and uses only GitHub-compatible Mermaid syntax; render proof or compatibility evidence is archived in the 26c audit artifacts.
+- Canonical diagrams are detailed enough to explain current Cohesix authority boundaries, HAL ownership, host/VM separation, Secure9P paths, generated-manifest authority, Pi 4 boot/network flow, and operator-facing control/data flow without contradicting docs-as-built evidence.
 - The 26c blocker ledger exists before cleanup starts, and every initial blocker is either fixed with evidence or explicitly deferred to a named later milestone without being used as a satisfied dependency.
 - The rendered Markdown inventory report is mechanically derived from the checked-in machine-readable inventory source.
 - A checked-in refactor map classifies every Cohesix-authored refactor candidate, names its owner, records preserved contracts, and states whether it is no-touch, low-risk cleanup, characterization-first refactor, boundary-sensitive refactor, or deferred.
@@ -6720,6 +6734,7 @@ For each inventory entry, 26c must record one of:
 ### Compiler / docsystem touchpoints
 - `coh-rtc` generated snippets referenced by `docs/snippets/*.md` remain authoritative; 26c may only change their source schemas or generators, never hand-edit the derived snippet text.
 - `docs/nist/REPORT.md` remains generated from its source registry; 26c may only update it through the proper generator flow.
+- Mermaid diagrams inside generated, release-derived, vendored, or reference-only Markdown follow the same disposition rules as their containing file; 26c may audit and report them, but edits must occur through the proper source, release-cut, or provenance flow.
 - Tracked release-cut documentation under `releases/RELEASE_NOTES-*.md`, `releases/*/{README.md,QUICKSTART.md,RELEASE_NOTES.md}`, `releases/*/docs/**/*.md`, and `releases/*/python/**/README.md` remains derived from canonical docs and release packaging; if snapshot wording changes, the corresponding release-cut flow and notes must change in the same work. Release-local validation outputs under `releases/**/out/**`, embedded virtualenv content under `releases/**/.venv*/**`, and other untracked byproducts are provenance inputs only and are not part of the 26c inventory.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, `scripts/ci/check_test_plan.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
 - Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe, must not import host-side capabilities, transports, or provider crates into the VM build, and must be reviewed against the archived per-profile dependency trees.
@@ -6783,6 +6798,29 @@ Checks:
   - The rendered report is mechanically derived from the machine-readable source.
 Deliverables:
   - Auditable Markdown inventory and disposition source/report pair covering canonical docs, release snapshots, audit evidence, reference mirrors, and vendored material.
+
+Title/ID: m26c-mermaid-as-built-diagram-audit
+Goal: Inventory, validate, and refine every Mermaid diagram in tracked Markdown so Cohesix visual documentation is as-built, review-grade, and 100% GitHub-online compatible.
+Inputs: `git ls-files '*.md' | sort`, README.md, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md, docs/USE_CASES.md, docs/FAILOVER.md, docs/GPU_NODES.md, docs/NETWORK_CONFIG.md, docs/SECURE9P.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md, docs/audit/M26C_MARKDOWN_INVENTORY.csv, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md, apps/root-task/src/hal/**, apps/root-task/src/net/**, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/nine-door/src/host/**, configs/root_task*.toml
+Changes:
+  - docs/audit/M26C_MERMAID_INVENTORY.csv — checked-in inventory of every Mermaid block in tracked Markdown with file, heading, diagram type, disposition, owner, as-built evidence source, GitHub compatibility status, and update rule.
+  - docs/audit/M26C_MERMAID_GITHUB_RENDER_AUDIT.md — render evidence for every edited or newly added diagram, including GitHub-online proof or the exact compatibility check path used.
+  - scripts/ci/mermaid_inventory.py — produce the Mermaid inventory from the tracked Markdown list without scanning ignored build outputs or local evidence directories.
+  - scripts/ci/check_mermaid_github.sh + scripts/ci/render_mermaid_github.sh — fail on unsupported GitHub Mermaid syntax and render all accepted diagrams into 26c audit evidence.
+  - README.md + docs/*.md + apps/**/README.md + crates/**/README.md + tools/**/*.md — refine stale or underspecified Mermaid diagrams; add new diagrams where canonical docs lack visual explanation of as-built contracts.
+  - docs/ARCHITECTURE.md — add or refine a HAL architecture Mermaid diagram if the as-built audit shows HAL ownership, driver boundaries, or host/VM capability separation is not clear enough for external review.
+Commands:
+  - git ls-files '*.md' | sort > out/audit/m26c_markdown_inventory.txt
+  - scripts/ci/mermaid_inventory.py --markdown-list out/audit/m26c_markdown_inventory.txt --out docs/audit/M26C_MERMAID_INVENTORY.csv
+  - scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt
+  - scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt --out out/audit/m26c-mermaid-rendered
+Checks:
+  - Every Mermaid block in tracked Markdown is inventoried exactly once and classified as canonical human-edited, generated/regenerate-only, release-derived, vendored/reference-only, append-only audit evidence, or external reference mirror.
+  - Edited and newly added diagrams render correctly in GitHub online and avoid unsupported Mermaid features such as custom init directives, raw HTML labels, external assets, theme CSS, local renderer extensions, or experimental diagram syntax unless GitHub-online proof is archived.
+  - Canonical diagrams describe the as-built system with enough detail to show authority boundaries, HAL ownership, host/VM separation, generated-manifest authority, Secure9P paths, worker roles, Pi 4 boot/network flows, and operator-visible control/data paths.
+  - Diagram changes do not contradict generated snippets, manifests, fixtures, test-plan evidence, or the 26c blocker ledger.
+Deliverables:
+  - World-class GitHub-renderable Mermaid diagram set with inventory, compatibility proof, and as-built traceability for every tracked Markdown diagram.
 
 Title/ID: m26c-refactor-map-and-risk-ratchet
 Goal: Freeze the aggressive refactor scope, ownership, preserved contracts, and risk-ratchet baseline before structural edits begin.

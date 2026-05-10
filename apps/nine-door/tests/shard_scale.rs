@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const WORKER_COUNT: usize = 1_000;
+const DEFAULT_WORKER_COUNT: usize = 64;
+const SCALE_WORKER_COUNT: usize = 1_000;
 const ATTACH_THREADS: usize = 32;
 
 fn unix_time_ms() -> u64 {
@@ -23,6 +24,16 @@ fn unix_time_ms() -> u64 {
 
 #[test]
 fn sharded_attach_scales_and_exports_metrics() {
+    run_sharded_attach_scale(DEFAULT_WORKER_COUNT);
+}
+
+#[cfg(feature = "scale-tests")]
+#[test]
+fn sharded_attach_1k_scale_gate_exports_metrics() {
+    run_sharded_attach_scale(SCALE_WORKER_COUNT);
+}
+
+fn run_sharded_attach_scale(worker_count: usize) {
     let server = NineDoor::new();
     server.register_ticket_secret(Role::WorkerHeartbeat, "worker-secret");
 
@@ -32,7 +43,7 @@ fn sharded_attach_scales_and_exports_metrics() {
     let queen_ctl = vec!["queen".to_owned(), "ctl".to_owned()];
     queen.walk(1, 2, &queen_ctl).expect("walk /queen/ctl");
     queen.open(2, OpenMode::write_append()).expect("open ctl");
-    for _ in 0..WORKER_COUNT {
+    for _ in 0..worker_count {
         queen
             .write(2, b"{\"spawn\":\"heartbeat\",\"ticks\":5}\n")
             .expect("spawn worker");
@@ -40,7 +51,7 @@ fn sharded_attach_scales_and_exports_metrics() {
     queen.clunk(2).expect("clunk ctl");
 
     let issuer = TicketIssuer::new("worker-secret");
-    let workers: Vec<(String, String)> = (1..=WORKER_COUNT)
+    let workers: Vec<(String, String)> = (1..=worker_count)
         .map(|idx| {
             let worker_id = format!("worker-{idx}");
             let claims = TicketClaims::new(
@@ -57,9 +68,9 @@ fn sharded_attach_scales_and_exports_metrics() {
     let workers = Arc::new(workers);
 
     let next_index = Arc::new(AtomicUsize::new(0));
-    let durations = Arc::new(Mutex::new(Vec::with_capacity(WORKER_COUNT)));
-    let connections = Arc::new(Mutex::new(Vec::with_capacity(WORKER_COUNT)));
-    let threads = ATTACH_THREADS.min(WORKER_COUNT);
+    let durations = Arc::new(Mutex::new(Vec::with_capacity(worker_count)));
+    let connections = Arc::new(Mutex::new(Vec::with_capacity(worker_count)));
+    let threads = ATTACH_THREADS.min(worker_count);
 
     let mut handles = Vec::with_capacity(threads);
     for _ in 0..threads {
@@ -98,16 +109,16 @@ fn sharded_attach_scales_and_exports_metrics() {
     }
 
     let durations = durations.lock().unwrap();
-    assert_eq!(durations.len(), WORKER_COUNT);
+    assert_eq!(durations.len(), worker_count);
     let total_ms: f64 = durations.iter().map(|d| d.as_secs_f64() * 1_000.0).sum();
     let max_ms = durations
         .iter()
         .map(|d| d.as_secs_f64() * 1_000.0)
         .fold(0.0, f64::max);
-    let avg_ms = total_ms / WORKER_COUNT as f64;
+    let avg_ms = total_ms / worker_count as f64;
     println!(
         "attach latency: workers={} avg_ms={avg_ms:.3} max_ms={max_ms:.3}",
-        WORKER_COUNT
+        worker_count
     );
 
     let sessions_path = vec!["proc".to_owned(), "9p".to_owned(), "sessions".to_owned()];
@@ -145,9 +156,9 @@ fn sharded_attach_scales_and_exports_metrics() {
             shard_lines += 1;
         }
     }
-    assert_eq!(worker_sessions, Some(WORKER_COUNT));
-    assert!(total_sessions.unwrap_or(0) > WORKER_COUNT);
-    assert_eq!(shard_total, WORKER_COUNT);
+    assert_eq!(worker_sessions, Some(worker_count));
+    assert!(total_sessions.unwrap_or(0) > worker_count);
+    assert_eq!(shard_total, worker_count);
 
     let shards = ShardLayout::default();
     assert!(shards.worker_telemetry_path("worker-1").len() <= 8);
@@ -155,5 +166,9 @@ fn sharded_attach_scales_and_exports_metrics() {
         assert!(vec!["worker", "worker-1", "telemetry"].len() <= 8);
     }
     assert_eq!(shard_count, Some(shards.shard_count()));
-    assert!(shard_lines >= shards.shard_count());
+    if worker_count >= SCALE_WORKER_COUNT {
+        assert!(shard_lines >= shards.shard_count());
+    } else {
+        assert!(shard_lines > 0);
+    }
 }

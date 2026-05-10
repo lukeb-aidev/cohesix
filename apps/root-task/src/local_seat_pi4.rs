@@ -2158,7 +2158,7 @@ impl Pi4LocalSeat {
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] pi4 keyboard unavailable detail={} hint=\"UEFI vars: XhciPci=0 XhciReload=1 SystemTableMode=1\"",
+                        "[local-seat] pi4 keyboard unavailable detail={} hint=\"Pi4 cold boot: inspect VL805 mailbox reset, live EXT_CFG BAR/COMMAND proof, and xHCI command/event-ring evidence\"",
                         err.as_str()
                     ),
                 );
@@ -4632,11 +4632,38 @@ fn xhci_probe_command_ring_after_event_drain(
                     result
                 }
                 Err(UsbError::Timeout) => {
+                    let fallback = match ctrl.probe_no_op_command_prompt_safe() {
+                        Ok(()) => {
+                            let result = "no-op-ok";
+                            let mut line = heapless::String::<256>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci root-port command-probe result={result} bus={bus} event_generation=poll-only-fallback prior=no-op-linux-event-timeout irq27_role=timer-only pcie_irqs=175,180"
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            return result;
+                        }
+                        Err(UsbError::Timeout) => "no-op-unproven",
+                        Err(err) => {
+                            let result = usb_no_op_probe_error_label(err);
+                            let mut line = heapless::String::<256>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci root-port command-probe poll-only-fallback={result} bus={bus} detail={err:?} prior=no-op-linux-event-timeout irq27_role=timer-only pcie_irqs=175,180"
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            result
+                        }
+                    };
                     let mut line = heapless::String::<256>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] xhci root-port command-probe result=no-op-linux-event-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout event_generation={event_generation} irq27_role=timer-only pcie_irqs=175,180"
+                            "[local-seat] xhci root-port command-probe result=no-op-linux-event-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout event_generation={event_generation} poll_fallback={fallback} irq27_role=timer-only pcie_irqs=175,180"
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
@@ -4644,7 +4671,7 @@ fn xhci_probe_command_ring_after_event_drain(
                     let _ = core::fmt::Write::write_fmt(
                         &mut summary,
                         format_args!(
-                            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-linux-event-unproven event=missing event_generation={event_generation} irq27_role=timer-only pcie_irqs=175,180"
+                            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-linux-event-unproven event=missing event_generation={event_generation} poll_fallback={fallback} irq27_role=timer-only pcie_irqs=175,180"
                         ),
                     );
                     boot_log::force_uart_line(summary.as_str());

@@ -58,7 +58,7 @@ required_snippets = [
     "scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none",
     "cargo test -p host-ticket-agent",
     "cargo test -p tests",
-    "cargo test -p root-task --no-default-features --features net-console net:: -- --nocapture",
+    "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",
     "cargo test --workspace",
     "pytest tests/test_pi4_trace_normalize.py",
 ]
@@ -70,7 +70,7 @@ for snippet in required_snippets:
 required_stage_02_commands = [
     "cargo test -p host-ticket-agent",
     "cargo test -p tests",
-    "cargo test -p root-task --no-default-features --features net-console net:: -- --nocapture",
+    "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",
     "cargo test --workspace",
     "pytest tests/test_pi4_trace_normalize.py",
 ]
