@@ -3298,7 +3298,13 @@ const fn cyw43_transport_mode_name(experimental_no_ht_transport: bool) -> &'stat
 
 #[inline]
 const fn control_plane_frame_request_len(frame_len: usize) -> usize {
-    (frame_len + 3) & !3
+    let aligned = (frame_len + 3) & !3;
+    if aligned <= SDIO_MAX_BYTE_MODE {
+        aligned
+    } else {
+        let block_size = SDIO_FUNCTION_ENABLE_F2.block_size as usize;
+        (aligned + block_size - 1) & !(block_size - 1)
+    }
 }
 
 #[inline]
@@ -23923,6 +23929,28 @@ mod tests {
         assert_eq!(control_plane_frame_request_len(4), 4);
         assert_eq!(control_plane_frame_request_len(47), 48);
         assert_eq!(control_plane_frame_request_len(512), 512);
+    }
+
+    #[test]
+    fn control_plane_frame_request_len_promotes_oversized_f2_frames_to_block_shape() {
+        assert_eq!(control_plane_frame_request_len(513), 1024);
+        assert_eq!(control_plane_frame_request_len(676), 1024);
+        assert_eq!(control_plane_frame_request_len(1072), 1536);
+        assert_eq!(control_plane_frame_request_len(1448), 1536);
+
+        let write = sdio_transfer_plan(
+            SdioFunction::Function2,
+            control_plane_frame_request_len(1448),
+            true,
+        )
+        .expect("oversized control frame transfer plan");
+        assert!(write.block_mode);
+        assert_eq!(write.block_size, SDIO_FUNCTION_ENABLE_F2.block_size);
+        assert_eq!(write.block_count, 3);
+        assert_eq!(write.cmd53_count, 3);
+        assert_ne!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
+        assert_ne!(write.transfer_mode & SDHCI_TRNS_MULTI, 0);
+        assert_eq!(write.transfer_mode & SDHCI_TRNS_READ, 0);
     }
 
     #[test]

@@ -41,7 +41,9 @@ const DATA_PADDING_LEN: usize = 2;
 
 const FRAME_BUF_LEN: usize = 2048;
 const CONTROL_RESPONSE_BUF_LEN: usize = 512;
-const CLM_CHUNK_SIZE: usize = 1024;
+const CLM_CHUNK_SIZE: usize = 1400;
+const CLM_IOVAR_NAME_LEN: usize = 8;
+const CLM_IOVAR_HEADER_LEN: usize = 12;
 const IOCTL_WAIT_LOOPS: usize = 8_000;
 // The bounded startup-link lane now preserves the exact blocker end-to-end, so
 // long ioctl waits only stretch a known failure. Keep one short startup-link
@@ -998,6 +1000,7 @@ impl Cyw43NetDevice {
 
         if let Some(clm) = firmware.clm_blob {
             control_step!("clm-download", self.load_clm(clm));
+            control_step!("clm-version", self.read_clm_version());
         } else {
             info!("[cyw43] control-plane step=clm-download action=skip");
         }
@@ -1051,7 +1054,7 @@ impl Cyw43NetDevice {
             if offset + chunk_len == clm.len() {
                 flags |= DOWNLOAD_FLAG_END;
             }
-            let payload_len = 8 + 12 + chunk_len;
+            let payload_len = clm_setvar_payload_len(chunk_len);
             {
                 let payload = self.payload_mut(payload_len)?;
                 payload[..8].copy_from_slice(b"clmload\0");
@@ -1069,6 +1072,23 @@ impl Cyw43NetDevice {
             offset += chunk_len;
         }
         info!("[cyw43] clm loaded bytes={}", clm.len());
+        Ok(())
+    }
+
+    fn read_clm_version(&mut self) -> Result<(), DriverError> {
+        let mut version = [0u8; 256];
+        let response_len = self.get_iovar("clmver", &mut version)?;
+        if response_len == 0 {
+            return Err(DriverError::Protocol("clmver-empty"));
+        }
+        let printable_len = version[..response_len]
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(response_len);
+        if printable_len == 0 {
+            return Err(DriverError::Protocol("clmver-empty"));
+        }
+        info!("[cyw43] clm version bytes={}", printable_len);
         Ok(())
     }
 
@@ -1844,17 +1864,7 @@ impl Cyw43NetDevice {
         frame_len: usize,
         allow_data: bool,
     ) -> Result<RxFrameResult, DriverError> {
-        if frame_len < SDPCM_HEADER_LEN {
-            return Err(DriverError::Protocol("sdpcm-short-header"));
-        }
-        let packet_len =
-            usize::from(get_u16_le(&self.rx_frame, 0).ok_or(DriverError::Protocol("sdpcm-len"))?);
-        let packet_len = core::cmp::min(packet_len, frame_len);
-        let len_inv =
-            get_u16_le(&self.rx_frame, 2).ok_or(DriverError::Protocol("sdpcm-len-inv"))?;
-        if len_inv != !u16::try_from(packet_len).unwrap_or(u16::MAX) {
-            return Err(DriverError::Protocol("sdpcm-len-mismatch"));
-        }
+        let packet_len = validate_sdpcm_packet_len(&self.rx_frame, frame_len)?;
         self.update_credit();
 
         let channel = self.rx_frame[5] & 0x0f;
@@ -2203,6 +2213,32 @@ impl NetDevice for Cyw43NetDevice {
     }
 }
 
+fn validate_sdpcm_packet_len(frame: &[u8], frame_len: usize) -> Result<usize, DriverError> {
+    if frame_len < SDPCM_HEADER_LEN {
+        return Err(DriverError::Protocol("sdpcm-short-header"));
+    }
+    let raw_packet_len =
+        usize::from(get_u16_le(frame, 0).ok_or(DriverError::Protocol("sdpcm-len"))?);
+    if raw_packet_len > frame_len {
+        return Err(DriverError::Protocol("sdpcm-len-overflow"));
+    }
+    let len_inv = get_u16_le(frame, 2).ok_or(DriverError::Protocol("sdpcm-len-inv"))?;
+    if len_inv != !u16::try_from(raw_packet_len).unwrap_or(u16::MAX) {
+        return Err(DriverError::Protocol("sdpcm-len-mismatch"));
+    }
+    Ok(raw_packet_len)
+}
+
+#[inline]
+const fn clm_iovar_data_len(chunk_len: usize) -> usize {
+    CLM_IOVAR_HEADER_LEN + chunk_len
+}
+
+#[inline]
+const fn clm_setvar_payload_len(chunk_len: usize) -> usize {
+    CLM_IOVAR_NAME_LEN + clm_iovar_data_len(chunk_len)
+}
+
 fn align4(len: usize) -> usize {
     (len + 3) & !3
 }
@@ -2339,8 +2375,8 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        align4, bdc_payload, control_plane_bootstrap_needs_full_replay_retry,
-        control_plane_data_clock_target_hz,
+        align4, bdc_payload, clm_iovar_data_len, clm_setvar_payload_len,
+        control_plane_bootstrap_needs_full_replay_retry, control_plane_data_clock_target_hz,
         control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait,
         control_plane_retry_after_promoted_timeout_resend_uses_startup_link,
         control_plane_retry_after_promoted_timeout_target_clock_hz,
@@ -2354,10 +2390,11 @@ mod tests {
         promoted_cyw43_init_failure_exact_error, put_u16_le, set_event_mask_bit,
         speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
-        startup_transport_recovery_should_reset_experimental_state, DriverError, EVENT_AUTH,
-        EVENT_IF, EVENT_SET_SSID, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
+        startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
+        DriverError, CLM_CHUNK_SIZE, EVENT_AUTH, EVENT_IF, EVENT_SET_SSID, IOCTL_WAIT_LOOPS,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
     };
     use crate::hal::HalError;
 
@@ -2407,10 +2444,35 @@ mod tests {
     }
 
     #[test]
+    fn clm_chunk_shape_matches_pi4_linux_capture() {
+        assert_eq!(CLM_CHUNK_SIZE, 1400);
+        assert_eq!(clm_iovar_data_len(CLM_CHUNK_SIZE), 1412);
+        assert_eq!(clm_setvar_payload_len(CLM_CHUNK_SIZE), 1420);
+        assert_eq!(clm_iovar_data_len(2676 - CLM_CHUNK_SIZE), 1288);
+        assert_eq!(clm_setvar_payload_len(2676 - CLM_CHUNK_SIZE), 1296);
+    }
+
+    #[test]
     fn little_endian_helpers_write_expected_bytes() {
         let mut buf = [0u8; 4];
         put_u16_le(&mut buf, 1, 0x1234);
         assert_eq!(buf, [0x00, 0x34, 0x12, 0x00]);
+    }
+
+    #[test]
+    fn sdpcm_len_validation_rejects_raw_packet_larger_than_received_frame() {
+        let mut frame = [0u8; 64];
+        put_u16_le(&mut frame, 0, 48);
+        put_u16_le(&mut frame, 2, !48u16);
+        assert_eq!(
+            validate_sdpcm_packet_len(&frame, 48).expect("valid frame"),
+            48
+        );
+
+        put_u16_le(&mut frame, 0, 64);
+        put_u16_le(&mut frame, 2, !48u16);
+        let err = validate_sdpcm_packet_len(&frame, 48).expect_err("overflow rejected");
+        assert!(matches!(err, DriverError::Protocol("sdpcm-len-overflow")));
     }
 
     #[test]

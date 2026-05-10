@@ -353,6 +353,7 @@ run_normalizer() {
         args+=("--expect-not" "WIFI_BLOCKER=sdio-cmd52-write")
         args+=("--expect-not" "WIFI_BLOCKER=sdio-cmd52-read")
         args+=("--expect-not" "WIFI_BLOCKER=sdio-cmd53-r5-error")
+        args+=("--expect-not" "WIFI_BLOCKER=sdhci-byte-mode-count")
         args+=("--expect-not" "WIFI_BLOCKER=firmware-channel-f2")
         args+=("--expect-not" "WIFI_BLOCKER=firmware-ready-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=mailbox-ready-timeout")

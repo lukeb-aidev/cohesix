@@ -321,8 +321,8 @@ def test_usb_proof_summary_advances_command_gate() -> None:
 
     gates = normalizer.summarize_gates(events)
 
-    assert gates.usb_gate == 4
-    assert gates.usb_blocker == "cmd-poll-pending"
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-event-ring-timeout"
 
 
 def test_parse_fields_preserves_unsupported_operation_detail() -> None:
@@ -724,7 +724,7 @@ def test_gate_summary_treats_usb_doorbell_edges_precisely() -> None:
         assert gates.usb_blocker == expected
 
 
-def test_gate_summary_treats_usb_prompt_safe_return_as_poll_pending() -> None:
+def test_gate_summary_treats_usb_prompt_safe_return_as_event_timeout() -> None:
     events = normalizer.parse_events(
         [
             "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
@@ -740,7 +740,7 @@ def test_gate_summary_treats_usb_prompt_safe_return_as_poll_pending() -> None:
     gates = normalizer.summarize_gates(events)
 
     assert gates.usb_gate == 3
-    assert gates.usb_blocker == "cmd-poll-pending"
+    assert gates.usb_blocker == "cmd-event-ring-timeout"
 
 
 def test_gate_summary_tracks_latest_usb_pre_doorbell_timer_halt() -> None:

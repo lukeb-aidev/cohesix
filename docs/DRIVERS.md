@@ -271,6 +271,15 @@ power/reset state.
 - Function 2 enable follows Linux's `SDIO_WAIT_F2RDY` contract: the strict
   Cohesix path polls CCCR `IORx` for a 3000-sample F2-ready window before
   declaring `sdio-function2-ready-timeout`.
+- Function 2 control-plane frames follow Linux SDIO host sizing: payloads that
+  still fit CMD53 byte mode are four-byte aligned, while larger frames are
+  padded to the 512-byte Function 2 block size so the HAL emits block-mode
+  CMD53 rather than an unencodable byte-mode count.
+- Pi 4 CLM upload follows the captured Linux `clmload` cadence: the first
+  `clmload` DCMD carries a 1400-byte CLM blob chunk (`len=1412` after the
+  `download_hdr`) and subsequent control frames are padded to the 512-byte
+  Function 2 block boundary. The driver queries `clmver` after upload before
+  continuing with the remaining preinit commands.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
@@ -297,6 +306,11 @@ active path is Cohesix-owned cold start:
 - HAL validates link/root-complex state or runs one bounded BCM2711
   root-complex reset/window init and drains posted writes with same-block
   readbacks.
+- HAL maps the BCM2711 root-port config page before higher PCIe pages and
+  programs the Linux/U-Boot bridge aperture before endpoint ownership:
+  primary/secondary/subordinate buses `00/01/01`, memory window
+  `0xc0000000..0xc00fffff`, prefetch disabled, and root-port COMMAND
+  `Mem+ BusMaster+`.
 - HAL reselects VL805 `01:00.0` via BCM2711 `EXT_CFG_INDEX` before each
   `EXT_CFG_DATA` access and rejects selector echoes.
 - Ownership can promote only on exact live `1106:3483`, class `0x0c0330`,

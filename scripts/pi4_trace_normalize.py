@@ -623,7 +623,7 @@ def normalize_usb_blocker(value: str) -> str:
         or "enable-slot-linux-event-unproven" in lower
         or "cmd-prompt-safe-return-to-shell" in lower
     ):
-        return "cmd-poll-pending"
+        return "cmd-event-ring-timeout"
     if (
         "cmd-submit-proof-timer-preempted" in lower
         or "cmd-submit-vtimer-interrupt" in lower
@@ -1359,7 +1359,17 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, proof_gate)
             proof_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
             if proof_blocker != "none":
-                if proof_blocker == "cmd-poll-pending":
+                if (
+                    proof_blocker == "cmd-poll-pending"
+                    and fields.get("command")
+                    in {
+                        "no-op-unproven",
+                        "enable-slot-unproven",
+                        "enable-slot-linux-event-unproven",
+                    }
+                ):
+                    proof_blocker = "cmd-event-ring-timeout"
+                elif proof_blocker == "cmd-poll-pending":
                     gate = max(gate, 4)
                 if (
                     command_timeout_detail == "usbcmd-run-preserved-reset-bit"
@@ -1373,8 +1383,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "enable-slot-unproven",
                 "enable-slot-linux-event-unproven",
             }:
-                gate = max(gate, 4)
-                blocker = "cmd-poll-pending"
+                gate = max(gate, 3)
+                blocker = "cmd-event-ring-timeout"
             else:
                 blocker = "none"
             continue
@@ -1606,7 +1616,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         elif tag == "cmd-prompt-safe-return-to-shell":
             gate = max(gate, 3)
             if command_timeout_detail not in precise_command_timeout_details:
-                command_timeout_detail = "cmd-poll-pending"
+                command_timeout_detail = "cmd-event-ring-timeout"
             blocker = command_timeout_detail
         elif tag.startswith("cmd-event-ring-before"):
             saw_command_event_ring_before = True

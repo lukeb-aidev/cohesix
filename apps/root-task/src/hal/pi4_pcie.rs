@@ -38,6 +38,7 @@ const BCM2711_PCIE_MSI_INTR2_CLR: usize = 0x4508;
 const BCM2711_PCIE_MSI_INTR2_MASK_SET: usize = 0x4510;
 const BCM2711_PCIE_EXT_CFG_DATA: usize = 0x8000;
 const BCM2711_PCIE_EXT_CFG_INDEX: usize = 0x9000;
+const BCM2711_PCIE_RC_CFG_PRIV1_ID_VAL3: usize = 0x043c;
 const VL805_XHCI_USBCMD_OFFSET: usize = 0x0020;
 const VL805_XHCI_DOORBELL0_OFFSET: usize = 0x0100;
 const VL805_XHCI_DOORBELL_STRIDE: usize = 4;
@@ -57,6 +58,7 @@ const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_LIMIT_MASK: u32 = 0xfff00000;
 const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_BASE_MASK: u32 = 0xfff0;
 const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI_BASE_MASK: u32 = 0xff;
 const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI_LIMIT_MASK: u32 = 0xff;
+const PCIE_RC_CFG_PRIV1_ID_VAL3_CLASS_CODE_MASK: u32 = 0x00ff_ffff;
 const PCIE_HARD_DEBUG_SERDES_IDDQ_MASK: u32 = 0x08000000;
 const PCIE_RGR1_SW_INIT_1_INIT_MASK: u32 = 0x2;
 const PCIE_RGR1_SW_INIT_1_PERST_MASK: u32 = 0x1;
@@ -69,10 +71,17 @@ const VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
 const VL805_PCI_VENDOR_ID: u16 = 0x1106;
 const VL805_PCI_DEVICE_ID: u16 = 0x3483;
 const VL805_EXPECTED_CLASS_CODE: u32 = 0x000c_0330;
+const BCM2711_ROOT_VENDOR_ID: u16 = 0x14e4;
+const BCM2711_ROOT_DEVICE_ID: u16 = 0x2711;
+const BCM2711_ROOT_BRIDGE_CLASS_CODE: u32 = 0x0006_0400;
 
 const PCI_CFG_VENDOR_DEVICE: usize = 0x00;
 const PCI_CFG_COMMAND_STATUS: usize = 0x04;
 const PCI_CFG_CLASS_REVISION: usize = 0x08;
+const PCI_CFG_PRIMARY_BUS: usize = 0x18;
+const PCI_CFG_IO_BASE_LIMIT: usize = 0x1c;
+const PCI_CFG_MEMORY_BASE_LIMIT: usize = 0x20;
+const PCI_CFG_PREFETCH_BASE_LIMIT: usize = 0x24;
 const PCI_CFG_CAP_PTR: usize = 0x34;
 const PCI_CFG_BAR0: usize = 0x10;
 const PCI_CFG_BAR1: usize = 0x14;
@@ -99,6 +108,11 @@ const RPI4_PCIE_BUS_MMIO_WINDOW_BASE: usize = 0xC000_0000;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BASE_U32: u32 = 0xC000_0000;
 const RPI4_PCIE_CPU_MMIO_WINDOW_BASE: usize = RPI4_VL805_XHCI_MMIO;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BYTES: usize = 0x4000_0000;
+const RPI4_VL805_BRIDGE_MMIO_WINDOW_BYTES: u32 = 0x0010_0000;
+const RPI4_PCIE_BRIDGE_BUS_NUMBERS: u32 = 0x0001_0100;
+const RPI4_PCIE_BRIDGE_IO_BASE_LIMIT_DISABLED: u32 = 0;
+const RPI4_PCIE_BRIDGE_PREFETCH_BASE_LIMIT_DISABLED: u32 = 0x0001_fff1;
+const RPI4_PCIE_BRIDGE_COMMAND_REQUIRED: u16 = PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER;
 // BCM2711 Pi 4 endpoint DMA uses the captured PCIe inbound bus alias:
 // PCIe bus 0x00000004_00000000 maps to CPU physical 0 for 4 GiB.
 const RPI4_PCIE_DMA_BUS_BASE: u64 = 0x0000_0004_0000_0000;
@@ -123,6 +137,7 @@ const VL805_XHCI_PORTSC_BASE_OFFSET: usize = 0x420;
 const VL805_XHCI_PORTSC_STRIDE: usize = 0x10;
 const VL805_XHCI_PORT_REGISTER_MMIO_LIMIT: usize = 0x1_0000;
 
+static PCIE_ROOT_CFG_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_STATUS_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_EXT_DATA_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_EXT_INDEX_PAGE_VIRT: AtomicUsize = AtomicUsize::new(0);
@@ -364,14 +379,15 @@ fn prove_pi4_vl805_pcie_ownership(
 ) -> Result<Pi4Vl805PcieProof, HalError> {
     pi4_wifi::power_on_vl805_usb_hcd(hal)?;
 
+    // seL4 device untyped retyping is monotonic. Map the BCM2711 PCIe register
+    // pages in ascending physical order so root-port config, status, EXT_CFG,
+    // and SW_INIT remain exactly mappable in one boot.
+    let root_cfg_page = map_pcie_reg_page_cached(hal, PCI_CFG_VENDOR_DEVICE, "pi4-pcie-root-cfg")?;
     let status_page =
         map_pcie_reg_page_cached(hal, BCM2711_PCIE_MISC_PCIE_STATUS, "pi4-pcie-status")?;
     let status_reg = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_PCIE_STATUS)?;
     mask_and_clear_pcie_irq_sources(status_page);
 
-    // seL4 device untyped retyping is monotonic. Map the BCM2711 PCIe register
-    // pages in ascending physical order so root init's SW_INIT page does not
-    // consume past the lower EXT_CFG_DATA page before the exact VL805 proof.
     let config_page =
         map_pcie_reg_page_cached(hal, BCM2711_PCIE_EXT_CFG_DATA, "pi4-pcie-ext-data")?;
     let index_page =
@@ -406,6 +422,8 @@ fn prove_pi4_vl805_pcie_ownership(
         boot_log::force_uart_line(skipped.as_str());
         return Err(HalError::Unsupported("pcie-link-not-active"));
     }
+
+    configure_pi4_pcie_root_bridge(root_cfg_page)?;
 
     let mut select = heapless::String::<224>::new();
     let _ = core::fmt::Write::write_fmt(
@@ -811,6 +829,77 @@ fn configure_pi4_pcie_outbound_window(status_page: usize) -> Result<(), HalError
     Ok(())
 }
 
+fn configure_pi4_pcie_root_bridge(root_cfg_page: usize) -> Result<(), HalError> {
+    let class_reg = same_page_reg_virt(root_cfg_page, BCM2711_PCIE_RC_CFG_PRIV1_ID_VAL3)?;
+    let vendor_device = pci_cfg_read_u32(root_cfg_page, PCI_CFG_VENDOR_DEVICE);
+    let vendor_id = (vendor_device & 0xffff) as u16;
+    let device_id = (vendor_device >> 16) as u16;
+    let class_before = pci_cfg_read_u32(root_cfg_page, PCI_CFG_CLASS_REVISION) >> 8;
+
+    mmio_clear_set_bits_u32_flush(
+        class_reg,
+        PCIE_RC_CFG_PRIV1_ID_VAL3_CLASS_CODE_MASK,
+        BCM2711_ROOT_BRIDGE_CLASS_CODE,
+    );
+    pci_cfg_write_u32(
+        root_cfg_page,
+        PCI_CFG_PRIMARY_BUS,
+        RPI4_PCIE_BRIDGE_BUS_NUMBERS,
+    );
+    pci_cfg_write_u32(
+        root_cfg_page,
+        PCI_CFG_IO_BASE_LIMIT,
+        RPI4_PCIE_BRIDGE_IO_BASE_LIMIT_DISABLED,
+    );
+    pci_cfg_write_u32(
+        root_cfg_page,
+        PCI_CFG_MEMORY_BASE_LIMIT,
+        rpi4_vl805_bridge_memory_base_limit(),
+    );
+    pci_cfg_write_u32(
+        root_cfg_page,
+        PCI_CFG_PREFETCH_BASE_LIMIT,
+        RPI4_PCIE_BRIDGE_PREFETCH_BASE_LIMIT_DISABLED,
+    );
+
+    let command_before = pci_cfg_read_u16(root_cfg_page, PCI_CFG_COMMAND_STATUS);
+    let command_required = command_before | RPI4_PCIE_BRIDGE_COMMAND_REQUIRED;
+    if command_required != command_before {
+        pci_cfg_write_u16(root_cfg_page, PCI_CFG_COMMAND_STATUS, command_required);
+    }
+    fence(Ordering::SeqCst);
+    pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
+
+    let command_after = pci_cfg_read_u16(root_cfg_page, PCI_CFG_COMMAND_STATUS);
+    let bus_after = pci_cfg_read_u32(root_cfg_page, PCI_CFG_PRIMARY_BUS);
+    let mem_after = pci_cfg_read_u32(root_cfg_page, PCI_CFG_MEMORY_BASE_LIMIT);
+    let pref_after = pci_cfg_read_u32(root_cfg_page, PCI_CFG_PREFETCH_BASE_LIMIT);
+    let class_after = pci_cfg_read_u32(root_cfg_page, PCI_CFG_CLASS_REVISION) >> 8;
+
+    let mut line = heapless::String::<320>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie bridge cfg vid:did={vendor_id:04x}:{device_id:04x} class=0x{class_before:06x}->0x{class_after:06x} bus=0x{bus_after:08x} mem=0x{mem_after:08x} prefetch=0x{pref_after:08x} cmd=0x{command_before:04x}->0x{command_after:04x} source=hal-root-port"
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+
+    if vendor_id != BCM2711_ROOT_VENDOR_ID || device_id != BCM2711_ROOT_DEVICE_ID {
+        return Err(HalError::Unsupported("pcie-root-id"));
+    }
+    if bus_after != RPI4_PCIE_BRIDGE_BUS_NUMBERS {
+        return Err(HalError::Unsupported("pcie-root-bus-window"));
+    }
+    if mem_after != rpi4_vl805_bridge_memory_base_limit() {
+        return Err(HalError::Unsupported("pcie-root-mem-window"));
+    }
+    if (command_after & RPI4_PCIE_BRIDGE_COMMAND_REQUIRED) != RPI4_PCIE_BRIDGE_COMMAND_REQUIRED {
+        return Err(HalError::Unsupported("pcie-root-command"));
+    }
+    Ok(())
+}
+
 fn configure_pcie_outbound_window_regs(
     win_lo: usize,
     win_hi: usize,
@@ -903,6 +992,21 @@ const fn pcie_outbound_limit_hi_value(cpu_addr: u64, size: u64) -> u32 {
 }
 
 #[inline]
+const fn pci_bridge_memory_base_limit(bus_addr: u32, size: u32) -> u32 {
+    let base = (bus_addr >> 16) & 0xfff0;
+    let limit = (bus_addr.saturating_add(size).saturating_sub(1) >> 16) & 0xfff0;
+    (limit << 16) | base
+}
+
+#[inline]
+const fn rpi4_vl805_bridge_memory_base_limit() -> u32 {
+    pci_bridge_memory_base_limit(
+        RPI4_PCIE_BUS_MMIO_WINDOW_BASE_U32,
+        RPI4_VL805_BRIDGE_MMIO_WINDOW_BYTES,
+    )
+}
+
+#[inline]
 const fn replace_u32_field(raw: u32, mask: u32, value: u32) -> u32 {
     if mask == 0 {
         return raw;
@@ -942,6 +1046,7 @@ fn map_pcie_reg_page_cached(
     label: &'static str,
 ) -> Result<usize, HalError> {
     let cache = match reg_offset & !PAGE_MASK {
+        page if page == (PCI_CFG_VENDOR_DEVICE & !PAGE_MASK) => &PCIE_ROOT_CFG_PAGE_VIRT,
         page if page == (BCM2711_PCIE_MISC_PCIE_STATUS & !PAGE_MASK) => &PCIE_STATUS_PAGE_VIRT,
         page if page == (BCM2711_PCIE_EXT_CFG_DATA & !PAGE_MASK) => &PCIE_EXT_DATA_PAGE_VIRT,
         page if page == (BCM2711_PCIE_EXT_CFG_INDEX & !PAGE_MASK) => &PCIE_EXT_INDEX_PAGE_VIRT,
@@ -1275,8 +1380,8 @@ fn pci_cfg_read_u8(config_virt: usize, offset: usize) -> u8 {
     let Some(addr) = config_virt.checked_add(offset) else {
         return 0xff;
     };
-    // SAFETY: `config_virt` is the HAL-owned BCM2711 EXT_CFG_DATA mapping for
-    // the selected VL805 function. PCI config byte reads are volatile MMIO.
+    // SAFETY: `config_virt` is a HAL-owned BCM2711 PCIe config mapping.
+    // PCI config byte reads are volatile MMIO.
     unsafe { ptr::read_volatile(addr as *const u8) }
 }
 
@@ -1285,8 +1390,8 @@ fn pci_cfg_read_u16(config_virt: usize, offset: usize) -> u16 {
     let Some(addr) = config_virt.checked_add(offset) else {
         return 0xffff;
     };
-    // SAFETY: `config_virt` is the HAL-owned BCM2711 EXT_CFG_DATA mapping for
-    // the selected VL805 function. PCI config word reads are volatile MMIO.
+    // SAFETY: `config_virt` is a HAL-owned BCM2711 PCIe config mapping.
+    // PCI config word reads are volatile MMIO.
     unsafe { ptr::read_volatile(addr as *const u16) }
 }
 
@@ -1295,8 +1400,8 @@ fn pci_cfg_write_u16(config_virt: usize, offset: usize, value: u16) {
     let Some(addr) = config_virt.checked_add(offset) else {
         return;
     };
-    // SAFETY: `config_virt` is the HAL-owned BCM2711 EXT_CFG_DATA mapping for
-    // the selected VL805 function. PCI config word writes are volatile MMIO.
+    // SAFETY: `config_virt` is a HAL-owned BCM2711 PCIe config mapping.
+    // PCI config word writes are volatile MMIO.
     unsafe {
         ptr::write_volatile(addr as *mut u16, value);
     }
@@ -1307,8 +1412,8 @@ fn pci_cfg_read_u32(config_virt: usize, offset: usize) -> u32 {
     let Some(addr) = config_virt.checked_add(offset) else {
         return 0xffff_ffff;
     };
-    // SAFETY: `config_virt` is the HAL-owned BCM2711 EXT_CFG_DATA mapping for
-    // the selected VL805 function. PCI config dword reads are volatile MMIO.
+    // SAFETY: `config_virt` is a HAL-owned BCM2711 PCIe config mapping.
+    // PCI config dword reads are volatile MMIO.
     unsafe { ptr::read_volatile(addr as *const u32) }
 }
 
@@ -1317,8 +1422,8 @@ fn pci_cfg_write_u32(config_virt: usize, offset: usize, value: u32) {
     let Some(addr) = config_virt.checked_add(offset) else {
         return;
     };
-    // SAFETY: `config_virt` is the HAL-owned BCM2711 EXT_CFG_DATA mapping for
-    // the selected VL805 function. PCI config dword writes are volatile MMIO.
+    // SAFETY: `config_virt` is a HAL-owned BCM2711 PCIe config mapping.
+    // PCI config dword writes are volatile MMIO.
     unsafe {
         ptr::write_volatile(addr as *mut u32, value);
     }
@@ -1424,12 +1529,14 @@ mod tests {
 
     #[test]
     fn bcm2711_pcie_register_pages_are_mapped_in_sel4_cursor_order() {
+        let (root_cfg_page, _) = pcie_reg_page(PCI_CFG_VENDOR_DEVICE).expect("root cfg page");
         let (status_page, _) = pcie_reg_page(BCM2711_PCIE_MISC_PCIE_STATUS).expect("status page");
         let (ext_data_page, _) = pcie_reg_page(BCM2711_PCIE_EXT_CFG_DATA).expect("ext data page");
         let (ext_index_page, _) =
             pcie_reg_page(BCM2711_PCIE_EXT_CFG_INDEX).expect("ext index page");
         let (sw_init_page, _) = pcie_reg_page(BCM2711_PCIE_RGR1_SW_INIT_1).expect("sw init page");
 
+        assert!(root_cfg_page < status_page);
         assert!(status_page < ext_data_page);
         assert!(ext_data_page < ext_index_page);
         assert_eq!(ext_index_page, sw_init_page);
@@ -1527,6 +1634,24 @@ mod tests {
         assert!(!vl805_command_ownership_ready(
             PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER
         ));
+    }
+
+    #[test]
+    fn bcm2711_root_bridge_config_matches_linux_capture() {
+        assert_eq!(RPI4_PCIE_BRIDGE_BUS_NUMBERS, 0x0001_0100);
+        assert_eq!(RPI4_VL805_BRIDGE_MMIO_WINDOW_BYTES, 0x0010_0000);
+        assert_eq!(rpi4_vl805_bridge_memory_base_limit(), 0xc000_c000);
+        assert_eq!(
+            pci_bridge_memory_base_limit(0xc000_0000, 0x0000_1000),
+            0xc000_c000
+        );
+        assert_eq!(RPI4_PCIE_BRIDGE_IO_BASE_LIMIT_DISABLED, 0);
+        assert_eq!(RPI4_PCIE_BRIDGE_PREFETCH_BASE_LIMIT_DISABLED, 0x0001_fff1);
+        assert_eq!(
+            RPI4_PCIE_BRIDGE_COMMAND_REQUIRED,
+            PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER
+        );
+        assert_eq!(BCM2711_ROOT_BRIDGE_CLASS_CODE, 0x0006_0400);
     }
 
     #[test]
