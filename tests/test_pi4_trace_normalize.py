@@ -229,6 +229,9 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_BLOCKER": "cmd-poll-only-timeout",
         "WIFI_GATE": 4,
         "WIFI_BLOCKER": "ht-clock-timeout",
+        "WIFI_EXACT": "ht-clock-timeout",
+        "WIFI_PHASE": "cyw43-load-firmware-fail",
+        "WIFI_BLOCKER_LINE": 8,
         "SERIAL_CLEAN": "yes",
         "BOOT_HALTED": "no",
         "TIMER_IRQ27_SEEN": "no",
@@ -1124,6 +1127,24 @@ def test_gate_summary_preserves_usbcmd_reset_bit_over_event_timeout() -> None:
     assert gates.usb_blocker == "usbcmd-run-preserved-reset-bit"
 
 
+def test_gate_summary_reports_run_posted_flush_timer_halt() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x02e5 "
+            "tag=usbcmd-run-write-done reg=0x0000000000000000 "
+            "value=0x0000000000000001 mode=0x0000000000000003",
+            "halting...",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "usbcmd-run-posted-flush-halt"
+    assert gates.to_record()["BOOT_HALT_REASON"] == "kernel-halt+timer-irq27"
+
+
 def test_gate_summary_classifies_wifi_pre_f2_core_control_failure() -> None:
     events = normalizer.parse_events(
         [
@@ -1185,7 +1206,7 @@ def test_gate_summary_tracks_d11_passive_core_control_reject() -> None:
             "[pi4-wifi] firmware stage=d11-disable core=0 "
             "base=0x18101000 action=upstream-passive",
             "[pi4-wifi] firmware core-ctrl access op=write8-prereset "
-            "mode=cmd53-word-windowed fallback=cmd52-byte-transfer-window-prereset "
+            "mode=cmd52-byte-transfer-window fallback=cmd53-byte-transfer-window "
             "base=0x18101000 off=0x408 addr=0x18101408 "
             "window=0x18100000 bus=0x09408",
             "[pi4-wifi] sdio cmd53 r5 fail arg=0x95281004 len=4 "
@@ -1570,7 +1591,7 @@ def test_gate_summary_tracks_wifi_armcr4_prereset_after_pmu_skip() -> None:
             "stage=prereset-fgc-clock value=0x23",
             "[pi4-wifi] firmware core-ctrl access op=write8 "
             "base=0x18103000 off=0x408 addr=0x18103408",
-            "[pi4-wifi] sdio cmd53 r5 fail arg=0x90681001 len=1 "
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x95681004 len=4 "
             "phase=command-r5 resp=0x00001800 r5=0x0800",
             "[pi4-wifi] firmware core-ctrl access stage=prereset-fgc-clock "
             "op=write8 err=unsupported operation: sdio-cmd53-r5-error "
@@ -1593,9 +1614,9 @@ def test_gate_summary_tracks_wifi_armcr4_prereset_current_r5_arg() -> None:
             "[pi4-wifi] firmware core-disable base=0x18103000 "
             "stage=prereset-fgc-clock value=0x23",
             "[pi4-wifi] firmware core-ctrl access op=write8-prereset "
-            "mode=cmd53-word-windowed fallback=cmd52-byte-transfer-window-prereset "
+            "mode=cmd53-word-windowed-prereset fallback=cmd52-byte-current-window "
             "base=0x18103000 off=0x408 addr=0x18103408",
-            "[pi4-wifi] sdio cmd53 r5 fail arg=0x95681001 len=1 "
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x95681004 len=4 "
             "phase=command-r5 resp=0x00001800 r5=0x0800",
             "[pi4-wifi] firmware core-ctrl access stage=prereset-fgc-clock "
             "op=write8-prereset err=unsupported operation: sdio-cmd53-r5-error "
@@ -1610,7 +1631,7 @@ def test_gate_summary_tracks_wifi_armcr4_prereset_current_r5_arg() -> None:
     assert gates.wifi_blocker == "armcr4-prereset-fgc-cmd53-r5-rejected"
 
 
-def test_gate_summary_tracks_wifi_socram_prereset_zero_after_advisory_skips() -> None:
+def test_gate_summary_tracks_wifi_socram_prereset_fgc_after_advisory_skips() -> None:
     events = normalizer.parse_events(
         [
             "[pi4-wifi] firmware core-disable base=0x18103000 "
@@ -1623,12 +1644,13 @@ def test_gate_summary_tracks_wifi_socram_prereset_zero_after_advisory_skips() ->
             "err=unsupported operation: sdio-cmd53-r5-error",
             "[pi4-wifi] firmware stage=socram-disable",
             "[pi4-wifi] firmware core-disable base=0x18104000 "
-            "stage=prereset-zero-ioctrl value=0x00",
+            "stage=prereset-fgc-clock value=0x03",
             "[pi4-wifi] firmware core-ctrl access op=write8-prereset "
+            "mode=cmd53-word-windowed-prereset fallback=cmd52-byte-current-window "
             "base=0x18104000 off=0x408 addr=0x18104408",
-            "[pi4-wifi] sdio cmd53 r5 fail arg=0x90881001 len=1 "
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x95881004 len=4 "
             "phase=command-r5 resp=0x00001800 r5=0x0800",
-            "[pi4-wifi] firmware core-ctrl access stage=prereset-zero-ioctrl "
+            "[pi4-wifi] firmware core-ctrl access stage=prereset-fgc-clock "
             "op=write8-prereset err=unsupported operation: sdio-cmd53-r5-error "
             "base=0x18104000 off=0x408",
             "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
@@ -1638,7 +1660,7 @@ def test_gate_summary_tracks_wifi_socram_prereset_zero_after_advisory_skips() ->
     gates = normalizer.summarize_gates(events)
 
     assert gates.wifi_gate == 4
-    assert gates.wifi_blocker == "socram-prereset-zero-cmd53-r5-rejected"
+    assert gates.wifi_blocker == "socram-prereset-fgc-cmd53-r5-rejected"
 
 
 def test_gate_summary_tracks_wifi_socram_assert_reset_after_prereset_skip() -> None:
@@ -2059,8 +2081,11 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         "socram-prereset-zero-cmd53-r5-rejected": (
             "socram-prereset-zero-cmd53-r5-rejected"
         ),
-        "base=0x18104000 off=0x408 err=unsupported operation: sdio-cmd53-r5-error": (
+        "stage=prereset-zero-ioctrl base=0x18104000 off=0x408 err=unsupported operation: sdio-cmd53-r5-error": (
             "socram-prereset-zero-cmd53-r5-rejected"
+        ),
+        "stage=prereset-fgc-clock base=0x18104000 off=0x408 err=unsupported operation: sdio-cmd53-r5-error": (
+            "socram-prereset-fgc-cmd53-r5-rejected"
         ),
         "armcr4-prereset-fgc-cmd53-r5-rejected": (
             "armcr4-prereset-fgc-cmd53-r5-rejected"

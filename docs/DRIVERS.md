@@ -287,9 +287,11 @@ active path is Cohesix-owned cold start:
   the Pi 4 outbound-window BAR value through EXT_CFG and read it back. Do not
   assign BARs for bad IDs, bad class, selector echoes, absent link proof, or
   any other tuple.
-- Doorbell posted-write flushes use the HAL EXT_CFG selector/COMMAND readback.
-  They must not read the xHCI BAR or `USBSTS` after doorbell publication on the
-  prompt-safe path.
+- Doorbell and `USBCMD.RUN` posted-write flushes use HAL-owned BCM2711 EXT_CFG
+  selector/COMMAND readback only. The 2026-05-10 Pi 4 trace proved that even an
+  xHCI capability dword read at BAR offset `0x0000` can halt immediately after
+  `USBCMD.RUN`; never use xHCI BAR reads, `USBSTS`, or any `PORTSC` as the
+  posted-write drain on this prompt-safe path.
 
 ## Evidence Ladder
 

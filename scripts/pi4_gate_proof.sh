@@ -18,6 +18,7 @@ DISK_LABEL="COHESIX"
 SERIAL_DEVICE="${COHESIX_PI4_SERIAL_DEVICE:-/dev/cu.usbserial-0001}"
 LOG_PATH="${COHESIX_PI4_SERIAL_LOG:-/Users/lukasbower/pi4-serial.log}"
 BOOT_WAIT_SECONDS=12
+CONSOLE_READY_TIMEOUT_SECONDS=60
 CAPTURE_SECONDS=10
 COMMAND_DELAY_SECONDS=2
 SKIP_BUILD=0
@@ -63,6 +64,11 @@ Options:
                              (default: /Users/lukasbower/pi4-serial.log)
   --boot-wait <seconds>      Delay before issuing console commands
                              (default: 12)
+  --console-ready-timeout <seconds>
+                             Maximum extra time to wait for the Cohesix prompt,
+                             advancing the top-level U-Boot boot-options prompt
+                             with its default choice when needed
+                             (default: 60)
   --capture-seconds <n>      Delay after the final command before normalization
                              (default: 10)
   --command-delay <seconds>  Delay between console commands
@@ -195,6 +201,27 @@ cleanup_capture() {
     fi
 }
 
+wait_for_console_ready() {
+    local deadline
+    local boot_options_advanced=0
+
+    deadline=$((SECONDS + CONSOLE_READY_TIMEOUT_SECONDS))
+    while ((SECONDS <= deadline)); do
+        if grep -q 'cohesix>' "${LOG_PATH}"; then
+            return
+        fi
+        if [[ "${boot_options_advanced}" -eq 0 ]] \
+            && grep -q '\[cohesix\] Cohesix boot options' "${LOG_PATH}" \
+            && grep -q 'Select option \[1\]:' "${LOG_PATH}"; then
+            log "advancing Cohesix boot-options prompt with default selection"
+            printf '1\r' > "${SERIAL_DEVICE}"
+            boot_options_advanced=1
+        fi
+        sleep 1
+    done
+    fail "Cohesix console prompt did not appear within ${CONSOLE_READY_TIMEOUT_SECONDS}s"
+}
+
 run_capture() {
     local -a commands=()
     local command
@@ -217,6 +244,7 @@ run_capture() {
     trap cleanup_capture EXIT
 
     sleep "${BOOT_WAIT_SECONDS}"
+    wait_for_console_ready
     for command in "${commands[@]}"; do
         log "console command: ${command}"
         printf '%s\r' "${command}" > "${SERIAL_DEVICE}"
@@ -304,6 +332,7 @@ run_normalizer() {
         args+=("--expect-not" "WIFI_BLOCKER=pre-f2-core-control")
         args+=("--expect-not" "WIFI_BLOCKER=armcr4-release-readback-unavailable")
         args+=("--expect-not" "WIFI_BLOCKER=socram-prereset-zero-cmd53-r5-rejected")
+        args+=("--expect-not" "WIFI_BLOCKER=socram-prereset-fgc-cmd53-r5-rejected")
         args+=("--expect-not" "WIFI_BLOCKER=socram-assert-reset-cmd53-r5-rejected")
         args+=("--expect-not" "WIFI_BLOCKER=socram-clear-reset-cmd53-r5-rejected")
         args+=("--expect-not" "WIFI_BLOCKER=socram-postreset-clock-cmd53-r5-rejected")
@@ -390,6 +419,11 @@ while [[ $# -gt 0 ]]; do
             BOOT_WAIT_SECONDS="$2"
             shift 2
             ;;
+        --console-ready-timeout)
+            require_arg "$1" "$#"
+            CONSOLE_READY_TIMEOUT_SECONDS="$2"
+            shift 2
+            ;;
         --capture-seconds)
             require_arg "$1" "$#"
             CAPTURE_SECONDS="$2"
@@ -464,6 +498,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_nonnegative_integer "--boot-wait" "${BOOT_WAIT_SECONDS}"
+require_nonnegative_integer "--console-ready-timeout" "${CONSOLE_READY_TIMEOUT_SECONDS}"
 require_nonnegative_integer "--capture-seconds" "${CAPTURE_SECONDS}"
 require_nonnegative_integer "--command-delay" "${COMMAND_DELAY_SECONDS}"
 require_file "${PYTHON}"

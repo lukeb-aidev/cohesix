@@ -38,9 +38,11 @@ const BCM2711_PCIE_MSI_INTR2_CLR: usize = 0x4508;
 const BCM2711_PCIE_MSI_INTR2_MASK_SET: usize = 0x4510;
 const BCM2711_PCIE_EXT_CFG_DATA: usize = 0x8000;
 const BCM2711_PCIE_EXT_CFG_INDEX: usize = 0x9000;
+const VL805_XHCI_USBCMD_OFFSET: usize = 0x0020;
 const VL805_XHCI_DOORBELL0_OFFSET: usize = 0x0100;
 const VL805_XHCI_DOORBELL_STRIDE: usize = 4;
 const VL805_XHCI_DOORBELL_FLUSH_STAGE: u16 = 0x031f;
+const VL805_XHCI_RUN_FLUSH_STAGE: u16 = 0x02e5;
 const BCM2711_PCIE_RGR1_SW_INIT_1: usize = 0x9210;
 
 const PCIE_MISC_MISC_CTRL_SCB_ACCESS_EN_MASK: u32 = 0x1000;
@@ -297,8 +299,12 @@ const fn vl805_xhci_flush_is_doorbell(stage: u16, offset: usize) -> bool {
         && (offset - VL805_XHCI_DOORBELL0_OFFSET) % VL805_XHCI_DOORBELL_STRIDE == 0
 }
 
-const fn vl805_xhci_flush_allows_bar_drain(_stage: u16, _offset: usize) -> bool {
-    false
+const fn vl805_xhci_flush_is_run_write(stage: u16, offset: usize) -> bool {
+    stage == VL805_XHCI_RUN_FLUSH_STAGE && offset == VL805_XHCI_USBCMD_OFFSET
+}
+
+const fn vl805_xhci_flush_skips_bar_drain(stage: u16, offset: usize) -> bool {
+    vl805_xhci_flush_is_doorbell(stage, offset) || vl805_xhci_flush_is_run_write(stage, offset)
 }
 
 /// Flushes posted VL805 xHCI MMIO writes through HAL-owned read drains.
@@ -331,15 +337,14 @@ pub fn vl805_xhci_flush_posted_write(mmio_virt: usize, offset: usize, value: u32
     fence(Ordering::SeqCst);
     let selected = bcm2711_ext_cfg_select(index_reg);
     let command_status = pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS);
-    let doorbell_flush = vl805_xhci_flush_is_doorbell(stage, offset);
-    let bar_drain_allowed = vl805_xhci_flush_allows_bar_drain(stage, offset);
+    let bar_drain_skipped = vl805_xhci_flush_skips_bar_drain(stage, offset);
     fence(Ordering::SeqCst);
-    let mut line = heapless::String::<256>::new();
-    if doorbell_flush && !bar_drain_allowed {
+    let mut line = heapless::String::<320>::new();
+    if bar_drain_skipped {
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 posted-write flush stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} bar_drain=skipped reason=prompt-safe-no-xhci-read source=hal-ext-cfg"
+                "[local-seat] vl805 posted-write flush stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} bar_drain=skipped reason=pi4-run-doorbell-xhci-read-toxic mmio=0x{mmio_virt:016x} source=hal-ext-cfg"
             ),
         );
     } else {
@@ -1532,14 +1537,19 @@ mod tests {
     }
 
     #[test]
-    fn vl805_posted_write_flush_skips_xhci_bar_drain_on_doorbells() {
+    fn vl805_posted_write_flush_skips_xhci_bar_drain_on_run_and_doorbells() {
         assert!(vl805_xhci_flush_is_doorbell(0x031f, 0x0100));
         assert!(vl805_xhci_flush_is_doorbell(0x031f, 0x0104));
+        assert!(vl805_xhci_flush_is_run_write(0x02e5, 0x0020));
         assert!(!vl805_xhci_flush_is_doorbell(0x02e5, 0x0020));
+        assert!(!vl805_xhci_flush_is_run_write(0x02e5, 0x0100));
         assert!(!vl805_xhci_flush_is_doorbell(0x031f, 0x00fc));
         assert!(!vl805_xhci_flush_is_doorbell(0x031f, 0x0102));
-        assert!(!vl805_xhci_flush_allows_bar_drain(0x031f, 0x0100));
-        assert!(!vl805_xhci_flush_allows_bar_drain(0x031f, 0x0104));
+        assert!(vl805_xhci_flush_skips_bar_drain(0x031f, 0x0100));
+        assert!(vl805_xhci_flush_skips_bar_drain(0x031f, 0x0104));
+        assert!(vl805_xhci_flush_skips_bar_drain(0x02e5, 0x0020));
+        assert!(!vl805_xhci_flush_skips_bar_drain(0x031f, 0x00fc));
+        assert!(!vl805_xhci_flush_skips_bar_drain(0x02e5, 0x0100));
     }
 
     #[test]

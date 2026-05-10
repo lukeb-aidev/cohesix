@@ -518,13 +518,15 @@ impl<H: Dma> Ring<H> {
     }
 }
 
-#[repr(C, align(64))]
+#[repr(C, align(16))]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ErstEntry {
     pub base: u64,
     pub size: u16,
     _0: [u8; 6],
 }
+
+const ERST_TABLE_ALIGNMENT: usize = 64;
 
 pub(crate) struct EventRing<H: Dma> {
     ring: PhysMem<H>,
@@ -542,7 +544,7 @@ impl<H: Dma> EventRing<H> {
             trb_count * core::mem::size_of::<Trb>(),
             core::mem::align_of::<Trb>(),
         )?;
-        let erst = PhysMem::alloc(host, host.page_size(), core::mem::align_of::<ErstEntry>())?;
+        let erst = PhysMem::alloc(host, host.page_size(), ERST_TABLE_ALIGNMENT)?;
 
         let erst_entries = trb_count.min(EVENT_RING_ERST_SEGMENTS).max(1);
         let entry = erst.as_ptr::<ErstEntry>();
@@ -888,11 +890,33 @@ mod tests {
         let event_ring = super::EventRing::<MockDma>::new(&host, 256).expect("allocate event ring");
         let entry = event_ring.erst.as_ptr::<super::ErstEntry>();
 
+        assert_eq!(core::mem::size_of::<super::ErstEntry>(), 16);
+        assert_eq!(event_ring.erst.align(), 64);
         assert_eq!(event_ring.erst_entries(), 8);
         for index in 0..8 {
             // SAFETY: EventRing::new initialized the bounded eight-entry ERST
             // prefix, and this test reads only that initialized prefix.
             let observed = unsafe { entry.add(index).read() };
+            assert_eq!(
+                observed.base,
+                event_ring.ring.phys(&host) + (index as u64 * 32 * 16)
+            );
+            assert_eq!(observed.size, 32);
+        }
+    }
+
+    #[test]
+    fn event_ring_erst_entries_are_hardware_strided() {
+        let host = MockDma::default();
+        let event_ring = super::EventRing::<MockDma>::new(&host, 256).expect("allocate event ring");
+        let bytes = event_ring.erst.as_ptr::<u8>();
+
+        for index in 0..8 {
+            // SAFETY: each xHCI ERST entry is a 16-byte hardware record. The
+            // table is page-sized and EventRing::new initialized the first
+            // eight records, so the byte-stride read stays inside the table.
+            let observed =
+                unsafe { (bytes.add(index * 16) as *const super::ErstEntry).read_unaligned() };
             assert_eq!(
                 observed.base,
                 event_ring.ring.phys(&host) + (index as u64 * 32 * 16)

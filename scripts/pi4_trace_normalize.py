@@ -30,6 +30,12 @@ UNSUPPORTED_OPERATION_FIELD_RE = re.compile(
     r"(?P<value>[A-Za-z0-9_.:-]+)"
 )
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+WIFI_SECRET_REDACTIONS = (
+    re.compile(r"(?i)(coh_wifi_psk=)([^ \t\r\n;]+)"),
+    re.compile(r"(?i)(cohesix,wifi-psk=)([^ \t\r\n;]+)"),
+    re.compile(r"(?i)(setenv\s+coh_wifi_psk\s+)([^;\r\n]+)"),
+    re.compile(r"(?i)(Wi-Fi PSK \(blank for open network\):\s*)(.*)"),
+)
 TRACE_SEGMENT_RE = re.compile(
     r"(?=(?:"
     r"\[cohesix:usb-trace\]"
@@ -192,6 +198,9 @@ class GateSummary:
     usb_blocker: str
     wifi_gate: int
     wifi_blocker: str
+    wifi_exact: str = "none"
+    wifi_phase: str = "none"
+    wifi_blocker_line: int = 0
     serial_clean: bool = True
     boot_halted: bool = False
     timer_irq27_seen: bool = False
@@ -206,6 +215,9 @@ class GateSummary:
             "USB_BLOCKER": self.usb_blocker,
             "WIFI_GATE": self.wifi_gate,
             "WIFI_BLOCKER": self.wifi_blocker,
+            "WIFI_EXACT": self.wifi_exact,
+            "WIFI_PHASE": self.wifi_phase,
+            "WIFI_BLOCKER_LINE": self.wifi_blocker_line,
             "SERIAL_CLEAN": "yes" if self.serial_clean else "no",
             "BOOT_HALTED": "yes" if self.boot_halted else "no",
             "TIMER_IRQ27_SEEN": "yes" if self.timer_irq27_seen else "no",
@@ -229,6 +241,15 @@ def sanitize_line(line: str) -> str:
     if clean.startswith("cohesix> "):
         clean = clean.removeprefix("cohesix> ").strip()
     return clean
+
+
+def redact_sensitive_line(line: str) -> str:
+    """Redact Wi-Fi secrets before normalized trace records are emitted."""
+
+    redacted = line
+    for pattern in WIFI_SECRET_REDACTIONS:
+        redacted = pattern.sub(r"\1<redacted>", redacted)
+    return redacted
 
 
 def split_trace_segments(line: str) -> list[str]:
@@ -404,6 +425,7 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
 
     if not line:
         return None
+    line = redact_sensitive_line(line)
     early_reason = serial_corruption_reason(line)
     if early_reason is not None:
         domain = "usb" if "usb" in early_reason else "wifi"
@@ -451,11 +473,11 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
     )
 
 
-def parse_events(lines: Iterable[str]) -> list[TraceEvent]:
+def parse_events(lines: Iterable[str], line_base: int = 0) -> list[TraceEvent]:
     """Parse all relevant trace lines from an iterable of log lines."""
 
     events: list[TraceEvent] = []
-    for line_number, line in enumerate(lines, start=1):
+    for line_number, line in enumerate(lines, start=line_base + 1):
         for segment in split_trace_segments(line):
             event = parse_line(segment, line_number)
             if event is not None:
@@ -527,6 +549,8 @@ def normalize_usb_blocker(value: str) -> str:
         return "cmd-controller-halted"
     if "usbcmd-run-preserved-reset-bit" in lower:
         return "usbcmd-run-preserved-reset-bit"
+    if "usbcmd-run-posted-flush-halt" in lower:
+        return "usbcmd-run-posted-flush-halt"
     if "cmd-event-ring-timeout" in lower or "event-ring-missing" in lower:
         return "cmd-event-ring-timeout"
     if "cmd-ring-timeout" in lower:
@@ -831,10 +855,21 @@ def normalize_wifi_blocker(value: str) -> str:
         or (
             "base=0x18104000" in lower
             and "off=0x408" in lower
+            and "prereset-zero-ioctrl" in lower
             and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
         )
     ):
         return "socram-prereset-zero-cmd53-r5-rejected"
+    if (
+        "socram-prereset-fgc-cmd53-r5-rejected" in lower
+        or (
+            "base=0x18104000" in lower
+            and "off=0x408" in lower
+            and "prereset-fgc-clock" in lower
+            and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
+        )
+    ):
+        return "socram-prereset-fgc-cmd53-r5-rejected"
     if stripped in {
         "sdio-cmd52-write",
         "unsupported operation: sdio-cmd52-write",
@@ -1046,6 +1081,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     root_port_read_pending = False
     brcm_axi_read_pending = False
     reset_pre_usbcmd_pending = False
+    run_posted_flush_pending = False
     command_probe_bus: str | None = None
     command_timeout_detail: str | None = None
     run_usbcmd_preserved_reset_bit = False
@@ -1059,6 +1095,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "cmd-controller-not-running",
         "cmd-controller-halted",
         "usbcmd-run-preserved-reset-bit",
+        "usbcmd-run-posted-flush-halt",
         "cmd-timeout",
         "cmd-poll-pending",
         "cmd-doorbell-write-halt",
@@ -1070,6 +1107,16 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         fields = event.fields
         tag = fields.get("tag", "")
         if event.domain == "kernel":
+            if (
+                run_posted_flush_pending
+                and command_timeout_detail is None
+                and blocker in {"unknown", "none", "cmd-poll-pending"}
+                and ("halting" in raw or "kernel entry via interrupt" in raw)
+            ):
+                gate = max(gate, 3)
+                command_timeout_detail = "usbcmd-run-posted-flush-halt"
+                blocker = command_timeout_detail
+                continue
             if (
                 saw_command_doorbell_write_pending
                 and command_timeout_detail is None
@@ -1151,6 +1198,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if event.domain != "usb":
             continue
+        if "vl805 posted-write flush" in raw:
+            run_posted_flush_pending = False
         if "xhci.diag stage=0x0111" in raw or tag == "brcm-axi-setup-read":
             brcm_axi_read_pending = True
             gate = max(gate, 3)
@@ -1345,6 +1394,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 command_timeout_detail = "usbcmd-run-preserved-reset-bit"
                 blocker = command_timeout_detail
                 gate = max(gate, 3)
+            if tag == "usbcmd-run-write-done":
+                run_posted_flush_pending = True
         if tag == "cmd-submit":
             saw_command_submit = True
             saw_command_doorbell = False
@@ -1564,6 +1615,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "socram-clear-reset-cmd53-r5-rejected",
         "socram-postreset-clock-cmd53-r5-rejected",
         "socram-prereset-zero-cmd53-r5-rejected",
+        "socram-prereset-fgc-cmd53-r5-rejected",
         "armcr4-prereset-fgc-cmd53-r5-rejected",
         "d11-prereset-fgc-cmd53-r5-rejected",
         "sdio-cmd52-write",
@@ -1596,6 +1648,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "socram-clear-reset-cmd53-r5-rejected",
         "socram-postreset-clock-cmd53-r5-rejected",
         "socram-prereset-zero-cmd53-r5-rejected",
+        "socram-prereset-fgc-cmd53-r5-rejected",
         "armcr4-prereset-fgc-cmd53-r5-rejected",
         "d11-prereset-fgc-cmd53-r5-rejected",
         "sdio-cmd53-r5-error",
@@ -1724,6 +1777,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             stage = fields.get("stage")
             if stage == "prereset-zero-ioctrl":
                 socram_core_ctrl_stage = "prereset-zero-ioctrl"
+            elif stage == "prereset-fgc-clock":
+                socram_core_ctrl_stage = "prereset-fgc-clock"
             elif stage == "assert-reset":
                 socram_core_ctrl_stage = "assert-reset"
             elif stage == "clear-reset-primary":
@@ -1939,6 +1994,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = "armcr4-reset-assert-cmd53-r5-rejected"
             elif socram_core_ctrl_stage == "prereset-zero-ioctrl":
                 blocker = "socram-prereset-zero-cmd53-r5-rejected"
+            elif socram_core_ctrl_stage == "prereset-fgc-clock":
+                blocker = "socram-prereset-fgc-cmd53-r5-rejected"
             elif socram_core_ctrl_stage == "assert-reset":
                 blocker = "socram-assert-reset-cmd53-r5-rejected"
             elif socram_core_ctrl_stage == "clear-reset-primary":
@@ -1948,6 +2005,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             elif armcr4_prereset_ioctrl_active or fields.get("arg") in {
                 "0x90681001",
                 "0x95681001",
+                "0x95681004",
             }:
                 blocker = "armcr4-prereset-fgc-cmd53-r5-rejected"
             elif fields.get("arg") in {
@@ -1971,6 +2029,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "socram-assert-reset-cmd53-r5-rejected",
                 "socram-clear-reset-cmd53-r5-rejected",
                 "socram-postreset-clock-cmd53-r5-rejected",
+                "socram-prereset-fgc-cmd53-r5-rejected",
                 "armcr4-prereset-fgc-cmd53-r5-rejected",
                 "d11-prereset-fgc-cmd53-r5-rejected",
             }:
@@ -2024,6 +2083,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "socram-clear-reset-cmd53-r5-rejected",
             "socram-postreset-clock-cmd53-r5-rejected",
             "socram-prereset-zero-cmd53-r5-rejected",
+            "socram-prereset-fgc-cmd53-r5-rejected",
             "armcr4-prereset-fgc-cmd53-r5-rejected",
             "d11-prereset-fgc-cmd53-r5-rejected",
             "sdio-cmd52-write",
@@ -2121,12 +2181,113 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     return gate, blocker
 
 
+def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
+    """Return the exact failure and phase carried by a Wi-Fi event."""
+
+    exact = "none"
+    for key in ("exact", "exact_error", "cause", "reason", "err", "detail"):
+        value = event.fields.get(key)
+        if value and value not in {"none", "n/a"}:
+            exact = normalize_wifi_blocker(value)
+            break
+    phase = (
+        event.fields.get("stage")
+        or event.fields.get("current")
+        or event.fields.get("focus")
+        or event.stage
+        or "none"
+    )
+    return exact, phase
+
+
+def summarize_wifi_failure_detail(
+    events: Iterable[TraceEvent], wifi_blocker: str
+) -> tuple[str, str, int]:
+    """Find the best source line for the current Wi-Fi gate blocker."""
+
+    socram_core_ctrl_stage: str | None = None
+    armcr4_prereset_ioctrl_active = False
+    exact = "none"
+    phase = "none"
+    line = 0
+    blocker_matched = False
+    for event in (event for event in events if event.domain == "wifi"):
+        raw = event.raw.lower()
+        fields = event.fields
+        if (
+            "prereset-fgc-clock" in raw
+            or (
+                "firmware core-ctrl access" in raw
+                and "base=0x18103000" in raw
+                and "off=0x408" in raw
+            )
+        ):
+            armcr4_prereset_ioctrl_active = True
+            socram_core_ctrl_stage = None
+        if (
+            "stage=armcr4-passive action=advisory-reset-skip" in raw
+            or "stage=d11-disable" in raw
+            or "base=0x18101000" in raw
+            or "base=0x18104000" in raw
+        ):
+            armcr4_prereset_ioctrl_active = False
+        if fields.get("base") == "0x18104000" or "base=0x18104000" in raw:
+            event_stage = fields.get("stage")
+            if event_stage in {
+                "prereset-zero-ioctrl",
+                "prereset-fgc-clock",
+                "assert-reset",
+                "clear-reset-primary",
+                "postreset-clock-en-write",
+            }:
+                socram_core_ctrl_stage = event_stage
+
+        candidate = normalize_wifi_blocker(raw)
+        if "sdio cmd53 r5 fail" in raw:
+            if socram_core_ctrl_stage == "prereset-zero-ioctrl":
+                candidate = "socram-prereset-zero-cmd53-r5-rejected"
+            elif socram_core_ctrl_stage == "prereset-fgc-clock":
+                candidate = "socram-prereset-fgc-cmd53-r5-rejected"
+            elif socram_core_ctrl_stage == "assert-reset":
+                candidate = "socram-assert-reset-cmd53-r5-rejected"
+            elif socram_core_ctrl_stage == "clear-reset-primary":
+                candidate = "socram-clear-reset-cmd53-r5-rejected"
+            elif socram_core_ctrl_stage == "postreset-clock-en-write":
+                candidate = "socram-postreset-clock-cmd53-r5-rejected"
+            elif armcr4_prereset_ioctrl_active:
+                candidate = "armcr4-prereset-fgc-cmd53-r5-rejected"
+        event_exact, event_phase = wifi_failure_detail_from_fields(event)
+        if event_exact != "none" and not blocker_matched:
+            exact = event_exact
+            phase = event_phase
+            line = event.line
+        if candidate == wifi_blocker:
+            blocker_matched = True
+            exact = event_exact
+            if exact == "none" and "sdio cmd53 r5 fail" in raw:
+                exact = "sdio-cmd53-r5-error"
+            if exact == "none":
+                exact = candidate
+            phase = (
+                socram_core_ctrl_stage
+                or fields.get("stage")
+                or event.stage
+                or event_phase
+                or "none"
+            )
+            line = event.line
+    return exact, phase, line
+
+
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
     event_list = list(events)
     usb_gate, usb_blocker = summarize_usb_gate(event_list)
     wifi_gate, wifi_blocker = summarize_wifi_gate(event_list)
+    wifi_exact, wifi_phase, wifi_blocker_line = summarize_wifi_failure_detail(
+        event_list, wifi_blocker
+    )
     boot_halted = any(
         event.domain == "kernel" and event.fields.get("halt") == "yes"
         for event in event_list
@@ -2153,6 +2314,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_blocker=usb_blocker,
         wifi_gate=wifi_gate,
         wifi_blocker=wifi_blocker,
+        wifi_exact=wifi_exact,
+        wifi_phase=wifi_phase,
+        wifi_blocker_line=wifi_blocker_line,
         serial_clean=serial_clean(event_list),
         boot_halted=boot_halted,
         timer_irq27_seen=timer_irq27_seen,
@@ -2273,14 +2437,21 @@ def read_input(path: str) -> list[str]:
 def latest_boot_lines(lines: list[str]) -> list[str]:
     """Return the latest boot slice from an accumulated serial capture."""
 
+    _, latest_lines = latest_boot_slice(lines)
+    return latest_lines
+
+
+def latest_boot_slice(lines: list[str]) -> tuple[int, list[str]]:
+    """Return the latest boot slice plus its original zero-based line offset."""
+
     latest_start = None
     for index, line in enumerate(lines):
         clean = ANSI_RE.sub("", line).lower()
         if any(marker in clean for marker in BOOT_START_MARKERS):
             latest_start = index
     if latest_start is None:
-        return lines
-    return lines[latest_start:]
+        return 0, lines
+    return latest_start, lines[latest_start:]
 
 
 def write_jsonl(events: Iterable[TraceEvent], output: TextIO) -> None:
@@ -2344,9 +2515,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     lines = read_input(args.log)
+    line_base = 0
     if args.gate_summary or args.summary:
-        lines = latest_boot_lines(lines)
-    events = filter_events(parse_events(lines), set(args.domain))
+        line_base, lines = latest_boot_slice(lines)
+    events = filter_events(parse_events(lines, line_base=line_base), set(args.domain))
     if args.gate_summary:
         gate_summary = summarize_gates(events)
         print("\n".join(gate_summary.to_env_lines()))
