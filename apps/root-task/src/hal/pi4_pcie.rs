@@ -386,10 +386,11 @@ fn prove_pi4_vl805_pcie_ownership(
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 bcm2711-pcie status inconclusive status=0x{status:08x} action=exact-vl805-ext-cfg-proof"
+                "[local-seat] vl805 bcm2711-pcie status inconclusive status=0x{status:08x} action=defer-ext-cfg-proof reason=link-or-rc-not-ready"
             ),
         );
         boot_log::force_uart_line(line.as_str());
+        return Err(HalError::Unsupported("pcie-link-or-rc-not-ready"));
     }
     if phase == Pi4PcieProofPhase::PostMailboxReset
         && post_mailbox_ext_cfg_data_read_deferred(status)
@@ -518,8 +519,6 @@ fn prove_pi4_vl805_pcie_ownership(
         bar0 = reassigned_bar0;
         bar1 = reassigned_bar1;
     }
-    let exact_config_ready =
-        vl805_exact_config_tuple_ready(vendor_device, class_revision, bar0, bar1);
     let Some(mmio) = translate_vl805_pci_bar_to_cpu_mmio(bar0, bar1) else {
         let mut line = heapless::String::<208>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -563,22 +562,6 @@ fn prove_pi4_vl805_pcie_ownership(
             return Err(HalError::Unsupported("pcie-link-or-rc-not-ready"));
         }
         return Err(HalError::Unsupported("vl805-bar"));
-    }
-
-    if !status_ready {
-        if !exact_config_ready {
-            return Err(HalError::Unsupported("pcie-link-or-rc-not-ready"));
-        }
-        configure_pi4_pcie_outbound_window(status_page)?;
-        PCIE_LINK_AND_RC_READY_PROVEN.store(1, Ordering::Release);
-        let mut line = heapless::String::<240>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie ext-cfg exact-proof promoted status=0x{status:08x} id={vendor_id:04x}:{device_id:04x} class=0x{class_code:06x} bar0=0x{bar0:08x}"
-            ),
-        );
-        boot_log::force_uart_line(line.as_str());
     }
 
     let command_masked = vl805_poll_only_intx_mask_command(command_before);
@@ -1068,14 +1051,19 @@ fn mask_and_clear_pcie_irq_sources(status_page_virt: usize) {
         same_page_reg_virt(status_page_virt, BCM2711_PCIE_MSI_INTR2_MASK_SET),
         same_page_reg_virt(status_page_virt, BCM2711_PCIE_MSI_INTR2_CLR),
     ) {
-        mmio_write_u32(cpu_mask_set, u32::MAX);
-        mmio_write_u32(cpu_clr, u32::MAX);
-        mmio_write_u32(msi_mask_set, u32::MAX);
-        mmio_write_u32(msi_clr, u32::MAX);
+        let cpu_mask = mmio_write_u32_flush(cpu_mask_set, u32::MAX);
+        let cpu_clear = mmio_write_u32_flush(cpu_clr, u32::MAX);
+        let msi_mask = mmio_write_u32_flush(msi_mask_set, u32::MAX);
+        let msi_clear = mmio_write_u32_flush(msi_clr, u32::MAX);
         PCIE_IRQ_SOURCES_MASKED_PROVEN.store(1, Ordering::Release);
-        boot_log::force_uart_line(
-            "[local-seat] vl805 bcm2711-pcie irq sources masked source=hal-ext-cfg",
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 bcm2711-pcie irq sources masked source=hal-ext-cfg readback=0x{cpu_mask:08x}/0x{cpu_clear:08x}/0x{msi_mask:08x}/0x{msi_clear:08x}"
+            ),
         );
+        boot_log::force_uart_line(line.as_str());
     }
 }
 
@@ -1087,14 +1075,8 @@ const fn pcie_status_link_up_and_rc(status: u32) -> bool {
 }
 
 #[inline]
-const fn pcie_status_link_bits_present(status: u32) -> bool {
-    (status & (BCM2711_PCIE_STATUS_DL_ACTIVE | BCM2711_PCIE_STATUS_PHY_LINK_UP))
-        == (BCM2711_PCIE_STATUS_DL_ACTIVE | BCM2711_PCIE_STATUS_PHY_LINK_UP)
-}
-
-#[inline]
 const fn post_mailbox_ext_cfg_data_read_deferred(status: u32) -> bool {
-    !pcie_status_link_bits_present(status)
+    !pcie_status_link_up_and_rc(status)
 }
 
 fn disable_vl805_msi_for_poll_only(index_reg: usize, config_virt: usize) -> Option<(u16, u16)> {
@@ -1367,10 +1349,6 @@ mod tests {
             BCM2711_PCIE_STATUS_DL_ACTIVE | BCM2711_PCIE_STATUS_PHY_LINK_UP
         ));
         assert!(!pcie_status_link_up_and_rc(0xf2c0_000a));
-        assert!(pcie_status_link_bits_present(
-            BCM2711_PCIE_STATUS_DL_ACTIVE | BCM2711_PCIE_STATUS_PHY_LINK_UP
-        ));
-        assert!(!pcie_status_link_bits_present(BCM2711_PCIE_STATUS_PORT));
     }
 
     #[test]
@@ -1434,7 +1412,7 @@ mod tests {
             BCM2711_PCIE_STATUS_PORT
         ));
         assert!(post_mailbox_ext_cfg_data_read_deferred(0));
-        assert!(!post_mailbox_ext_cfg_data_read_deferred(
+        assert!(post_mailbox_ext_cfg_data_read_deferred(
             BCM2711_PCIE_STATUS_DL_ACTIVE | BCM2711_PCIE_STATUS_PHY_LINK_UP
         ));
         assert!(!post_mailbox_ext_cfg_data_read_deferred(

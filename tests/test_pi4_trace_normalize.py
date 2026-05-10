@@ -321,7 +321,7 @@ def test_usb_proof_summary_advances_command_gate() -> None:
 
     gates = normalizer.summarize_gates(events)
 
-    assert gates.usb_gate == 3
+    assert gates.usb_gate == 4
     assert gates.usb_blocker == "cmd-poll-pending"
 
 
@@ -420,7 +420,7 @@ def test_gate_summary_preserves_usb_pcie_irq_quiesce_blocker() -> None:
 
     gates = normalizer.summarize_gates(events)
 
-    assert gates.usb_gate == 3
+    assert gates.usb_gate == 4
     assert gates.usb_blocker == "pcie-irq-quiesce-failed"
 
 
@@ -1031,7 +1031,26 @@ def test_gate_summary_reports_root_port_read_timer_after_controller_ready() -> N
     gates = normalizer.summarize_gates(events)
 
     assert gates.usb_gate == 3
-    assert gates.usb_blocker == "root-port-read-begin"
+    assert gates.usb_blocker == "root-port-read-timer-preempted"
+
+
+def test_gate_summary_reports_root_port_sample_timer_without_read_breadcrumb() -> None:
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+        "[local-seat] xhci.diag stage=0x0110 tag=controller-init-complete "
+        "ready=0x00000000",
+        "[local-seat] xhci root-port sample begin ports=5 passes=1 "
+        "timer_irq=27 timer_role=kernel-vtimer",
+        "halting...",
+        "Kernel entry via Interrupt, irq 27",
+    ]
+
+    events = normalizer.parse_events(normalizer.latest_boot_lines(lines))
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "root-port-read-timer-preempted"
 
 
 def test_gate_summary_reports_reset_pre_usbcmd_timer_after_first_attempt() -> None:
@@ -1111,7 +1130,7 @@ def test_gate_summary_reports_platform_reset_port_access_disabled() -> None:
     assert gates.usb_blocker == "port-register-access-disabled"
 
 
-def test_gate_summary_promotes_deferred_capture_after_command_proof() -> None:
+def test_gate_summary_rejects_deferred_capture_after_command_proof() -> None:
     events = normalizer.parse_events(
         [
             "[local-seat] xhci.diag stage=0x0110 tag=controller-init-complete",
@@ -1127,8 +1146,8 @@ def test_gate_summary_promotes_deferred_capture_after_command_proof() -> None:
 
     gates = normalizer.summarize_gates(events)
 
-    assert gates.usb_gate == 5
-    assert gates.usb_blocker == "address-device-pending"
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "captured-root-port-enum"
 
 
 def test_gate_summary_reports_root_port_reset_timeout_after_connection() -> None:
@@ -1383,7 +1402,7 @@ def test_gate_summary_preserves_no_op_event_timeout_without_summary() -> None:
             "[local-seat] xhci root-port command-probe "
             "result=no-op-unproven bus=pcie-window "
             "action=return-to-shell detail=cmd-event-ring-timeout "
-            "irq27_role=timer-only pcie_irqs=175,180",
+            "irq27_role=timer-only pcie_irqs=179,175,180",
             "Kernel entry via Interrupt, irq 27",
         ]
     )
@@ -1401,7 +1420,7 @@ def test_gate_summary_preserves_enable_slot_event_timeout_without_summary() -> N
                 "[local-seat] xhci root-port command-probe "
                 f"result={result} bus=pcie-window "
                 "action=return-to-shell detail=cmd-event-ring-timeout "
-                "irq27_role=timer-only pcie_irqs=175,180",
+                "irq27_role=timer-only pcie_irqs=179,175,180",
                 "Kernel entry via Interrupt, irq 27",
             ]
         )
@@ -2159,6 +2178,7 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
         "xhci.diag stage=0x0111": "brcm-axi-setup-read",
         "reset-pre-usbcmd-source-timer-preempted": "reset-pre-usbcmd-source",
         "xhci.diag stage=0x0226": "reset-pre-usbcmd-source",
+        "root-port-read-timer-preempted": "root-port-read-timer-preempted",
         "root-port-sample-deferred": "root-port-sample-deferred",
         "platform-reset-portsc-toxic": "port-register-access-disabled",
         "xhci.diag stage=0x03f5": "port-register-access-disabled",
@@ -2203,7 +2223,13 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         "stage=assert-reset base=0x18103000 off=0x800 err=unsupported operation: sdio-cmd53-r5-error": (
             "armcr4-reset-assert-cmd53-r5-rejected"
         ),
+        "stage=assert-reset base=0x18102000 off=0x800 err=unsupported operation: sdio-cmd53-r5-error": (
+            "armcr4-reset-assert-cmd53-r5-rejected"
+        ),
         "sdio cmd53 r5 fail arg=0x95700004": (
+            "armcr4-reset-assert-cmd53-r5-rejected"
+        ),
+        "sdio cmd53 r5 fail arg=0x95500004": (
             "armcr4-reset-assert-cmd53-r5-rejected"
         ),
         "socram-assert-reset-cmd53-r5-rejected": (
@@ -2237,6 +2263,9 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
             "armcr4-prereset-fgc-cmd53-r5-rejected"
         ),
         "sdio cmd53 r5 fail arg=0x90681001": (
+            "armcr4-prereset-fgc-cmd53-r5-rejected"
+        ),
+        "sdio cmd53 r5 fail arg=0x95481004": (
             "armcr4-prereset-fgc-cmd53-r5-rejected"
         ),
         "sdio cmd53 r5 fail arg=0x95281004": (
@@ -2426,7 +2455,7 @@ def test_gate_summary_tracks_wifi_function2_and_firmware_channel() -> None:
     events = normalizer.parse_events(
         [
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=yes",
-            "[pi4-wifi] sdio function-ready fn=2 ioex=0x06 iordy=0x06",
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
             "wifi: f2_gate policy=post-ht-proof f2_enabled=yes f2_ready=yes",
             "wifi: snapshot source=live stage=post-firmware-ready-function2-strict-repoll-fail "
             "exact=firmware-channel-f2",
@@ -2439,11 +2468,29 @@ def test_gate_summary_tracks_wifi_function2_and_firmware_channel() -> None:
     assert gates.wifi_blocker == "firmware-channel-f2"
 
 
+def test_gate_summary_does_not_credit_function2_without_ior2() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: ht_state chipclk=0x50 ht_req=yes ht_avail=no",
+            "[pi4-wifi] sdio function-ready fn=2 poll=1/3000 ready=0x02 need=0x04",
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x02",
+            "[pi4-wifi] sdio function-ready fn=2 action=experimental-continue-without-ready "
+            "desired=0x06 ready=0x02",
+            "[pi4-wifi] sdio function2 ready-snapshot timeout diagnosis=f2-enable-latched-not-ready "
+            "ioex=0x06/y iorx=0x02/y",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate < 6
+
+
 def test_gate_summary_tracks_wifi_control_plane_breadcrumb_failures() -> None:
     events = normalizer.parse_events(
         [
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=yes",
-            "[pi4-wifi] sdio function-ready fn=2 ioex=0x06 iordy=0x06",
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
             "[cyw43] control-plane step=event-mask action=fail err=ioctl-timeout",
             "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
             "exact=cyw43-control-plane-no-reply-linux-f2-armed",
@@ -2460,7 +2507,7 @@ def test_gate_summary_tracks_wifi_control_plane_step_err_without_snapshot() -> N
     events = normalizer.parse_events(
         [
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=yes",
-            "[pi4-wifi] sdio function-ready fn=2 ioex=0x06 iordy=0x06",
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
             "[cyw43] control-plane step=event-mask action=fail err=ioctl-timeout",
         ]
     )

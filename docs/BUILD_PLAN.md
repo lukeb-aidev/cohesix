@@ -6051,12 +6051,14 @@ Changes:
   - HAL-bound USB keyboard input path feeding existing parser/dispatcher.
   - Primitive HDMI text sink mirroring root-console output lines with bounded memory and deterministic truncation.
   - `coh-rtc` schema/codegen for `hw.local_seat` (`enabled`, `required`, declared devices).
+  - Pi 4 VL805 local-seat remains cold-boot-only: Linux/U-Boot captures may provide layout diagnostics, but root-port power readback, connected/enabled/speed state, and reset must be proven in the current Cohesix boot after command/event-ring proof.
 Commands:
   - `cargo check -p root-task`
   - `cargo test -p root-task --features "kernel serial-console" local_seat`
   - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 Checks:
   - USB keyboard commands yield identical parser semantics to serial.
+  - Pi 4 USB enumeration does not synthesize root-port state from Linux/U-Boot captures after command-ring proof.
   - HDMI output mirrors root-console lines deterministically.
   - `hw.local_seat.required=true` fails fast when dependencies are unsatisfied.
 Deliverables:
@@ -6444,6 +6446,7 @@ Commands:
   - cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <wifi-lease-ip> --tcp-port 31337 --auth-token bootstrap
 Checks:
   - Normalized Cohesix, U-Boot, and Linux comparison traces preserve USB/Wi-Fi stages, blockers, and latest verdicts as machine-readable evidence.
+  - Final Pi 4 USB acceptance requires `USB_COLD_BOOT_SEEN=yes`, command/event-ring proof before live Cohesix-owned root-port power assertion/readback/sampling/reset, and no Linux/U-Boot captured root-port enumeration.
   - Serial shows CYW43455 attach/join breadcrumbs followed by `[dhcp] lease bound ...`.
   - `netstats` / `netstatus` report the Wi-Fi lease on `policy=wifi`.
   - `auto` proves single-active-interface behavior by using Wi-Fi when healthy and falling back to wired only after explicit Wi-Fi failure.

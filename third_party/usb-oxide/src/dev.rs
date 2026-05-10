@@ -326,7 +326,7 @@ impl<H: Dma> Drop for SlotCleanup<H> {
         if !self.armed {
             return;
         }
-        self.ctrl.set_device_context(self.slot_id, 0);
+        let _ = self.ctrl.set_device_context(self.slot_id, 0);
         let _ = self.ctrl.disable_slot(self.slot_id);
     }
 }
@@ -354,7 +354,7 @@ fn recycle_slot_after_address_failure<H: Dma>(
         *slot_recycles as u64,
     );
 
-    ctrl.set_device_context(old_slot, 0);
+    let _ = ctrl.set_device_context(old_slot, 0);
     let _ = ctrl.disable_slot(old_slot);
 
     *slot_id = match ctrl.enable_slot() {
@@ -369,7 +369,7 @@ fn recycle_slot_after_address_failure<H: Dma>(
     unsafe {
         core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, device_ctx_bytes);
     }
-    ctrl.set_device_context(*slot_id, device_ctx.phys(ctrl.host()));
+    ctrl.set_device_context(*slot_id, device_ctx.phys(ctrl.host()))?;
     compiler_fence(Ordering::Release);
 
     ctrl.emit_diag(0x0384, old_slot as u64, *slot_id as u64, 0);
@@ -727,7 +727,7 @@ impl<H: Dma> UsbDevice<H> {
             core::ptr::write_bytes(device_ctx.as_ptr::<u8>(), 0, device_ctx_bytes);
             core::ptr::write_bytes(input_base, 0, input_ctx_bytes);
         }
-        ctrl.set_device_context(slot_id, device_ctx.phys(host));
+        ctrl.set_device_context(slot_id, device_ctx.phys(host))?;
         compiler_fence(Ordering::Release);
         ctrl.emit_diag(
             0x0390,

@@ -9,7 +9,7 @@ use crate::{
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
-    sync::atomic::{Ordering, compiler_fence},
+    sync::atomic::{AtomicBool, Ordering, compiler_fence},
 };
 use spin::Mutex;
 
@@ -19,6 +19,7 @@ const CMD_RING_SIZE: usize = 256;
 const EVENT_RING_SIZE: usize = 256;
 const STOP_WAIT_SPINS: usize = 10_000_000;
 const RESET_WAIT_SPINS: usize = 10_000_000;
+const PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS: usize = RESET_WAIT_SPINS * 10;
 // On Pi 4 mailbox-reset handoff, live operational reads after RUN can enter
 // the seL4 timer interrupt path before userland can recover. Keep prompt-safe
 // command recovery write-only until fresh rings are published and polled.
@@ -51,6 +52,7 @@ const USBCMD_RUN_SEED_CLEAR_MASK: u32 = USBCMD_INTERRUPT_DELIVERY_MASK
 const PORT_RESET_WAIT_SPINS: usize = 10_000_000;
 const PORT_ENABLE_WAIT_SPINS: usize = 10_000_000;
 const PORT_SETTLE_SPINS: usize = 100_000;
+const PORT_POWER_WAIT_SPINS: usize = 1_000_000;
 const PORT_POST_ACK_WAIT_SPINS: usize = 1_000_000;
 const PORT_POST_ACK_TRANSITION_LOGS: usize = 8;
 const DROP_HALT_WAIT_SPINS: usize = 1_000_000;
@@ -1394,6 +1396,21 @@ const fn skip_reset_completion_poll_for_init(
 }
 
 #[inline(always)]
+const fn reset_completion_blind_settle_spins(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+    skip_initial_live_operational_reads: bool,
+) -> usize {
+    if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
+        && skip_initial_live_operational_reads
+    {
+        PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS
+    } else {
+        RESET_WAIT_SPINS
+    }
+}
+
+#[inline(always)]
 const fn runtime_snapshot_has_stop_state_seed(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
@@ -1775,7 +1792,7 @@ pub struct XhciCtrl<H: Dma> {
     event_ring: Mutex<Box<EventRing<H>>>,
     host: Arc<H>,
     skip_initial_live_operational_reads: bool,
-    port_register_access_allowed: bool,
+    port_register_access_allowed: AtomicBool,
 }
 
 /// Snapshot of xHCI command/event ring state for timeout diagnostics.
@@ -2538,7 +2555,7 @@ impl<H: Dma> XhciCtrl<H> {
             event_ring: Mutex::new(event_ring),
             host,
             skip_initial_live_operational_reads: params.skip_initial_live_operational_reads,
-            port_register_access_allowed: params.port_register_access_allowed,
+            port_register_access_allowed: AtomicBool::new(params.port_register_access_allowed),
         };
 
         emit_xhci_diag(0x010f, mmio as u64, op_base as u64, rt_base as u64);
@@ -2996,11 +3013,16 @@ impl<H: Dma> XhciCtrl<H> {
                 );
             }
             if skip_reset_completion_poll {
-                emit_xhci_diag(0x0227, RESET_WAIT_SPINS as u64, reset_cmd as u64, 2);
-                for _ in 0..RESET_WAIT_SPINS {
+                let reset_settle_spins = reset_completion_blind_settle_spins(
+                    self.firmware_handoff,
+                    trusted_runtime_seed_snapshot,
+                    self.skip_initial_live_operational_reads,
+                );
+                emit_xhci_diag(0x0227, reset_settle_spins as u64, reset_cmd as u64, 2);
+                for _ in 0..reset_settle_spins {
                     spin_loop();
                 }
-                emit_xhci_diag(0x0228, RESET_WAIT_SPINS as u64, reset_cmd as u64, 2);
+                emit_xhci_diag(0x0228, reset_settle_spins as u64, reset_cmd as u64, 2);
                 emit_xhci_diag(0x0229, reg::USBSTS_CNR as u64, reset_cmd as u64, 1);
                 emit_xhci_diag(0x0233, 0, 0, 1);
             } else {
@@ -5206,17 +5228,24 @@ impl<H: Dma> XhciCtrl<H> {
             0x03c8,
             stop_cmd as u64,
         );
-        for _ in 0..RESET_WAIT_SPINS {
+        let reset_settle_spins = reset_completion_blind_settle_spins(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+            self.skip_initial_live_operational_reads,
+        );
+        for _ in 0..reset_settle_spins {
             spin_loop();
         }
-        emit_xhci_diag(0x03cb, reset_cmd as u64, RESET_WAIT_SPINS as u64, 2);
+        emit_xhci_diag(0x03cb, reset_cmd as u64, reset_settle_spins as u64, 2);
         Ok(())
     }
 
     fn republish_fresh_command_event_rings_for_prompt_safe_recovery(&self) -> Result<()> {
         let cmd_ring = Box::new(Ring::new(&*self.host, CMD_RING_SIZE)?);
         let event_ring = Box::new(EventRing::new(&*self.host, EVENT_RING_SIZE)?);
-        let dcbaa_phys = self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa-recovery")?;
+        let dcbaa_phys = self
+            .dcbaa
+            .share_for_device(&*self.host, "xhci-dcbaa-recovery")?;
         let cmd_ring_phys = cmd_ring.share_for_device(&*self.host, "xhci-cmd-ring-recovery")?;
         let (event_ring_phys, erst_phys) = event_ring.share_for_device(&*self.host)?;
         let event_ring_dequeue = event_ring.try_dequeue_ptr(&*self.host)?;
@@ -5689,7 +5718,7 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x03f0, port as u64, self.max_ports as u64, 0);
             return 0;
         }
-        if !self.port_register_access_allowed {
+        if !self.port_register_access_allowed() {
             emit_xhci_diag(0x03f5, port as u64, self.max_ports as u64, 0);
             return 0;
         }
@@ -5706,7 +5735,7 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x03f1, port as u64, self.max_ports as u64, val as u64);
             return;
         }
-        if !self.port_register_access_allowed {
+        if !self.port_register_access_allowed() {
             emit_xhci_diag(0x03f6, port as u64, self.max_ports as u64, val as u64);
             return;
         }
@@ -5718,18 +5747,65 @@ impl<H: Dma> XhciCtrl<H> {
         self.write_reg(offset, val);
     }
 
+    fn ensure_port_power_for_detection(&self, port: u8, portsc: u32) -> u32 {
+        if (portsc & reg::PORTSC_PP) != 0 {
+            return portsc;
+        }
+        let powered = port_state_neutral(portsc) | reg::PORTSC_PP;
+        emit_xhci_diag(0x03fc, port as u64, encode_port_diag(portsc), powered as u64);
+        self.write_port_status(port, powered);
+
+        let mut waited = 0usize;
+        let mut after: u32;
+        loop {
+            for _ in 0..PORT_SETTLE_SPINS {
+                spin_loop();
+            }
+            waited = waited.saturating_add(PORT_SETTLE_SPINS);
+            after = self.port_status(port);
+            if (after & reg::PORTSC_PP) != 0 || waited >= PORT_POWER_WAIT_SPINS {
+                break;
+            }
+        }
+        emit_xhci_diag(0x03fd, port as u64, encode_port_diag(after), waited as u64);
+        after
+    }
+
+    /// Assert power on root ports before live cold-boot detection.
+    pub fn power_on_root_ports_for_detection(&self, max_ports: usize) {
+        if !self.port_register_access_allowed() {
+            emit_xhci_diag(0x03fc, max_ports as u64, self.max_ports as u64, 0);
+            return;
+        }
+        let capped_ports = if max_ports < self.max_ports as usize {
+            max_ports
+        } else {
+            self.max_ports as usize
+        };
+        for port in 0..capped_ports {
+            let port = port as u8;
+            let portsc = self.port_status(port);
+            let _ = self.ensure_port_power_for_detection(port, portsc);
+        }
+    }
+
     /// Reset a port
     pub fn reset_port(&self, port: u8) -> Result<()> {
         if !self.port_in_range(port) {
             emit_xhci_diag(0x03f2, port as u64, self.max_ports as u64, 0);
             return Err(UsbError::InvPort);
         }
-        if !self.port_register_access_allowed {
+        if !self.port_register_access_allowed() {
             emit_xhci_diag(0x03f7, port as u64, self.max_ports as u64, 0);
             return Err(UsbError::NotSupported);
         }
         let mut portsc: u32 = self.port_status(port);
         emit_xhci_diag(0x0280, port as u64, encode_port_diag(portsc), 0);
+        portsc = self.ensure_port_power_for_detection(port, portsc);
+        if (portsc & reg::PORTSC_PP) == 0 {
+            emit_xhci_diag(0x028f, port as u64, encode_port_diag(portsc), 1);
+            return Err(UsbError::DeviceNotFound);
+        }
         if (portsc & reg::PORTSC_CCS) == 0 {
             emit_xhci_diag(0x028f, port as u64, encode_port_diag(portsc), 0);
             return Err(UsbError::DeviceNotFound);
@@ -5893,10 +5969,10 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     /// Set device context in DCBAA
-    pub fn set_device_context(&self, slot: u8, phys: u64) {
+    pub fn set_device_context(&self, slot: u8, phys: u64) -> Result<()> {
         if !self.slot_in_range(slot) {
             emit_xhci_diag(0x03f3, slot as u64, self.max_slots as u64, phys);
-            return;
+            return Err(UsbError::InvSlot);
         }
         // SAFETY: `slot` is allocated by the controller and indexes the owned
         // DCBAA; the caller supplies the DMA address for that slot's context.
@@ -5909,8 +5985,12 @@ impl<H: Dma> XhciCtrl<H> {
         compiler_fence(Ordering::Release);
         match self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa-slot") {
             Ok(bus) => emit_xhci_diag(0x03f5, slot as u64, phys, bus),
-            Err(_) => emit_xhci_diag(0x03f6, slot as u64, phys, 0),
+            Err(_) => {
+                emit_xhci_diag(0x03f6, slot as u64, phys, 0);
+                return Err(UsbError::DmaSync);
+            }
         }
+        Ok(())
     }
 
     /// Reads the current DCBAA slot entry for diagnostics.
@@ -5946,7 +6026,14 @@ impl<H: Dma> XhciCtrl<H> {
 
     /// Returns whether direct root-port register MMIO is enabled for this controller.
     pub fn port_register_access_allowed(&self) -> bool {
+        self.port_register_access_allowed.load(Ordering::Acquire)
+    }
+
+    /// Allows platform code to re-enable root-port MMIO after command/event proof.
+    pub fn allow_port_register_access_after_command_proof(&self) {
         self.port_register_access_allowed
+            .store(true, Ordering::Release);
+        emit_xhci_diag(0x03fb, self.max_ports as u64, 1, 0);
     }
 
     /// Returns the xHCI context stride in bytes (32 or 64).
@@ -5965,7 +6052,7 @@ impl<H: Dma> XhciCtrl<H> {
             iman: self.read_reg::<u32>(int_base + reg::IMAN),
             erdp: self.read_reg_u64(int_base + reg::ERDP),
             erstba: self.read_reg_u64(int_base + reg::ERSTBA),
-            portsc: if self.port_register_access_allowed {
+            portsc: if self.port_register_access_allowed() {
                 self.port_status(port)
             } else {
                 emit_xhci_diag(0x03f8, port as u64, self.max_ports as u64, 0);
@@ -5987,7 +6074,8 @@ mod tests {
         COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
         COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
         COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, ConstructorPollingScrubMode,
-        LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD, READY_WAIT_PROGRESS_SPINS,
+        LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD,
+        PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, READY_WAIT_PROGRESS_SPINS, RESET_WAIT_SPINS,
         SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
         TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
         XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
@@ -6026,7 +6114,8 @@ mod tests {
         probe_live_dcbaap_before_staged_publish_with_snapshot,
         prompt_safe_command_recovery_avoids_live_operational_reads,
         prompt_safe_command_timeout_live_snapshot_enabled,
-        replay_staged_dcbaap_snapshot_before_publish_with_snapshot, reset_usbcmd_seed_before_hcrst,
+        replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
+        reset_completion_blind_settle_spins, reset_usbcmd_seed_before_hcrst,
         reset_usbcmd_seed_before_hcrst_for_init, run_seed_usbcmd, run_usbcmd_needs_live_seed_read,
         run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed, run_wait_observable_usbsts,
         run_wait_progress_due, runtime_bootloader_owned_pollsafe_handoff,
@@ -7206,6 +7295,23 @@ mod tests {
     }
 
     #[test]
+    fn port_power_enable_value_preserves_neutral_state_only() {
+        let stale = reg::PORTSC_PED
+            | reg::PORTSC_CSC
+            | reg::PORTSC_PEC
+            | ((reg::SPEED_HIGH as u32) << 10);
+        let powered = port_state_neutral(stale) | reg::PORTSC_PP;
+
+        assert_eq!(powered & reg::PORTSC_PED, 0);
+        assert_eq!(powered & PORT_CHANGE_BITS, 0);
+        assert_ne!(powered & reg::PORTSC_PP, 0);
+        assert_eq!(
+            powered & reg::PORTSC_SPEED_MASK,
+            (reg::SPEED_HIGH as u32) << 10
+        );
+    }
+
+    #[test]
     fn polling_mode_keeps_interrupter_disabled() {
         assert_eq!(polling_iman_value(), 0);
         assert_eq!(polling_iman_value() & reg::IMAN_IE, 0);
@@ -8144,6 +8250,50 @@ mod tests {
             None,
             true,
         ));
+    }
+
+    #[test]
+    fn platform_reset_prompt_safe_hcrst_uses_extended_blind_settle() {
+        let stop_seed = Some(XhciRuntimeSeedSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(reg::USBSTS_HCH),
+            iman0: Some(0),
+            dcbaap: None,
+            crcr: None,
+            erstba0: None,
+            erdp0: None,
+            erstsz0: None,
+        });
+
+        assert!(PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS > RESET_WAIT_SPINS);
+        assert_eq!(
+            reset_completion_blind_settle_spins(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                None,
+                true,
+            ),
+            PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS
+        );
+        assert_eq!(
+            reset_completion_blind_settle_spins(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                None,
+                false,
+            ),
+            RESET_WAIT_SPINS
+        );
+        assert_eq!(
+            reset_completion_blind_settle_spins(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                stop_seed,
+                false,
+            ),
+            RESET_WAIT_SPINS
+        );
+        assert_eq!(
+            reset_completion_blind_settle_spins(XhciFirmwareHandoff::None, None, true),
+            RESET_WAIT_SPINS
+        );
     }
 
     #[test]

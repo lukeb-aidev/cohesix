@@ -259,15 +259,29 @@ power/reset state.
 - Function 2 is the data/control-plane FIFO path after firmware.
 - Function 2 remains disabled before firmware/NVRAM upload.
 - Production Function 2 traffic requires firmware upload/release evidence, real
-  `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness (`IOR2`/ready proof).
+  `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness (`IOR2`/ready proof). The
+  latest Pi 4 hardware trace proved the `CHIPCLKCSR=0x50`
+  (`ALP_AVAIL|HT_REQ`) shape can latch `IOEX=0x06` while `IOR2` remains clear at
+  `0x02`, even after the Linux-sized wait. That no-HT shape is therefore
+  diagnostic evidence only, not a production Function 2 promotion.
+- The bounded no-HT probe is not a success gate: `0x52`
+  (`FORCE_HT|HT_REQ|ALP_AVAIL`) is only diagnostic readback of the exact `0x50`
+  token after F2 clock forcing, and production boot still stops before F2 traffic
+  unless real HT and live `IOR2` are both present.
+- Function 2 enable follows Linux's `SDIO_WAIT_F2RDY` contract: the strict
+  Cohesix path polls CCCR `IORx` for a 3000-sample F2-ready window before
+  declaring `sdio-function2-ready-timeout`.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
-- No-HT / forced-HT paths are diagnostics unless `docs/BUILD_PLAN.md`,
-  `docs/INTERFACES.md`, generated manifests, and tests all promote them.
+- No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
+  production Function 2 traffic without real HT and live `IOR2`.
 - Pi 4 uses the CYW43455 ARMCR4 firmware path. Do not run the Linux CM3-only
   SOCSRAM bank remap writes (`bankidx=3`, `bankpda=0`) before firmware upload;
   Linux applies those writes only to the 43430/43439 CM3 path, and on CYW43455
   they are a Function 1 backplane blocker rather than progress.
+- Pi 4 Linux capture identifies the CYW43455 ARM_CR4 wrapper at `0x18102000`.
+  `0x18103000` is the adjacent PCIe2 wrapper, so ARMCR4 reset/release proof must
+  target `0x18102000` through the HAL backplane helpers.
 
 ### PCIe/VL805
 
@@ -297,7 +311,23 @@ active path is Cohesix-owned cold start:
   `USBCMD.RUN`; never use xHCI BAR reads, `USBSTS`, or any `PORTSC` as the
   posted-write drain on this prompt-safe path. Command-timeout recovery follows
   the same rule: stop/reset/RUN recovery waits are blind bounded settles, not
-  live `USBCMD`/`USBSTS` polls.
+  live `USBCMD`/`USBSTS` polls. The active `platform-reset-complete` path uses
+  an extended bounded blind HCRST/CNR settle before publishing fresh rings, and
+  command-timeout recovery reuses that extended settle before retrying the
+  first command.
+- Root-port state is cold-boot live evidence only. After mailbox reset, live
+  HAL EXT_CFG proof, local HCRST, and fresh ring publication, direct `PORTSC`
+  reads remain gated until command/event-ring proof succeeds; local-seat may
+  then assert root-port power, require bounded `PORTSC.PP` readback evidence,
+  run bounded live settle/sampling passes, and reset root ports through the
+  Cohesix-owned controller. Linux or U-Boot captures must not synthesize a
+  connected mask, speed, enabled-port state, or skipped root-port reset.
+- When no polled port-status event is present, the Pi 4 prompt-safe high-BAR
+  lane first proves command/event-ring consumption with a Linux-shaped No Op
+  command (`USBCMD.RUN|INTE`, `IMOD=0xa0`, `IMAN.IE`) while PCI INTx/MSI/GIC
+  delivery remains masked. Only a completed command may reopen live root-port
+  sampling; real enumeration still issues `Enable Slot` after current-boot port
+  evidence.
 - The external VL805 high-BAR path must not apply the generic Broadcom xHCI
   wrapper AXI read/write attribute quirk. On Pi 4 that quirk's `0x0c08/0x0c0c`
   offsets are not part of the live VL805 PCI controller contract; the
@@ -530,13 +560,17 @@ Required Cohesix shape:
   CMD52/CMD53 transport.
 - Driver owns CYW43 protocol state: firmware/NVRAM/CLM staging, SDPCM, CDC/BDC,
   association, and Ethernet dataplane.
-- Function 2 traffic is forbidden until firmware release, HT/readiness proof,
-  and Function 2 readiness are live.
+- Function 2 traffic is forbidden until firmware release, real
+  `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness are proven.
+- The Linux F2 enable timeout shape remains a 3000-sample CCCR `IORx` F2-ready
+  window, but `FORCE_HT` / `0x50 -> 0x52` evidence is diagnostic only and cannot
+  replace HT or `IOR2`.
 - NVRAM normalization is deterministic and logged.
 - Firmware upload proof distinguishes proven byte mismatch from readback
   unavailable.
-- Diagnostic no-HT or forced clock paths must be explicit and must not become
-  production gates.
+- Diagnostic no-HT or forced clock paths must be explicit. They are not
+  production promotions unless a future milestone adds a separate hardware proof
+  and updates this guide in the same change.
 - Pi 4 CYW43455 firmware upload follows the ARMCR4 path: Function 1 backplane
   control, firmware/NVRAM into ARMCR4 RAM, reset-vector release, then Function 2
   readiness. CM3-only SOCSRAM remap writes are not part of this path.
@@ -555,7 +589,9 @@ Required Cohesix shape:
   no xHCI ownership handoff opt-in; stop-state, preserve-state, and U-Boot
   reset-authority evidence must fail gate proof instead of authorizing rings.
 - MSI remains disabled unless the milestone explicitly proves it.
-- Poll-only command/event-ring proof comes before keyboard enumeration.
+- Keyboard enumeration must use live cold-boot root-port sampling and reset
+  after command/event-ring proof; Linux/U-Boot captures are layout diagnostics
+  only and do not authorize deferred port enumeration.
 - Cold-boot high-BAR xHCI must not touch generic Broadcom wrapper AXI
   attribute registers; BCM2711 PCIe AXI/outbound-window setup is a HAL
   root-complex responsibility, not a VL805 BAR responsibility.

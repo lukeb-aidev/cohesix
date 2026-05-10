@@ -330,10 +330,10 @@ configure_cpio_path() {
     local cpio_bin="$1"
     local cpio_dir
     cpio_dir="$(dirname "$cpio_bin")"
-    case ":${PATH}:" in
-        *":${cpio_dir}:"*) ;;
-        *) export PATH="${cpio_dir}:${PATH}" ;;
-    esac
+    # seL4 archive rules invoke "cpio" by name from nested bash commands. Keep
+    # the verified GNU cpio first even if its directory already appears later
+    # in PATH behind macOS /usr/bin/cpio.
+    export PATH="${cpio_dir}:${PATH}"
     log "Using cpio: ${cpio_bin}"
 }
 

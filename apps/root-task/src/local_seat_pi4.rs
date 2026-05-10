@@ -144,12 +144,10 @@ const VL805_ECAM_BASE_CANDIDATES: [usize; 0] = [];
 const XHCI_MMIO_CANDIDATE_LIMIT: usize = 8;
 const XHCI_MAX_PROBE_PORTS: usize = 16;
 const XHCI_PORT_DETECT_PASSES: usize = 4;
-const XHCI_PLATFORM_RESET_PORT_DETECT_PASSES: usize = 1;
+const XHCI_PLATFORM_RESET_PORT_DETECT_PASSES: usize = XHCI_PORT_DETECT_PASSES;
 const XHCI_PORT_DETECT_SETTLE_SPINS: usize = 200_000;
 const XHCI_PORT_DETECT_FINAL_WAIT_MS: u64 = 100;
 const XHCI_PORT_EVENT_DRAIN_LIMIT: usize = 16;
-const PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK: u32 = 0x0001;
-const PI4_XHCI_LINUX_CAPTURE_PORT0_SPEED: u8 = regs::SPEED_HIGH;
 const HUB_ENUM_MAX_DEPTH: usize = 2;
 const HUB_MAX_DOWNSTREAM_PORTS: usize = 15;
 const HUB_DESC_MAX_BYTES: usize = 12;
@@ -213,18 +211,22 @@ const fn pi4_gic_spi_irq(spi: u32) -> u32 {
 }
 
 // The seL4 IRQ API uses the full GIC ID, not the Linux virtual IRQ number and
-// not the raw SPI cell from DT. Linux's `/proc/interrupts` shows PCIe INTx A as
-// `GICv2 175`; the Pi 4 DT maps the host interrupt at SPI 0x94 and child INTx A
-// at SPI 0x8f.
+// not the raw SPI cell from DT. The Pi 4 DT maps the host/root PCIe interrupt at
+// SPI 0x93, the PCIe MSI line at SPI 0x94, and child INTx A at SPI 0x8f.
 const PI4_VL805_XHCI_INTX_IRQ: u32 = pi4_gic_spi_irq(0x8F);
-const PI4_PCIE_BRIDGE_IRQ: u32 = pi4_gic_spi_irq(0x94);
+const PI4_PCIE_BRIDGE_IRQ: u32 = pi4_gic_spi_irq(0x93);
+const PI4_PCIE_MSI_IRQ: u32 = pi4_gic_spi_irq(0x94);
 const PI4_GENERIC_VTIMER_IRQ: u32 = 27;
-const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 2] = [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ];
+const TRUSTED_XHCI_PCIE_SINK_IRQS: [u32; 3] = [
+    PI4_PCIE_BRIDGE_IRQ,
+    PI4_VL805_XHCI_INTX_IRQ,
+    PI4_PCIE_MSI_IRQ,
+];
 // Linux routes the Pi 4 VL805 through MSI IRQ 30, but Cohesix has only the
-// seL4-visible bridge and child INTx lines during the early poll-only xHCI
-// path. Bind both lines before the first BCM2711 EXT_CFG access and before the
-// first Cohesix-owned pre-run register writes so PCIe/xHCI interrupt delivery
-// is drained by HAL instead of escaping as an unhandled kernel IRQ.
+// seL4-visible bridge, child INTx, and MSI GIC IDs during the early poll-only
+// xHCI path. Bind all three before the first BCM2711 EXT_CFG access and before
+// the first Cohesix-owned pre-run register writes so PCIe/xHCI interrupt
+// delivery is drained by HAL instead of escaping as an unhandled kernel IRQ.
 // IRQ 27 is the kernel's ARM generic virtual timer PPI on this seL4 build, not
 // an xHCI/PCIe line, so it remains diagnostic-only for USB.
 const XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE: bool = true;
@@ -2393,6 +2395,18 @@ fn remember_vl805_cfg_proof(command: u16) {
     VL805_CFG_PROOF_READY.store(true, Ordering::Release);
 }
 
+fn clear_vl805_live_cfg_proof(reason: &'static str) {
+    VL805_CFG_PROOF_READY.store(false, Ordering::Release);
+    VL805_MSI_DISABLED_PROOF.store(false, Ordering::Release);
+    VL805_XHCI_MMIO_HINT.store(0, Ordering::Release);
+    let mut line = heapless::String::<160>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!("[local-seat] vl805 live cfg proof invalidated reason={reason}"),
+    );
+    boot_log::force_uart_line(line.as_str());
+}
+
 #[inline]
 fn vl805_cfg_proof_ready() -> bool {
     VL805_CFG_PROOF_READY.load(Ordering::Acquire)
@@ -3817,6 +3831,9 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0380..=0x03b2
             | 0x03c0..=0x03ed
             | 0x03f3..=0x03f6
+            | 0x03f8
+            | 0x03fb
+            | 0x03fc..=0x03fd
     )
 }
 
@@ -3840,6 +3857,9 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x0380..=0x03b2
             | 0x03c0..=0x03ed
             | 0x03f3..=0x03f6
+            | 0x03f8
+            | 0x03fb
+            | 0x03fc..=0x03fd
     )
 }
 
@@ -4008,7 +4028,11 @@ const fn xhci_diag_stage_value_labels(
         0x03e7..=0x03eb => Some(("reg_off", "value", "policy")),
         0x03ec => Some(("waited", "usbsts", "run_usbcmd")),
         0x03ed => Some(("settle_spins", "live_state_skipped", "run_usbcmd")),
-        0x03f3..=0x03f6 => Some(("slot", "entry", "bus_or_result")),
+        0x03f3..=0x03f6 => Some(("slot_or_port", "entry_or_max_ports", "bus_or_result")),
+        0x03f7 | 0x03f8 => Some(("port", "max_ports", "policy")),
+        0x03fb => Some(("max_ports", "allowed", "policy")),
+        0x03fc => Some(("port_or_limit", "portsc_or_max_ports", "power_value")),
+        0x03fd => Some(("port", "portsc", "settle_spins")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4314,8 +4338,13 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03b2 => Some("usb-address-direct-fail"),
         0x03f3 => Some("usb-dcbaa-slot-out-of-range"),
         0x03f4 => Some("usb-dcbaa-slot-read-out-of-range"),
-        0x03f5 => Some("usb-dcbaa-slot-share"),
-        0x03f6 => Some("usb-dcbaa-slot-share-fail"),
+        0x03f5 => Some("usb-port-read-gated-or-dcbaa-slot-share"),
+        0x03f6 => Some("usb-port-write-gated-or-dcbaa-slot-share-fail"),
+        0x03f7 => Some("usb-port-reset-gated"),
+        0x03f8 => Some("usb-port-diag-gated"),
+        0x03fb => Some("usb-port-access-after-command-proof"),
+        0x03fc => Some("usb-root-port-power-on"),
+        0x03fd => Some("usb-root-port-power-on-settled"),
         0x03c0 => Some("usb-hid-report-event"),
         0x03c1 => Some("usb-hid-report-decode-fail"),
         0x03c2 => Some("usb-hid-report-empty"),
@@ -4423,7 +4452,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
 
 #[inline]
 const fn xhci_root_port_connected(portsc: u32) -> bool {
-    (portsc & usb_oxide::regs::PORTSC_CCS) != 0
+    (portsc & usb_oxide::regs::PORTSC_CCS) != 0 && (portsc & usb_oxide::regs::PORTSC_PP) != 0
 }
 
 #[inline]
@@ -4622,38 +4651,6 @@ fn usb_command_probe_proves_ring(label: &str) -> bool {
 }
 
 #[inline]
-fn usb_command_probe_allows_deferred_capture(label: &str) -> bool {
-    usb_command_probe_proves_ring(label)
-}
-
-#[inline]
-const fn xhci_deferred_root_port_capture_speed(port: usize) -> u8 {
-    match port {
-        0 => PI4_XHCI_LINUX_CAPTURE_PORT0_SPEED,
-        _ => 0,
-    }
-}
-
-#[inline]
-fn xhci_deferred_root_port_capture_mask(
-    mmio: usize,
-    strategy: XhciRuntimeInitStrategy,
-    command_probe: &str,
-) -> u32 {
-    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
-        && matches!(
-            strategy.firmware_handoff,
-            XhciFirmwareHandoff::PlatformResetComplete
-        )
-        && usb_command_probe_allows_deferred_capture(command_probe)
-    {
-        PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK
-    } else {
-        0
-    }
-}
-
-#[inline]
 fn xhci_probe_command_ring_after_event_drain(
     ctrl: &XhciCtrl<SeatDma>,
     event_candidate_mask: u32,
@@ -4665,13 +4662,9 @@ fn xhci_probe_command_ring_after_event_drain(
         "phys"
     };
     if event_candidate_mask == 0 {
-        let use_enable_slot = pcie_dma_window;
-        let verb = if use_enable_slot {
-            "enable-slot"
-        } else {
-            "no-op"
-        };
-        let event_generation = if use_enable_slot {
+        let use_linux_event_generation = pcie_dma_window;
+        let verb = "no-op";
+        let event_generation = if use_linux_event_generation {
             "linux-shaped-polled"
         } else {
             "poll-only"
@@ -4685,86 +4678,19 @@ fn xhci_probe_command_ring_after_event_drain(
         );
         boot_log::force_uart_line(line.as_str());
 
-        if use_enable_slot {
-            let precheck = "skipped-no-op-linux-first-enable-slot";
-            let mut line = heapless::String::<256>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] xhci root-port command-probe precheck={precheck} bus={bus} action=submit-enable-slot-first reason=linux-capture-first-command event_generation={event_generation} irq27_role=timer-only pcie_irqs=175,180"
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-
-            return match ctrl.probe_enable_slot_linux_event_generation_prompt_safe() {
-                Ok(slot) => {
-                    let cleanup = match ctrl.disable_slot_linux_event_generation_prompt_safe(slot) {
-                        Ok(()) => "disable-slot-ok",
-                        Err(UsbError::Timeout | UsbError::EnableSlotTimeout) => {
-                            "disable-slot-timeout"
-                        }
-                        Err(UsbError::CmdFail(_)) => "disable-slot-cmd-fail",
-                        Err(_) => "disable-slot-error",
-                    };
-                    let result = if cleanup == "disable-slot-ok" {
-                        "enable-slot-ok"
-                    } else {
-                        "enable-slot-ok-cleanup-failed"
-                    };
-                    let mut line = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] xhci root-port command-probe result={result} bus={bus} slot={} cleanup={cleanup} precheck={precheck} event_generation={event_generation}",
-                            slot
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    result
-                }
-                Err(UsbError::EnableSlotTimeout | UsbError::Timeout) => {
-                    let mut line = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] xhci root-port command-probe result=enable-slot-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout precheck={precheck} event_generation={event_generation} irq27_role=timer-only pcie_irqs=175,180"
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    let mut summary = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut summary,
-                        format_args!(
-                            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=enable-slot-unproven event=missing precheck={precheck} event_generation={event_generation} irq27_role=timer-only pcie_irqs=175,180"
-                        ),
-                    );
-                    boot_log::force_uart_line(summary.as_str());
-                    "enable-slot-unproven"
-                }
-                Err(err) => {
-                    let result = usb_command_probe_error_label(err);
-                    let action = "none";
-                    let mut line = heapless::String::<192>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] xhci root-port command-probe result={result} bus={bus} action={action} detail={err:?}"
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    result
-                }
-            };
-        }
-
-        return match ctrl.probe_no_op_command_prompt_safe() {
+        let no_op_result = if use_linux_event_generation {
+            ctrl.probe_no_op_command_linux_event_generation_prompt_safe()
+        } else {
+            ctrl.probe_no_op_command_prompt_safe()
+        };
+        return match no_op_result {
             Ok(()) => {
                 let result = "no-op-ok";
-                let mut line = heapless::String::<192>::new();
+                let mut line = heapless::String::<224>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci root-port command-probe result={result} bus={bus} event_generation={event_generation}"
+                        "[local-seat] xhci root-port command-probe result={result} bus={bus} action=unlock-port-sampling reason=command-ring-proof-no-op event_generation={event_generation}"
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -4775,13 +4701,18 @@ fn xhci_probe_command_ring_after_event_drain(
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
                     format_args!(
-                        "[local-seat] xhci root-port command-probe result=no-op-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=175,180"
+                        "[local-seat] xhci root-port command-probe result=no-op-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180"
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
-                boot_log::force_uart_line(
-                    "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-unproven event=missing irq27_role=timer-only pcie_irqs=175,180",
+                let mut summary = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut summary,
+                    format_args!(
+                        "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-unproven event=missing event_generation={event_generation} irq27_role=timer-only pcie_irqs=179,175,180"
+                    ),
                 );
+                boot_log::force_uart_line(summary.as_str());
                 "no-op-unproven"
             }
             Err(err) => {
@@ -5105,19 +5036,37 @@ const fn xhci_controller_allows_port_register_access(
     mmio: usize,
     strategy: XhciRuntimeInitStrategy,
 ) -> bool {
-    // IRQ27 is the seL4 virtual timer, so a halt at the first post-RUN PORTSC
-    // read is a timer-preempted toxic edge, not an xHCI interrupt. The Pi 4
-    // high-BAR platform-reset lane must prove readiness through the poll-only
-    // event/command ring before any live root-port register sampling.
+    // Pi 4 USB is cold-boot only, but the 2026-05-10 hardware trace proved that
+    // direct high-BAR PORTSC reads can halt immediately after RUN. Keep root
+    // port register access disabled until a later HAL gate proves that path.
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
         && matches!(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::PlatformResetComplete
         )
+        && !strategy.seed_stop_state
     {
         return false;
     }
     !xhci_runtime_init_strategy_skips_root_port_reads(strategy)
+}
+
+#[inline]
+fn xhci_pi4_high_bar_cold_boot_params_allowed(
+    mmio: usize,
+    strategy: XhciRuntimeInitStrategy,
+    params: &XhciControllerParams,
+) -> bool {
+    if mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE {
+        return true;
+    }
+    params.runtime_seed_snapshot.is_none()
+        && params.firmware_handoff == strategy.firmware_handoff
+        && matches!(
+            (strategy.firmware_handoff, strategy.seed_stop_state),
+            (XhciFirmwareHandoff::None, false)
+                | (XhciFirmwareHandoff::PlatformResetComplete, false)
+        )
 }
 
 #[inline]
@@ -5398,14 +5347,7 @@ const fn xhci_root_port_detect_passes(strategy: XhciRuntimeInitStrategy) -> usiz
 }
 
 #[inline]
-const fn xhci_root_port_final_wait_ms(strategy: XhciRuntimeInitStrategy) -> u64 {
-    if matches!(
-        strategy.firmware_handoff,
-        XhciFirmwareHandoff::PlatformResetComplete
-    ) && !strategy.seed_stop_state
-    {
-        return 0;
-    }
+const fn xhci_root_port_final_wait_ms(_strategy: XhciRuntimeInitStrategy) -> u64 {
     XHCI_PORT_DETECT_FINAL_WAIT_MS
 }
 
@@ -6491,6 +6433,7 @@ fn ensure_runtime_vl805_mailbox_reset(hal: &mut KernelHal<'_>) -> Result<(), Pi4
     boot_log::force_uart_line(
         "[local-seat] vl805 reset ownership=runtime-owned stage=runtime action=mailbox-notify",
     );
+    clear_vl805_live_cfg_proof("mailbox-reset-boundary");
     match pi4_wifi::notify_vl805_reset(hal).map_err(map_pi4_wifi_mailbox_reset_error) {
         Ok(result) => {
             wait_ms(runtime_vl805_mailbox_reset_success_settle_ms(result));
@@ -7314,19 +7257,16 @@ fn ensure_vl805_config_replay_irq_sinks(hal: &mut KernelHal<'_>) -> bool {
 }
 
 fn ensure_capture_backed_xhci_pin(hal: &mut KernelHal<'_>, mmio: usize) -> bool {
-    if pinned_xhci_window_lookup_trusted(mmio, PAGE_SIZE).is_some() {
+    if pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_some() {
         return true;
     }
-    if promote_pinned_xhci_mmio_window_trusted(mmio, XHCI_MMIO_INIT_BYTES) {
-        return true;
-    }
-    match pin_xhci_mmio_window(hal, mmio, XHCI_MMIO_PRESEED_BYTES_FALLBACK, true) {
+    match pin_xhci_mmio_window(hal, mmio, XHCI_MMIO_PRESEED_BYTES_FALLBACK, false) {
         Ok(()) => {
             let mut line = heapless::String::<208>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] vl805 capture cfg xhci-pin mmio=0x{mmio:016x} bytes=0x{bytes:05x} trusted=1",
+                    "[local-seat] vl805 capture cfg xhci-pin mmio=0x{mmio:016x} bytes=0x{bytes:05x} trusted=0 authority=layout-only",
                     bytes = XHCI_MMIO_PRESEED_BYTES_FALLBACK,
                 ),
             );
@@ -7388,7 +7328,6 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
         return None;
     }
     remember_vl805_cfg_command_shadow(snapshot.command);
-    let selected = record_vl805_xhci_mmio_hint(&snapshot, "linux-capture-replay")?;
     let mut line = heapless::String::<320>::new();
     let live_ext_cfg = if VL805_BCM2711_PCIE_CFG_RUNTIME_TOUCH_ENABLED {
         "fallback"
@@ -7398,7 +7337,7 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] vl805 capture cfg witness selected source=linux-capture-static live_ext_cfg={live_ext_cfg} vid:did={vendor:08x} class=0x{class:08x} cmd=0x{cmd:04x} bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{selected:016x}",
+            "[local-seat] vl805 capture cfg witness selected source=linux-capture-static live_ext_cfg={live_ext_cfg} authority=layout-only vid:did={vendor:08x} class=0x{class:08x} cmd=0x{cmd:04x} bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{mmio:016x}",
             vendor = snapshot.vendor_device,
             class = snapshot.class_revision,
             cmd = snapshot.command,
@@ -7407,7 +7346,7 @@ fn prepare_vl805_pci_capture_witness(hal: &mut KernelHal<'_>) -> Option<usize> {
         ),
     );
     boot_log::force_uart_line(line.as_str());
-    Some(selected)
+    None
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7599,7 +7538,7 @@ fn retry_vl805_pci_bcm2711_after_mailbox_reset(
         ),
     );
     boot_log::force_uart_line(line.as_str());
-    ready
+    proven && ready
 }
 
 struct UsbKeyboard {
@@ -9363,10 +9302,11 @@ impl UsbKeyboard {
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] xhci irq sink reuse mmio=0x{mmio:016x} stage={} has_bridge={} has_intx={} action=avoid-rebind",
+                                "[local-seat] xhci irq sink reuse mmio=0x{mmio:016x} stage={} has_bridge={} has_intx={} has_msi={} action=avoid-rebind",
                                 xhci_irq_phase_label(XhciIrqInstallPhase::PreControllerReady),
                                 existing_guard.covers_irq(PI4_PCIE_BRIDGE_IRQ) as u8,
                                 existing_guard.covers_irq(PI4_VL805_XHCI_INTX_IRQ) as u8,
+                                existing_guard.covers_irq(PI4_PCIE_MSI_IRQ) as u8,
                                 mmio = effective_mmio,
                             ),
                         );
@@ -9412,7 +9352,10 @@ impl UsbKeyboard {
                 let intx_irq_bound = xhci_irq_guard
                     .as_ref()
                     .is_some_and(|guard| guard.covers_irq(PI4_VL805_XHCI_INTX_IRQ));
-                let bounded_pcie_sinks_bound = bridge_irq_bound && intx_irq_bound;
+                let msi_irq_bound = xhci_irq_guard
+                    .as_ref()
+                    .is_some_and(|guard| guard.covers_irq(PI4_PCIE_MSI_IRQ));
+                let bounded_pcie_sinks_bound = bridge_irq_bound && intx_irq_bound && msi_irq_bound;
                 let controller_gate = if requires_primary_pcie_irq && !bounded_pcie_sinks_bound {
                     "pcie-sinks-unbound"
                 } else {
@@ -9493,6 +9436,41 @@ impl UsbKeyboard {
                             ),
                         );
                         boot_log::force_uart_line(probe_line.as_str());
+
+                        if !xhci_pi4_high_bar_cold_boot_params_allowed(
+                            effective_mmio,
+                            strategy,
+                            &controller_params,
+                        ) {
+                            pathway_summary.controller_gate = "pi4-cold-boot-guard";
+                            usb_probe_pathway_record(
+                                &mut pathway_summary,
+                                UsbProbePathProgress::NoController,
+                                UsbProbePathOutcome::ControllerInitFailed,
+                                None,
+                                0,
+                                0,
+                                false,
+                                XhciDiagSnapshot::empty(),
+                                false,
+                            );
+                            let mut line = heapless::String::<320>::new();
+                            let seed_flags = xhci_runtime_seed_snapshot_flag_bits(
+                                controller_params.runtime_seed_snapshot,
+                            );
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] xhci probe skipped mmio=0x{effective_mmio:016x} reason=pi4-cold-boot-guard handoff={} seed={} seed_flags=0x{seed_flags:02x} action=return-to-shell",
+                                    xhci_firmware_handoff_mode_label(strategy.firmware_handoff),
+                                    xhci_runtime_init_strategy_seed_label(strategy),
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            log_usb_probe_pathway_summary(&pathway_summary);
+                            usb_probe_best_pathway_update(&mut best_probe_pathway, pathway_summary);
+                            continue;
+                        }
 
                         if xhci_pre_reset_irq_quiesce_required(effective_mmio, strategy) {
                             let Some(guard) = xhci_irq_guard.as_ref() else {
@@ -9688,11 +9666,12 @@ impl UsbKeyboard {
                                 let _ = core::fmt::Write::write_fmt(
                                     &mut line,
                                     format_args!(
-                                        "[local-seat] xhci irq sink retry mmio=0x{mmio:016x} stage={} action=reinstall-bounded-sinks has_irq27={} has_bridge={} has_intx={}",
+                                        "[local-seat] xhci irq sink retry mmio=0x{mmio:016x} stage={} action=reinstall-bounded-sinks has_irq27={} has_bridge={} has_intx={} has_msi={}",
                                         xhci_irq_phase_label(XhciIrqInstallPhase::ControllerReady),
                                         existing_guard.covers_irq(PI4_GENERIC_VTIMER_IRQ) as u8,
                                         existing_guard.covers_irq(PI4_PCIE_BRIDGE_IRQ) as u8,
                                         existing_guard.covers_irq(PI4_VL805_XHCI_INTX_IRQ) as u8,
+                                        existing_guard.covers_irq(PI4_PCIE_MSI_IRQ) as u8,
                                         mmio = effective_mmio,
                                     ),
                                 );
@@ -9734,7 +9713,7 @@ impl UsbKeyboard {
                         let mut command_probe = "n/a";
                         let mut port_statuses = [0u32; XHCI_MAX_PROBE_PORTS];
                         let mut detect_passes_used = 1usize;
-                        let bootloader_port_reads_toxic =
+                        let mut bootloader_port_reads_toxic =
                             xhci_runtime_init_strategy_skips_root_port_reads(strategy)
                                 || !ctrl.port_register_access_allowed();
                         if bootloader_port_reads_toxic {
@@ -9794,8 +9773,24 @@ impl UsbKeyboard {
                                     event_candidate_mask,
                                     pcie_dma_window,
                                 );
+                                if usb_command_probe_proves_ring(command_probe) {
+                                    ctrl.allow_port_register_access_after_command_proof();
+                                    bootloader_port_reads_toxic =
+                                        !ctrl.port_register_access_allowed();
+                                    let mut line = heapless::String::<192>::new();
+                                    let _ = core::fmt::Write::write_fmt(
+                                        &mut line,
+                                        format_args!(
+                                            "[local-seat] xhci root-port sample resume reason=command-ring-proof probe={command_probe} allowed={}",
+                                            (!bootloader_port_reads_toxic) as u8,
+                                        ),
+                                    );
+                                    boot_log::force_uart_line(line.as_str());
+                                }
                             }
-                        } else {
+                        }
+                        if !bootloader_port_reads_toxic {
+                            ctrl.power_on_root_ports_for_detection(max_ports);
                             let detect_passes = xhci_root_port_detect_passes(strategy);
                             {
                                 let mut line = heapless::String::<160>::new();
@@ -9884,59 +9879,18 @@ impl UsbKeyboard {
                         pathway_summary.command_probe = command_probe;
 
                         let mut attempt_recorded = false;
-                        let deferred_capture_mask = if bootloader_port_reads_toxic {
-                            xhci_deferred_root_port_capture_mask(
-                                effective_mmio,
-                                strategy,
-                                command_probe,
-                            )
-                        } else {
-                            0
-                        };
                         let enumeration_mask = if bootloader_port_reads_toxic {
-                            event_candidate_mask | deferred_capture_mask
+                            0
                         } else {
                             connected_mask
                         };
-                        if deferred_capture_mask != 0 {
-                            let mut line = heapless::String::<192>::new();
-                            let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
-                                    "[local-seat] xhci root-port deferred-capture mask=0x{deferred_capture_mask:04x} source=pi4-linux-capture command_probe={command_probe}"
-                                ),
-                            );
-                            boot_log::force_uart_line(line.as_str());
-                        }
-                        if bootloader_port_reads_toxic && enumeration_mask != 0 {
-                            connected_mask = enumeration_mask;
-                        }
                         for port in 0..max_ports {
                             if (enumeration_mask & (1u32 << port)) == 0 {
                                 continue;
                             }
 
                             let root_device = if bootloader_port_reads_toxic {
-                                let speed = xhci_deferred_root_port_capture_speed(port);
-                                if speed == 0 {
-                                    Err(UsbError::DeviceNotFound)
-                                } else {
-                                    let mut line = heapless::String::<192>::new();
-                                    let _ = core::fmt::Write::write_fmt(
-                                        &mut line,
-                                        format_args!(
-                                            "[local-seat] usb root-enum deferred-port port={} speed={} source=pi4-linux-capture reset=skip",
-                                            port + 1,
-                                            speed,
-                                        ),
-                                    );
-                                    boot_log::force_uart_line(line.as_str());
-                                    UsbDevice::new_assume_enabled_root_port(
-                                        ctrl.clone(),
-                                        port as u8,
-                                        speed,
-                                    )
-                                }
+                                Err(UsbError::DeviceNotFound)
                             } else {
                                 UsbDevice::new(ctrl.clone(), port as u8)
                             };
@@ -14471,6 +14425,20 @@ mod driver_coverage_tests {
             "enable-slot-ok-cleanup-failed"
         ));
         assert!(usb_command_probe_proves_ring("no-op-ok"));
+        let platform_cold =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
+        assert!(!xhci_controller_allows_port_register_access(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            platform_cold,
+        ));
+        assert_eq!(
+            xhci_root_port_detect_passes(platform_cold),
+            XHCI_PORT_DETECT_PASSES
+        );
+        assert_eq!(
+            xhci_root_port_final_wait_ms(platform_cold),
+            XHCI_PORT_DETECT_FINAL_WAIT_MS
+        );
 
         assert!(xhci_polling_only_runtime(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
@@ -14486,6 +14454,10 @@ mod driver_coverage_tests {
         ));
         assert_eq!(xhci_diag_stage_label(0x03d0), Some("cmd-recovery-rings"));
         assert_eq!(
+            xhci_diag_stage_label(0x03fc),
+            Some("usb-root-port-power-on")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x03c4),
             Some("cmd-recovery-blind-reset-plan")
         );
@@ -14495,6 +14467,58 @@ mod driver_coverage_tests {
         );
         assert!(xhci_diag_history_stage_relevant(0x03d0));
         assert!(xhci_diag_stage_after_run(0x03e1));
+    }
+
+    #[test]
+    fn pi4_high_bar_cold_boot_guard_rejects_seeded_runtime_params() {
+        let probe = pi4_vl805_linux_capture_capability_probe(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+            .expect("Pi4 high BAR should use Linux-captured caps");
+        let stop_seed = Some(LocalSeatXhciStopStateSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0),
+        });
+        let platform_cold =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
+        let platform_seeded =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true);
+        let preserve =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PreserveControllerState, false);
+        let cold_params = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            platform_cold,
+            stop_seed,
+        );
+        let seeded_params = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            platform_seeded,
+            stop_seed,
+        );
+        let preserve_params = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            preserve,
+            stop_seed,
+        );
+
+        assert!(!cold_params.port_register_access_allowed);
+        assert!(xhci_pi4_high_bar_cold_boot_params_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            platform_cold,
+            &cold_params,
+        ));
+        assert!(!xhci_pi4_high_bar_cold_boot_params_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            platform_seeded,
+            &seeded_params,
+        ));
+        assert!(!xhci_pi4_high_bar_cold_boot_params_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            preserve,
+            &preserve_params,
+        ));
     }
 }
 
@@ -14539,22 +14563,22 @@ mod tests {
     }
 
     #[test]
-    fn xhci_root_port_connected_uses_ccs_bit() {
+    fn xhci_root_port_connected_requires_ccs_and_power() {
         assert!(!xhci_root_port_connected(0));
-        assert!(xhci_root_port_connected(usb_oxide::regs::PORTSC_CCS));
+        assert!(!xhci_root_port_connected(usb_oxide::regs::PORTSC_CCS));
         assert!(xhci_root_port_connected(
-            usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PED
+            usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PP
         ));
     }
 
     #[test]
     fn xhci_connected_mask_from_portsc_sets_bits_for_connected_ports_only() {
         let statuses = [
-            usb_oxide::regs::PORTSC_CCS,
+            usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PP,
             0,
             usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PED,
         ];
-        assert_eq!(xhci_connected_mask_from_portsc(&statuses), 0b0101);
+        assert_eq!(xhci_connected_mask_from_portsc(&statuses), 0b0001);
     }
 
     #[test]
@@ -15180,44 +15204,49 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_high_bar_uses_capture_port_after_command_ring_proof() {
+    fn platform_reset_high_bar_keeps_direct_portsc_gated() {
         let strategy =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
+        let stop_seed =
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true);
+        let probe = super::pi4_vl805_linux_capture_capability_probe(RPI4_XHCI_MMIO_HIGH_CANDIDATE)
+            .expect("Pi4 high BAR should use Linux-captured caps");
+        let snapshot = Some(LocalSeatXhciStopStateSnapshot {
+            usbcmd: Some(0),
+            usbsts: Some(1),
+            iman0: Some(0),
+        });
+        let cold_params = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+            snapshot,
+        );
+        let seeded_params = xhci_controller_params_from_probe_with_strategy(
+            probe,
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            stop_seed,
+            snapshot,
+        );
 
-        assert_eq!(
-            xhci_deferred_root_port_capture_mask(
-                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-                strategy,
-                "no-op-ok",
-            ),
-            PI4_XHCI_LINUX_CAPTURE_CONNECTED_MASK,
-        );
-        assert_eq!(
-            xhci_deferred_root_port_capture_mask(
-                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-                strategy,
-                "no-op-linux-event-ok",
-            ),
-            0,
-        );
-        assert_eq!(
-            xhci_deferred_root_port_capture_mask(
-                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-                strategy,
-                "no-op-deferred",
-            ),
-            0,
-        );
-        assert_eq!(
-            xhci_deferred_root_port_capture_mask(
-                RPI4_XHCI_MMIO_HIGH_CANDIDATE,
-                strategy,
-                "no-op-timeout",
-            ),
-            0,
-        );
-        assert_eq!(xhci_deferred_root_port_capture_speed(0), regs::SPEED_HIGH,);
-        assert_eq!(xhci_deferred_root_port_capture_speed(1), 0);
+        assert!(!xhci_controller_allows_port_register_access(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+        ));
+        assert!(!xhci_controller_allows_port_register_access(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            stop_seed,
+        ));
+        assert!(xhci_pi4_high_bar_cold_boot_params_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            strategy,
+            &cold_params,
+        ));
+        assert!(!xhci_pi4_high_bar_cold_boot_params_allowed(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            stop_seed,
+            &seeded_params,
+        ));
     }
 
     #[test]
@@ -17223,7 +17252,14 @@ mod tests {
             xhci_diag_stage_label(0x03b2),
             Some("usb-address-direct-fail")
         );
-        assert_eq!(xhci_diag_stage_label(0x03f5), Some("usb-dcbaa-slot-share"));
+        assert_eq!(
+            xhci_diag_stage_label(0x03f5),
+            Some("usb-port-read-gated-or-dcbaa-slot-share")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x03fb),
+            Some("usb-port-access-after-command-proof")
+        );
         assert_eq!(xhci_diag_stage_label(0x03c0), Some("usb-hid-report-event"));
         assert_eq!(
             xhci_diag_stage_label(0x03c1),
@@ -17802,7 +17838,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_platform_reset_root_port_sample_uses_timer_safe_single_pass() {
+    fn fresh_platform_reset_root_port_sample_stays_gated_to_command_proof() {
         let fresh = XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
         let stop_seed =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true);
@@ -17812,7 +17848,15 @@ mod tests {
             super::xhci_root_port_detect_passes(fresh),
             super::XHCI_PLATFORM_RESET_PORT_DETECT_PASSES
         );
-        assert_eq!(super::xhci_root_port_final_wait_ms(fresh), 0);
+        assert_eq!(
+            super::xhci_root_port_final_wait_ms(fresh),
+            super::XHCI_PORT_DETECT_FINAL_WAIT_MS
+        );
+        assert!(!super::xhci_controller_allows_port_register_access(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            fresh,
+        ));
+        assert!(!super::xhci_runtime_init_strategy_skips_command_probe_after_toxic_portsc(fresh,));
         assert_eq!(
             super::xhci_root_port_detect_passes(stop_seed),
             super::XHCI_PORT_DETECT_PASSES
@@ -18012,15 +18056,20 @@ mod tests {
     }
 
     #[test]
-    fn trusted_xhci_irq_sink_set_covers_bridge_and_child_intx_lines() {
+    fn trusted_xhci_irq_sink_set_covers_bridge_child_intx_and_msi_lines() {
         assert_eq!(
             TRUSTED_XHCI_PCIE_SINK_IRQS,
-            [PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ]
+            [
+                PI4_PCIE_BRIDGE_IRQ,
+                PI4_VL805_XHCI_INTX_IRQ,
+                PI4_PCIE_MSI_IRQ,
+            ]
         );
-        assert_eq!(PI4_PCIE_BRIDGE_IRQ, 180);
+        assert_eq!(PI4_PCIE_BRIDGE_IRQ, 179);
         assert_eq!(PI4_VL805_XHCI_INTX_IRQ, 175);
+        assert_eq!(PI4_PCIE_MSI_IRQ, 180);
         assert!(!TRUSTED_XHCI_PCIE_SINK_IRQS.contains(&PI4_GENERIC_VTIMER_IRQ));
-        assert_eq!(TRUSTED_XHCI_IRQ_BINDING_LIMIT, 2);
+        assert_eq!(TRUSTED_XHCI_IRQ_BINDING_LIMIT, 3);
     }
 
     #[test]
@@ -18031,6 +18080,10 @@ mod tests {
         ));
         assert!(!xhci_trusted_irq_soft_ignore_reason(
             PI4_VL805_XHCI_INTX_IRQ,
+            "irq-get-revoke-first-owned",
+        ));
+        assert!(!xhci_trusted_irq_soft_ignore_reason(
+            PI4_PCIE_MSI_IRQ,
             "irq-get-revoke-first-owned",
         ));
         assert!(!xhci_trusted_irq_soft_ignore_reason(
@@ -18048,6 +18101,7 @@ mod tests {
                     shadow: false,
                     hal_binding: None,
                 }),
+                None,
                 None,
             ],
         };
@@ -18068,6 +18122,11 @@ mod tests {
                 }),
                 Some(XhciIrqBinding {
                     irq: PI4_VL805_XHCI_INTX_IRQ,
+                    shadow: false,
+                    hal_binding: None,
+                }),
+                Some(XhciIrqBinding {
+                    irq: PI4_PCIE_MSI_IRQ,
                     shadow: false,
                     hal_binding: None,
                 }),
@@ -19536,30 +19595,15 @@ mod tests {
         );
         assert!(!usb_command_probe_proves_ring("no-op-timeout"));
         assert!(!usb_command_probe_proves_ring("no-op-deferred"));
-        assert!(!super::usb_command_probe_allows_deferred_capture(
-            "no-op-deferred"
-        ));
         assert!(!usb_command_probe_proves_ring("no-op-linux-event-ok"));
-        assert!(!super::usb_command_probe_allows_deferred_capture(
-            "no-op-linux-event-ok"
-        ));
         assert!(!usb_command_probe_proves_ring("enable-slot-linux-event-ok"));
-        assert!(!super::usb_command_probe_allows_deferred_capture(
-            "enable-slot-linux-event-ok"
-        ));
         assert!(!usb_command_probe_proves_ring(
-            "enable-slot-linux-event-ok-cleanup-failed"
-        ));
-        assert!(!super::usb_command_probe_allows_deferred_capture(
             "enable-slot-linux-event-ok-cleanup-failed"
         ));
         assert!(usb_command_probe_proves_ring(
             "enable-slot-ok-cleanup-failed"
         ));
         assert!(!usb_command_probe_proves_ring("enable-slot-uboot-first-ok"));
-        assert!(!super::usb_command_probe_allows_deferred_capture(
-            "enable-slot-uboot-first-ok"
-        ));
         assert!(usb_command_probe_proves_ring("no-op-ok"));
     }
 
