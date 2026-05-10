@@ -276,10 +276,14 @@ def usb_bootloader_handoff_evidence(event: TraceEvent) -> bool:
 
     if event.domain != "usb":
         return False
+    if (event.stage or "").lower().startswith("handoff-"):
+        return True
     lowered_fields = {key.lower(): value.lower() for key, value in event.fields.items()}
     for key in USB_BOOTLOADER_HANDOFF_FIELD_KEYS:
         value = lowered_fields.get(key)
         if value in USB_BOOTLOADER_HANDOFF_VALUES:
+            return True
+        if value and any(marker in value for marker in USB_BOOTLOADER_HANDOFF_VALUES):
             return True
     return False
 
@@ -711,6 +715,27 @@ def normalize_wifi_blocker(value: str) -> str:
 
     lower = value.lower()
     stripped = lower.strip()
+    if (
+        "d11-prereset-fgc-cmd53-r5-rejected" in lower
+        or (
+            "stage=d11-disable" in lower
+            and (
+                "terminal-disable-fail" in lower
+                or "pre-upload-f1-reset-write-rejected" in lower
+            )
+            and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
+        )
+        or (
+            "base=0x18101000" in lower
+            and "off=0x408" in lower
+            and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
+        )
+        or "arg=0x95281004" in lower
+        or "arg=0x91281004" in lower
+        or "arg=0x95281001" in lower
+        or "arg=0x91281001" in lower
+    ):
+        return "d11-prereset-fgc-cmd53-r5-rejected"
     if (
         "blocker_phase=pre-f2-core-control" in lower
         or "policy=pre-f2-core-control" in lower
@@ -1540,6 +1565,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "socram-postreset-clock-cmd53-r5-rejected",
         "socram-prereset-zero-cmd53-r5-rejected",
         "armcr4-prereset-fgc-cmd53-r5-rejected",
+        "d11-prereset-fgc-cmd53-r5-rejected",
         "sdio-cmd52-write",
         "sdio-cmd52-read",
         "sdio-cmd53-r5-error",
@@ -1571,6 +1597,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "socram-postreset-clock-cmd53-r5-rejected",
         "socram-prereset-zero-cmd53-r5-rejected",
         "armcr4-prereset-fgc-cmd53-r5-rejected",
+        "d11-prereset-fgc-cmd53-r5-rejected",
         "sdio-cmd53-r5-error",
         "function2-disabled",
         "unknown",
@@ -1607,6 +1634,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "firmware-core-control",
             "armcr4-reset-assert-cmd52-r5-rejected",
             "armcr4-reset-assert-cmd53-r5-rejected",
+            "d11-prereset-fgc-cmd53-r5-rejected",
         }:
             explicit_blocker = raw_contract_blocker
         if (
@@ -1646,6 +1674,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "armcr4-reset-assert-cmd52-r5-rejected",
                 "armcr4-reset-assert-cmd53-r5-rejected",
             }:
+                blocker = "none"
+                specific_reset_blocker = None
+            continue
+        if "stage=d11-disable" in raw and "action=advisory-skip" in raw:
+            gate = max(gate, 4)
+            if blocker == "d11-prereset-fgc-cmd53-r5-rejected":
                 blocker = "none"
                 specific_reset_blocker = None
             continue
@@ -1916,6 +1950,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "0x95681001",
             }:
                 blocker = "armcr4-prereset-fgc-cmd53-r5-rejected"
+            elif fields.get("arg") in {
+                "0x95281004",
+                "0x91281004",
+                "0x95281001",
+                "0x91281001",
+            }:
+                blocker = "d11-prereset-fgc-cmd53-r5-rejected"
             elif linux_probe_pmu_write_active or fields.get("arg") == "0x900c0601":
                 blocker = "linux-probe-pmu-cmd53-r5-rejected"
             elif blocker not in {
@@ -1931,6 +1972,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "socram-clear-reset-cmd53-r5-rejected",
                 "socram-postreset-clock-cmd53-r5-rejected",
                 "armcr4-prereset-fgc-cmd53-r5-rejected",
+                "d11-prereset-fgc-cmd53-r5-rejected",
             }:
                 blocker = normalize_wifi_blocker(raw)
             if blocker in exact_reset_blockers:
@@ -1983,6 +2025,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "socram-postreset-clock-cmd53-r5-rejected",
             "socram-prereset-zero-cmd53-r5-rejected",
             "armcr4-prereset-fgc-cmd53-r5-rejected",
+            "d11-prereset-fgc-cmd53-r5-rejected",
             "sdio-cmd52-write",
             "sdio-cmd52-read",
             "sdio-cmd53-r5-error",

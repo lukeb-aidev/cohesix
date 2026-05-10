@@ -457,6 +457,16 @@ def test_gate_summary_flags_usb_bootloader_handoff_evidence() -> None:
     assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "yes"
 
 
+def test_gate_summary_flags_legacy_usb_handoff_stage() -> None:
+    events = normalizer.parse_events(
+        ["[cohesix:usb-trace] stage=handoff-usb-stop-begin input=0"]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "yes"
+
+
 def test_gate_summary_flags_structured_usb_preserve_state_handoff() -> None:
     events = normalizer.parse_events(
         [
@@ -475,6 +485,19 @@ def test_gate_summary_flags_structured_usb_stop_state_seed() -> None:
         [
             "[local-seat] xhci probe params attempt=1/1 "
             "policy=full-reset-start origin=live-runtime-default seed=stop-state",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "yes"
+
+
+def test_gate_summary_flags_compound_usb_stop_seed_route() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb golden_path preflight "
+            "route=trusted-high-bar-stop-seed-primary attempt=1/2"
         ]
     )
 
@@ -1145,6 +1168,52 @@ def test_gate_summary_clears_armcr4_reset_assert_after_advisory_skip() -> None:
             "[pi4-wifi] firmware core-ctrl access stage=assert-reset op=write8 "
             "err=unsupported operation: sdio-cmd53-r5-error base=0x18103000 off=0x800",
             "[pi4-wifi] firmware stage=armcr4-passive action=advisory-reset-skip "
+            "err=unsupported operation: sdio-cmd53-r5-error "
+            "reason=pre-upload-f1-reset-write-rejected",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "none"
+
+
+def test_gate_summary_tracks_d11_passive_core_control_reject() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware stage=d11-disable core=0 "
+            "base=0x18101000 action=upstream-passive",
+            "[pi4-wifi] firmware core-ctrl access op=write8-prereset "
+            "mode=cmd53-word-windowed fallback=cmd52-byte-transfer-window-prereset "
+            "base=0x18101000 off=0x408 addr=0x18101408 "
+            "window=0x18100000 bus=0x09408",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x95281004 len=4 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800 r5_raw=0x1800",
+            "[pi4-wifi] firmware stage=d11-disable core=0 "
+            "base=0x18101000 action=terminal-disable-fail "
+            "err=unsupported operation: sdio-cmd53-r5-error "
+            "reason=pre-upload-f1-reset-write-rejected",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "d11-prereset-fgc-cmd53-r5-rejected"
+
+
+def test_gate_summary_clears_d11_passive_reject_after_advisory_skip() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware stage=d11-disable core=0 "
+            "base=0x18101000 action=terminal-disable-fail "
+            "err=unsupported operation: sdio-cmd53-r5-error "
+            "reason=pre-upload-f1-reset-write-rejected",
+            "[pi4-wifi] firmware stage=d11-disable core=0 "
+            "base=0x18101000 action=advisory-skip "
             "err=unsupported operation: sdio-cmd53-r5-error "
             "reason=pre-upload-f1-reset-write-rejected",
         ]
@@ -1998,6 +2067,12 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         ),
         "sdio cmd53 r5 fail arg=0x90681001": (
             "armcr4-prereset-fgc-cmd53-r5-rejected"
+        ),
+        "sdio cmd53 r5 fail arg=0x95281004": (
+            "d11-prereset-fgc-cmd53-r5-rejected"
+        ),
+        "stage=d11-disable action=terminal-disable-fail err=unsupported operation: sdio-cmd53-r5-error": (
+            "d11-prereset-fgc-cmd53-r5-rejected"
         ),
         "stage=debug-probe-ht arg=0x12001c00": "chipclkcsr-cmd52-pre-f2",
         "chipclkcsr-cmd52-pre-f2": "chipclkcsr-cmd52-pre-f2",

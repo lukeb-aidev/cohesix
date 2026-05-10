@@ -240,8 +240,12 @@ leave the line stuck.
   `INT_STATUS`/`INT_ENABLE`/`SIGNAL_ENABLE`.
 - IRQ 27 is the seL4 timer on this path; never treat it as a USB or Wi-Fi
   device interrupt.
-- Current Pi 4 USB/VL805 is poll-only with PCI INTx/MSI masked. Do not enable
-  xHCI interrupt delivery until a milestone explicitly proves it.
+- Current Pi 4 USB/VL805 is event-ring polled with PCI INTx/MSI delivery
+  masked. The cold-boot command proof may program Linux-shaped xHCI
+  event-generation state (`USBCMD.INTE`, `IMOD`, `IMAN.IE`) only while PCI/GIC
+  delivery remains masked and the event ring is consumed by polling; do not
+  unmask external xHCI interrupt delivery until a milestone explicitly proves
+  it.
 
 ### SDIO/CYW43455
 

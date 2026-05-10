@@ -1301,9 +1301,12 @@ const fn core_disable_prereset_recover_label(base: u32) -> &'static str {
 
 #[inline]
 fn d11_passive_disable_rejection_can_continue(base: u32, err: &HalError) -> bool {
-    let _ = base;
-    let _ = err;
-    false
+    CYW43_D11_CORE_BASES.contains(&base)
+        && matches!(
+            err,
+            HalError::Unsupported("sdio-cmd53-r5-error")
+                | HalError::Unsupported("sdio-cmd52-write")
+        )
 }
 
 #[inline]
@@ -26475,13 +26478,21 @@ mod tests {
             "prereset-fgc-clock",
             &HalError::Unsupported("sdio-cmd52-write"),
         ));
-        assert!(!d11_passive_disable_rejection_can_continue(
+        assert!(d11_passive_disable_rejection_can_continue(
             CYW43_D11_CORE_BASES[0],
             &HalError::Unsupported("sdio-cmd53-r5-error"),
+        ));
+        assert!(d11_passive_disable_rejection_can_continue(
+            CYW43_D11_CORE_BASES[1],
+            &HalError::Unsupported("sdio-cmd52-write"),
         ));
         assert!(!d11_passive_disable_rejection_can_continue(
             CYW43_D11_CORE_BASES[0],
             &HalError::Unsupported("sdhci-int-timeout"),
+        ));
+        assert!(!d11_passive_disable_rejection_can_continue(
+            CYW43_ARMCR4_CORE_BASE,
+            &HalError::Unsupported("sdio-cmd53-r5-error"),
         ));
         assert!(!core_disable_can_defer_prereset_write_failure(
             CYW43_SOCRAM_CORE_BASE,

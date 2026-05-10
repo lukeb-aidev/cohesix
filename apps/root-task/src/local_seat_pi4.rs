@@ -4596,7 +4596,11 @@ fn xhci_probe_command_ring_after_event_drain(
         } else {
             "no-op"
         };
-        let event_generation = "poll-only";
+        let event_generation = if use_enable_slot {
+            "linux-shaped-polled"
+        } else {
+            "poll-only"
+        };
         let mut line = heapless::String::<256>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -4607,9 +4611,9 @@ fn xhci_probe_command_ring_after_event_drain(
         boot_log::force_uart_line(line.as_str());
 
         if use_enable_slot {
-            return match ctrl.probe_enable_slot_command_prompt_safe() {
+            return match ctrl.probe_enable_slot_linux_event_generation_prompt_safe() {
                 Ok(slot) => {
-                    let cleanup = match ctrl.disable_slot_command_prompt_safe(slot) {
+                    let cleanup = match ctrl.disable_slot_linux_event_generation_prompt_safe(slot) {
                         Ok(()) => "disable-slot-ok",
                         Err(UsbError::Timeout | UsbError::EnableSlotTimeout) => {
                             "disable-slot-timeout"
@@ -4642,9 +4646,14 @@ fn xhci_probe_command_ring_after_event_drain(
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
-                    boot_log::force_uart_line(
-                        "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=enable-slot-unproven event=missing event_generation=poll-only irq27_role=timer-only pcie_irqs=175,180",
+                    let mut summary = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut summary,
+                        format_args!(
+                            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=enable-slot-unproven event=missing event_generation={event_generation} irq27_role=timer-only pcie_irqs=175,180"
+                        ),
                     );
+                    boot_log::force_uart_line(summary.as_str());
                     "enable-slot-unproven"
                 }
                 Err(err) => {
@@ -13410,6 +13419,7 @@ struct PhysRegion {
     size: usize,
     align: usize,
     backing: RegionBacking,
+    shares: Vec<dma::PinnedDmaRange>,
 }
 
 impl SeatDma {
@@ -13608,6 +13618,7 @@ impl SeatDma {
             size,
             align,
             backing: RegionBacking::Dma(frames),
+            shares: Vec::new(),
         });
         if XHCI_DMA_VERBOSE_LOGS {
             let mut done_line = heapless::String::<224>::new();
@@ -13814,6 +13825,7 @@ impl SeatDma {
             size,
             align: PAGE_SIZE,
             backing: RegionBacking::Mmio(frames),
+            shares: Vec::new(),
         });
         Some(virt)
     }
@@ -13867,13 +13879,13 @@ impl SeatDma {
     }
 
     fn share_for_device_locked(
-        state: &SeatDmaState,
+        state: &mut SeatDmaState,
         vaddr: usize,
         len: usize,
         label: &'static str,
     ) -> Result<(), DmaShareError> {
         let end = vaddr.checked_add(len).ok_or(DmaShareError)?;
-        for region in &state.regions {
+        for region in &mut state.regions {
             let RegionBacking::Dma(_) = &region.backing else {
                 continue;
             };
@@ -13886,10 +13898,35 @@ impl SeatDma {
             }
             let offset = vaddr.checked_sub(start).ok_or(DmaShareError)?;
             let phys = region.phys_start.checked_add(offset).ok_or(DmaShareError)?;
-            dma::pin(vaddr, phys, len, label).map_err(|_| DmaShareError)?;
+            let range = dma::pin(vaddr, phys, len, label).map_err(|_| DmaShareError)?;
+            if !region.shares.iter().any(|existing| {
+                existing.vaddr() == range.vaddr()
+                    && existing.paddr() == range.paddr()
+                    && existing.len() == range.len()
+            }) {
+                region.shares.push(range);
+            }
             return Ok(());
         }
         Err(DmaShareError)
+    }
+
+    fn reclaim_dma_shares(region: &mut PhysRegion) {
+        for range in region.shares.drain(..) {
+            if let Err(err) = dma::unpin(&range) {
+                let mut line = heapless::String::<208>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci dma reclaim warning label={} vaddr=0x{:016x} len=0x{:08x} err={err}",
+                        range.label(),
+                        range.vaddr(),
+                        range.len(),
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+        }
     }
 
     fn sync_for_cpu_locked(
@@ -13934,7 +13971,10 @@ impl Dma for SeatDma {
         if let Some(index) = state.regions.iter().position(|region| {
             region.virt_start == addr && region.size == size && region.align == align
         }) {
-            let region = state.regions.swap_remove(index);
+            let mut region = state.regions.swap_remove(index);
+            if matches!(&region.backing, RegionBacking::Dma(_)) {
+                Self::reclaim_dma_shares(&mut region);
+            }
             match region.backing {
                 RegionBacking::Dma(frames) => {
                     let _ = frames.len();
@@ -13971,8 +14011,8 @@ impl Dma for SeatDma {
         len: usize,
         label: &'static str,
     ) -> Result<(), DmaShareError> {
-        let state = self.state.lock();
-        Self::share_for_device_locked(&state, vaddr, len, label)
+        let mut state = self.state.lock();
+        Self::share_for_device_locked(&mut state, vaddr, len, label)
     }
 
     fn sync_for_cpu(
@@ -19271,9 +19311,40 @@ mod tests {
                 size: PAGE_SIZE,
                 align: PAGE_SIZE,
                 backing: RegionBacking::Dma(Vec::new()),
+                shares: Vec::new(),
             }]),
         };
         assert_eq!(SeatDma::try_virt_to_phys_locked(&state, PAGE_SIZE), None);
+    }
+
+    #[test]
+    fn seat_dma_reclaim_unpins_shared_dma_ranges() {
+        let _ = dma::take_audit_log();
+        let mut region = PhysRegion {
+            virt_start: 0x1000_0000,
+            phys_start: 0x2000_0000,
+            length: PAGE_SIZE,
+            size: PAGE_SIZE,
+            align: PAGE_SIZE,
+            backing: RegionBacking::Dma(Vec::new()),
+            shares: Vec::new(),
+        };
+        let range = dma::pin(
+            region.virt_start,
+            region.phys_start,
+            128,
+            "seat-dma-reclaim-test",
+        )
+        .expect("test DMA range should pin");
+        region.shares.push(range);
+        let _ = dma::take_audit_log();
+
+        SeatDma::reclaim_dma_shares(&mut region);
+
+        assert!(region.shares.is_empty());
+        let log = dma::take_audit_log().join("\n");
+        assert!(log.contains("[dma][share] reclaim label=seat-dma-reclaim-test"));
+        assert!(log.contains("[dma][share] reclaimed label=seat-dma-reclaim-test"));
     }
 
     #[test]

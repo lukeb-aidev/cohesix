@@ -23,18 +23,8 @@ use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
-#[cfg(any(
-    all(feature = "kernel", target_os = "none"),
-    feature = "cache-maintenance"
-))]
-use crate::hal::cache::{cache_clean, cache_invalidate};
-use crate::hal::{bcmgenet as genet_hal, DeviceHal, HalError};
+use crate::hal::{bcmgenet as genet_hal, dma, DeviceHal, HalError};
 use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError};
-#[cfg(any(
-    all(feature = "kernel", target_os = "none"),
-    feature = "cache-maintenance"
-))]
-use crate::sel4::seL4_CapInitThreadVSpace;
 use crate::sel4::{RamFrame, PAGE_BITS};
 
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
@@ -278,6 +268,8 @@ pub struct BcmGenetDevice {
     mmio_base: usize,
     rx_frames: HeaplessVec<RamFrame, RX_RING_DESCS>,
     tx_frames: HeaplessVec<RamFrame, TX_RING_DESCS>,
+    rx_dma_shares: HeaplessVec<Option<dma::PinnedDmaRange>, RX_RING_DESCS>,
+    tx_dma_shares: HeaplessVec<Option<dma::PinnedDmaRange>, TX_RING_DESCS>,
     tx_prod_index: u16,
     tx_cons_index: u16,
     rx_cons_index: u16,
@@ -325,14 +317,22 @@ impl BcmGenetDevice {
         let dma_cacheable = !genet_hal::dma_uncached();
         let mut rx_frames = HeaplessVec::new();
         let mut tx_frames = HeaplessVec::new();
+        let mut rx_dma_shares = HeaplessVec::new();
+        let mut tx_dma_shares = HeaplessVec::new();
         for _ in 0..RX_RING_DESCS {
             rx_frames
                 .push(hal.alloc_dma_frame_low_attr(dma_attr)?)
+                .map_err(|_| DriverError::QueueInit)?;
+            rx_dma_shares
+                .push(None)
                 .map_err(|_| DriverError::QueueInit)?;
         }
         for _ in 0..TX_RING_DESCS {
             tx_frames
                 .push(hal.alloc_dma_frame_low_attr(dma_attr)?)
+                .map_err(|_| DriverError::QueueInit)?;
+            tx_dma_shares
+                .push(None)
                 .map_err(|_| DriverError::QueueInit)?;
         }
         Self::validate_dma_frames(&rx_frames, &tx_frames)?;
@@ -344,6 +344,8 @@ impl BcmGenetDevice {
             mmio_base,
             rx_frames,
             tx_frames,
+            rx_dma_shares,
+            tx_dma_shares,
             tx_prod_index: 0,
             tx_cons_index: 0,
             rx_cons_index: 0,
@@ -1050,6 +1052,13 @@ impl BcmGenetDevice {
             self.log_dma_breadcrumb(BreadcrumbReason::TxConsJump);
         } else {
             let prev_complete = self.counters.tx_complete;
+            for completed_offset in 0..completed as usize {
+                let slot = ring_slot(
+                    self.tx_cons_index.wrapping_add(completed_offset as u16),
+                    ring_len,
+                );
+                self.unshare_tx_slot(slot);
+            }
             self.counters.tx_used_advances = self
                 .counters
                 .tx_used_advances
@@ -1068,60 +1077,89 @@ impl BcmGenetDevice {
         self.refresh_tx_counters();
     }
 
-    fn clean_cache_for_device(&self, vaddr: usize, len: usize) {
+    fn share_dma_for_device(
+        &self,
+        vaddr: usize,
+        paddr: usize,
+        len: usize,
+        label: &'static str,
+    ) -> Result<dma::PinnedDmaRange, DriverError> {
         if len == 0 {
-            return;
+            return Err(DriverError::QueueInit);
         }
         // Ensure payload writes are not reordered past descriptor publication.
         compiler_fence(Ordering::Release);
-        if !self.dma_cacheable {
-            return;
-        }
-        #[cfg(any(
-            all(feature = "kernel", target_os = "none"),
-            feature = "cache-maintenance"
-        ))]
-        if let Err(err) = cache_clean(seL4_CapInitThreadVSpace, vaddr, len) {
-            warn!("[bcmgenet] cache clean failed vaddr=0x{vaddr:016x} len={len} err={err}");
-        }
-        #[cfg(not(any(
-            all(feature = "kernel", target_os = "none"),
-            feature = "cache-maintenance"
-        )))]
-        let _ = (vaddr, len);
+        dma::pin(vaddr, paddr, len, label).map_err(|err| {
+            warn!(
+                "[bcmgenet] DMA share failed label={label} vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} len={len} err={err:?}"
+            );
+            DriverError::QueueInit
+        })
     }
 
-    fn invalidate_cache_for_cpu(&self, vaddr: usize, len: usize) {
-        if len == 0 {
-            return;
+    fn unshare_dma_range(range: dma::PinnedDmaRange) {
+        if let Err(err) = dma::unpin(&range) {
+            warn!(
+                "[bcmgenet] DMA unshare failed label={} vaddr=0x{:016x} paddr=0x{:016x} len={} err={err}",
+                range.label(),
+                range.vaddr(),
+                range.paddr(),
+                range.len(),
+            );
         }
-        if !self.dma_cacheable {
-            dma_load_barrier();
-            return;
+    }
+
+    fn unshare_rx_slot(&mut self, slot: usize) {
+        if let Some(share) = self.rx_dma_shares.get_mut(slot).and_then(Option::take) {
+            Self::unshare_dma_range(share);
+        }
+    }
+
+    fn unshare_tx_slot(&mut self, slot: usize) {
+        if let Some(share) = self.tx_dma_shares.get_mut(slot).and_then(Option::take) {
+            Self::unshare_dma_range(share);
+        }
+    }
+
+    fn sync_dma_for_cpu(
+        &self,
+        vaddr: usize,
+        paddr: usize,
+        len: usize,
+        label: &'static str,
+    ) -> Result<(), DriverError> {
+        if len == 0 {
+            return Ok(());
         }
         compiler_fence(Ordering::SeqCst);
-        #[cfg(any(
-            all(feature = "kernel", target_os = "none"),
-            feature = "cache-maintenance"
-        ))]
-        if let Err(err) = cache_invalidate(seL4_CapInitThreadVSpace, vaddr, len) {
-            warn!("[bcmgenet] cache invalidate failed vaddr=0x{vaddr:016x} len={len} err={err}");
+        if let Err(err) = dma::sync_for_cpu(vaddr, paddr, len, label) {
+            warn!(
+                "[bcmgenet] DMA sync failed label={label} vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} len={len} err={err:?}"
+            );
+            return Err(DriverError::QueueInit);
         }
-        #[cfg(not(any(
-            all(feature = "kernel", target_os = "none"),
-            feature = "cache-maintenance"
-        )))]
-        let _ = (vaddr, len);
         dma_load_barrier();
+        Ok(())
     }
 
     fn rearm_rx_slot(&mut self, slot: usize) {
+        self.unshare_rx_slot(slot);
         let Some(frame) = self.rx_frames.get(slot) else {
             return;
         };
         let frame_ptr = frame.ptr().as_ptr() as usize;
-        self.clean_cache_for_device(frame_ptr, RX_BUF_LENGTH);
-        let frame_dma = genet_hal::dma_bus_addr(frame.paddr() as u64);
+        let frame_paddr = frame.paddr();
+        let Ok(range) =
+            self.share_dma_for_device(frame_ptr, frame_paddr, RX_BUF_LENGTH, "bcmgenet-rx-rearm")
+        else {
+            return;
+        };
+        let Some(share) = self.rx_dma_shares.get_mut(slot) else {
+            Self::unshare_dma_range(range);
+            return;
+        };
+        *share = Some(range);
+        let frame_dma = genet_hal::dma_bus_addr(frame_paddr as u64);
         self.write_rx_desc(slot, frame_dma, rx_owned_len_status());
     }
 
@@ -1161,12 +1199,26 @@ impl BcmGenetDevice {
         }
 
         let slot = ring_slot(self.tx_prod_index, self.tx_ring_len());
-        let frame = self.tx_frames.get_mut(slot).ok_or(DriverError::QueueInit)?;
-        let frame_ptr = frame.ptr().as_ptr() as usize;
-        let frame_paddr = frame.paddr() as u64;
-        let buf = frame.as_mut_slice();
-        buf[..packet.len()].copy_from_slice(packet);
-        self.clean_cache_for_device(frame_ptr, packet.len());
+        self.unshare_tx_slot(slot);
+        let (frame_ptr, frame_paddr) = {
+            let frame = self.tx_frames.get_mut(slot).ok_or(DriverError::QueueInit)?;
+            let frame_ptr = frame.ptr().as_ptr() as usize;
+            let frame_paddr = frame.paddr() as u64;
+            let buf = frame.as_mut_slice();
+            buf[..packet.len()].copy_from_slice(packet);
+            (frame_ptr, frame_paddr)
+        };
+        let range = self.share_dma_for_device(
+            frame_ptr,
+            frame_paddr as usize,
+            packet.len(),
+            "bcmgenet-tx-submit",
+        )?;
+        let Some(share) = self.tx_dma_shares.get_mut(slot) else {
+            Self::unshare_dma_range(range);
+            return Err(DriverError::QueueInit);
+        };
+        *share = Some(range);
 
         let frame_dma = genet_hal::dma_bus_addr(frame_paddr);
         self.write_tx_desc(slot, frame_dma, encode_tx_len_status(packet.len()));
@@ -1235,21 +1287,31 @@ impl BcmGenetDevice {
                 let mut frame = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
                 if let Some(source) = self.rx_frames.get(slot) {
                     let source_ptr = source.ptr().as_ptr() as usize;
-                    self.invalidate_cache_for_cpu(source_ptr, length);
-                    let payload_len = length.saturating_sub(RX_BUF_OFFSET).min(MAX_FRAME_LEN);
-                    let payload_start = RX_BUF_OFFSET;
-                    let payload_end = payload_start.saturating_add(payload_len);
-                    let src_slice = source.as_slice();
-                    if payload_end <= src_slice.len()
-                        && frame
-                            .extend_from_slice(&src_slice[payload_start..payload_end])
-                            .is_ok()
+                    if self
+                        .sync_dma_for_cpu(
+                            source_ptr,
+                            source.paddr(),
+                            length,
+                            "bcmgenet-rx-complete",
+                        )
+                        .is_ok()
                     {
-                        maybe_frame = Some(frame);
+                        let payload_len = length.saturating_sub(RX_BUF_OFFSET).min(MAX_FRAME_LEN);
+                        let payload_start = RX_BUF_OFFSET;
+                        let payload_end = payload_start.saturating_add(payload_len);
+                        let src_slice = source.as_slice();
+                        if payload_end <= src_slice.len()
+                            && frame
+                                .extend_from_slice(&src_slice[payload_start..payload_end])
+                                .is_ok()
+                        {
+                            maybe_frame = Some(frame);
+                        }
                     }
                 }
             }
 
+            self.unshare_rx_slot(slot);
             self.rearm_rx_slot(slot);
             self.advance_rx_consumer();
             self.counters.rx_used_advances = self.counters.rx_used_advances.saturating_add(1);
@@ -1287,6 +1349,17 @@ impl BcmGenetDevice {
         if let Err(err) = self.regs.write_u32(offset, value) {
             debug_assert!(false, "invalid GENET register write offset 0x{offset:x}");
             warn!("[bcmgenet] invalid HAL register write offset=0x{offset:x} err={err}");
+        }
+    }
+}
+
+impl Drop for BcmGenetDevice {
+    fn drop(&mut self) {
+        for slot in 0..self.rx_dma_shares.len() {
+            self.unshare_rx_slot(slot);
+        }
+        for slot in 0..self.tx_dma_shares.len() {
+            self.unshare_tx_slot(slot);
         }
     }
 }
