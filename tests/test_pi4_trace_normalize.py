@@ -238,7 +238,6 @@ def test_latest_boot_slice_prefers_later_uboot_chain() -> None:
 
     assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "no"
     assert gates.to_record()["USB_COLD_BOOT_SEEN"] == "yes"
-    assert gates.to_record()["USB_COLD_BOOT_SEEN"] == "yes"
     assert gates.to_record()["WIFI_EXACT"] == "new-failure"
 
 

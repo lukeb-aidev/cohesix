@@ -9,6 +9,12 @@ publish = false
 build = "build.rs"
 autotests = false
 
+[[bin]]
+name = "root-task"
+path = "src/main.rs"
+test = false
+bench = false
+
 [features]
 default = []   # no debug features by default (always pass --no-default-features)
 # Feature combinations validated for developer builds (explicitly opt-in when using --no-default-features):
