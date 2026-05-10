@@ -121,6 +121,51 @@ def test_gate_proof_rejects_unknown_default_gate_evidence(
     assert "WIFI_BLOCKER rejected unknown" in result.stderr
 
 
+def test_gate_proof_rejects_stale_uefi_usb_hint(tmp_path: pathlib.Path) -> None:
+    """The default proof loop must fail if a stale pre-cold-boot image ran."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "U-Boot 2026.01-dirty",
+                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix:root-task] Cohesix boot: root-task online",
+                "[local-seat] pi4 keyboard unavailable detail=usb-keyboard-missing "
+                'hint="UEFI vars: XhciPci=0 XhciReload=1 SystemTableMode=1"',
+                "wifi: power=on reset=deasserted card=yes rca=0x0001",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "USB_STALE_UEFI_HINT_SEEN=yes" in result.stdout
+    assert (
+        "USB_STALE_UEFI_HINT_SEEN expected no got yes"
+        in result.stderr
+    )
+
+
 def test_gate_proof_rejects_summary_only_ready_requirements(
     tmp_path: pathlib.Path,
 ) -> None:

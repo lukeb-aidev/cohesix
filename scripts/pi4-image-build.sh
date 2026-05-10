@@ -570,6 +570,23 @@ realpath_py() {
     python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"
 }
 
+root_task_target_dir() {
+    local target_dir="${CARGO_TARGET_DIR:-${ROOT_DIR}/target}"
+
+    case "$target_dir" in
+        /*)
+            printf "%s\n" "$target_dir"
+            ;;
+        *)
+            printf "%s\n" "${ROOT_DIR}/${target_dir}"
+            ;;
+    esac
+}
+
+root_task_release_elf_path() {
+    printf "%s/aarch64-unknown-none/release/root-task\n" "$(root_task_target_dir)"
+}
+
 run_coh_rtc_codegen_for_manifest() {
     local manifest_path="$1"
     local manifest_json="$2"
@@ -654,7 +671,7 @@ sync_resolved_manifest_json() {
 }
 
 build_pi4_image() {
-    local root_task_elf="${ROOT_DIR}/target/aarch64-unknown-none/release/root-task"
+    local root_task_elf
     local embedded_rootserver="${SEL4_BUILD_DIR}/elfloader/rootserver"
     local sel4_source_dir
     local jobs
@@ -664,6 +681,8 @@ build_pi4_image() {
     export SEL4_BUILD_DIR
     export SEL4_BUILD="$SEL4_BUILD_DIR"
     export SEL4_LD="${ROOT_DIR}/apps/root-task/sel4.ld"
+
+    root_task_elf="$(root_task_release_elf_path)"
 
     sel4_source_dir="$(resolve_sel4_source_dir)"
     verify_pi4_sel4_xhci_device_untyped "$sel4_source_dir"
@@ -689,6 +708,7 @@ build_pi4_image() {
 
     jobs="$(sysctl -n hw.ncpu)"
     require_file "$root_task_elf"
+    log "Using root-task ELF: ${root_task_elf}"
     log "Rebuilding Pi4 seL4 image in ${SEL4_BUILD_DIR}"
     cmake --build "$SEL4_BUILD_DIR" \
       --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \

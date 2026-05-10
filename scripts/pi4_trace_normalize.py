@@ -167,6 +167,9 @@ USB_COLD_BOOT_MARKERS = (
     "xhci state discarded before cohesix cold boot",
     "xhci cold boot starts unseeded",
 )
+USB_STALE_UEFI_HINT_MARKERS = (
+    "uefi vars: xhcipci=0 xhcireload=1 systemtablemode=1",
+)
 
 
 @dataclass(frozen=True)
@@ -215,6 +218,7 @@ class GateSummary:
     boot_halt_reason: str = "none"
     usb_bootloader_handoff_seen: bool = False
     usb_cold_boot_seen: bool = False
+    usb_stale_uefi_hint_seen: bool = False
 
     def to_record(self) -> dict[str, object]:
         """Return a JSON-serializable gate summary."""
@@ -235,6 +239,9 @@ class GateSummary:
                 "yes" if self.usb_bootloader_handoff_seen else "no"
             ),
             "USB_COLD_BOOT_SEEN": "yes" if self.usb_cold_boot_seen else "no",
+            "USB_STALE_UEFI_HINT_SEEN": (
+                "yes" if self.usb_stale_uefi_hint_seen else "no"
+            ),
         }
 
     def to_env_lines(self) -> list[str]:
@@ -343,6 +350,15 @@ def usb_cold_boot_evidence(event: TraceEvent) -> bool:
         and fields.get("seed", "none") == "none"
         and fields.get("run", "run-default") in {"run-default", "run-cold"}
     )
+
+
+def usb_stale_uefi_hint_evidence(event: TraceEvent) -> bool:
+    """Return true when a USB event proves a stale UEFI-era image ran."""
+
+    if event.domain != "usb":
+        return False
+    lowered_raw = event.raw.lower()
+    return any(marker in lowered_raw for marker in USB_STALE_UEFI_HINT_MARKERS)
 
 
 def serial_corruption_reason(line: str, fields: dict[str, str] | None = None) -> str | None:
@@ -810,6 +826,16 @@ def normalize_wifi_blocker(value: str) -> str:
         or "expected=f1-backplane-core-control" in lower
     ):
         return "firmware-core-control"
+    if (
+        "chipcommon-socram-remap-cmd53-r5-rejected" in lower
+        or (
+            "stage=chipcommon-config-write" in lower
+            and ("sdio-cmd53-r5-error" in lower or "sdio cmd53 r5 fail" in lower)
+        )
+        or "arg=0x95802004" in lower
+        or "arg=0x91802004" in lower
+    ):
+        return "chipcommon-socram-remap-cmd53-r5-rejected"
     if (
         "armcr4-reset-assert-cmd52-r5-rejected" in lower
         or (
@@ -1645,6 +1671,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "linux-probe-pmu-cmd53-r5-rejected",
         "pre-f2-core-control",
         "firmware-core-control",
+        "chipcommon-socram-remap-cmd53-r5-rejected",
         "armcr4-reset-assert-cmd52-r5-rejected",
         "armcr4-reset-assert-cmd53-r5-rejected",
         "socram-assert-reset-cmd53-r5-rejected",
@@ -1678,6 +1705,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "linux-probe-pmu-cmd53-r5-rejected",
         "pre-f2-core-control",
         "firmware-core-control",
+        "chipcommon-socram-remap-cmd53-r5-rejected",
         "armcr4-reset-assert-cmd52-r5-rejected",
         "armcr4-reset-assert-cmd53-r5-rejected",
         "socram-assert-reset-cmd53-r5-rejected",
@@ -1697,6 +1725,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     linux_probe_attach_seen = False
     linux_probe_pmu_write_active = False
     armcr4_prereset_ioctrl_active = False
+    chipcommon_config_write_active = False
     socram_core_ctrl_stage: str | None = None
     specific_reset_blocker: str | None = None
     for event in wifi_events:
@@ -1721,6 +1750,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if raw_contract_blocker in {
             "pre-f2-core-control",
             "firmware-core-control",
+            "chipcommon-socram-remap-cmd53-r5-rejected",
             "armcr4-reset-assert-cmd52-r5-rejected",
             "armcr4-reset-assert-cmd53-r5-rejected",
             "d11-prereset-fgc-cmd53-r5-rejected",
@@ -1802,6 +1832,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         ):
             armcr4_prereset_ioctrl_active = True
             socram_core_ctrl_stage = None
+            chipcommon_config_write_active = False
         if (
             "stage=armcr4-passive action=advisory-reset-skip" in raw
             or "stage=d11-disable" in raw
@@ -1809,6 +1840,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             or "base=0x18104000" in raw
         ):
             armcr4_prereset_ioctrl_active = False
+        if "stage=chipcommon-config-write" in raw:
+            chipcommon_config_write_active = True
+            socram_core_ctrl_stage = None
+        if "stage=chipcommon-config action=skip-socram-remap" in raw:
+            chipcommon_config_write_active = False
         if fields.get("base") == "0x18104000" or "base=0x18104000" in raw:
             stage = fields.get("stage")
             if stage == "prereset-zero-ioctrl":
@@ -2053,6 +2089,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = "d11-prereset-fgc-cmd53-r5-rejected"
             elif linux_probe_pmu_write_active or fields.get("arg") == "0x900c0601":
                 blocker = "linux-probe-pmu-cmd53-r5-rejected"
+            elif chipcommon_config_write_active or fields.get("arg") in {
+                "0x95802004",
+                "0x91802004",
+            }:
+                blocker = "chipcommon-socram-remap-cmd53-r5-rejected"
             elif blocker not in {
                 "ht-backplane-cmd53-data-wait",
                 "ht-recover-cmd5-timeout",
@@ -2060,6 +2101,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "linux-probe-pmu-cmd53-r5-rejected",
                 "pre-f2-core-control",
                 "firmware-core-control",
+                "chipcommon-socram-remap-cmd53-r5-rejected",
                 "armcr4-reset-assert-cmd52-r5-rejected",
                 "armcr4-reset-assert-cmd53-r5-rejected",
                 "socram-assert-reset-cmd53-r5-rejected",
@@ -2113,6 +2155,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "linux-probe-pmu-cmd53-r5-rejected",
             "pre-f2-core-control",
             "firmware-core-control",
+            "chipcommon-socram-remap-cmd53-r5-rejected",
             "armcr4-reset-assert-cmd52-r5-rejected",
             "armcr4-reset-assert-cmd53-r5-rejected",
             "socram-assert-reset-cmd53-r5-rejected",
@@ -2344,6 +2387,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_bootloader_handoff_evidence(event) for event in event_list
     )
     usb_cold_boot_seen = any(usb_cold_boot_evidence(event) for event in event_list)
+    usb_stale_uefi_hint_seen = any(
+        usb_stale_uefi_hint_evidence(event) for event in event_list
+    )
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -2358,6 +2404,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         boot_halt_reason=boot_halt_reason,
         usb_bootloader_handoff_seen=usb_bootloader_handoff_seen,
         usb_cold_boot_seen=usb_cold_boot_seen,
+        usb_stale_uefi_hint_seen=usb_stale_uefi_hint_seen,
     )
 
 

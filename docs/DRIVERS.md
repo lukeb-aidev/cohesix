@@ -264,6 +264,10 @@ power/reset state.
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths are diagnostics unless `docs/BUILD_PLAN.md`,
   `docs/INTERFACES.md`, generated manifests, and tests all promote them.
+- Pi 4 uses the CYW43455 ARMCR4 firmware path. Do not run the Linux CM3-only
+  SOCSRAM bank remap writes (`bankidx=3`, `bankpda=0`) before firmware upload;
+  Linux applies those writes only to the 43430/43439 CM3 path, and on CYW43455
+  they are a Function 1 backplane blocker rather than progress.
 
 ### PCIe/VL805
 
@@ -292,6 +296,10 @@ active path is Cohesix-owned cold start:
   xHCI capability dword read at BAR offset `0x0000` can halt immediately after
   `USBCMD.RUN`; never use xHCI BAR reads, `USBSTS`, or any `PORTSC` as the
   posted-write drain on this prompt-safe path.
+- After the mailbox reset promotes live cold-boot ownership of the high BAR,
+  the xHCI controller must apply the Broadcom AXI read/write attribute registers
+  before publishing rings. This is controller MMIO owned by the xHCI constructor,
+  while the posted-write drains still go through HAL-owned PCIe EXT_CFG.
 
 ## Evidence Ladder
 
@@ -526,6 +534,9 @@ Required Cohesix shape:
   unavailable.
 - Diagnostic no-HT or forced clock paths must be explicit and must not become
   production gates.
+- Pi 4 CYW43455 firmware upload follows the ARMCR4 path: Function 1 backplane
+  control, firmware/NVRAM into ARMCR4 RAM, reset-vector release, then Function 2
+  readiness. CM3-only SOCSRAM remap writes are not part of this path.
 - Wi-Fi credentials remain bounded: SSID 1-32 printable ASCII bytes; PSK empty,
   8-63 printable ASCII bytes, or 64 ASCII hex digits.
 
@@ -542,6 +553,8 @@ Required Cohesix shape:
   reset-authority evidence must fail gate proof instead of authorizing rings.
 - MSI remains disabled unless the milestone explicitly proves it.
 - Poll-only command/event-ring proof comes before keyboard enumeration.
+- Cold-boot high-BAR xHCI must program the Broadcom AXI attributes after
+  mailbox-reset ownership and before the first command-ring proof.
 - Root-port reads known to be toxic must stay behind explicit HAL gates.
 - USB keyboard feeds only the existing root-console parser.
 

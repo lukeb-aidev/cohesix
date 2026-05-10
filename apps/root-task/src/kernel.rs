@@ -1900,7 +1900,7 @@ fn emit_pi4_uefi_dtb_diagnostics<P: Platform>(
     let mut line = HeaplessString::<192>::new();
     let _ = write!(
         line,
-        "[uefi-diag] dtb chosen={} stdout-path={} xhci-node={} pcie-node={}",
+        "[pi4-dtb-diag] dtb chosen={} stdout-path={} xhci-node={} pcie-node={}",
         bool_label(diagnostics.has_chosen),
         bool_label(diagnostics.has_stdout_path),
         bool_label(diagnostics.has_xhci_node),
@@ -1911,32 +1911,32 @@ fn emit_pi4_uefi_dtb_diagnostics<P: Platform>(
     if !diagnostics.has_xhci_node {
         if diagnostics.has_pcie_node {
             console.writeln_prefixed(
-                "[uefi-diag] inferred XhciPci=1 (PCIe mode); set XhciPci=0 for local-seat USB keyboard",
+                "[pi4-dtb-diag] inferred PCIe-mode xHCI DT; ignoring it for cold-boot local-seat USB keyboard",
             );
         } else {
             console.writeln_prefixed(
-                "[uefi-diag] missing xHCI DT node; verify SystemTableMode=1 and XhciReload=1",
+                "[pi4-dtb-diag] missing xHCI DT node; using cold-boot PCIe/VL805 HAL proof only",
             );
         }
     } else if diagnostics.has_xhci_disabled {
         console.writeln_prefixed(
-            "[uefi-diag] xHCI DT node is disabled; inferred stale DT, set XhciReload=1 and reboot; ignoring stale reg hint for local-seat safety",
+            "[pi4-dtb-diag] xHCI DT node is disabled; ignoring stale DT reg hint for cold-boot local-seat safety",
         );
     } else {
         console
-            .writeln_prefixed("[uefi-diag] xHCI DT node present (matches XhciPci=0 expectation)");
+            .writeln_prefixed("[pi4-dtb-diag] xHCI DT node present; treating as diagnostic only");
     }
 
     if !diagnostics.has_stdout_path {
         console.writeln_prefixed(
-            "[uefi-diag] chosen.stdout-path missing; firmware DT handoff may be incomplete (SystemTableMode)",
+            "[pi4-dtb-diag] chosen.stdout-path missing; DT console hint unavailable",
         );
     }
 }
 
 fn emit_pi4_uefi_no_dtb_hint<P: Platform>(console: &mut DebugConsole<'_, P>) {
     console.writeln_prefixed(
-        "[uefi-diag] no DTB payload; inferred SystemTableMode=0 (ACPI-only) or firmware DT handoff disabled",
+        "[pi4-dtb-diag] no DTB payload; cold-boot Pi 4 HAL paths do not require DT xHCI authority",
     );
 }
 
@@ -2349,7 +2349,7 @@ fn init_local_seat_runtime<P: Platform>(
                 let mut line = heapless::String::<192>::new();
                 let _ = write!(
                     line,
-                    "[uefi-diag] xhci hint translate source={} raw=0x{:016x} phys=0x{:016x}",
+                    "[pi4-dtb-diag] xhci hint translate source={} raw=0x{:016x} phys=0x{:016x}",
                     hint.source.label(),
                     hint.raw_mmio,
                     hint.mmio
@@ -4775,7 +4775,7 @@ fn bootstrap<P: Platform>(
                                     let mut diag_line = heapless::String::<128>::new();
                                     let _ = write!(
                                         diag_line,
-                                        "[uefi-diag] dtb diagnostics skipped: {err}"
+                                        "[pi4-dtb-diag] dtb diagnostics skipped: {err}"
                                     );
                                     console.writeln_prefixed(diag_line.as_str());
                                 }

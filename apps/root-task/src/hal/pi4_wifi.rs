@@ -1442,8 +1442,7 @@ const fn pre_ht_control_plane_clock_target_hz(current_clock_hz: u32) -> u32 {
 
 #[inline]
 const fn firmware_core_reset_clock_target_hz(current_clock_hz: u32) -> u32 {
-    let _ = current_clock_hz;
-    CYW43_STARTUP_CLOCK_HZ
+    current_clock_hz
 }
 
 #[inline]
@@ -3400,6 +3399,11 @@ const fn core_reset_can_skip_postreset_verify(base: u32) -> bool {
 
 #[inline]
 const fn socram_core_reset_required_before_armcr4_upload() -> bool {
+    false
+}
+
+#[inline]
+const fn cyw43455_armcr4_preupload_socram_remap_required() -> bool {
     false
 }
 
@@ -15427,8 +15431,15 @@ impl SdioHost {
 
     fn configure_chipcommon(&mut self) -> Result<(), HalError> {
         self.refresh_transport_phase_for("chipcommon-config")?;
-        // Upstream CYW43 writes these remap registers in SOCSRAM immediately
-        // after SOCSRAM reset, before firmware upload begins.
+        if !cyw43455_armcr4_preupload_socram_remap_required() {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=chipcommon-config action=skip-socram-remap reason=linux-armcr4-no-cm3-remap chip=cyw43455"
+            ));
+            return Ok(());
+        }
+        // Upstream only writes these SOCSRAM remap registers for the CM3 chips
+        // that need bank remap before upload. Pi 4 CYW43455 uses ARMCR4 RAM
+        // upload directly and must skip this sequence.
         let writes = [
             (CYW43_SOCRAM_CORE_BASE + 0x10, 3u32),
             (CYW43_SOCRAM_CORE_BASE + 0x44, 0u32),
@@ -19198,9 +19209,14 @@ impl SdioHost {
 
     fn ensure_firmware_core_reset_clock(&mut self, stage: &'static str) -> Result<(), HalError> {
         let target_clock_hz = firmware_core_reset_clock_target_hz(self.current_clock_hz);
+        let reason = if target_clock_hz > CYW43_STARTUP_CLOCK_HZ {
+            "linux-high-speed-core-control"
+        } else {
+            "pre-firmware-core-control-startup-clock"
+        };
         if target_clock_hz == self.current_clock_hz {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} action=hold-core-reset-clock current={}Hz preferred={}Hz reason=pre-firmware-core-control-startup-clock",
+                "[pi4-wifi] firmware stage={stage} action=hold-core-reset-clock current={}Hz preferred={}Hz reason={reason}",
                 self.current_clock_hz, self.preferred_data_clock_hz
             ));
             self.preferred_data_clock_hz = self.preferred_data_clock_hz.max(self.current_clock_hz);
@@ -19213,7 +19229,7 @@ impl SdioHost {
         }
 
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action={} request={}Hz from={}Hz preferred={}Hz reason=pre-firmware-core-control-startup-clock",
+            "[pi4-wifi] firmware stage={stage} action={} request={}Hz from={}Hz preferred={}Hz reason={reason}",
             if target_clock_hz < self.current_clock_hz {
                 "lower-core-reset-clock"
             } else {
@@ -26606,6 +26622,7 @@ mod tests {
             CYW43_ARMCR4_CORE_BASE
         ));
         assert!(!socram_core_reset_required_before_armcr4_upload());
+        assert!(!cyw43455_armcr4_preupload_socram_remap_required());
         assert!(core_ctrl_can_skip_redundant_in_reset_write(
             CYW43_SOCRAM_CORE_BASE,
             true,
@@ -32358,7 +32375,7 @@ mod tests {
         );
         assert_eq!(
             firmware_core_reset_clock_target_hz(CYW43_FIRMWARE_BULK_CLOCK_HZ),
-            CYW43_STARTUP_CLOCK_HZ
+            CYW43_FIRMWARE_BULK_CLOCK_HZ
         );
         assert_eq!(
             post_download_ht_clock_target_hz(400_000, CYW43_FIRMWARE_NO_HT_BULK_CLOCK_HZ),

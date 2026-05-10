@@ -5091,8 +5091,7 @@ const fn xhci_controller_should_apply_brcm_axi_setup(
     firmware_handoff: XhciFirmwareHandoff,
 ) -> bool {
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
-        let _ = firmware_handoff;
-        return false;
+        return matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete);
     }
     matches!(firmware_handoff, XhciFirmwareHandoff::None)
 }
@@ -15066,7 +15065,7 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete
         );
         assert!(params.runtime_seed_snapshot.is_none());
-        assert!(!params.apply_brcm_axi_setup);
+        assert!(params.apply_brcm_axi_setup);
         assert!(!params.port_register_access_allowed);
     }
 
@@ -15103,7 +15102,7 @@ mod tests {
             "mailbox-reset-complete"
         );
         assert!(params.runtime_seed_snapshot.is_none());
-        assert!(!params.apply_brcm_axi_setup);
+        assert!(params.apply_brcm_axi_setup);
         assert!(!params.port_register_access_allowed);
     }
 
@@ -15136,7 +15135,7 @@ mod tests {
         assert!(params.skip_initial_live_operational_reads);
         assert!(params.skip_constructor_live_scrub);
         assert!(params.runtime_seed_snapshot.is_none());
-        assert!(!params.apply_brcm_axi_setup);
+        assert!(params.apply_brcm_axi_setup);
         assert!(!params.port_register_access_allowed);
     }
 
@@ -16147,7 +16146,7 @@ mod tests {
         assert!(
             !super::xhci_runtime_init_strategy_skips_runtime_publication_entry(strategy, true,)
         );
-        assert!(!xhci_controller_should_apply_brcm_axi_setup(
+        assert!(xhci_controller_should_apply_brcm_axi_setup(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             XhciFirmwareHandoff::PlatformResetComplete,
         ));

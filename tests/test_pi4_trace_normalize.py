@@ -277,6 +277,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "BOOT_HALT_REASON": "none",
         "USB_BOOTLOADER_HANDOFF_SEEN": "no",
         "USB_COLD_BOOT_SEEN": "no",
+        "USB_STALE_UEFI_HINT_SEEN": "no",
     }
 
 
@@ -569,6 +570,22 @@ def test_gate_summary_keeps_cold_usb_path_handoff_clean() -> None:
 
     assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "no"
     assert gates.to_record()["USB_COLD_BOOT_SEEN"] == "yes"
+    assert gates.to_record()["USB_STALE_UEFI_HINT_SEEN"] == "no"
+
+
+def test_gate_summary_flags_stale_uefi_usb_hint() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "[local-seat] pi4 keyboard unavailable detail=usb-keyboard-missing "
+            'hint="UEFI vars: XhciPci=0 XhciReload=1 SystemTableMode=1"',
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record()["USB_COLD_BOOT_SEEN"] == "yes"
+    assert gates.to_record()["USB_STALE_UEFI_HINT_SEEN"] == "yes"
 
 
 def test_gate_summary_ignores_disabled_handoff_label_fields() -> None:
@@ -1533,6 +1550,24 @@ def test_gate_summary_tracks_wifi_ht_backplane_cmd53_r5_rejection() -> None:
 
     assert gates.wifi_gate == 4
     assert gates.wifi_blocker == "ht-backplane-cmd53-r5-rejected"
+
+
+def test_gate_summary_tracks_wifi_chipcommon_socram_remap_r5_rejection() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: contract current=firmware-core-control expected=f1-backplane-core-control",
+            "[pi4-wifi] firmware stage=chipcommon-config-write "
+            "addr=0x18104010 value=0x00000003 path=cmd53-byte-windowed",
+            "[pi4-wifi] sdio cmd53 r5 fail arg=0x95802004 len=4 "
+            "phase=command-r5 resp=0x00001800 r5=0x0800",
+            "ERR NETTEST reason=policy detail=net-disabled cause=sdio-cmd53-r5-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "chipcommon-socram-remap-cmd53-r5-rejected"
 
 
 def test_gate_summary_preserves_wifi_ht_recover_cmd5_timeout_over_nettest() -> None:
