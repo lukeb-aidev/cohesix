@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Encode and decode Secure9P wire messages without std dependencies.
 // Author: Lukas Bower
@@ -265,6 +265,7 @@ impl Codec {
             }
             other => return Err(CodecError::Unsupported(other as u8)),
         };
+        ensure_consumed(&cursor, payload.len(), bytes.len())?;
         Ok(Request { tag, body })
     }
 
@@ -325,6 +326,7 @@ impl Codec {
             }
             other => return Err(CodecError::Unsupported(other as u8)),
         };
+        ensure_consumed(&cursor, payload.len(), bytes.len())?;
         Ok(Response { tag, body })
     }
 }
@@ -383,6 +385,20 @@ fn decode_message(bytes: &[u8]) -> Result<(MessageType, &[u8]), CodecError> {
     Ok((ty, &bytes[5..]))
 }
 
+fn ensure_consumed(
+    cursor: &Cursor<'_>,
+    payload_len: usize,
+    frame_len: usize,
+) -> Result<(), CodecError> {
+    if cursor.pos == payload_len {
+        return Ok(());
+    }
+    Err(CodecError::LengthMismatch {
+        declared: frame_len as u32,
+        actual: cursor.pos.saturating_add(5),
+    })
+}
+
 fn read_u8(cursor: &mut Cursor<'_>) -> Result<u8, CodecError> {
     let mut buf = [0u8; 1];
     cursor
@@ -433,7 +449,12 @@ fn read_qid(cursor: &mut Cursor<'_>) -> Result<Qid, CodecError> {
 }
 
 fn validate_component(component: &str) -> Result<(), CodecError> {
-    if component.is_empty() || component.len() > 64 || component.contains('/') {
+    if component.is_empty()
+        || component.len() > 64
+        || component == ".."
+        || component.contains('/')
+        || component.as_bytes().contains(&0)
+    {
         return Err(CodecError::InvalidPath);
     }
     Ok(())
@@ -482,15 +503,21 @@ mod tests {
     #[test]
     fn reject_invalid_paths_during_encoding() {
         let codec = Codec;
-        let req = Request {
-            tag: 1,
-            body: RequestBody::Walk {
-                fid: 1,
-                newfid: 2,
-                wnames: vec!["invalid/component".to_string()],
-            },
-        };
-        assert_eq!(codec.encode_request(&req), Err(CodecError::InvalidPath));
+        for component in ["invalid/component", "..", "nul\0byte"] {
+            let req = Request {
+                tag: 1,
+                body: RequestBody::Walk {
+                    fid: 1,
+                    newfid: 2,
+                    wnames: vec![component.to_string()],
+                },
+            };
+            assert_eq!(
+                codec.encode_request(&req),
+                Err(CodecError::InvalidPath),
+                "{component:?} should be rejected"
+            );
+        }
     }
 
     #[test]
@@ -510,6 +537,62 @@ mod tests {
         frame[15] = 9;
         frame[16] = 0;
         assert_eq!(codec.decode_request(&frame), Err(CodecError::InvalidPath));
+
+        for component in ["..", "a\0"] {
+            let mut frame = codec
+                .encode_request(&Request {
+                    tag: 1,
+                    body: RequestBody::Walk {
+                        fid: 1,
+                        newfid: 2,
+                        wnames: vec!["ok".to_string()],
+                    },
+                })
+                .expect("encode valid walk");
+            frame[19..21].copy_from_slice(component.as_bytes());
+            assert_eq!(
+                codec.decode_request(&frame),
+                Err(CodecError::InvalidPath),
+                "{component:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn reject_trailing_request_payload_bytes() {
+        let codec = Codec;
+        let req = Request {
+            tag: 1,
+            body: RequestBody::Open {
+                fid: 1,
+                mode: OpenMode::read_only(),
+            },
+        };
+        let mut frame = codec.encode_request(&req).expect("encode frame");
+        frame.push(0);
+        let declared = frame.len() as u32;
+        frame[..4].copy_from_slice(&declared.to_le_bytes());
+        assert!(matches!(
+            codec.decode_request(&frame),
+            Err(CodecError::LengthMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn reject_trailing_response_payload_bytes() {
+        let codec = Codec;
+        let response = Response {
+            tag: 1,
+            body: ResponseBody::Clunk,
+        };
+        let mut frame = codec.encode_response(&response).expect("encode frame");
+        frame.push(0);
+        let declared = frame.len() as u32;
+        frame[..4].copy_from_slice(&declared.to_le_bytes());
+        assert!(matches!(
+            codec.decode_response(&frame),
+            Err(CodecError::LengthMismatch { .. })
+        ));
     }
 
     #[test]

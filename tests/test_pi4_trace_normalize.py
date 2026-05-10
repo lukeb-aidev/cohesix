@@ -202,6 +202,44 @@ def test_cli_summary_uses_latest_boot_slice(
     assert summary["gates"]["WIFI_BLOCKER"] == "ht-clock-timeout"
 
 
+def test_latest_boot_slice_keeps_same_boot_uboot_usb_evidence() -> None:
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "[cohesix] USB host stopped; xHCI stop seed exported as diagnostic only",
+        "[cohesix] dtb chosen cohesix,xhci-usbcmd=0x00000000",
+        "Starting kernel ...",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+        "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write doorbell=0x100",
+        "halting...",
+        "Kernel entry via Interrupt, irq 27",
+    ]
+
+    events = normalizer.parse_events(normalizer.latest_boot_lines(lines))
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "yes"
+    assert gates.to_record()["BOOT_HALT_REASON"] == "kernel-halt"
+
+
+def test_latest_boot_slice_prefers_later_uboot_chain() -> None:
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "[cohesix] USB host stopped; xHCI stop seed exported as diagnostic only",
+        "Starting kernel ...",
+        "wifi: boot_failure source=live exact=old-failure",
+        "U-Boot 2026.01-dirty",
+        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "Starting kernel ...",
+        "wifi: boot_failure source=live exact=new-failure",
+    ]
+
+    events = normalizer.parse_events(normalizer.latest_boot_lines(lines))
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "no"
+    assert gates.to_record()["WIFI_EXACT"] == "new-failure"
+
+
 def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
     events = normalizer.parse_events(
         [
@@ -425,7 +463,7 @@ def test_gate_summary_does_not_classify_irq27_as_usb_without_usb_edge() -> None:
     assert gates.usb_gate == 0
     assert gates.usb_blocker == "missing"
     assert gates.timer_irq27_seen
-    assert gates.boot_halt_reason == "timer-irq27-without-halt"
+    assert gates.boot_halt_reason == "timer-irq27-observed"
 
 
 def test_gate_summary_reports_kernel_halt_and_timer_irq27() -> None:
@@ -440,7 +478,7 @@ def test_gate_summary_reports_kernel_halt_and_timer_irq27() -> None:
 
     assert gates.to_record()["BOOT_HALTED"] == "yes"
     assert gates.to_record()["TIMER_IRQ27_SEEN"] == "yes"
-    assert gates.to_record()["BOOT_HALT_REASON"] == "kernel-halt+timer-irq27"
+    assert gates.to_record()["BOOT_HALT_REASON"] == "kernel-halt"
 
 
 def test_gate_summary_flags_usb_bootloader_handoff_evidence() -> None:
@@ -687,7 +725,7 @@ def test_gate_summary_keeps_usb_timeout_plan_ahead_of_timer_halt() -> None:
             "[local-seat] xhci.diag stage=0x036c tag=cmd-gate-timeout-plan-0 "
             "expected_usbcmd_usbsts=0x0000000500000000",
             "[local-seat] xhci.diag stage=0x036f tag=cmd-gate-timeout-plan-3 "
-            "expected_erdp=0x0000000404025008",
+            "expected_erdp=0x0000000404025000",
             "Kernel entry via Interrupt, irq 27",
             "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
         ]
@@ -1142,7 +1180,7 @@ def test_gate_summary_reports_run_posted_flush_timer_halt() -> None:
 
     assert gates.usb_gate == 3
     assert gates.usb_blocker == "usbcmd-run-posted-flush-halt"
-    assert gates.to_record()["BOOT_HALT_REASON"] == "kernel-halt+timer-irq27"
+    assert gates.to_record()["BOOT_HALT_REASON"] == "kernel-halt"
 
 
 def test_gate_summary_classifies_wifi_pre_f2_core_control_failure() -> None:

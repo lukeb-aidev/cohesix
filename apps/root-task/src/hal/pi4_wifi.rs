@@ -549,9 +549,9 @@ fn backplane_window_program_sequence(
     window_high: u8,
 ) -> [(&'static str, u32, u8); 3] {
     [
-        ("high", SBSDIO_FUNC1_SBADDRHIGH, window_high),
-        ("mid", SBSDIO_FUNC1_SBADDRMID, window_mid),
         ("low", SBSDIO_FUNC1_SBADDRLOW, window_low),
+        ("mid", SBSDIO_FUNC1_SBADDRMID, window_mid),
+        ("high", SBSDIO_FUNC1_SBADDRHIGH, window_high),
     ]
 }
 
@@ -567,7 +567,9 @@ const fn core_ctrl_write_access_mode_label() -> &'static str {
 
 #[inline]
 const fn core_ctrl_prereset_access_mode_label(base: u32, offset: u32) -> &'static str {
-    if core_ctrl_prereset_write_uses_word_primary(base, offset) {
+    if core_ctrl_prereset_write_uses_unflagged_byte_primary(base, offset) {
+        "cmd52-byte-unflagged-prereset fallback=cmd53-word-windowed"
+    } else if core_ctrl_prereset_write_uses_word_primary(base, offset) {
         "cmd53-word-windowed-prereset fallback=cmd52-byte-current-window"
     } else {
         core_ctrl_write_access_mode_label()
@@ -663,11 +665,16 @@ fn log_core_ctrl_access(op: &'static str, base: u32, offset: u32, value: Option<
 
 fn log_core_ctrl_prereset_write(base: u32, offset: u32, value: u8) {
     let addr = base.saturating_add(offset);
+    let bus = if core_ctrl_prereset_write_uses_unflagged_byte_primary(base, offset) {
+        core_ctrl_unflagged_byte_function_addr(addr)
+    } else {
+        core_ctrl_cmd52_write_function_addr(addr)
+    };
     emit_breadcrumb(format_args!(
         "[pi4-wifi] firmware core-ctrl access op=write8-prereset mode={} base=0x{base:08x} off=0x{offset:03x} addr=0x{addr:08x} window=0x{window:08x} bus=0x{bus:05x} trace_bus=0x{trace_bus:05x} shift={shift} inc={} value=0x{value:02x}",
         core_ctrl_prereset_access_mode_label(base, offset),
         backplane_word_increment_addr() as u8,
-        bus = core_ctrl_cmd52_write_function_addr(addr),
+        bus = bus,
         trace_bus = core_ctrl_trace_function_addr(addr),
         shift = backplane_word_byte_shift(addr),
         window = addr & BACKPLANE_WINDOW_MASK,
@@ -747,9 +754,18 @@ const fn core_ctrl_uses_unflagged_byte_primary(_base: u32, _offset: u32) -> bool
 }
 
 #[inline]
+const fn core_ctrl_prereset_write_uses_unflagged_byte_primary(base: u32, offset: u32) -> bool {
+    offset == AI_IOCTRL_OFFSET
+        && (base == CYW43_ARMCR4_CORE_BASE
+            || base == CYW43_SOCRAM_CORE_BASE
+            || base == CYW43_D11_CORE_BASES[0])
+}
+
+#[inline]
 const fn core_ctrl_prereset_write_uses_word_primary(base: u32, offset: u32) -> bool {
     (base == CYW43_ARMCR4_CORE_BASE || base == CYW43_SOCRAM_CORE_BASE)
         && offset == AI_IOCTRL_OFFSET
+        && !core_ctrl_prereset_write_uses_unflagged_byte_primary(base, offset)
         && !core_ctrl_uses_unflagged_byte_primary(base, offset)
 }
 
@@ -15896,10 +15912,10 @@ impl SdioHost {
         let function_addr = addr & BACKPLANE_ADDRESS_MASK;
         let (target_low, target_mid, target_high) = backplane_window_register_bytes(addr);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage=chipcommon-config-retry addr=0x{addr:08x} current_window=0x{current_window:08x} target_window=0x{target_window:08x} reason=mid-byte-only-window-switch-direct"
+            "[pi4-wifi] firmware stage=chipcommon-config-retry addr=0x{addr:08x} current_window=0x{current_window:08x} target_window=0x{target_window:08x} reason=mid-high-window-switch-direct"
         ));
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] backplane window retarget current=0x{current_window:08x} target=0x{target_window:08x} low=0x{target_low:02x} mid=0x{target_mid:02x} high=0x{target_high:02x} path=cmd52-mid-only"
+            "[pi4-wifi] backplane window retarget current=0x{current_window:08x} target=0x{target_window:08x} low=0x{target_low:02x} mid=0x{target_mid:02x} high=0x{target_high:02x} path=cmd52-mid-high-latch"
         ));
         if let Err(err) =
             self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_SBADDRMID, target_mid)
@@ -15909,6 +15925,30 @@ impl SdioHost {
             }
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=chipcommon-config-window-assumed-committed addr=0x{addr:08x} current_window=0x{current_window:08x} target_window=0x{target_window:08x} err={err} reason=chipcommon-mid-window-timeout"
+            ));
+            self.remember_backplane_window(
+                addr,
+                function_addr,
+                target_low,
+                target_mid,
+                target_high,
+            );
+            self.programmed_backplane_window = Some(target_window);
+            self.recover_command_path_preserve_window_and_refresh_transport(
+                "chipcommon-config-window-assumed-committed",
+            )?;
+            return Ok(());
+        }
+        if let Err(err) = self.io_direct_write(
+            SdioFunction::Function1,
+            SBSDIO_FUNC1_SBADDRHIGH,
+            target_high,
+        ) {
+            if !chipcommon_config_can_assume_window_commit(&err) {
+                return Err(err);
+            }
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=chipcommon-config-window-assumed-committed addr=0x{addr:08x} current_window=0x{current_window:08x} target_window=0x{target_window:08x} err={err} reason=chipcommon-high-latch-timeout"
             ));
             self.remember_backplane_window(
                 addr,
@@ -20290,6 +20330,16 @@ impl SdioHost {
         offset: u32,
         value: u8,
     ) -> Result<(), HalError> {
+        if core_ctrl_prereset_write_uses_unflagged_byte_primary(base, offset) {
+            return self.core_ctrl_unflagged_byte_primary_write8(
+                base,
+                offset,
+                value,
+                "write8-prereset",
+                "core-ctrl-prereset-cmd53-current-window",
+                "core-ctrl-prereset-cmd53-rewindow",
+            );
+        }
         if core_ctrl_uses_unflagged_byte_primary(base, offset) {
             return self.core_ctrl_unflagged_byte_primary_write8(
                 base,
@@ -26273,7 +26323,7 @@ mod tests {
         assert!(backplane_word_increment_addr());
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd53-word-windowed-prereset fallback=cmd52-byte-current-window"
+            "cmd52-byte-unflagged-prereset fallback=cmd53-word-windowed"
         );
         let core_ctrl_word_plan =
             sdio_transfer_plan(SdioFunction::Function1, 4, true).expect("word-write plan");
@@ -26341,11 +26391,11 @@ mod tests {
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd53-word-windowed-prereset fallback=cmd52-byte-current-window"
+            "cmd52-byte-unflagged-prereset fallback=cmd53-word-windowed"
         );
         assert_eq!(
             core_ctrl_prereset_access_mode_label(CYW43_SOCRAM_CORE_BASE, AI_IOCTRL_OFFSET),
-            "cmd53-word-windowed-prereset fallback=cmd52-byte-current-window"
+            "cmd52-byte-unflagged-prereset fallback=cmd53-word-windowed"
         );
         assert_eq!(
             core_ctrl_reset_assert_access_mode_label(CYW43_ARMCR4_CORE_BASE, AI_RESETCTRL_OFFSET),
@@ -26453,11 +26503,23 @@ mod tests {
             CYW43_SOCRAM_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
-        assert!(core_ctrl_prereset_write_uses_word_primary(
+        assert!(core_ctrl_prereset_write_uses_unflagged_byte_primary(
             CYW43_ARMCR4_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
-        assert!(core_ctrl_prereset_write_uses_word_primary(
+        assert!(core_ctrl_prereset_write_uses_unflagged_byte_primary(
+            CYW43_SOCRAM_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(core_ctrl_prereset_write_uses_unflagged_byte_primary(
+            CYW43_D11_CORE_BASES[0],
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_prereset_write_uses_word_primary(
+            CYW43_ARMCR4_CORE_BASE,
+            AI_IOCTRL_OFFSET
+        ));
+        assert!(!core_ctrl_prereset_write_uses_word_primary(
             CYW43_SOCRAM_CORE_BASE,
             AI_IOCTRL_OFFSET
         ));
@@ -27058,13 +27120,13 @@ mod tests {
     }
 
     #[test]
-    fn backplane_window_program_sequence_commits_low_last() {
+    fn backplane_window_program_sequence_matches_linux_low_mid_high_commit() {
         assert_eq!(
             backplane_window_program_sequence(0x80, 0x19, 0x00),
             [
-                ("high", SBSDIO_FUNC1_SBADDRHIGH, 0x00),
-                ("mid", SBSDIO_FUNC1_SBADDRMID, 0x19),
                 ("low", SBSDIO_FUNC1_SBADDRLOW, 0x80),
+                ("mid", SBSDIO_FUNC1_SBADDRMID, 0x19),
+                ("high", SBSDIO_FUNC1_SBADDRHIGH, 0x00),
             ]
         );
     }

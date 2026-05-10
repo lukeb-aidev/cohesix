@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate control-plane transcript for schedule/lease/export/policy surfaces.
 // Author: Lukas Bower
@@ -6,6 +6,9 @@
 
 #[path = "../../../tests/fixtures/transcripts/support.rs"]
 mod transcript_support;
+
+use std::fs;
+use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use cohesix_ticket::Role;
@@ -39,6 +42,9 @@ fn control_plane_transcript_matches_fixture() -> Result<()> {
     let connection = server.connect().expect("connect");
     let transport = InProcessTransport::new(connection);
     let mut client = CohClient::connect(transport, Role::Queen, None)?;
+    let schedule_queue_max = generated_limit("control_plane.schedule.queue_max_entries");
+    let lease_active_max = generated_limit("control_plane.lease.active_max_entries");
+    let lease_preemptions_max = generated_limit("control_plane.lease.preemptions_max_entries");
 
     let mut transcript = Vec::new();
     let detail = format!("role={}", role_label(Role::Queen));
@@ -55,11 +61,19 @@ fn control_plane_transcript_matches_fixture() -> Result<()> {
     )?;
     transcript.push(render_echo_ack("/queen/schedule/ctl", SCHEDULE_PAYLOAD));
 
-    read_payload(&mut client, PROC_SCHEDULE_SUMMARY)?;
+    let schedule_summary = read_payload(&mut client, PROC_SCHEDULE_SUMMARY)?;
+    assert_eq!(
+        schedule_summary,
+        format!("queue=1 dequeued=0 dropped=0 max_entries={schedule_queue_max}\n")
+    );
     transcript.push(render_cat_ack(PROC_SCHEDULE_SUMMARY));
     transcript.push(END_LINE.to_owned());
 
-    read_payload(&mut client, PROC_SCHEDULE_QUEUE)?;
+    let schedule_queue = read_payload(&mut client, PROC_SCHEDULE_QUEUE)?;
+    assert_eq!(
+        schedule_queue,
+        "id=sched-1 role=worker-gpu priority=2 ticks=3 budget_ms=120 seq=1\n"
+    );
     transcript.push(render_cat_ack(PROC_SCHEDULE_QUEUE));
     transcript.push(END_LINE.to_owned());
 
@@ -77,15 +91,26 @@ fn control_plane_transcript_matches_fixture() -> Result<()> {
     )?;
     transcript.push(render_echo_ack("/queen/lease/ctl", LEASE_PREEMPT_PAYLOAD));
 
-    read_payload(&mut client, PROC_LEASE_SUMMARY)?;
+    let lease_summary = read_payload(&mut client, PROC_LEASE_SUMMARY)?;
+    assert_eq!(
+        lease_summary,
+        format!(
+            "active=0 preemptions=1 quotas=0 max_active={lease_active_max} max_preemptions={lease_preemptions_max}\n"
+        )
+    );
     transcript.push(render_cat_ack(PROC_LEASE_SUMMARY));
     transcript.push(END_LINE.to_owned());
 
-    read_payload(&mut client, PROC_LEASE_ACTIVE)?;
+    let lease_active = read_payload(&mut client, PROC_LEASE_ACTIVE)?;
+    assert_eq!(lease_active, "");
     transcript.push(render_cat_ack(PROC_LEASE_ACTIVE));
     transcript.push(END_LINE.to_owned());
 
-    read_payload(&mut client, PROC_LEASE_PREEMPTIONS)?;
+    let lease_preemptions = read_payload(&mut client, PROC_LEASE_PREEMPTIONS)?;
+    assert_eq!(
+        lease_preemptions,
+        "id=lease-1 subject=queen resource=gpu0 reason=timeout seq=2\n"
+    );
     transcript.push(render_cat_ack(PROC_LEASE_PREEMPTIONS));
     transcript.push(END_LINE.to_owned());
 
@@ -145,11 +170,35 @@ fn write_payload<T: cohsh_core::Secure9pTransport>(
 fn read_payload<T: cohsh_core::Secure9pTransport>(
     client: &mut CohClient<T>,
     path: &str,
-) -> Result<()> {
+) -> Result<String> {
     let fid = client.open(path, OpenMode::read_only())?;
-    let _ = client.read(fid, 0, client.negotiated_msize())?;
+    let payload = client.read(fid, 0, client.negotiated_msize())?;
     client.clunk(fid)?;
-    Ok(())
+    Ok(String::from_utf8(payload)?)
+}
+
+fn repo_path(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("cohsh has workspace parent")
+        .parent()
+        .expect("workspace root has parent")
+        .join(path)
+}
+
+fn generated_limit(key: &str) -> usize {
+    let snippet = fs::read_to_string(repo_path("docs/snippets/root_task_manifest.md"))
+        .expect("read generated root-task manifest snippet");
+    let needle = format!("- `{key}`: `");
+    for line in snippet.lines() {
+        if let Some(value) = line
+            .strip_prefix(&needle)
+            .and_then(|rest| rest.split('`').next())
+        {
+            return value.parse().expect("generated manifest limit is numeric");
+        }
+    }
+    panic!("generated manifest snippet is missing {key}");
 }
 
 fn render_echo_ack(path: &str, payload: &str) -> String {

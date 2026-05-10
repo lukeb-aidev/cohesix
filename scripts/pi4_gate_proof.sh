@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE_BUILD_SCRIPT="${SCRIPT_DIR}/pi4-image-build.sh"
 TRACE_NORMALIZER="${SCRIPT_DIR}/pi4_trace_normalize.py"
 MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
-VENV_DIR="${COHESIX_PI4_VENV:-${HOME}/seL4/.venv_aarch64}"
+VENV_DIR="${COHESIX_PI4_VENV:-${ROOT_DIR}/.venv}"
 PYTHON="${VENV_DIR}/bin/python"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
@@ -32,7 +32,7 @@ DEFAULT_COMMANDS=(
     "wifi diag"
     "nettest"
     "usb status"
-    "usb probe-kbd"
+    "usb diag"
     "usb status"
 )
 EXTRA_COMMANDS=()
@@ -52,7 +52,7 @@ Options:
   --manifest <path>          Root-task Pi 4 manifest
                              (default: configs/root_task_pi4_uboot_aarch64.toml)
   --venv <dir>               Python virtualenv for local scripts
-                             (default: ~/seL4/.venv_aarch64)
+                             (default: <repo>/.venv)
   --flash-disk <device|auto> Flash SD card via scripts/pi4-image-build.sh.
                              "auto" requires exactly one external disk carrying
                              the configured --disk-label.
@@ -77,6 +77,9 @@ Options:
   --no-capture               Do not open serial; normalize the existing log
   --normalize-only           Skip build, flash, and capture; normalize only
   --no-default-commands      Do not send the default proof commands
+  --probe-usb-keyboard       Append the live USB keyboard probe. This can enter
+                             the prompt-safe halt path while command/event-ring
+                             gates are still blocked.
   --command <line>           Append a console command to send during capture
   --expect <KEY=VALUE>       Require a gate summary value from the normalizer.
                              Examples: USB_GATE=3, WIFI_BLOCKER=ht-clock-timeout
@@ -95,7 +98,7 @@ Default proof commands:
   wifi diag
   nettest
   usb status
-  usb probe-kbd
+  usb diag
   usb status
 USAGE
 }
@@ -448,6 +451,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-default-commands)
             DEFAULT_COMMANDS=()
+            shift
+            ;;
+        --probe-usb-keyboard)
+            EXTRA_COMMANDS+=("usb probe-kbd")
             shift
             ;;
         --command)

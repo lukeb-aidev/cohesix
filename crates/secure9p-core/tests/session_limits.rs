@@ -1,12 +1,12 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate Secure9P session window and short-write policy behavior.
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
 use secure9p_core::{
-    ShortWritePolicy, TagError, TagWindow, DEFAULT_SHORT_WRITE_BACKOFF_MS,
-    DEFAULT_SHORT_WRITE_RETRIES,
+    FidError, ShardedFidTable, ShortWritePolicy, TagError, TagWindow,
+    DEFAULT_SHORT_WRITE_BACKOFF_MS, DEFAULT_SHORT_WRITE_RETRIES,
 };
 
 #[test]
@@ -37,4 +37,17 @@ fn short_write_policy_backoff_is_bounded() {
     );
     assert_eq!(policy.retry_delay_ms(DEFAULT_SHORT_WRITE_RETRIES), None);
     assert_eq!(ShortWritePolicy::Reject.retry_delay_ms(0), None);
+}
+
+#[test]
+fn sharded_fid_table_rejects_reuse_after_clunk() {
+    let table = ShardedFidTable::new(4);
+    assert_eq!(table.insert(7, "root"), Ok(()));
+    assert!(table.contains(7));
+    assert_eq!(table.insert(7, "duplicate"), Err(FidError::InUse));
+    assert_eq!(table.get(7), Some("root"));
+    assert_eq!(table.remove(7), Some("root"));
+    assert!(table.contains(7));
+    assert_eq!(table.get(7), None);
+    assert_eq!(table.insert(7, "reused"), Err(FidError::Retired));
 }

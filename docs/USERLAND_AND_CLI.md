@@ -129,14 +129,12 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 - Ticket authorizes the role and namespace slice during `attach`.
 - A session may require both; missing either yields deterministic `ERR`.
 
-<!-- Author: Lukas Bower -->
-<!-- Purpose: Generated cohsh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
-
+<!-- coh-rtc:cohsh-policy:start -->
 ### cohsh client policy (generated)
-- `manifest.sha256`: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`
-- `policy.sha256`: `96262c617e5a15321d58f069f17664dfbe02ffa9e6e4df7a38169c21b4e37ee8`
+- `manifest.sha256`: `9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf`
+- `policy.sha256`: `cff5790043c14eed514e0865e8247657ce76660bc8cbb8924420a1c8eaa73929`
 - `cohsh.pool.control_sessions`: `2`
-- `cohsh.pool.telemetry_sessions`: `4`
+- `cohsh.pool.telemetry_sessions`: `24`
 - `cohsh.tail.poll_ms_default`: `1000`
 - `cohsh.tail.poll_ms_min`: `250`
 - `cohsh.tail.poll_ms_max`: `10000`
@@ -151,37 +149,43 @@ Manifest-derived policy defaults are emitted by `coh-rtc` into `out/cohsh_policy
 - `heartbeat.interval_ms`: `15000`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`)._
+_Generated from `configs/root_task.toml` (sha256: `9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf`)._
+<!-- coh-rtc:cohsh-policy:end -->
 
 Manifest-derived CohClient defaults (paths and Secure9P bounds) are emitted by `coh-rtc`.
 
-<!-- Author: Lukas Bower -->
-<!-- Purpose: Generated cohsh client snippet consumed by docs/USERLAND_AND_CLI.md. -->
-
+<!-- coh-rtc:cohsh-client:start -->
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`
+- `manifest.sha256`: `9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `trace.max_bytes`: `1048576`
 - `client_paths.queen_ctl`: `/queen/ctl`
 - `client_paths.queen_lifecycle_ctl`: `/queen/lifecycle/ctl`
+- `client_paths.queen_schedule_ctl`: `/queen/schedule/ctl`
+- `client_paths.queen_lease_ctl`: `/queen/lease/ctl`
+- `client_paths.queen_export_ctl`: `/queen/export/ctl`
+- `client_paths.policy_ctl`: `/policy/ctl`
 - `client_paths.log`: `/log/queen.log`
 - `telemetry_ingest.max_segments_per_device`: `4`
-- `telemetry_ingest.max_bytes_per_segment`: `32768`
-- `telemetry_ingest.max_total_bytes_per_device`: `131072`
+- `telemetry_ingest.max_bytes_per_segment`: `131072`
+- `telemetry_ingest.max_total_bytes_per_device`: `524288`
+- `telemetry_ingest.max_reference_entries_per_segment`: `1024`
+- `telemetry_ingest.max_reference_manifest_bytes_per_segment`: `131072`
+- `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`)._
+_Generated from `configs/root_task.toml` (sha256: `9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf`)._
+<!-- coh-rtc:cohsh-client:end -->
 
 Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-core` so CLI and console stay aligned.
 
-<!-- Author: Lukas Bower -->
-<!-- Purpose: Generated cohsh grammar snippet consumed by docs/USERLAND_AND_CLI.md. -->
-
+<!-- coh-rtc:cohsh-grammar:start -->
 ### cohsh console grammar (generated)
 - `help`
 - `bi`
 - `caps`
+- `smp`
 - `mem`
 - `ping`
 - `test`
@@ -198,23 +202,22 @@ Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-co
 - `spawn <payload>`
 - `kill <worker>`
 
-_Generated from cohsh-core verb specs (18 verbs)._
+_Generated from cohsh-core verb specs (19 verbs)._
+<!-- coh-rtc:cohsh-grammar:end -->
 
 ### Lifecycle control (cohsh)
 - `lifecycle <cordon|drain|resume|quiesce|reset>` — writes to `/queen/lifecycle/ctl`.
 - The CLI reads `/proc/lifecycle/state` and rejects invalid transitions locally with deterministic `ERR`.
 - Successful commands still flow through the append-only control file and emit `/log/queen.log` audit lines.
 
-
-<!-- Author: Lukas Bower -->
-<!-- Purpose: Generated cohsh ticket policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
-
+<!-- coh-rtc:cohsh-ticket-policy:start -->
 ### cohsh ticket policy (generated)
 - `ticket.max_len`: `224`
 - `queen` tickets are optional; TCP validates claims when present, NineDoor passes through.
 - `worker-*` tickets are required; role must match and subject identity is mandatory.
 
 _Generated from cohsh-core ticket policy._
+<!-- coh-rtc:cohsh-ticket-policy:end -->
 
 <!-- coh-rtc:ticket-quotas:start -->
 ### Ticket quota limits (generated)

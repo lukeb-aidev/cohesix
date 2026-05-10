@@ -1019,12 +1019,13 @@ const fn runtime_handoff_skips_live_drop_stop(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // A controller instance that did not publish fresh runtime ownership must
-    // not acquire ownership later from Drop. Pi 4 cold boot uses the
-    // PlatformResetComplete lane; these weaker diagnostic lanes remain no-touch
-    // and cannot acquire ownership during drop.
+    // A controller instance on a toxic live-read lane must not acquire new
+    // register evidence from Drop. Pi 4 cold boot uses PlatformResetComplete
+    // after mailbox reset; the live stop is an explicit probe step, not an
+    // implicit destructor side effect.
     runtime_pollsafe_no_fresh_ownership_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_platform_reset_stop_seed_handoff(firmware_handoff, runtime_seed_snapshot)
+        || matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
 }
 
 #[inline(always)]
@@ -1956,6 +1957,19 @@ fn compose_initial_erdp(event_ring_ptr: u64) -> u64 {
 #[inline(always)]
 fn compose_polling_erdp_ack(event_ring_ptr: u64) -> u64 {
     event_ring_ptr | reg::ERST_EHB
+}
+
+#[inline(always)]
+fn pre_command_event_handler_erdp(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+    event_ring_ptr: u64,
+) -> u64 {
+    if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot) {
+        compose_initial_erdp(event_ring_ptr)
+    } else {
+        compose_polling_erdp_ack(event_ring_ptr)
+    }
 }
 
 #[inline(always)]
@@ -4495,7 +4509,11 @@ impl<H: Dma> XhciCtrl<H> {
     pub fn clear_event_handler_busy_for_polling(&self) {
         let event_ring = self.event_ring.lock();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
-        let erdp = compose_polling_erdp_ack(event_ring.dequeue_ptr(&*self.host));
+        let erdp = pre_command_event_handler_erdp(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+            event_ring.dequeue_ptr(&*self.host),
+        );
         let iman_ack = polling_iman_ack_value();
         let iman_event_generation =
             polling_event_generation_iman_value(self.firmware_handoff, self.runtime_seed_snapshot);
@@ -4806,7 +4824,7 @@ impl<H: Dma> XhciCtrl<H> {
             (
                 event_ring.erst_phys(&*self.host),
                 event_ring.erst_entries(),
-                compose_polling_erdp_ack(event_ring.dequeue_ptr(&*self.host)),
+                compose_initial_erdp(event_ring.dequeue_ptr(&*self.host)),
             )
         };
 
@@ -5681,6 +5699,11 @@ impl<H: Dma> XhciCtrl<H> {
                 .add(slot as usize)
                 .write_volatile(phys);
         }
+        compiler_fence(Ordering::Release);
+        match self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa-slot") {
+            Ok(bus) => emit_xhci_diag(0x03f5, slot as u64, phys, bus),
+            Err(_) => emit_xhci_diag(0x03f6, slot as u64, phys, 0),
+        }
     }
 
     /// Reads the current DCBAA slot entry for diagnostics.
@@ -5784,6 +5807,7 @@ mod tests {
         polling_event_generation_iman_value, polling_event_generation_run_usbcmd,
         polling_iman_ack_value, polling_iman_value, port_ready_for_enumeration,
         post_start_polling_irq_quiesce_pending_bits,
+        pre_command_event_handler_erdp,
         post_start_polling_irq_quiesce_skip_usbsts_clear,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
         pre_halt_source_quiesce_before_live_stop_revalidation, preserve_firmware_handoff_config,
@@ -7672,7 +7696,7 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(!runtime_handoff_skips_live_drop_stop(
+        assert!(runtime_handoff_skips_live_drop_stop(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -8936,6 +8960,34 @@ mod tests {
         let erdp = compose_polling_erdp_ack(compose_initial_erdp(0x0404_0040_08));
         assert_eq!(erdp & reg::ERST_EHB, reg::ERST_EHB);
         assert_eq!(erdp & !reg::ERST_PTR_MASK, 0x0404_0040_00);
+    }
+
+    #[test]
+    fn pre_command_erdp_uses_clean_pointer_for_fresh_platform_reset() {
+        let fresh = pre_command_event_handler_erdp(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+            0x0404_0040_08,
+        );
+        assert_eq!(fresh & reg::ERST_EHB, 0);
+        assert_eq!(fresh & !reg::ERST_PTR_MASK, 0x0404_0040_00);
+
+        let inherited = pre_command_event_handler_erdp(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            Some(XhciRuntimeSeedSnapshot {
+                usbcmd: Some(0),
+                usbsts: Some(reg::USBSTS_HCH),
+                iman0: Some(0),
+                dcbaap: None,
+                crcr: None,
+                erstba0: None,
+                erdp0: None,
+                erstsz0: None,
+            }),
+            0x0404_0040_00,
+        );
+        assert_eq!(inherited & reg::ERST_EHB, reg::ERST_EHB);
+        assert_eq!(inherited & !reg::ERST_PTR_MASK, 0x0404_0040_00);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate cohsh .coh script interpreter behavior.
 // Author: Lukas Bower
@@ -8,7 +8,7 @@ use std::io::Cursor;
 
 use anyhow::{anyhow, Result};
 use cohesix_ticket::Role;
-use cohsh::{Session, Shell, Transport};
+use cohsh::{validate_script, Session, Shell, Transport};
 use secure9p_codec::SessionId;
 
 #[derive(Default)]
@@ -135,11 +135,13 @@ fn script_rejects_257_lines() {
 
 #[test]
 fn script_wait_enforces_bounds() {
+    validate_script(Cursor::new(b"WAIT 2000\n".as_slice()))
+        .expect("WAIT 2000 should validate without sleeping");
     let transport = ScriptTransport::default();
     let mut shell = Shell::new(transport, Cursor::new(Vec::new()));
     shell
-        .run_script(Cursor::new(b"WAIT 2000\n".as_slice()))
-        .expect("WAIT 2000 should be accepted");
+        .run_script(Cursor::new(b"WAIT 1\n".as_slice()))
+        .expect("WAIT 1 should execute");
     let err = shell
         .run_script(Cursor::new(b"WAIT 2001\n".as_slice()))
         .expect_err("WAIT 2001 should be rejected");

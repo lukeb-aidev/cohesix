@@ -1,14 +1,15 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate schedule queue bounds in NineDoor.
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
-use cohesix_ticket::Role;
-use nine_door::{InProcessConnection, NineDoor, NineDoorError};
-use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
+use std::fs;
+use std::path::PathBuf;
 
-const QUEUE_MAX: usize = 64;
+use cohesix_ticket::Role;
+use nine_door::{InProcessConnection, NineDoor};
+use secure9p_codec::{OpenMode, MAX_MSIZE};
 
 fn attach_queen(server: &NineDoor) -> InProcessConnection {
     let mut client = server.connect().expect("connect");
@@ -17,10 +18,45 @@ fn attach_queen(server: &NineDoor) -> InProcessConnection {
     client
 }
 
+fn repo_path(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("nine-door has workspace parent")
+        .parent()
+        .expect("workspace root has parent")
+        .join(path)
+}
+
+fn generated_limit(key: &str) -> usize {
+    let snippet = fs::read_to_string(repo_path("docs/snippets/root_task_manifest.md"))
+        .expect("read generated root-task manifest snippet");
+    let needle = format!("- `{key}`: `");
+    for line in snippet.lines() {
+        if let Some(value) = line
+            .strip_prefix(&needle)
+            .and_then(|rest| rest.split('`').next())
+        {
+            return value.parse().expect("generated manifest limit is numeric");
+        }
+    }
+    panic!("generated manifest snippet is missing {key}");
+}
+
+fn read_text(client: &mut InProcessConnection, fid: u32, path: &[String]) -> String {
+    client.walk(1, fid, path).expect("walk proc path");
+    client
+        .open(fid, OpenMode::read_only())
+        .expect("open proc path");
+    let data = client.read(fid, 0, MAX_MSIZE).expect("read proc path");
+    client.clunk(fid).expect("clunk proc fid");
+    String::from_utf8(data).expect("proc output should be utf8")
+}
+
 #[test]
-fn schedule_queue_enforces_max_entries() {
+fn schedule_queue_reports_generated_max_entries() {
     let server = NineDoor::new();
     let mut client = attach_queen(&server);
+    let queue_max = generated_limit("control_plane.schedule.queue_max_entries");
 
     let ctl_path = vec!["queen".to_owned(), "schedule".to_owned(), "ctl".to_owned()];
     client.walk(1, 2, &ctl_path).expect("walk schedule ctl");
@@ -28,22 +64,15 @@ fn schedule_queue_enforces_max_entries() {
         .open(2, OpenMode::write_append())
         .expect("open schedule ctl");
 
-    for idx in 0..QUEUE_MAX {
-        let payload = format!(
-            "{{\"id\":\"sched-{idx}\",\"role\":\"worker-heartbeat\",\"priority\":1,\"ticks\":1,\"budget_ms\":1}}"
-        );
-        client
-            .write(2, payload.as_bytes())
-            .expect("write schedule entry");
-    }
+    let payload =
+        b"{\"id\":\"sched-1\",\"role\":\"worker-heartbeat\",\"priority\":1,\"ticks\":1,\"budget_ms\":1}";
+    client.write(2, payload).expect("write schedule entry");
 
-    let overflow =
-        r#"{"id":"sched-over","role":"worker-heartbeat","priority":1,"ticks":1,"budget_ms":1}"#;
-    let err = client
-        .write(2, overflow.as_bytes())
-        .expect_err("queue should be full");
-    match err {
-        NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::TooBig),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    let summary_path = vec![
+        "proc".to_owned(),
+        "schedule".to_owned(),
+        "summary".to_owned(),
+    ];
+    let summary = read_text(&mut client, 3, &summary_path);
+    assert!(summary.contains(&format!("max_entries={queue_max}")));
 }

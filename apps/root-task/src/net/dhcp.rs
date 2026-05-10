@@ -1,4 +1,4 @@
-// Copyright © 2026 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Deterministic no_std DHCPv4 state machine and packet codec for root-task networking.
 // Author: Lukas Bower
@@ -668,6 +668,29 @@ mod tests {
         packet
     }
 
+    fn option_value<'a>(packet: &'a [u8], code: u8) -> Option<&'a [u8]> {
+        let mut cursor = DHCP_FIXED_LEN;
+        while cursor < packet.len() {
+            let found = packet[cursor];
+            cursor = cursor.saturating_add(1);
+            if found == OPT_END {
+                break;
+            }
+            if found == 0 {
+                continue;
+            }
+            let len = usize::from(*packet.get(cursor)?);
+            cursor = cursor.saturating_add(1);
+            let end = cursor.checked_add(len)?;
+            let value = packet.get(cursor..end)?;
+            if found == code {
+                return Some(value);
+            }
+            cursor = end;
+        }
+        None
+    }
+
     #[test]
     fn dhcp_discover_encodes_message_type() {
         let mut packet = [0u8; 300];
@@ -678,7 +701,43 @@ mod tests {
             packet[DHCP_COOKIE_OFFSET..DHCP_FIXED_LEN],
             DHCP_MAGIC_COOKIE
         );
-        assert!(packet[..len].contains(&DhcpMessageType::Discover.code()));
+        assert_eq!(
+            option_value(&packet[..len], OPT_MESSAGE_TYPE),
+            Some(&[DhcpMessageType::Discover.code()][..])
+        );
+        assert_eq!(
+            option_value(&packet[..len], OPT_CLIENT_ID),
+            Some(&[DHCP_HTYPE_ETHERNET, 0x02, 0, 0, 0, 0, 1][..])
+        );
+        assert_eq!(
+            option_value(&packet[..len], OPT_PARAMETER_REQUEST_LIST),
+            Some(&[OPT_SUBNET_MASK, OPT_ROUTER, OPT_LEASE_TIME, OPT_SERVER_ID][..])
+        );
+    }
+
+    #[test]
+    fn dhcp_request_encodes_selected_offer() {
+        let lease = DhcpLease {
+            ip: [192, 168, 10, 42],
+            prefix_len: 24,
+            gateway: Some([192, 168, 10, 1]),
+            server_id: [192, 168, 10, 1],
+            lease_seconds: 300,
+        };
+        let mut packet = [0u8; 300];
+        let len = encode_request(0x1234_5678, MAC, lease, &mut packet).expect("request");
+        assert_eq!(
+            option_value(&packet[..len], OPT_MESSAGE_TYPE),
+            Some(&[DhcpMessageType::Request.code()][..])
+        );
+        assert_eq!(
+            option_value(&packet[..len], OPT_REQUESTED_IP),
+            Some(&lease.ip[..])
+        );
+        assert_eq!(
+            option_value(&packet[..len], OPT_SERVER_ID),
+            Some(&lease.server_id[..])
+        );
     }
 
     #[test]
@@ -707,6 +766,35 @@ mod tests {
         assert_eq!(lease.prefix_len, 24);
         assert_eq!(lease.gateway, Some([192, 168, 10, 1]));
         assert_eq!(client.status().phase, DhcpPhase::Bound);
+    }
+
+    #[test]
+    fn dhcp_nak_fails_requesting_client() {
+        let mut client = DhcpClient::new(config());
+        client.start(MAC, 0);
+        let offer = offer_packet(client.xid);
+        assert_eq!(client.handle_packet(MAC, &offer, 5), DhcpEvent::SendQueued);
+        let mut nak = offer_packet(client.xid);
+        nak[DHCP_FIXED_LEN + 2] = DhcpMessageType::Nak.code();
+        assert_eq!(
+            client.handle_packet(MAC, &nak, 6),
+            DhcpEvent::Failed(DhcpFailureReason::Nak)
+        );
+        assert_eq!(client.status().phase, DhcpPhase::Failed);
+        assert_eq!(client.status().failure, Some(DhcpFailureReason::Nak));
+    }
+
+    #[test]
+    fn dhcp_ack_server_mismatch_is_rejected() {
+        let mut client = DhcpClient::new(config());
+        client.start(MAC, 0);
+        let offer = offer_packet(client.xid);
+        assert_eq!(client.handle_packet(MAC, &offer, 5), DhcpEvent::SendQueued);
+        let mut ack = ack_packet(client.xid);
+        ack[DHCP_FIXED_LEN + 5..DHCP_FIXED_LEN + 9].copy_from_slice(&[10, 0, 0, 1]);
+        assert_eq!(client.handle_packet(MAC, &ack, 6), DhcpEvent::None);
+        assert_eq!(client.status().metrics.invalid_packets, 1);
+        assert_eq!(client.status().phase, DhcpPhase::Requesting);
     }
 
     #[test]

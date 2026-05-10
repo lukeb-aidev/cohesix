@@ -21,6 +21,9 @@ const MAX_LEASE_REASON_LEN: usize = 24;
 const MAX_EXPORT_ID_LEN: usize = 64;
 const EXPORT_MAX_WINDOWS: usize = 64;
 const LEASE_STATE_ACTIVE: &str = "active";
+const DEFAULT_SCHEDULE_QUEUE_MAX_ENTRIES: usize = 256;
+const DEFAULT_LEASE_ACTIVE_MAX_ENTRIES: usize = 256;
+const DEFAULT_LEASE_PREEMPTIONS_MAX_ENTRIES: usize = 256;
 
 /// Schedule control sizing limits.
 #[derive(Debug, Clone, Copy)]
@@ -34,7 +37,7 @@ impl Default for ScheduleControlConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            queue_max_entries: 64,
+            queue_max_entries: DEFAULT_SCHEDULE_QUEUE_MAX_ENTRIES,
             ctl_max_bytes: 8192,
         }
     }
@@ -53,8 +56,8 @@ impl Default for LeaseControlConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            active_max_entries: 64,
-            preemptions_max_entries: 64,
+            active_max_entries: DEFAULT_LEASE_ACTIVE_MAX_ENTRIES,
+            preemptions_max_entries: DEFAULT_LEASE_PREEMPTIONS_MAX_ENTRIES,
             ctl_max_bytes: 8192,
         }
     }
@@ -704,6 +707,106 @@ fn ensure_len(label: &str, len: usize, max_len: usize) -> Result<(), NineDoorErr
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schedule_queue_enforces_configured_capacity() {
+        let mut state = ScheduleState::new(
+            ScheduleControlConfig {
+                enable: true,
+                queue_max_entries: 2,
+                ctl_max_bytes: 1024,
+            },
+            ProcScheduleConfig {
+                summary: false,
+                queue: false,
+                summary_bytes: 0,
+                queue_bytes: 0,
+            },
+        );
+        let first =
+            r#"{"id":"sched-1","role":"worker-heartbeat","priority":1,"ticks":1,"budget_ms":1}"#;
+        let second =
+            r#"{"id":"sched-2","role":"worker-heartbeat","priority":1,"ticks":1,"budget_ms":1}"#;
+        let overflow =
+            r#"{"id":"sched-3","role":"worker-heartbeat","priority":1,"ticks":1,"budget_ms":1}"#;
+        state.append_line(first).expect("first schedule entry");
+        state.append_line(second).expect("second schedule entry");
+        let err = state
+            .append_line(overflow)
+            .expect_err("schedule queue should be full");
+        assert!(matches!(
+            err,
+            NineDoorError::Protocol {
+                code: ErrorCode::TooBig,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn lease_lists_enforce_configured_capacity() {
+        let mut state = LeaseState::new(
+            LeaseControlConfig {
+                enable: true,
+                active_max_entries: 2,
+                preemptions_max_entries: 2,
+                ctl_max_bytes: 1024,
+            },
+            ProcLeaseConfig {
+                summary: false,
+                active: false,
+                preemptions: false,
+                summary_bytes: 0,
+                active_bytes: 0,
+                preemptions_bytes: 0,
+            },
+        );
+        for id in ["l1", "l2"] {
+            state
+                .append_line(&format!(
+                    r#"{{"op":"grant","id":"{id}","subject":"s","resource":"r","ttl_s":1,"priority":1}}"#
+                ))
+                .expect("grant lease");
+        }
+        let active_err = state
+            .append_line(
+                r#"{"op":"grant","id":"l3","subject":"s","resource":"r","ttl_s":1,"priority":1}"#,
+            )
+            .expect_err("active list should be full");
+        assert!(matches!(
+            active_err,
+            NineDoorError::Protocol {
+                code: ErrorCode::TooBig,
+                ..
+            }
+        ));
+
+        for id in ["l1", "l2"] {
+            state
+                .append_line(&format!(r#"{{"op":"preempt","id":"{id}","reason":"x"}}"#))
+                .expect("preempt lease");
+        }
+        state
+            .append_line(
+                r#"{"op":"grant","id":"l3","subject":"s","resource":"r","ttl_s":1,"priority":1}"#,
+            )
+            .expect("grant after preemptions");
+        let preempt_err = state
+            .append_line(r#"{"op":"preempt","id":"l3","reason":"x"}"#)
+            .expect_err("preemptions list should be full");
+        assert!(matches!(
+            preempt_err,
+            NineDoorError::Protocol {
+                code: ErrorCode::TooBig,
+                ..
+            }
+        ));
+    }
 }
 
 fn validate_simple_token(value: &str, max_len: usize, label: &str) -> Result<(), NineDoorError> {

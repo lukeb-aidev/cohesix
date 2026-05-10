@@ -5,7 +5,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
 
 pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -83,16 +82,50 @@ pub fn write_transcript(path: &Path, lines: &[String]) {
 }
 
 pub fn diff_files(expected: &Path, actual: &Path) -> Result<(), String> {
-    let output = ProcessCommand::new("diff")
-        .args(["-u", expected.to_str().unwrap(), actual.to_str().unwrap()])
-        .output()
-        .map_err(|err| format!("diff failed: {err}"))?;
-    if output.status.success() {
+    let expected_text = fs::read_to_string(expected)
+        .map_err(|err| format!("read expected transcript {}: {err}", expected.display()))?;
+    let actual_text = fs::read_to_string(actual)
+        .map_err(|err| format!("read actual transcript {}: {err}", actual.display()))?;
+    if expected_text == actual_text {
         return Ok(());
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(format!("{stdout}{stderr}"))
+    Err(render_diff(expected, &expected_text, actual, &actual_text))
+}
+
+fn render_diff(expected: &Path, expected_text: &str, actual: &Path, actual_text: &str) -> String {
+    let expected_lines: Vec<&str> = expected_text.lines().collect();
+    let actual_lines: Vec<&str> = actual_text.lines().collect();
+    let first_diff = expected_lines
+        .iter()
+        .zip(actual_lines.iter())
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| expected_lines.len().min(actual_lines.len()));
+    let start = first_diff.saturating_sub(3);
+    let end = expected_lines
+        .len()
+        .max(actual_lines.len())
+        .min(first_diff.saturating_add(4));
+
+    let mut out = format!("--- {}\n+++ {}\n", expected.display(), actual.display());
+    for idx in start..end {
+        match (expected_lines.get(idx), actual_lines.get(idx)) {
+            (Some(left), Some(right)) if left == right => {
+                out.push_str(&format!(" {:>4} {left}\n", idx + 1));
+            }
+            (Some(left), Some(right)) => {
+                out.push_str(&format!("-{:>4} {left}\n", idx + 1));
+                out.push_str(&format!("+{:>4} {right}\n", idx + 1));
+            }
+            (Some(left), None) => {
+                out.push_str(&format!("-{:>4} {left}\n", idx + 1));
+            }
+            (None, Some(right)) => {
+                out.push_str(&format!("+{:>4} {right}\n", idx + 1));
+            }
+            (None, None) => {}
+        }
+    }
+    out
 }
 
 pub fn compare_transcript(frontend: &str, scenario: &str, name: &str, lines: &[String]) -> PathBuf {

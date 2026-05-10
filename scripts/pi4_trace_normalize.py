@@ -53,10 +53,14 @@ TRACE_SEGMENT_RE = re.compile(
 MALFORMED_WIFI_PREFIX_RE = re.compile(r"(?<![A-Za-z0-9_.:-])(?:wif|wi):")
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
 WIFI_HINTS = ("wifi", "wi-fi", "wlan", "cyw", "brcmf", "sdio", "sdhci", "mmc")
-BOOT_START_MARKERS = (
+BOOT_CHAIN_ROOT_MARKERS = (
     "u-boot ",
+)
+BOOT_CHAIN_CONTINUATION_MARKERS = (
     "starting kernel ...",
     "elf-loader started",
+)
+BOOT_START_MARKERS = (
     "bootstrapping kernel",
     "booting all finished, dropped to user space",
     "[kernel:entry] root-task entry reached",
@@ -297,6 +301,14 @@ def usb_bootloader_handoff_evidence(event: TraceEvent) -> bool:
 
     if event.domain != "usb":
         return False
+    lowered_raw = event.raw.lower()
+    if (
+        "xhci stop seed" in lowered_raw
+        or "cohesix,xhci-usbcmd" in lowered_raw
+        or "cohesix,xhci-usbsts" in lowered_raw
+        or "cohesix,xhci-iman0" in lowered_raw
+    ):
+        return True
     if (event.stage or "").lower().startswith("handoff-"):
         return True
     lowered_fields = {key.lower(): value.lower() for key, value in event.fields.items()}
@@ -2298,12 +2310,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         and event.fields.get("timer_irq") == "yes"
         for event in event_list
     )
-    if boot_halted and timer_irq27_seen:
-        boot_halt_reason = "kernel-halt+timer-irq27"
-    elif boot_halted:
+    if boot_halted:
         boot_halt_reason = "kernel-halt"
     elif timer_irq27_seen:
-        boot_halt_reason = "timer-irq27-without-halt"
+        boot_halt_reason = "timer-irq27-observed"
     else:
         boot_halt_reason = "none"
     usb_bootloader_handoff_seen = any(
@@ -2445,10 +2455,22 @@ def latest_boot_slice(lines: list[str]) -> tuple[int, list[str]]:
     """Return the latest boot slice plus its original zero-based line offset."""
 
     latest_start = None
+    latest_start_is_chain = False
     for index, line in enumerate(lines):
         clean = ANSI_RE.sub("", line).lower()
-        if any(marker in clean for marker in BOOT_START_MARKERS):
+        if any(marker in clean for marker in BOOT_CHAIN_ROOT_MARKERS):
             latest_start = index
+            latest_start_is_chain = True
+            continue
+        if any(marker in clean for marker in BOOT_CHAIN_CONTINUATION_MARKERS):
+            if latest_start_is_chain and latest_start is not None:
+                continue
+            latest_start = index
+            latest_start_is_chain = True
+            continue
+        if any(marker in clean for marker in BOOT_START_MARKERS) and not latest_start_is_chain:
+            latest_start = index
+            latest_start_is_chain = False
     if latest_start is None:
         return 0, lines
     return latest_start, lines[latest_start:]

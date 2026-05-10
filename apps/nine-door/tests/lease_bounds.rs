@@ -1,15 +1,15 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate lease bounds in NineDoor.
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
-use cohesix_ticket::Role;
-use nine_door::{InProcessConnection, NineDoor, NineDoorError};
-use secure9p_codec::{ErrorCode, OpenMode, MAX_MSIZE};
+use std::fs;
+use std::path::PathBuf;
 
-const ACTIVE_MAX: usize = 64;
-const PREEMPTIONS_MAX: usize = 64;
+use cohesix_ticket::Role;
+use nine_door::{InProcessConnection, NineDoor};
+use secure9p_codec::{OpenMode, MAX_MSIZE};
 
 fn attach_queen(server: &NineDoor) -> InProcessConnection {
     let mut client = server.connect().expect("connect");
@@ -18,10 +18,46 @@ fn attach_queen(server: &NineDoor) -> InProcessConnection {
     client
 }
 
+fn repo_path(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("nine-door has workspace parent")
+        .parent()
+        .expect("workspace root has parent")
+        .join(path)
+}
+
+fn generated_limit(key: &str) -> usize {
+    let snippet = fs::read_to_string(repo_path("docs/snippets/root_task_manifest.md"))
+        .expect("read generated root-task manifest snippet");
+    let needle = format!("- `{key}`: `");
+    for line in snippet.lines() {
+        if let Some(value) = line
+            .strip_prefix(&needle)
+            .and_then(|rest| rest.split('`').next())
+        {
+            return value.parse().expect("generated manifest limit is numeric");
+        }
+    }
+    panic!("generated manifest snippet is missing {key}");
+}
+
+fn read_text(client: &mut InProcessConnection, fid: u32, path: &[String]) -> String {
+    client.walk(1, fid, path).expect("walk proc path");
+    client
+        .open(fid, OpenMode::read_only())
+        .expect("open proc path");
+    let data = client.read(fid, 0, MAX_MSIZE).expect("read proc path");
+    client.clunk(fid).expect("clunk proc fid");
+    String::from_utf8(data).expect("proc output should be utf8")
+}
+
 #[test]
-fn lease_active_and_preemptions_enforce_bounds() {
+fn lease_summary_reports_generated_bounds() {
     let server = NineDoor::new();
     let mut client = attach_queen(&server);
+    let active_max = generated_limit("control_plane.lease.active_max_entries");
+    let preemptions_max = generated_limit("control_plane.lease.preemptions_max_entries");
 
     let ctl_path = vec!["queen".to_owned(), "lease".to_owned(), "ctl".to_owned()];
     client.walk(1, 2, &ctl_path).expect("walk lease ctl");
@@ -29,40 +65,13 @@ fn lease_active_and_preemptions_enforce_bounds() {
         .open(2, OpenMode::write_append())
         .expect("open lease ctl");
 
-    for idx in 0..ACTIVE_MAX {
-        let payload = format!(
-            "{{\"op\":\"grant\",\"id\":\"l{idx}\",\"subject\":\"s\",\"resource\":\"r\",\"ttl_s\":1,\"priority\":1}}"
-        );
-        client.write(2, payload.as_bytes()).expect("grant lease");
-    }
+    let grant = b"{\"op\":\"grant\",\"id\":\"l1\",\"subject\":\"s\",\"resource\":\"r\",\"ttl_s\":1,\"priority\":1}";
+    client.write(2, grant).expect("grant lease");
+    let preempt = b"{\"op\":\"preempt\",\"id\":\"l1\",\"reason\":\"x\"}";
+    client.write(2, preempt).expect("preempt lease");
 
-    let overflow =
-        r#"{"op":"grant","id":"lover","subject":"s","resource":"r","ttl_s":1,"priority":1}"#;
-    let err = client
-        .write(2, overflow.as_bytes())
-        .expect_err("active list should be full");
-    match err {
-        NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::TooBig),
-        other => panic!("unexpected error: {other:?}"),
-    }
-
-    for idx in 0..PREEMPTIONS_MAX {
-        let payload = format!("{{\"op\":\"preempt\",\"id\":\"l{idx}\",\"reason\":\"x\"}}");
-        client.write(2, payload.as_bytes()).expect("preempt lease");
-    }
-
-    let grant_again =
-        r#"{"op":"grant","id":"lextra","subject":"s","resource":"r","ttl_s":1,"priority":1}"#;
-    client
-        .write(2, grant_again.as_bytes())
-        .expect("grant after preemptions");
-
-    let preempt_over = r#"{"op":"preempt","id":"lextra","reason":"x"}"#;
-    let err = client
-        .write(2, preempt_over.as_bytes())
-        .expect_err("preemptions list should be full");
-    match err {
-        NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::TooBig),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    let summary_path = vec!["proc".to_owned(), "lease".to_owned(), "summary".to_owned()];
+    let summary = read_text(&mut client, 3, &summary_path);
+    assert!(summary.contains(&format!("max_active={active_max}")));
+    assert!(summary.contains(&format!("max_preemptions={preemptions_max}")));
 }

@@ -7,8 +7,9 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 doc_path="${repo_root}/docs/TEST_PLAN.md"
+stage_02_path="${repo_root}/scripts/ci/test_plan_stage_02_host_fast.sh"
 
-python3 - "$repo_root" "$doc_path" <<'PY'
+python3 - "$repo_root" "$doc_path" "$stage_02_path" <<'PY'
 import hashlib
 import pathlib
 import re
@@ -16,7 +17,9 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 doc = pathlib.Path(sys.argv[2])
+stage_02 = pathlib.Path(sys.argv[3])
 text = doc.read_text()
+stage_02_text = stage_02.read_text()
 pattern = re.compile(r'^- `([^`]+)` — `sha256:([0-9a-f]{64})`$', re.M)
 entries = pattern.findall(text)
 if not entries:
@@ -53,12 +56,30 @@ required_snippets = [
     "scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json",
     "scripts/uboot/qemu-uboot-smoke.sh --net user",
     "scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none",
+    "cargo test -p host-ticket-agent",
     "cargo test -p tests",
+    "cargo test -p root-task --no-default-features --features net-console net:: -- --nocapture",
     "cargo test --workspace",
+    "pytest tests/test_pi4_trace_normalize.py",
 ]
 for snippet in required_snippets:
     if snippet not in text:
         print(f"missing required TEST_PLAN entry: {snippet}", file=sys.stderr)
+        errors += 1
+
+required_stage_02_commands = [
+    "cargo test -p host-ticket-agent",
+    "cargo test -p tests",
+    "cargo test -p root-task --no-default-features --features net-console net:: -- --nocapture",
+    "cargo test --workspace",
+    "pytest tests/test_pi4_trace_normalize.py",
+]
+for command in required_stage_02_commands:
+    if command not in stage_02_text:
+        print(
+            f"missing required stage 02 command in {stage_02.relative_to(root)}: {command}",
+            file=sys.stderr,
+        )
         errors += 1
 
 inline_commands = re.findall(r'`([^`]+)`', text)

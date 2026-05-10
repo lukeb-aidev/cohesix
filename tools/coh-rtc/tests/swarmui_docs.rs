@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Guard SwarmUI defaults docs against coh-rtc output.
+// Purpose: Guard userland generated docs against coh-rtc output.
 // Author: Lukas Bower
 
 use coh_rtc::{compile, CompileOptions};
@@ -46,7 +46,7 @@ fn strip_header_comments(contents: &str) -> String {
     lines.join("\n").trim().to_string()
 }
 
-fn compile_swarmui_defaults(temp_dir: &TempDir) -> PathBuf {
+fn compile_manifest_docs(temp_dir: &TempDir) {
     let manifest_path = repo_path("configs/root_task.toml");
     let options = CompileOptions {
         manifest_path,
@@ -81,17 +81,32 @@ fn compile_swarmui_defaults(temp_dir: &TempDir) -> PathBuf {
         swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
     };
     compile(&options).expect("compile manifest");
-    temp_dir.path().join("swarmui_defaults.md")
 }
 
 #[test]
-fn swarmui_defaults_snippet_matches_codegen() {
+fn generated_doc_snippets_match_codegen() {
     let temp_dir = TempDir::new().expect("tempdir");
-    let generated_path = compile_swarmui_defaults(&temp_dir);
-    let generated = fs::read_to_string(&generated_path).expect("read generated swarmui defaults");
-    let repo_snippet = fs::read_to_string(repo_path("docs/snippets/swarmui_defaults.md"))
-        .expect("read repo swarmui defaults");
-    assert_eq!(generated.trim(), repo_snippet.trim());
+    compile_manifest_docs(&temp_dir);
+    for (generated_name, repo_snippet_path) in [
+        ("cohsh_policy.md", "docs/snippets/cohsh_policy.md"),
+        ("cohsh_client.md", "docs/snippets/cohsh_client.md"),
+        ("cohsh_grammar.md", "docs/snippets/cohsh_grammar.md"),
+        (
+            "cohsh_ticket_policy.md",
+            "docs/snippets/cohsh_ticket_policy.md",
+        ),
+        ("swarmui_defaults.md", "docs/snippets/swarmui_defaults.md"),
+    ] {
+        let generated = fs::read_to_string(temp_dir.path().join(generated_name))
+            .unwrap_or_else(|err| panic!("read generated {generated_name}: {err}"));
+        let repo_snippet = fs::read_to_string(repo_path(repo_snippet_path))
+            .unwrap_or_else(|err| panic!("read repo snippet {repo_snippet_path}: {err}"));
+        assert_eq!(
+            generated.trim(),
+            repo_snippet.trim(),
+            "{repo_snippet_path} drifted"
+        );
+    }
 }
 
 #[test]
@@ -107,4 +122,33 @@ fn userland_swarmui_snippet_matches_repo() {
         .expect("read repo swarmui defaults");
     let normalized_repo = strip_header_comments(&repo_snippet);
     assert_eq!(extracted.trim(), normalized_repo.trim());
+}
+
+#[test]
+fn userland_cohsh_snippets_match_repo() {
+    let userland_path = repo_path("docs/USERLAND_AND_CLI.md");
+    let contents = fs::read_to_string(&userland_path).expect("read userland docs");
+    for (marker, snippet_path) in [
+        ("cohsh-policy", "docs/snippets/cohsh_policy.md"),
+        ("cohsh-client", "docs/snippets/cohsh_client.md"),
+        ("cohsh-grammar", "docs/snippets/cohsh_grammar.md"),
+        (
+            "cohsh-ticket-policy",
+            "docs/snippets/cohsh_ticket_policy.md",
+        ),
+    ] {
+        let extracted = extract_snippet(
+            &contents,
+            &format!("<!-- coh-rtc:{marker}:start -->"),
+            &format!("<!-- coh-rtc:{marker}:end -->"),
+        );
+        let repo_snippet = fs::read_to_string(repo_path(snippet_path))
+            .unwrap_or_else(|err| panic!("read repo snippet {snippet_path}: {err}"));
+        let normalized_repo = strip_header_comments(&repo_snippet);
+        assert_eq!(
+            extracted.trim(),
+            normalized_repo.trim(),
+            "{snippet_path} is not embedded in docs/USERLAND_AND_CLI.md"
+        );
+    }
 }

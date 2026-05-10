@@ -26,6 +26,7 @@ host_matrix=(
   "cargo test -p swarmui --test console_parity"
   "cargo test -p swarmui --test security"
   "cargo test -p host-sidecar-bridge"
+  "cargo test -p host-ticket-agent"
   "cargo test -p nine-door --test ui_security"
   "cargo test -p nine-door --test session_state"
   "cargo test -p nine-door --test pressure_counters"
@@ -44,6 +45,7 @@ host_matrix=(
   "cargo run -p coh --features mock -- doctor --mock"
   "cargo test -p hive-gateway"
   "cargo test -p tests"
+  "cargo test -p root-task --no-default-features --features net-console net:: -- --nocapture"
   "cargo test --workspace"
 )
 
@@ -70,6 +72,7 @@ else
     fi
   fi
   python_matrix=(
+    "\"${python_bin}\" -m pytest tests/test_pi4_trace_normalize.py"
     "\"${python_bin}\" -m pytest tools/cohesix-py/tests"
     "\"${python_bin}\" tools/cohesix-py/examples/lease_run.py --mock"
     "\"${python_bin}\" tools/cohesix-py/examples/peft_roundtrip.py --mock"
