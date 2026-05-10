@@ -370,6 +370,42 @@ def test_gate_summary_preserves_wifi_direct_sdio_r5_over_later_ht_symptom() -> N
     assert gates.wifi_blocker == "sdio-cmd53-r5-error"
 
 
+def test_gate_summary_promotes_post_release_ht_timeout_over_readback_unavailable() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware_verify outcome=readback-unavailable "
+            "action=continue-before-armcr4-release "
+            "err=unsupported operation: sdio-cmd53-r5-error verified=no",
+            "[pi4-wifi] firmware stage=armcr4-release-proof "
+            "armcr4-release-proof=cpuhalt-clear-core-up io=0x01 reset=0x00",
+            "[pi4-wifi] firmware stage=wait-ht-clock "
+            "action=ht-clock-terminal reason=active-ht-timeout-no-ladder "
+            "exact_error=cyw43-ht-clock-timeout-before-function2 csr=0x50",
+            "[cyw43] init failure stage=cyw43-load-firmware-fail "
+            "err=unsupported operation: cyw43-ht-clock-timeout-before-function2",
+            "wifi: contract current=firmware-core-control "
+            "expected=f1-backplane-core-control "
+            "observed=exact=sdio-cmd52-write+clock=41666666Hz "
+            "blocker=firmware-core-control path=strict-control-plane",
+            "wifi: f2_gate policy=pre-f2-core-control "
+            "gate=core-control-blocked-before-f2 f2_enabled=no f2_ready=no "
+            "ioex=0x02 iordy=0x02 blocker=sdio-cmd52-write "
+            "blocker_phase=pre-f2-core-control",
+            "wifi: firmware_proof source=cached upload=upload-range-ok "
+            "nvram_tail=nvram-tail-ok rstvec=reset-vector-programmed "
+            "cpuhalt=cpuhalt-clear-core-up",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-ht-clock-timeout-before-function2",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "ht-clock-timeout"
+    assert gates.wifi_exact == "ht-clock-timeout"
+
+
 def test_gate_summary_preserves_usb_pcie_irq_quiesce_blocker() -> None:
     events = normalizer.parse_events(
         [

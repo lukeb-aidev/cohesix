@@ -782,6 +782,28 @@ fn configure_pi4_pcie_dma_window(
     );
     mmio_clear_bits_u32_flush(rc_bar1, PCIE_MISC_RC_BAR1_CONFIG_LO_SIZE_MASK);
     mmio_clear_bits_u32_flush(rc_bar3, PCIE_MISC_RC_BAR3_CONFIG_LO_SIZE_MASK);
+
+    let rc_bar2_lo_after = mmio_read_u32(rc_bar2_lo);
+    let rc_bar2_hi_after = mmio_read_u32(rc_bar2_hi);
+    let misc_ctrl_after = mmio_read_u32(misc_ctrl);
+    let rc_bar1_after = mmio_read_u32(rc_bar1);
+    let rc_bar3_after = mmio_read_u32(rc_bar3);
+    let mut line = heapless::String::<320>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie dma-window bus_base=0x{bus:016x} cpu_base=0x{cpu:016x} bytes=0x{bytes:016x} rc_bar2=0x{lo:08x}/0x{hi:08x} misc_ctrl=0x{misc:08x} scb_size={scb_size} rc_bar1=0x{bar1:08x} rc_bar3=0x{bar3:08x} source=hal",
+            bus = RPI4_PCIE_DMA_BUS_BASE,
+            cpu = RPI4_PCIE_DMA_CPU_BASE,
+            bytes = RPI4_PCIE_DMA_WINDOW_BYTES,
+            lo = rc_bar2_lo_after,
+            hi = rc_bar2_hi_after,
+            misc = misc_ctrl_after,
+            bar1 = rc_bar1_after,
+            bar3 = rc_bar3_after,
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
 }
 
 fn configure_pi4_pcie_outbound_window(status_page: usize) -> Result<(), HalError> {

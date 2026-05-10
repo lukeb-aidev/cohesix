@@ -1740,6 +1740,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     ht_available_seen = False
     post_f2_progress_seen = False
     firmware_release_seen = False
+    terminal_ht_timeout_seen = False
     linux_probe_attach_seen = False
     linux_probe_pmu_write_active = False
     armcr4_prereset_ioctrl_active = False
@@ -2160,6 +2161,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 3)
             if "armcr4_release=1" in raw:
                 firmware_release_seen = True
+        if (
+            "armcr4-release-proof=cpuhalt-clear-core-up" in raw
+            or "cpuhalt_state=cpuhalt-clear-core-up" in raw
+            or "cpuhalt=cpuhalt-clear-core-up" in raw
+            or "stage=armcr4-core-up" in raw
+        ):
+            firmware_release_seen = True
+            gate = max(gate, 4)
         if explicit_blocker == "devon-timeout":
             gate = max(gate, 4)
             blocker = explicit_blocker
@@ -2258,8 +2267,19 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if (
                 explicit_blocker == "ht-clock-timeout"
                 and firmware_release_seen
+                and "stage=wait-ht-clock" in raw
+                and (
+                    "timeout-terminal" in raw
+                    or "action=ht-clock-terminal" in raw
+                    or "active-ht-stable-timeout" in raw
+                    or "status=active-ht-terminal-timeout" in raw
+                )
+            ):
+                terminal_ht_timeout_seen = True
+            if (
+                explicit_blocker == "ht-clock-timeout"
+                and firmware_release_seen
                 and blocker in reset_phase_blockers
-                and blocker not in direct_sdio_blockers
             ) or (
                 explicit_blocker == "ht-clock-timeout"
                 and blocker in reset_phase_blockers
@@ -2275,6 +2295,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = explicit_blocker
 
     if blocker == "function2-disabled" and gate >= 4 and not ht_available_seen:
+        blocker = "ht-clock-timeout"
+    if terminal_ht_timeout_seen and not ht_available_seen and not post_f2_progress_seen:
+        gate = min(gate, 4)
         blocker = "ht-clock-timeout"
     if blocker in precise_ht_blockers and not ht_available_seen and not post_f2_progress_seen:
         gate = min(gate, 4)

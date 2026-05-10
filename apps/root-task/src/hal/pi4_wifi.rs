@@ -956,11 +956,10 @@ const fn post_download_ht_request_primes_wake_sideband() -> bool {
 
 #[inline]
 fn post_download_ht_stage_primes_wake_sideband(stage: &'static str) -> bool {
-    // The Pi 4 board trace shows pre-HT Function 1 sideband CMD52 accesses can
-    // collapse the SDHCI command path immediately after firmware upload. Keep
-    // the pre-HT clock request on CHIPCLKCSR plus cached shadow evidence; only
-    // program the broader wake/cardcap/SLEEPCSR sideband after the F2 boundary.
-    matches!(stage, "post-function2-sr-init")
+    // Linux arms the wake/CMD14/KSO sideband in the firmware callback before
+    // waiting for HT. Keep Function 2 gated on real HT proof, but seed the
+    // sideband that lets the firmware leave the ALP-only 0x50 CHIPCLKCSR state.
+    matches!(stage, "wait-ht-clock" | "post-function2-sr-init")
 }
 
 #[inline]
@@ -1103,7 +1102,7 @@ fn post_download_ht_sleepcsr_requires_clear_set_before_ht(
 
 #[inline]
 const fn post_download_ht_sideband_primes_before_clock_request() -> bool {
-    false
+    true
 }
 
 #[inline]
@@ -6161,6 +6160,9 @@ fn control_plane_exact_error_preserving_driver_failure(
     if !control_plane_exact_error_is_direct_sdio_transport_blocker(driver_failure) {
         return exact_error;
     }
+    if control_plane_exact_error_is_pre_function2_clock_blocker(exact_error) {
+        return exact_error;
+    }
     if exact_error.is_empty()
         || matches!(
             exact_error,
@@ -6169,7 +6171,6 @@ fn control_plane_exact_error_preserving_driver_failure(
                 | "cyw43-control-plane-state-visible-no-reply"
         )
         || exact_error.starts_with("cyw43-function2-disabled")
-        || exact_error.starts_with("cyw43-ht-clock-timeout")
     {
         driver_failure
     } else {
@@ -32050,7 +32051,7 @@ mod tests {
     }
 
     #[test]
-    fn driver_failure_exact_error_preserves_direct_sdio_blocker() {
+    fn driver_failure_exact_error_preserves_direct_sdio_blocker_without_masking_ht_timeout() {
         assert_eq!(
             control_plane_exact_error_preserving_driver_failure(
                 "cyw43-function2-disabled",
@@ -32063,7 +32064,7 @@ mod tests {
                 "cyw43-ht-clock-timeout-before-function2",
                 Some("sdio-cmd52-write"),
             ),
-            "sdio-cmd52-write"
+            "cyw43-ht-clock-timeout-before-function2"
         );
         assert_eq!(
             control_plane_exact_error_preserving_driver_failure(
@@ -32443,10 +32444,8 @@ mod tests {
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
         ));
-        assert!(!post_download_ht_sideband_primes_before_clock_request());
-        assert!(!post_download_ht_stage_primes_wake_sideband(
-            "wait-ht-clock"
-        ));
+        assert!(post_download_ht_sideband_primes_before_clock_request());
+        assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
         assert!(!post_download_ht_stage_primes_wake_sideband(
             "debug-probe-ht"
         ));
@@ -32477,7 +32476,7 @@ mod tests {
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK
         );
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
-        assert!(!post_download_ht_sideband_primes_before_clock_request());
+        assert!(post_download_ht_sideband_primes_before_clock_request());
         assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
@@ -32502,9 +32501,7 @@ mod tests {
             (SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL) & SBSDIO_HT_AVAIL,
             0
         );
-        assert!(!post_download_ht_stage_primes_wake_sideband(
-            "wait-ht-clock"
-        ));
+        assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
         assert!(!post_download_ht_stage_primes_wake_sideband(
             "pre-write-alp-clock"
         ));
@@ -32874,7 +32871,7 @@ mod tests {
             CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS
         );
         assert!(CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
-        assert!(!post_download_ht_sideband_primes_before_clock_request());
+        assert!(post_download_ht_sideband_primes_before_clock_request());
         assert!(!devon_before_ht_may_be_deferred_for_stage(
             "pre-write-alp-clock"
         ));
@@ -33043,9 +33040,7 @@ mod tests {
             true,
             true
         ));
-        assert!(!post_download_ht_stage_primes_wake_sideband(
-            "wait-ht-clock"
-        ));
+        assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
         assert!(!post_download_ht_stage_primes_wake_sideband(
             "debug-probe-ht"
         ));
@@ -33774,10 +33769,8 @@ mod tests {
         assert_eq!(cyw43455_cardcap_command_decode_value(), 0x06);
         assert!(!pre_function2_ht_sideband_programs_sr_registers());
         assert!(post_download_ht_request_primes_wake_sideband());
-        assert!(!post_download_ht_sideband_primes_before_clock_request());
-        assert!(!post_download_ht_stage_primes_wake_sideband(
-            "wait-ht-clock"
-        ));
+        assert!(post_download_ht_sideband_primes_before_clock_request());
+        assert!(post_download_ht_stage_primes_wake_sideband("wait-ht-clock"));
         assert!(post_download_ht_stage_primes_wake_sideband(
             "post-function2-sr-init"
         ));

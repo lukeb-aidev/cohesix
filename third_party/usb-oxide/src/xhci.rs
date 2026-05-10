@@ -262,8 +262,9 @@ const fn polling_event_generation_run_usbcmd(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    let _ = firmware_handoff;
-    let _ = runtime_seed_snapshot;
+    if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot) {
+        return run_usbcmd | reg::USBCMD_INTE;
+    }
     run_usbcmd & !reg::USBCMD_INTE
 }
 
@@ -272,8 +273,9 @@ const fn polling_event_generation_iman_value(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    let _ = firmware_handoff;
-    let _ = runtime_seed_snapshot;
+    if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot) {
+        return reg::IMAN_IE;
+    }
     polling_iman_value()
 }
 
@@ -5172,9 +5174,72 @@ impl<H: Dma> XhciCtrl<H> {
         );
     }
 
+    fn reset_controller_for_prompt_safe_command_recovery(&self) -> Result<()> {
+        let current_usbcmd = self.read_op::<u32>(reg::USBCMD);
+        let mut usbsts = self.read_op::<u32>(reg::USBSTS);
+        emit_xhci_diag(0x03c4, current_usbcmd as u64, usbsts as u64, 0);
+        if halt_revalidation_needed(usbsts) {
+            let stop_cmd = masked_usbcmd(current_usbcmd) & !reg::USBCMD_RUN;
+            Self::write_reg_u32_store_diag_at(
+                self.mmio,
+                self.op_base - self.mmio + reg::USBCMD,
+                stop_cmd,
+                0x03c5,
+                0x03c5,
+                current_usbcmd as u64,
+            );
+            let mut waited = 0usize;
+            while halt_revalidation_needed(usbsts) {
+                waited = waited.saturating_add(1);
+                if waited >= STOP_WAIT_SPINS {
+                    emit_xhci_diag(0x03c6, waited as u64, usbsts as u64, stop_cmd as u64);
+                    return Err(UsbError::Timeout);
+                }
+                spin_loop();
+                usbsts = self.read_op::<u32>(reg::USBSTS);
+            }
+        }
+        emit_xhci_diag(0x03c7, usbsts as u64, reg::USBSTS_HCH as u64, 0);
+
+        let reset_cmd = (masked_usbcmd(current_usbcmd) & !reg::USBCMD_RUN) | reg::USBCMD_HCRST;
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            self.op_base - self.mmio + reg::USBCMD,
+            reset_cmd,
+            0x03c8,
+            0x03c8,
+            current_usbcmd as u64,
+        );
+        let mut waited = 0usize;
+        let mut reset_state = self.read_op::<u32>(reg::USBCMD);
+        while (reset_state & reg::USBCMD_HCRST) != 0 {
+            waited = waited.saturating_add(1);
+            if waited >= RESET_WAIT_SPINS {
+                emit_xhci_diag(0x03c9, waited as u64, reset_state as u64, reset_cmd as u64);
+                return Err(UsbError::Timeout);
+            }
+            spin_loop();
+            reset_state = self.read_op::<u32>(reg::USBCMD);
+        }
+        waited = 0;
+        usbsts = self.read_op::<u32>(reg::USBSTS);
+        while (usbsts & reg::USBSTS_CNR) != 0 {
+            waited = waited.saturating_add(1);
+            if waited >= RESET_WAIT_SPINS {
+                emit_xhci_diag(0x03ca, waited as u64, usbsts as u64, reg::USBSTS_CNR as u64);
+                return Err(UsbError::Timeout);
+            }
+            spin_loop();
+            usbsts = self.read_op::<u32>(reg::USBSTS);
+        }
+        emit_xhci_diag(0x03cb, reset_state as u64, usbsts as u64, 1);
+        Ok(())
+    }
+
     fn republish_fresh_command_event_rings_for_prompt_safe_recovery(&self) -> Result<()> {
         let cmd_ring = Box::new(Ring::new(&*self.host, CMD_RING_SIZE)?);
         let event_ring = Box::new(EventRing::new(&*self.host, EVENT_RING_SIZE)?);
+        let dcbaa_phys = self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa-recovery")?;
         let cmd_ring_phys = cmd_ring.share_for_device(&*self.host, "xhci-cmd-ring-recovery")?;
         let (event_ring_phys, erst_phys) = event_ring.share_for_device(&*self.host)?;
         let event_ring_dequeue = event_ring.try_dequeue_ptr(&*self.host)?;
@@ -5182,10 +5247,13 @@ impl<H: Dma> XhciCtrl<H> {
         let crcr = compose_crcr(0, cmd_ring_phys, true);
         let erst_entries = event_ring.erst_entries();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        let config_offset = self.op_base - self.mmio + reg::CONFIG;
+        let dcbaap_offset = self.op_base - self.mmio + reg::DCBAAP;
         let crcr_offset = self.op_base - self.mmio + reg::CRCR;
 
         emit_xhci_diag(0x03d0, cmd_ring_phys, event_ring_phys, erst_phys);
         emit_xhci_diag(0x03d1, event_ring_dequeue, erdp, u64::from(erst_entries));
+        self.reset_controller_for_prompt_safe_command_recovery()?;
         {
             let mut current = self.cmd_ring.lock();
             *current = cmd_ring;
@@ -5194,6 +5262,23 @@ impl<H: Dma> XhciCtrl<H> {
             let mut current = self.event_ring.lock();
             *current = event_ring;
         }
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            config_offset,
+            self.max_slots as u32,
+            0x03cc,
+            0x03cd,
+            0,
+        );
+        Self::write_reg_u64_done_diag_at(
+            self.mmio,
+            dcbaap_offset,
+            dcbaa_phys,
+            0x03ce,
+            0x03cf,
+            0x03e5,
+            0x03e6,
+        );
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             int_base + reg::ERSTSZ,
@@ -5230,7 +5315,62 @@ impl<H: Dma> XhciCtrl<H> {
             0x03df,
         );
         flush_posted_write(self.mmio, crcr_offset, crcr as u32, 0x03e0);
-        emit_xhci_diag(0x03e1, crcr, erdp, 1);
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            self.op_base - self.mmio + reg::DNCTRL,
+            LINUX_COMMAND_PROBE_DNCTRL,
+            0x03e7,
+            0x03e8,
+            0,
+        );
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            int_base + reg::IMOD,
+            LINUX_COMMAND_PROBE_IMOD,
+            0x03e9,
+            0x03e9,
+            0,
+        );
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            int_base + reg::IMAN,
+            reg::IMAN_IE,
+            0x03ea,
+            0x03ea,
+            0,
+        );
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            self.op_base - self.mmio + reg::USBCMD,
+            linux_command_probe_usbcmd_seed(),
+            0x03eb,
+            0x03eb,
+            1,
+        );
+        flush_posted_write(
+            self.mmio,
+            self.op_base - self.mmio + reg::USBCMD,
+            linux_command_probe_usbcmd_seed(),
+            0x03eb,
+        );
+        let mut waited = 0usize;
+        let mut usbsts_after_run = self.read_op::<u32>(reg::USBSTS);
+        while (usbsts_after_run & reg::USBSTS_HCH) != 0 {
+            waited = waited.saturating_add(1);
+            if waited >= READY_WAIT_SPINS {
+                emit_xhci_diag(
+                    0x03ec,
+                    waited as u64,
+                    usbsts_after_run as u64,
+                    linux_command_probe_usbcmd_seed() as u64,
+                );
+                return Err(UsbError::Timeout);
+            }
+            spin_loop();
+            usbsts_after_run = self.read_op::<u32>(reg::USBSTS);
+        }
+        emit_xhci_diag(0x03ed, waited as u64, usbsts_after_run as u64, 1);
+        emit_xhci_diag(0x03e1, crcr, erdp, 2);
         Ok(())
     }
 
@@ -7355,7 +7495,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_stop_seed_keeps_command_proof_poll_only() {
+    fn platform_reset_fresh_ring_handoff_arms_linux_command_event_generation() {
         let stop_seed = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -7373,14 +7513,14 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            reg::USBCMD_RUN
+            reg::USBCMD_RUN | reg::USBCMD_INTE
         );
         assert_eq!(
             polling_event_generation_iman_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            polling_iman_value()
+            reg::IMAN_IE
         );
         assert_eq!(
             polling_event_generation_run_usbcmd(
@@ -7388,14 +7528,14 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ) & reg::USBCMD_INTE,
-            0
+            reg::USBCMD_INTE
         );
         assert_eq!(
             polling_event_generation_iman_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ) & reg::IMAN_IE,
-            0
+            reg::IMAN_IE
         );
         assert_eq!(
             polling_command_proof_dnctrl_value(

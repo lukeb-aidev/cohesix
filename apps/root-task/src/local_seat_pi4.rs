@@ -3326,7 +3326,7 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
         XHCI_DIAG_HISTORY_B[history_slot].store(b as usize, Ordering::Release);
         XHCI_DIAG_HISTORY_C[history_slot].store(c as usize, Ordering::Release);
     }
-    if line_no > XHCI_DIAG_MAX_LINES {
+    if line_no > XHCI_DIAG_MAX_LINES && !xhci_diag_stage_force_log(stage) {
         if line_no == XHCI_DIAG_MAX_LINES.saturating_add(1) {
             boot_log::force_uart_line("[local-seat] xhci.diag suppressed (rate-limited)");
         }
@@ -3815,8 +3815,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0360..=0x036f
             | 0x0370..=0x0377
             | 0x0380..=0x03b2
-            | 0x03c0..=0x03c3
-            | 0x03d0..=0x03e4
+            | 0x03c0..=0x03ed
             | 0x03f3..=0x03f6
     )
 }
@@ -3839,9 +3838,16 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x0360..=0x036f
             | 0x0370..=0x0377
             | 0x0380..=0x03b2
-            | 0x03c0..=0x03c3
-            | 0x03d0..=0x03e4
+            | 0x03c0..=0x03ed
             | 0x03f3..=0x03f6
+    )
+}
+
+#[inline]
+const fn xhci_diag_stage_force_log(stage: u16) -> bool {
+    matches!(
+        stage,
+        0x030f | 0x031f | 0x035f | 0x0368..=0x0377 | 0x03c4..=0x03ed
     )
 }
 
@@ -3984,6 +3990,9 @@ const fn xhci_diag_stage_value_labels(
         0x03ab..=0x03af => Some(("control_state0", "control_state1", "control_state2")),
         0x03b0 | 0x03b1 => Some(("slot_ep", "dequeue", "result")),
         0x03c0..=0x03c3 => Some(("slot_ep", "code_payload", "decode_state")),
+        0x03c4..=0x03cb => Some(("usbcmd_or_waited", "usbsts_or_state", "target")),
+        0x03cc | 0x03cd => Some(("config_off", "slots", "policy")),
+        0x03ce | 0x03cf | 0x03e5 | 0x03e6 => Some(("reg_off", "reg_value", "target")),
         0x03d0 => Some(("cmd_ring", "event_ring", "erst")),
         0x03d1 => Some(("event_dequeue", "erdp", "erst_entries")),
         0x03d2 | 0x03d3 => Some(("erstsz_off", "erst_entries", "policy")),
@@ -3992,6 +4001,8 @@ const fn xhci_diag_stage_value_labels(
         0x03e1 => Some(("crcr", "erdp", "recovered")),
         0x03e2 | 0x03e4 => Some(("cmd_addr", "status", "recovery")),
         0x03e3 => Some(("cmd_addr", "enqueue_state", "cycle_state")),
+        0x03e7..=0x03eb => Some(("reg_off", "value", "policy")),
+        0x03ec | 0x03ed => Some(("waited", "usbsts", "run_usbcmd")),
         0x03f3..=0x03f6 => Some(("slot", "entry", "bus_or_result")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
@@ -4304,6 +4315,18 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03c1 => Some("usb-hid-report-decode-fail"),
         0x03c2 => Some("usb-hid-report-empty"),
         0x03c3 => Some("usb-hid-report-transfer-fail"),
+        0x03c4 => Some("cmd-recovery-reset-state"),
+        0x03c5 => Some("cmd-recovery-stop-write"),
+        0x03c6 => Some("cmd-recovery-stop-timeout"),
+        0x03c7 => Some("cmd-recovery-stop-halted"),
+        0x03c8 => Some("cmd-recovery-hcrst-write"),
+        0x03c9 => Some("cmd-recovery-hcrst-timeout"),
+        0x03ca => Some("cmd-recovery-cnr-timeout"),
+        0x03cb => Some("cmd-recovery-reset-done"),
+        0x03cc => Some("cmd-recovery-config-write"),
+        0x03cd => Some("cmd-recovery-config-write-done"),
+        0x03ce => Some("cmd-recovery-dcbaap-low-write"),
+        0x03cf => Some("cmd-recovery-dcbaap-low-write-done"),
         0x03d0 => Some("cmd-recovery-rings"),
         0x03d1 => Some("cmd-recovery-event-dequeue"),
         0x03d2 => Some("cmd-recovery-erstsz-write"),
@@ -4325,6 +4348,15 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03e2 => Some("cmd-recovery-timeout-begin"),
         0x03e3 => Some("cmd-recovery-retry-enqueue"),
         0x03e4 => Some("cmd-recovery-retry-timeout"),
+        0x03e5 => Some("cmd-recovery-dcbaap-high-write"),
+        0x03e6 => Some("cmd-recovery-dcbaap-high-write-done"),
+        0x03e7 => Some("cmd-recovery-dnctrl-write"),
+        0x03e8 => Some("cmd-recovery-dnctrl-write-done"),
+        0x03e9 => Some("cmd-recovery-imod-write"),
+        0x03ea => Some("cmd-recovery-iman-write"),
+        0x03eb => Some("cmd-recovery-run-write"),
+        0x03ec => Some("cmd-recovery-run-timeout"),
+        0x03ed => Some("cmd-recovery-run-ready"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -17400,8 +17432,25 @@ mod tests {
         assert!(super::xhci_diag_stage_after_run(0x0374));
         assert!(super::xhci_diag_stage_after_run(0x0380));
         assert!(super::xhci_diag_stage_after_run(0x03c1));
+        assert!(super::xhci_diag_stage_after_run(0x03c4));
+        assert!(super::xhci_diag_stage_after_run(0x03eb));
+        assert!(super::xhci_diag_stage_after_run(0x03ed));
         assert!(!super::xhci_diag_stage_after_run(0x0248));
         assert!(!super::xhci_diag_stage_after_run(0x0213));
+    }
+
+    #[test]
+    fn xhci_diag_force_log_preserves_command_recovery_frontier() {
+        assert!(super::xhci_diag_stage_force_log(0x030f));
+        assert!(super::xhci_diag_stage_force_log(0x035f));
+        assert!(super::xhci_diag_stage_force_log(0x0368));
+        assert!(super::xhci_diag_stage_force_log(0x0377));
+        assert!(super::xhci_diag_stage_force_log(0x03c4));
+        assert!(super::xhci_diag_stage_force_log(0x03d0));
+        assert!(super::xhci_diag_stage_force_log(0x03e4));
+        assert!(super::xhci_diag_stage_force_log(0x03eb));
+        assert!(super::xhci_diag_stage_force_log(0x03ed));
+        assert!(!super::xhci_diag_stage_force_log(0x0248));
     }
 
     #[test]
@@ -17638,6 +17687,22 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0352),
             Some(("iman_off", "iman", "seed_flags"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03c4),
+            Some(("usbcmd_or_waited", "usbsts_or_state", "target"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03cc),
+            Some(("config_off", "slots", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03e7),
+            Some(("reg_off", "value", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03ed),
+            Some(("waited", "usbsts", "run_usbcmd"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x02e5),
