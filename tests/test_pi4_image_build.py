@@ -22,3 +22,12 @@ def test_pi4_image_build_respects_cargo_target_dir_for_root_task() -> None:
         'local root_task_elf="${ROOT_DIR}/target/aarch64-unknown-none/release/root-task"'
         not in source
     )
+
+
+def test_pi4_image_build_defaults_to_pi4_release_features() -> None:
+    """The image path must compile the same Pi 4 release feature bundle as tests."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"' in source
+    assert "(default: release-pi4,bootstrap-trace)" in source

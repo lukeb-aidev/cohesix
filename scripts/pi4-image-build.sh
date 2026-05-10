@@ -25,7 +25,7 @@ BRCMFMAC_CMDLINE_STAGE_NAME="brcmfmac-dyndbg.cmdline"
 BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME="brcmfmac-dyndbg.sh"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
-ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net-console"
+ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"
 SKIP_BUILD=0
 CLEAN_BUILD=0
 PI4_TOTAL_MEM_MB=2048
@@ -60,7 +60,7 @@ Options:
   --image-name <name>       Staged/boot image filename on FAT partition
                             (default: cohesix-image-arm-bcm2711)
   --root-task-features <f>  Comma-separated root-task feature list
-                            (default: kernel,bootstrap-trace,serial-console,net-console)
+                            (default: release-pi4,bootstrap-trace)
   --clean                   Clean and rebuild root-task, Pi4 seL4/U-Boot outputs,
                             and the Pi 4 U-Boot binary before staging/flashing
   --skip-build              Skip rebuild and reuse existing seL4 image in sel4 build dir

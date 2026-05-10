@@ -120,3 +120,77 @@ where
     }
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnvSnapshot, RamFrame};
+
+    struct CoverageOnlyHal {
+        covered_base: usize,
+        covered_pages: usize,
+    }
+
+    impl DeviceHal for CoverageOnlyHal {
+        type Error = HalError;
+
+        fn map_device(&mut self, _paddr: usize) -> Result<DeviceFrame, Self::Error> {
+            Err(HalError::Unsupported("test-map-device-unused"))
+        }
+
+        fn alloc_dma_frame(&mut self) -> Result<RamFrame, Self::Error> {
+            Err(HalError::Unsupported("test-dma-unused"))
+        }
+
+        fn reserve_dma_guard_page(&mut self) -> Result<usize, Self::Error> {
+            Err(HalError::Unsupported("test-guard-unused"))
+        }
+
+        fn device_coverage(&self, paddr: usize, size_bits: usize) -> Option<DeviceCoverage> {
+            if size_bits != PAGE_BITS {
+                return None;
+            }
+            let covered_end = self
+                .covered_base
+                .checked_add(self.covered_pages.checked_mul(PAGE_SIZE)?)?;
+            if (self.covered_base..covered_end).contains(&paddr) {
+                Some(DeviceCoverage {
+                    base: self.covered_base,
+                    limit: covered_end,
+                    size_bits: PAGE_BITS as u8,
+                    index: 0,
+                    used: false,
+                })
+            } else {
+                None
+            }
+        }
+
+        fn snapshot(&self) -> KernelEnvSnapshot {
+            panic!("GENET HAL coverage tests do not use snapshots")
+        }
+    }
+
+    #[test]
+    fn genet_dma_policy_is_physical_uncached_for_pi4() {
+        assert!(dma_uncached());
+        assert_eq!(dma_address_policy_name(), "physical");
+        assert_eq!(dma_bus_addr(0x1234_5000), 0x1234_5000);
+        assert_eq!(dma_bus_addr(DMA_ALIAS_WINDOW_BYTES), DMA_ALIAS_WINDOW_BYTES);
+    }
+
+    #[test]
+    fn genet_candidate_requires_all_register_pages_covered() {
+        let full = CoverageOnlyHal {
+            covered_base: GENET_MMIO_CANDIDATES[0],
+            covered_pages: BCMGENET_MMIO_PAGE_COUNT,
+        };
+        assert!(candidate_covered(&full, GENET_MMIO_CANDIDATES[0]));
+
+        let partial = CoverageOnlyHal {
+            covered_base: GENET_MMIO_CANDIDATES[0],
+            covered_pages: BCMGENET_MMIO_PAGE_COUNT - 1,
+        };
+        assert!(!candidate_covered(&partial, GENET_MMIO_CANDIDATES[0]));
+    }
+}

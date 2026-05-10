@@ -1191,7 +1191,18 @@ fn is_sdhci_fragile_read_error(err: &HalError) -> bool {
 
 #[inline]
 fn firmware_verify_readback_can_be_treated_as_unavailable(err: &HalError) -> bool {
-    is_sdhci_int_timeout(err) || is_sdhci_io_path_error(err) || is_sdio_cmd52_access_error(err)
+    is_sdhci_int_timeout(err)
+        || is_sdhci_io_path_error(err)
+        || is_sdio_cmd52_access_error(err)
+        || matches!(err, HalError::Unsupported("sdio-cmd53-r5-error"))
+}
+
+#[inline]
+fn firmware_verify_mismatch_is_terminal(err: &HalError) -> bool {
+    matches!(
+        err,
+        HalError::Unsupported("cyw43-firmware-verify-mismatch" | "cyw43-firmware-proof-mismatch")
+    )
 }
 
 #[inline]
@@ -12922,6 +12933,14 @@ impl SdioHost {
     }
 
     fn set_bus_width(&mut self, width: SdioBusWidth) -> Result<(), HalError> {
+        if self.desired_bus_width == width {
+            self.apply_host_bus_width(width);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] host bus-width={} action=unchanged skip_card_cccr=yes",
+                sdio_bus_width_name(width),
+            ));
+            return Ok(());
+        }
         self.desired_bus_width = width;
         self.apply_host_bus_width(width);
         if self.card.is_some() {
@@ -17611,8 +17630,14 @@ impl SdioHost {
                 }
                 Err(initial_verify_err) => {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware_verify retry reason=initial-fail err={initial_verify_err}"
+                        "[pi4-wifi] firmware_verify retry retry_reason=initial-fail err={initial_verify_err}"
                     ));
+                    if firmware_verify_mismatch_is_terminal(&initial_verify_err) {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware_verify outcome=fail action=terminal-mismatch err={initial_verify_err}"
+                        ));
+                        return Err(initial_verify_err);
+                    }
                     let verified = self.retry_firmware_upload_after_verify_failure(
                         bundle.firmware,
                         &nvram,
@@ -19541,23 +19566,55 @@ impl SdioHost {
         selected_bulk_clock_hz: &mut u32,
         initial_verify_err: HalError,
     ) -> Result<bool, HalError> {
+        if firmware_verify_readback_can_be_treated_as_unavailable(&initial_verify_err) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware_verify outcome=readback-unavailable action=return-unverified-linux-upload reason=initial-readback-unavailable retry_profiles=skipped err={initial_verify_err} verified=no"
+            ));
+            return Ok(false);
+        }
         let original_width = self.desired_bus_width;
         let original_clock_hz = self.current_clock_hz;
         let original_selected_bulk_clock_hz = *selected_bulk_clock_hz;
         let mut last_err = initial_verify_err;
         let mut last_successful_upload_clock_hz = None;
         for (index, profile) in CYW43_FIRMWARE_VERIFY_RETRY_PROFILES.iter().enumerate() {
+            let attempt = index + 1;
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware_verify_profile attempt={} clock={}Hz width={} chunk={} byte_mode={}",
-                index + 1,
+                attempt,
                 profile.clock_hz,
                 sdio_bus_width_name(profile.width),
                 firmware_verify_transfer_chunk_limit(profile.prefer_byte_mode),
                 yn(profile.prefer_byte_mode),
             ));
-            self.set_bus_width(profile.width)?;
-            let effective_hz = self.set_clock_hz(profile.clock_hz)?;
-            self.write_firmware_payloads(
+            if let Err(err) = self.set_bus_width(profile.width) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware_verify_profile attempt={attempt} outcome=transport-setup-fail op=set-bus-width err={err} prior_readback={last_err}"
+                ));
+                if firmware_verify_readback_can_be_treated_as_unavailable(&last_err) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware_verify outcome=readback-unavailable action=return-unverified-linux-upload reason=retry-transport-setup-unavailable setup_err={err} prior_readback={last_err} verified=no"
+                    ));
+                    return Ok(false);
+                }
+                return Err(err);
+            }
+            let effective_hz = match self.set_clock_hz(profile.clock_hz) {
+                Ok(effective_hz) => effective_hz,
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware_verify_profile attempt={attempt} outcome=transport-setup-fail op=set-clock err={err} prior_readback={last_err}"
+                    ));
+                    if firmware_verify_readback_can_be_treated_as_unavailable(&last_err) {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware_verify outcome=readback-unavailable action=return-unverified-linux-upload reason=retry-transport-clock-unavailable setup_err={err} prior_readback={last_err} verified=no"
+                        ));
+                        return Ok(false);
+                    }
+                    return Err(err);
+                }
+            };
+            if let Err(err) = self.write_firmware_payloads(
                 firmware,
                 nvram,
                 ram_base,
@@ -19566,7 +19623,25 @@ impl SdioHost {
                 nvram_magic,
                 profile.prefer_byte_mode,
                 firmware_upload_attempt_pre_nvram_readback_enabled(true),
-            )?;
+            ) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware_verify_profile attempt={attempt} outcome=reupload-fail err={err} prior_readback={last_err}"
+                ));
+                if firmware_verify_readback_can_be_treated_as_unavailable(&last_err) {
+                    self.restore_firmware_verify_retry_transport(
+                        "reupload-fail-readback-unavailable",
+                        original_clock_hz,
+                        original_width,
+                    )?;
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware_verify outcome=readback-unavailable action=return-unverified-linux-upload reason=retry-reupload-unavailable reupload_err={err} prior_readback={last_err} restored_clock={}Hz width={} verified=no",
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                    ));
+                    return Ok(false);
+                }
+                return Err(err);
+            }
             last_successful_upload_clock_hz = Some(effective_hz);
             match self.verify_firmware_payloads_after_nvram(
                 firmware,
@@ -19591,7 +19666,7 @@ impl SdioHost {
                     last_err = err;
                     emit_breadcrumb(format_args!(
                         "[pi4-wifi] firmware_verify_profile attempt={} outcome=fail err={err}",
-                        index + 1,
+                        attempt,
                     ));
                 }
             }
@@ -27411,8 +27486,20 @@ mod tests {
         assert!(firmware_verify_readback_can_be_treated_as_unavailable(
             &HalError::Unsupported("sdio-cmd52-read")
         ));
+        assert!(firmware_verify_readback_can_be_treated_as_unavailable(
+            &HalError::Unsupported("sdio-cmd53-r5-error")
+        ));
         assert!(!firmware_verify_readback_can_be_treated_as_unavailable(
             &HalError::Unsupported("cyw43-firmware-verify-mismatch")
+        ));
+        assert!(firmware_verify_mismatch_is_terminal(
+            &HalError::Unsupported("cyw43-firmware-verify-mismatch")
+        ));
+        assert!(firmware_verify_mismatch_is_terminal(
+            &HalError::Unsupported("cyw43-firmware-proof-mismatch")
+        ));
+        assert!(!firmware_verify_mismatch_is_terminal(
+            &HalError::Unsupported("sdio-cmd53-r5-error")
         ));
         assert!(firmware_verify_cmd52_fallback_enabled(
             true,

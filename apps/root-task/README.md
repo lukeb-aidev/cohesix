@@ -28,8 +28,11 @@ commands when switching modes:
 # Host defaults for unit and integration tests
 cargo test -p root-task
 
-# Kernel-mode release build for QEMU / aarch64-unknown-none (serial + TCP console)
-cargo build -p root-task --no-default-features --features cohesix-dev --target aarch64-unknown-none --release
+# Kernel-mode QEMU release target (serial + TCP + VirtIO + USB)
+cargo build -p root-task --no-default-features --features release-qemu --target aarch64-unknown-none --release
+
+# Kernel-mode Pi 4 release target (serial + TCP + local seat/GENET/Wi-Fi/USB)
+cargo build -p root-task --no-default-features --features release-pi4 --target aarch64-unknown-none --release
 
 # Guard to ensure sel4_start is present and milestone modules remain
 scripts/check-root-task.sh <path-to-rootserver-elf>
@@ -43,22 +46,11 @@ bridges seL4 debug I/O and the host-mode console harness.
 
 ### Feature flags and dev boot profiles
 
-All feature flags live in `Cargo.toml` with no defaults enabled. The
-production bring-up path expects the following combinations when using
-`--no-default-features`:
+All feature flags live in `Cargo.toml` with no defaults enabled. The two
+release bundles are the supported target configurations when using
+`--no-default-features`; both include TCP (`net-console`) and USB:
 
-- **Serial-only dev boot (PL011 console, no TCP)**
-
-  ```
-  cargo build \
-    --target aarch64-unknown-none \
-    --release \
-    -p root-task \
-    --no-default-features \
-    --features kernel,bootstrap-trace,serial-console
-  ```
-
-- **Serial + net-console dev boot (PL011 + TCP console)**
+- **QEMU release target (PL011 serial, TCP console, VirtIO networking, USB)**
 
   ```
   cargo build \
@@ -66,11 +58,25 @@ production bring-up path expects the following combinations when using
     --release \
     -p root-task \
     --no-default-features \
-    --features cohesix-dev
+    --features release-qemu
   ```
 
-`cohesix-dev` pulls in the net-console stack (including `net`) plus the
-QEMU dev profile; omitting it disables the TCP listener and self-tests.
+- **Pi 4 release target (PL011/mini-UART serial, TCP console, local seat, GENET, Wi-Fi, USB)**
+
+  ```
+  cargo build \
+    --target aarch64-unknown-none \
+    --release \
+    -p root-task \
+    --no-default-features \
+    --features release-pi4
+  ```
+
+`cohesix-dev` layers QEMU trace/self-test diagnostics on top of
+`release-qemu`. Focused driver validation uses `driver-tests-qemu` and
+`driver-tests-pi4` so the two target surfaces can be tested without ad hoc
+feature strings. Both release bundles include TCP and the `usb` feature, which
+selects the `usb-oxide` dependency.
 
 ## Event Pump Overview
 
@@ -107,6 +113,28 @@ feature when validating the bounded virtio queues or smoltcp polls:
 ```
 cargo check -p root-task --features net
 cargo clippy -p root-task --features net --tests
+```
+
+Driver and HAL changes should use the release-aligned bundles instead of
+hand-built feature strings:
+
+```
+python3 scripts/ci/check_driver_test_coverage.py
+cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::rtl8139
+cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::virtio
+cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci
+cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio
+cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts
+cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance
+SEL4_BUILD_DIR=$REPO/seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu
+SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
 ```
 
 ### Debug Console Input

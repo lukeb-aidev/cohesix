@@ -346,6 +346,13 @@ impl<H: Dma> PhysMem<H> {
         host.try_virt_to_phys(self.addr).unwrap_or(0) as u64
     }
 
+    /// Returns the device-visible address or a DMA publication error.
+    pub fn try_phys(&self, host: &H) -> Result<u64> {
+        host.try_virt_to_phys(self.addr)
+            .map(|addr| addr as u64)
+            .ok_or(UsbError::DmaSync)
+    }
+
     /// Prepares the region for device access and returns its bus address.
     pub fn share_for_device(&self, host: &H, label: &'static str) -> Result<u64> {
         host.share_for_device(self.addr, self.size, label)
@@ -425,7 +432,7 @@ impl<H: Dma> Ring<H> {
             cycle: true,
             size: trb_count,
         };
-        ring.init_link_trb(host);
+        ring.init_link_trb(host)?;
         Ok(ring)
     }
 
@@ -463,15 +470,16 @@ impl<H: Dma> Ring<H> {
     }
 
     /// Enqueues one TRB and returns its device-visible address.
-    pub fn enqueue(&mut self, host: &H, mut trb: Trb) -> u64 {
+    pub fn try_enqueue(&mut self, host: &H, mut trb: Trb) -> Result<u64> {
         trb.set_cycle(self.cycle);
-        let addr = self.mem.phys(host) + (self.enqueue * 16) as u64;
+        let ring_phys = self.mem.try_phys(host)?;
+        let addr = ring_phys + (self.enqueue * 16) as u64;
         self.trbs()[self.enqueue] = trb;
         self.enqueue += 1;
 
         if self.enqueue >= self.size - 1 {
             let mut link = Trb::new();
-            link.param = self.mem.phys(host);
+            link.param = ring_phys;
             link.control = (trb_type::LINK << 10) | 2;
             link.set_cycle(self.cycle);
             self.trbs()[self.enqueue] = link;
@@ -479,12 +487,12 @@ impl<H: Dma> Ring<H> {
             self.cycle = !self.cycle;
         }
 
-        addr
+        Ok(addr)
     }
 
     /// Enqueues one TRB, then publishes the updated ring contents to the device.
     pub fn enqueue_and_sync(&mut self, host: &H, trb: Trb, label: &'static str) -> Result<u64> {
-        let addr = self.enqueue(host, trb);
+        let addr = self.try_enqueue(host, trb)?;
         self.sync_for_device(host, label)?;
         Ok(addr)
     }
@@ -503,13 +511,14 @@ impl<H: Dma> Ring<H> {
         Some(unsafe { (self.mem.as_ptr::<Trb>()).add(index).read_volatile() })
     }
 
-    fn init_link_trb(&mut self, host: &H) {
+    fn init_link_trb(&mut self, host: &H) -> Result<()> {
         let last = self.size - 1;
         let mut link = Trb::new();
-        link.param = self.mem.phys(host);
+        link.param = self.mem.try_phys(host)?;
         link.control = (trb_type::LINK << 10) | 2; // Toggle cycle
         link.set_cycle(self.cycle);
         self.trbs()[last] = link;
+        Ok(())
     }
 
     /// Frees the ring allocation.
@@ -558,7 +567,7 @@ impl<H: Dma> EventRing<H> {
             for index in 0..erst_entries {
                 let segment_trbs = trbs_per_entry + usize::from(index < extra_trbs);
                 (*entry.add(index)).base =
-                    ring.phys(host) + (trb_offset * core::mem::size_of::<Trb>()) as u64;
+                    ring.try_phys(host)? + (trb_offset * core::mem::size_of::<Trb>()) as u64;
                 (*entry.add(index)).size = segment_trbs as u16;
                 trb_offset += segment_trbs;
             }
@@ -681,6 +690,10 @@ impl<H: Dma> EventRing<H> {
 
     pub fn dequeue_ptr(&self, host: &H) -> u64 {
         self.ring.phys(host) + (self.dequeue * 16) as u64
+    }
+
+    pub fn try_dequeue_ptr(&self, host: &H) -> Result<u64> {
+        Ok(self.ring.try_phys(host)? + (self.dequeue * 16) as u64)
     }
 }
 

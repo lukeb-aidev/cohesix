@@ -131,6 +131,22 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo run -p coh --features mock -- doctor --mock`
 - `cargo test -p hive-gateway`
 - `cargo test -p tests`
+- `python3 scripts/ci/check_driver_test_coverage.py`
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::rtl8139`
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::virtio`
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci`
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio`
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts`
+- `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`
+- `SEL4_BUILD_DIR=$REPO/seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu`
+- `SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
 - `cargo test --workspace`
 - If `pytest` is not available in the host `python3`, `scripts/ci/test_plan_stage_02_host_fast.sh` auto-creates `${TEST_PLAN_STATE_DIR}/.venv` and installs `pytest` there.
 - `python3 -m pytest tools/cohesix-py/tests`

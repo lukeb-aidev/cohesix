@@ -1402,19 +1402,19 @@ impl<H: Dma> UsbDevice<H> {
                     0 // No data stage
                 },
         };
-        let setup_trb_addr = ep0_ring.enqueue(host, setup_trb);
+        let setup_trb_addr = ep0_ring.try_enqueue(host, setup_trb)?;
 
         // Data Stage TRB (if needed)
         let data_trb_addr = if let Some(ref buf) = data_buf {
-            buf.share_for_device(host, "xhci-control-buffer")?;
+            let data_bus = buf.share_for_device(host, "xhci-control-buffer")?;
             let data_trb = Trb {
-                param: buf.phys(host),
+                param: data_bus,
                 status: setup.length as u32,
                 control: (trb_type::DATA << 10)
                     | if data_dir { 1 << 16 } else { 0 } // DIR
                     | (1 << 5), // IOC for debugging
             };
-            Some(ep0_ring.enqueue(host, data_trb))
+            Some(ep0_ring.try_enqueue(host, data_trb)?)
         } else {
             None
         };
@@ -1427,7 +1427,7 @@ impl<H: Dma> UsbDevice<H> {
                 | if data_len > 0 && setup.length > 0 && data_dir { 0 } else { 1 << 16 } // DIR
                 | (1 << 5), // IOC
         };
-        let status_trb_addr = ep0_ring.enqueue(host, status_trb);
+        let status_trb_addr = ep0_ring.try_enqueue(host, status_trb)?;
         ep0_ring.sync_for_device(host, "xhci-ep0-ring-submit")?;
         self.ctrl.emit_diag(
             0x03a4,
@@ -1883,9 +1883,9 @@ impl<H: Dma> UsbDevice<H> {
         let ring = ep_rings[ring_idx].as_mut().ok_or(UsbError::InvEndpoint)?;
 
         let host = self.ctrl.host();
-        buf.share_for_device(host, "xhci-transfer-buffer")?;
+        let buf_bus = buf.share_for_device(host, "xhci-transfer-buffer")?;
         let trb = Trb {
-            param: buf.phys(host),
+            param: buf_bus,
             status: len as u32,
             control: (trb_type::NORMAL << 10) | (1 << 5), // IOC
         };

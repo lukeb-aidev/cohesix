@@ -2285,7 +2285,7 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     """Return the exact failure and phase carried by a Wi-Fi event."""
 
     exact = "none"
-    for key in ("exact", "exact_error", "cause", "reason", "err", "detail"):
+    for key in ("exact", "exact_error", "err", "cause", "detail", "reason"):
         value = event.fields.get(key)
         if value and value not in {"none", "n/a"}:
             exact = normalize_wifi_blocker(value)

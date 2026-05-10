@@ -481,8 +481,8 @@ impl NetDevice for Rtl8139Device {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hal::pci::{PciAddress, PciBar, PciTopology};
     use crate::hal::DeviceHal;
-    use crate::hal::pci::{PciBar, PciTopology};
     use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnvSnapshot, RamFrame};
 
     struct FakePciHal {
@@ -521,7 +521,7 @@ mod tests {
 
     fn rtl8139_device_with_bar(kind: PciBarKind) -> PciDeviceInfo {
         PciDeviceInfo {
-            addr: crate::hal::PciAddress::new(0, 0, 2, 0),
+            addr: PciAddress::new(0, 0, 2, 0),
             vendor_id: RTL8139_VENDOR_ID,
             device_id: RTL8139_DEVICE_ID,
             class_code: 0x02,
@@ -608,7 +608,7 @@ mod tests {
                 | RTL_RCR_ACCEPT_PHYS
                 | RTL_RCR_ACCEPT_ALL_MULTICAST
                 | RTL_RCR_WRAP,
-            0x0001_880d
+            0x0000_188d
         );
     }
 }

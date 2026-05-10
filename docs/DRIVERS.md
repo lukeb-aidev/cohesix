@@ -586,6 +586,65 @@ docs describing:
 - operator-visible evidence;
 - tests and hardware proof commands.
 
+## Compliant Test Coverage Matrix
+
+Cohesix has two release driver targets:
+
+- `release-qemu`: QEMU `aarch64/virt` with serial, TCP (`net-console`),
+  VirtIO networking, USB, and cache-maintained DMA.
+- `release-pi4`: Raspberry Pi 4 with serial, TCP (`net-console`), local
+  seat, GENETv5, CYW43455 Wi-Fi, USB, PCIe/VL805, SDIO, MMIO, and
+  cache-maintained DMA.
+
+Both release bundles include TCP and USB; the `usb` feature owns the
+`usb-oxide` dependency so USB cannot silently disappear from a release-target
+compile. Do not test driver changes with ad hoc feature strings when the target
+bundle applies. Use the focused aliases:
+
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib`
+  is not the staged command because it runs unrelated root-task tests too; use
+  the focused filters below instead.
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::rtl8139`
+  covers the QEMU RTL8139 fallback PCI/MMIO contract.
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::virtio`
+  covers QEMU VirtIO MMIO identification, bounded ring ownership, and DMA
+  cache hooks.
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci`
+  covers HAL PCI topology lookup semantics.
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio`
+  covers QEMU VirtIO slot bounds and register mapping authority.
+- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart`
+  covers QEMU and Pi 4 UART physical address constants.
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet`
+  covers GENET descriptor, ring, link, and DMA address invariants.
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43`
+  covers CYW43 protocol state, first-reply recovery, and bounded SDPCM/CDC
+  behavior.
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet`
+  covers GENET HAL MMIO coverage and DMA policy.
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie`
+  covers BCM2711 PCIe/VL805 BAR, INTx/MSI, posted-write, DMA-window, and page
+  mapping contracts.
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi`
+  covers SDIO, CYW43455 firmware/HT/Function 2 gates, mailbox, and R5 error
+  contracts.
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::`
+  covers target-neutral local-seat parser, queue, mirror, and USB/Wi-Fi command
+  policy helpers.
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts`
+  covers Pi 4 local-seat USB/VL805/xHCI policy, event-ring polling, PCIe DMA
+  aliasing, and HAL interrupt-source ordering.
+- `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`
+  covers HAL cache-clean/invalidate/error paths and DMA pin/sync/unpin audit
+  ordering.
+- `SEL4_BUILD_DIR=$REPO/seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu`
+  proves the QEMU release bundle builds against the seL4 target artifacts.
+- `SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
+  proves the Pi 4 release bundle compiles the target-only local-seat/USB path.
+- `python3 scripts/ci/check_driver_test_coverage.py` verifies that this matrix,
+  `docs/TEST_PLAN.md`, the staged runner, release feature bundles, and critical
+  driver/HAL test tokens stay aligned.
+
 ## Review Checklist
 
 Use this before merging any driver change:
@@ -618,8 +677,20 @@ Changes:
   - <file> -- <summary>
 Commands:
   - rg -n "ARCH_AARCH64|PLAT_|ARM_GIC|SMMU|AARCH64_USER_CACHE|IRQ" seL4/build/kernel/gen_config/kernel/gen_config.yaml seL4/build/kernel/gen_headers/plat/platform_gen.h
-  - cargo check -p root-task
-  - cargo test -p root-task <module-or-feature>
+  - python3 scripts/ci/check_driver_test_coverage.py
+  - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::rtl8139
+  - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::virtio
+  - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci
+  - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio
+  - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts
+  - cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance
   - scripts/ci/test_plan_run.sh --list
   - scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>
 Checks:

@@ -336,6 +336,22 @@ def test_parse_fields_preserves_unsupported_operation_detail() -> None:
     assert events[0].fields["err"] == "sdio-cmd53-r5-error"
 
 
+def test_wifi_exact_prefers_transport_error_over_retry_reason() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware_verify retry retry_reason=initial-fail "
+            "err=unsupported operation: sdio-cmd53-r5-error",
+            "wifi: contract current=firmware-upload expected=wait-ht-clock "
+            "blocker=ht-backplane-cmd53-r5-rejected",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_blocker == "sdio-cmd53-r5-error"
+    assert gates.wifi_exact == "sdio-cmd53-r5-error"
+
+
 def test_gate_summary_preserves_wifi_direct_sdio_r5_over_later_ht_symptom() -> None:
     events = normalizer.parse_events(
         [

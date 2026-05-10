@@ -6438,7 +6438,8 @@ Commands:
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
   - minicom -D /dev/cu.usbserial-0001 -b 115200 -o -C pi4-serial.log
   - python3 scripts/pi4_trace_normalize.py pi4-serial.log --summary
-  - python3 scripts/pi4_trace_normalize.py pi4-serial.log --gate-summary --expect USB_GATE=3 --expect USB_BLOCKER=cmd-event-ring-timeout --expect WIFI_GATE=4 --expect WIFI_BLOCKER=ht-backplane-cmd53-r5-rejected --expect WIFI_EXACT=sdio-cmd53-r5-error
+  - python3 scripts/pi4_trace_normalize.py pi4-serial.log --gate-summary --expect USB_GATE=10 --expect USB_BLOCKER=none --expect WIFI_GATE=10 --expect WIFI_BLOCKER=none --expect WIFI_EXACT=none
+  - python3 scripts/pi4_trace_normalize.py pi4-serial.log --gate-summary --expect USB_BOOTLOADER_HANDOFF_SEEN=no --expect USB_COLD_BOOT_SEEN=yes --expect BOOT_HALTED=no --expect TIMER_IRQ27_SEEN=no
   - python3 scripts/pi4_trace_normalize.py pi4-linux-known-good.log --domain wifi --summary
   - cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <wifi-lease-ip> --tcp-port 31337 --auth-token bootstrap
 Checks:

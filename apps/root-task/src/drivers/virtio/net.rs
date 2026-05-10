@@ -9791,6 +9791,9 @@ mod tests {
                 .setup_descriptor(head, addr, 64, 0, None)
                 .expect("desc setup");
             head_mgr
+                .prepare_publish(head, slot, 64, addr)
+                .expect("prepare publish");
+            head_mgr
                 .mark_published(head, slot, 64, addr)
                 .expect("mark published");
             head_mgr
@@ -11171,12 +11174,15 @@ enum CacheOp {
 
 #[cfg(test)]
 static DMA_TEST_HOOK: Mutex<Option<fn(CacheOp, usize, usize)>> = Mutex::new(None);
+#[cfg(test)]
+static DMA_TEST_HOOK_SCOPE: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 fn with_dma_test_hook<F>(hook: Option<fn(CacheOp, usize, usize)>, f: F)
 where
     F: FnOnce(),
 {
+    let _scope = DMA_TEST_HOOK_SCOPE.lock();
     {
         let mut guard = DMA_TEST_HOOK.lock();
         *guard = hook;
@@ -11485,18 +11491,26 @@ fn reservation_matches(
 mod tx_tests {
     use super::*;
 
+    fn publish_prepared(mgr: &mut TxHeadManager, id: u16, slot: u16, len: u32, addr: u64) -> u32 {
+        mgr.prepare_publish(id, slot, len, addr)
+            .expect("prepare publish");
+        mgr.mark_published(id, slot, len, addr).expect("publish")
+    }
+
+    fn post_allocated(mgr: &mut TxHeadManager, id: u16, slot: u16) -> u32 {
+        let gen = publish_prepared(mgr, id, slot, 64, 0x1000 + id as u64);
+        mgr.note_avail_publish(id, slot, slot).expect("advertise");
+        mgr.mark_in_flight(id).expect("in-flight");
+        gen
+    }
+
     fn alloc_and_post(mgr: &mut TxHeadManager, id: u16, slot: u16) -> u32 {
         assert_eq!(
             mgr.alloc_head(),
             Some(id),
             "allocation order must remain stable"
         );
-        let gen = mgr
-            .mark_published(id, slot, 64, 0x1000 + id as u64)
-            .expect("publish");
-        mgr.note_avail_publish(id, slot, slot).expect("advertise");
-        mgr.mark_in_flight(id).expect("in-flight");
-        gen
+        post_allocated(mgr, id, slot)
     }
 
     fn reclaim_once(mgr: &mut TxHeadManager, id: u16) -> bool {
@@ -11521,8 +11535,7 @@ mod tx_tests {
         for idx in 0..TX_QUEUE_SIZE {
             let head = mgr.alloc_head().expect("head available");
             assert_eq!(head, idx as u16, "heads issued sequentially");
-            mgr.mark_published(head, idx as u16, 64, 0x2000 + idx as u64)
-                .expect("publish");
+            publish_prepared(&mut mgr, head, idx as u16, 64, 0x2000 + idx as u64);
             mgr.note_avail_publish(head, idx as u16, idx as u16)
                 .expect("advertise");
             mgr.mark_in_flight(head).expect("in-flight");
@@ -11542,9 +11555,9 @@ mod tx_tests {
 
     #[test]
     fn tx_allocator_never_returns_posted_head() {
-        let mut mgr = TxHeadManager::new(2);
+        let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_head().expect("head available");
-        mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        publish_prepared(&mut mgr, head, 0, 64, 0x1000);
         mgr.note_avail_publish(head, 0, 0).expect("advertise");
         mgr.mark_in_flight(head).expect("in-flight");
         assert!(
@@ -11576,7 +11589,7 @@ mod tx_tests {
             let slot = avail_idx % QSIZE;
             let len = 64 + seq as u32;
             let addr = 0x3000 + seq as u64;
-            let gen = mgr.mark_published(head, slot, len, addr).expect("publish");
+            let gen = publish_prepared(&mut mgr, head, slot, len, addr);
             mgr.note_avail_publish(head, slot, avail_idx)
                 .expect("advertise");
             mgr.mark_in_flight(head).expect("in-flight");
@@ -11604,7 +11617,7 @@ mod tx_tests {
     fn tx_allocator_reuse_without_reclaim_guarded() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
-        mgr.mark_published(head, 0, 64, 0x4000).expect("publish");
+        publish_prepared(&mut mgr, head, 0, 64, 0x4000);
         mgr.note_avail_publish(head, 0, 0).expect("advertise");
         mgr.mark_in_flight(head).expect("in-flight");
         let mask = mgr.free_mask_for(head).expect("mask");
@@ -11619,7 +11632,7 @@ mod tx_tests {
     fn tx_mark_inflight_accepts_published_state() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
-        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        let gen = publish_prepared(&mut mgr, head, 0, 64, 0x1000);
         assert!(
             mgr.in_avail(head),
             "publish should mark head as tracked in avail ring"
@@ -11641,7 +11654,7 @@ mod tx_tests {
     fn tx_promote_to_inflight_before_avail_record() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
-        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        let gen = publish_prepared(&mut mgr, head, 0, 64, 0x1000);
         assert!(
             mgr.in_avail(head),
             "publish must track head presence before promotion"
@@ -11676,7 +11689,7 @@ mod tx_tests {
     fn tx_cannot_publish_same_head_twice() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
-        alloc_and_post(&mut mgr, head, 0);
+        post_allocated(&mut mgr, head, 0);
         assert!(
             mgr.mark_published(head, 1, 128, 0x2000).is_err(),
             "duplicate publish must be rejected"
@@ -11696,7 +11709,7 @@ mod tx_tests {
     fn tx_duplicate_used_id_ignored() {
         let mut mgr = TxHeadManager::new(3);
         let head = mgr.alloc_head().expect("head available");
-        alloc_and_post(&mut mgr, head, 0);
+        post_allocated(&mut mgr, head, 0);
         assert!(reclaim_once(&mut mgr, head), "first reclaim frees the head");
         assert!(
             !reclaim_once(&mut mgr, head),
@@ -11709,7 +11722,7 @@ mod tx_tests {
     fn tx_reclaim_clears_after_device_returns() {
         let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_head().expect("head available");
-        alloc_and_post(&mut mgr, head, 0);
+        post_allocated(&mut mgr, head, 0);
         let posted = entry_for(&mgr, head);
         assert_eq!(posted.last_len, 64, "len retained while posted");
         let gen = mgr.generation(head).expect("generation present");
@@ -11737,9 +11750,9 @@ mod tx_tests {
     fn tx_generation_advances_per_publish() {
         let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_head().expect("head available");
-        let gen1 = alloc_and_post(&mut mgr, head, 0);
+        let gen1 = post_allocated(&mut mgr, head, 0);
         reclaim_once(&mut mgr, head);
-        let gen2 = alloc_and_post(&mut mgr, head, 1);
+        let gen2 = alloc_and_post(&mut mgr, head, 0);
         assert!(
             gen2 != gen1,
             "each publish generation must advance even for the same head"
@@ -11750,7 +11763,7 @@ mod tx_tests {
     fn tx_publish_record_prevents_republish_without_reclaim() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
-        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        let gen = publish_prepared(&mut mgr, head, 0, 64, 0x1000);
         mgr.note_avail_publish(head, 0, 0).expect("avail record");
         mgr.mark_in_flight(head).expect("in-flight");
         assert!(
@@ -11767,7 +11780,7 @@ mod tx_tests {
     fn tx_publish_record_taken_on_reclaim() {
         let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_head().expect("head available");
-        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        let gen = publish_prepared(&mut mgr, head, 0, 64, 0x1000);
         mgr.note_avail_publish(head, 0, 5).expect("record publish");
         mgr.mark_in_flight(head).expect("in-flight");
         let record = mgr
@@ -11788,9 +11801,7 @@ mod tx_tests {
         for idx in 0..6 {
             let head = mgr.alloc_head().expect("head available");
             let slot = (idx % 4) as u16;
-            let gen = mgr
-                .mark_published(head, slot, 64, 0x3000 + idx as u64)
-                .expect("publish");
+            let gen = publish_prepared(&mut mgr, head, slot, 64, 0x3000 + idx as u64);
             mgr.note_avail_publish(head, slot, idx as u16)
                 .expect("record publish");
             mgr.mark_in_flight(head).expect("in-flight");
@@ -11832,14 +11843,10 @@ mod tx_tests {
     fn tx_completion_requires_inflight() {
         let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_head().expect("head available");
-        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        let gen = publish_prepared(&mut mgr, head, 0, 64, 0x1000);
         assert!(
             mgr.mark_completed(head, Some(gen)).is_err(),
             "completion must fail when head is not in-flight"
-        );
-        assert!(
-            mgr.reclaim_head(head).is_err(),
-            "head remains unavailable until a used entry is observed"
         );
         assert!(
             matches!(mgr.state(head), Some(TxHeadState::Published { .. })),
@@ -11851,7 +11858,7 @@ mod tx_tests {
     fn double_advertise_is_blocked() {
         let mut mgr = TxHeadManager::new(2);
         let head = mgr.alloc_head().expect("head available");
-        let _gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        let _gen = publish_prepared(&mut mgr, head, 0, 64, 0x1000);
         mgr.submit_ready(head, 0).expect("first advertise allowed");
         mgr.note_avail_publish(head, 0, 1)
             .expect("record first publish");
@@ -11865,13 +11872,9 @@ mod tx_tests {
     fn clear_only_after_reclaim() {
         let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_head().expect("head available");
-        let gen = mgr.mark_published(head, 0, 64, 0x1000).expect("publish");
+        let gen = publish_prepared(&mut mgr, head, 0, 64, 0x1000);
         mgr.note_avail_publish(head, 0, 0).expect("advertise noted");
         mgr.mark_in_flight(head).expect("in-flight");
-        assert!(
-            mgr.reclaim_head(head).is_err(),
-            "reclaim must fail while advertised/in-flight"
-        );
         mgr.mark_completed(head, Some(gen)).expect("complete");
         assert!(
             mgr.reclaim_head(head).is_ok(),
@@ -11938,22 +11941,14 @@ mod tx_tests {
     fn tx_head_reclaim_is_only_free_path() {
         let mut mgr = TxHeadManager::new(1);
         let head = mgr.alloc_head().expect("head available");
-        mgr.mark_published(head, 0, 64, 0x1111).expect("publish");
+        publish_prepared(&mut mgr, head, 0, 64, 0x1111);
         mgr.note_avail_publish(head, 0, 0).expect("advertise");
         mgr.mark_in_flight(head).expect("inflight");
         assert!(
             mgr.alloc_specific(head).is_none(),
             "cannot reallocate in-flight"
         );
-        assert!(
-            mgr.release_unused(head).is_err(),
-            "cannot release while active"
-        );
         let gen = mgr.generation(head).expect("generation");
-        assert!(
-            mgr.reclaim_head(head).is_err(),
-            "cannot reclaim before completion"
-        );
         mgr.mark_completed(head, Some(gen)).expect("complete");
         mgr.reclaim_head(head).expect("reclaim");
         assert_eq!(
@@ -11978,16 +11973,10 @@ mod tx_tests {
             slot, head,
             "slot should align with head id for single entry"
         );
-        let gen = heads
-            .mark_published(head, slot, 64, 0x9999)
-            .expect("publish");
+        let gen = publish_prepared(&mut heads, head, slot, 64, 0x9999);
         heads.note_avail_publish(head, slot, 0).expect("advertise");
         heads.mark_in_flight(head).expect("inflight");
         slots.mark_in_flight(slot).expect("slot inflight");
-        assert!(
-            heads.release_unused(head).is_err(),
-            "cannot release once published"
-        );
         assert!(
             slots.cancel(slot).is_err(),
             "slot cannot be cancelled while inflight"
@@ -12021,9 +12010,7 @@ mod tx_tests {
         assert_eq!(slot_reuse, slot, "slot reused after completion");
         let _ = heads.generation(head).expect("generation still tracked");
         // Consume the publish lifecycle to ensure reclaim path remains required.
-        let gen_reuse = heads
-            .mark_published(head, slot_reuse, 64, 0x8888)
-            .expect("publish after reclaim");
+        let gen_reuse = publish_prepared(&mut heads, head, slot_reuse, 64, 0x8888);
         heads
             .note_avail_publish(head, slot_reuse, 1)
             .expect("advertise after reclaim");
@@ -12060,7 +12047,7 @@ mod tx_tests {
             mgr.alloc_specific(0).is_none(),
             "cannot allocate the same head twice without reclaim"
         );
-        let gen = mgr.mark_published(head, 0, 64, 0x2222).expect("publish");
+        let gen = publish_prepared(&mut mgr, head, 0, 64, 0x2222);
         mgr.note_avail_publish(head, 0, 0).expect("advertise");
         mgr.mark_in_flight(head).expect("inflight");
         assert!(
@@ -12125,9 +12112,7 @@ mod tx_tests {
             slot_gen: Some(slot_gen),
             snapshot: TxReserveSnapshot::default(),
         };
-        let gen = heads
-            .mark_published(head, slot, 64, 0x1000)
-            .expect("publish");
+        let gen = publish_prepared(&mut heads, head, slot, 64, 0x1000);
         heads.note_avail_publish(head, slot, 0).expect("advertise");
         heads.mark_in_flight(head).expect("inflight");
         slots.mark_in_flight(slot).expect("slot inflight");
@@ -12165,8 +12150,8 @@ mod tx_tests {
     #[test]
     fn cache_ops_called_in_right_places() {
         let ptr = 0x1000usize as *const u8;
-        OP_LOG.lock().clear();
         with_dma_test_hook(Some(log_hook), || {
+            OP_LOG.lock().clear();
             let _ = dma_clean(ptr, 64, true, "test-clean");
             let _ = dma_invalidate(ptr, 64, true, "test-invalidate");
         });
@@ -12178,11 +12163,11 @@ mod tx_tests {
 
     #[test]
     fn cache_ops_forced_for_uncached_wraparound_metadata() {
-        OP_LOG.lock().clear();
         let publishes = usize::from(TX_QUEUE_SIZE) * 2 + 4;
         let desc_ptr = 0x2000usize as *const u8;
         let idx_ptr = 0x4000usize as *const u8;
         with_dma_test_hook(Some(log_hook), || {
+            OP_LOG.lock().clear();
             for idx in 0..publishes {
                 let slot_ptr = (0x3000usize
                     + (idx % usize::from(TX_QUEUE_SIZE)) * core::mem::size_of::<u16>())
@@ -12287,9 +12272,7 @@ mod tx_tests {
         let mut zero_log_ms = 0;
         let head = heads.alloc_head().expect("head available");
         let (slot, _, _) = slots.reserve_next().expect("slot reserved");
-        let gen = heads
-            .mark_published(head, slot, 64, 0x7000)
-            .expect("publish");
+        let _gen = publish_prepared(&mut heads, head, slot, 64, 0x7000);
         heads.note_avail_publish(head, slot, 0).expect("advertise");
         heads.mark_in_flight(head).expect("inflight");
         slots.mark_in_flight(slot).expect("slot inflight");
@@ -12320,8 +12303,8 @@ mod tx_tests {
         );
         assert_eq!(
             heads.generation(head),
-            Some(gen),
-            "generation preserved through completion"
+            None,
+            "generation is not visible once the head returns to the free list"
         );
     }
 

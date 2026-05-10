@@ -3816,6 +3816,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0370..=0x0377
             | 0x0380..=0x03b2
             | 0x03c0..=0x03c3
+            | 0x03d0..=0x03e4
             | 0x03f3..=0x03f6
     )
 }
@@ -3839,6 +3840,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x0370..=0x0377
             | 0x0380..=0x03b2
             | 0x03c0..=0x03c3
+            | 0x03d0..=0x03e4
             | 0x03f3..=0x03f6
     )
 }
@@ -3982,6 +3984,14 @@ const fn xhci_diag_stage_value_labels(
         0x03ab..=0x03af => Some(("control_state0", "control_state1", "control_state2")),
         0x03b0 | 0x03b1 => Some(("slot_ep", "dequeue", "result")),
         0x03c0..=0x03c3 => Some(("slot_ep", "code_payload", "decode_state")),
+        0x03d0 => Some(("cmd_ring", "event_ring", "erst")),
+        0x03d1 => Some(("event_dequeue", "erdp", "erst_entries")),
+        0x03d2 | 0x03d3 => Some(("erstsz_off", "erst_entries", "policy")),
+        0x03d4..=0x03df => Some(("reg_off", "reg_value", "target")),
+        0x03e0 => Some(("flush_off", "flush_value", "policy")),
+        0x03e1 => Some(("crcr", "erdp", "recovered")),
+        0x03e2 | 0x03e4 => Some(("cmd_addr", "status", "recovery")),
+        0x03e3 => Some(("cmd_addr", "enqueue_state", "cycle_state")),
         0x03f3..=0x03f6 => Some(("slot", "entry", "bus_or_result")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
@@ -4294,6 +4304,27 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03c1 => Some("usb-hid-report-decode-fail"),
         0x03c2 => Some("usb-hid-report-empty"),
         0x03c3 => Some("usb-hid-report-transfer-fail"),
+        0x03d0 => Some("cmd-recovery-rings"),
+        0x03d1 => Some("cmd-recovery-event-dequeue"),
+        0x03d2 => Some("cmd-recovery-erstsz-write"),
+        0x03d3 => Some("cmd-recovery-erstsz-write-done"),
+        0x03d4 => Some("cmd-recovery-erstba-low-write"),
+        0x03d5 => Some("cmd-recovery-erstba-low-write-done"),
+        0x03d6 => Some("cmd-recovery-erstba-high-write"),
+        0x03d7 => Some("cmd-recovery-erstba-high-write-done"),
+        0x03d8 => Some("cmd-recovery-erdp-low-write"),
+        0x03d9 => Some("cmd-recovery-erdp-low-write-done"),
+        0x03da => Some("cmd-recovery-erdp-high-write"),
+        0x03db => Some("cmd-recovery-erdp-high-write-done"),
+        0x03dc => Some("cmd-recovery-crcr-low-write"),
+        0x03dd => Some("cmd-recovery-crcr-low-write-done"),
+        0x03de => Some("cmd-recovery-crcr-high-write"),
+        0x03df => Some("cmd-recovery-crcr-high-write-done"),
+        0x03e0 => Some("cmd-recovery-posted-write-flush"),
+        0x03e1 => Some("cmd-recovery-published"),
+        0x03e2 => Some("cmd-recovery-timeout-begin"),
+        0x03e3 => Some("cmd-recovery-retry-enqueue"),
+        0x03e4 => Some("cmd-recovery-retry-timeout"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -13863,7 +13894,7 @@ impl SeatDma {
                                 Some(phys)
                             }
                         }
-                        RegionBacking::Mmio(_) => Some(phys),
+                        RegionBacking::Mmio(_) => None,
                     };
                 }
             }
@@ -13875,16 +13906,37 @@ impl SeatDma {
         }
     }
 
+    fn virt_to_phys_reject_reason_locked(state: &SeatDmaState, va: usize) -> &'static str {
+        for region in &state.regions {
+            let start = region.virt_start;
+            let Some(end) = start.checked_add(region.length) else {
+                continue;
+            };
+            if (start..end).contains(&va) {
+                return match &region.backing {
+                    RegionBacking::Dma(_) => "dma-bus-address-unavailable",
+                    RegionBacking::Mmio(_) => "mmio-not-dma",
+                };
+            }
+        }
+        if state.pcie_dma_window {
+            "pcie-window-untracked"
+        } else {
+            "untracked"
+        }
+    }
+
     fn virt_to_phys_locked(state: &SeatDmaState, va: usize) -> usize {
         match Self::try_virt_to_phys_locked(state, va) {
             Some(addr) => addr,
             None => {
                 if !USB_DMA_RANGE_WARNED.swap(true, Ordering::AcqRel) {
+                    let reason = Self::virt_to_phys_reject_reason_locked(state, va);
                     let mut line = heapless::String::<192>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] xhci dma translate reject vaddr=0x{va:016x} reason=pcie-window"
+                            "[local-seat] xhci dma translate reject vaddr=0x{va:016x} reason={reason}"
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
@@ -14343,62 +14395,73 @@ fn validate_framebuffer_geometry(
 }
 
 #[cfg(test)]
-mod tests {
-    use alloc::{string::String, vec::Vec};
+mod driver_coverage_tests {
+    use super::*;
 
-    use super::{
-        append_wrapped_scrollback_rows, clamp_visible_height, clamp_visible_width,
-        config_value_for_set, decode_pci_mmio_bar, display_init_failure_allows_headless,
-        hid_keyboard_attach_rank, hid_keyboard_attach_source,
-        hid_keyboard_candidate_requires_force_mode, hub_retry_wait_spins,
-        hub_should_eager_port_power, keyboard_attach_retry_allowed,
-        keyboard_display_scroll_delta_for_key, keyboard_scancode_to_char,
-        mailbox_visible_dimension, normalize_hub_tt_profile, normalize_pi4_xhci_mmio_hint,
-        parse_xhci_capbase, runtime_vl805_mailbox_reset_allows_trusted_cold_init,
-        runtime_vl805_mailbox_reset_error_allows_cold_init, text_backspace_target, text_row_count,
-        text_viewport_height, translate_bcm2711_soc_reg_addr, translate_vl805_pci_bar_to_cpu_mmio,
-        usb_command_probe_proves_ring, usb_no_op_probe_error_label,
-        usb_probe_preflight_next_step_for_source, vl805_capture_cfg_witness_contract_ready,
-        vl805_cfg_preseed_mode, vl805_cfg_preseed_needed, vl805_runtime_cfg_replay_ready,
-        vl805_runtime_cfg_touch_allowed, xhci_connected_mask_from_portsc,
-        xhci_controller_params_from_probe, xhci_controller_params_from_probe_with_strategy,
-        xhci_controller_skips_constructor_live_scrub,
-        xhci_controller_skips_initial_live_operational_reads, xhci_diag_stage_label,
-        xhci_diag_stage_value_labels, xhci_firmware_handoff_hint_reason, xhci_irq_policy_reason,
-        xhci_irq_service_ack_loop_ready, xhci_irq_sink_mode, xhci_irq_sink_needed,
-        xhci_pre_reset_irq_quiesce_required, xhci_preseed_allows_high_bar_candidate,
-        xhci_preseed_allows_static_legacy_fallbacks, xhci_preseed_pin_only_reason,
-        xhci_preseed_runtime_trusted, xhci_root_port_connected, xhci_runtime_init_strategies,
-        xhci_runtime_init_strategy_after_mailbox_reset,
-        xhci_runtime_init_strategy_after_mailbox_reset_with_ownership,
-        xhci_runtime_init_strategy_constructor_label_for_source,
-        xhci_runtime_init_strategy_halt_guard_label_for_source,
-        xhci_runtime_init_strategy_legacy_label_for_source,
-        xhci_runtime_init_strategy_origin_label, xhci_runtime_init_strategy_policy_label,
-        xhci_runtime_init_strategy_pre_reset_label_for_source,
-        xhci_runtime_init_strategy_prompt_safe, xhci_runtime_init_strategy_prompt_safe_for_source,
-        xhci_runtime_init_strategy_publish_label,
-        xhci_runtime_init_strategy_requires_primary_pcie_irq, xhci_runtime_init_strategy_run_label,
-        xhci_runtime_mmio_candidate_allowed, xhci_runtime_mmio_has_accessible_window,
-        xhci_safe_mode_skip_command, xhci_vl805_irq_delivery_ready, ConfigDesc,
-        LocalSeatXhciStopStateSnapshot, Pi4SeatError, UsbError, UsbKeyboard, UsbProbePathOutcome,
-        UsbProbePathProgress, UsbProbePathwaySummary, Vl805CfgPreseedMode, XhciCapProbe,
-        XhciDiagSnapshot, XhciFirmwareHandoff, XhciIrqBinding, XhciIrqGuard, XhciIrqInstallPhase,
-        XhciIrqSinkMode, XhciRuntimeInitStrategy, HUB_PORT_IFACE_FALLBACK_MAX,
-        PI4_GENERIC_VTIMER_IRQ, PI4_PCIE_BRIDGE_IRQ, PI4_VL805_XHCI_INTX_IRQ,
-        RPI4_PCIE_BUS_MMIO_WINDOW_BASE, RPI4_VL805_LINUX_BAR0, RPI4_VL805_LINUX_BAR1,
-        RPI4_VL805_LINUX_COMMAND, RPI4_XHCI_MMIO_HIGH_CANDIDATE, RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
-        TRUSTED_XHCI_IRQ_BINDING_LIMIT, TRUSTED_XHCI_PCIE_SINK_IRQS,
-        XHCI_HAL_IRQ_ACK_LOOP_AVAILABLE, XHCI_MMIO_ALIAS_SCAN_STEPS,
-        XHCI_PRE_CONTROLLER_VTIMER_SHADOW_ENABLED, XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED,
-        XHCI_VL805_PCIE_IRQ_SINK_ENABLED,
-    };
-    use super::{
-        hid_protocol, hid_subclass, scancode, xhci_firmware_handoff_safe, CHAR_HEIGHT,
-        HUB_CLASS_CONTROL_WAIT_SPINS, HUB_CLASS_CONTROL_WAIT_SPINS_FAST, PCI_COMMAND_BUS_MASTER,
-        PCI_COMMAND_INTERRUPT_DISABLE, PCI_COMMAND_MEMORY_SPACE,
-        RPI4_XHCI_MMIO_SECONDARY_CANDIDATE,
-    };
+    #[test]
+    fn driver_coverage_pi4_local_seat_usb_vl805_dma_contracts() {
+        assert!(XHCI_PRE_RESET_PCIE_IRQ_QUIESCE_ENABLED);
+        assert!(!VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN);
+        assert!(!xhci_pre_reset_irq_ack_without_source_clear_allowed(
+            VL805_CAPTURE_WITNESS_HOST_IRQ_MMIO_QUIESCE_OPT_IN,
+        ));
+        assert!(!xhci_pre_reset_irq_ack_without_source_clear_allowed(true));
+        assert!(xhci_runtime_init_strategy_requires_primary_pcie_irq(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
+        ));
+        assert!(xhci_pre_reset_irq_quiesce_required(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, true),
+        ));
+
+        assert_eq!(pcie_dma_bus_addr(0x0400_3000), Some(0x0000_0004_0400_3000));
+        assert_eq!(
+            pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT - PAGE_SIZE),
+            Some(0x0000_0004_FFFF_F000)
+        );
+        assert_eq!(pcie_dma_bus_addr(RPI4_PCIE_DMA_LIMIT), None);
+
+        assert!(XHCI_PCIE_DMA_WINDOW_ENABLED);
+        assert_eq!(xhci_dma_bus_modes(), &[true]);
+        assert_eq!(xhci_dma_bus_policy_label(), "pcie-window-high-alias-only");
+        assert_eq!(
+            usb_no_op_probe_error_label(UsbError::Timeout),
+            "no-op-timeout"
+        );
+        assert!(!usb_command_probe_proves_ring("no-op-timeout"));
+        assert!(usb_command_probe_proves_ring(
+            "enable-slot-ok-cleanup-failed"
+        ));
+        assert!(usb_command_probe_proves_ring("no-op-ok"));
+
+        assert!(xhci_polling_only_runtime(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            xhci_preferred_trusted_handoff_mode(VL805_RUNTIME_RESET_STATE_UNATTEMPTED),
+        ));
+        assert!(!xhci_polling_only_runtime(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            XhciFirmwareHandoff::PreserveControllerState,
+        ));
+        assert!(xhci_polling_only_runtime(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::None,
+        ));
+        assert_eq!(xhci_diag_stage_label(0x03d0), Some("cmd-recovery-rings"));
+        assert_eq!(
+            xhci_diag_stage_label(0x03e4),
+            Some("cmd-recovery-retry-timeout")
+        );
+        assert!(xhci_diag_history_stage_relevant(0x03d0));
+        assert!(xhci_diag_stage_after_run(0x03e1));
+    }
+}
+
+#[cfg(all(test, target_os = "none"))]
+mod tests {
+    use crate::rust_alloc::{string::String, vec::Vec};
+
+    use super::*;
 
     #[test]
     fn decode_pci_mmio_bar_rejects_io_bar() {
@@ -19234,8 +19297,8 @@ mod tests {
 
     #[test]
     fn hub_port_power_policy_defaults_to_deferred_scan() {
-        assert!(!hub_should_eager_port_power(0));
-        assert!(!hub_should_eager_port_power(1));
+        assert!(!UsbKeyboard::hub_should_eager_port_power(0));
+        assert!(!UsbKeyboard::hub_should_eager_port_power(1));
     }
 
     #[test]
@@ -19332,6 +19395,30 @@ mod tests {
             }]),
         };
         assert_eq!(SeatDma::try_virt_to_phys_locked(&state, PAGE_SIZE), None);
+    }
+
+    #[test]
+    fn seat_dma_translation_rejects_mmio_regions_as_dma_addresses() {
+        let state = SeatDmaState {
+            hal_ptr: 0,
+            prefer_high: false,
+            pcie_dma_window: true,
+            sealed: false,
+            regions: Vec::from([PhysRegion {
+                virt_start: PAGE_SIZE,
+                phys_start: RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+                length: PAGE_SIZE,
+                size: PAGE_SIZE,
+                align: PAGE_SIZE,
+                backing: RegionBacking::Mmio(Vec::new()),
+                shares: Vec::new(),
+            }]),
+        };
+        assert_eq!(SeatDma::try_virt_to_phys_locked(&state, PAGE_SIZE), None);
+        assert_eq!(
+            SeatDma::virt_to_phys_reject_reason_locked(&state, PAGE_SIZE),
+            "mmio-not-dma"
+        );
     }
 
     #[test]
