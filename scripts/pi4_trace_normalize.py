@@ -933,6 +933,21 @@ def normalize_wifi_blocker(value: str) -> str:
     ):
         return "socram-prereset-fgc-cmd53-r5-rejected"
     if stripped in {
+        "firmware-window-cmd52-write",
+        "unsupported operation: firmware-window-cmd52-write",
+    } or "blocker=firmware-window-cmd52-write" in lower:
+        return "firmware-window-cmd52-write"
+    if stripped in {
+        "firmware-window-sdhci-int-timeout",
+        "unsupported operation: firmware-window-sdhci-int-timeout",
+    } or "blocker=firmware-window-sdhci-int-timeout" in lower:
+        return "firmware-window-sdhci-int-timeout"
+    if stripped in {
+        "firmware-window-sdhci-io-path",
+        "unsupported operation: firmware-window-sdhci-io-path",
+    } or "blocker=firmware-window-sdhci-io-path" in lower:
+        return "firmware-window-sdhci-io-path"
+    if stripped in {
         "sdio-cmd52-write",
         "unsupported operation: sdio-cmd52-write",
     }:
@@ -1681,6 +1696,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "socram-prereset-fgc-cmd53-r5-rejected",
         "armcr4-prereset-fgc-cmd53-r5-rejected",
         "d11-prereset-fgc-cmd53-r5-rejected",
+        "firmware-window-cmd52-write",
+        "firmware-window-sdhci-int-timeout",
+        "firmware-window-sdhci-io-path",
         "sdio-cmd52-write",
         "sdio-cmd52-read",
         "sdio-cmd53-r5-error",
@@ -2165,6 +2183,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "socram-prereset-fgc-cmd53-r5-rejected",
             "armcr4-prereset-fgc-cmd53-r5-rejected",
             "d11-prereset-fgc-cmd53-r5-rejected",
+            "firmware-window-cmd52-write",
+            "firmware-window-sdhci-int-timeout",
+            "firmware-window-sdhci-io-path",
             "sdio-cmd52-write",
             "sdio-cmd52-read",
             "sdio-cmd53-r5-error",

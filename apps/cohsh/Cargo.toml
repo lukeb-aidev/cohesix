@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Configure the Cohesix shell crate dependencies and metadata.
+# Copyright 2026 Lukas Bower
 [package]
 name = "cohsh"
 version = "0.1.0"
@@ -24,7 +25,7 @@ cohesix-proto = { workspace = true }
 cohesix-rest = { path = "../../crates/cohesix-rest", optional = true }
 secure9p-codec = { workspace = true }
 nine-door = { path = "../nine-door" }
-gpu-bridge-host = { path = "../gpu-bridge-host" }
+gpu-bridge-host = { path = "../gpu-bridge-host", default-features = false }
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
 fs2 = "0.4"

@@ -103,9 +103,13 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p cohsh --test transcripts`
 - `cargo test -p cohsh --test control_plane`
 - `cargo test -p cohsh` (REST transport is enabled by default; use `--no-default-features` to verify minimal builds)
+- `cargo check -p swarmui --bin swarmui` (Tauri 2 command/context wiring; SwarmUI keeps the Tauri binary out of Cargo test harnesses)
+- `python3 scripts/ci/check_swarmui_dependencies.py` (default REST projection may use `ureq`; `--no-default-features` must not pull HTTP clients)
+- `cargo test -p swarmui --test dependency_policy`
 - `cargo test -p swarmui --test transcript`
 - `cargo test -p swarmui --test console_parity`
 - `cargo test -p swarmui --test security`
+- `cargo test -p swarmui --test tauri2_config`
 - `cargo test -p host-sidecar-bridge`
 - `cargo test -p host-ticket-agent`
 - `cargo test -p nine-door --test ui_security`

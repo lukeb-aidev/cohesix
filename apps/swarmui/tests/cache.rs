@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate SwarmUI snapshot cache bounds and offline behavior.
 // Author: Lukas Bower
@@ -44,8 +44,15 @@ fn snapshot_cache_bounds_and_expiry() {
     let read = cache.read("fleet:ingest").expect("read");
     assert_eq!(read.payload, payload);
 
-    std::thread::sleep(Duration::from_millis(60));
-    let expired = cache.read("fleet:ingest").unwrap_err();
+    let expired_cache = SnapshotCache::new(
+        temp_dir.path().join("expired-snapshots"),
+        128,
+        Duration::ZERO,
+    );
+    expired_cache
+        .write("fleet:expired", &payload)
+        .expect("write expired snapshot");
+    let expired = expired_cache.read("fleet:expired").unwrap_err();
     assert!(matches!(expired, CacheError::Expired));
 
     let oversized = vec![0u8; 256];

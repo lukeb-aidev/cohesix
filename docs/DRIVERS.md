@@ -296,10 +296,11 @@ active path is Cohesix-owned cold start:
   xHCI capability dword read at BAR offset `0x0000` can halt immediately after
   `USBCMD.RUN`; never use xHCI BAR reads, `USBSTS`, or any `PORTSC` as the
   posted-write drain on this prompt-safe path.
-- After the mailbox reset promotes live cold-boot ownership of the high BAR,
-  the xHCI controller must apply the Broadcom AXI read/write attribute registers
-  before publishing rings. This is controller MMIO owned by the xHCI constructor,
-  while the posted-write drains still go through HAL-owned PCIe EXT_CFG.
+- The external VL805 high-BAR path must not apply the generic Broadcom xHCI
+  wrapper AXI read/write attribute quirk. On Pi 4 that quirk's `0x0c08/0x0c0c`
+  offsets are not part of the live VL805 PCI controller contract; the
+  root-complex AXI/outbound-window setup belongs to the HAL-owned BCM2711 PCIe
+  path and posted-write drains still go through HAL-owned EXT_CFG readback.
 
 ## Evidence Ladder
 
@@ -553,8 +554,9 @@ Required Cohesix shape:
   reset-authority evidence must fail gate proof instead of authorizing rings.
 - MSI remains disabled unless the milestone explicitly proves it.
 - Poll-only command/event-ring proof comes before keyboard enumeration.
-- Cold-boot high-BAR xHCI must program the Broadcom AXI attributes after
-  mailbox-reset ownership and before the first command-ring proof.
+- Cold-boot high-BAR xHCI must not touch generic Broadcom wrapper AXI
+  attribute registers; BCM2711 PCIe AXI/outbound-window setup is a HAL
+  root-complex responsibility, not a VL805 BAR responsibility.
 - Root-port reads known to be toxic must stay behind explicit HAL gates.
 - USB keyboard feeds only the existing root-console parser.
 

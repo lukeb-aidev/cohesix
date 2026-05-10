@@ -1390,7 +1390,23 @@ fn firmware_bulk_transfer_can_retry(err: &HalError) -> bool {
 
 #[inline]
 fn firmware_window_write_can_retry(err: &HalError, attempt: usize) -> bool {
-    attempt == 0 && chipcommon_config_can_assume_window_commit(err)
+    attempt == 0
+        && (is_sdio_cmd52_access_error(err)
+            || is_sdhci_io_path_error(err)
+            || is_sdhci_int_timeout(err))
+}
+
+#[inline]
+fn firmware_window_write_blocker(err: &HalError) -> &'static str {
+    if is_sdio_cmd52_access_error(err) {
+        "firmware-window-cmd52-write"
+    } else if is_sdhci_int_timeout(err) {
+        "firmware-window-sdhci-int-timeout"
+    } else if is_sdhci_io_path_error(err) {
+        "firmware-window-sdhci-io-path"
+    } else {
+        "firmware-window-write"
+    }
 }
 
 #[inline]
@@ -15332,7 +15348,12 @@ impl SdioHost {
                         window_remaining,
                     ),
                 );
-                if attempt > 0 {
+                if attempt > 0
+                    || backplane_window_reprogram_needed(
+                        self.programmed_backplane_window,
+                        chunk_addr,
+                    )
+                {
                     self.prepare_firmware_upload_window(
                         window_stage,
                         window_assumed_stage,
@@ -16183,6 +16204,11 @@ impl SdioHost {
                         attempt += 1;
                     }
                     Err(err) => {
+                        let blocker = firmware_window_write_blocker(&err);
+                        remember_wifi_driver_failure_exact_error(blocker);
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage={stage} addr=0x{addr:08x} reg={register_name} value=0x{value:02x} err={err} action=window-write-fail blocker={blocker}"
+                        ));
                         if !chipcommon_config_can_assume_window_commit(&err) {
                             return Err(err);
                         }
@@ -27325,19 +27351,35 @@ mod tests {
     }
 
     #[test]
-    fn firmware_window_write_retry_stays_disabled_without_commit_assumption() {
-        assert!(!firmware_window_write_can_retry(
+    fn firmware_window_write_retry_is_bounded_to_transport_errors() {
+        assert!(firmware_window_write_can_retry(
+            &HalError::Unsupported("sdio-cmd52-write"),
+            0,
+        ));
+        assert!(firmware_window_write_can_retry(
             &HalError::Unsupported("sdhci-command-error"),
             0,
         ));
         assert!(!firmware_window_write_can_retry(
-            &HalError::Unsupported("sdhci-command-error"),
+            &HalError::Unsupported("sdio-cmd52-write"),
             1,
         ));
-        assert!(!firmware_window_write_can_retry(
+        assert!(firmware_window_write_can_retry(
             &HalError::Unsupported("sdhci-transfer-command"),
             0,
         ));
+        assert!(!firmware_window_write_can_retry(
+            &HalError::Unsupported("cyw43-firmware-verify-mismatch"),
+            0,
+        ));
+        assert_eq!(
+            firmware_window_write_blocker(&HalError::Unsupported("sdio-cmd52-write")),
+            "firmware-window-cmd52-write"
+        );
+        assert_eq!(
+            firmware_window_write_blocker(&HalError::Unsupported("sdhci-int-timeout")),
+            "firmware-window-sdhci-int-timeout"
+        );
     }
 
     #[test]

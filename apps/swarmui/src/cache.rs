@@ -1,5 +1,6 @@
 // Author: Lukas Bower
 // Purpose: Provide bounded CBOR snapshot caching for SwarmUI offline inspection.
+// Copyright 2026 Lukas Bower
 
 use std::fs;
 use std::io;
@@ -153,7 +154,7 @@ impl SnapshotCache {
             return Err(CacheError::Version(entry.version));
         }
         let now = now_ms();
-        if now > entry.expires_ms {
+        if now >= entry.expires_ms {
             let _ = fs::remove_file(&path);
             return Err(CacheError::Expired);
         }

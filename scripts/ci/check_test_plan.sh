@@ -56,6 +56,8 @@ required_snippets = [
     "scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json",
     "scripts/uboot/qemu-uboot-smoke.sh --net user",
     "scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none",
+    "cargo check -p swarmui --bin swarmui",
+    "python3 scripts/ci/check_swarmui_dependencies.py",
     "cargo test -p host-ticket-agent",
     "cargo test -p tests",
     "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",
@@ -68,6 +70,8 @@ for snippet in required_snippets:
         errors += 1
 
 required_stage_02_commands = [
+    "cargo check -p swarmui --bin swarmui",
+    "python3 scripts/ci/check_swarmui_dependencies.py",
     "cargo test -p host-ticket-agent",
     "cargo test -p tests",
     "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",

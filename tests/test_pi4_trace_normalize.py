@@ -1832,6 +1832,24 @@ def test_gate_summary_prefers_terminal_wifi_cmd52_write_failure() -> None:
     assert gates.wifi_blocker == "sdio-cmd52-write"
 
 
+def test_gate_summary_classifies_firmware_window_cmd52_write_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware stage=write-firmware-window "
+            "addr=0x001a8000 reg=high value=0x00 "
+            "err=unsupported operation: sdio-cmd52-write "
+            "action=window-write-fail blocker=firmware-window-cmd52-write",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=firmware-window-cmd52-write",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "firmware-window-cmd52-write"
+
+
 def test_gate_summary_caps_wifi_diag_control_plane_after_pre_f2_cmd52_failure() -> None:
     events = normalizer.parse_events(
         [

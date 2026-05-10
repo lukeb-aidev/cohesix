@@ -9,10 +9,15 @@
 //! SwarmUI backend helpers: session management, transcripts, and cache handling.
 
 mod cache;
+mod desktop;
 mod hive;
 mod transport;
 
 pub use cache::{CacheError, SnapshotCache, SnapshotRecord};
+pub use desktop::{
+    mint_ticket_for_role, parse_mint_args, parse_replay_path, parse_trace_replay_path,
+    resolve_console_auth_token, resolve_replay_path, resolve_rest_auth_token, MintArgs,
+};
 pub use hive::{
     SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig, SwarmUiHiveDetail,
     SwarmUiHiveEvent, SwarmUiHiveEventKind, SwarmUiHiveLeaseEntry, SwarmUiHiveLeasePreemption,

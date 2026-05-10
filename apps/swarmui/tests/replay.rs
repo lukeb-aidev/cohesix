@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate SwarmUI hive replay determinism and snapshot expiry handling.
 // Author: Lukas Bower
@@ -67,7 +67,7 @@ fn expired_hive_snapshot_is_rejected() -> Result<()> {
     let mut config = SwarmUiConfig::from_generated(temp_dir.path().to_path_buf());
     config.cache.enabled = true;
     config.cache.max_bytes = 65536;
-    config.cache.ttl = Duration::from_millis(1);
+    config.cache.ttl = Duration::ZERO;
     let calls = Arc::new(Mutex::new(0usize));
     let factory = NoConnectFactory {
         calls: Arc::clone(&calls),
@@ -77,7 +77,6 @@ fn expired_hive_snapshot_is_rejected() -> Result<()> {
     backend
         .cache_write("hive:demo", &payload)
         .context("cache write")?;
-    std::thread::sleep(Duration::from_millis(4));
     backend.set_offline(true);
     let err = backend
         .hive_bootstrap(Role::Queen, None, Some("demo"))

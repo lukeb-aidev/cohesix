@@ -12,6 +12,8 @@ description = "SwarmUI desktop client for Cohesix (Tauri host UI)"
 [[bin]]
 name = "swarmui"
 path = "src-tauri/main.rs"
+test = false
+bench = false
 
 [features]
 default = ["offline-cache", "rest"]
@@ -19,7 +21,7 @@ offline-cache = []
 rest = ["cohsh/rest"]
 
 [dependencies]
-cohsh = { path = "../cohsh", features = ["tcp"] }
+cohsh = { path = "../cohsh", default-features = false, features = ["tcp"] }
 cohsh-core = { workspace = true }
 cohesix-ticket = { workspace = true }
 secure9p-codec = { workspace = true }
