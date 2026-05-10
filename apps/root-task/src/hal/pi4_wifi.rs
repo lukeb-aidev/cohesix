@@ -946,20 +946,20 @@ const fn ht_clock_assist_shadow_is_complete(
 
 #[inline]
 const fn post_download_ht_request_primes_wake_sideband() -> bool {
-    // Explicit diagnostics may still characterize the Broadcom wake/CMD14/KSO
-    // sideband. Production post-release HT follows brcmfmac's firmware callback:
-    // preserve the live KSO/DEVON evidence from ARMCR4 release, replay the
-    // CHIPCLKCSR SD-only fence, request HT, and only touch Function 2 sideband
-    // after HT proof exists.
+    // Explicit diagnostics and the post-F2 boundary may still characterize the
+    // Broadcom wake/CMD14/KSO sideband. The production post-release HT edge
+    // keeps the fragile Function 1 sideband untouched until after the first
+    // CHIPCLKCSR proof attempt.
     true
 }
 
 #[inline]
 fn post_download_ht_stage_primes_wake_sideband(stage: &'static str) -> bool {
-    // Linux arms the wake/CMD14/KSO sideband in the firmware callback before
-    // waiting for HT. Keep Function 2 gated on real HT proof, but seed the
-    // sideband that lets the firmware leave the ALP-only 0x50 CHIPCLKCSR state.
-    matches!(stage, "wait-ht-clock" | "post-function2-sr-init")
+    // The 2026-05-10 Pi 4 trace showed that pre-HT Function 1 sideband writes
+    // can collapse DEVON before CHIPCLKCSR can progress. Keep production
+    // wait-ht-clock focused on the Linux SD-only fence plus HT request; SR
+    // sideband programming is deferred to the post-F2 boundary.
+    matches!(stage, "post-function2-sr-init")
 }
 
 #[inline]
@@ -1079,7 +1079,7 @@ fn post_download_ht_sleepcsr_clear_set_poll_limit_for_stage(stage: &'static str)
 
 #[inline]
 fn post_download_ht_sleepcsr_requires_live_devon_before_ht(stage: &'static str) -> bool {
-    !matches!(stage, "wait-ht-clock" | "debug-probe-ht")
+    !matches!(stage, "debug-probe-ht")
 }
 
 #[inline]
@@ -1676,10 +1676,11 @@ const fn firmware_stage_allows_function2_ready_bypass(experimental_no_ht_transpo
 
 #[inline]
 const fn firmware_stage_can_enter_bounded_no_ht_transport_after_soft_ht_timeout() -> bool {
-    // Missing HT proof is a production stop condition. Bounded no-HT transport
-    // stays diagnostic-only because Function 2 and the control-plane channel
-    // are not a proven runtime surface until HT_AVAIL is observed.
-    false
+    // The exact Pi 4 CYW43455 post-release shape 0x50 (ALP_AVAIL|HT_REQ) with
+    // cached KSO may try the existing bounded no-HT Function 2 readiness probe.
+    // This does not bypass IOR2 or firmware-channel readiness; it only avoids
+    // stopping before the card-level readiness contract can be measured.
+    true
 }
 
 #[inline]
@@ -3830,9 +3831,9 @@ fn required_ht_clock_linux_active_transition_resets_chipclk_for_attempt(
 
 #[inline]
 const fn cyw43455_uses_linux_sr_kso_clock() -> bool {
-    // The post-download HT edge primes wake/CMD14/KSO sideband before the clock
-    // request, but Pi 4 CYW43455 still does not use SR KSO as a generic clock
-    // shortcut. Function 2 remains gated on CHIPCLKCSR/CCCR proof.
+    // Pi 4 CYW43455 does not use SR KSO as a generic clock shortcut. Function
+    // 2 remains gated on the bounded no-HT probe's real CCCR readiness or on
+    // the strict CHIPCLKCSR/CCCR proof when HT is available.
     false
 }
 
@@ -5205,7 +5206,7 @@ const fn pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
 
 #[inline]
 fn devon_before_ht_may_be_deferred_for_stage(stage: &'static str) -> bool {
-    matches!(stage, "wait-ht-clock" | "debug-probe-ht")
+    matches!(stage, "debug-probe-ht")
 }
 
 #[inline]
@@ -21373,11 +21374,19 @@ impl SdioHost {
         if !sleep_after.is_some_and(post_download_ht_sleepcsr_ready_for_function2)
             && sleep_after.is_some_and(post_download_ht_sleepcsr_ready_for_ht_request)
         {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage={stage} action=post-download-sleepcsr-devon-deferred sleep=0x{sleep_value:02x}/{sleep_set} readiness=chipclk-ht-avail terminal=no f2=blocked policy=kso-only-before-ht",
-                sleep_value = sleep_after.unwrap_or(0),
-                sleep_set = yn(sleep_after.is_some()),
-            ));
+            if requires_live_devon {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=post-download-sleepcsr-devon-missing sleep=0x{sleep_value:02x}/{sleep_set} readiness=chipclk-ht-avail terminal=pending f2=blocked policy=live-devon-before-ht",
+                    sleep_value = sleep_after.unwrap_or(0),
+                    sleep_set = yn(sleep_after.is_some()),
+                ));
+            } else {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=post-download-sleepcsr-devon-deferred sleep=0x{sleep_value:02x}/{sleep_set} readiness=chipclk-ht-avail terminal=no f2=blocked policy=kso-only-before-ht",
+                    sleep_value = sleep_after.unwrap_or(0),
+                    sleep_set = yn(sleep_after.is_some()),
+                ));
+            }
         }
         if !sleep_after.is_some_and(|sleep| {
             post_download_ht_sleepcsr_ready_for_clock_request(sleep, requires_live_devon)
@@ -32415,7 +32424,7 @@ mod tests {
         );
         assert!(CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
         assert!(post_download_ht_sleepcsr_poll_limit() < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
-        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
@@ -32424,7 +32433,7 @@ mod tests {
         assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "pre-write-alp-clock"
         ));
-        assert!(!post_download_ht_sleepcsr_requires_clear_set_before_ht(
+        assert!(post_download_ht_sleepcsr_requires_clear_set_before_ht(
             "wait-ht-clock",
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
@@ -32458,14 +32467,14 @@ mod tests {
         assert!(!devon_before_ht_may_be_deferred_for_stage(
             "pre-write-alp-clock"
         ));
-        assert!(devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
+        assert!(!devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
         assert!(CYW43_KSO_DEVICE_ON_WAIT_LOOPS <= CYW43_KSO_AWAKE_WAIT_LOOPS);
         assert!(CYW43_KSO_DEVICE_ON_PROGRESS_INTERVAL_LOOPS > 0);
         assert!(CYW43_KSO_INITIAL_SETTLE_LOOPS > 0);
     }
 
     #[test]
-    fn post_download_ht_sideband_allows_kso_only_for_production_ht_request() {
+    fn post_download_ht_sideband_requires_live_devon_for_production_ht_request() {
         assert!(post_download_ht_sleepcsr_uses_linux_clear_set());
         assert!(post_download_ht_sleepcsr_clear_set_is_primary_before_ht());
         assert!(post_download_ht_sleepcsr_preserves_cached_devon());
@@ -32477,7 +32486,7 @@ mod tests {
         );
         assert!(post_download_ht_sleepcsr_clear_set_is_nonterminal());
         assert!(post_download_ht_sideband_primes_before_clock_request());
-        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
@@ -32486,7 +32495,7 @@ mod tests {
         assert!(!post_download_ht_sleepcsr_ready_for_function2(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK
         ));
-        assert!(post_download_ht_sleepcsr_ready_for_clock_request(
+        assert!(!post_download_ht_sleepcsr_ready_for_clock_request(
             SBSDIO_FUNC1_SLEEPCSR_KSO_MASK,
             post_download_ht_sleepcsr_requires_live_devon_before_ht("wait-ht-clock")
         ));
@@ -32505,7 +32514,7 @@ mod tests {
         assert!(!post_download_ht_stage_primes_wake_sideband(
             "pre-write-alp-clock"
         ));
-        assert!(!post_download_ht_sleepcsr_requires_clear_set_before_ht(
+        assert!(post_download_ht_sleepcsr_requires_clear_set_before_ht(
             "wait-ht-clock",
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK | SBSDIO_FUNC1_SLEEPCSR_DEVON_MASK),
             Some(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK),
@@ -32875,7 +32884,7 @@ mod tests {
         assert!(!devon_before_ht_may_be_deferred_for_stage(
             "pre-write-alp-clock"
         ));
-        assert!(devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
+        assert!(!devon_before_ht_may_be_deferred_for_stage("wait-ht-clock"));
         assert!(sleepcsr_kso_acknowledged(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK));
         assert!(!sleepcsr_device_on_awake(SBSDIO_FUNC1_SLEEPCSR_KSO_MASK));
         assert_eq!(required_ht_clock_request_value(None), SBSDIO_HT_AVAIL_REQ);
@@ -33788,7 +33797,7 @@ mod tests {
         );
         assert!(CYW43_KSO_DEVON_PRE_HT_LIVE_POLLS < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
         assert!(post_download_ht_sleepcsr_poll_limit() < CYW43_KSO_DEVON_CLEAR_SET_POLLS);
-        assert!(!post_download_ht_sleepcsr_requires_live_devon_before_ht(
+        assert!(post_download_ht_sleepcsr_requires_live_devon_before_ht(
             "wait-ht-clock"
         ));
         assert_eq!(

@@ -19,10 +19,9 @@ const CMD_RING_SIZE: usize = 256;
 const EVENT_RING_SIZE: usize = 256;
 const STOP_WAIT_SPINS: usize = 10_000_000;
 const RESET_WAIT_SPINS: usize = 10_000_000;
-// On Pi 4 mailbox-reset handoff, the first live USBSTS read or USBCMD reset
-// write can race VL805 while firmware is still finishing the reset boundary.
-// Keep a short blind settle before the first live reset/CNR touch on those
-// paths, including the weaker stop-state-only snapshot.
+// On Pi 4 mailbox-reset handoff, live operational reads after RUN can enter
+// the seL4 timer interrupt path before userland can recover. Keep prompt-safe
+// command recovery write-only until fresh rings are published and polled.
 const MAILBOX_RESET_POST_SETTLE_SPINS: usize = 1_000_000;
 const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
@@ -33,6 +32,11 @@ const COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL: usize = 250_000;
 const COMMAND_PROMPT_SAFE_REDOORBELL_POLL: usize = 4;
 const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
+
+#[inline(always)]
+const fn prompt_safe_command_recovery_avoids_live_operational_reads() -> bool {
+    true
+}
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
 const COMMAND_RING_DEBUG_TRBS: usize = 4;
@@ -5175,64 +5179,37 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     fn reset_controller_for_prompt_safe_command_recovery(&self) -> Result<()> {
-        let current_usbcmd = self.read_op::<u32>(reg::USBCMD);
-        let mut usbsts = self.read_op::<u32>(reg::USBSTS);
-        emit_xhci_diag(0x03c4, current_usbcmd as u64, usbsts as u64, 0);
-        if halt_revalidation_needed(usbsts) {
-            let stop_cmd = masked_usbcmd(current_usbcmd) & !reg::USBCMD_RUN;
-            Self::write_reg_u32_store_diag_at(
-                self.mmio,
-                self.op_base - self.mmio + reg::USBCMD,
-                stop_cmd,
-                0x03c5,
-                0x03c5,
-                current_usbcmd as u64,
-            );
-            let mut waited = 0usize;
-            while halt_revalidation_needed(usbsts) {
-                waited = waited.saturating_add(1);
-                if waited >= STOP_WAIT_SPINS {
-                    emit_xhci_diag(0x03c6, waited as u64, usbsts as u64, stop_cmd as u64);
-                    return Err(UsbError::Timeout);
-                }
-                spin_loop();
-                usbsts = self.read_op::<u32>(reg::USBSTS);
-            }
+        if !prompt_safe_command_recovery_avoids_live_operational_reads() {
+            return Err(UsbError::NotSupported);
         }
-        emit_xhci_diag(0x03c7, usbsts as u64, reg::USBSTS_HCH as u64, 0);
+        let stop_cmd = masked_usbcmd(linux_command_probe_usbcmd_seed()) & !reg::USBCMD_RUN;
+        emit_xhci_diag(0x03c4, stop_cmd as u64, 0, 1);
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            self.op_base - self.mmio + reg::USBCMD,
+            stop_cmd,
+            0x03c5,
+            0x03c5,
+            linux_command_probe_usbcmd_seed() as u64,
+        );
+        for _ in 0..STOP_WAIT_SPINS {
+            spin_loop();
+        }
+        emit_xhci_diag(0x03c7, STOP_WAIT_SPINS as u64, reg::USBSTS_HCH as u64, 1);
 
-        let reset_cmd = (masked_usbcmd(current_usbcmd) & !reg::USBCMD_RUN) | reg::USBCMD_HCRST;
+        let reset_cmd = stop_cmd | reg::USBCMD_HCRST;
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             self.op_base - self.mmio + reg::USBCMD,
             reset_cmd,
             0x03c8,
             0x03c8,
-            current_usbcmd as u64,
+            stop_cmd as u64,
         );
-        let mut waited = 0usize;
-        let mut reset_state = self.read_op::<u32>(reg::USBCMD);
-        while (reset_state & reg::USBCMD_HCRST) != 0 {
-            waited = waited.saturating_add(1);
-            if waited >= RESET_WAIT_SPINS {
-                emit_xhci_diag(0x03c9, waited as u64, reset_state as u64, reset_cmd as u64);
-                return Err(UsbError::Timeout);
-            }
+        for _ in 0..RESET_WAIT_SPINS {
             spin_loop();
-            reset_state = self.read_op::<u32>(reg::USBCMD);
         }
-        waited = 0;
-        usbsts = self.read_op::<u32>(reg::USBSTS);
-        while (usbsts & reg::USBSTS_CNR) != 0 {
-            waited = waited.saturating_add(1);
-            if waited >= RESET_WAIT_SPINS {
-                emit_xhci_diag(0x03ca, waited as u64, usbsts as u64, reg::USBSTS_CNR as u64);
-                return Err(UsbError::Timeout);
-            }
-            spin_loop();
-            usbsts = self.read_op::<u32>(reg::USBSTS);
-        }
-        emit_xhci_diag(0x03cb, reset_state as u64, usbsts as u64, 1);
+        emit_xhci_diag(0x03cb, reset_cmd as u64, RESET_WAIT_SPINS as u64, 2);
         Ok(())
     }
 
@@ -5353,23 +5330,15 @@ impl<H: Dma> XhciCtrl<H> {
             linux_command_probe_usbcmd_seed(),
             0x03eb,
         );
-        let mut waited = 0usize;
-        let mut usbsts_after_run = self.read_op::<u32>(reg::USBSTS);
-        while (usbsts_after_run & reg::USBSTS_HCH) != 0 {
-            waited = waited.saturating_add(1);
-            if waited >= READY_WAIT_SPINS {
-                emit_xhci_diag(
-                    0x03ec,
-                    waited as u64,
-                    usbsts_after_run as u64,
-                    linux_command_probe_usbcmd_seed() as u64,
-                );
-                return Err(UsbError::Timeout);
-            }
+        for _ in 0..READY_WAIT_SPINS {
             spin_loop();
-            usbsts_after_run = self.read_op::<u32>(reg::USBSTS);
         }
-        emit_xhci_diag(0x03ed, waited as u64, usbsts_after_run as u64, 1);
+        emit_xhci_diag(
+            0x03ed,
+            READY_WAIT_SPINS as u64,
+            0,
+            linux_command_probe_usbcmd_seed() as u64,
+        );
         emit_xhci_diag(0x03e1, crcr, erdp, 2);
         Ok(())
     }
@@ -6055,6 +6024,7 @@ mod tests {
         preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
+        prompt_safe_command_recovery_avoids_live_operational_reads,
         prompt_safe_command_timeout_live_snapshot_enabled,
         replay_staged_dcbaap_snapshot_before_publish_with_snapshot, reset_usbcmd_seed_before_hcrst,
         reset_usbcmd_seed_before_hcrst_for_init, run_seed_usbcmd, run_usbcmd_needs_live_seed_read,
@@ -7411,6 +7381,15 @@ mod tests {
         assert_eq!(
             XhciCtrl::<MockDma>::read_reg_at::<u32>(mmio_base, op_offset + reg::USBCMD),
             reg::USBCMD_RUN
+        );
+    }
+
+    #[test]
+    fn prompt_safe_command_recovery_is_write_only() {
+        assert!(prompt_safe_command_recovery_avoids_live_operational_reads());
+        assert_eq!(
+            masked_usbcmd(linux_command_probe_usbcmd_seed()) & !reg::USBCMD_RUN,
+            0
         );
     }
 

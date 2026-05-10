@@ -1104,6 +1104,20 @@ def normalize_wifi_blocker(value: str) -> str:
     return value
 
 
+def normalize_wifi_exact(value: str) -> str:
+    """Preserve exact CYW43 terminal reasons while keeping stable blockers."""
+
+    lower = value.lower()
+    for reason in (
+        "cyw43-ht-clock-timeout-before-function2",
+        "cyw43-device-on-timeout-before-ht",
+        "cyw43-device-on-timeout-before-function2",
+    ):
+        if reason in lower:
+            return reason
+    return normalize_wifi_blocker(value)
+
+
 def wifi_progress_gate(value: str | None) -> int | None:
     """Return the WiFi gate proved by a progress label, if any."""
 
@@ -2311,7 +2325,7 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     for key in ("exact", "exact_error", "err", "cause", "detail", "reason"):
         value = event.fields.get(key)
         if value and value not in {"none", "n/a"}:
-            exact = normalize_wifi_blocker(value)
+            exact = normalize_wifi_exact(value)
             break
     phase = (
         event.fields.get("stage")

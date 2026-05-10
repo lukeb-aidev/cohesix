@@ -295,7 +295,9 @@ active path is Cohesix-owned cold start:
   selector/COMMAND readback only. The 2026-05-10 Pi 4 trace proved that even an
   xHCI capability dword read at BAR offset `0x0000` can halt immediately after
   `USBCMD.RUN`; never use xHCI BAR reads, `USBSTS`, or any `PORTSC` as the
-  posted-write drain on this prompt-safe path.
+  posted-write drain on this prompt-safe path. Command-timeout recovery follows
+  the same rule: stop/reset/RUN recovery waits are blind bounded settles, not
+  live `USBCMD`/`USBSTS` polls.
 - The external VL805 high-BAR path must not apply the generic Broadcom xHCI
   wrapper AXI read/write attribute quirk. On Pi 4 that quirk's `0x0c08/0x0c0c`
   offsets are not part of the live VL805 PCI controller contract; the

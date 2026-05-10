@@ -268,7 +268,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_BLOCKER": "cmd-poll-only-timeout",
         "WIFI_GATE": 4,
         "WIFI_BLOCKER": "ht-clock-timeout",
-        "WIFI_EXACT": "ht-clock-timeout",
+        "WIFI_EXACT": "cyw43-ht-clock-timeout-before-function2",
         "WIFI_PHASE": "cyw43-load-firmware-fail",
         "WIFI_BLOCKER_LINE": 8,
         "SERIAL_CLEAN": "yes",
@@ -403,7 +403,7 @@ def test_gate_summary_promotes_post_release_ht_timeout_over_readback_unavailable
 
     assert gates.wifi_gate == 4
     assert gates.wifi_blocker == "ht-clock-timeout"
-    assert gates.wifi_exact == "ht-clock-timeout"
+    assert gates.wifi_exact == "cyw43-ht-clock-timeout-before-function2"
 
 
 def test_gate_summary_preserves_usb_pcie_irq_quiesce_blocker() -> None:
