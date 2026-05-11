@@ -44,8 +44,8 @@ const CDC_HEADER_LEN: usize = 16;
 const BDC_HEADER_LEN: usize = 4;
 const DATA_PADDING_LEN: usize = 2;
 
-const FRAME_BUF_LEN: usize = 2048;
-const CONTROL_RESPONSE_BUF_LEN: usize = 512;
+const FRAME_BUF_LEN: usize = 2112;
+const CONTROL_RESPONSE_BUF_LEN: usize = 2048;
 const CLM_CHUNK_SIZE: usize = 1400;
 const CLM_IOVAR_NAME_LEN: usize = 8;
 const CLM_IOVAR_HEADER_LEN: usize = 12;
@@ -63,6 +63,7 @@ const DEFERRED_JOIN_FRAME_BUDGET: usize = 8;
 const DEFERRED_JOIN_POLL_LIMIT: u16 = 1_200;
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
+const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
 
 const CHANNEL_CONTROL: u8 = 0;
 const CHANNEL_EVENT: u8 = 1;
@@ -88,6 +89,7 @@ const STATUS_SUCCESS: u32 = 0;
 const EVENT_MASK_LEN: usize = 24;
 const DEFAULT_SCAN_CHANNEL_TIME_MS: u32 = 40;
 const DEFAULT_SCAN_UNASSOC_TIME_MS: u32 = 40;
+const BCME_UNSUPPORTED: u32 = 0xffff_ffe9;
 
 const BDC_VERSION: u8 = 2;
 const BDC_VERSION_SHIFT: u8 = 4;
@@ -236,6 +238,47 @@ fn is_transport_retryable(err: &HalError) -> bool {
             | HalError::Unsupported("sdio-ocr-timeout")
             | HalError::Unsupported("sdio-card-not-ready")
             | HalError::Unsupported("sdhci-int-timeout")
+    )
+}
+
+#[inline]
+fn linux_optional_iovar_allows_unsupported(name: &str, cmd: u32, status: u32) -> bool {
+    name == "ulp_sdioctrl" && cmd == Ioctl::GetVar as u32 && status == BCME_UNSUPPORTED
+}
+
+#[inline]
+const fn linux_first_control_plane_iovar_order() -> [&'static str; 3] {
+    ["bus:txglomalign", "ulp_sdioctrl", "bus:rxglom"]
+}
+
+#[inline]
+const fn linux_attach_control_plane_probe_order() -> [&'static str; 4] {
+    [
+        "bus:txglomalign",
+        "ulp_sdioctrl",
+        "bus:rxglom",
+        "cur_etheraddr",
+    ]
+}
+
+#[inline]
+fn optional_control_plane_iovar_allows_failure(name: &str, err: &DriverError) -> bool {
+    matches!(
+        err,
+        DriverError::IoctlFailed {
+            status: BCME_UNSUPPORTED,
+            ..
+        } if matches!(
+            name,
+            "apsta"
+                | "bsscfg:event_msgs"
+                | "bsscfg:sup_wpa"
+                | "bsscfg:sup_wpa2_eapver"
+                | "bsscfg:sup_wpa_tmo"
+                | "bus:txglom"
+                | "country"
+                | "mfp"
+        )
     )
 }
 
@@ -1011,6 +1054,61 @@ impl Cyw43NetDevice {
                 }
             }};
         }
+        macro_rules! optional_iovar_step {
+            ($name:literal, $iovar:literal, $expr:expr) => {{
+                info!(
+                    "[cyw43] control-plane step={} action=begin optional=yes",
+                    $name
+                );
+                match $expr {
+                    Ok(value) => {
+                        info!(
+                            "[cyw43] control-plane step={} action=ready optional=yes",
+                            $name
+                        );
+                        value
+                    }
+                    Err(err) if optional_control_plane_iovar_allows_failure($iovar, &err) => {
+                        warn!(
+                            "[cyw43] control-plane step={} action=skip optional=yes err={err}",
+                            $name
+                        );
+                    }
+                    Err(err) => {
+                        warn!("[cyw43] control-plane step={} action=fail err={err}", $name);
+                        return Err(err);
+                    }
+                }
+            }};
+        }
+
+        let linux_probe_order = linux_attach_control_plane_probe_order();
+        info!(
+            "[cyw43] control-plane linux-first-iovar-order={}>{}>{}>{}",
+            linux_probe_order[0], linux_probe_order[1], linux_probe_order[2], linux_probe_order[3]
+        );
+        control_step!(
+            "linux-startup-status-drain",
+            self.drain_linux_startup_status_frames()
+        );
+        control_step!(
+            "linux-first-iovar-txglomalign",
+            self.set_iovar_u32("bus:txglomalign", 8)
+        );
+        control_step!(
+            "linux-first-iovar-ulp-sdioctrl",
+            self.get_optional_linux_iovar("ulp_sdioctrl", &mut [0u8; 16])
+        );
+        control_step!(
+            "linux-first-iovar-rxglom",
+            self.set_iovar_u32("bus:rxglom", 1)
+        );
+        info!("[cyw43] control-plane step=read-mac action=begin order=linux-before-clm");
+        self.mac = self.read_mac_address();
+        info!(
+            "[cyw43] control-plane step=read-mac action=ready order=linux-before-clm mac={}",
+            self.mac
+        );
 
         if let Some(clm) = firmware.clm_blob {
             control_step!("clm-download", self.load_clm(clm));
@@ -1019,9 +1117,13 @@ impl Cyw43NetDevice {
             info!("[cyw43] control-plane step=clm-download action=skip");
         }
 
-        control_step!("bus-txglom-disable", self.set_iovar_u32("bus:txglom", 0));
-        control_step!("apsta-enable", self.set_iovar_u32("apsta", 1));
-        control_step!("country-worldwide", self.set_country_worldwide());
+        optional_iovar_step!(
+            "bus-txglom-disable",
+            "bus:txglom",
+            self.set_iovar_u32("bus:txglom", 0)
+        );
+        optional_iovar_step!("apsta-enable", "apsta", self.set_iovar_u32("apsta", 1));
+        optional_iovar_step!("country-worldwide", "country", self.set_country_worldwide());
         control_step!(
             "linux-preinit-defaults",
             self.apply_linux_preinit_defaults()
@@ -1032,8 +1134,9 @@ impl Cyw43NetDevice {
         );
         control_step!("ampdu-ba-window", self.set_iovar_u32("ampdu_ba_wsize", 8));
         control_step!("ampdu-mpdu", self.set_iovar_u32("ampdu_mpdu", 4));
-        control_step!(
+        optional_iovar_step!(
             "event-mask",
+            "bsscfg:event_msgs",
             self.set_event_mask(&[
                 EVENT_SET_SSID,
                 EVENT_AUTH,
@@ -1046,12 +1149,6 @@ impl Cyw43NetDevice {
         control_step!("gmode", self.ioctl_set_u32(Ioctl::SetGmode, 0, 1));
         control_step!("band", self.ioctl_set_u32(Ioctl::SetBand, 0, 0));
         control_step!("power-mode", self.ioctl_set_u32(Ioctl::SetPm, 0, 0));
-        info!("[cyw43] control-plane step=read-mac action=begin");
-        self.mac = self.read_mac_address();
-        info!(
-            "[cyw43] control-plane step=read-mac action=ready mac={}",
-            self.mac
-        );
         control_step!("join", self.join(credentials, wait_for_join_completion));
         info!("[cyw43] control-plane step=init-complete action=ready");
         Ok(())
@@ -1191,20 +1288,20 @@ impl Cyw43NetDevice {
         self.deferred_join_state = DeferredJoinState::Disabled;
         if psk.is_empty() {
             self.ioctl_set_u32(Ioctl::SetWsec, 0, 0)?;
-            self.set_iovar_u32x2("bsscfg:sup_wpa", 0, 0)?;
+            self.set_optional_iovar_u32x2("bsscfg:sup_wpa", 0, 0)?;
             self.ioctl_set_u32(Ioctl::SetInfra, 0, 1)?;
             self.ioctl_set_u32(Ioctl::SetAuth, 0, 0)?;
             self.ioctl_set_u32(Ioctl::SetWpaAuth, 0, WPA_AUTH_DISABLED)?;
             info!("[cyw43] join: auth=open ssid_len={}", ssid.len());
         } else {
             self.ioctl_set_u32(Ioctl::SetWsec, 0, WSEC_AES)?;
-            self.set_iovar_u32x2("bsscfg:sup_wpa", 0, 1)?;
-            self.set_iovar_u32x2("bsscfg:sup_wpa2_eapver", 0, u32::MAX)?;
-            self.set_iovar_u32x2("bsscfg:sup_wpa_tmo", 0, 2500)?;
+            self.set_optional_iovar_u32x2("bsscfg:sup_wpa", 0, 1)?;
+            self.set_optional_iovar_u32x2("bsscfg:sup_wpa2_eapver", 0, u32::MAX)?;
+            self.set_optional_iovar_u32x2("bsscfg:sup_wpa_tmo", 0, 2500)?;
             self.set_wsec_pmk(psk.as_bytes())?;
             self.ioctl_set_u32(Ioctl::SetInfra, 0, 1)?;
             self.ioctl_set_u32(Ioctl::SetAuth, 0, AUTH_OPEN)?;
-            self.set_iovar_u32("mfp", MFP_CAPABLE)?;
+            self.set_optional_iovar_u32("mfp", MFP_CAPABLE)?;
             self.ioctl_set_u32(Ioctl::SetWpaAuth, 0, WPA_AUTH_WPA2_PSK)?;
             info!(
                 "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={}",
@@ -1372,6 +1469,37 @@ impl Cyw43NetDevice {
         self.set_iovar_from_payload(name, 8)
     }
 
+    fn set_optional_iovar_u32(
+        &mut self,
+        name: &'static str,
+        value: u32,
+    ) -> Result<(), DriverError> {
+        match self.set_iovar_u32(name, value) {
+            Ok(()) => Ok(()),
+            Err(err) if optional_control_plane_iovar_allows_failure(name, &err) => {
+                warn!("[cyw43] optional iovar skipped name={name} err={err}");
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn set_optional_iovar_u32x2(
+        &mut self,
+        name: &'static str,
+        first: u32,
+        second: u32,
+    ) -> Result<(), DriverError> {
+        match self.set_iovar_u32x2(name, first, second) {
+            Ok(()) => Ok(()),
+            Err(err) if optional_control_plane_iovar_allows_failure(name, &err) => {
+                warn!("[cyw43] optional iovar skipped name={name} err={err}");
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     fn set_iovar_bytes(&mut self, name: &str, value: &[u8]) -> Result<(), DriverError> {
         {
             let payload = self.payload_mut(value.len())?;
@@ -1414,6 +1542,25 @@ impl Cyw43NetDevice {
         let copy_len = core::cmp::min(out.len(), response_len);
         out[..copy_len].copy_from_slice(&self.control_response[..copy_len]);
         Ok(copy_len)
+    }
+
+    fn get_optional_linux_iovar(
+        &mut self,
+        name: &'static str,
+        out: &mut [u8],
+    ) -> Result<usize, DriverError> {
+        match self.get_iovar(name, out) {
+            Ok(len) => Ok(len),
+            Err(DriverError::IoctlFailed { cmd, status })
+                if linux_optional_iovar_allows_unsupported(name, cmd, status) =>
+            {
+                info!(
+                    "[cyw43] control-plane optional linux iovar unsupported name={name} status=0x{status:08x}"
+                );
+                Ok(0)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn ioctl_set_u32(&mut self, cmd: Ioctl, iface: u32, value: u32) -> Result<(), DriverError> {
@@ -1806,6 +1953,44 @@ impl Cyw43NetDevice {
         ))
     }
 
+    fn drain_linux_startup_status_frames(&mut self) -> Result<(), DriverError> {
+        for attempt in 0..LINUX_STARTUP_STATUS_DRAIN_BUDGET {
+            let frame_len = self.state.read_cyw43_frame(&mut self.rx_frame)?;
+            if frame_len == 0 {
+                info!(
+                    "[cyw43] control-plane startup-drain action=idle attempt={}/{}",
+                    attempt + 1,
+                    LINUX_STARTUP_STATUS_DRAIN_BUDGET
+                );
+                return Ok(());
+            }
+
+            let header = parse_rx_sdpcm_header(&self.rx_frame, frame_len)?;
+            if sdpcm_header_only_status_frame(header) {
+                self.update_credit(header);
+                info!(
+                    "[cyw43] control-plane startup-drain action=drain-header-only channel={} packet_len={} credit={} attempt={}/{}",
+                    header.channel,
+                    header.packet_len,
+                    header.credit,
+                    attempt + 1,
+                    LINUX_STARTUP_STATUS_DRAIN_BUDGET
+                );
+                continue;
+            }
+
+            let result = self.process_frame(frame_len, false)?;
+            info!(
+                "[cyw43] control-plane startup-drain action=process-frame result={} frame_len={} attempt={}/{}",
+                rx_frame_result_name(&result),
+                frame_len,
+                attempt + 1,
+                LINUX_STARTUP_STATUS_DRAIN_BUDGET
+            );
+        }
+        Ok(())
+    }
+
     fn log_pending_ioctl_frame(&self, stage: &'static str) {
         let packet_len = get_u16_le(&self.tx_frame, 0).unwrap_or(0);
         let len_inv = get_u16_le(&self.tx_frame, 2).unwrap_or(0);
@@ -1913,6 +2098,10 @@ impl Cyw43NetDevice {
         payload_end: usize,
     ) -> Result<RxFrameResult, DriverError> {
         let payload = &self.rx_frame[payload_start..payload_end];
+        if payload.is_empty() {
+            info!("[cyw43] control-plane header-only control frame drained");
+            return Ok(RxFrameResult::None);
+        }
         if payload.len() < CDC_HEADER_LEN {
             return Err(DriverError::Protocol("cdc-short-header"));
         }
@@ -2283,6 +2472,22 @@ fn parse_rx_sdpcm_header(frame: &[u8], frame_len: usize) -> Result<RxSdpcmHeader
 }
 
 #[inline]
+const fn sdpcm_header_only_status_frame(header: RxSdpcmHeader) -> bool {
+    header.payload_start == header.packet_len
+        && matches!(header.channel, CHANNEL_CONTROL | CHANNEL_EVENT)
+}
+
+#[inline]
+fn rx_frame_result_name(result: &RxFrameResult) -> &'static str {
+    match result {
+        RxFrameResult::None => "none",
+        RxFrameResult::Control { .. } => "control",
+        RxFrameResult::Event(_) => "event",
+        RxFrameResult::Data(_) => "data",
+    }
+}
+
+#[inline]
 const fn clm_iovar_data_len(chunk_len: usize) -> usize {
     CLM_IOVAR_HEADER_LEN + chunk_len
 }
@@ -2539,18 +2744,21 @@ mod tests {
         control_response_matches, first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
-        ioctl_wait_loops, is_transport_retryable, parse_event_payload, parse_rx_sdpcm_header,
+        ioctl_wait_loops, is_transport_retryable, linux_attach_control_plane_probe_order,
+        linux_first_control_plane_iovar_order, linux_optional_iovar_allows_unsupported,
+        optional_control_plane_iovar_allows_failure, parse_event_payload, parse_rx_sdpcm_header,
         preserve_cyw43_init_failure_exact_error, promoted_cyw43_init_failure_exact_error,
-        put_u16_le, sdpcm_control_tx_request_len, set_event_mask_bit,
-        speculative_credit_window_after_promoted_timeout_retry,
+        put_u16_le, sdpcm_control_tx_request_len, sdpcm_header_only_status_frame,
+        set_event_mask_bit, speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
         startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
-        write_sdpcm_control_tx_header, DriverError, Ioctl, RxFrameResult, BDC_VERSION,
-        BDC_VERSION_SHIFT, CDC_HEADER_LEN, CHANNEL_CONTROL, CLM_CHUNK_SIZE, EVENT_AUTH, EVENT_IF,
-        EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_WAIT_LOOPS,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
-        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_HEADER_LEN, STATUS_SUCCESS,
+        write_sdpcm_control_tx_header, DriverError, Ioctl, RxFrameResult, RxSdpcmHeader,
+        BCME_UNSUPPORTED, BDC_VERSION, BDC_VERSION_SHIFT, CDC_HEADER_LEN, CHANNEL_CONTROL,
+        CHANNEL_DATA, CHANNEL_EVENT, CLM_CHUNK_SIZE, EVENT_AUTH, EVENT_IF, EVENT_SET_SSID,
+        FRAME_BUF_LEN, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_SUCCESS,
     };
     use crate::hal::HalError;
 
@@ -2595,6 +2803,37 @@ mod tests {
         assert!(parse_event_payload(&header_only)
             .expect("header-only event is drained")
             .is_none());
+    }
+
+    #[test]
+    fn linux_startup_status_frames_are_header_only_and_drainable() {
+        let header = RxSdpcmHeader {
+            packet_len: SDPCM_HEADER_LEN,
+            payload_start: SDPCM_HEADER_LEN,
+            channel: CHANNEL_EVENT,
+            credit: 0x15,
+        };
+        assert!(sdpcm_header_only_status_frame(header));
+
+        let control_header = RxSdpcmHeader {
+            channel: CHANNEL_CONTROL,
+            ..header
+        };
+        assert!(sdpcm_header_only_status_frame(control_header));
+
+        let data_header = RxSdpcmHeader {
+            channel: CHANNEL_DATA,
+            ..header
+        };
+        assert!(!sdpcm_header_only_status_frame(data_header));
+
+        let payload_header = RxSdpcmHeader {
+            packet_len: SDPCM_HEADER_LEN + CDC_HEADER_LEN,
+            payload_start: SDPCM_HEADER_LEN,
+            channel: CHANNEL_CONTROL,
+            credit: 0x15,
+        };
+        assert!(!sdpcm_header_only_status_frame(payload_header));
     }
 
     #[test]
@@ -2764,6 +3003,83 @@ mod tests {
             initial_control_plane_data_clock_target_hz(SDIO_DATA_CLOCK_HZ, false),
             SDIO_DATA_CLOCK_HZ
         );
+    }
+
+    #[test]
+    fn linux_first_control_plane_iovar_order_precedes_clm() {
+        assert_eq!(
+            linux_first_control_plane_iovar_order(),
+            ["bus:txglomalign", "ulp_sdioctrl", "bus:rxglom"]
+        );
+        assert_eq!(
+            linux_attach_control_plane_probe_order(),
+            [
+                "bus:txglomalign",
+                "ulp_sdioctrl",
+                "bus:rxglom",
+                "cur_etheraddr"
+            ]
+        );
+    }
+
+    #[test]
+    fn linux_optional_ulp_sdioctrl_accepts_unsupported_status() {
+        assert!(linux_optional_iovar_allows_unsupported(
+            "ulp_sdioctrl",
+            Ioctl::GetVar as u32,
+            BCME_UNSUPPORTED
+        ));
+        assert!(!linux_optional_iovar_allows_unsupported(
+            "bus:rxglom",
+            Ioctl::GetVar as u32,
+            BCME_UNSUPPORTED
+        ));
+        assert!(!linux_optional_iovar_allows_unsupported(
+            "ulp_sdioctrl",
+            Ioctl::SetVar as u32,
+            BCME_UNSUPPORTED
+        ));
+        assert!(!linux_optional_iovar_allows_unsupported(
+            "ulp_sdioctrl",
+            Ioctl::GetVar as u32,
+            STATUS_SUCCESS
+        ));
+    }
+
+    #[test]
+    fn optional_non_captured_iovars_accept_only_firmware_unsupported() {
+        assert!(optional_control_plane_iovar_allows_failure(
+            "bus:txglom",
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_UNSUPPORTED,
+            }
+        ));
+        assert!(optional_control_plane_iovar_allows_failure(
+            "bsscfg:event_msgs",
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_UNSUPPORTED,
+            }
+        ));
+        assert!(optional_control_plane_iovar_allows_failure(
+            "bsscfg:sup_wpa",
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_UNSUPPORTED,
+            }
+        ));
+        assert!(!optional_control_plane_iovar_allows_failure(
+            "bus:txglomalign",
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_UNSUPPORTED,
+            }
+        ));
+        assert!(!optional_control_plane_iovar_allows_failure(
+            "bus:txglom",
+            &DriverError::Hal(HalError::Unsupported("sdio-cmd53-r5-error"))
+        ));
     }
 
     #[test]

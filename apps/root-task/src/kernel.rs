@@ -757,6 +757,16 @@ fn pi4_local_usb_boot_wifi_cooperation_reason(
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
+fn pi4_local_usb_boot_wifi_pending_detail(reason: &str) -> HeaplessString<192> {
+    let mut detail = heapless::String::<192>::new();
+    let _ = write!(
+        detail,
+        "wifi-net-console-pending-before-root-console:{reason}"
+    );
+    detail
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
 fn format_net_console_init_detail<DE: fmt::Display>(
     err: &crate::net::NetConsoleError<DE>,
 ) -> HeaplessString<192> {
@@ -2943,6 +2953,8 @@ pub struct BootContext {
     pub(crate) net_stack: RefCell<Option<NetStack>>,
     #[cfg(feature = "net-console")]
     pub(crate) net_unavailable_detail: RefCell<Option<HeaplessString<192>>>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub(crate) deferred_net_config: RefCell<Option<crate::net::ConsoleNetConfig>>,
     #[cfg(feature = "kernel")]
     pub(crate) ninedoor: RefCell<Option<&'static mut NineDoorBridge>>,
     #[cfg(feature = "kernel")]
@@ -4564,7 +4576,7 @@ fn bootstrap<P: Platform>(
         boot_guard.record_phase("NetInit");
         check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let (net_stack, virtio_present, net_init_error, net_backend_label) = {
+        let (net_stack, virtio_present, net_init_error, net_backend_label, deferred_net_config) = {
             use crate::net::{
                 console_net_config_with_runtime_policy, init_net_console, NetConsoleError, NetMode,
                 NetPoller,
@@ -4625,13 +4637,13 @@ fn bootstrap<P: Platform>(
                 log::info!("[net-console] disabled by manifest no_nic baseline");
                 let mut detail = heapless::String::<192>::new();
                 let _ = write!(detail, "disabled by manifest hw.no_nic=true");
-                (None, false, Some(detail), net_backend_label)
+                (None, false, Some(detail), net_backend_label, None)
             } else if matches!(config.policy.mode, NetMode::Off) {
                 boot_log::force_uart_line("[net-console] disabled reason=policy-off err=0");
                 log::info!("[net-console] disabled by runtime policy mode=off");
                 let mut detail = heapless::String::<192>::new();
                 let _ = write!(detail, "disabled by runtime policy mode=off");
-                (None, false, Some(detail), net_backend_label)
+                (None, false, Some(detail), net_backend_label, None)
             } else if let Some(reason) = rejected_policy_reason {
                 boot_log::force_uart_line(
                     "[net-console] disabled reason=invalid-config err=InvalidConfig",
@@ -4650,33 +4662,29 @@ fn bootstrap<P: Platform>(
                     detail,
                     "invalid net config: dtb override rejected ({reason})"
                 );
-                (None, false, Some(detail), net_backend_label)
+                (None, false, Some(detail), net_backend_label, None)
             } else if !sel4::ep_ready() || !sel4::ep_validated() {
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
                 log::warn!("[net-console] skipped: root endpoint not ready");
-                (None, false, None, net_backend_label)
+                (None, false, None, net_backend_label, None)
             } else if let Some(reason) =
                 pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config)
             {
                 let mut line = heapless::String::<192>::new();
                 let _ = write!(
                     line,
-                    "[net-console] deferred reason={reason} action=serial-root-console-first"
+                    "[net-console] deferred reason={reason} action=root-console-wait-for-wifi"
                 );
                 boot_log::force_uart_line(line.as_str());
                 console.writeln_prefixed(line.as_str());
                 boot_log::force_uart_line(
-                    "[boot] wifi net-console probe deferred; continuing serial root console",
+                    "[boot] wifi net-console probe deferred; root console waits for Wi-Fi",
                 );
                 log::info!(
-                    "[net-console] Pi4 local-seat Wi-Fi net-console probe deferred until serial root console reason={reason}"
+                    "[net-console] Pi4 local-seat Wi-Fi net-console probe deferred before root console reason={reason}"
                 );
-                let mut detail = heapless::String::<192>::new();
-                let _ = write!(
-                    detail,
-                    "wifi net-console probe deferred until serial root console ({reason})"
-                );
-                (None, false, Some(detail), net_backend_label)
+                let detail = pi4_local_usb_boot_wifi_pending_detail(reason);
+                (None, false, Some(detail), net_backend_label, Some(config))
             } else {
                 match init_net_console(hal, config) {
                     Ok(stack) => {
@@ -4711,7 +4719,7 @@ fn bootstrap<P: Platform>(
                         boot_guard.record_invariant("net-console.ready");
                         let virtio_selected = cfg!(feature = "net-backend-virtio")
                             && net_backend_label == "virtio-net";
-                        (Some(stack), virtio_selected, None, net_backend_label)
+                        (Some(stack), virtio_selected, None, net_backend_label, None)
                     }
                     Err(err) => {
                         let (reason, err_code) = match err {
@@ -4739,7 +4747,7 @@ fn bootstrap<P: Platform>(
                         let virtio_present = cfg!(feature = "net-backend-virtio")
                             && net_backend_label == "virtio-net"
                             && !matches!(err, NetConsoleError::NoDevice);
-                        (None, virtio_present, Some(detail), net_backend_label)
+                        (None, virtio_present, Some(detail), net_backend_label, None)
                     }
                 }
             }
@@ -4994,6 +5002,8 @@ fn bootstrap<P: Platform>(
             tickets: RefCell::new(Some(tickets)),
             net_stack: RefCell::new(net_stack),
             net_unavailable_detail: RefCell::new(net_init_error),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            deferred_net_config: RefCell::new(deferred_net_config),
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(Some(ninedoor)),
             #[cfg(feature = "kernel")]
@@ -7037,6 +7047,15 @@ mod tests {
         assert_eq!(
             super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
             None
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi4_local_usb_boot_wifi_pending_detail_is_machine_parseable() {
+        assert_eq!(
+            super::pi4_local_usb_boot_wifi_pending_detail("pi4-local-seat-explicit-wifi").as_str(),
+            "wifi-net-console-pending-before-root-console:pi4-local-seat-explicit-wifi"
         );
     }
 

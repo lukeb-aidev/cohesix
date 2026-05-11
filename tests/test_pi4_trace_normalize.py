@@ -2726,15 +2726,29 @@ def test_gate_summary_tracks_wifi_preinit_substep_failure() -> None:
 def test_gate_summary_tracks_pi4_wifi_boot_deferral_for_local_seat() -> None:
     events = normalizer.parse_events(
         [
-            "[net-console] deferred reason=local-seat-usb-first-wifi "
-            "action=serial-local-seat-first",
+            "[net-console] deferred reason=pi4-local-seat-explicit-wifi "
+            "action=root-console-wait-for-wifi",
         ]
     )
 
     gates = normalizer.summarize_gates(events)
 
     assert gates.wifi_gate == 1
-    assert gates.wifi_blocker == "boot-deferred-local-seat-usb"
+    assert gates.wifi_blocker == "boot-waiting-for-wifi"
+
+
+def test_gate_summary_tracks_root_console_waiting_for_wifi() -> None:
+    events = normalizer.parse_events(
+        [
+            "[net-console] root console waiting "
+            "reason=wifi-not-ready action=wait-for-wifi",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 1
+    assert gates.wifi_blocker == "boot-waiting-for-wifi"
 
 
 def test_gate_summary_tracks_nettest_usb_first_boot_deferral() -> None:

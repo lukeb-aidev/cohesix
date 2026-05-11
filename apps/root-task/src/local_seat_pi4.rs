@@ -1141,7 +1141,11 @@ fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
             } else if matches!(summary.command_probe, "enable-slot-ok") {
                 "safe-port-state"
             } else if matches!(summary.command_probe, "no-op-ok") {
-                "safe-port-event-required"
+                if summary.event_candidate_mask != 0 {
+                    "safe-port-state"
+                } else {
+                    "safe-port-event-required"
+                }
             } else if summary.command_probe != "n/a" {
                 "command-ring-recovery"
             } else {
@@ -3839,6 +3843,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x022c
             | 0x0320..=0x0330
             | 0x0332..=0x0333
+            | 0x0337..=0x0339
             | 0x0340..=0x034c
             | 0x0350..=0x035f
             | 0x0360..=0x036f
@@ -3867,6 +3872,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x031f
             | 0x0315..=0x0319
             | 0x0320..=0x0330
+            | 0x0337..=0x0339
             | 0x0350..=0x035f
             | 0x0360..=0x036f
             | 0x0370..=0x0377
@@ -3884,7 +3890,13 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
 const fn xhci_diag_stage_force_log(stage: u16) -> bool {
     matches!(
         stage,
-        0x030f | 0x031f | 0x035f | 0x0368..=0x0377 | 0x037d..=0x037f | 0x03c4..=0x03ee
+        0x030f
+            | 0x031f
+            | 0x0337..=0x0339
+            | 0x035f
+            | 0x0368..=0x0377
+            | 0x037d..=0x037f
+            | 0x03c4..=0x03ee
     )
 }
 
@@ -3992,6 +4004,8 @@ const fn xhci_diag_stage_value_labels(
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
         0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
         0x0332 | 0x0333 => Some(("iman", "masked_iman", "seed_flags")),
+        0x0337 | 0x0338 => Some(("dnctrl_off", "dnctrl", "policy")),
+        0x0339 => Some(("cmd_addr", "barrier", "policy")),
         0x0350 => Some(("run_usbcmd", "event_run_usbcmd", "seed_flags")),
         0x0351 | 0x0352 => Some(("iman_off", "iman", "seed_flags")),
         0x0353..=0x035a => Some(("param", "status_control", "index_dequeue_cycle")),
@@ -4286,6 +4300,9 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0331 => Some("drop-skip-uninitialized"),
         0x0332 => Some("pre-dcbaap-iman-quiesce"),
         0x0333 => Some("pre-dcbaap-iman-quiesce-done"),
+        0x0337 => Some("cmd-event-generation-dnctrl-write"),
+        0x0338 => Some("cmd-event-generation-dnctrl-write-done"),
+        0x0339 => Some("cmd-ring-publish-barrier-done"),
         0x0350 => Some("usbcmd-run-event-generation"),
         0x0351 => Some("polling-iman-event-generation-write"),
         0x0352 => Some("polling-iman-event-generation-write-done"),
@@ -4649,16 +4666,6 @@ fn xhci_drain_root_port_change_events(ctrl: &XhciCtrl<SeatDma>, max_ports: usize
 }
 
 #[inline]
-fn usb_command_probe_error_label(err: UsbError) -> &'static str {
-    match err {
-        UsbError::EnableSlotTimeout | UsbError::Timeout => "enable-slot-timeout",
-        UsbError::CmdFail(_) => "enable-slot-cmd-fail",
-        UsbError::PostedWriteFlushFailed => "enable-slot-posted-flush-failed",
-        _ => "enable-slot-error",
-    }
-}
-
-#[inline]
 fn usb_no_op_probe_error_label(err: UsbError) -> &'static str {
     match err {
         UsbError::Timeout => "no-op-timeout",
@@ -4763,55 +4770,59 @@ fn xhci_probe_command_ring_after_event_drain(
     } else {
         "prompt-safe-poll"
     };
-    let mut line = heapless::String::<256>::new();
+    let mut line = heapless::String::<320>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=enable-slot bus={bus} event_generation={event_generation} pci_intx_masked=yes irq27_role=timer-only"
+            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=no-op-before-port-sample bus={bus} event_generation={event_generation} pci_intx_masked=yes irq27_role=timer-only"
         ),
     );
     boot_log::force_uart_line(line.as_str());
 
-    let enable_slot_result = if use_linux_event_generation {
-        ctrl.probe_enable_slot_linux_event_generation_prompt_safe()
+    let no_op_result = if use_linux_event_generation {
+        ctrl.probe_no_op_command_linux_event_generation_prompt_safe()
     } else {
-        ctrl.probe_enable_slot_command_prompt_safe()
+        ctrl.probe_no_op_command_prompt_safe()
     };
-    match enable_slot_result {
-        Ok(slot) => {
-            let cleanup_result = if use_linux_event_generation {
-                ctrl.disable_slot_linux_event_generation_prompt_safe(slot)
-            } else {
-                ctrl.disable_slot_command_prompt_safe(slot)
-            };
-            let cleanup = match cleanup_result {
-                Ok(()) => "disable-slot-ok",
-                Err(UsbError::Timeout) => "disable-slot-timeout",
-                Err(UsbError::CmdFail(_)) => "disable-slot-cmd-fail",
-                Err(_) => "disable-slot-error",
-            };
-            let mut line = heapless::String::<256>::new();
+    match no_op_result {
+        Ok(()) => {
+            let result = "no-op-ok";
+            let mut line = heapless::String::<320>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci root-port command-probe result=enable-slot-ok bus={bus} slot={} cleanup={cleanup} event_generation={event_generation}",
-                    slot
+                    "[local-seat] xhci root-port command-probe result={result} bus={bus} action=unlock-port-sampling reason=command-ring-proof-before-root-port-sample event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
                 ),
             );
             boot_log::force_uart_line(line.as_str());
-            if cleanup == "disable-slot-ok" {
-                "enable-slot-ok"
-            } else {
-                "enable-slot-ok-cleanup-failed"
-            }
+            result
+        }
+        Err(UsbError::Timeout) => {
+            let mut line = heapless::String::<320>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci root-port command-probe result=no-op-unproven bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180 event_candidate_mask=0x{event_candidate_mask:04x}"
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            let mut summary = heapless::String::<320>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut summary,
+                format_args!(
+                    "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-unproven event=missing event_generation={event_generation} irq27_role=timer-only pcie_irqs=179,175,180"
+                ),
+            );
+            boot_log::force_uart_line(summary.as_str());
+            "no-op-unproven"
         }
         Err(err) => {
-            let result = usb_command_probe_error_label(err);
+            let result = usb_no_op_probe_error_label(err);
             let mut line = heapless::String::<256>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci root-port command-probe result={result} bus={bus} detail={err:?} event_generation={event_generation}"
+                    "[local-seat] xhci root-port command-probe result={result} bus={bus} action=return-to-shell detail={err:?} event_generation={event_generation}"
                 ),
             );
             boot_log::force_uart_line(line.as_str());
@@ -14511,6 +14522,26 @@ mod driver_coverage_tests {
             "enable-slot-ok-cleanup-failed"
         ));
         assert!(usb_command_probe_proves_ring("no-op-ok"));
+        let event_no_op_ready = UsbProbePathwaySummary {
+            progress: UsbProbePathProgress::ControllerReady,
+            outcome: UsbProbePathOutcome::RootPortSampleDeferred,
+            event_candidate_mask: 0x0001,
+            command_probe: "no-op-ok",
+            ..UsbProbePathwaySummary::new(
+                1,
+                2,
+                2,
+                "platform-reset-complete",
+                "mailbox-reset-complete",
+                "platform-reset-complete",
+                "stop-state",
+                "skip-live-halt-read",
+                true,
+                true,
+                true,
+            )
+        };
+        assert_eq!(usb_probe_next_step(event_no_op_ready), "safe-port-state");
         let platform_cold =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
         assert!(!xhci_controller_allows_port_register_access(
@@ -16098,6 +16129,16 @@ mod tests {
         assert_eq!(super::usb_probe_next_step(command_ready), "safe-port-state");
         assert!(command_ready.is_better_than(event_candidate));
 
+        let no_op_ready_after_event = UsbProbePathwaySummary {
+            command_probe: "no-op-ok",
+            ..event_candidate
+        };
+        assert_eq!(
+            super::usb_probe_next_step(no_op_ready_after_event),
+            "safe-port-state"
+        );
+        assert!(no_op_ready_after_event.is_better_than(event_candidate));
+
         let no_event_command_ready = UsbProbePathwaySummary {
             progress: UsbProbePathProgress::ControllerReady,
             outcome: UsbProbePathOutcome::RootPortSampleDeferred,
@@ -17093,6 +17134,18 @@ mod tests {
             xhci_diag_stage_label(0x0333),
             Some("pre-dcbaap-iman-quiesce-done")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x0337),
+            Some("cmd-event-generation-dnctrl-write")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0338),
+            Some("cmd-event-generation-dnctrl-write-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x0339),
+            Some("cmd-ring-publish-barrier-done")
+        );
         assert_eq!(xhci_diag_stage_label(0x0270), Some("usbsts-run-read"));
         assert_eq!(xhci_diag_stage_label(0x0271), Some("usbcmd-run-read"));
         assert_eq!(
@@ -17617,6 +17670,8 @@ mod tests {
         assert!(super::xhci_diag_stage_after_run(0x02e9));
         assert!(super::xhci_diag_stage_after_run(0x0316));
         assert!(super::xhci_diag_stage_after_run(0x032c));
+        assert!(super::xhci_diag_stage_after_run(0x0337));
+        assert!(super::xhci_diag_stage_after_run(0x0339));
         assert!(super::xhci_diag_stage_after_run(0x0360));
         assert!(super::xhci_diag_stage_after_run(0x0374));
         assert!(super::xhci_diag_stage_after_run(0x0380));
@@ -17631,6 +17686,8 @@ mod tests {
     #[test]
     fn xhci_diag_force_log_preserves_command_recovery_frontier() {
         assert!(super::xhci_diag_stage_force_log(0x030f));
+        assert!(super::xhci_diag_stage_force_log(0x0337));
+        assert!(super::xhci_diag_stage_force_log(0x0339));
         assert!(super::xhci_diag_stage_force_log(0x035f));
         assert!(super::xhci_diag_stage_force_log(0x0368));
         assert!(super::xhci_diag_stage_force_log(0x0377));
@@ -17848,6 +17905,14 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),
             Some(("iman", "masked_iman", "seed_flags"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0337),
+            Some(("dnctrl_off", "dnctrl", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0339),
+            Some(("cmd_addr", "barrier", "policy"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0346),

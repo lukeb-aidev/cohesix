@@ -157,8 +157,8 @@ def test_gate_proof_rejects_local_seat_wifi_boot_deferral(
                 "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
                 "[cohesix:root-task] Cohesix boot: root-task online",
                 "[local-seat] xhci enumerate outcome=keyboard-ready",
-                "[net-console] deferred reason=local-seat-usb-first-wifi "
-                "action=serial-local-seat-first",
+                "[net-console] deferred reason=pi4-local-seat-explicit-wifi "
+                "action=root-console-wait-for-wifi",
             ]
         ),
         encoding="utf-8",
@@ -180,11 +180,8 @@ def test_gate_proof_rejects_local_seat_wifi_boot_deferral(
     )
 
     assert result.returncode == 2
-    assert "WIFI_BLOCKER=boot-deferred-local-seat-usb" in result.stdout
-    assert (
-        "WIFI_BLOCKER rejected boot-deferred-local-seat-usb"
-        in result.stderr
-    )
+    assert "WIFI_BLOCKER=boot-waiting-for-wifi" in result.stdout
+    assert "WIFI_BLOCKER rejected boot-waiting-for-wifi" in result.stderr
 
 
 def test_gate_proof_rejects_missing_root_console_prompt(

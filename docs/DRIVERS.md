@@ -231,9 +231,13 @@ Device-visible address policy is not generic:
 - Pi 4 local-seat cold boot is USB-first. When local-seat USB is enabled and
   the net-console policy selects Wi-Fi (`wifi`, or `auto` with credentials), the
   boot path runs one bounded USB keyboard/xHCI probe before entering CYW43
-  control-plane bring-up. Wi-Fi net-console initialization still runs during
-  boot; only visible Wi-Fi progress output and AP association completion are
-  deferred so the prompt, timers, IPC, and USB keyboard gate keep moving.
+  control-plane bring-up. Wi-Fi net-console initialization is deferred out of
+  early kernel net init, then the runtime resumes the saved Wi-Fi configuration
+  before announcing the root console. The `Cohesix console ready` banner and
+  `cohesix>` prompt are emitted only after the deferred CYW43 net-console path
+  reports a reachable address state (`manifest-static`, `dev-virt`, or
+  `dhcp-lease`). QEMU virtio and Pi 4 wired NIC paths still use their immediate
+  net-init flow and are not held by the Pi 4 Wi-Fi gate.
 - CYW43455 SDIO traffic is host-driven through SDHCI/CMD52/CMD53; the driver
   must not publish arbitrary DMA addresses to the Wi-Fi firmware path.
 
@@ -304,6 +308,25 @@ power/reset state.
   request length of 1536 and `tail_pad=80`, matching the Pi 4 Linux capture.
   The driver queries `clmver` after upload before continuing with the remaining
   preinit commands.
+- CLM must not be the first meaningful BCDC/iovar exchange. Linux proves the
+  initial control-plane path with small iovars first: set
+  `bus:txglomalign=8`, query `ulp_sdioctrl` while accepting the captured
+  `BCME_UNSUPPORTED` result, set `bus:rxglom=1`, then query
+  `cur_etheraddr`. Cohesix follows that order before CLM so the first Function
+  2 replies are small Linux-shaped 64-byte first-read transactions rather than
+  a large CLM transfer.
+- Non-captured early iovars must not be hard blockers before this attach proof
+  point. Cohesix may attempt compatibility knobs such as `bus:txglom`, `apsta`,
+  `country`, and `bsscfg:event_msgs`, but only after the Linux first-iovar/MAC
+  sequence, and `BCME_UNSUPPORTED` on those non-captured knobs is nonfatal.
+  Transport errors remain fatal.
+- Before the first iovar, Cohesix must drain the Linux-observed startup
+  status/credit traffic emitted after `Dongle ready`. The captured first frame
+  is a 12-byte SDPCM header-only event/status frame, followed by an empty
+  64-byte read. That frame is not a CDC ioctl response and must be consumed
+  before `bus:txglomalign`, otherwise the first ioctl wait can consume stale
+  startup traffic and then spin on the SDIO-core status sideband instead of
+  reading the real response.
 - After real post-release HT and live Function 2 readiness are proved, the Pi 4
   firmware channel arms the Linux-shaped Function 2 interrupt path
   (`FUNCTIONINTMASK`, `CCCR.IENx`, and SDHCI `CARD_INT`) through HAL-owned
@@ -316,6 +339,11 @@ power/reset state.
   same Function 2 host-transfer shape Linux uses. Do not block that read on
   stale `RFRAME` sideband hints or on a `FUNCTIONINTMASK` readback of zero when
   `CCCR.IENx` is armed and `I_HMB_FRAME_IND` is visible.
+- Control-plane receive buffers must fit the captured Linux `BRCMF_FIRSTREAD`
+  cadence for large replies: the initial 64-byte fixed-address Function 2 read
+  followed by a 2048-byte bulk read. Smaller 2048-byte buffers are not enough to
+  hold the padded SDPCM control frame and will misclassify real reply progress
+  as partial hint visibility.
 - If the first control-plane write succeeds but neither `RFRAME` nor
   `I_HMB_FRAME_IND` becomes visible, the HAL must not spin indefinitely on the
   SDIO-core `int_status` word. It performs a sparse, bounded Linux-shaped
@@ -333,24 +361,29 @@ power/reset state.
   control response arrives, so Cohesix must not treat a 12-byte event-side frame
   as `bdc-event` failure while waiting for the real CDC reply.
 - Pi 4 local-seat USB and CYW43455 Wi-Fi may both be active during boot, but
-  USB prompt bring-up owns the first visible boot-progress lane. While USB is
-  inside its bounded keyboard/xHCI boot activity window, Wi-Fi progress updates
-  and raw `[pi4-wifi]` breadcrumbs must not compete for HDMI/UART output; Wi-Fi
-  records them to the internal log buffer and resumes visible progress only
-  after the USB activity window clears.
-- Wi-Fi net-console bring-up is never allowed to block the serial root console
-  handoff. On Pi 4 local-seat boots, explicit `wifi` and credentialed `auto`
-  policies defer the CYW43455 boot-time net-console probe until after the serial
-  shell is visible. Cohesix must emit a nonfatal deferred net-console status and
-  continue until `Cohesix console ready` and the `cohesix>` prompt are visible.
+  USB owns the bounded pre-net keyboard/xHCI activity window. While USB is
+  inside that window, Wi-Fi progress updates and raw `[pi4-wifi]` breadcrumbs
+  must not compete for HDMI/UART output; Wi-Fi records them to the internal log
+  buffer and resumes visible progress only after the USB activity window clears.
+- Wi-Fi net-console bring-up may gate the root console only on the Pi 4
+  local-seat path that explicitly selects Wi-Fi (`wifi`, or `auto` with
+  credentials). Cohesix must emit
+  `action=root-console-wait-for-wifi`, resume the saved net-console
+  configuration exactly once from the userland runtime, attach the resulting
+  network stack to the event pump, and continue polling until the Wi-Fi
+  transport is reachable before it emits `Cohesix console ready` or the
+  `cohesix>` prompt. A lingering
+  `wifi-net-console-pending-before-root-console` state after the prompt is drift:
+  it means the prompt escaped before Wi-Fi net-console readiness was proved.
 - Pi 4 local-seat USB is not a reason to disable Wi-Fi diagnostics. The serial
   console retains the HAL-backed Wi-Fi debug path after root-console handoff so
   `wifi diag`, `wifi load-fw`, and `wifi retry` can exercise CYW43455 without
   preventing boot from reaching the shell.
 - Wi-Fi association completion is event-pump driven for both explicit `wifi`
   and `auto` interface policies. The driver may issue the join command during
-  boot, but it must not wait synchronously for the AP association result while
-  local-seat USB, serial prompt, timers, or IPC still need to come online.
+  boot, but root-console publication on the Pi 4 Wi-Fi net-console path must
+  wait until the event pump has advanced association and DHCP/static addressing
+  to a reachable net-console state.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
@@ -391,31 +424,36 @@ active path is Cohesix-owned cold start:
   the Pi 4 outbound-window BAR value through EXT_CFG and read it back. Do not
   assign BARs for bad IDs, bad class, selector echoes, absent link proof, or
   any other tuple.
-- Doorbell and `USBCMD.RUN` posted-write flushes use HAL-owned BCM2711 EXT_CFG
-  selector/COMMAND readback only. The 2026-05-10 Pi 4 trace proved that even an
-  xHCI capability dword read at BAR offset `0x0000` can halt immediately after
-  `USBCMD.RUN`; never use xHCI BAR reads, `USBSTS`, or any `PORTSC` as the
-  posted-write drain on this prompt-safe path. Command-timeout recovery follows
-  the same rule: stop/reset/RUN recovery waits are blind bounded settles, not
-  live `USBCMD`/`USBSTS` polls. The active `platform-reset-complete` path uses
-  an extended bounded blind HCRST/CNR settle before publishing fresh rings, and
-  command-timeout recovery reuses that extended settle before retrying the
-  first command. Command timeout diagnostics on that lane report deferred state
+- Doorbell, Linux-shaped command-event setup, and `USBCMD.RUN` posted-write
+  flushes use HAL-owned BCM2711 EXT_CFG selector/COMMAND readback only. The
+  2026-05-10 Pi 4 trace proved that even an xHCI capability dword read at BAR
+  offset `0x0000` can halt immediately after `USBCMD.RUN`; never use xHCI BAR
+  reads, `USBSTS`, or any `PORTSC` as the posted-write drain on this
+  prompt-safe path. Command-timeout recovery follows the same rule:
+  stop/reset/RUN recovery waits are blind bounded settles, not live
+  `USBCMD`/`USBSTS` polls. The active `platform-reset-complete` path uses an
+  extended bounded blind HCRST/CNR settle before publishing fresh rings, and
+  command-timeout recovery reuses that extended settle before retrying the first
+  command. Command timeout diagnostics on that lane report deferred state
   instead of live `CRCR`, `DCBAAP`, interrupter, or `PORTSC` reads.
 - RUN, command-ring recovery, and command-doorbell posted-write drains fail
   closed when the HAL cannot prove the EXT_CFG selector, link/root readiness,
   PCIe IRQ-source masking, or poll-only VL805 COMMAND ownership, or when the
   drain read returns a selector echo or invalid config value.
-- Linux-shaped command/event proof must drain its own `USBCMD.RUN|INTE` write
-  before any command TRB is enqueued or doorbell is rung; a missing platform
-  posted-write hook is a hard failure on the Pi 4 high-BAR VL805 path.
+- Linux-shaped command/event proof must DMA-publish the command TRB first,
+  issue a device-visible command-ring publish barrier, then drain its own
+  `DNCTRL=0x2`, `IMOD=0xa0`, `ERDP.EHB`, `IMAN.IP`, `IMAN.IE`, and
+  `USBCMD.RUN|INTE` writes immediately before ringing the doorbell. `ERDP.EHB`
+  acknowledgement drains both the high DMA-alias dword and the low/control
+  dword in order. A missing platform posted-write hook is a hard failure on the
+  Pi 4 high-BAR VL805 path.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. USB keyboard availability must not depend on the
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local
   seat is enabled, explicit Wi-Fi net-console bring-up, and Auto policy with
   Wi-Fi credentials, proceed only after that pre-net USB probe has completed;
-  the Wi-Fi join result is then completed by the event pump instead of a
-  synchronous boot wait. USB and Wi-Fi may only be interleaved at explicit
+  the root console then waits in the event pump until Wi-Fi association and
+  addressing are reachable. USB and Wi-Fi may only be interleaved at explicit
   boot/event-pump phase boundaries where the root task is not holding
   overlapping HAL ownership.
 - Root-port state is cold-boot live evidence only. After mailbox reset, live
@@ -427,10 +465,11 @@ active path is Cohesix-owned cold start:
   connected mask, speed, enabled-port state, or skipped root-port reset.
 - The Pi 4 prompt-safe high-BAR lane proves command/event-ring consumption with
   Linux-shaped command-event state (`USBCMD.RUN|INTE`, `IMOD=0xa0`, `IMAN.IE`)
-  while PCI INTx/MSI/GIC delivery remains masked. With no port-status event it
-  first submits No Op; after current-boot port-status events it submits Enable
-  Slot through the same bounded/re-doorbell/recovery path. Only a completed
-  command may reopen live root-port sampling.
+  while PCI INTx/MSI/GIC delivery remains masked. It submits a bounded No Op
+  command before reopening live root-port sampling, including after
+  current-boot port-status events; device enumeration, not the proof gate, owns
+  the subsequent Enable Slot command. Only a completed command may reopen live
+  root-port sampling.
 - The external VL805 high-BAR path must not apply the generic Broadcom xHCI
   wrapper AXI read/write attribute quirk. On Pi 4 that quirk's `0x0c08/0x0c0c`
   offsets are not part of the live VL805 PCI controller contract; the

@@ -2067,7 +2067,8 @@ fn startup_link_direct_speculative_probe_failure_skips_empty_poll_wait(
     cached_snapshot: Option<&WifiDebugSnapshot>,
 ) -> bool {
     experimental_no_ht_transport
-        && control_plane_reply_rearm_uses_active_startup_link_wait(reply_rearm_mode)
+        && (control_plane_reply_rearm_uses_active_startup_link_wait(reply_rearm_mode)
+            || control_plane_reply_rearm_uses_slow_link_channel_rearm(reply_rearm_mode))
         && !linux_rxskip_pending
         && cached_snapshot
             .is_some_and(cached_first_reply_blocker_prefers_direct_reply_probe_cutover)
@@ -3130,6 +3131,19 @@ const fn sdio_irq_ack_requires_dongle_source_read(
 }
 
 #[inline]
+const fn polled_sdio_reply_requires_irq_ack(
+    irq_bound: bool,
+    sdhci_status_before_clear: u32,
+) -> bool {
+    irq_bound && (sdhci_status_before_clear & SDHCI_INT_CARD_INT) != 0
+}
+
+#[inline]
+const fn sdio_irq_binding_failure_is_terminal() -> bool {
+    true
+}
+
+#[inline]
 const fn sdio_irq_clear_ack_reenable_order_valid(
     clear_source_step: u8,
     sel4_ack_step: u8,
@@ -3141,6 +3155,19 @@ const fn sdio_irq_clear_ack_reenable_order_valid(
 #[inline]
 const fn sdhci_wait_int_ack_bits(mask: u32, status: u32) -> u32 {
     status & (mask | SDHCI_INT_WAIT_ACK_MASK) & !SDHCI_INT_CARD_INT
+}
+
+#[inline]
+const fn merge_sdio_core_int_status(
+    live_int_status: Option<u32>,
+    cached_int_status: Option<u32>,
+) -> Option<u32> {
+    match (live_int_status, cached_int_status) {
+        (Some(live), Some(cached)) => Some(live | cached),
+        (Some(live), None) => Some(live),
+        (None, Some(cached)) => Some(cached),
+        (None, None) => None,
+    }
 }
 
 #[inline]
@@ -3424,12 +3451,12 @@ const fn experimental_no_ht_f2_fifo_chunk_limit(write: bool) -> usize {
     // sizing used by the upstream Broadcom stack. The transfer planner keeps
     // that size in CMD53 byte mode, matching Linux's `sdio_writesb()` path.
     // Linux `brcmfmac` then switches reply polls to a 64-byte
-    // `BRCMF_FIRSTREAD`, so mirror that startup read size instead of pecking
-    // at Function 2 in 16-byte bursts.
+    // `BRCMF_FIRSTREAD` followed by one sized bulk read, so allow the second
+    // fixed-address Function 2 read to use the captured 2048-byte cadence.
     if write {
         SDIO_FUNCTION_ENABLE_F2.block_size as usize
     } else {
-        CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
+        CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN
     }
 }
 
@@ -5179,6 +5206,7 @@ const SDHCI_INT_WAIT_ACK_MASK: u32 = SDHCI_INT_CMD_MASK
     | SDHCI_INT_SPACE_AVAIL
     | SDHCI_INT_DATA_AVAIL
     | SDHCI_INT_ERROR;
+const SDHCI_INT_COMMAND_DATA_CLEAR_MASK: u32 = SDHCI_INT_WAIT_ACK_MASK;
 
 const SDIO_CMD5: u16 = 5;
 const SDIO_CMD3: u16 = 3;
@@ -7044,8 +7072,10 @@ const SDIO_FUNCTION_ENABLE_F2: SdioFunctionEnableStep = SdioFunctionEnableStep {
 const SDIO_FUNCTION_ENABLE_SEQUENCE: [SdioFunctionEnableStep; 2] =
     [SDIO_FUNCTION_ENABLE_F1, SDIO_FUNCTION_ENABLE_F2];
 const CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN: usize = 64;
-const CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY: usize =
+const CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN: usize =
     SDIO_FUNCTION_ENABLE_F2.block_size as usize * 4;
+const CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY: usize =
+    CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN + CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN;
 const CYW43_SDPCM_PREFIX_MIN_LEN: usize = 8;
 const CYW43_SDPCM_HEADER_LEN: usize = 12;
 const CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS: [usize; 4] = [
@@ -8753,6 +8783,7 @@ struct SdioHost {
     experimental_control_plane_reply_rearm_empty_polls: u8,
     experimental_control_plane_promoted_probe_pending: bool,
     experimental_control_plane_linux_rxskip_pending: bool,
+    cached_control_plane_irq_int_status: Option<u32>,
     experimental_control_plane_speculative_frame_len: usize,
     experimental_control_plane_speculative_frame:
         [u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY],
@@ -8834,10 +8865,13 @@ impl SdioHost {
                 }
                 Err(err) => {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] sdio irq bind irq={} action=defer-interrupt-arm err={err}",
+                        "[pi4-wifi] sdio irq bind irq={} action=fail-closed err={err}",
                         PI4_WIFI_SDIO_HOST_IRQ,
                     ));
-                    None
+                    if sdio_irq_binding_failure_is_terminal() {
+                        return Err(err);
+                    }
+                    unreachable!("sdio_irq_binding_failure_is_terminal is true for Pi4 WiFi")
                 }
             }
         };
@@ -8890,6 +8924,7 @@ impl SdioHost {
             experimental_control_plane_reply_rearm_empty_polls: 0,
             experimental_control_plane_promoted_probe_pending: false,
             experimental_control_plane_linux_rxskip_pending: false,
+            cached_control_plane_irq_int_status: None,
             experimental_control_plane_speculative_frame_len: 0,
             experimental_control_plane_speculative_frame: [0;
                 CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY],
@@ -8951,6 +8986,7 @@ impl SdioHost {
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
         self.experimental_control_plane_promoted_probe_pending = false;
         self.experimental_control_plane_linux_rxskip_pending = false;
+        self.cached_control_plane_irq_int_status = None;
         self.clear_control_plane_speculative_reply_frame();
         self.block_size_count_shadow = 0;
         self.transfer_mode_shadow = 0;
@@ -12099,6 +12135,9 @@ impl SdioHost {
                         "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-clear-deferred err={err}"
                     ));
                 }
+                self.ack_sdio_irq_after_polled_reply_if_pending(
+                    "control-plane-reply-strict-frame-indicated-ready",
+                );
                 self.log_transport_shadow("control-plane-reply-strict-frame-indicated-ready");
                 Ok(frame_len)
             }
@@ -12184,6 +12223,9 @@ impl SdioHost {
                         "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-clear-deferred err={err}"
                     ));
                 }
+                self.ack_sdio_irq_after_polled_reply_if_pending(
+                    "control-plane-reply-post-write-hintless-ready",
+                );
                 self.log_transport_shadow("control-plane-reply-post-write-hintless-ready");
                 Ok(frame_len)
             }
@@ -13193,13 +13235,13 @@ impl SdioHost {
         self.write8(SDHCI_POWER_CONTROL, SDHCI_POWER_330 | SDHCI_POWER_ON);
         self.settle_power_on_ready();
         self.write8(SDHCI_TIMEOUT_CONTROL, 0x0E);
-        self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
+        self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
         self.write32(SDHCI_INT_ENABLE, SDHCI_INT_ALL_MASK);
         self.write32(SDHCI_SIGNAL_ENABLE, 0);
         if let Err(err) = self.set_clock_hz(400_000) {
             emit_breadcrumb(format_args!("[pi4-wifi] host reset clock-retry err={err}"));
             self.software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA).ok();
-            self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
+            self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
             self.set_clock_hz(400_000)?;
         }
         self.apply_host_bus_width(self.desired_bus_width);
@@ -14501,6 +14543,21 @@ impl SdioHost {
         Ok(())
     }
 
+    fn cache_control_plane_irq_int_status(&mut self, int_status: Option<u32>) {
+        let Some(int_status) = int_status else {
+            return;
+        };
+        if (int_status & I_HMB_FRAME_IND) == 0 {
+            return;
+        }
+        self.cached_control_plane_irq_int_status =
+            Some(self.cached_control_plane_irq_int_status.unwrap_or(0) | int_status);
+    }
+
+    fn take_cached_control_plane_irq_int_status(&mut self) -> Option<u32> {
+        self.cached_control_plane_irq_int_status.take()
+    }
+
     fn service_sdio_irq_once_for_firmware_channel(
         &mut self,
         stage: &'static str,
@@ -14557,7 +14614,6 @@ impl SdioHost {
         let signal_before = self.read32(SDHCI_SIGNAL_ENABLE);
         let int_enable_after = int_enable_before | SDHCI_INT_CARD_INT;
         let signal_after = signal_before | SDHCI_INT_CARD_INT;
-        self.write32(SDHCI_INT_STATUS, SDHCI_INT_CARD_INT);
         if int_enable_after != int_enable_before {
             self.write32(SDHCI_INT_ENABLE, int_enable_after);
         }
@@ -14576,6 +14632,7 @@ impl SdioHost {
     ) -> Result<(), HalError> {
         let int_status =
             self.read_control_plane_snapshot_u32(stage, "irq-int-status", SDIO_INT_STATUS);
+        self.cache_control_plane_irq_int_status(int_status);
         let serviced_bits = int_status.unwrap_or(0) & HOSTINTMASK;
         if serviced_bits != 0 {
             self.write_sdio_core_u32_for_firmware_channel(
@@ -14602,6 +14659,32 @@ impl SdioHost {
             int_status = int_status.unwrap_or(0),
         ));
         Ok(())
+    }
+
+    fn ack_sdio_irq_after_polled_reply_if_pending(&mut self, stage: &'static str) {
+        let Some(binding) = self.sdio_irq_binding else {
+            return;
+        };
+        let sdhci_status = self.read32(SDHCI_INT_STATUS);
+        let card_int_still_visible = polled_sdio_reply_requires_irq_ack(true, sdhci_status);
+        match binding.ack_from_hal() {
+            Ok(()) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=sel4-irq-polled-reply-ack irq={} trigger={:?} badge=0x{:x} sdhci=0x{sdhci_status:08x} card_int_still_visible={}",
+                    binding.irq().0,
+                    binding.trigger(),
+                    binding.badge(),
+                    yn(card_int_still_visible),
+                ));
+                self.enable_sdhci_card_interrupt_signal(stage);
+            }
+            Err(err) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=sel4-irq-polled-reply-ack-fail irq={} err={err} sdhci=0x{sdhci_status:08x}",
+                    binding.irq().0,
+                ));
+            }
+        }
     }
 
     fn enable_function_step(
@@ -17047,7 +17130,8 @@ impl SdioHost {
             return Ok(frame_len);
         }
         let strict_int_status = if !low_touch_pure_f2_mode {
-            let int_status = match self.read_sdio_core_u32_with_f1_fallback(
+            let cached_int_status = self.take_cached_control_plane_irq_int_status();
+            let live_int_status = match self.read_sdio_core_u32_with_f1_fallback(
                 "control-plane-reply-strict-frame-indication",
                 "int-status",
                 SDIO_INT_STATUS,
@@ -17065,6 +17149,16 @@ impl SdioHost {
                 }
                 Err(err) => return Err(err),
             };
+            let int_status = merge_sdio_core_int_status(live_int_status, cached_int_status);
+            if cached_int_status.is_some_and(|value| (value & I_HMB_FRAME_IND) != 0) {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indication-cached int_status=0x{int_status:08x} live=0x{live:08x}/{} cached=0x{cached:08x}",
+                    yn(live_int_status.is_some()),
+                    int_status = int_status.unwrap_or(0),
+                    live = live_int_status.unwrap_or(0),
+                    cached = cached_int_status.unwrap_or(0),
+                ));
+            }
             if strict_control_plane_should_probe_f2_on_frame_indication(
                 self.experimental_no_ht_transport,
                 self.experimental_control_plane_reply_rearm_mode,
@@ -17089,12 +17183,12 @@ impl SdioHost {
                 self.current_clock_hz,
                 self.experimental_control_plane_linux_rxskip_pending,
                 cached_snapshot.as_ref(),
-            ) {
+            ) && self.experimental_control_plane_reply_rearm_empty_polls == 0
+            {
                 let exact_error = cached_snapshot
                     .as_ref()
                     .map(|snapshot| snapshot.control_plane_exact_error)
                     .unwrap_or("none");
-                self.experimental_control_plane_reply_rearm_empty_polls = 0;
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=control-plane-reply action=direct-speculative-reply-probe mode=startup-link-passive current_clock={}Hz width={} chunk_limit={} no_ht={} exact_error={exact_error} reason=preserved-linux-f2-first-reply-blocker",
                     self.current_clock_hz,
@@ -17107,6 +17201,7 @@ impl SdioHost {
                 if speculative_frame_len != 0 {
                     return Ok(speculative_frame_len);
                 }
+                self.experimental_control_plane_reply_rearm_empty_polls = 1;
                 return Ok(0);
             }
             let passive_startup_link_wait_limit = passive_startup_link_wait_empty_poll_limit_for(
@@ -17240,21 +17335,24 @@ impl SdioHost {
                 return Ok(0);
             }
             let cached_snapshot = cached_wifi_debug_snapshot();
-            if startup_link_prefers_direct_speculative_reply_probe(
-                self.experimental_no_ht_transport,
-                self.experimental_control_plane_reply_rearm_mode,
-                self.experimental_control_plane_linux_rxskip_pending,
-                cached_snapshot.as_ref(),
-            ) || startup_link_resume_prefers_direct_speculative_reply_probe(
-                self.experimental_no_ht_transport,
-                self.experimental_control_plane_reply_rearm_mode,
-                self.experimental_control_plane_linux_rxskip_pending,
-                cached_snapshot.as_ref(),
-            ) {
+            let direct_speculative_probe_untried =
+                self.experimental_control_plane_reply_rearm_empty_polls == 0;
+            if direct_speculative_probe_untried
+                && (startup_link_prefers_direct_speculative_reply_probe(
+                    self.experimental_no_ht_transport,
+                    self.experimental_control_plane_reply_rearm_mode,
+                    self.experimental_control_plane_linux_rxskip_pending,
+                    cached_snapshot.as_ref(),
+                ) || startup_link_resume_prefers_direct_speculative_reply_probe(
+                    self.experimental_no_ht_transport,
+                    self.experimental_control_plane_reply_rearm_mode,
+                    self.experimental_control_plane_linux_rxskip_pending,
+                    cached_snapshot.as_ref(),
+                ))
+            {
                 let exact_error = cached_snapshot
                     .map(|snapshot| snapshot.control_plane_exact_error)
                     .unwrap_or("none");
-                self.experimental_control_plane_reply_rearm_empty_polls = 0;
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=control-plane-reply action=direct-speculative-reply-probe mode={} current_clock={}Hz width={} chunk_limit={} no_ht={} exact_error={exact_error} reason=preserved-linux-f2-first-reply-blocker",
                     control_plane_reply_rearm_mode_name(
@@ -17290,6 +17388,8 @@ impl SdioHost {
                         self.control_plane_chunk_limit(),
                         self.experimental_no_ht_transport,
                     ));
+                } else {
+                    self.experimental_control_plane_reply_rearm_empty_polls = 1;
                 }
                 return Ok(0);
             }
@@ -22724,7 +22824,7 @@ impl SdioHost {
 
     fn recover_command_path(&mut self, stage: &'static str) {
         let reset_result = self.software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-        self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
+        self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
         self.programmed_backplane_window = None;
         let present = self.read32(SDHCI_PRESENT_STATE);
         let inhibit = present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE);
@@ -22761,7 +22861,7 @@ impl SdioHost {
 
     fn recover_command_path_preserve_window(&mut self, stage: &'static str) {
         self.software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA).ok();
-        self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
+        self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
         self.programmed_backplane_window =
             restore_programmed_backplane_window(self.last_backplane_window);
         let restored_window = self.programmed_backplane_window.unwrap_or(0);
@@ -22828,7 +22928,7 @@ impl SdioHost {
         response: ResponseType,
     ) -> Result<[u32; 4], HalError> {
         self.wait_inhibit_clear(matches!(response, ResponseType::ShortBusy))?;
-        self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
+        self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
         self.write32(SDHCI_ARGUMENT, arg);
         self.write16(SDHCI_TRANSFER_MODE, 0);
         self.write16(SDHCI_COMMAND, make_command(cmd, response, false));
@@ -22878,7 +22978,7 @@ impl SdioHost {
     ) -> Result<(), HalError> {
         self.clear_last_data_wait_diag();
         self.wait_inhibit_clear(true)?;
-        self.write32(SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
+        self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
         self.write16(SDHCI_BLOCK_SIZE, plan.block_size);
         self.write16(SDHCI_BLOCK_COUNT, plan.block_count);
         self.write32(SDHCI_ARGUMENT, arg);
@@ -23701,6 +23801,52 @@ mod tests {
         SMB_INT_ACK, TAG_GET_CLOCK_RATE, TAG_NOTIFY_XHCI_RESET, TAG_SET_GPIO_CONFIG,
         TAG_SET_POWER_STATE,
     };
+
+    fn test_wifi_debug_snapshot_exact(exact_error: &'static str) -> WifiDebugSnapshot {
+        WifiDebugSnapshot {
+            power_state: super::WifiPowerState::On,
+            reset_state: super::WifiResetState::Deasserted,
+            current_clock_hz: CYW43_STARTUP_CLOCK_HZ,
+            preferred_data_clock_hz: CYW43_CONTROL_PLANE_CLOCK_HZ,
+            bus_width: SdioBusWidth::FourBit,
+            card_ready: true,
+            card_rca: 1,
+            card_ocr: 0,
+            io_enable: Some(SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2),
+            io_ready: Some(SDIO_FUNC_READY_1),
+            chipclkcsr: Some(0xd2),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x03),
+            cardcap: Some(0x06),
+            programmed_backplane_window: Some(0x1800_0000),
+            shadow_backplane_window: Some(0x1800_0000),
+            shadow_backplane_fn_addr: Some(0x08000),
+            control_plane_frame_recovery_stage: None,
+            control_plane_frame_recovery_policy: None,
+            control_plane_frame_recovery_write: None,
+            control_plane_frame_recovery_drained: None,
+            control_plane_frame_recovery_count: None,
+            control_plane_bootstrap_phase: "startup-link-recovery",
+            control_plane_reply_mode: "startup-link-resume",
+            control_plane_reply_attempts: 0,
+            control_plane_reply_empty_polls: 0,
+            control_plane_no_ht_transport: true,
+            control_plane_probe_pending: false,
+            control_plane_startup_link_stable: false,
+            control_plane_startup_profile_locked: true,
+            control_plane_startup_profile_reason: "test",
+            control_plane_promoted_probe_pending: false,
+            debug_snapshot_source: "cached",
+            debug_snapshot_stage: "test",
+            control_plane_startup_link_rescue_cycles: 0,
+            control_plane_startup_link_rescue_limit: CYW43_CONTROL_PLANE_STARTUP_LINK_RESCUE_LIMIT,
+            control_plane_passive_startup_link_empty_poll_limit:
+                CYW43_CONTROL_PLANE_PASSIVE_STARTUP_LINK_EMPTY_POLL_LIMIT,
+            control_plane_f2_state: "latched-linux-configured-no-iorx",
+            control_plane_sdhci_read_diag: "none",
+            control_plane_exact_error: exact_error,
+        }
+    }
     use crate::hal::SdioBusWidth;
 
     #[test]
@@ -24275,7 +24421,7 @@ mod tests {
     }
 
     #[test]
-    fn experimental_function2_fifo_chunk_limit_splits_no_ht_fifo_reads_from_writes() {
+    fn experimental_function2_fifo_chunk_limit_matches_linux_no_ht_reply_reads() {
         assert_eq!(
             experimental_function2_fifo_chunk_limit(SdioFunction::Function2, false, true, true),
             experimental_no_ht_f2_fifo_chunk_limit(true)
@@ -24292,9 +24438,13 @@ mod tests {
             experimental_function2_fifo_chunk_limit(SdioFunction::Function2, false, false, true),
             experimental_no_ht_f2_fifo_chunk_limit(false)
         );
+        assert_eq!(
+            experimental_no_ht_f2_fifo_chunk_limit(false),
+            CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN
+        );
         assert!(
             experimental_no_ht_f2_fifo_chunk_limit(false)
-                < experimental_no_ht_f2_fifo_chunk_limit(true)
+                > experimental_no_ht_f2_fifo_chunk_limit(true)
         );
         assert_eq!(
             experimental_function2_fifo_chunk_limit(SdioFunction::Function2, true, false, true),
@@ -25280,6 +25430,16 @@ mod tests {
         assert!(!control_plane_reply_rearm_uses_slow_link_channel_rearm(
             control_plane_reply_rearm_startup_link()
         ));
+        assert!(
+            startup_link_direct_speculative_probe_failure_skips_empty_poll_wait(
+                true,
+                control_plane_reply_rearm_startup_link_resume(),
+                false,
+                Some(&test_wifi_debug_snapshot_exact(
+                    "cyw43-function2-reply-read-stall-no-buffer-ready"
+                )),
+            )
+        );
         assert!(!control_plane_reply_rearm_uses_startup_link(
             control_plane_reply_rearm_promoted_link()
         ));
@@ -26137,10 +26297,10 @@ mod tests {
     }
 
     #[test]
-    fn no_ht_control_plane_reads_use_linux_firstread_size() {
+    fn no_ht_control_plane_reads_allow_linux_bulk_after_firstread() {
         assert_eq!(
             experimental_no_ht_f2_fifo_chunk_limit(false),
-            CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
+            CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN
         );
         assert_eq!(
             experimental_no_ht_f2_fifo_chunk_limit(true),
@@ -26508,6 +26668,26 @@ mod tests {
         );
         assert_eq!(
             control_plane_reply_remainder_len_from_firstread(&first_read, 1599),
+            None
+        );
+
+        let linux_large_reply_len = 2064usize;
+        let linux_large_reply_len_u16 =
+            u16::try_from(linux_large_reply_len).expect("packet length fits");
+        first_read[0..2].copy_from_slice(&linux_large_reply_len_u16.to_le_bytes());
+        first_read[2..4].copy_from_slice(&(!linux_large_reply_len_u16).to_le_bytes());
+        assert_eq!(
+            control_plane_reply_remainder_len_from_firstread(
+                &first_read,
+                CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY,
+            ),
+            Some(CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN)
+        );
+        assert_eq!(
+            control_plane_reply_remainder_len_from_firstread(
+                &first_read,
+                CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN,
+            ),
             None
         );
     }
@@ -29054,6 +29234,23 @@ mod tests {
             sdhci_wait_int_ack_bits(SDHCI_INT_CMD_MASK, SDHCI_INT_CARD_INT),
             0
         );
+        assert_eq!(SDHCI_INT_COMMAND_DATA_CLEAR_MASK & SDHCI_INT_CARD_INT, 0);
+        assert_eq!(SDHCI_INT_DATA_READY_MASK & SDHCI_INT_CARD_INT, 0);
+        assert_eq!(
+            merge_sdio_core_int_status(Some(I_CHIPACTIVE), Some(I_HMB_FRAME_IND)),
+            Some(I_CHIPACTIVE | I_HMB_FRAME_IND)
+        );
+        assert_eq!(
+            merge_sdio_core_int_status(None, Some(I_HMB_FRAME_IND)),
+            Some(I_HMB_FRAME_IND)
+        );
+        assert!(polled_sdio_reply_requires_irq_ack(true, SDHCI_INT_CARD_INT));
+        assert!(!polled_sdio_reply_requires_irq_ack(
+            false,
+            SDHCI_INT_CARD_INT
+        ));
+        assert!(!polled_sdio_reply_requires_irq_ack(true, 0));
+        assert!(sdio_irq_binding_failure_is_terminal());
         assert_eq!(SDPCMD_REG_FUNCTIONINTMASK, 0x34);
         assert_eq!(FUNCTIONINTMASK, u32::from(SDIO_FUNC_ENABLE_2));
         assert_eq!(SDIO_INTERRUPT_ENABLE_MASK, 0x07);
@@ -31944,7 +32141,7 @@ mod tests {
             )
         );
         assert!(
-            !startup_link_direct_speculative_probe_failure_skips_empty_poll_wait(
+            startup_link_direct_speculative_probe_failure_skips_empty_poll_wait(
                 true,
                 control_plane_reply_rearm_startup_link_resume(),
                 false,

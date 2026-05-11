@@ -123,7 +123,7 @@ use crate::net::NetSelfTestStartResult;
 #[cfg(feature = "net-console")]
 use crate::net::{
     ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller,
-    NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
+    NetStatusReport, NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
 };
 #[cfg(feature = "kernel")]
 use crate::ninedoor::TelemetryTailMeta;
@@ -206,6 +206,18 @@ const NET_DIAG_RATE_LIMIT_MS: u64 = 15_000;
 const NET_DIAG_RATE_KINDS: usize = 1;
 #[cfg(feature = "net-console")]
 const NET_DIAG_STUCK_MS: u64 = 3_000;
+
+#[cfg(feature = "net-console")]
+fn net_status_allows_root_console(status: &NetStatusReport) -> bool {
+    match status.address_source {
+        "disabled"
+        | "wifi-associating"
+        | "wifi-association-failed"
+        | "dhcp-pending"
+        | "dhcp-failed" => false,
+        _ => true,
+    }
+}
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
 #[derive(Debug, Default)]
@@ -1579,6 +1591,15 @@ where
         }
     }
 
+    /// Returns whether the active network transport is ready to carry the root console.
+    #[cfg(feature = "net-console")]
+    pub fn net_console_ready_for_root(&self) -> bool {
+        match self.net.as_ref() {
+            Some(net) => net_status_allows_root_console(&net.status_report()),
+            None => false,
+        }
+    }
+
     /// Returns whether the NineDoor bridge is enabled.
     pub fn ninedoor_enabled(&self) -> bool {
         #[cfg(feature = "kernel")]
@@ -2172,9 +2193,9 @@ where
                     self.emit_console_line("wifi: diag stage=before-ht-probe");
                     self.emit_wifi_snapshot_with_traces(&before);
 
-                    if Self::wifi_diag_should_skip_ht_probe(&before) {
+                    if let Some(reason) = Self::wifi_diag_ht_probe_skip_reason(&before) {
                         let detail = format_message(format_args!(
-                            "wifi: diag ht_probe skipped reason=pre-firmware-core-control-failure exact_error={}",
+                            "wifi: diag ht_probe skipped reason={reason} exact_error={}",
                             before.control_plane_exact_error,
                         ));
                         self.emit_console_line(detail.as_str());
@@ -3577,10 +3598,23 @@ where
 
     #[cfg(feature = "kernel")]
     fn wifi_diag_should_skip_ht_probe(snapshot: &WifiDebugSnapshot) -> bool {
-        snapshot.debug_snapshot_stage == "cyw43-load-firmware-fail"
+        Self::wifi_diag_ht_probe_skip_reason(snapshot).is_some()
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_ht_probe_skip_reason(snapshot: &WifiDebugSnapshot) -> Option<&'static str> {
+        if matches!(snapshot.power_state, WifiPowerState::Off)
+            || matches!(snapshot.reset_state, WifiResetState::Asserted)
+            || !snapshot.card_ready
+            || snapshot.current_clock_hz == 0
+        {
+            return Some("transport-not-initialized");
+        }
+        (snapshot.debug_snapshot_stage == "cyw43-load-firmware-fail"
             && Self::wifi_exact_error_is_direct_sdio_transport_blocker(
                 snapshot.control_plane_exact_error,
-            )
+            ))
+        .then_some("pre-firmware-core-control-failure")
     }
 
     #[cfg(feature = "kernel")]
@@ -6396,6 +6430,56 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn root_console_waits_for_reachable_net_console_status() {
+        let mut status = NetStatusReport {
+            backend: "bcmgenet-v5",
+            mode: "dhcp",
+            interface_policy: "wifi",
+            active_interface: "wifi",
+            standby_interface: "wired",
+            address_source: "wifi-associating",
+            ip: HeaplessString::new(),
+            gateway: HeaplessString::new(),
+            dhcp_phase: "associating",
+        };
+
+        assert!(!super::net_status_allows_root_console(&status));
+        status.address_source = "dhcp-pending";
+        status.dhcp_phase = "selecting";
+        assert!(!super::net_status_allows_root_console(&status));
+        status.address_source = "dhcp-lease";
+        status.dhcp_phase = "bound";
+        assert!(super::net_status_allows_root_console(&status));
+        status.address_source = "dev-virt";
+        status.dhcp_phase = "disabled";
+        assert!(super::net_status_allows_root_console(&status));
+    }
+
+    #[test]
+    fn start_cli_emits_serial_banner_and_prompt_without_network() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.start_cli();
+        let emitted = pump.serial_mut().driver_mut().drain_tx();
+        let transcript = core::str::from_utf8(emitted.as_slice()).unwrap();
+
+        assert!(transcript.contains(CONSOLE_BANNER));
+        assert!(transcript.contains("Cohesix console ready"));
+        assert!(transcript.ends_with(CONSOLE_PROMPT));
+    }
+
     struct NullIpc;
 
     impl IpcDispatcher for NullIpc {
@@ -8546,6 +8630,24 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_reply_contract_blocker_class(&fake.snapshot),
             "firmware-core-control"
+        );
+        assert!(KernelConsoleTestPump::wifi_diag_should_skip_ht_probe(
+            &fake.snapshot
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_diag_skips_ht_probe_when_transport_is_not_initialized() {
+        let mut fake = FakeWifiDebug::new();
+        fake.snapshot.power_state = WifiPowerState::Off;
+        fake.snapshot.reset_state = WifiResetState::Asserted;
+        fake.snapshot.current_clock_hz = 0;
+        fake.snapshot.card_ready = false;
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_diag_ht_probe_skip_reason(&fake.snapshot),
+            Some("transport-not-initialized")
         );
         assert!(KernelConsoleTestPump::wifi_diag_should_skip_ht_probe(
             &fake.snapshot

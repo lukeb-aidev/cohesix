@@ -472,6 +472,11 @@ def classify_domain(line: str) -> str | None:
     if "[net-console]" in lower and (
         "deferred reason=local-seat-usb-first" in lower
         or "action=serial-local-seat-first" in lower
+        or "action=serial-root-console-first" in lower
+        or "action=root-console-wait-for-wifi" in lower
+        or "action=wait-for-wifi" in lower
+        or "wifi-net-console-pending-before-root-console" in lower
+        or "wifi-not-ready" in lower
     ):
         return "wifi"
     if "cyw43-" in lower and ("net-disabled" in lower or "net-console" in lower):
@@ -1151,7 +1156,17 @@ def normalize_wifi_blocker(value: str) -> str:
         if "no-reply" in lower:
             return "control-plane-no-reply"
         return "control-plane"
-    if "local-seat-usb-first" in lower or "serial-local-seat-first" in lower:
+    if (
+        "root-console-wait-for-wifi" in lower
+        or "wifi-net-console-pending-before-root-console" in lower
+        or ("wifi-not-ready" in lower and "wait-for-wifi" in lower)
+    ):
+        return "boot-waiting-for-wifi"
+    if (
+        "local-seat-usb-first" in lower
+        or "serial-local-seat-first" in lower
+        or "serial-root-console-first" in lower
+    ):
         return "boot-deferred-local-seat-usb"
     if (
         "join-timeout" in lower
@@ -1940,7 +1955,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if value and value not in {"none", "n/a"}:
                 explicit_blocker = normalize_wifi_blocker(value)
         raw_contract_blocker = normalize_wifi_blocker(raw)
-        if raw_contract_blocker == "boot-deferred-local-seat-usb":
+        if raw_contract_blocker in {
+            "boot-deferred-local-seat-usb",
+            "boot-waiting-for-wifi",
+        }:
             explicit_blocker = raw_contract_blocker
         if raw_contract_blocker in {
             "control-plane",
@@ -2513,7 +2531,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 7)
             blocker = explicit_blocker
             continue
-        if explicit_blocker == "boot-deferred-local-seat-usb":
+        if explicit_blocker in {"boot-deferred-local-seat-usb", "boot-waiting-for-wifi"}:
             gate = max(gate, 1)
             blocker = explicit_blocker
             continue
