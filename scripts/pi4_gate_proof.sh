@@ -206,13 +206,26 @@ cleanup_capture() {
     fi
 }
 
+console_prompt_seen() {
+    "${PYTHON}" - "${LOG_PATH}" <<'PY'
+import pathlib
+import sys
+
+data = pathlib.Path(sys.argv[1]).read_bytes()
+for line in data.replace(b"\r", b"\n").split(b"\n"):
+    if line.startswith(b"cohesix>"):
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
 wait_for_console_ready() {
     local deadline
     local boot_options_advanced=0
 
     deadline=$((SECONDS + CONSOLE_READY_TIMEOUT_SECONDS))
     while ((SECONDS <= deadline)); do
-        if grep -q 'cohesix>' "${LOG_PATH}"; then
+        if console_prompt_seen; then
             return
         fi
         if [[ "${boot_options_advanced}" -eq 0 ]] \
@@ -267,13 +280,15 @@ run_normalizer() {
     require_file "${TRACE_NORMALIZER}"
     require_file "${LOG_PATH}"
     if [[ "${ALLOW_SUMMARY_ONLY}" -eq 0 ]]; then
-        args+=("--expect-min" "USB_GATE=1" "--expect-min" "WIFI_GATE=1")
+        args+=("--expect-min" "USB_GATE=3" "--expect-min" "WIFI_GATE=1")
         args+=("--expect" "SERIAL_CLEAN=yes")
         args+=("--expect" "BOOT_HALTED=no")
         args+=("--expect" "TIMER_IRQ27_SEEN=no")
         args+=("--expect" "USB_BOOTLOADER_HANDOFF_SEEN=no")
         args+=("--expect" "USB_COLD_BOOT_SEEN=yes")
         args+=("--expect" "USB_STALE_UEFI_HINT_SEEN=no")
+        args+=("--expect" "ROOT_CONSOLE_READY=yes")
+        args+=("--expect" "ROOT_PROMPT_SEEN=yes")
         args+=("--expect-not" "USB_BLOCKER=unknown")
         args+=("--expect-not" "USB_BLOCKER=no-controller-edge-yet")
         args+=("--expect-not" "USB_BLOCKER=policy-skip-before-run")
@@ -290,10 +305,10 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-pending")
         args+=("--expect-not" "USB_BLOCKER=cmd-doorbell-write-halt")
         args+=("--expect-not" "USB_BLOCKER=cmd-fetch-timeout")
+        args+=("--expect-not" "USB_BLOCKER=cmd-event-ring-timeout")
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-only-timeout")
         args+=("--expect-not" "USB_BLOCKER=cmd-live-timeout-snapshot-missing")
         args+=("--expect-not" "USB_BLOCKER=cmd-timeout")
-        args+=("--expect-not" "USB_BLOCKER=cmd-event-ring-timeout")
         args+=("--expect-not" "USB_BLOCKER=usbcmd-run-preserved-reset-bit")
         args+=("--expect-not" "USB_BLOCKER=usbcmd-run-posted-flush-halt")
         args+=("--expect-not" "USB_BLOCKER=pcie-window-no-op-timeout")
@@ -324,10 +339,13 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=hid-first-report")
         args+=("--expect-not" "USB_BLOCKER=keyboard-first-byte")
         args+=("--expect-not" "USB_BLOCKER=no-keyboard-found")
+        args+=("--expect-not" "USB_BLOCKER=unavailable")
         args+=("--expect-not" "USB_BLOCKER=safe-port-event-required")
         args+=("--expect-not" "USB_BLOCKER=safe-port-state")
         args+=("--expect-not" "WIFI_BLOCKER=ht-recover-cmd5-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=unknown")
+        args+=("--expect-not" "WIFI_BLOCKER=deferred")
+        args+=("--expect-not" "WIFI_BLOCKER=boot-deferred-local-seat-usb")
         args+=("--expect-not" "WIFI_BLOCKER=ht-clock-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=devon-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=function2-disabled")
@@ -360,9 +378,13 @@ run_normalizer() {
         args+=("--expect-not" "WIFI_BLOCKER=sdpcm-credit-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=ioctl-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=control-plane")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane-bdc-event")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane-interrupt-programming-drift")
         args+=("--expect-not" "WIFI_BLOCKER=control-plane-interrupts-deferred")
         args+=("--expect-not" "WIFI_BLOCKER=control-plane-no-reply")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane-partial-hint-visibility")
         args+=("--expect-not" "WIFI_BLOCKER=control-plane-rearm-timeout")
+        args+=("--expect-not" "WIFI_BLOCKER=control-plane-reply-idle-loop")
         args+=("--expect-not" "WIFI_BLOCKER=control-plane-sideband-unreadable")
         args+=("--expect-not" "WIFI_BLOCKER=control-plane-startup-link-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=join-pending")

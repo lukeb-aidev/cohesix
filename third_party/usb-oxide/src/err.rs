@@ -42,6 +42,8 @@ pub enum UsbError {
     Stall,
     /// Failed to prepare DMA-backed memory for device access
     DmaSync,
+    /// Platform-owned posted-write drain could not prove the write reached hardware
+    PostedWriteFlushFailed,
 }
 
 /// Result type for USB operations.

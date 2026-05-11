@@ -23,6 +23,25 @@ def test_gate_proof_does_not_emit_leading_carriage_return() -> None:
     assert "printf '\\r%s\\r'" not in source
 
 
+def test_gate_proof_waits_for_prompt_at_line_start() -> None:
+    """Capture readiness must not match debug prose containing the prompt text."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "console_prompt_seen()" in source
+    assert 'line.startswith(b"cohesix>")' in source
+    assert "grep -q 'cohesix>'" not in source
+
+
+def test_gate_proof_rejects_generic_usb_unavailable_summary() -> None:
+    """A generic keyboard-unavailable summary must not mask the real USB gate."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert '"USB_BLOCKER=cmd-event-ring-timeout"' in source
+    assert '"USB_BLOCKER=unavailable"' in source
+
+
 def test_gate_proof_rejects_current_usb_and_wifi_blockers(tmp_path: pathlib.Path) -> None:
     """Default proof policy must reject stale USB reset and WiFi HT blockers."""
 
@@ -119,6 +138,98 @@ def test_gate_proof_rejects_unknown_default_gate_evidence(
     assert "WIFI_BLOCKER=unknown" in result.stdout
     assert "USB_BLOCKER rejected unknown" in result.stderr
     assert "WIFI_BLOCKER rejected unknown" in result.stderr
+
+
+def test_gate_proof_rejects_local_seat_wifi_boot_deferral(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Default hardware proof must fail if local-seat boot skips WiFi."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "U-Boot 2026.01-dirty",
+                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix:root-task] Cohesix boot: root-task online",
+                "[local-seat] xhci enumerate outcome=keyboard-ready",
+                "[net-console] deferred reason=local-seat-usb-first-wifi "
+                "action=serial-local-seat-first",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "WIFI_BLOCKER=boot-deferred-local-seat-usb" in result.stdout
+    assert (
+        "WIFI_BLOCKER rejected boot-deferred-local-seat-usb"
+        in result.stderr
+    )
+
+
+def test_gate_proof_rejects_missing_root_console_prompt(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Default hardware proof must fail if boot never reaches the root prompt."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "U-Boot 2026.01-dirty",
+                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix:root-task] Cohesix boot: root-task online",
+                "[local-seat] xhci root-port command-probe result=no-op-ok",
+                "wifi: firmware-ready",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "ROOT_CONSOLE_READY=no" in result.stdout
+    assert "ROOT_PROMPT_SEEN=no" in result.stdout
+    assert "ROOT_CONSOLE_READY expected yes got no" in result.stderr
+    assert "ROOT_PROMPT_SEEN expected yes got no" in result.stderr
 
 
 def test_gate_proof_rejects_stale_uefi_usb_hint(tmp_path: pathlib.Path) -> None:

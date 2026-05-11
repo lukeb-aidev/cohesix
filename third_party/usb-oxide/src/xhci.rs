@@ -44,6 +44,7 @@ const COMMAND_RING_DEBUG_TRBS: usize = 4;
 const LINUX_COMMAND_PROBE_DNCTRL: u32 = 0x0000_0002;
 const LINUX_COMMAND_PROBE_IMOD: u32 = 0x0000_00a0;
 const LINUX_COMMAND_PROBE_USBCMD: u32 = reg::USBCMD_RUN | reg::USBCMD_INTE;
+const LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE: u16 = 0x035c;
 const USBCMD_RUN_SEED_CLEAR_MASK: u32 = USBCMD_INTERRUPT_DELIVERY_MASK
     | reg::USBCMD_HCRST
     | reg::USBCMD_LHCRST
@@ -1146,6 +1147,7 @@ const fn defer_crcr_publish_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -1496,7 +1498,7 @@ pub type XhciPortReadHook = fn(mmio: usize, offset: usize, port: u8, max_ports: 
 pub type XhciPortWriteHook = fn(mmio: usize, offset: usize, port: u8, max_ports: u8, value: u32);
 
 /// Callback signature for platform-owned xHCI posted-write flushes.
-pub type XhciPostedWriteFlushHook = fn(mmio: usize, offset: usize, value: u32, stage: u16);
+pub type XhciPostedWriteFlushHook = fn(mmio: usize, offset: usize, value: u32, stage: u16) -> bool;
 
 static XHCI_DIAG_HOOK: Mutex<Option<XhciDiagHook>> = Mutex::new(None);
 static XHCI_PORT_READ_HOOK: Mutex<Option<XhciPortReadHook>> = Mutex::new(None);
@@ -1540,10 +1542,17 @@ fn xhci_port_write_hook() -> Option<XhciPortWriteHook> {
 }
 
 #[inline(always)]
-fn flush_posted_write(mmio: usize, offset: usize, value: u32, stage: u16) {
+fn flush_posted_write_with_policy(
+    mmio: usize,
+    offset: usize,
+    value: u32,
+    stage: u16,
+    required: bool,
+) -> bool {
     if let Some(hook) = *XHCI_POSTED_WRITE_FLUSH_HOOK.lock() {
-        hook(mmio, offset, value, stage);
+        return hook(mmio, offset, value, stage);
     }
+    !required
 }
 
 #[inline(always)]
@@ -1755,6 +1764,9 @@ pub struct XhciControllerParams {
     /// Permit direct root-port register access. Platform HALs may disable this
     /// when PORTSC reads are known to trap before a HAL-owned port path exists.
     pub port_register_access_allowed: bool,
+    /// Require platform posted-write drains to be installed before command and
+    /// RUN writes are trusted.
+    pub posted_write_flush_required: bool,
 }
 
 impl XhciControllerParams {
@@ -1803,6 +1815,7 @@ pub struct XhciCtrl<H: Dma> {
     host: Arc<H>,
     skip_initial_live_operational_reads: bool,
     port_register_access_allowed: AtomicBool,
+    posted_write_flush_required: bool,
 }
 
 /// Snapshot of xHCI command/event ring state for timeout diagnostics.
@@ -1877,6 +1890,30 @@ fn dcbaap_reg_write_ops(offset: usize, _current: u64, target: u64) -> [(usize, u
     // transient high-only DCBAAP base when a platform uses nonzero PCIe DMA
     // bus addresses.
     split_u64_reg_write_ops(offset, target)
+}
+
+#[inline(always)]
+fn crcr_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
+    let [low, high] = split_u64_reg_write_ops(offset, val);
+    // CRCR low bits include RCS/command control while bits 63:6 hold the ring
+    // pointer. On Pi 4 VL805 the command ring is published through the high
+    // PCIe DMA alias, so the high dword must be visible before the low dword
+    // exposes RCS and lets the controller fetch the ring.
+    [high, low]
+}
+
+#[inline(always)]
+fn erdp_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
+    let [low, high] = split_u64_reg_write_ops(offset, val);
+    if (val & reg::ERST_EHB) != 0 {
+        // ERDP low bits include EHB, a write-one-to-clear control bit. When
+        // acknowledging events on VL805, publish the high DMA alias before the
+        // low/control dword so the controller never observes EHB against a
+        // stale or partially published dequeue pointer.
+        [high, low]
+    } else {
+        [low, high]
+    }
 }
 
 #[inline(always)]
@@ -2029,6 +2066,17 @@ impl<H: Dma> XhciCtrl<H> {
     #[inline(always)]
     fn slot_in_range(&self, slot: u8) -> bool {
         xhci_slot_in_range(slot, self.max_slots)
+    }
+
+    #[inline(always)]
+    fn flush_posted_write(&self, offset: usize, value: u32, stage: u16) -> bool {
+        flush_posted_write_with_policy(
+            self.mmio,
+            offset,
+            value,
+            stage,
+            self.posted_write_flush_required,
+        )
     }
 
     #[inline(always)]
@@ -2185,6 +2233,47 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     #[inline(always)]
+    fn write_crcr_reg_u64_diag_at(
+        mmio: usize,
+        offset: usize,
+        val: u64,
+        low_stage: u16,
+        high_stage: u16,
+    ) {
+        for (reg_offset, reg_value) in crcr_reg_write_ops(offset, val) {
+            let stage = if reg_offset == offset {
+                low_stage
+            } else {
+                high_stage
+            };
+            emit_xhci_diag(stage, reg_offset as u64, reg_value as u64, val);
+            Self::write_reg_at::<u32>(mmio, reg_offset, reg_value);
+        }
+    }
+
+    #[inline(always)]
+    fn write_crcr_reg_u64_done_diag_at(
+        mmio: usize,
+        offset: usize,
+        val: u64,
+        low_stage: u16,
+        low_done_stage: u16,
+        high_stage: u16,
+        high_done_stage: u16,
+    ) {
+        for (reg_offset, reg_value) in crcr_reg_write_ops(offset, val) {
+            let (pre_stage, done_stage) = if reg_offset == offset {
+                (low_stage, low_done_stage)
+            } else {
+                (high_stage, high_done_stage)
+            };
+            emit_xhci_diag(pre_stage, reg_offset as u64, reg_value as u64, val);
+            Self::write_reg_at::<u32>(mmio, reg_offset, reg_value);
+            emit_xhci_diag(done_stage, reg_offset as u64, reg_value as u64, val);
+        }
+    }
+
+    #[inline(always)]
     fn write_dcbaap_reg_u64_done_diag_at(
         mmio: usize,
         offset: usize,
@@ -2308,7 +2397,9 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(stage, erdp_ack, polling_iman_value() as u64, 0);
         }
         let _ = op_offset;
-        Self::write_reg_at::<u64>(mmio, int_base + reg::ERDP, erdp_ack);
+        for (reg_offset, reg_value) in erdp_reg_write_ops(int_base + reg::ERDP, erdp_ack) {
+            Self::write_reg_at::<u32>(mmio, reg_offset, reg_value);
+        }
     }
 
     #[inline(always)]
@@ -2440,6 +2531,7 @@ impl<H: Dma> XhciCtrl<H> {
             skip_constructor_live_scrub: false,
             skip_initial_live_operational_reads: false,
             port_register_access_allowed: true,
+            posted_write_flush_required: false,
         };
 
         // SAFETY: `init_mmio` is the live mapping returned by `map_mmio` above
@@ -2566,6 +2658,7 @@ impl<H: Dma> XhciCtrl<H> {
             host,
             skip_initial_live_operational_reads: params.skip_initial_live_operational_reads,
             port_register_access_allowed: AtomicBool::new(params.port_register_access_allowed),
+            posted_write_flush_required: params.posted_write_flush_required,
         };
 
         emit_xhci_diag(0x010f, mmio as u64, op_base as u64, rt_base as u64);
@@ -3352,7 +3445,7 @@ impl<H: Dma> XhciCtrl<H> {
                 emit_preserve_state_crcr_skip_diag(crcr_offset, current_crcr_publish, crcr);
                 return;
             }
-            Self::write_reg_u64_done_diag_at(
+            Self::write_crcr_reg_u64_done_diag_at(
                 this.mmio,
                 crcr_offset,
                 current_crcr_publish,
@@ -3361,23 +3454,15 @@ impl<H: Dma> XhciCtrl<H> {
                 0x02ae,
                 0x02af,
             );
-            let [target_low, target_high] = split_u64_reg_write_ops(crcr_offset, crcr);
-            emit_xhci_diag(
+            Self::write_crcr_reg_u64_done_diag_at(
+                this.mmio,
+                crcr_offset,
+                crcr,
                 0x02b0,
-                target_low.0 as u64,
-                target_low.1 as u64,
-                current_crcr_publish,
-            );
-            Self::write_reg_at::<u32>(this.mmio, target_low.0, target_low.1);
-            emit_xhci_diag(0x02b1, target_low.0 as u64, target_low.1 as u64, crcr);
-            emit_xhci_diag(
+                0x02b1,
                 0x02b2,
-                target_high.0 as u64,
-                target_high.1 as u64,
-                current_crcr_publish,
+                0x02b3,
             );
-            Self::write_reg_at::<u32>(this.mmio, target_high.0, target_high.1);
-            emit_xhci_diag(0x02b3, target_high.0 as u64, target_high.1 as u64, crcr);
             emit_xhci_diag(0x02b4, reg::CRCR as u64, crcr, 1);
         };
         if !defer_crcr_publish {
@@ -3385,7 +3470,13 @@ impl<H: Dma> XhciCtrl<H> {
                 emit_xhci_diag(0x0293, reg::CRCR as u64, crcr, 0);
                 Self::write_reg_u64_atomic_diag_at(self.mmio, crcr_offset, crcr, 0x0294, 0x0295);
             } else {
-                self.write_op_u64_diag(reg::CRCR, crcr, 0x0254, 0x0255);
+                Self::write_crcr_reg_u64_diag_at(
+                    self.mmio,
+                    crcr_offset,
+                    crcr,
+                    0x0254,
+                    0x0255,
+                );
             }
             if preserve_firmware_state {
                 emit_xhci_diag(0x0251, crcr, 1, 0);
@@ -4082,12 +4173,11 @@ impl<H: Dma> XhciCtrl<H> {
             );
         }
         if !skip_live_run_write {
-            flush_posted_write(
-                self.mmio,
-                self.op_base - self.mmio + reg::USBCMD,
-                run_usbcmd,
-                0x02e5,
-            );
+            if !self.flush_posted_write(self.op_base - self.mmio + reg::USBCMD, run_usbcmd, 0x02e5)
+            {
+                emit_xhci_diag(0x03ee, reg::USBCMD as u64, run_usbcmd as u64, 0x02e5);
+                return Err(UsbError::PostedWriteFlushFailed);
+            }
         }
         let post_run_blind_settle = runtime_stop_state_needs_post_run_settle(
             self.firmware_handoff,
@@ -4467,17 +4557,6 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     #[inline(always)]
-    fn write_op_u64_diag(&self, offset: usize, val: u64, low_stage: u16, high_stage: u16) {
-        Self::write_reg_u64_diag_at(
-            self.mmio,
-            self.op_base - self.mmio + offset,
-            val,
-            low_stage,
-            high_stage,
-        );
-    }
-
-    #[inline(always)]
     fn read_op_u64(&self, offset: usize) -> u64 {
         let lo = self.read_op::<u32>(offset) as u64;
         let hi = self.read_op::<u32>(offset + 4) as u64;
@@ -4492,19 +4571,23 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     /// Ring the command doorbell
-    fn ring_cmd_doorbell(&self) {
+    fn ring_cmd_doorbell(&self) -> bool {
         let db = reg::doorbell(self.db_offset, 0);
         let skip_readback = skip_doorbell_readback_after_ring(self.firmware_handoff);
         emit_xhci_diag(0x030f, db as u64, 0, u64::from(skip_readback));
         mmio_write_barrier();
         self.write_reg(db, 0u32);
         mmio_write_barrier();
-        flush_posted_write(self.mmio, db, 0, 0x031f);
+        if !self.flush_posted_write(db, 0, 0x031f) {
+            emit_xhci_diag(0x03ee, db as u64, 0, 0x031f);
+            return false;
+        }
         emit_xhci_diag(0x031a, db as u64, 0, u64::from(skip_readback));
         emit_xhci_diag(0x031f, db as u64, 0, u64::from(skip_readback));
         if !skip_readback {
             let _ = self.read_reg::<u32>(db);
         }
+        true
     }
 
     /// Ring device doorbell
@@ -4512,7 +4595,7 @@ impl<H: Dma> XhciCtrl<H> {
         let db = reg::doorbell(self.db_offset, slot);
         ring_write_barrier();
         self.write_reg(db, target as u32);
-        flush_posted_write(self.mmio, db, target as u32, 0x031f);
+        let _ = self.flush_posted_write(db, target as u32, 0x031f);
         if !skip_doorbell_readback_after_ring(self.firmware_handoff) {
             let _ = self.read_reg::<u32>(db);
         }
@@ -4556,9 +4639,9 @@ impl<H: Dma> XhciCtrl<H> {
         let iman_event_generation =
             polling_event_generation_iman_value(self.firmware_handoff, self.runtime_seed_snapshot);
         emit_xhci_diag(0x031b, (int_base + reg::ERDP) as u64, erdp, 0);
-        let [target_low, target_high] = split_u64_reg_write_ops(int_base + reg::ERDP, erdp);
-        Self::write_reg_at::<u32>(self.mmio, target_low.0, target_low.1);
-        Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
+        for (reg_offset, reg_value) in erdp_reg_write_ops(int_base + reg::ERDP, erdp) {
+            Self::write_reg_at::<u32>(self.mmio, reg_offset, reg_value);
+        }
         emit_xhci_diag(0x031c, (int_base + reg::ERDP) as u64, erdp, 0);
         emit_xhci_diag(0x031d, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
         Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, iman_ack);
@@ -5068,7 +5151,9 @@ impl<H: Dma> XhciCtrl<H> {
                         event_syncs as u64,
                         u64::from(linux_event_generation),
                     );
-                    self.ring_cmd_doorbell();
+                    if !self.ring_cmd_doorbell() {
+                        return Err(UsbError::PostedWriteFlushFailed);
+                    }
                     replayed_doorbell = true;
                 }
                 for _ in 0..COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL {
@@ -5170,18 +5255,27 @@ impl<H: Dma> XhciCtrl<H> {
         trb
     }
 
-    fn enable_linux_command_event_generation_for_probe(&self) {
+    fn ack_event_ring_before_linux_command_generation(&self) {
+        let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        let erdp = {
+            let event_ring = self.event_ring.lock();
+            compose_polling_erdp_ack(event_ring.dequeue_ptr(&*self.host))
+        };
+        let iman_ack = polling_iman_ack_value();
+        emit_xhci_diag(0x037d, (int_base + reg::ERDP) as u64, erdp, 0);
+        for (reg_offset, reg_value) in erdp_reg_write_ops(int_base + reg::ERDP, erdp) {
+            Self::write_reg_at::<u32>(self.mmio, reg_offset, reg_value);
+        }
+        emit_xhci_diag(0x037e, (int_base + reg::ERDP) as u64, erdp, 0);
+        Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, iman_ack);
+        emit_xhci_diag(0x037f, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
+    }
+
+    fn enable_linux_command_event_generation_for_probe(&self) -> Result<()> {
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         let linux_usbcmd = linux_command_probe_usbcmd_seed();
+        let usbcmd_offset = self.op_base - self.mmio + reg::USBCMD;
 
-        Self::write_reg_u32_store_diag_at(
-            self.mmio,
-            self.op_base - self.mmio + reg::USBCMD,
-            linux_usbcmd,
-            0x035b,
-            0x035c,
-            0,
-        );
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             int_base + reg::IMOD,
@@ -5190,6 +5284,7 @@ impl<H: Dma> XhciCtrl<H> {
             0x035d,
             0,
         );
+        self.ack_event_ring_before_linux_command_generation();
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             int_base + reg::IMAN,
@@ -5198,12 +5293,34 @@ impl<H: Dma> XhciCtrl<H> {
             0x035e,
             0,
         );
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            usbcmd_offset,
+            linux_usbcmd,
+            0x035b,
+            0x035c,
+            0,
+        );
+        if !self.flush_posted_write(
+            usbcmd_offset,
+            linux_usbcmd,
+            LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
+        ) {
+            emit_xhci_diag(
+                0x03ee,
+                usbcmd_offset as u64,
+                linux_usbcmd as u64,
+                LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE as u64,
+            );
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         emit_xhci_diag(
             0x035f,
             (linux_usbcmd as u64) << 32,
             ((reg::IMAN_IE as u64) << 32) | u64::from(LINUX_COMMAND_PROBE_IMOD),
             1,
         );
+        Ok(())
     }
 
     fn reset_controller_for_prompt_safe_command_recovery(&self) -> Result<()> {
@@ -5211,15 +5328,20 @@ impl<H: Dma> XhciCtrl<H> {
             return Err(UsbError::NotSupported);
         }
         let stop_cmd = masked_usbcmd(linux_command_probe_usbcmd_seed()) & !reg::USBCMD_RUN;
+        let usbcmd_offset = self.op_base - self.mmio + reg::USBCMD;
         emit_xhci_diag(0x03c4, stop_cmd as u64, 0, 1);
         Self::write_reg_u32_store_diag_at(
             self.mmio,
-            self.op_base - self.mmio + reg::USBCMD,
+            usbcmd_offset,
             stop_cmd,
             0x03c5,
             0x03c5,
             linux_command_probe_usbcmd_seed() as u64,
         );
+        if !self.flush_posted_write(usbcmd_offset, stop_cmd, 0x03c5) {
+            emit_xhci_diag(0x03ee, usbcmd_offset as u64, stop_cmd as u64, 0x03c5);
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         for _ in 0..STOP_WAIT_SPINS {
             spin_loop();
         }
@@ -5228,12 +5350,16 @@ impl<H: Dma> XhciCtrl<H> {
         let reset_cmd = stop_cmd | reg::USBCMD_HCRST;
         Self::write_reg_u32_store_diag_at(
             self.mmio,
-            self.op_base - self.mmio + reg::USBCMD,
+            usbcmd_offset,
             reset_cmd,
             0x03c8,
             0x03c8,
             stop_cmd as u64,
         );
+        if !self.flush_posted_write(usbcmd_offset, reset_cmd, 0x03c8) {
+            emit_xhci_diag(0x03ee, usbcmd_offset as u64, reset_cmd as u64, 0x03c8);
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         let reset_settle_spins = reset_completion_blind_settle_spins(
             self.firmware_handoff,
             self.runtime_seed_snapshot,
@@ -5255,7 +5381,7 @@ impl<H: Dma> XhciCtrl<H> {
         let cmd_ring_phys = cmd_ring.share_for_device(&*self.host, "xhci-cmd-ring-recovery")?;
         let (event_ring_phys, erst_phys) = event_ring.share_for_device(&*self.host)?;
         let event_ring_dequeue = event_ring.try_dequeue_ptr(&*self.host)?;
-        let erdp = compose_initial_erdp(event_ring_phys);
+        let erdp = compose_initial_erdp(event_ring_dequeue);
         let crcr = compose_crcr(0, cmd_ring_phys, true);
         let erst_entries = event_ring.erst_entries();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
@@ -5282,9 +5408,10 @@ impl<H: Dma> XhciCtrl<H> {
             0x03cd,
             0,
         );
-        Self::write_reg_u64_done_diag_at(
+        Self::write_dcbaap_reg_u64_done_diag_at(
             self.mmio,
             dcbaap_offset,
+            0,
             dcbaa_phys,
             0x03ce,
             0x03cf,
@@ -5317,7 +5444,7 @@ impl<H: Dma> XhciCtrl<H> {
             0x03da,
             0x03db,
         );
-        Self::write_reg_u64_done_diag_at(
+        Self::write_crcr_reg_u64_done_diag_at(
             self.mmio,
             crcr_offset,
             crcr,
@@ -5326,7 +5453,10 @@ impl<H: Dma> XhciCtrl<H> {
             0x03de,
             0x03df,
         );
-        flush_posted_write(self.mmio, crcr_offset, crcr as u32, 0x03e0);
+        if !self.flush_posted_write(crcr_offset, crcr as u32, 0x03e0) {
+            emit_xhci_diag(0x03ee, crcr_offset as u64, crcr, 0x03e0);
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             self.op_base - self.mmio + reg::DNCTRL,
@@ -5343,6 +5473,7 @@ impl<H: Dma> XhciCtrl<H> {
             0x03e9,
             0,
         );
+        self.ack_event_ring_before_linux_command_generation();
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             int_base + reg::IMAN,
@@ -5359,12 +5490,19 @@ impl<H: Dma> XhciCtrl<H> {
             0x03eb,
             1,
         );
-        flush_posted_write(
-            self.mmio,
+        if !self.flush_posted_write(
             self.op_base - self.mmio + reg::USBCMD,
             linux_command_probe_usbcmd_seed(),
             0x03eb,
-        );
+        ) {
+            emit_xhci_diag(
+                0x03ee,
+                reg::USBCMD as u64,
+                linux_command_probe_usbcmd_seed() as u64,
+                0x03eb,
+            );
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         for _ in 0..READY_WAIT_SPINS {
             spin_loop();
         }
@@ -5409,7 +5547,9 @@ impl<H: Dma> XhciCtrl<H> {
             ((cycle_before as u64) << 1) | (cycle_after as u64),
         );
         drop(cmd_ring);
-        self.ring_cmd_doorbell();
+        if !self.ring_cmd_doorbell() {
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         self.wait_command(Some(cmd_addr))
     }
 
@@ -5446,7 +5586,9 @@ impl<H: Dma> XhciCtrl<H> {
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
         self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
-        self.ring_cmd_doorbell();
+        if !self.ring_cmd_doorbell() {
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, false);
         self.wait_command_poll_only(Some(cmd_addr))
     }
@@ -5484,7 +5626,9 @@ impl<H: Dma> XhciCtrl<H> {
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
         self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
-        self.ring_cmd_doorbell();
+        if !self.ring_cmd_doorbell() {
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, false);
         match self.wait_command_prompt_safe(Some(cmd_addr), false) {
             Ok(trb) => Ok(trb),
@@ -5520,7 +5664,7 @@ impl<H: Dma> XhciCtrl<H> {
             ((trb.status as u64) << 32) | trb.control as u64,
             2,
         );
-        self.enable_linux_command_event_generation_for_probe();
+        self.enable_linux_command_event_generation_for_probe()?;
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
         let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
@@ -5532,7 +5676,9 @@ impl<H: Dma> XhciCtrl<H> {
             ((cycle_before as u64) << 1) | (cycle_after as u64),
         );
         drop(cmd_ring);
-        self.ring_cmd_doorbell();
+        if !self.ring_cmd_doorbell() {
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         self.wait_command_poll_only(Some(cmd_addr))
     }
 
@@ -5555,7 +5701,7 @@ impl<H: Dma> XhciCtrl<H> {
             ((trb.status as u64) << 32) | trb.control as u64,
             4,
         );
-        self.enable_linux_command_event_generation_for_probe();
+        self.enable_linux_command_event_generation_for_probe()?;
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
         let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
@@ -5570,14 +5716,16 @@ impl<H: Dma> XhciCtrl<H> {
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
         self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, true);
-        self.ring_cmd_doorbell();
+        if !self.ring_cmd_doorbell() {
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
         self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, true);
         match self.wait_command_prompt_safe(Some(cmd_addr), true) {
             Ok(evt) => Ok(evt),
             Err(UsbError::Timeout) => {
                 emit_xhci_diag(0x03e2, cmd_addr, 0, 1);
                 self.republish_fresh_command_event_rings_for_prompt_safe_recovery()?;
-                self.enable_linux_command_event_generation_for_probe();
+                self.enable_linux_command_event_generation_for_probe()?;
                 let mut cmd_ring = self.cmd_ring.lock();
                 let (enqueue_before, cycle_before) = cmd_ring.debug_state();
                 let retry_cmd_addr =
@@ -5593,7 +5741,9 @@ impl<H: Dma> XhciCtrl<H> {
                 self.emit_command_ring_debug_snapshot(0x0360);
                 self.emit_command_event_ring_debug_snapshot(0x0353);
                 self.emit_command_gate_plan_snapshot(0x0370, Some(retry_cmd_addr), 2, true);
-                self.ring_cmd_doorbell();
+                if !self.ring_cmd_doorbell() {
+                    return Err(UsbError::PostedWriteFlushFailed);
+                }
                 self.emit_command_gate_plan_snapshot(0x0368, Some(retry_cmd_addr), 3, true);
                 match self.wait_command_prompt_safe(Some(retry_cmd_addr), true) {
                     Ok(evt) => Ok(evt),
@@ -6098,6 +6248,7 @@ mod tests {
         COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
         COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, ConstructorPollingScrubMode,
         LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD,
+        LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
         PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, READY_WAIT_PROGRESS_SPINS, RESET_WAIT_SPINS,
         SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
         TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
@@ -6119,6 +6270,7 @@ mod tests {
         deferred_erst_publish_uses_size_first_with_snapshot, disable_interrupter_iman_value,
         disable_legacy_smi_control_bits, disable_slot_command_trb_for_probe,
         enable_slot_command_trb_for_probe, halt_revalidation_needed,
+        flush_posted_write_with_policy,
         initial_live_operational_read_hazard, linux_command_probe_usbcmd_seed, masked_usbcmd,
         no_op_command_trb_for_probe, parse_controller_params,
         platform_reset_dcbaap_publish_blocked_with_snapshot, polling_command_proof_dnctrl_value,
@@ -6143,6 +6295,7 @@ mod tests {
         run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed, run_wait_observable_usbsts,
         run_wait_progress_due, runtime_bootloader_owned_pollsafe_handoff,
         runtime_deferred_ring_handoff, runtime_handoff_needs_pre_run_settle,
+        set_xhci_posted_write_flush_hook,
         runtime_handoff_needs_relaxed_run_write,
         runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
         runtime_handoff_needs_release_only_run_write,
@@ -6258,6 +6411,7 @@ mod tests {
             skip_constructor_live_scrub: false,
             skip_initial_live_operational_reads: false,
             port_register_access_allowed: true,
+            posted_write_flush_required: false,
         };
         let validated = params.validated().expect("validated controller params");
         assert_eq!(validated.4, 64);
@@ -8229,6 +8383,7 @@ mod tests {
             skip_constructor_live_scrub: true,
             skip_initial_live_operational_reads: true,
             port_register_access_allowed: true,
+            posted_write_flush_required: false,
         };
         assert_eq!(
             constructor_polling_scrub_mode_from_params(params),
@@ -8336,6 +8491,26 @@ mod tests {
             reset_completion_blind_settle_spins(XhciFirmwareHandoff::None, None, true),
             RESET_WAIT_SPINS
         );
+    }
+
+    #[test]
+    fn platform_reset_fresh_rings_defers_crcr_until_event_ring_publish() {
+        assert!(runtime_platform_reset_fresh_rings_handoff(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None
+        ));
+        assert!(defer_crcr_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None
+        ));
+        assert!(defer_erdp_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None
+        ));
+        assert!(!defer_event_ring_publish_until_after_run_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None
+        ));
     }
 
     #[test]
@@ -9322,6 +9497,53 @@ mod tests {
     fn split_u64_register_writes_use_low_then_high_order() {
         let writes = split_u64_reg_write_ops(0x30, 0x1122_3344_5566_7788);
         assert_eq!(writes, [(0x30, 0x5566_7788), (0x34, 0x1122_3344)]);
+    }
+
+    #[test]
+    fn crcr_register_publish_writes_high_before_low_control_bits() {
+        let writes = crcr_reg_write_ops(0x18, 0x0000_0004_0402_4001);
+        assert_eq!(writes, [(0x1c, 0x0000_0004), (0x18, 0x0402_4001)]);
+    }
+
+    #[test]
+    fn erdp_ehb_ack_writes_high_before_low_control_bits() {
+        let writes = erdp_reg_write_ops(0x18, 0x0000_0004_0402_5008);
+        assert_eq!(writes, [(0x1c, 0x0000_0004), (0x18, 0x0402_5008)]);
+    }
+
+    #[test]
+    fn erdp_initial_publish_keeps_low_before_high_pointer_order() {
+        let writes = erdp_reg_write_ops(0x18, 0x0000_0004_0402_5000);
+        assert_eq!(writes, [(0x18, 0x0402_5000), (0x1c, 0x0000_0004)]);
+    }
+
+    #[test]
+    fn linux_command_probe_run_flush_fails_closed_without_required_hook() {
+        set_xhci_posted_write_flush_hook(None);
+        assert_eq!(LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE, 0x035c);
+        assert!(!flush_posted_write_with_policy(
+            0x6000_0000_0,
+            reg::USBCMD,
+            linux_command_probe_usbcmd_seed(),
+            LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
+            true,
+        ));
+        assert!(flush_posted_write_with_policy(
+            0x6000_0000_0,
+            reg::USBCMD,
+            linux_command_probe_usbcmd_seed(),
+            LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
+            false,
+        ));
+    }
+
+    #[test]
+    fn recovery_erdp_publish_uses_checked_dequeue_pointer() {
+        let ring_base = 0x0000_0004_0402_4000;
+        let checked_dequeue = ring_base + 0x10;
+        let erdp = compose_initial_erdp(checked_dequeue);
+        assert_eq!(erdp & !reg::ERST_PTR_MASK, checked_dequeue);
+        assert_ne!(erdp, compose_initial_erdp(ring_base));
     }
 
     #[test]

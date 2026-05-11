@@ -75,7 +75,10 @@ pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(_reason: &str) -> bool
 
 #[must_use]
 pub(crate) const fn wifi_boot_join_should_defer(interface: NetInterfacePolicy) -> bool {
-    matches!(interface, NetInterfacePolicy::Wifi)
+    matches!(
+        interface,
+        NetInterfacePolicy::Wifi | NetInterfacePolicy::Auto
+    )
 }
 
 /// Build-time network bring-up stage selector.
@@ -1185,9 +1188,9 @@ mod tests {
     }
 
     #[test]
-    fn wifi_join_deferral_only_applies_to_explicit_wifi_policy() {
+    fn wifi_join_deferral_applies_to_boot_wifi_paths() {
         assert!(wifi_boot_join_should_defer(NetInterfacePolicy::Wifi));
-        assert!(!wifi_boot_join_should_defer(NetInterfacePolicy::Auto));
+        assert!(wifi_boot_join_should_defer(NetInterfacePolicy::Auto));
         assert!(!wifi_boot_join_should_defer(NetInterfacePolicy::Wired));
     }
 }

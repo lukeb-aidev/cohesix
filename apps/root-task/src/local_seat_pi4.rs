@@ -501,6 +501,12 @@ fn usb_progress_finish() {
     USB_PROGRESS_DISPLAY_PTR.store(0, Ordering::Release);
 }
 
+/// Reports whether local-seat USB is inside a bounded boot/probe activity window.
+#[must_use]
+pub(crate) fn usb_boot_activity_active() -> bool {
+    USB_PROGRESS_ACTIVE.load(Ordering::Acquire)
+}
+
 fn wifi_progress_dot_count(emissions: usize) -> usize {
     if emissions == 0 {
         0
@@ -513,9 +519,14 @@ fn wifi_progress_dots_for_ticks(ticks: usize) -> usize {
     wifi_progress_dot_count(ticks / WIFI_PROGRESS_EMIT_INTERVAL_TICKS)
 }
 
+#[inline]
+const fn wifi_progress_emit_allowed(display_registered: bool, usb_active: bool) -> bool {
+    display_registered && !usb_active
+}
+
 fn wifi_progress_emit(dots: usize) {
     let ptr = WIFI_PROGRESS_DISPLAY_PTR.load(Ordering::Acquire);
-    if ptr == 0 {
+    if !wifi_progress_emit_allowed(ptr != 0, usb_boot_activity_active()) {
         return;
     }
     let mut line = heapless::String::<160>::new();
@@ -2334,7 +2345,11 @@ fn pinned_xhci_phys_state() -> Option<(usize, bool)> {
         .map(|window| (window.phys_start, window.trusted_for_runtime))
 }
 
-fn promote_pinned_xhci_mmio_window_trusted(phys_start: usize, min_length: usize) -> bool {
+fn promote_pinned_xhci_mmio_window_trusted(
+    phys_start: usize,
+    min_length: usize,
+    source: &'static str,
+) -> bool {
     let mut pinned = PINNED_XHCI_MMIO.lock();
     let Some(window) = pinned.as_mut() else {
         return false;
@@ -2348,7 +2363,7 @@ fn promote_pinned_xhci_mmio_window_trusted(phys_start: usize, min_length: usize)
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] xhci preseed layout-promote mmio=0x{phys_start:016x} bytes=0x{bytes:05x} authority=layout-only source=linux-capture-replay",
+                "[local-seat] xhci preseed layout-promote mmio=0x{phys_start:016x} bytes=0x{bytes:05x} authority=runtime-mmio source={source}",
                 bytes = window.length,
             ),
         );
@@ -3828,8 +3843,9 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0350..=0x035f
             | 0x0360..=0x036f
             | 0x0370..=0x0377
+            | 0x037d..=0x037f
             | 0x0380..=0x03b2
-            | 0x03c0..=0x03ed
+            | 0x03c0..=0x03ee
             | 0x03f3..=0x03f6
             | 0x03f8
             | 0x03fb
@@ -3854,8 +3870,9 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x0350..=0x035f
             | 0x0360..=0x036f
             | 0x0370..=0x0377
+            | 0x037d..=0x037f
             | 0x0380..=0x03b2
-            | 0x03c0..=0x03ed
+            | 0x03c0..=0x03ee
             | 0x03f3..=0x03f6
             | 0x03f8
             | 0x03fb
@@ -3867,7 +3884,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
 const fn xhci_diag_stage_force_log(stage: u16) -> bool {
     matches!(
         stage,
-        0x030f | 0x031f | 0x035f | 0x0368..=0x0377 | 0x03c4..=0x03ed
+        0x030f | 0x031f | 0x035f | 0x0368..=0x0377 | 0x037d..=0x037f | 0x03c4..=0x03ee
     )
 }
 
@@ -3993,6 +4010,8 @@ const fn xhci_diag_stage_value_labels(
         0x0375 => Some(("usbcmd_usbsts", "iman_erstsz", "dcbaap")),
         0x0376 => Some(("erstba", "erdp", "phase")),
         0x0377 => Some(("expected_ptr", "event_syncs", "live_snapshot_deferred")),
+        0x037d | 0x037e => Some(("erdp_off", "erdp_ack", "policy")),
+        0x037f => Some(("iman_off", "iman_ack", "policy")),
         0x0380 => Some(("attempt_speed", "slot_mps", "slot_recycles")),
         0x0381 | 0x0382 | 0x038b..=0x038e => Some(("ctx0_ctx1", "ctx2_ctx3", "ctx4_or_phys")),
         0x0383 | 0x0384 | 0x0396 | 0x0397 => Some(("old_slot", "new_or_entry", "slot_recycles")),
@@ -4028,6 +4047,7 @@ const fn xhci_diag_stage_value_labels(
         0x03e7..=0x03eb => Some(("reg_off", "value", "policy")),
         0x03ec => Some(("waited", "usbsts", "run_usbcmd")),
         0x03ed => Some(("settle_spins", "live_state_skipped", "run_usbcmd")),
+        0x03ee => Some(("reg_off", "value", "flush_stage")),
         0x03f3..=0x03f6 => Some(("slot_or_port", "entry_or_max_ports", "bus_or_result")),
         0x03f7 | 0x03f8 => Some(("port", "max_ports", "policy")),
         0x03fb => Some(("max_ports", "allowed", "policy")),
@@ -4391,6 +4411,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03eb => Some("cmd-recovery-run-write"),
         0x03ec => Some("cmd-recovery-run-timeout"),
         0x03ed => Some("cmd-recovery-run-blind-settle"),
+        0x03ee => Some("posted-write-flush-failed"),
         0x0300 => Some("cmd-submit"),
         0x0301 => Some("cmd-completion"),
         0x0302 => Some("cmd-fail"),
@@ -4409,6 +4430,9 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x030f => Some("cmd-doorbell-write"),
         0x031a => Some("cmd-doorbell-write-done"),
         0x031f => Some("cmd-doorbell-post-barrier"),
+        0x037d => Some("cmd-linux-event-erdp-ack"),
+        0x037e => Some("cmd-linux-event-erdp-ack-done"),
+        0x037f => Some("cmd-linux-event-iman-ack-done"),
         0x0353 => Some("cmd-event-ring-before-0"),
         0x0354 => Some("cmd-event-ring-before-1"),
         0x0355 => Some("cmd-event-ring-before-2"),
@@ -4629,6 +4653,7 @@ fn usb_command_probe_error_label(err: UsbError) -> &'static str {
     match err {
         UsbError::EnableSlotTimeout | UsbError::Timeout => "enable-slot-timeout",
         UsbError::CmdFail(_) => "enable-slot-cmd-fail",
+        UsbError::PostedWriteFlushFailed => "enable-slot-posted-flush-failed",
         _ => "enable-slot-error",
     }
 }
@@ -4638,6 +4663,7 @@ fn usb_no_op_probe_error_label(err: UsbError) -> &'static str {
     match err {
         UsbError::Timeout => "no-op-timeout",
         UsbError::CmdFail(_) => "no-op-command-failed",
+        UsbError::PostedWriteFlushFailed => "no-op-posted-flush-failed",
         _ => "no-op-error",
     }
 }
@@ -4845,6 +4871,7 @@ fn usb_address_error_kind(err: UsbError) -> &'static str {
         UsbError::AddressDeviceTimeout => "address-device-timeout",
         UsbError::CmdFail(_) => "cmd-fail",
         UsbError::Timeout => "timeout",
+        UsbError::PostedWriteFlushFailed => "posted-flush-failed",
         _ => "other",
     }
 }
@@ -5152,6 +5179,7 @@ fn xhci_controller_params_from_probe(
             mmio, strategy,
         ),
         port_register_access_allowed: xhci_controller_allows_port_register_access(mmio, strategy),
+        posted_write_flush_required: xhci_controller_requires_posted_write_flush(mmio),
     }
 }
 
@@ -5201,6 +5229,7 @@ fn xhci_controller_params_from_probe_with_strategy(
             mmio, strategy,
         ),
         port_register_access_allowed: xhci_controller_allows_port_register_access(mmio, strategy),
+        posted_write_flush_required: xhci_controller_requires_posted_write_flush(mmio),
     }
 }
 
@@ -5293,6 +5322,11 @@ const fn xhci_runtime_init_strategy_halt_guard_label(
     } else {
         "live-halt-read"
     }
+}
+
+#[inline]
+const fn xhci_controller_requires_posted_write_flush(mmio: usize) -> bool {
+    mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
 }
 
 #[inline]
@@ -6215,6 +6249,15 @@ impl Mailbox {
     }
 
     fn call_tag(
+        &mut self,
+        tag: u32,
+        request_len_bytes: u32,
+        payload: &mut [u32],
+    ) -> Result<(), Pi4SeatError> {
+        pi4_wifi::with_mailbox_call_lock(|| self.call_tag_locked(tag, request_len_bytes, payload))
+    }
+
+    fn call_tag_locked(
         &mut self,
         tag: u32,
         request_len_bytes: u32,
@@ -7406,6 +7449,7 @@ fn prepare_vl805_pci_bcm2711(
             return None;
         }
     };
+    let msi_disabled = proof.msi_disabled();
     let pi4_pcie::Pi4Vl805PcieProof {
         status,
         vendor_id,
@@ -7430,7 +7474,20 @@ fn prepare_vl805_pci_bcm2711(
         boot_log::force_uart_line(line.as_str());
         return None;
     }
-    remember_vl805_msi_disabled_proof(msi_control_after.is_some());
+    if !msi_disabled {
+        remember_vl805_msi_disabled_proof(false);
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 bcm2711-pcie reject msi=0x{msi:04x} reason=msi-not-disabled",
+                msi = msi_control_after.unwrap_or(0),
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return None;
+    }
+    remember_vl805_msi_disabled_proof(true);
     if !ensure_vl805_config_replay_irq_sinks(hal) {
         boot_log::force_uart_line(
             "[local-seat] vl805 bcm2711-pcie reject reason=pcie-sinks-unavailable-after-mask",
@@ -7449,7 +7506,19 @@ fn prepare_vl805_pci_bcm2711(
 
     remember_vl805_cfg_proof(command_after);
     remember_vl805_xhci_mmio_hint(mmio);
-    if pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_none() {
+    if pinned_xhci_window_lookup(mmio, PAGE_SIZE).is_some() {
+        if !promote_pinned_xhci_mmio_window_trusted(mmio, PAGE_SIZE, "hal-ext-cfg-proof") {
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 bcm2711-pcie reject mmio=0x{mmio:016x} reason=xhci-pin-promote-failed"
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return None;
+        }
+    } else {
         match pin_xhci_mmio_window(hal, mmio, XHCI_MMIO_PRESEED_BYTES_FALLBACK, true) {
             Ok(()) => {
                 let mut line = heapless::String::<192>::new();
@@ -7471,6 +7540,7 @@ fn prepare_vl805_pci_bcm2711(
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
+                return None;
             }
         }
     }
@@ -14447,6 +14517,12 @@ mod driver_coverage_tests {
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             platform_cold,
         ));
+        assert!(xhci_controller_requires_posted_write_flush(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        ));
+        assert!(!xhci_controller_requires_posted_write_flush(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE
+        ));
         assert_eq!(
             xhci_root_port_detect_passes(platform_cold),
             XHCI_PORT_DETECT_PASSES
@@ -14481,8 +14557,40 @@ mod driver_coverage_tests {
             xhci_diag_stage_label(0x03e4),
             Some("cmd-recovery-retry-timeout")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x03ee),
+            Some("posted-write-flush-failed")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x037d),
+            Some("cmd-linux-event-erdp-ack")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x037e),
+            Some("cmd-linux-event-erdp-ack-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x037f),
+            Some("cmd-linux-event-iman-ack-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x037d),
+            Some(("erdp_off", "erdp_ack", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x037f),
+            Some(("iman_off", "iman_ack", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03ee),
+            Some(("reg_off", "value", "flush_stage"))
+        );
         assert!(xhci_diag_history_stage_relevant(0x03d0));
+        assert!(xhci_diag_history_stage_relevant(0x037d));
+        assert!(xhci_diag_history_stage_relevant(0x03ee));
         assert!(xhci_diag_stage_after_run(0x03e1));
+        assert!(xhci_diag_stage_after_run(0x037f));
+        assert!(xhci_diag_stage_after_run(0x03ee));
     }
 
     #[test]
@@ -14520,6 +14628,7 @@ mod driver_coverage_tests {
         );
 
         assert!(!cold_params.port_register_access_allowed);
+        assert!(cold_params.posted_write_flush_required);
         assert!(xhci_pi4_high_bar_cold_boot_params_allowed(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             platform_cold,
@@ -14535,6 +14644,13 @@ mod driver_coverage_tests {
             preserve,
             &preserve_params,
         ));
+    }
+
+    #[test]
+    fn wifi_progress_does_not_emit_during_usb_boot_activity() {
+        assert!(wifi_progress_emit_allowed(true, false));
+        assert!(!wifi_progress_emit_allowed(true, true));
+        assert!(!wifi_progress_emit_allowed(false, false));
     }
 }
 
@@ -16740,6 +16856,18 @@ mod tests {
             Some("cmd-doorbell-post-barrier")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x037d),
+            Some("cmd-linux-event-erdp-ack")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x037e),
+            Some("cmd-linux-event-erdp-ack-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x037f),
+            Some("cmd-linux-event-iman-ack-done")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x0353),
             Some("cmd-event-ring-before-0")
         );
@@ -17748,6 +17876,14 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0352),
             Some(("iman_off", "iman", "seed_flags"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x037d),
+            Some(("erdp_off", "erdp_ack", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x037f),
+            Some(("iman_off", "iman_ack", "policy"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x03c4),
@@ -19702,6 +19838,13 @@ mod tests {
             wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS * 4),
             1
         );
+    }
+
+    #[test]
+    fn wifi_progress_does_not_emit_during_usb_boot_activity() {
+        assert!(wifi_progress_emit_allowed(true, false));
+        assert!(!wifi_progress_emit_allowed(true, true));
+        assert!(!wifi_progress_emit_allowed(false, false));
     }
 
     #[test]

@@ -736,6 +736,27 @@ const fn dtb_rejected_net_policy_reason(source: Pi4BootNetPolicySource) -> Optio
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
+fn pi4_local_usb_boot_wifi_cooperation_reason(
+    hardware: generated::HardwareConfig,
+    config: &crate::net::ConsoleNetConfig,
+) -> Option<&'static str> {
+    if !hardware.local_seat.enabled || hardware.no_nic {
+        return None;
+    }
+    if !matches!(config.backend, crate::net::NetBackend::BcmGenet) {
+        return None;
+    }
+
+    match config.policy.interface {
+        crate::net::NetInterfacePolicy::Wifi => Some("pi4-local-seat-explicit-wifi"),
+        crate::net::NetInterfacePolicy::Auto if config.wifi_credentials.is_some() => {
+            Some("pi4-local-seat-auto-wifi")
+        }
+        crate::net::NetInterfacePolicy::Auto | crate::net::NetInterfacePolicy::Wired => None,
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
 fn format_net_console_init_detail<DE: fmt::Display>(
     err: &crate::net::NetConsoleError<DE>,
 ) -> HeaplessString<192> {
@@ -4423,6 +4444,15 @@ fn bootstrap<P: Platform>(
         boot_log::force_uart_line("[local-seat] runtime preseed hook begin");
         runtime.preseed_backend_keyboard_mmio();
         boot_log::force_uart_line("[local-seat] runtime preseed hook end");
+        boot_log::force_uart_line("[local-seat] cold-boot keyboard probe begin stage=pre-net");
+        runtime.probe_backend_keyboard_once();
+        let mut probe_line = heapless::String::<128>::new();
+        let _ = write!(
+            probe_line,
+            "[local-seat] cold-boot keyboard probe end stage=pre-net polling_enabled={}",
+            runtime.backend_keyboard_polling_enabled() as u8
+        );
+        boot_log::force_uart_line(probe_line.as_str());
     }
 
     if uart_mmio.is_none() {
@@ -4625,6 +4655,28 @@ fn bootstrap<P: Platform>(
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
                 log::warn!("[net-console] skipped: root endpoint not ready");
                 (None, false, None, net_backend_label)
+            } else if let Some(reason) =
+                pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config)
+            {
+                let mut line = heapless::String::<192>::new();
+                let _ = write!(
+                    line,
+                    "[net-console] deferred reason={reason} action=serial-root-console-first"
+                );
+                boot_log::force_uart_line(line.as_str());
+                console.writeln_prefixed(line.as_str());
+                boot_log::force_uart_line(
+                    "[boot] wifi net-console probe deferred; continuing serial root console",
+                );
+                log::info!(
+                    "[net-console] Pi4 local-seat Wi-Fi net-console probe deferred until serial root console reason={reason}"
+                );
+                let mut detail = heapless::String::<192>::new();
+                let _ = write!(
+                    detail,
+                    "wifi net-console probe deferred until serial root console ({reason})"
+                );
+                (None, false, Some(detail), net_backend_label)
             } else {
                 match init_net_console(hal, config) {
                     Ok(stack) => {
@@ -4675,6 +4727,9 @@ fn bootstrap<P: Platform>(
                             "[net-console] disabled reason={reason} err={err_code}"
                         );
                         boot_log::force_uart_line(fail_line.as_str());
+                        boot_log::force_uart_line(
+                            "[boot] net-console init failed nonfatal; continuing serial root console",
+                        );
                         let detail = format_net_console_init_detail(&err);
                         let mut detail_line = heapless::String::<192>::new();
                         let _ =
@@ -4695,6 +4750,7 @@ fn bootstrap<P: Platform>(
         let net_stack = None::<()>;
         check_bootinfo(&mut boot_guard, "[mark] net.init.post");
         boot_guard.record_phase("TimersAndIPC");
+        boot_log::force_uart_line("[boot] net-console init complete; continuing root console boot");
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
         let (timer, ipc) = match run_timers_and_ipc_phase(endpoints, bootstrap_ipc) {
@@ -6925,6 +6981,62 @@ mod tests {
         assert_eq!(
             format_net_console_init_detail(&err).as_str(),
             "invalid net config: wifi-credentials-missing",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi4_local_usb_boot_marks_explicit_wifi_net_console_cooperative() {
+        let mut hardware = crate::generated::hardware_config();
+        hardware.local_seat.enabled = true;
+        hardware.no_nic = false;
+        let mut config = crate::net::ConsoleNetConfig::default();
+        config.backend = crate::net::NetBackend::BcmGenet;
+        config.policy.interface = crate::net::NetInterfacePolicy::Wifi;
+
+        assert_eq!(
+            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            Some("pi4-local-seat-explicit-wifi")
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi4_local_usb_boot_marks_auto_wifi_cooperative_only_with_credentials() {
+        let mut hardware = crate::generated::hardware_config();
+        hardware.local_seat.enabled = true;
+        hardware.no_nic = false;
+        let mut config = crate::net::ConsoleNetConfig::default();
+        config.backend = crate::net::NetBackend::BcmGenet;
+        config.policy.interface = crate::net::NetInterfacePolicy::Auto;
+
+        assert_eq!(
+            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            None
+        );
+
+        config.wifi_credentials =
+            Some(crate::net::WifiCredentials::new("cohesix", "passphrase").unwrap());
+
+        assert_eq!(
+            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            Some("pi4-local-seat-auto-wifi")
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi4_local_usb_boot_does_not_mark_wired_net_console_cooperative() {
+        let mut hardware = crate::generated::hardware_config();
+        hardware.local_seat.enabled = true;
+        hardware.no_nic = false;
+        let mut config = crate::net::ConsoleNetConfig::default();
+        config.backend = crate::net::NetBackend::BcmGenet;
+        config.policy.interface = crate::net::NetInterfacePolicy::Wired;
+
+        assert_eq!(
+            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            None
         );
     }
 

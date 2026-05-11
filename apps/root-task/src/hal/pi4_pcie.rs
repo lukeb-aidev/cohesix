@@ -168,6 +168,12 @@ impl Pi4PcieProofPhase {
     }
 }
 
+fn finish_pi4_pcie_root_init_attempt(phase: Pi4PcieProofPhase, ready: bool) {
+    if !ready {
+        phase.root_init_latch().store(0, Ordering::Release);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Pi4Vl805PcieProof {
     pub status: u32,
@@ -314,16 +320,41 @@ const fn vl805_xhci_flush_is_doorbell(stage: u16, offset: usize) -> bool {
         && (offset - VL805_XHCI_DOORBELL0_OFFSET) % VL805_XHCI_DOORBELL_STRIDE == 0
 }
 
+const fn vl805_xhci_flush_is_run_stage(stage: u16) -> bool {
+    matches!(stage, VL805_XHCI_RUN_FLUSH_STAGE | 0x035c | 0x03eb)
+}
+
 const fn vl805_xhci_flush_is_run_write(stage: u16, offset: usize) -> bool {
-    stage == VL805_XHCI_RUN_FLUSH_STAGE && offset == VL805_XHCI_USBCMD_OFFSET
+    vl805_xhci_flush_is_run_stage(stage) && offset == VL805_XHCI_USBCMD_OFFSET
 }
 
 const fn vl805_xhci_flush_skips_bar_drain(stage: u16, offset: usize) -> bool {
     vl805_xhci_flush_is_doorbell(stage, offset) || vl805_xhci_flush_is_run_write(stage, offset)
 }
 
+const fn vl805_xhci_flush_live_proof_failure(
+    link_and_rc_ready: bool,
+    irq_sources_masked: bool,
+    command_status: u32,
+) -> Option<&'static str> {
+    if !link_and_rc_ready {
+        Some("link-root-unproven")
+    } else if !irq_sources_masked {
+        Some("irq-source-mask-unproven")
+    } else if !vl805_command_ownership_ready(command_status as u16) {
+        Some("command-ownership")
+    } else {
+        None
+    }
+}
+
 /// Flushes posted VL805 xHCI MMIO writes through HAL-owned read drains.
-pub fn vl805_xhci_flush_posted_write(mmio_virt: usize, offset: usize, value: u32, stage: u16) {
+pub fn vl805_xhci_flush_posted_write(
+    mmio_virt: usize,
+    offset: usize,
+    value: u32,
+    stage: u16,
+) -> bool {
     let config_page = PCIE_EXT_DATA_PAGE_VIRT.load(Ordering::Acquire);
     let index_page = PCIE_EXT_INDEX_PAGE_VIRT.load(Ordering::Acquire);
     if config_page == 0 || index_page == 0 {
@@ -335,25 +366,58 @@ pub fn vl805_xhci_flush_posted_write(mmio_virt: usize, offset: usize, value: u32
             ),
         );
         boot_log::force_uart_line(line.as_str());
-        return;
+        return false;
     }
     let Ok(config_virt) = same_page_reg_virt(config_page, BCM2711_PCIE_EXT_CFG_DATA) else {
         boot_log::force_uart_line(
             "[local-seat] vl805 posted-write flush skipped reason=bad-ext-cfg-data",
         );
-        return;
+        return false;
     };
     let Ok(index_reg) = same_page_reg_virt(index_page, BCM2711_PCIE_EXT_CFG_INDEX) else {
         boot_log::force_uart_line(
             "[local-seat] vl805 posted-write flush skipped reason=bad-ext-cfg-index",
         );
-        return;
+        return false;
     };
     fence(Ordering::SeqCst);
     let selected = bcm2711_ext_cfg_select(index_reg);
     let command_status = pci_cfg_read_u32(config_virt, PCI_CFG_COMMAND_STATUS);
     let bar_drain_skipped = vl805_xhci_flush_skips_bar_drain(stage, offset);
     fence(Ordering::SeqCst);
+    if !vl805_ext_cfg_flush_read_valid(selected, command_status) {
+        let mut line = heapless::String::<256>::new();
+        let reason = if selected != VL805_PCI_DEV_ADDR {
+            "selector"
+        } else if vl805_ext_cfg_selector_echo(command_status) {
+            "selector-echo"
+        } else {
+            "command-status"
+        };
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 posted-write flush failed stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} reason={reason} mmio=0x{mmio_virt:016x} source=hal-ext-cfg"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return false;
+    }
+    if let Some(reason) = vl805_xhci_flush_live_proof_failure(
+        pi4_pcie_link_and_rc_ready_proven(),
+        pi4_pcie_irq_sources_masked_proven(),
+        command_status,
+    ) {
+        let mut line = heapless::String::<288>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 posted-write flush failed stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} reason={reason} mmio=0x{mmio_virt:016x} source=hal-ext-cfg"
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return false;
+    }
     let mut line = heapless::String::<320>::new();
     if bar_drain_skipped {
         let _ = core::fmt::Write::write_fmt(
@@ -371,6 +435,7 @@ pub fn vl805_xhci_flush_posted_write(mmio_virt: usize, offset: usize, value: u32
         );
     }
     boot_log::force_uart_line(line.as_str());
+    true
 }
 
 fn prove_pi4_vl805_pcie_ownership(
@@ -438,8 +503,8 @@ fn prove_pi4_vl805_pcie_ownership(
     let mut device_id = 0xffff;
     let mut vendor_device = 0xffff_ffff;
     for attempt in 0..=PCIE_EXT_CFG_SELECTOR_RETRIES {
-        vendor_id = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_VENDOR_DEVICE);
-        device_id = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_VENDOR_DEVICE + 2);
+        vendor_id = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_VENDOR_DEVICE)?;
+        device_id = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_VENDOR_DEVICE + 2)?;
         vendor_device = vl805_vendor_device_dword(vendor_id, device_id);
         if !vl805_ext_cfg_selector_echo(vendor_device) {
             break;
@@ -490,7 +555,7 @@ fn prove_pi4_vl805_pcie_ownership(
         return Err(HalError::Unsupported("vl805-id"));
     }
 
-    let class_revision = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_CLASS_REVISION);
+    let class_revision = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_CLASS_REVISION)?;
     let class_code = (class_revision >> 8) & 0x00ff_ffff;
     if class_code != VL805_EXPECTED_CLASS_CODE {
         let mut line = heapless::String::<208>::new();
@@ -515,17 +580,17 @@ fn prove_pi4_vl805_pcie_ownership(
         return Err(HalError::Unsupported("vl805-class"));
     }
 
-    let command_before = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS);
-    let mut bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0);
-    let mut bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1);
+    let command_before = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS)?;
+    let mut bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0)?;
+    let mut bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1)?;
     if status_ready && vl805_bar_assignment_needed(bar0, bar1) {
         let assigned_bar0 = vl805_pi4_assigned_bar0_value();
-        vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR1, 0);
-        vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR0, assigned_bar0);
+        vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR1, 0)?;
+        vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR0, assigned_bar0)?;
         fence(Ordering::SeqCst);
         pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
-        let reassigned_bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0);
-        let reassigned_bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1);
+        let reassigned_bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0)?;
+        let reassigned_bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1)?;
         let mut line = heapless::String::<240>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -589,9 +654,9 @@ fn prove_pi4_vl805_pcie_ownership(
             config_virt,
             PCI_CFG_COMMAND_STATUS,
             command_masked,
-        );
+        )?;
     }
-    let command_masked_after = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS);
+    let command_masked_after = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS)?;
     if (command_masked_after & PCI_COMMAND_INTERRUPT_DISABLE) == 0 {
         let mut line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -605,8 +670,7 @@ fn prove_pi4_vl805_pcie_ownership(
     }
 
     let (msi_control_before, msi_control_after) =
-        disable_vl805_msi_for_poll_only(index_reg, config_virt)
-            .ok_or(HalError::Unsupported("vl805-msi"))?;
+        disable_vl805_msi_for_poll_only(index_reg, config_virt)?;
 
     let command_required = vl805_poll_only_bus_master_command(command_masked_after);
     if command_required != command_masked_after {
@@ -615,9 +679,9 @@ fn prove_pi4_vl805_pcie_ownership(
             config_virt,
             PCI_CFG_COMMAND_STATUS,
             command_required,
-        );
+        )?;
     }
-    let command_after = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS);
+    let command_after = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS)?;
     if !vl805_command_ownership_ready(command_after) {
         let mut line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_fmt(
@@ -746,20 +810,26 @@ fn ensure_pi4_pcie_root_ready(
 
     let ready = remember_pi4_pcie_link_and_rc_ready(status_after);
     if ready {
-        configure_pi4_pcie_outbound_window(status_page)?;
+        if let Err(err) = configure_pi4_pcie_outbound_window(status_page) {
+            finish_pi4_pcie_root_init_attempt(phase, false);
+            return Err(err);
+        }
+    } else {
+        finish_pi4_pcie_root_init_attempt(phase, false);
     }
 
     let mut done = heapless::String::<320>::new();
     let _ = core::fmt::Write::write_fmt(
             &mut done,
             format_args!(
-                "[local-seat] vl805 bcm2711-pcie root-init done stage={} status_before=0x{status_before:08x} status_after=0x{status_after:08x} ready={} polls={polls} post_perst_ms={} poll_window_ms={} poll_interval_ms={} delay_scale={} write_flush=readback",
+                "[local-seat] vl805 bcm2711-pcie root-init done stage={} status_before=0x{status_before:08x} status_after=0x{status_after:08x} ready={} polls={polls} post_perst_ms={} poll_window_ms={} poll_interval_ms={} delay_scale={} write_flush=readback retry={}",
                 phase.label(),
             ready as u8,
             PCIE_POST_PERST_SETTLE_MS,
             PCIE_LINK_POLL_TOTAL_MS,
             PCIE_LINK_POLL_INTERVAL_MS,
             PCIE_ROOT_DELAY_SPIN_SAFETY_MULTIPLIER,
+            if ready { "closed" } else { "armed" },
         ),
     );
     boot_log::force_uart_line(done.as_str());
@@ -1203,32 +1273,35 @@ const fn post_mailbox_ext_cfg_data_read_deferred(status: u32) -> bool {
     !pcie_status_link_up_and_rc(status)
 }
 
-fn disable_vl805_msi_for_poll_only(index_reg: usize, config_virt: usize) -> Option<(u16, u16)> {
-    let status = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS + 2);
+fn disable_vl805_msi_for_poll_only(
+    index_reg: usize,
+    config_virt: usize,
+) -> Result<(u16, u16), HalError> {
+    let status = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS + 2)?;
     if (status & PCI_STATUS_CAPABILITIES_LIST) == 0 {
         boot_log::force_uart_line(
             "[local-seat] vl805 bcm2711-pcie msi proof skipped reason=no-cap-list",
         );
-        return None;
+        return Err(HalError::Unsupported("vl805-msi"));
     }
 
     let mut cap =
-        (vl805_cfg_read_u8(index_reg, config_virt, PCI_CFG_CAP_PTR) & PCI_CAP_NEXT_MASK) as usize;
+        (vl805_cfg_read_u8(index_reg, config_virt, PCI_CFG_CAP_PTR)? & PCI_CAP_NEXT_MASK) as usize;
     for _ in 0..PCI_CAP_TRAVERSE_LIMIT {
         if !(0x40..0x100).contains(&cap) {
             break;
         }
-        let cap_id = vl805_cfg_read_u8(index_reg, config_virt, cap);
+        let cap_id = vl805_cfg_read_u8(index_reg, config_virt, cap)?;
         let next =
-            (vl805_cfg_read_u8(index_reg, config_virt, cap + 1) & PCI_CAP_NEXT_MASK) as usize;
+            (vl805_cfg_read_u8(index_reg, config_virt, cap + 1)? & PCI_CAP_NEXT_MASK) as usize;
         if cap_id == PCI_CAP_ID_MSI {
             let ctrl_offset = cap + PCI_MSI_CONTROL_OFFSET;
-            let control_before = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset);
+            let control_before = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset)?;
             let control_request = vl805_msi_control_disable_value(control_before);
             if control_request != control_before {
-                vl805_cfg_write_u16(index_reg, config_virt, ctrl_offset, control_request);
+                vl805_cfg_write_u16(index_reg, config_virt, ctrl_offset, control_request)?;
             }
-            let control_after = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset);
+            let control_after = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset)?;
             let disabled = vl805_msi_control_disabled(control_after);
             let mut line = heapless::String::<240>::new();
             let _ = core::fmt::Write::write_fmt(
@@ -1239,7 +1312,9 @@ fn disable_vl805_msi_for_poll_only(index_reg: usize, config_virt: usize) -> Opti
                 ),
             );
             boot_log::force_uart_line(line.as_str());
-            return disabled.then_some((control_before, control_after));
+            return disabled
+                .then_some((control_before, control_after))
+                .ok_or(HalError::Unsupported("vl805-msi"));
         }
         if next == 0 || next == cap {
             break;
@@ -1250,7 +1325,7 @@ fn disable_vl805_msi_for_poll_only(index_reg: usize, config_virt: usize) -> Opti
     boot_log::force_uart_line(
         "[local-seat] vl805 bcm2711-pcie msi proof skipped reason=msi-cap-missing",
     );
-    None
+    Err(HalError::Unsupported("vl805-msi"))
 }
 
 #[inline]
@@ -1322,6 +1397,13 @@ const fn vl805_ext_cfg_selector_echo(value: u32) -> bool {
     value == VL805_PCI_DEV_ADDR
 }
 
+#[inline]
+const fn vl805_ext_cfg_flush_read_valid(selected: u32, command_status: u32) -> bool {
+    selected == VL805_PCI_DEV_ADDR
+        && !vl805_ext_cfg_selector_echo(command_status)
+        && command_status != 0xffff_ffff
+}
+
 fn decode_pci_mmio_bar(bar0: u32, bar1: u32) -> Option<usize> {
     if (bar0 & 0x1) != 0 {
         return None;
@@ -1365,33 +1447,75 @@ fn bcm2711_ext_cfg_select(index_reg: usize) -> u32 {
 }
 
 #[inline]
-fn vl805_cfg_read_u8(index_reg: usize, config_virt: usize, offset: usize) -> u8 {
-    let _ = bcm2711_ext_cfg_select(index_reg);
-    pci_cfg_read_u8(config_virt, offset)
+fn vl805_cfg_select_or_err(
+    index_reg: usize,
+    offset: usize,
+    op: &'static str,
+) -> Result<(), HalError> {
+    let selected = bcm2711_ext_cfg_select(index_reg);
+    if selected == VL805_PCI_DEV_ADDR {
+        return Ok(());
+    }
+
+    let mut line = heapless::String::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie ext-cfg reject op={op} offset=0x{offset:02x} selected=0x{selected:08x} expected=0x{VL805_PCI_DEV_ADDR:08x} reason=selector"
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    Err(HalError::Unsupported("vl805-ext-cfg-selector"))
 }
 
 #[inline]
-fn vl805_cfg_read_u16(index_reg: usize, config_virt: usize, offset: usize) -> u16 {
-    let _ = bcm2711_ext_cfg_select(index_reg);
-    pci_cfg_read_u16(config_virt, offset)
+fn vl805_cfg_read_u8(index_reg: usize, config_virt: usize, offset: usize) -> Result<u8, HalError> {
+    vl805_cfg_select_or_err(index_reg, offset, "read8")?;
+    Ok(pci_cfg_read_u8(config_virt, offset))
 }
 
 #[inline]
-fn vl805_cfg_write_u16(index_reg: usize, config_virt: usize, offset: usize, value: u16) {
-    let _ = bcm2711_ext_cfg_select(index_reg);
+fn vl805_cfg_read_u16(
+    index_reg: usize,
+    config_virt: usize,
+    offset: usize,
+) -> Result<u16, HalError> {
+    vl805_cfg_select_or_err(index_reg, offset, "read16")?;
+    Ok(pci_cfg_read_u16(config_virt, offset))
+}
+
+#[inline]
+fn vl805_cfg_write_u16(
+    index_reg: usize,
+    config_virt: usize,
+    offset: usize,
+    value: u16,
+) -> Result<(), HalError> {
+    vl805_cfg_select_or_err(index_reg, offset, "write16")?;
     pci_cfg_write_u16(config_virt, offset, value);
+    Ok(())
 }
 
 #[inline]
-fn vl805_cfg_write_u32(index_reg: usize, config_virt: usize, offset: usize, value: u32) {
-    let _ = bcm2711_ext_cfg_select(index_reg);
+fn vl805_cfg_write_u32(
+    index_reg: usize,
+    config_virt: usize,
+    offset: usize,
+    value: u32,
+) -> Result<(), HalError> {
+    vl805_cfg_select_or_err(index_reg, offset, "write32")?;
     pci_cfg_write_u32(config_virt, offset, value);
+    Ok(())
 }
 
 #[inline]
-fn vl805_cfg_read_u32(index_reg: usize, config_virt: usize, offset: usize) -> u32 {
-    let _ = bcm2711_ext_cfg_select(index_reg);
-    pci_cfg_read_u32(config_virt, offset)
+fn vl805_cfg_read_u32(
+    index_reg: usize,
+    config_virt: usize,
+    offset: usize,
+) -> Result<u32, HalError> {
+    vl805_cfg_select_or_err(index_reg, offset, "read32")?;
+    Ok(pci_cfg_read_u32(config_virt, offset))
 }
 
 #[inline]
@@ -1685,6 +1809,8 @@ mod tests {
         assert!(vl805_xhci_flush_is_doorbell(0x031f, 0x0100));
         assert!(vl805_xhci_flush_is_doorbell(0x031f, 0x0104));
         assert!(vl805_xhci_flush_is_run_write(0x02e5, 0x0020));
+        assert!(vl805_xhci_flush_is_run_write(0x035c, 0x0020));
+        assert!(vl805_xhci_flush_is_run_write(0x03eb, 0x0020));
         assert!(!vl805_xhci_flush_is_doorbell(0x02e5, 0x0020));
         assert!(!vl805_xhci_flush_is_run_write(0x02e5, 0x0100));
         assert!(!vl805_xhci_flush_is_doorbell(0x031f, 0x00fc));
@@ -1694,6 +1820,53 @@ mod tests {
         assert!(vl805_xhci_flush_skips_bar_drain(0x02e5, 0x0020));
         assert!(!vl805_xhci_flush_skips_bar_drain(0x031f, 0x00fc));
         assert!(!vl805_xhci_flush_skips_bar_drain(0x02e5, 0x0100));
+        assert!(vl805_ext_cfg_flush_read_valid(
+            VL805_PCI_DEV_ADDR,
+            0x0018_0546
+        ));
+        assert!(!vl805_ext_cfg_flush_read_valid(0, 0x0018_0546));
+        assert!(!vl805_ext_cfg_flush_read_valid(
+            VL805_PCI_DEV_ADDR,
+            VL805_PCI_DEV_ADDR
+        ));
+        assert!(!vl805_ext_cfg_flush_read_valid(
+            VL805_PCI_DEV_ADDR,
+            0xffff_ffff
+        ));
+    }
+
+    #[test]
+    fn vl805_posted_write_flush_requires_live_pcie_irq_and_command_proof() {
+        let ready_command_status = 0x0018_0000 | u32::from(VL805_POLL_ONLY_COMMAND_REQUIRED);
+        assert_eq!(
+            vl805_xhci_flush_live_proof_failure(false, true, ready_command_status),
+            Some("link-root-unproven")
+        );
+        assert_eq!(
+            vl805_xhci_flush_live_proof_failure(true, false, ready_command_status),
+            Some("irq-source-mask-unproven")
+        );
+        assert_eq!(
+            vl805_xhci_flush_live_proof_failure(true, true, 0x0018_0000),
+            Some("command-ownership")
+        );
+        assert_eq!(
+            vl805_xhci_flush_live_proof_failure(true, true, ready_command_status),
+            None
+        );
+    }
+
+    #[test]
+    fn failed_root_init_attempt_rearms_phase_latch_for_retry() {
+        let phase = Pi4PcieProofPhase::PostMailboxReset;
+        phase.root_init_latch().store(1, Ordering::Release);
+        finish_pi4_pcie_root_init_attempt(phase, false);
+        assert_eq!(phase.root_init_latch().load(Ordering::Acquire), 0);
+
+        phase.root_init_latch().store(1, Ordering::Release);
+        finish_pi4_pcie_root_init_attempt(phase, true);
+        assert_eq!(phase.root_init_latch().load(Ordering::Acquire), 1);
+        phase.root_init_latch().store(0, Ordering::Release);
     }
 
     #[test]

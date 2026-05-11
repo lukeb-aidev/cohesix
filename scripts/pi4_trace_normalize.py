@@ -221,6 +221,8 @@ class GateSummary:
     usb_bootloader_handoff_seen: bool = False
     usb_cold_boot_seen: bool = False
     usb_stale_uefi_hint_seen: bool = False
+    root_console_ready: bool = False
+    root_prompt_seen: bool = False
 
     def to_record(self) -> dict[str, object]:
         """Return a JSON-serializable gate summary."""
@@ -244,6 +246,8 @@ class GateSummary:
             "USB_STALE_UEFI_HINT_SEEN": (
                 "yes" if self.usb_stale_uefi_hint_seen else "no"
             ),
+            "ROOT_CONSOLE_READY": "yes" if self.root_console_ready else "no",
+            "ROOT_PROMPT_SEEN": "yes" if self.root_prompt_seen else "no",
         }
 
     def to_env_lines(self) -> list[str]:
@@ -363,6 +367,27 @@ def usb_stale_uefi_hint_evidence(event: TraceEvent) -> bool:
     return any(marker in lowered_raw for marker in USB_STALE_UEFI_HINT_MARKERS)
 
 
+def root_console_ready_evidence(event: TraceEvent) -> bool:
+    """Return true when serial root-console readiness reached userland."""
+
+    if event.domain != "console":
+        return False
+    lowered_raw = event.raw.lower()
+    return (
+        "cohesix console ready" in lowered_raw
+        or "root console ready" in lowered_raw
+        or "root console banner emitted" in lowered_raw
+    )
+
+
+def root_prompt_evidence(event: TraceEvent) -> bool:
+    """Return true when the interactive root prompt reached serial."""
+
+    return event.domain == "console" and (
+        event.fields.get("prompt") == "yes" or event.raw.startswith("cohesix>")
+    )
+
+
 def serial_corruption_reason(line: str, fields: dict[str, str] | None = None) -> str | None:
     """Return a stable reason when a trace segment looks byte-interleaved."""
 
@@ -399,6 +424,14 @@ def classify_domain(line: str) -> str | None:
     """Classify USB/WiFi trace domain, or return None for unrelated lines."""
 
     lower = line.lower()
+    if (
+        line.startswith("cohesix>")
+        or "cohesix console ready" in lower
+        or "root console ready" in lower
+        or "root console banner emitted" in lower
+        or "[dbg] console: root console task entry" in lower
+    ):
+        return "console"
     if "[cohesix:usb-trace]" in lower:
         return "usb"
     if line.startswith("usb:") or line.startswith("USB:") or "[local-seat]" in lower:
@@ -436,6 +469,11 @@ def classify_domain(line: str) -> str | None:
         or line.startswith("netstats")
     ):
         return "wifi"
+    if "[net-console]" in lower and (
+        "deferred reason=local-seat-usb-first" in lower
+        or "action=serial-local-seat-first" in lower
+    ):
+        return "wifi"
     if "cyw43-" in lower and ("net-disabled" in lower or "net-console" in lower):
         return "wifi"
     if "brcmfmac" in lower or "brcmf_" in lower:
@@ -456,7 +494,7 @@ def extract_message(line: str, domain: str, source: str) -> str:
         return line.removeprefix("usb:").strip()
     if line.startswith("wifi:"):
         return line.removeprefix("wifi:").strip()
-    for marker in ("[local-seat]", "[pi4-wifi]", "[cyw43]", "[cohesix]"):
+    for marker in ("[local-seat]", "[pi4-wifi]", "[cyw43]", "[net-console]", "[cohesix]"):
         if marker in line:
             return line.split(marker, 1)[1].strip()
     if source == "linux" and domain == "wifi":
@@ -532,6 +570,19 @@ def parse_events(lines: Iterable[str], line_base: int = 0) -> list[TraceEvent]:
 
     events: list[TraceEvent] = []
     for line_number, line in enumerate(lines, start=line_base + 1):
+        raw_clean = ANSI_RE.sub("", line).replace("\r", "").strip()
+        if raw_clean.startswith("cohesix>"):
+            events.append(
+                TraceEvent(
+                    line=line_number,
+                    domain="console",
+                    source="cohesix",
+                    message="prompt",
+                    raw=raw_clean,
+                    fields={"prompt": "yes"},
+                    stage="prompt",
+                )
+            )
         for segment in split_trace_segments(line):
             event = parse_line(segment, line_number)
             if event is not None:
@@ -1062,11 +1113,35 @@ def normalize_wifi_blocker(value: str) -> str:
         return "sdpcm-credit-timeout"
     if "ioctl-timeout" in lower or "ioctl timeout" in lower:
         return "ioctl-timeout"
+    if "bdc-event" in lower:
+        return "control-plane-bdc-event"
+    if stripped == "interrupt-programming-drift":
+        return "control-plane-interrupt-programming-drift"
+    if stripped == "partial-hint-visibility":
+        return "control-plane-partial-hint-visibility"
+    if stripped == "interrupts-deferred":
+        return "control-plane-interrupts-deferred"
+    if stripped == "sideband-unreadable":
+        return "control-plane-sideband-unreadable"
+    if stripped == "rearm-timeout":
+        return "control-plane-rearm-timeout"
+    if stripped == "reply-idle-loop":
+        return "control-plane-reply-idle-loop"
+    if (
+        "hintless-firstread-no-irq" in lower
+        or "post-write-no-irq" in lower
+        or "control-plane-reply-idle-loop" in lower
+    ):
+        return "control-plane-reply-idle-loop"
     if "control-plane" in lower:
         if "sideband" in lower and any(
             token in lower for token in ("unreadable", "timeout", "missing")
         ):
             return "control-plane-sideband-unreadable"
+        if "interrupt-programming-drift" in lower:
+            return "control-plane-interrupt-programming-drift"
+        if "partial-hint-visibility" in lower:
+            return "control-plane-partial-hint-visibility"
         if "interrupt" in lower and "deferred" in lower:
             return "control-plane-interrupts-deferred"
         if "rearm-timeout" in lower:
@@ -1076,6 +1151,8 @@ def normalize_wifi_blocker(value: str) -> str:
         if "no-reply" in lower:
             return "control-plane-no-reply"
         return "control-plane"
+    if "local-seat-usb-first" in lower or "serial-local-seat-first" in lower:
+        return "boot-deferred-local-seat-usb"
     if (
         "join-timeout" in lower
         or ("join" in lower and "timeout" in lower)
@@ -1137,9 +1214,15 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-ht-clock-timeout-before-function2",
         "cyw43-device-on-timeout-before-ht",
         "cyw43-device-on-timeout-before-function2",
+        "cyw43-control-plane-bdc-event",
+        "cyw43-control-plane-hintless-firstread-no-irq",
+        "cyw43-control-plane-interrupt-programming-drift",
+        "cyw43-control-plane-partial-hint-visibility",
     ):
         if reason in lower:
             return reason
+    if "bdc-event" in lower:
+        return "cyw43-control-plane-bdc-event"
     return normalize_wifi_blocker(value)
 
 
@@ -1194,6 +1277,9 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     saw_command_doorbell_write_pending = False
     saw_command_event_ring_before = False
     saw_command_timeout_plan = False
+    saw_keyboard_preseed = False
+    saw_keyboard_runtime_init = False
+    saw_net_init_before_keyboard = False
     root_port_read_pending = False
     brcm_axi_read_pending = False
     reset_pre_usbcmd_pending = False
@@ -1222,6 +1308,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         raw = event.raw.lower()
         fields = event.fields
         tag = fields.get("tag", "")
+        if "pi4 keyboard preseed end" in raw:
+            saw_keyboard_preseed = True
+        if "pi4 keyboard runtime init begin" in raw:
+            saw_keyboard_runtime_init = True
+        if (
+            not saw_keyboard_runtime_init
+            and (event.domain == "wifi" or "[net-console] init: bringing up" in raw)
+        ):
+            saw_net_init_before_keyboard = True
         if event.domain == "kernel":
             if (
                 run_posted_flush_pending
@@ -1721,9 +1816,20 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
 
     if (
         command_timeout_detail in stale_command_timeout_details
-        and blocker in USB_OUTCOME_BLOCKERS
+        and blocker in USB_OUTCOME_BLOCKERS.union({"unavailable"})
     ):
         blocker = command_timeout_detail
+    if (
+        gate == 1
+        and blocker == "unknown"
+        and saw_keyboard_preseed
+        and not saw_keyboard_runtime_init
+    ):
+        blocker = (
+            "keyboard-runtime-init-blocked-by-net-init"
+            if saw_net_init_before_keyboard
+            else "keyboard-runtime-init-not-reached"
+        )
 
     return gate, blocker
 
@@ -1771,6 +1877,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "sdio-cmd52-read",
         "sdio-cmd53-r5-error",
     }
+    precise_control_plane_blockers = {
+        "control-plane-bdc-event",
+        "control-plane-interrupt-programming-drift",
+        "control-plane-interrupts-deferred",
+        "control-plane-partial-hint-visibility",
+        "control-plane-reply-idle-loop",
+    }
     specific_sdio_blockers = precise_ht_blockers - direct_sdio_blockers
     exact_reset_blockers = specific_sdio_blockers - {
         "pre-f2-core-control",
@@ -1799,6 +1912,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     post_f2_progress_seen = False
     firmware_release_seen = False
     terminal_ht_timeout_seen = False
+    control_plane_write_seen = False
+    control_plane_reply_seen_after_write = False
+    control_plane_idle_poll_count = 0
     linux_probe_attach_seen = False
     linux_probe_pmu_write_active = False
     armcr4_prereset_ioctrl_active = False
@@ -1824,16 +1940,41 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if value and value not in {"none", "n/a"}:
                 explicit_blocker = normalize_wifi_blocker(value)
         raw_contract_blocker = normalize_wifi_blocker(raw)
+        if raw_contract_blocker == "boot-deferred-local-seat-usb":
+            explicit_blocker = raw_contract_blocker
         if raw_contract_blocker in {
             "control-plane",
+            "control-plane-bdc-event",
+            "control-plane-interrupt-programming-drift",
             "control-plane-interrupts-deferred",
             "control-plane-no-reply",
+            "control-plane-partial-hint-visibility",
             "control-plane-rearm-timeout",
+            "control-plane-reply-idle-loop",
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
             "ioctl-timeout",
         } and explicit_blocker in {None, "cyw43", "nettest-policy-disabled"}:
             explicit_blocker = raw_contract_blocker
+        if "firmware stage=control-plane-write" in raw and "linux-f2-write-shape" in raw:
+            control_plane_write_seen = True
+            control_plane_reply_seen_after_write = False
+            control_plane_idle_poll_count = 0
+        if control_plane_write_seen and (
+            "control-plane reply" in raw
+            or "control-plane-reply action=" in raw and "ready" in raw
+            or "[cyw43] control-plane reply" in raw
+        ):
+            control_plane_reply_seen_after_write = True
+        if (
+            control_plane_write_seen
+            and not control_plane_reply_seen_after_write
+            and "sdio xfer chunk" in raw
+            and "fn=1" in raw
+            and "op=read" in raw
+            and ("base=0x0c020" in raw or "chunk=0x0c020" in raw)
+        ):
+            control_plane_idle_poll_count += 1
         if raw_contract_blocker in {
             "pre-f2-core-control",
             "firmware-core-control",
@@ -1984,7 +2125,15 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane step=" in raw or "control-plane preinit step=" in raw
         ) and " action=fail" in raw:
             gate = max(gate, 7)
-            if blocker == "control-plane-interrupts-deferred" and explicit_blocker in {
+            if (
+                blocker == "control-plane-bdc-event"
+                and explicit_blocker in precise_control_plane_blockers
+            ):
+                blocker = blocker
+            elif explicit_blocker in precise_control_plane_blockers:
+                blocker = explicit_blocker
+            elif blocker in precise_control_plane_blockers and explicit_blocker in {
+                "control-plane",
                 "ioctl-timeout",
                 "cyw43",
             }:
@@ -2084,7 +2233,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 and explicit_blocker == "sdio-cmd53-r5-error"
             ):
                 blocker = blocker
-            elif blocker == "control-plane-interrupts-deferred" and explicit_blocker in {
+            elif blocker in precise_control_plane_blockers and explicit_blocker in {
                 "ioctl-timeout",
                 "cyw43",
             }:
@@ -2329,9 +2478,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if explicit_blocker in {
             "control-plane",
+            "control-plane-bdc-event",
+            "control-plane-interrupt-programming-drift",
             "control-plane-interrupts-deferred",
             "control-plane-no-reply",
+            "control-plane-partial-hint-visibility",
             "control-plane-rearm-timeout",
+            "control-plane-reply-idle-loop",
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
             "ioctl-timeout",
@@ -2340,11 +2493,28 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, 4)
             else:
                 gate = max(gate, 7)
-            if blocker not in precise_ht_blockers:
+            preserve_bdc_event = (
+                blocker == "control-plane-bdc-event"
+                and explicit_blocker in precise_control_plane_blockers
+            )
+            if preserve_bdc_event:
+                blocker = blocker
+            elif (
+                blocker in precise_control_plane_blockers
+                and explicit_blocker in {"control-plane", "ioctl-timeout", "cyw43"}
+            ):
+                blocker = blocker
+            elif explicit_blocker in precise_control_plane_blockers:
+                blocker = explicit_blocker
+            elif blocker not in precise_ht_blockers and not preserve_bdc_event:
                 blocker = explicit_blocker
             continue
         if explicit_blocker in {"join-timeout", "wifi-association-failed"}:
             gate = max(gate, 7)
+            blocker = explicit_blocker
+            continue
+        if explicit_blocker == "boot-deferred-local-seat-usb":
+            gate = max(gate, 1)
             blocker = explicit_blocker
             continue
         ht_evidence = wifi_ht_runtime_evidence(raw, fields, explicit_blocker)
@@ -2388,6 +2558,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     if terminal_ht_timeout_seen and not ht_available_seen and not post_f2_progress_seen:
         gate = min(gate, 4)
         blocker = "ht-clock-timeout"
+    if control_plane_idle_poll_count >= 64 and not control_plane_reply_seen_after_write:
+        gate = max(gate, 7)
+        post_f2_progress_seen = True
+        blocker = "control-plane-reply-idle-loop"
     if blocker in precise_ht_blockers and not ht_available_seen and not post_f2_progress_seen:
         gate = min(gate, 4)
     return gate, blocker
@@ -2397,6 +2571,16 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     """Return the exact failure and phase carried by a Wi-Fi event."""
 
     exact = "none"
+    if "bdc-event" in event.raw.lower():
+        exact = "cyw43-control-plane-bdc-event"
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "none"
+        )
+        return exact, phase
     for key in ("exact", "exact_error", "err", "cause", "detail", "reason"):
         value = event.fields.get(key)
         if value and value not in {"none", "n/a"}:
@@ -2455,6 +2639,14 @@ def summarize_wifi_failure_detail(
                 socram_core_ctrl_stage = event_stage
 
         candidate = normalize_wifi_blocker(raw)
+        if (
+            wifi_blocker == "control-plane-reply-idle-loop"
+            and "sdio xfer chunk" in raw
+            and "fn=1" in raw
+            and "op=read" in raw
+            and ("base=0x0c020" in raw or "chunk=0x0c020" in raw)
+        ):
+            candidate = "control-plane-reply-idle-loop"
         if "sdio cmd53 r5 fail" in raw:
             if socram_core_ctrl_stage == "prereset-zero-ioctrl":
                 candidate = "socram-prereset-zero-cmd53-r5-rejected"
@@ -2523,6 +2715,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     usb_stale_uefi_hint_seen = any(
         usb_stale_uefi_hint_evidence(event) for event in event_list
     )
+    root_prompt_seen = any(root_prompt_evidence(event) for event in event_list)
+    root_console_ready = (
+        any(root_console_ready_evidence(event) for event in event_list) or root_prompt_seen
+    )
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -2538,6 +2734,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_bootloader_handoff_seen=usb_bootloader_handoff_seen,
         usb_cold_boot_seen=usb_cold_boot_seen,
         usb_stale_uefi_hint_seen=usb_stale_uefi_hint_seen,
+        root_console_ready=root_console_ready,
+        root_prompt_seen=root_prompt_seen,
     )
 
 

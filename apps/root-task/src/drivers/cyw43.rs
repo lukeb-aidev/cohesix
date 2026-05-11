@@ -35,6 +35,11 @@ const SDIO_CCCR_IOEX: u32 = 0x02;
 const DEFAULT_WIFI_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x55];
 
 const SDPCM_HEADER_LEN: usize = 12;
+const SDPCM_HWHDR_LEN: usize = 4;
+const SDPCM_CONTROL_TX_HWEXT_LEN: usize = 8;
+const SDPCM_CONTROL_TX_HEADER_LEN: usize = SDPCM_HEADER_LEN + SDPCM_CONTROL_TX_HWEXT_LEN;
+const SDPCM_CONTROL_TX_BLOCK_SIZE: usize = 512;
+const SDPCM_CONTROL_TX_LAST_FRAME: u32 = 1 << 24;
 const CDC_HEADER_LEN: usize = 16;
 const BDC_HEADER_LEN: usize = 4;
 const DATA_PADDING_LEN: usize = 2;
@@ -162,12 +167,21 @@ struct Cyw43Event {
 enum RxFrameResult {
     None,
     Control {
+        cmd: u32,
         id: u16,
         status: u32,
         response_len: usize,
     },
     Event(Cyw43Event),
     Data(HeaplessVec<u8, MAX_FRAME_LEN>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RxSdpcmHeader {
+    packet_len: usize,
+    payload_start: usize,
+    channel: u8,
+    credit: u8,
 }
 
 #[derive(Debug)]
@@ -1372,12 +1386,12 @@ impl Cyw43NetDevice {
             return Err(DriverError::FrameTooLarge);
         }
         self.tx_frame.copy_within(
-            SDPCM_HEADER_LEN + CDC_HEADER_LEN..SDPCM_HEADER_LEN + CDC_HEADER_LEN + value_len,
-            SDPCM_HEADER_LEN + CDC_HEADER_LEN + name_len + 1,
+            control_tx_payload_offset()..control_tx_payload_offset() + value_len,
+            control_tx_payload_offset() + name_len + 1,
         );
         {
-            let payload = &mut self.tx_frame[SDPCM_HEADER_LEN + CDC_HEADER_LEN
-                ..SDPCM_HEADER_LEN + CDC_HEADER_LEN + name_len + 1 + value_len];
+            let payload = &mut self.tx_frame[control_tx_payload_offset()
+                ..control_tx_payload_offset() + name_len + 1 + value_len];
             payload[..name_len].copy_from_slice(name.as_bytes());
             payload[name_len] = 0;
         }
@@ -1597,48 +1611,54 @@ impl Cyw43NetDevice {
     ) -> Result<usize, DriverError> {
         self.wait_for_credit(allow_speculative_retry_credit)?;
 
-        let total_len = SDPCM_HEADER_LEN
+        let total_len = SDPCM_CONTROL_TX_HEADER_LEN
             .checked_add(CDC_HEADER_LEN)
             .and_then(|value| value.checked_add(payload_len))
             .ok_or(DriverError::FrameTooLarge)?;
-        let aligned_len = align4(total_len);
-        if aligned_len > self.tx_frame.len() {
+        let request_len = sdpcm_control_tx_request_len(total_len);
+        if request_len > self.tx_frame.len() {
             return Err(DriverError::FrameTooLarge);
         }
+        let tail_pad = request_len
+            .checked_sub(total_len)
+            .ok_or(DriverError::FrameTooLarge)?;
 
         let sdpcm_seq = self.sdpcm_seq;
         self.sdpcm_seq = self.sdpcm_seq.wrapping_add(1);
         self.ioctl_id = self.ioctl_id.wrapping_add(1);
 
-        let packet_len = u16::try_from(total_len).map_err(|_| DriverError::FrameTooLarge)?;
-        let len_inv = !packet_len;
-        put_u16_le(&mut self.tx_frame, 0, packet_len);
-        put_u16_le(&mut self.tx_frame, 2, len_inv);
-        self.tx_frame[4] = sdpcm_seq;
-        self.tx_frame[5] = CHANNEL_CONTROL;
-        self.tx_frame[6] = 0;
-        self.tx_frame[7] =
-            u8::try_from(SDPCM_HEADER_LEN).map_err(|_| DriverError::FrameTooLarge)?;
-        self.tx_frame[8] = 0;
-        self.tx_frame[9] = 0;
-        self.tx_frame[10] = 0;
-        self.tx_frame[11] = 0;
+        let packet_len = u16::try_from(request_len).map_err(|_| DriverError::FrameTooLarge)?;
+        write_sdpcm_control_tx_header(
+            &mut self.tx_frame,
+            packet_len,
+            total_len,
+            tail_pad,
+            sdpcm_seq,
+        )?;
 
-        put_u32_le(&mut self.tx_frame[SDPCM_HEADER_LEN..], 0, cmd as u32);
         put_u32_le(
-            &mut self.tx_frame[SDPCM_HEADER_LEN..],
+            &mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..],
+            0,
+            cmd as u32,
+        );
+        put_u32_le(
+            &mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..],
             4,
             u32::try_from(payload_len).map_err(|_| DriverError::FrameTooLarge)?,
         );
         put_u16_le(
-            &mut self.tx_frame[SDPCM_HEADER_LEN..],
+            &mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..],
             8,
             (kind as u16) | (u16::try_from(iface).unwrap_or(0) << 12),
         );
-        put_u16_le(&mut self.tx_frame[SDPCM_HEADER_LEN..], 10, self.ioctl_id);
-        put_u32_le(&mut self.tx_frame[SDPCM_HEADER_LEN..], 12, 0);
+        put_u16_le(
+            &mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..],
+            10,
+            self.ioctl_id,
+        );
+        put_u32_le(&mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..], 12, 0);
 
-        self.tx_frame[total_len..aligned_len].fill(0);
+        self.tx_frame[total_len..request_len].fill(0);
         trace!(
             "[cyw43] ioctl tx cmd=0x{:08x} iface={} len={} seq={}",
             cmd as u32,
@@ -1653,25 +1673,28 @@ impl Cyw43NetDevice {
                 "strict"
             };
             info!(
-                "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} packet_len={} len_inv=0x{:04x} aligned_len={} seq={}/{} ioctl_id={} channel={} header_len={} cdc_flags=0x{:04x} write_chunk_limit={} reply_chunk_limit={} mode={transport_mode}",
+                "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} packet_len={} len_inv=0x{:04x} unpadded_len={} request_len={} tail_pad={} seq={}/{} ioctl_id={} channel={} header_channel={} header_len={} cdc_flags=0x{:04x} write_chunk_limit={} reply_chunk_limit={} mode={transport_mode}",
                 cmd as u32,
                 iface,
                 payload_len,
                 packet_len,
-                len_inv,
-                aligned_len,
+                !packet_len,
+                total_len,
+                request_len,
+                tail_pad,
                 sdpcm_seq,
                 self.sdpcm_seq_max,
                 self.ioctl_id,
                 CHANNEL_CONTROL,
-                self.tx_frame[7],
-                get_u16_le(&self.tx_frame[SDPCM_HEADER_LEN..], 8).unwrap_or(0),
+                self.tx_frame[SDPCM_HEADER_LEN + 1] & 0x0f,
+                self.tx_frame[SDPCM_HEADER_LEN + 3],
+                get_u16_le(&self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..], 8).unwrap_or(0),
                 self.state.cyw43_control_plane_write_chunk_limit(),
                 self.state.cyw43_control_plane_reply_chunk_limit(),
             );
         }
         self.state
-            .write_cyw43_frame(&mut self.tx_frame[..aligned_len])?;
+            .write_cyw43_frame(&mut self.tx_frame[..request_len])?;
         if self.state.cyw43_experimental_no_ht_transport() && allow_speculative_retry_credit {
             if control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
                 true,
@@ -1729,11 +1752,14 @@ impl Cyw43NetDevice {
                         .log_cyw43_control_plane_snapshot("ioctl-response-error");
                     return Err(err);
                 }
-                Ok(RxFrameResult::Control {
-                    id,
-                    status,
-                    response_len,
-                }) if id == expected_id => {
+                Ok(
+                    result @ RxFrameResult::Control {
+                        id,
+                        status,
+                        response_len,
+                        ..
+                    },
+                ) if control_response_matches(&result, cmd, expected_id) => {
                     if status != STATUS_SUCCESS {
                         return Err(DriverError::IoctlFailed { cmd, status });
                     }
@@ -1783,20 +1809,22 @@ impl Cyw43NetDevice {
     fn log_pending_ioctl_frame(&self, stage: &'static str) {
         let packet_len = get_u16_le(&self.tx_frame, 0).unwrap_or(0);
         let len_inv = get_u16_le(&self.tx_frame, 2).unwrap_or(0);
-        let cdc = &self.tx_frame[SDPCM_HEADER_LEN..];
+        let hwext = get_u32_le(&self.tx_frame, SDPCM_HWHDR_LEN).unwrap_or(0);
+        let tail_pad = get_u32_le(&self.tx_frame, SDPCM_HWHDR_LEN + 4).unwrap_or(0) >> 16;
+        let cdc = &self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..];
         let cdc_cmd = get_u32_le(cdc, 0).unwrap_or(0);
         let cdc_len = get_u32_le(cdc, 4).unwrap_or(0);
         let cdc_flags = get_u16_le(cdc, 8).unwrap_or(0);
         let cdc_id = get_u16_le(cdc, 10).unwrap_or(0);
         let cdc_status = get_u32_le(cdc, 12).unwrap_or(0);
         warn!(
-            "[cyw43] ioctl frame {stage} packet_len={} len_inv=0x{:04x} seq=0x{:02x} channel=0x{:02x} header_len={} credit=0x{:02x} cdc_cmd=0x{:08x} cdc_len={} cdc_flags=0x{:04x} cdc_id={} cdc_status=0x{:08x}",
+            "[cyw43] ioctl frame {stage} packet_len={} len_inv=0x{:04x} hwext=0x{hwext:08x} tail_pad={} seq=0x{:02x} channel=0x{:02x} header_len={} cdc_cmd=0x{:08x} cdc_len={} cdc_flags=0x{:04x} cdc_id={} cdc_status=0x{:08x}",
             packet_len,
             len_inv,
-            self.tx_frame[4],
-            self.tx_frame[5],
-            self.tx_frame[7],
-            self.tx_frame[9],
+            tail_pad,
+            self.tx_frame[SDPCM_HEADER_LEN],
+            self.tx_frame[SDPCM_HEADER_LEN + 1] & 0x0f,
+            self.tx_frame[SDPCM_HEADER_LEN + 3],
             cdc_cmd,
             cdc_len,
             cdc_flags,
@@ -1864,19 +1892,17 @@ impl Cyw43NetDevice {
         frame_len: usize,
         allow_data: bool,
     ) -> Result<RxFrameResult, DriverError> {
-        let packet_len = validate_sdpcm_packet_len(&self.rx_frame, frame_len)?;
-        self.update_credit();
+        let header = parse_rx_sdpcm_header(&self.rx_frame, frame_len)?;
+        self.update_credit(header);
 
-        let channel = self.rx_frame[5] & 0x0f;
-        let header_length = usize::from(self.rx_frame[7]);
-        if header_length > packet_len || header_length < SDPCM_HEADER_LEN {
-            return Err(DriverError::Protocol("sdpcm-header-length"));
-        }
-        match channel {
-            CHANNEL_CONTROL => self.process_control_frame(header_length, packet_len),
-            CHANNEL_EVENT => self.process_event_frame(header_length, packet_len),
-            CHANNEL_DATA if allow_data => self.process_data_frame(header_length, packet_len),
-            CHANNEL_DATA => Ok(RxFrameResult::None),
+        match header.channel {
+            CHANNEL_CONTROL => self.process_control_frame(header.payload_start, header.packet_len),
+            CHANNEL_EVENT => self.process_event_frame(header.payload_start, header.packet_len),
+            CHANNEL_DATA => self.process_data_or_event_frame(
+                header.payload_start,
+                header.packet_len,
+                allow_data,
+            ),
             _ => Ok(RxFrameResult::None),
         }
     }
@@ -1890,6 +1916,7 @@ impl Cyw43NetDevice {
         if payload.len() < CDC_HEADER_LEN {
             return Err(DriverError::Protocol("cdc-short-header"));
         }
+        let response_cmd = get_u32_le(payload, 0).ok_or(DriverError::Protocol("cdc-cmd"))?;
         let response_len = usize::try_from(
             get_u32_le(payload, 4).ok_or(DriverError::Protocol("cdc-response-len"))?,
         )
@@ -1904,7 +1931,7 @@ impl Cyw43NetDevice {
         self.control_response[..copy_len]
             .copy_from_slice(&payload[CDC_HEADER_LEN..CDC_HEADER_LEN + copy_len]);
         info!(
-            "[cyw43] control-plane reply id={} status=0x{status:08x} response_len={} copied={} sdpcm_seq={} sdpcm_credit={}",
+            "[cyw43] control-plane reply cmd=0x{response_cmd:08x} id={} status=0x{status:08x} response_len={} copied={} sdpcm_seq={} sdpcm_credit={}",
             id,
             response_len,
             copy_len,
@@ -1912,6 +1939,7 @@ impl Cyw43NetDevice {
             self.sdpcm_seq_max,
         );
         Ok(RxFrameResult::Control {
+            cmd: response_cmd,
             id,
             status,
             response_len: copy_len,
@@ -1924,33 +1952,10 @@ impl Cyw43NetDevice {
         payload_end: usize,
     ) -> Result<RxFrameResult, DriverError> {
         let payload = &self.rx_frame[payload_start..payload_end];
-        let packet = bdc_payload(payload).ok_or(DriverError::Protocol("bdc-event"))?;
-        if packet.len() < 72 {
-            return Err(DriverError::Protocol("event-short"));
-        }
-        if get_u16_be(packet, 12) != Some(ETH_P_LINK_CTL)
-            || get_u16_be(packet, 14) != Some(BCMILCP_SUBTYPE_VENDOR_LONG)
-            || packet.get(19..22) != Some(&BROADCOM_OUI)
-            || get_u16_be(packet, 22) != Some(BCMILCP_BCM_SUBTYPE_EVENT)
-        {
+        let Some(event) = parse_event_payload(payload)? else {
             return Ok(RxFrameResult::None);
-        }
-
-        let event = Cyw43Event {
-            event_type: packet[31],
-            status: get_u32_be(packet, 32).ok_or(DriverError::Protocol("event-status"))?,
-            reason: get_u32_be(packet, 36).ok_or(DriverError::Protocol("event-reason"))?,
-            auth_type: get_u32_be(packet, 40).ok_or(DriverError::Protocol("event-auth"))?,
         };
-        match event.event_type {
-            EVENT_SET_SSID | EVENT_LINK => {
-                self.link_up = event.status == STATUS_SUCCESS;
-            }
-            EVENT_DEAUTH | EVENT_DISASSOC => {
-                self.link_up = false;
-            }
-            _ => {}
-        }
+        self.apply_event(event);
         info!(
             "[cyw43] event type={} status=0x{:08x} reason=0x{:08x} auth=0x{:08x}",
             event.event_type, event.status, event.reason, event.auth_type
@@ -1958,13 +1963,31 @@ impl Cyw43NetDevice {
         Ok(RxFrameResult::Event(event))
     }
 
-    fn process_data_frame(
+    fn process_data_or_event_frame(
         &mut self,
         payload_start: usize,
         payload_end: usize,
+        allow_data: bool,
     ) -> Result<RxFrameResult, DriverError> {
         let payload = &self.rx_frame[payload_start..payload_end];
-        let packet = bdc_payload(payload).ok_or(DriverError::Protocol("bdc-data"))?;
+        let Some(packet) = bdc_payload(payload) else {
+            trace!(
+                "[cyw43] data/event frame ignored reason=bdc-header-unavailable len={}",
+                payload.len()
+            );
+            return Ok(RxFrameResult::None);
+        };
+        if let Some(event) = parse_broadcom_event(packet)? {
+            self.apply_event(event);
+            info!(
+                "[cyw43] event type={} status=0x{:08x} reason=0x{:08x} auth=0x{:08x}",
+                event.event_type, event.status, event.reason, event.auth_type
+            );
+            return Ok(RxFrameResult::Event(event));
+        }
+        if !allow_data {
+            return Ok(RxFrameResult::None);
+        }
         if packet.len() > MAX_FRAME_LEN {
             return Err(DriverError::FrameTooLarge);
         }
@@ -1975,9 +1998,21 @@ impl Cyw43NetDevice {
         Ok(RxFrameResult::Data(frame))
     }
 
-    fn update_credit(&mut self) {
-        let mut sdpcm_seq_max = self.rx_frame[9];
-        if (self.rx_frame[5] & 0x0f) < 3 {
+    fn apply_event(&mut self, event: Cyw43Event) {
+        match event.event_type {
+            EVENT_SET_SSID | EVENT_LINK => {
+                self.link_up = event.status == STATUS_SUCCESS;
+            }
+            EVENT_DEAUTH | EVENT_DISASSOC => {
+                self.link_up = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn update_credit(&mut self, header: RxSdpcmHeader) {
+        let mut sdpcm_seq_max = header.credit;
+        if header.channel < 3 {
             if sdpcm_seq_max.wrapping_sub(self.sdpcm_seq) > 0x40 {
                 sdpcm_seq_max = self.sdpcm_seq.wrapping_add(2);
             }
@@ -2064,11 +2099,11 @@ impl Cyw43NetDevice {
             return Err(DriverError::FrameTooLarge);
         }
         Ok(&mut self.tx_frame
-            [SDPCM_HEADER_LEN + CDC_HEADER_LEN..SDPCM_HEADER_LEN + CDC_HEADER_LEN + payload_len])
+            [control_tx_payload_offset()..control_tx_payload_offset() + payload_len])
     }
 
     const fn payload_capacity(&self) -> usize {
-        FRAME_BUF_LEN - SDPCM_HEADER_LEN - CDC_HEADER_LEN
+        FRAME_BUF_LEN - control_tx_payload_offset()
     }
 }
 
@@ -2229,6 +2264,24 @@ fn validate_sdpcm_packet_len(frame: &[u8], frame_len: usize) -> Result<usize, Dr
     Ok(raw_packet_len)
 }
 
+fn parse_rx_sdpcm_header(frame: &[u8], frame_len: usize) -> Result<RxSdpcmHeader, DriverError> {
+    if frame_len > frame.len() {
+        return Err(DriverError::Protocol("sdpcm-frame-overflow"));
+    }
+    let packet_len = validate_sdpcm_packet_len(frame, frame_len)?;
+    let channel = frame[5] & 0x0f;
+    let payload_start = usize::from(frame[7]);
+    if payload_start > packet_len || payload_start < SDPCM_HEADER_LEN {
+        return Err(DriverError::Protocol("sdpcm-header-length"));
+    }
+    Ok(RxSdpcmHeader {
+        packet_len,
+        payload_start,
+        channel,
+        credit: frame[9],
+    })
+}
+
 #[inline]
 const fn clm_iovar_data_len(chunk_len: usize) -> usize {
     CLM_IOVAR_HEADER_LEN + chunk_len
@@ -2239,17 +2292,110 @@ const fn clm_setvar_payload_len(chunk_len: usize) -> usize {
     CLM_IOVAR_NAME_LEN + clm_iovar_data_len(chunk_len)
 }
 
-fn align4(len: usize) -> usize {
+const fn align4(len: usize) -> usize {
     (len + 3) & !3
+}
+
+const fn control_tx_payload_offset() -> usize {
+    SDPCM_CONTROL_TX_HEADER_LEN + CDC_HEADER_LEN
+}
+
+const fn sdpcm_control_tx_request_len(unpadded_len: usize) -> usize {
+    if unpadded_len > SDPCM_CONTROL_TX_BLOCK_SIZE {
+        let remainder = unpadded_len % SDPCM_CONTROL_TX_BLOCK_SIZE;
+        if remainder == 0 {
+            unpadded_len
+        } else {
+            unpadded_len + (SDPCM_CONTROL_TX_BLOCK_SIZE - remainder)
+        }
+    } else {
+        align4(unpadded_len)
+    }
+}
+
+fn write_sdpcm_control_tx_header(
+    frame: &mut [u8],
+    packet_len: u16,
+    unpadded_len: usize,
+    tail_pad: usize,
+    sdpcm_seq: u8,
+) -> Result<(), DriverError> {
+    if frame.len() < SDPCM_CONTROL_TX_HEADER_LEN {
+        return Err(DriverError::FrameTooLarge);
+    }
+    let tail_pad = u16::try_from(tail_pad).map_err(|_| DriverError::FrameTooLarge)?;
+    let unpadded_len = u32::try_from(unpadded_len).map_err(|_| DriverError::FrameTooLarge)?;
+    let hw_header_len = u32::try_from(SDPCM_HWHDR_LEN).map_err(|_| DriverError::FrameTooLarge)?;
+    let data_offset =
+        u32::try_from(SDPCM_CONTROL_TX_HEADER_LEN).map_err(|_| DriverError::FrameTooLarge)?;
+    let hwext_len = unpadded_len
+        .checked_sub(hw_header_len)
+        .ok_or(DriverError::FrameTooLarge)?;
+    put_u16_le(frame, 0, packet_len);
+    put_u16_le(frame, 2, !packet_len);
+    put_u32_le(
+        frame,
+        SDPCM_HWHDR_LEN,
+        hwext_len | SDPCM_CONTROL_TX_LAST_FRAME,
+    );
+    put_u32_le(frame, SDPCM_HWHDR_LEN + 4, u32::from(tail_pad) << 16);
+    put_u32_le(
+        frame,
+        SDPCM_HEADER_LEN,
+        u32::from(sdpcm_seq) | (u32::from(CHANNEL_CONTROL) << 8) | (data_offset << 24),
+    );
+    put_u32_le(frame, SDPCM_HEADER_LEN + 4, 0);
+    Ok(())
 }
 
 fn bdc_payload(payload: &[u8]) -> Option<&[u8]> {
     if payload.len() < BDC_HEADER_LEN {
         return None;
     }
+    if payload[0] >> BDC_VERSION_SHIFT != BDC_VERSION {
+        return None;
+    }
     let data_offset_words = usize::from(payload[3]);
     let start = BDC_HEADER_LEN.checked_add(data_offset_words.checked_mul(4)?)?;
     payload.get(start..)
+}
+
+fn parse_event_payload(payload: &[u8]) -> Result<Option<Cyw43Event>, DriverError> {
+    let Some(packet) = bdc_payload(payload) else {
+        trace!(
+            "[cyw43] event frame ignored reason=bdc-header-unavailable len={}",
+            payload.len()
+        );
+        return Ok(None);
+    };
+    if packet.len() < 72 {
+        trace!(
+            "[cyw43] event frame ignored reason=event-short len={}",
+            packet.len()
+        );
+        return Ok(None);
+    }
+    parse_broadcom_event(packet)
+}
+
+fn parse_broadcom_event(packet: &[u8]) -> Result<Option<Cyw43Event>, DriverError> {
+    if packet.len() < 72 {
+        return Ok(None);
+    }
+    if get_u16_be(packet, 12) != Some(ETH_P_LINK_CTL)
+        || get_u16_be(packet, 14) != Some(BCMILCP_SUBTYPE_VENDOR_LONG)
+        || packet.get(19..22) != Some(&BROADCOM_OUI)
+        || get_u16_be(packet, 22) != Some(BCMILCP_BCM_SUBTYPE_EVENT)
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(Cyw43Event {
+        event_type: packet[31],
+        status: get_u32_be(packet, 32).ok_or(DriverError::Protocol("event-status"))?,
+        reason: get_u32_be(packet, 36).ok_or(DriverError::Protocol("event-reason"))?,
+        auth_type: get_u32_be(packet, 40).ok_or(DriverError::Protocol("event-auth"))?,
+    }))
 }
 
 fn set_event_mask_bit(mask: &mut [u8], event: u8) -> Result<(), DriverError> {
@@ -2334,6 +2480,13 @@ const fn has_sdpcm_credit(sdpcm_seq: u8, sdpcm_seq_max: u8) -> bool {
     sdpcm_seq != sdpcm_seq_max && (sdpcm_seq_max.wrapping_sub(sdpcm_seq) & 0x80) == 0
 }
 
+fn control_response_matches(result: &RxFrameResult, expected_cmd: u32, expected_id: u16) -> bool {
+    matches!(
+        result,
+        RxFrameResult::Control { cmd, id, .. } if *cmd == expected_cmd && *id == expected_id
+    )
+}
+
 fn put_u16_le(buf: &mut [u8], offset: usize, value: u16) {
     if let Some(slot) = buf.get_mut(offset..offset + 2) {
         slot.copy_from_slice(&value.to_le_bytes());
@@ -2383,18 +2536,21 @@ mod tests {
         control_plane_retry_after_reply_wait_resend_target_clock_hz,
         control_plane_retry_after_reply_wait_uses_promoted_link,
         control_plane_retry_after_startup_link_reply_failure_target_clock_hz,
-        first_control_plane_retry_after_promoted_timeout,
+        control_response_matches, first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
-        ioctl_wait_loops, is_transport_retryable, preserve_cyw43_init_failure_exact_error,
-        promoted_cyw43_init_failure_exact_error, put_u16_le, set_event_mask_bit,
+        ioctl_wait_loops, is_transport_retryable, parse_event_payload, parse_rx_sdpcm_header,
+        preserve_cyw43_init_failure_exact_error, promoted_cyw43_init_failure_exact_error,
+        put_u16_le, sdpcm_control_tx_request_len, set_event_mask_bit,
         speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
         startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
-        DriverError, CLM_CHUNK_SIZE, EVENT_AUTH, EVENT_IF, EVENT_SET_SSID, IOCTL_WAIT_LOOPS,
+        write_sdpcm_control_tx_header, DriverError, Ioctl, RxFrameResult, BDC_VERSION,
+        BDC_VERSION_SHIFT, CDC_HEADER_LEN, CHANNEL_CONTROL, CLM_CHUNK_SIZE, EVENT_AUTH, EVENT_IF,
+        EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_WAIT_LOOPS,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
-        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_HEADER_LEN, STATUS_SUCCESS,
     };
     use crate::hal::HalError;
 
@@ -2416,8 +2572,29 @@ mod tests {
     #[test]
     fn bdc_payload_respects_optional_offset() {
         let mut frame = [0u8; 16];
+        frame[0] = BDC_VERSION << BDC_VERSION_SHIFT;
         frame[3] = 1;
         assert_eq!(bdc_payload(&frame), Some(&frame[8..]));
+    }
+
+    #[test]
+    fn bdc_payload_rejects_wrong_version() {
+        let mut frame = [0u8; 16];
+        frame[0] = 1 << BDC_VERSION_SHIFT;
+        assert_eq!(bdc_payload(&frame), None);
+    }
+
+    #[test]
+    fn short_control_plane_event_frames_are_drained() {
+        assert!(parse_event_payload(&[])
+            .expect("empty event is drained")
+            .is_none());
+
+        let mut header_only = [0u8; 4];
+        header_only[0] = BDC_VERSION << BDC_VERSION_SHIFT;
+        assert!(parse_event_payload(&header_only)
+            .expect("header-only event is drained")
+            .is_none());
     }
 
     #[test]
@@ -2453,6 +2630,34 @@ mod tests {
     }
 
     #[test]
+    fn control_tx_header_shape_matches_pi4_linux_clm_capture() {
+        let payload_len = clm_setvar_payload_len(CLM_CHUNK_SIZE);
+        let unpadded_len = SDPCM_CONTROL_TX_HEADER_LEN + CDC_HEADER_LEN + payload_len;
+        let request_len = sdpcm_control_tx_request_len(unpadded_len);
+        let tail_pad = request_len - unpadded_len;
+        assert_eq!(unpadded_len, 1456);
+        assert_eq!(request_len, 1536);
+        assert_eq!(tail_pad, 80);
+
+        let mut frame = [0u8; FRAME_BUF_LEN];
+        write_sdpcm_control_tx_header(
+            &mut frame,
+            u16::try_from(request_len).expect("request length fits"),
+            unpadded_len,
+            tail_pad,
+            4,
+        )
+        .expect("header writes");
+        assert_eq!(
+            &frame[..SDPCM_CONTROL_TX_HEADER_LEN],
+            &[
+                0x00, 0x06, 0xff, 0xf9, 0xac, 0x05, 0x00, 0x01, 0x00, 0x00, 0x50, 0x00, 0x04, 0x00,
+                0x00, 0x14, 0x00, 0x00, 0x00, 0x00,
+            ],
+        );
+    }
+
+    #[test]
     fn little_endian_helpers_write_expected_bytes() {
         let mut buf = [0u8; 4];
         put_u16_le(&mut buf, 1, 0x1234);
@@ -2473,6 +2678,49 @@ mod tests {
         put_u16_le(&mut frame, 2, !48u16);
         let err = validate_sdpcm_packet_len(&frame, 48).expect_err("overflow rejected");
         assert!(matches!(err, DriverError::Protocol("sdpcm-len-overflow")));
+    }
+
+    #[test]
+    fn rx_sdpcm_header_matches_linux_clm_reply_shape() {
+        let mut frame = [0u8; FRAME_BUF_LEN];
+        frame[..12].copy_from_slice(&[
+            0xa8, 0x05, 0x57, 0xfa, 0x06, 0x00, 0x00, 0x0c, 0x00, 0x19, 0x00, 0x00,
+        ]);
+        let header = parse_rx_sdpcm_header(&frame, 0x05a8).expect("linux clm rx header parses");
+        assert_eq!(header.packet_len, 0x05a8);
+        assert_eq!(header.payload_start, 12);
+        assert_eq!(header.channel, CHANNEL_CONTROL);
+        assert_eq!(header.credit, 0x19);
+    }
+
+    #[test]
+    fn rx_sdpcm_header_rejects_hal_length_past_buffer() {
+        let mut frame = [0u8; 16];
+        put_u16_le(&mut frame, 0, 16);
+        put_u16_le(&mut frame, 2, !16u16);
+        let err = parse_rx_sdpcm_header(&frame, 17).expect_err("oversized HAL length rejected");
+        assert!(matches!(err, DriverError::Protocol("sdpcm-frame-overflow")));
+    }
+
+    #[test]
+    fn control_response_matching_requires_command_and_id() {
+        let response = RxFrameResult::Control {
+            cmd: Ioctl::SetVar as u32,
+            id: 7,
+            status: STATUS_SUCCESS,
+            response_len: 0,
+        };
+        assert!(control_response_matches(&response, Ioctl::SetVar as u32, 7));
+        assert!(!control_response_matches(
+            &response,
+            Ioctl::GetVar as u32,
+            7
+        ));
+        assert!(!control_response_matches(
+            &response,
+            Ioctl::SetVar as u32,
+            8
+        ));
     }
 
     #[test]
