@@ -209,13 +209,17 @@ const NET_DIAG_STUCK_MS: u64 = 3_000;
 
 #[cfg(feature = "net-console")]
 fn net_status_allows_root_console(status: &NetStatusReport) -> bool {
+    matches!(
+        status.address_source,
+        "manifest-static" | "dev-virt" | "dhcp-lease"
+    )
+}
+
+#[cfg(feature = "net-console")]
+fn net_status_terminal_failure_reason(status: &NetStatusReport) -> Option<&'static str> {
     match status.address_source {
-        "disabled"
-        | "wifi-associating"
-        | "wifi-association-failed"
-        | "dhcp-pending"
-        | "dhcp-failed" => false,
-        _ => true,
+        "wifi-association-failed" | "dhcp-failed" => Some(status.address_source),
+        _ => None,
     }
 }
 
@@ -1263,6 +1267,19 @@ where
         self.serial.poll_io();
         self.consume_serial();
         self.consume_local_seat();
+        self.poll_runtime(false);
+    }
+
+    #[cfg(feature = "net-console")]
+    /// Execute the pre-root network/timer portion of the pump without accepting
+    /// console input.
+    pub fn poll_pre_root_network(&mut self) {
+        self.poll_runtime(true);
+    }
+
+    fn poll_runtime(&mut self, suppress_console_input: bool) {
+        #[cfg(not(feature = "net-console"))]
+        let _ = suppress_console_input;
 
         #[cfg(feature = "kernel")]
         let timebase_now_ms = crate::hal::timebase().now_ms();
@@ -1314,7 +1331,9 @@ where
                 self.audit.info(message.as_str());
             }
             for line in buffered {
-                self.handle_network_line(line.text);
+                if !suppress_console_input {
+                    self.handle_network_line(line.text);
+                }
             }
             #[cfg(feature = "kernel")]
             if let Some(bridge) = self.ninedoor.as_mut() {
@@ -1598,6 +1617,13 @@ where
             Some(net) => net_status_allows_root_console(&net.status_report()),
             None => false,
         }
+    }
+
+    #[cfg(feature = "net-console")]
+    pub fn net_console_terminal_failure_reason(&self) -> Option<&'static str> {
+        self.net
+            .as_ref()
+            .and_then(|net| net_status_terminal_failure_reason(&net.status_report()))
     }
 
     /// Returns whether the NineDoor bridge is enabled.
@@ -2138,7 +2164,7 @@ where
             );
             self.emit_console_line("  wifi probe-ht   - Probe HT clock readiness without reboot");
             self.emit_console_line(
-                "  wifi diag       - Dump, probe HT, then dump post-probe state",
+                "  wifi diag       - Dump state; probe HT only before preserved control-plane failure",
             );
             self.emit_console_line(
                 "  wifi load-fw    - Retry firmware load from current transport",
@@ -3597,6 +3623,20 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_exact_error_is_terminal_diag_blocker(exact_error: &str) -> bool {
+        !exact_error.is_empty()
+            && (matches!(
+                exact_error,
+                "cyw43-ht-clock-timeout"
+                    | "cyw43-ht-clock-timeout-before-function2"
+                    | "cyw43-device-on-timeout-before-ht"
+                    | "cyw43-device-on-timeout-before-function2"
+            ) || exact_error.starts_with("cyw43-control-plane-")
+                || exact_error.starts_with("cyw43-function2-")
+                || Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error))
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_should_skip_ht_probe(snapshot: &WifiDebugSnapshot) -> bool {
         Self::wifi_diag_ht_probe_skip_reason(snapshot).is_some()
     }
@@ -3610,11 +3650,16 @@ where
         {
             return Some("transport-not-initialized");
         }
-        (snapshot.debug_snapshot_stage == "cyw43-load-firmware-fail"
+        if snapshot.debug_snapshot_stage == "cyw43-load-firmware-fail"
             && Self::wifi_exact_error_is_direct_sdio_transport_blocker(
                 snapshot.control_plane_exact_error,
-            ))
-        .then_some("pre-firmware-core-control-failure")
+            )
+        {
+            return Some("pre-firmware-core-control-failure");
+        }
+        (snapshot.debug_snapshot_stage == "cyw43-init-control-plane-fail"
+            || Self::wifi_exact_error_is_terminal_diag_blocker(snapshot.control_plane_exact_error))
+        .then_some("preserved-control-plane-failure")
     }
 
     #[cfg(feature = "kernel")]
@@ -6449,11 +6494,31 @@ mod tests {
         status.address_source = "dhcp-pending";
         status.dhcp_phase = "selecting";
         assert!(!super::net_status_allows_root_console(&status));
+        status.address_source = "wifi-association-failed";
+        status.dhcp_phase = "failed";
+        assert!(!super::net_status_allows_root_console(&status));
+        assert_eq!(
+            super::net_status_terminal_failure_reason(&status),
+            Some("wifi-association-failed")
+        );
+        status.address_source = "dhcp-failed";
+        assert!(!super::net_status_allows_root_console(&status));
+        assert_eq!(
+            super::net_status_terminal_failure_reason(&status),
+            Some("dhcp-failed")
+        );
+        status.address_source = "future-intermediate-state";
+        status.dhcp_phase = "probing";
+        assert!(!super::net_status_allows_root_console(&status));
+        assert_eq!(super::net_status_terminal_failure_reason(&status), None);
         status.address_source = "dhcp-lease";
         status.dhcp_phase = "bound";
         assert!(super::net_status_allows_root_console(&status));
+        assert_eq!(super::net_status_terminal_failure_reason(&status), None);
         status.address_source = "dev-virt";
         status.dhcp_phase = "disabled";
+        assert!(super::net_status_allows_root_console(&status));
+        status.address_source = "manifest-static";
         assert!(super::net_status_allows_root_console(&status));
     }
 
@@ -7109,6 +7174,35 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn pre_root_network_poll_does_not_accept_console_input() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut line = HeaplessString::new();
+        line.push_str("ping").unwrap();
+        net.lines.push(ConsoleLine::new(line, 1)).unwrap();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().driver_mut().push_rx(b"ping\n");
+
+        pump.poll_pre_root_network();
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        assert!(transcript.is_empty());
+        assert!(net.sent.is_empty());
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn nettest_reports_dhcp_pending_detail() {
         let driver = LoopbackSerial::<128>::new();
         let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -7757,6 +7851,54 @@ mod tests {
             wifi.calls.as_slice(),
             &["dump-state", "probe-ht", "dump-state"]
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_wifi_diag_skips_probe_after_control_plane_failure() {
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        wifi.snapshot.current_clock_hz = 41_666_666;
+        wifi.snapshot.card_ready = true;
+        wifi.snapshot.debug_snapshot_stage = "console-diag-before";
+        wifi.snapshot.control_plane_exact_error = "cyw43-control-plane-partial-hint-visibility";
+        wifi.expect_breadcrumb_suppression = true;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        let mut transcript = Vec::new();
+        for _ in 0..40 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        }
+
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(wifi.breadcrumb_suppression_observed);
+        assert!(
+            rendered.contains(
+                "wifi: diag ht_probe skipped reason=preserved-control-plane-failure exact_error=cyw43-control-plane-partial-hint-visibility"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=diag"),
+            "{rendered}"
+        );
+        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
     }
 
     #[cfg(feature = "kernel")]
@@ -8648,6 +8790,23 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_diag_ht_probe_skip_reason(&fake.snapshot),
             Some("transport-not-initialized")
+        );
+        assert!(KernelConsoleTestPump::wifi_diag_should_skip_ht_probe(
+            &fake.snapshot
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_diag_skips_ht_probe_for_preserved_control_plane_failure() {
+        let mut fake = FakeWifiDebug::new();
+        fake.snapshot.current_clock_hz = 41_666_666;
+        fake.snapshot.debug_snapshot_stage = "console-diag-before";
+        fake.snapshot.control_plane_exact_error = "cyw43-control-plane-partial-hint-visibility";
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_diag_ht_probe_skip_reason(&fake.snapshot),
+            Some("preserved-control-plane-failure")
         );
         assert!(KernelConsoleTestPump::wifi_diag_should_skip_ht_probe(
             &fake.snapshot

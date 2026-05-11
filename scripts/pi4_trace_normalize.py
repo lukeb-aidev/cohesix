@@ -477,6 +477,8 @@ def classify_domain(line: str) -> str | None:
         or "action=wait-for-wifi" in lower
         or "wifi-net-console-pending-before-root-console" in lower
         or "wifi-not-ready" in lower
+        or "deferred failed detail=" in lower
+        or "deferred ready backend=cyw43" in lower
     ):
         return "wifi"
     if "cyw43-" in lower and ("net-disabled" in lower or "net-console" in lower):
@@ -701,6 +703,8 @@ def normalize_usb_blocker(value: str) -> str:
         return "pcie-window-cmd-doorbell-proof-timer-preempted"
     if "raw-phys-cmd-poll-only-timeout" in lower:
         return "raw-phys-cmd-poll-only-timeout"
+    if "pcie-window-enable-slot-timeout" in lower:
+        return "pcie-window-enable-slot-timeout"
     if "pcie-window-no-op-timeout" in lower:
         return "pcie-window-no-op-timeout"
     if (
@@ -1116,6 +1120,14 @@ def normalize_wifi_blocker(value: str) -> str:
         return "mailbox-ready-timeout"
     if "sdpcm-credit" in lower or "credit-timeout" in lower:
         return "sdpcm-credit-timeout"
+    if (
+        "wsec-pmk" in lower
+        or "set_wsec_pmk" in lower
+        or "setwsecpmk" in lower
+        or "ioctl 0x0000010c" in lower
+        or "ioctl 0x10c" in lower
+    ) and ("status=0xfffffffe" in lower or "badarg" in lower or "bad-argument" in lower):
+        return "wsec-pmk-bad-argument"
     if "ioctl-timeout" in lower or "ioctl timeout" in lower:
         return "ioctl-timeout"
     if "bdc-event" in lower:
@@ -1233,6 +1245,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-plane-hintless-firstread-no-irq",
         "cyw43-control-plane-interrupt-programming-drift",
         "cyw43-control-plane-partial-hint-visibility",
+        "wsec-pmk-bad-argument",
     ):
         if reason in lower:
             return reason
@@ -1300,11 +1313,13 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     reset_pre_usbcmd_pending = False
     run_posted_flush_pending = False
     command_probe_bus: str | None = None
+    command_probe_verb: str | None = None
     command_timeout_detail: str | None = None
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
     precise_command_timeout_details = {
         "cmd-poll-only-timeout",
+        "pcie-window-enable-slot-timeout",
         "pcie-window-no-op-timeout",
         "raw-phys-cmd-poll-only-timeout",
         "cmd-fetch-timeout",
@@ -1474,6 +1489,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     and fields.get("command")
                     in {
                         "no-op-unproven",
+                        "enable-slot-timeout",
                         "enable-slot-unproven",
                         "enable-slot-linux-event-unproven",
                     }
@@ -1490,6 +1506,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     blocker = proof_blocker
             elif fields.get("command") in {
                 "no-op-unproven",
+                "enable-slot-timeout",
                 "enable-slot-unproven",
                 "enable-slot-linux-event-unproven",
             }:
@@ -1522,6 +1539,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "phys",
         }:
             command_probe_bus = fields["bus"]
+            command_probe_verb = fields.get("verb")
         for key in ("progress", "phase", "current", "outcome"):
             progress_gate = usb_progress_gate(fields.get(key))
             if progress_gate is not None:
@@ -1668,7 +1686,10 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = command_timeout_detail
             else:
                 if command_probe_bus == "pcie-window":
-                    command_timeout_detail = "pcie-window-no-op-timeout"
+                    if command_probe_verb and "enable-slot" in command_probe_verb:
+                        command_timeout_detail = "pcie-window-enable-slot-timeout"
+                    else:
+                        command_timeout_detail = "pcie-window-no-op-timeout"
                 elif command_probe_bus == "phys":
                     command_timeout_detail = "raw-phys-cmd-poll-only-timeout"
                 else:
@@ -1781,6 +1802,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         and value
                         in {
                             "enable-slot-unproven",
+                            "enable-slot-timeout",
                             "enable-slot-linux-event-unproven",
                             "enable-slot-uboot-first-unproven",
                             "no-op-unproven",
@@ -1801,6 +1823,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     ):
                         if command_timeout_detail in precise_command_timeout_details:
                             blocker = command_timeout_detail
+                        elif command_probe_verb and "enable-slot" in command_probe_verb:
+                            blocker = "pcie-window-enable-slot-timeout"
                         else:
                             blocker = "pcie-window-no-op-timeout"
                     elif (
@@ -1898,6 +1922,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-interrupts-deferred",
         "control-plane-partial-hint-visibility",
         "control-plane-reply-idle-loop",
+        "wsec-pmk-bad-argument",
     }
     specific_sdio_blockers = precise_ht_blockers - direct_sdio_blockers
     exact_reset_blockers = specific_sdio_blockers - {
@@ -1972,6 +1997,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
             "ioctl-timeout",
+            "wsec-pmk-bad-argument",
         } and explicit_blocker in {None, "cyw43", "nettest-policy-disabled"}:
             explicit_blocker = raw_contract_blocker
         if "firmware stage=control-plane-write" in raw and "linux-f2-write-shape" in raw:
@@ -2144,7 +2170,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         ) and " action=fail" in raw:
             gate = max(gate, 7)
             if (
-                blocker == "control-plane-bdc-event"
+                blocker in {"control-plane-bdc-event", "wsec-pmk-bad-argument"}
                 and explicit_blocker in precise_control_plane_blockers
             ):
                 blocker = blocker
@@ -2506,16 +2532,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
             "ioctl-timeout",
+            "wsec-pmk-bad-argument",
         }:
             if blocker in precise_ht_blockers and not ht_available_seen:
                 gate = max(gate, 4)
             else:
                 gate = max(gate, 7)
-            preserve_bdc_event = (
-                blocker == "control-plane-bdc-event"
+            preserve_precise_control = (
+                blocker in {"control-plane-bdc-event", "wsec-pmk-bad-argument"}
                 and explicit_blocker in precise_control_plane_blockers
             )
-            if preserve_bdc_event:
+            if preserve_precise_control:
                 blocker = blocker
             elif (
                 blocker in precise_control_plane_blockers
@@ -2524,7 +2551,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = blocker
             elif explicit_blocker in precise_control_plane_blockers:
                 blocker = explicit_blocker
-            elif blocker not in precise_ht_blockers and not preserve_bdc_event:
+            elif blocker not in precise_ht_blockers and not preserve_precise_control:
                 blocker = explicit_blocker
             continue
         if explicit_blocker in {"join-timeout", "wifi-association-failed"}:
@@ -2533,7 +2560,25 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if explicit_blocker in {"boot-deferred-local-seat-usb", "boot-waiting-for-wifi"}:
             gate = max(gate, 1)
-            blocker = explicit_blocker
+            if blocker not in {
+                "control-plane",
+                "control-plane-bdc-event",
+                "control-plane-interrupt-programming-drift",
+                "control-plane-interrupts-deferred",
+                "control-plane-no-reply",
+                "control-plane-partial-hint-visibility",
+                "control-plane-rearm-timeout",
+                "control-plane-reply-idle-loop",
+                "control-plane-sideband-unreadable",
+                "control-plane-startup-link-timeout",
+                "firmware-channel-f2",
+                "firmware-ready-timeout",
+                "ioctl-timeout",
+                "mailbox-ready-timeout",
+                "sdpcm-credit-timeout",
+                "wsec-pmk-bad-argument",
+            }:
+                blocker = explicit_blocker
             continue
         ht_evidence = wifi_ht_runtime_evidence(raw, fields, explicit_blocker)
         if (
@@ -2593,12 +2638,23 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
         exact = "cyw43-control-plane-bdc-event"
         phase = (
             event.fields.get("stage")
+            or event.fields.get("step")
             or event.fields.get("current")
             or event.fields.get("focus")
             or event.stage
             or "none"
         )
         return exact, phase
+    if normalize_wifi_blocker(event.raw) == "wsec-pmk-bad-argument":
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "none"
+        )
+        return "wsec-pmk-bad-argument", phase
     for key in ("exact", "exact_error", "err", "cause", "detail", "reason"):
         value = event.fields.get(key)
         if value and value not in {"none", "n/a"}:
@@ -2606,6 +2662,7 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             break
     phase = (
         event.fields.get("stage")
+        or event.fields.get("step")
         or event.fields.get("current")
         or event.fields.get("focus")
         or event.stage

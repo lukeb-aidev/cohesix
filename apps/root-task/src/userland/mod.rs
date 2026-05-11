@@ -54,7 +54,7 @@ type NetStackHandle = NetStack;
 #[cfg(not(feature = "net-console"))]
 type NetStackHandle = ();
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-const DEFERRED_NET_CONSOLE_ROOT_WAIT_LOG_POLLS: usize = 4_096;
+const DEFERRED_NET_CONSOLE_ROOT_WAIT_LOG_POLLS: usize = 1_048_576;
 
 /// Authoritative entrypoint for userland bring-up and runtime loops. Full boots
 /// must always flow through this handoff so the serial root console comes up;
@@ -247,6 +247,7 @@ pub fn main(ctx: BootContext) -> ! {
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         if deferred_net_console_holds_root_console(
             defer_net_console,
+            pump.net_console_enabled(),
             pump.net_console_ready_for_root(),
         ) {
             wait_for_deferred_net_console_before_root(&mut pump);
@@ -479,9 +480,10 @@ fn deferred_net_console_hal_from_ptr(hal_ptr: usize) -> Option<&'static mut Kern
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn deferred_net_console_holds_root_console(
     deferred_requested: bool,
+    net_console_enabled: bool,
     net_console_ready: bool,
 ) -> bool {
-    deferred_requested && !net_console_ready
+    deferred_requested && net_console_enabled && !net_console_ready
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -503,6 +505,16 @@ fn wait_for_deferred_net_console_before_root<
 {
     let mut polls = 0usize;
     while !pump.net_console_ready_for_root() {
+        if let Some(reason) = pump.net_console_terminal_failure_reason() {
+            let mut line = HeaplessString::<128>::new();
+            let _ = write!(
+                line,
+                "[net-console] root console releasing reason={reason} action=serial-diagnostic-shell"
+            );
+            boot_log::force_uart_line(line.as_str());
+            log::warn!(target: "net-console", "{}", line.as_str());
+            break;
+        }
         if polls == 0 {
             boot_log::force_uart_line(
                 "[net-console] root console waiting reason=wifi-not-ready action=wait-for-wifi",
@@ -520,7 +532,7 @@ fn wait_for_deferred_net_console_before_root<
             boot_log::force_uart_line(line.as_str());
             log::warn!(target: "net-console", "{}", line.as_str());
         }
-        pump.poll();
+        pump.poll_pre_root_network();
         polls = polls.saturating_add(1);
         crate::sel4::yield_now();
     }
@@ -852,11 +864,18 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn deferred_wifi_is_the_only_path_that_holds_root_console() {
-        assert!(super::deferred_net_console_holds_root_console(true, false));
-        assert!(!super::deferred_net_console_holds_root_console(true, true));
+    fn deferred_wifi_pending_stack_is_the_only_path_that_holds_root_console() {
+        assert!(super::deferred_net_console_holds_root_console(
+            true, true, false
+        ));
         assert!(!super::deferred_net_console_holds_root_console(
-            false, false
+            true, true, true
+        ));
+        assert!(!super::deferred_net_console_holds_root_console(
+            true, false, false
+        ));
+        assert!(!super::deferred_net_console_holds_root_console(
+            false, true, false
         ));
     }
 }

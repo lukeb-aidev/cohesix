@@ -37,7 +37,8 @@ const DEFAULT_WIFI_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x55];
 const SDPCM_HEADER_LEN: usize = 12;
 const SDPCM_HWHDR_LEN: usize = 4;
 const SDPCM_CONTROL_TX_HWEXT_LEN: usize = 8;
-const SDPCM_CONTROL_TX_HEADER_LEN: usize = SDPCM_HEADER_LEN + SDPCM_CONTROL_TX_HWEXT_LEN;
+const SDPCM_CONTROL_TX_HEADER_LEN: usize = SDPCM_HEADER_LEN;
+const SDPCM_CONTROL_TX_EXT_HEADER_LEN: usize = SDPCM_HEADER_LEN + SDPCM_CONTROL_TX_HWEXT_LEN;
 const SDPCM_CONTROL_TX_BLOCK_SIZE: usize = 512;
 const SDPCM_CONTROL_TX_LAST_FRAME: u32 = 1 << 24;
 const CDC_HEADER_LEN: usize = 16;
@@ -90,6 +91,14 @@ const EVENT_MASK_LEN: usize = 24;
 const DEFAULT_SCAN_CHANNEL_TIME_MS: u32 = 40;
 const DEFAULT_SCAN_UNASSOC_TIME_MS: u32 = 40;
 const BCME_UNSUPPORTED: u32 = 0xffff_ffe9;
+const WSEC_PMK_LEN: usize = 32;
+const WSEC_PMK_KEY_CAPACITY: usize = 128;
+const WSEC_PMK_PAYLOAD_LEN: usize = 4 + WSEC_PMK_KEY_CAPACITY;
+const WPA2_PSK_PBKDF2_ROUNDS: u16 = 4096;
+const WPA2_PSK_BLOCK_COUNT: u32 = 2;
+const SHA1_BLOCK_LEN: usize = 64;
+const SHA1_DIGEST_LEN: usize = 20;
+const LINUX_JOIN_PREF_DEFAULT: [u8; 8] = [0x04, 0x02, 0x08, 0x01, 0x01, 0x02, 0x00, 0x00];
 
 const BDC_VERSION: u8 = 2;
 const BDC_VERSION_SHIFT: u8 = 4;
@@ -278,8 +287,236 @@ fn optional_control_plane_iovar_allows_failure(name: &str, err: &DriverError) ->
                 | "bus:txglom"
                 | "country"
                 | "mfp"
+                | "sup_wpa"
+                | "sup_wpa2_eapver"
+                | "sup_wpa_tmo"
         )
     )
+}
+
+fn write_wsec_pmk_payload(
+    payload: &mut [u8],
+    ssid: &[u8],
+    psk: &[u8],
+) -> Result<WsecPmkKind, DriverError> {
+    if payload.len() < WSEC_PMK_PAYLOAD_LEN {
+        return Err(DriverError::FrameTooLarge);
+    }
+    if psk.is_empty() {
+        return Err(DriverError::Config("wifi-psk-empty"));
+    }
+    let mut pmk = [0u8; WSEC_PMK_LEN];
+    let kind = if decode_hex_pmk(psk, &mut pmk) {
+        WsecPmkKind::HexPmk
+    } else {
+        if psk.len() < 8 {
+            return Err(DriverError::Config("wifi-psk-too-short"));
+        }
+        if psk.len() > 63 {
+            return Err(DriverError::Config("wifi-psk-invalid"));
+        }
+        derive_wpa2_psk_pmk(psk, ssid, &mut pmk);
+        WsecPmkKind::Pbkdf2Passphrase
+    };
+    payload[..WSEC_PMK_PAYLOAD_LEN].fill(0);
+    put_u16_le(payload, 0, WSEC_PMK_LEN as u16);
+    put_u16_le(payload, 2, 0);
+    payload[4..4 + WSEC_PMK_LEN].copy_from_slice(&pmk);
+    Ok(kind)
+}
+
+fn decode_hex_pmk(input: &[u8], output: &mut [u8; WSEC_PMK_LEN]) -> bool {
+    if input.len() != WSEC_PMK_LEN * 2 {
+        return false;
+    }
+    let mut index = 0;
+    while index < WSEC_PMK_LEN {
+        let Some(hi) = hex_nibble(input[index * 2]) else {
+            return false;
+        };
+        let Some(lo) = hex_nibble(input[index * 2 + 1]) else {
+            return false;
+        };
+        output[index] = (hi << 4) | lo;
+        index += 1;
+    }
+    true
+}
+
+const fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn derive_wpa2_psk_pmk(passphrase: &[u8], ssid: &[u8], output: &mut [u8; WSEC_PMK_LEN]) {
+    // WPA2-PSK firmware offload follows Linux: store the 32-byte PBKDF2 PMK, not the raw passphrase.
+    for block_index in 1..=WPA2_PSK_BLOCK_COUNT {
+        let mut block_suffix = [0u8; 4];
+        block_suffix.copy_from_slice(&block_index.to_be_bytes());
+        let mut u = hmac_sha1(passphrase, ssid, &block_suffix);
+        let mut t = u;
+        for _ in 1..WPA2_PSK_PBKDF2_ROUNDS {
+            u = hmac_sha1(passphrase, &u, &[]);
+            let mut index = 0;
+            while index < SHA1_DIGEST_LEN {
+                t[index] ^= u[index];
+                index += 1;
+            }
+        }
+        let output_offset = (block_index as usize - 1) * SHA1_DIGEST_LEN;
+        let remaining = WSEC_PMK_LEN - output_offset;
+        let copy_len = core::cmp::min(SHA1_DIGEST_LEN, remaining);
+        output[output_offset..output_offset + copy_len].copy_from_slice(&t[..copy_len]);
+    }
+}
+
+fn hmac_sha1(key: &[u8], first: &[u8], second: &[u8]) -> [u8; SHA1_DIGEST_LEN] {
+    let mut key_block = [0u8; SHA1_BLOCK_LEN];
+    if key.len() > SHA1_BLOCK_LEN {
+        let digest = sha1_digest(key, &[], &[]);
+        key_block[..SHA1_DIGEST_LEN].copy_from_slice(&digest);
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+
+    let mut inner_pad = [0x36u8; SHA1_BLOCK_LEN];
+    let mut outer_pad = [0x5cu8; SHA1_BLOCK_LEN];
+    let mut index = 0;
+    while index < SHA1_BLOCK_LEN {
+        inner_pad[index] ^= key_block[index];
+        outer_pad[index] ^= key_block[index];
+        index += 1;
+    }
+    let inner = sha1_digest(&inner_pad, first, second);
+    sha1_digest(&outer_pad, &inner, &[])
+}
+
+fn sha1_digest(first: &[u8], second: &[u8], third: &[u8]) -> [u8; SHA1_DIGEST_LEN] {
+    let mut state = Sha1State::new();
+    state.update(first);
+    state.update(second);
+    state.update(third);
+    state.finalize()
+}
+
+#[derive(Clone)]
+struct Sha1State {
+    state: [u32; 5],
+    buffer: [u8; SHA1_BLOCK_LEN],
+    buffer_len: usize,
+    total_len: u64,
+}
+
+impl Sha1State {
+    const fn new() -> Self {
+        Self {
+            state: [
+                0x6745_2301,
+                0xefcd_ab89,
+                0x98ba_dcfe,
+                0x1032_5476,
+                0xc3d2_e1f0,
+            ],
+            buffer: [0; SHA1_BLOCK_LEN],
+            buffer_len: 0,
+            total_len: 0,
+        }
+    }
+
+    fn update(&mut self, mut input: &[u8]) {
+        self.total_len = self.total_len.wrapping_add(input.len() as u64);
+        if self.buffer_len != 0 {
+            let fill = core::cmp::min(SHA1_BLOCK_LEN - self.buffer_len, input.len());
+            self.buffer[self.buffer_len..self.buffer_len + fill].copy_from_slice(&input[..fill]);
+            self.buffer_len += fill;
+            input = &input[fill..];
+            if self.buffer_len == SHA1_BLOCK_LEN {
+                let block = self.buffer;
+                self.process_block(&block);
+                self.buffer_len = 0;
+            }
+        }
+        while input.len() >= SHA1_BLOCK_LEN {
+            let mut block = [0u8; SHA1_BLOCK_LEN];
+            block.copy_from_slice(&input[..SHA1_BLOCK_LEN]);
+            self.process_block(&block);
+            input = &input[SHA1_BLOCK_LEN..];
+        }
+        if !input.is_empty() {
+            self.buffer[..input.len()].copy_from_slice(input);
+            self.buffer_len = input.len();
+        }
+    }
+
+    fn finalize(mut self) -> [u8; SHA1_DIGEST_LEN] {
+        let bit_len = self.total_len.wrapping_mul(8);
+        self.update(&[0x80]);
+        let zeros = [0u8; SHA1_BLOCK_LEN];
+        while self.buffer_len != 56 {
+            let fill = if self.buffer_len < 56 {
+                56 - self.buffer_len
+            } else {
+                SHA1_BLOCK_LEN - self.buffer_len
+            };
+            self.update(&zeros[..fill]);
+        }
+        self.update(&bit_len.to_be_bytes());
+        let mut digest = [0u8; SHA1_DIGEST_LEN];
+        for (index, word) in self.state.iter().copied().enumerate() {
+            digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        digest
+    }
+
+    fn process_block(&mut self, block: &[u8; SHA1_BLOCK_LEN]) {
+        let mut schedule = [0u32; 80];
+        for (index, chunk) in block.chunks_exact(4).enumerate().take(16) {
+            schedule[index] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
+        for index in 16..80 {
+            schedule[index] = (schedule[index - 3]
+                ^ schedule[index - 8]
+                ^ schedule[index - 14]
+                ^ schedule[index - 16])
+                .rotate_left(1);
+        }
+
+        let mut a = self.state[0];
+        let mut b = self.state[1];
+        let mut c = self.state[2];
+        let mut d = self.state[3];
+        let mut e = self.state[4];
+
+        for (index, word) in schedule.iter().copied().enumerate() {
+            let (f, k) = match index {
+                0..=19 => ((b & c) | ((!b) & d), 0x5a82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ed9_eba1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1b_bcdc),
+                _ => (b ^ c ^ d, 0xca62_c1d6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+        self.state[4] = self.state[4].wrapping_add(e);
+    }
 }
 
 #[inline]
@@ -726,6 +963,21 @@ enum DeferredJoinState {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WsecPmkKind {
+    Pbkdf2Passphrase,
+    HexPmk,
+}
+
+impl WsecPmkKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Pbkdf2Passphrase => "pbkdf2-passphrase",
+            Self::HexPmk => "hex-pmk",
+        }
+    }
+}
+
 pub struct Cyw43NetDevice {
     state: Pi4WifiState,
     probe: ProbeReport,
@@ -736,6 +988,7 @@ pub struct Cyw43NetDevice {
     sdpcm_seq: u8,
     sdpcm_seq_max: u8,
     ioctl_id: u16,
+    control_tx_ext_header: bool,
     link_up: bool,
     deferred_join_state: DeferredJoinState,
     rx_frame: [u8; FRAME_BUF_LEN],
@@ -899,6 +1152,7 @@ impl Cyw43NetDevice {
             sdpcm_seq: 0,
             sdpcm_seq_max: 1,
             ioctl_id: 0,
+            control_tx_ext_header: false,
             link_up: false,
             deferred_join_state: DeferredJoinState::Disabled,
             rx_frame: [0; FRAME_BUF_LEN],
@@ -982,6 +1236,7 @@ impl Cyw43NetDevice {
         self.sdpcm_seq = 0;
         self.sdpcm_seq_max = 1;
         self.ioctl_id = 0;
+        self.control_tx_ext_header = false;
         self.link_up = false;
         self.deferred_join_state = DeferredJoinState::Disabled;
         self.rx_frame.fill(0);
@@ -1103,6 +1358,7 @@ impl Cyw43NetDevice {
             "linux-first-iovar-rxglom",
             self.set_iovar_u32("bus:rxglom", 1)
         );
+        self.enable_control_tx_extension_header("linux-first-iovar-rxglom");
         info!("[cyw43] control-plane step=read-mac action=begin order=linux-before-clm");
         self.mac = self.read_mac_address();
         info!(
@@ -1235,6 +1491,10 @@ impl Cyw43NetDevice {
         }
 
         preinit_step!("mpc", self.set_iovar_u32("mpc", 1));
+        preinit_step!(
+            "join-pref",
+            self.set_iovar_bytes("join_pref", &LINUX_JOIN_PREF_DEFAULT)
+        );
         preinit_step!("if-event-message", self.enable_linux_if_event_message());
         preinit_step!(
             "scan-channel-time",
@@ -1288,25 +1548,26 @@ impl Cyw43NetDevice {
         self.deferred_join_state = DeferredJoinState::Disabled;
         if psk.is_empty() {
             self.ioctl_set_u32(Ioctl::SetWsec, 0, 0)?;
-            self.set_optional_iovar_u32x2("bsscfg:sup_wpa", 0, 0)?;
+            self.set_optional_iovar_u32("sup_wpa", 0)?;
             self.ioctl_set_u32(Ioctl::SetInfra, 0, 1)?;
             self.ioctl_set_u32(Ioctl::SetAuth, 0, 0)?;
             self.ioctl_set_u32(Ioctl::SetWpaAuth, 0, WPA_AUTH_DISABLED)?;
             info!("[cyw43] join: auth=open ssid_len={}", ssid.len());
         } else {
             self.ioctl_set_u32(Ioctl::SetWsec, 0, WSEC_AES)?;
-            self.set_optional_iovar_u32x2("bsscfg:sup_wpa", 0, 1)?;
-            self.set_optional_iovar_u32x2("bsscfg:sup_wpa2_eapver", 0, u32::MAX)?;
-            self.set_optional_iovar_u32x2("bsscfg:sup_wpa_tmo", 0, 2500)?;
-            self.set_wsec_pmk(psk.as_bytes())?;
             self.ioctl_set_u32(Ioctl::SetInfra, 0, 1)?;
             self.ioctl_set_u32(Ioctl::SetAuth, 0, AUTH_OPEN)?;
             self.set_optional_iovar_u32("mfp", MFP_CAPABLE)?;
             self.ioctl_set_u32(Ioctl::SetWpaAuth, 0, WPA_AUTH_WPA2_PSK)?;
+            self.set_iovar_u32("sup_wpa", 1)?;
+            self.set_optional_iovar_u32("sup_wpa2_eapver", u32::MAX)?;
+            self.set_optional_iovar_u32("sup_wpa_tmo", 2500)?;
+            let pmk_kind = self.set_wsec_pmk(ssid.as_bytes(), psk.as_bytes())?;
             info!(
-                "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={}",
+                "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={} pmk_kind={}",
                 ssid.len(),
                 psk.len(),
+                pmk_kind.label(),
             );
         }
 
@@ -1339,24 +1600,14 @@ impl Cyw43NetDevice {
         }
     }
 
-    fn set_wsec_pmk(&mut self, psk: &[u8]) -> Result<(), DriverError> {
-        if psk.is_empty() {
-            return Err(DriverError::Config("wifi-psk-empty"));
-        }
-        let payload_len = 68;
+    fn set_wsec_pmk(&mut self, ssid: &[u8], psk: &[u8]) -> Result<WsecPmkKind, DriverError> {
+        let pmk_kind;
         {
-            let payload = self.payload_mut(payload_len)?;
-            payload.fill(0);
-            put_u16_le(
-                payload,
-                0,
-                u16::try_from(psk.len()).map_err(|_| DriverError::Config("wifi-psk-too-long"))?,
-            );
-            put_u16_le(payload, 2, 1);
-            payload[4..4 + psk.len()].copy_from_slice(psk);
+            let payload = self.payload_mut(WSEC_PMK_PAYLOAD_LEN)?;
+            pmk_kind = write_wsec_pmk_payload(payload, ssid, psk)?;
         }
-        let _ = self.ioctl_encoded(IoctlType::Set, Ioctl::SetWsecPmk, 0, payload_len)?;
-        Ok(())
+        let _ = self.ioctl_encoded(IoctlType::Set, Ioctl::SetWsecPmk, 0, WSEC_PMK_PAYLOAD_LEN)?;
+        Ok(pmk_kind)
     }
 
     fn wait_for_join(&mut self) -> Result<(), DriverError> {
@@ -1513,13 +1764,14 @@ impl Cyw43NetDevice {
         if name_len + 1 + value_len > self.payload_capacity() {
             return Err(DriverError::FrameTooLarge);
         }
+        let payload_offset = self.control_tx_payload_offset();
         self.tx_frame.copy_within(
-            control_tx_payload_offset()..control_tx_payload_offset() + value_len,
-            control_tx_payload_offset() + name_len + 1,
+            payload_offset..payload_offset + value_len,
+            payload_offset + name_len + 1,
         );
         {
-            let payload = &mut self.tx_frame[control_tx_payload_offset()
-                ..control_tx_payload_offset() + name_len + 1 + value_len];
+            let payload =
+                &mut self.tx_frame[payload_offset..payload_offset + name_len + 1 + value_len];
             payload[..name_len].copy_from_slice(name.as_bytes());
             payload[name_len] = 0;
         }
@@ -1758,7 +2010,8 @@ impl Cyw43NetDevice {
     ) -> Result<usize, DriverError> {
         self.wait_for_credit(allow_speculative_retry_credit)?;
 
-        let total_len = SDPCM_CONTROL_TX_HEADER_LEN
+        let control_header_len = self.control_tx_header_len();
+        let total_len = control_header_len
             .checked_add(CDC_HEADER_LEN)
             .and_then(|value| value.checked_add(payload_len))
             .ok_or(DriverError::FrameTooLarge)?;
@@ -1777,33 +2030,26 @@ impl Cyw43NetDevice {
         let packet_len = u16::try_from(request_len).map_err(|_| DriverError::FrameTooLarge)?;
         write_sdpcm_control_tx_header(
             &mut self.tx_frame,
+            control_header_len,
             packet_len,
             total_len,
             tail_pad,
             sdpcm_seq,
         )?;
 
+        put_u32_le(&mut self.tx_frame[control_header_len..], 0, cmd as u32);
         put_u32_le(
-            &mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..],
-            0,
-            cmd as u32,
-        );
-        put_u32_le(
-            &mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..],
+            &mut self.tx_frame[control_header_len..],
             4,
             u32::try_from(payload_len).map_err(|_| DriverError::FrameTooLarge)?,
         );
         put_u16_le(
-            &mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..],
+            &mut self.tx_frame[control_header_len..],
             8,
             (kind as u16) | (u16::try_from(iface).unwrap_or(0) << 12),
         );
-        put_u16_le(
-            &mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..],
-            10,
-            self.ioctl_id,
-        );
-        put_u32_le(&mut self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..], 12, 0);
+        put_u16_le(&mut self.tx_frame[control_header_len..], 10, self.ioctl_id);
+        put_u32_le(&mut self.tx_frame[control_header_len..], 12, 0);
 
         self.tx_frame[total_len..request_len].fill(0);
         trace!(
@@ -1819,6 +2065,7 @@ impl Cyw43NetDevice {
             } else {
                 "strict"
             };
+            let sw_header_offset = control_tx_sw_header_offset_for_header(control_header_len);
             info!(
                 "[cyw43] control tx probe cmd=0x{:08x} iface={} payload_len={} packet_len={} len_inv=0x{:04x} unpadded_len={} request_len={} tail_pad={} seq={}/{} ioctl_id={} channel={} header_channel={} header_len={} cdc_flags=0x{:04x} write_chunk_limit={} reply_chunk_limit={} mode={transport_mode}",
                 cmd as u32,
@@ -1833,9 +2080,9 @@ impl Cyw43NetDevice {
                 self.sdpcm_seq_max,
                 self.ioctl_id,
                 CHANNEL_CONTROL,
-                self.tx_frame[SDPCM_HEADER_LEN + 1] & 0x0f,
-                self.tx_frame[SDPCM_HEADER_LEN + 3],
-                get_u16_le(&self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..], 8).unwrap_or(0),
+                self.tx_frame[sw_header_offset + 1] & 0x0f,
+                self.tx_frame[sw_header_offset + 3],
+                get_u16_le(&self.tx_frame[control_header_len..], 8).unwrap_or(0),
                 self.state.cyw43_control_plane_write_chunk_limit(),
                 self.state.cyw43_control_plane_reply_chunk_limit(),
             );
@@ -1994,9 +2241,19 @@ impl Cyw43NetDevice {
     fn log_pending_ioctl_frame(&self, stage: &'static str) {
         let packet_len = get_u16_le(&self.tx_frame, 0).unwrap_or(0);
         let len_inv = get_u16_le(&self.tx_frame, 2).unwrap_or(0);
-        let hwext = get_u32_le(&self.tx_frame, SDPCM_HWHDR_LEN).unwrap_or(0);
-        let tail_pad = get_u32_le(&self.tx_frame, SDPCM_HWHDR_LEN + 4).unwrap_or(0) >> 16;
-        let cdc = &self.tx_frame[SDPCM_CONTROL_TX_HEADER_LEN..];
+        let hwext = if self.control_tx_ext_header {
+            get_u32_le(&self.tx_frame, SDPCM_HWHDR_LEN).unwrap_or(0)
+        } else {
+            0
+        };
+        let tail_pad = if self.control_tx_ext_header {
+            get_u32_le(&self.tx_frame, SDPCM_HWHDR_LEN + 4).unwrap_or(0) >> 16
+        } else {
+            0
+        };
+        let control_header_len = self.control_tx_header_len();
+        let cdc = &self.tx_frame[control_header_len..];
+        let sw_header_offset = control_tx_sw_header_offset_for_header(control_header_len);
         let cdc_cmd = get_u32_le(cdc, 0).unwrap_or(0);
         let cdc_len = get_u32_le(cdc, 4).unwrap_or(0);
         let cdc_flags = get_u16_le(cdc, 8).unwrap_or(0);
@@ -2007,9 +2264,9 @@ impl Cyw43NetDevice {
             packet_len,
             len_inv,
             tail_pad,
-            self.tx_frame[SDPCM_HEADER_LEN],
-            self.tx_frame[SDPCM_HEADER_LEN + 1] & 0x0f,
-            self.tx_frame[SDPCM_HEADER_LEN + 3],
+            self.tx_frame[sw_header_offset],
+            self.tx_frame[sw_header_offset + 1] & 0x0f,
+            self.tx_frame[sw_header_offset + 3],
             cdc_cmd,
             cdc_len,
             cdc_flags,
@@ -2287,12 +2544,34 @@ impl Cyw43NetDevice {
         if payload_len > self.payload_capacity() {
             return Err(DriverError::FrameTooLarge);
         }
-        Ok(&mut self.tx_frame
-            [control_tx_payload_offset()..control_tx_payload_offset() + payload_len])
+        let payload_offset = self.control_tx_payload_offset();
+        Ok(&mut self.tx_frame[payload_offset..payload_offset + payload_len])
+    }
+
+    const fn control_tx_header_len(&self) -> usize {
+        if self.control_tx_ext_header {
+            SDPCM_CONTROL_TX_EXT_HEADER_LEN
+        } else {
+            SDPCM_CONTROL_TX_HEADER_LEN
+        }
+    }
+
+    const fn control_tx_payload_offset(&self) -> usize {
+        control_tx_payload_offset_for_header(self.control_tx_header_len())
+    }
+
+    fn enable_control_tx_extension_header(&mut self, stage: &'static str) {
+        if !self.control_tx_ext_header {
+            self.control_tx_ext_header = true;
+            info!(
+                "[cyw43] control-plane step={stage} action=enable-sdpcm-tx-hwext header_len={}",
+                self.control_tx_header_len()
+            );
+        }
     }
 
     const fn payload_capacity(&self) -> usize {
-        FRAME_BUF_LEN - control_tx_payload_offset()
+        FRAME_BUF_LEN - self.control_tx_payload_offset()
     }
 }
 
@@ -2501,8 +2780,16 @@ const fn align4(len: usize) -> usize {
     (len + 3) & !3
 }
 
-const fn control_tx_payload_offset() -> usize {
-    SDPCM_CONTROL_TX_HEADER_LEN + CDC_HEADER_LEN
+const fn control_tx_payload_offset_for_header(header_len: usize) -> usize {
+    header_len + CDC_HEADER_LEN
+}
+
+const fn control_tx_sw_header_offset_for_header(header_len: usize) -> usize {
+    if header_len == SDPCM_CONTROL_TX_EXT_HEADER_LEN {
+        SDPCM_HEADER_LEN
+    } else {
+        SDPCM_HWHDR_LEN
+    }
 }
 
 const fn sdpcm_control_tx_request_len(unpadded_len: usize) -> usize {
@@ -2520,36 +2807,52 @@ const fn sdpcm_control_tx_request_len(unpadded_len: usize) -> usize {
 
 fn write_sdpcm_control_tx_header(
     frame: &mut [u8],
+    header_len: usize,
     packet_len: u16,
     unpadded_len: usize,
     tail_pad: usize,
     sdpcm_seq: u8,
 ) -> Result<(), DriverError> {
-    if frame.len() < SDPCM_CONTROL_TX_HEADER_LEN {
+    if !matches!(
+        header_len,
+        SDPCM_CONTROL_TX_HEADER_LEN | SDPCM_CONTROL_TX_EXT_HEADER_LEN
+    ) {
+        return Err(DriverError::Protocol("sdpcm-control-tx-header-len"));
+    }
+    if frame.len() < header_len {
         return Err(DriverError::FrameTooLarge);
     }
     let tail_pad = u16::try_from(tail_pad).map_err(|_| DriverError::FrameTooLarge)?;
     let unpadded_len = u32::try_from(unpadded_len).map_err(|_| DriverError::FrameTooLarge)?;
+    let packet_len_for_header = if header_len == SDPCM_CONTROL_TX_EXT_HEADER_LEN {
+        packet_len
+    } else {
+        u16::try_from(unpadded_len).map_err(|_| DriverError::FrameTooLarge)?
+    };
     let hw_header_len = u32::try_from(SDPCM_HWHDR_LEN).map_err(|_| DriverError::FrameTooLarge)?;
-    let data_offset =
-        u32::try_from(SDPCM_CONTROL_TX_HEADER_LEN).map_err(|_| DriverError::FrameTooLarge)?;
+    let data_offset = u32::try_from(header_len).map_err(|_| DriverError::FrameTooLarge)?;
     let hwext_len = unpadded_len
         .checked_sub(hw_header_len)
         .ok_or(DriverError::FrameTooLarge)?;
-    put_u16_le(frame, 0, packet_len);
-    put_u16_le(frame, 2, !packet_len);
+    put_u16_le(frame, 0, packet_len_for_header);
+    put_u16_le(frame, 2, !packet_len_for_header);
+    let sw_header_offset = if header_len == SDPCM_CONTROL_TX_EXT_HEADER_LEN {
+        put_u32_le(
+            frame,
+            SDPCM_HWHDR_LEN,
+            hwext_len | SDPCM_CONTROL_TX_LAST_FRAME,
+        );
+        put_u32_le(frame, SDPCM_HWHDR_LEN + 4, u32::from(tail_pad) << 16);
+        SDPCM_HEADER_LEN
+    } else {
+        control_tx_sw_header_offset_for_header(header_len)
+    };
     put_u32_le(
         frame,
-        SDPCM_HWHDR_LEN,
-        hwext_len | SDPCM_CONTROL_TX_LAST_FRAME,
-    );
-    put_u32_le(frame, SDPCM_HWHDR_LEN + 4, u32::from(tail_pad) << 16);
-    put_u32_le(
-        frame,
-        SDPCM_HEADER_LEN,
+        sw_header_offset,
         u32::from(sdpcm_seq) | (u32::from(CHANNEL_CONTROL) << 8) | (data_offset << 24),
     );
-    put_u32_le(frame, SDPCM_HEADER_LEN + 4, 0);
+    put_u32_le(frame, sw_header_offset + 4, 0);
     Ok(())
 }
 
@@ -2741,7 +3044,8 @@ mod tests {
         control_plane_retry_after_reply_wait_resend_target_clock_hz,
         control_plane_retry_after_reply_wait_uses_promoted_link,
         control_plane_retry_after_startup_link_reply_failure_target_clock_hz,
-        control_response_matches, first_control_plane_retry_after_promoted_timeout,
+        control_response_matches, control_tx_payload_offset_for_header, derive_wpa2_psk_pmk,
+        first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
         ioctl_wait_loops, is_transport_retryable, linux_attach_control_plane_probe_order,
@@ -2752,13 +3056,15 @@ mod tests {
         set_event_mask_bit, speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
         startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
-        write_sdpcm_control_tx_header, DriverError, Ioctl, RxFrameResult, RxSdpcmHeader,
-        BCME_UNSUPPORTED, BDC_VERSION, BDC_VERSION_SHIFT, CDC_HEADER_LEN, CHANNEL_CONTROL,
-        CHANNEL_DATA, CHANNEL_EVENT, CLM_CHUNK_SIZE, EVENT_AUTH, EVENT_IF, EVENT_SET_SSID,
-        FRAME_BUF_LEN, IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
-        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_SUCCESS,
+        write_sdpcm_control_tx_header, write_wsec_pmk_payload, DriverError, Ioctl, RxFrameResult,
+        RxSdpcmHeader, WsecPmkKind, BCME_UNSUPPORTED, BDC_VERSION, BDC_VERSION_SHIFT,
+        CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA, CHANNEL_EVENT, CLM_CHUNK_SIZE, EVENT_AUTH,
+        EVENT_IF, EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_WAIT_LOOPS,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_SUCCESS, WSEC_PMK_LEN,
+        WSEC_PMK_PAYLOAD_LEN,
     };
     use crate::hal::HalError;
 
@@ -2869,9 +3175,39 @@ mod tests {
     }
 
     #[test]
-    fn control_tx_header_shape_matches_pi4_linux_clm_capture() {
-        let payload_len = clm_setvar_payload_len(CLM_CHUNK_SIZE);
+    fn first_linux_iovar_uses_plain_sdpcm_header_before_rxglom() {
+        let payload_len = "bus:txglomalign".len() + 1 + 4;
         let unpadded_len = SDPCM_CONTROL_TX_HEADER_LEN + CDC_HEADER_LEN + payload_len;
+        let request_len = sdpcm_control_tx_request_len(unpadded_len);
+        let tail_pad = request_len - unpadded_len;
+        assert_eq!(unpadded_len, 48);
+        assert_eq!(request_len, 48);
+        assert_eq!(tail_pad, 0);
+
+        let mut frame = [0u8; FRAME_BUF_LEN];
+        write_sdpcm_control_tx_header(
+            &mut frame,
+            SDPCM_CONTROL_TX_HEADER_LEN,
+            u16::try_from(request_len).expect("request length fits"),
+            unpadded_len,
+            tail_pad,
+            0,
+        )
+        .expect("header writes");
+        assert_eq!(
+            &frame[..SDPCM_CONTROL_TX_HEADER_LEN],
+            &[0x30, 0x00, 0xcf, 0xff, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00],
+        );
+        assert_eq!(
+            control_tx_payload_offset_for_header(SDPCM_CONTROL_TX_HEADER_LEN),
+            SDPCM_HEADER_LEN + CDC_HEADER_LEN
+        );
+    }
+
+    #[test]
+    fn extended_control_tx_header_shape_matches_pi4_linux_clm_capture() {
+        let payload_len = clm_setvar_payload_len(CLM_CHUNK_SIZE);
+        let unpadded_len = SDPCM_CONTROL_TX_EXT_HEADER_LEN + CDC_HEADER_LEN + payload_len;
         let request_len = sdpcm_control_tx_request_len(unpadded_len);
         let tail_pad = request_len - unpadded_len;
         assert_eq!(unpadded_len, 1456);
@@ -2881,6 +3217,7 @@ mod tests {
         let mut frame = [0u8; FRAME_BUF_LEN];
         write_sdpcm_control_tx_header(
             &mut frame,
+            SDPCM_CONTROL_TX_EXT_HEADER_LEN,
             u16::try_from(request_len).expect("request length fits"),
             unpadded_len,
             tail_pad,
@@ -2888,11 +3225,15 @@ mod tests {
         )
         .expect("header writes");
         assert_eq!(
-            &frame[..SDPCM_CONTROL_TX_HEADER_LEN],
+            &frame[..SDPCM_CONTROL_TX_EXT_HEADER_LEN],
             &[
                 0x00, 0x06, 0xff, 0xf9, 0xac, 0x05, 0x00, 0x01, 0x00, 0x00, 0x50, 0x00, 0x04, 0x00,
                 0x00, 0x14, 0x00, 0x00, 0x00, 0x00,
             ],
+        );
+        assert_eq!(
+            control_tx_payload_offset_for_header(SDPCM_CONTROL_TX_EXT_HEADER_LEN),
+            SDPCM_CONTROL_TX_EXT_HEADER_LEN + CDC_HEADER_LEN
         );
     }
 
@@ -3080,6 +3421,74 @@ mod tests {
             "bus:txglom",
             &DriverError::Hal(HalError::Unsupported("sdio-cmd53-r5-error"))
         ));
+    }
+
+    #[test]
+    fn linux_join_pref_payload_matches_capture() {
+        assert_eq!(
+            super::LINUX_JOIN_PREF_DEFAULT,
+            [0x04, 0x02, 0x08, 0x01, 0x01, 0x02, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn wpa2_psk_pbkdf2_matches_ieee_vector() {
+        let mut pmk = [0u8; WSEC_PMK_LEN];
+        derive_wpa2_psk_pmk(b"password", b"IEEE", &mut pmk);
+        assert_eq!(
+            pmk,
+            [
+                0xf4, 0x2c, 0x6f, 0xc5, 0x2d, 0xf0, 0xeb, 0xef, 0x9e, 0xbb, 0x4b, 0x90, 0xb3, 0x8a,
+                0x5f, 0x90, 0x2e, 0x83, 0xfe, 0x1b, 0x13, 0x5a, 0x70, 0xe2, 0x3a, 0xed, 0x76, 0x2e,
+                0x97, 0x10, 0xa1, 0x2e,
+            ]
+        );
+    }
+
+    #[test]
+    fn wsec_pmk_payload_derives_passphrase_into_linux_pmk_shape() {
+        let mut payload = [0xa5u8; WSEC_PMK_PAYLOAD_LEN];
+        let kind = write_wsec_pmk_payload(&mut payload, b"IEEE", b"password")
+            .expect("passphrase pmk payload should encode");
+
+        assert_eq!(kind, WsecPmkKind::Pbkdf2Passphrase);
+        assert_eq!(&payload[0..2], &(WSEC_PMK_LEN as u16).to_le_bytes());
+        assert_eq!(&payload[2..4], &0u16.to_le_bytes());
+        assert_eq!(
+            &payload[4..4 + WSEC_PMK_LEN],
+            &[
+                0xf4, 0x2c, 0x6f, 0xc5, 0x2d, 0xf0, 0xeb, 0xef, 0x9e, 0xbb, 0x4b, 0x90, 0xb3, 0x8a,
+                0x5f, 0x90, 0x2e, 0x83, 0xfe, 0x1b, 0x13, 0x5a, 0x70, 0xe2, 0x3a, 0xed, 0x76, 0x2e,
+                0x97, 0x10, 0xa1, 0x2e,
+            ]
+        );
+        assert!(payload[4 + WSEC_PMK_LEN..]
+            .iter()
+            .copied()
+            .all(|byte| byte == 0));
+    }
+
+    #[test]
+    fn wsec_pmk_payload_decodes_hex_psk_without_passphrase_flag() {
+        let mut payload = [0u8; WSEC_PMK_PAYLOAD_LEN];
+        let kind = write_wsec_pmk_payload(
+            &mut payload,
+            b"cohesix",
+            b"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        )
+        .expect("hex pmk payload should encode");
+
+        assert_eq!(kind, WsecPmkKind::HexPmk);
+        assert_eq!(&payload[0..2], &(WSEC_PMK_LEN as u16).to_le_bytes());
+        assert_eq!(&payload[2..4], &0u16.to_le_bytes());
+        assert_eq!(
+            &payload[4..4 + WSEC_PMK_LEN],
+            &[
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+                0x1c, 0x1d, 0x1e, 0x1f,
+            ]
+        );
     }
 
     #[test]

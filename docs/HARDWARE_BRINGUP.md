@@ -83,6 +83,7 @@
 - `setenv coh_static_gateway <ipv4>` (mirrored into DTB `/chosen/cohesix,static-gateway`; optional and only applied when the effective mode is `static`)
 - `setenv coh_wifi_ssid <ssid>` (mirrored into DTB `/chosen/cohesix,wifi-ssid`; used by the CYW43455 path when `coh_net_interface=wifi` or when `auto` prefers Wi-Fi; root-task accepts 1-32 printable ASCII bytes)
 - `setenv coh_wifi_psk <psk>` (mirrored into DTB `/chosen/cohesix,wifi-psk`; used by the CYW43455 path for open/WPA2-PSK join; root-task accepts empty for open networks, 8-63 printable ASCII bytes for WPA2 passphrases, or exactly 64 ASCII hex digits)
+- WPA2 passphrases are converted in root-task to the Linux-shaped 32-byte PBKDF2-HMAC-SHA1 PMK before `WLC_SET_WSEC_PMK`; 64-character hex values are decoded directly as that PMK.
 - The staged boot script now hands the saved `coh_wifi_*` variables directly to `fdt set` without mutating or persisting escaped shadow copies, so repeated boots and policy-file writes do not grow backslashes or corrupt WPA2 credentials. If an older card reports `Wi-Fi credential handoff overflow`, clear the saved `coh_wifi_ssid` / `coh_wifi_psk` values once and re-enter them through the wizard.
 - The staged `bcm2711-rpi-4-b.dtb` is padded to 128 KiB before flashing, so U-Boot can add `/chosen/cohesix,*` properties in place without `fdt resize`.
 - `setenv coh_show_logo <0|1>` (controls whether the staged `boot.bmp` splash is displayed on HDMI before the menu)
@@ -138,8 +139,8 @@
 2. At the prompt, run `wifi dump-state`.
 3. Run `usb status`.
 4. Run `usb diag` to capture status and xHCI preflight without entering the live MMIO probe path or enabling background keyboard polling.
-5. Run `wifi diag` to capture pre-HT state, a bounded HT probe, and post-probe state without retrying firmware upload.
-6. If `wifi diag` shows HT ready but Wi-Fi is still down, run `wifi load-fw` once and then `wifi dump-state`; use `wifi retry` only when the dump shows a stale/failed transport state that needs the full retry ladder.
+5. Run `wifi diag` to capture the preserved Wi-Fi state without retrying firmware upload. If boot already recorded a terminal Wi-Fi failure, `wifi diag` skips the long live HT probe and replays cached before/after evidence.
+6. If `wifi diag` shows no terminal cached failure and HT ready but Wi-Fi is still down, run `wifi load-fw` once and then `wifi dump-state`; use `wifi retry` only when the dump shows a stale/failed transport state that needs the full retry ladder. Use `wifi probe-ht` only when you explicitly need the stateful HT probe.
 7. Normalize the raw serial log before comparing against older boots:
 - `mkdir -p out/pi4-traces`
 - `python3 scripts/pi4_trace_normalize.py ~/pi4-serial.log --summary > out/pi4-traces/cohesix-summary.json`

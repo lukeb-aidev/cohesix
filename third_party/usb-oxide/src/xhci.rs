@@ -2,14 +2,15 @@
 // Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
 // Copyright 2026 Lukas Bower
 use crate::{
-    Dma, Result, UsbError, reg,
-    ring::{EventRing, PhysMem, Ring, Trb, completion, trb_type},
+    reg,
+    ring::{completion, trb_type, EventRing, PhysMem, Ring, Trb},
+    Dma, Result, UsbError,
 };
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
-    sync::atomic::{AtomicBool, Ordering, compiler_fence},
+    sync::atomic::{compiler_fence, AtomicBool, Ordering},
 };
 use spin::Mutex;
 
@@ -1866,11 +1867,11 @@ impl<H: Dma> ScratchpadSet<H> {
         for index in 0..count {
             // Scratchpad buffers are page-sized and page-aligned.
             let page = PhysMem::alloc(host, host.page_size(), host.page_size())?;
-            let phys = page.phys(host);
             // SAFETY: `array_ptr` points at the owned scratchpad pointer array
-            // allocation and `index < count` by loop construction.
+            // allocation and `index < count` by loop construction. Entries are
+            // filled with HAL-returned bus addresses when the pages are shared.
             unsafe {
-                array_ptr.add(index).write_volatile(phys);
+                array_ptr.add(index).write_volatile(0);
             }
             buffers.push(page);
         }
@@ -1878,12 +1879,18 @@ impl<H: Dma> ScratchpadSet<H> {
         Ok(Self { array, buffers })
     }
 
-    fn share_for_device(&self, host: &H) -> Result<()> {
-        for page in &self.buffers {
-            let _ = page.share_for_device(host, "xhci-scratchpad-page")?;
+    fn share_for_device(&self, host: &H) -> Result<u64> {
+        let array_ptr = self.array.as_ptr::<u64>();
+        for (index, page) in self.buffers.iter().enumerate() {
+            let bus_addr = page.share_for_device(host, "xhci-scratchpad-page")?;
+            // SAFETY: `array_ptr` points at the owned scratchpad pointer array
+            // and `index` is bounded by `self.buffers.len() == array entries`.
+            unsafe {
+                array_ptr.add(index).write_volatile(bus_addr);
+            }
         }
-        let _ = self.array.share_for_device(host, "xhci-scratchpad-array")?;
-        Ok(())
+        compiler_fence(Ordering::Release);
+        self.array.share_for_device(host, "xhci-scratchpad-array")
     }
 }
 
@@ -2400,6 +2407,7 @@ impl<H: Dma> XhciCtrl<H> {
         }
     }
 
+    #[cfg(test)]
     #[inline(always)]
     fn write_polling_interrupt_quiesce_at(
         mmio: usize,
@@ -2631,12 +2639,13 @@ impl<H: Dma> XhciCtrl<H> {
         emit_xhci_diag(0x010a, max_scratchpad as u64, host.page_size() as u64, 0);
         let scratchpad = if max_scratchpad > 0 {
             let set = ScratchpadSet::build(&*host, max_scratchpad as usize)?;
+            let scratchpad_array_phys = set.array.try_phys(&*host)?;
             // SAFETY: DCBAA entry 0 is the scratchpad array pointer; `dcbaa`
             // is the owned controller DCBAA allocation.
             unsafe {
-                dcbaa.as_ptr::<u64>().write_volatile(set.array.phys(&*host));
+                dcbaa.as_ptr::<u64>().write_volatile(scratchpad_array_phys);
             }
-            emit_xhci_diag(0x010b, set.array.phys(&*host), max_scratchpad as u64, 0);
+            emit_xhci_diag(0x010b, scratchpad_array_phys, max_scratchpad as u64, 0);
             Some(set)
         } else {
             emit_xhci_diag(0x010c, 0, 0, 0);
@@ -3234,16 +3243,13 @@ impl<H: Dma> XhciCtrl<H> {
                 }
             }
         }
-        let deferred_scratchpad_array_phys = if defer_scratchpad_array_publish {
-            self.scratchpad
-                .as_ref()
-                .map(|scratchpad| scratchpad.array.phys(&*self.host))
+        let scratchpad_array_phys = if let Some(scratchpad) = &self.scratchpad {
+            Some(scratchpad.share_for_device(&*self.host)?)
         } else {
             None
         };
-        if let Some(scratchpad) = &self.scratchpad {
-            scratchpad.share_for_device(&*self.host)?;
-        }
+        let deferred_scratchpad_array_phys =
+            scratchpad_array_phys.filter(|_| defer_scratchpad_array_publish);
         if deferred_scratchpad_array_phys.is_some() {
             // SAFETY: DCBAA entry 0 is the controller-owned scratchpad pointer;
             // it is intentionally kept clear until DCBAAP/CRCR/ERST are live.
@@ -3486,13 +3492,7 @@ impl<H: Dma> XhciCtrl<H> {
                 emit_xhci_diag(0x0293, reg::CRCR as u64, crcr, 0);
                 Self::write_reg_u64_atomic_diag_at(self.mmio, crcr_offset, crcr, 0x0294, 0x0295);
             } else {
-                Self::write_crcr_reg_u64_diag_at(
-                    self.mmio,
-                    crcr_offset,
-                    crcr,
-                    0x0254,
-                    0x0255,
-                );
+                Self::write_crcr_reg_u64_diag_at(self.mmio, crcr_offset, crcr, 0x0254, 0x0255);
             }
             if preserve_firmware_state {
                 emit_xhci_diag(0x0251, crcr, 1, 0);
@@ -4618,7 +4618,7 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     /// Update event ring dequeue pointer
-    fn update_erdp(&self) {
+    fn update_erdp(&self) -> Result<()> {
         if runtime_pollsafe_no_fresh_ownership_handoff(
             self.firmware_handoff,
             self.runtime_seed_snapshot,
@@ -4629,17 +4629,22 @@ impl<H: Dma> XhciCtrl<H> {
                 runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
                 1,
             );
-            return;
+            return Ok(());
         }
-        let event_ring = self.event_ring.lock();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
-        Self::write_polling_interrupt_quiesce_at(
-            self.mmio,
-            self.op_base - self.mmio,
-            int_base,
-            event_ring.dequeue_ptr(&*self.host),
-            None,
-        );
+        let erdp = {
+            let event_ring = self.event_ring.lock();
+            compose_polling_erdp_ack(event_ring.dequeue_ptr(&*self.host))
+        };
+        for (reg_offset, reg_value) in erdp_reg_write_ops(int_base + reg::ERDP, erdp) {
+            Self::write_reg_at::<u32>(self.mmio, reg_offset, reg_value);
+            self.flush_required_posted_write(
+                reg_offset,
+                reg_value,
+                LINUX_COMMAND_PROBE_ERDP_ACK_FLUSH_STAGE,
+            )?;
+        }
+        Ok(())
     }
 
     /// Acknowledge inherited Event Handler Busy state before poll-only drains.
@@ -4789,7 +4794,7 @@ impl<H: Dma> XhciCtrl<H> {
             };
 
             if let Some(trb) = trb {
-                self.update_erdp();
+                self.update_erdp()?;
 
                 if trb.trb_type() == trb_type::COMMAND_COMPLETION as u8 {
                     let code = trb.completion_code();
@@ -5050,7 +5055,7 @@ impl<H: Dma> XhciCtrl<H> {
             };
 
             if let Some(trb) = trb {
-                self.update_erdp();
+                self.update_erdp()?;
 
                 if trb.trb_type() == trb_type::COMMAND_COMPLETION as u8 {
                     let code = trb.completion_code();
@@ -5177,7 +5182,7 @@ impl<H: Dma> XhciCtrl<H> {
                 }
                 continue;
             };
-            self.update_erdp();
+            self.update_erdp()?;
 
             if trb.trb_type() == trb_type::COMMAND_COMPLETION as u8 {
                 let code = trb.completion_code();
@@ -5266,7 +5271,9 @@ impl<H: Dma> XhciCtrl<H> {
         let trb = event_ring.try_dequeue();
         drop(event_ring);
         if trb.is_some() {
-            self.update_erdp();
+            if self.update_erdp().is_err() {
+                return None;
+            }
         }
         trb
     }
@@ -5961,7 +5968,12 @@ impl<H: Dma> XhciCtrl<H> {
             return portsc;
         }
         let powered = port_state_neutral(portsc) | reg::PORTSC_PP;
-        emit_xhci_diag(0x03fc, port as u64, encode_port_diag(portsc), powered as u64);
+        emit_xhci_diag(
+            0x03fc,
+            port as u64,
+            encode_port_diag(portsc),
+            powered as u64,
+        );
         self.write_port_status(port, powered);
 
         let mut waited = 0usize;
@@ -6296,26 +6308,14 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
-        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
-        COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
-        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, ConstructorPollingScrubMode,
-        LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD,
-        LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE, PORT_CHANGE_BITS,
-        PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, READY_WAIT_PROGRESS_SPINS, RESET_WAIT_SPINS,
-        SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
-        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
-        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
         blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
-        claim_legacy_ownership_before_reset_with_snapshot,
-        command_diag_live_reads_allowed,
+        claim_legacy_ownership_before_reset_with_snapshot, command_diag_live_reads_allowed,
         command_poll_only_should_sync_event_ring, command_timeout_live_snapshot_enabled,
         command_timeout_live_snapshot_spins, command_wait_should_sync_event_ring,
         compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base,
         compose_erst_size, compose_initial_erdp, compose_polling_erdp_ack, compose_run_usbcmd,
-        crcr_reg_write_ops,
         constructor_polling_scrub_mode, constructor_polling_scrub_mode_from_params,
-        dcbaap_reg_write_ops, defer_crcr_publish_until_after_run_with_snapshot,
+        crcr_reg_write_ops, dcbaap_reg_write_ops, defer_crcr_publish_until_after_run_with_snapshot,
         defer_crcr_publish_with_snapshot, defer_dcbaap_publish_until_after_run_with_snapshot,
         defer_dcbaap_publish_with_snapshot, defer_dnctrl_write_until_after_run_with_snapshot,
         defer_erdp_publish_with_snapshot, defer_erst_publish_with_snapshot,
@@ -6324,18 +6324,16 @@ mod tests {
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, disable_interrupter_iman_value,
         disable_legacy_smi_control_bits, disable_slot_command_trb_for_probe,
-        enable_slot_command_trb_for_probe, halt_revalidation_needed,
-        flush_posted_write_with_policy,
-        initial_live_operational_read_hazard, linux_command_probe_usbcmd_seed, masked_usbcmd,
-        no_op_command_trb_for_probe, parse_controller_params,
-        platform_reset_dcbaap_publish_blocked_with_snapshot, polling_command_proof_dnctrl_value,
-        polling_event_generation_iman_value, polling_event_generation_run_usbcmd,
-        polling_iman_ack_value, polling_iman_value, port_ready_for_enumeration,
-        port_state_neutral,
+        enable_slot_command_trb_for_probe, erdp_reg_write_ops, flush_posted_write_with_policy,
+        halt_revalidation_needed, initial_live_operational_read_hazard,
+        linux_command_probe_usbcmd_seed, masked_usbcmd, no_op_command_trb_for_probe,
+        parse_controller_params, platform_reset_dcbaap_publish_blocked_with_snapshot,
+        polling_command_proof_dnctrl_value, polling_event_generation_iman_value,
+        polling_event_generation_run_usbcmd, polling_iman_ack_value, polling_iman_value,
+        port_ready_for_enumeration, port_state_neutral,
         post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear, pre_command_event_handler_erdp,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
-        erdp_reg_write_ops,
         pre_halt_source_quiesce_before_live_stop_revalidation, preserve_firmware_handoff_config,
         preserve_state_crcr_publish_seed, preserve_state_crcr_write_is_redundant,
         preserve_state_dcbaap_publish_seed, preserve_state_dcbaap_write_is_redundant,
@@ -6352,7 +6350,6 @@ mod tests {
         run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed, run_wait_observable_usbsts,
         run_wait_progress_due, runtime_bootloader_owned_pollsafe_handoff,
         runtime_deferred_ring_handoff, runtime_handoff_needs_pre_run_settle,
-        set_xhci_posted_write_flush_hook,
         runtime_handoff_needs_relaxed_run_write,
         runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
         runtime_handoff_needs_release_only_run_write,
@@ -6366,7 +6363,8 @@ mod tests {
         runtime_pollsafe_no_fresh_ownership_handoff, runtime_preserve_stop_state_handoff,
         runtime_seed_snapshot_flag_bits, runtime_seeded_full_reset_start_handoff,
         runtime_stop_state_needs_post_run_settle, runtime_unseeded_full_reset_handoff,
-        skip_config_write_during_init, skip_config_write_during_init_with_snapshot,
+        set_xhci_posted_write_flush_hook, skip_config_write_during_init,
+        skip_config_write_during_init_with_snapshot,
         skip_constructor_polling_scrub_writes_with_snapshot, skip_dnctrl_write_with_snapshot,
         skip_doorbell_readback_after_ring, skip_fresh_event_ring_publish_with_snapshot,
         skip_fresh_runtime_ownership_publish_with_snapshot, skip_init_pre_reset_scrub_writes,
@@ -6385,17 +6383,31 @@ mod tests {
         use_live_config_seed_reads, use_live_config_seed_reads_for_init,
         use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
         use_live_post_reset_seed_reads_for_init, use_live_post_reset_seed_reads_with_snapshot,
-        xhci_port_in_range, xhci_slot_in_range,
+        xhci_port_in_range, xhci_slot_in_range, ConstructorPollingScrubMode, ScratchpadSet,
+        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
+        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
+        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
+        COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
+        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, LINUX_COMMAND_PROBE_DNCTRL,
+        LINUX_COMMAND_PROBE_IMOD, LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
+        PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, PORT_CHANGE_BITS, READY_WAIT_PROGRESS_SPINS,
+        RESET_WAIT_SPINS, SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
+        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
     };
     use super::{
-        LINUX_COMMAND_PROBE_ERDP_ACK_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE,
-        LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMOD_FLUSH_STAGE,
-        LINUX_COMMAND_PROBE_DNCTRL_FLUSH_STAGE,
-        LINUX_COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE,
+        LINUX_COMMAND_PROBE_DNCTRL_FLUSH_STAGE, LINUX_COMMAND_PROBE_ERDP_ACK_FLUSH_STAGE,
+        LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE,
+        LINUX_COMMAND_PROBE_IMOD_FLUSH_STAGE, LINUX_COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE,
         LINUX_COMMAND_RECOVERY_IMAN_ENABLE_FLUSH_STAGE, LINUX_COMMAND_RECOVERY_IMOD_FLUSH_STAGE,
     };
-    use crate::{Dma, reg, ring::trb_type};
+    use crate::{reg, ring::trb_type, Dma};
     use alloc::vec;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        alloc::{alloc_zeroed, dealloc, Layout},
+        sync::Mutex as StdMutex,
+        vec::Vec as StdVec,
+    };
 
     struct MockDma;
 
@@ -6414,6 +6426,116 @@ mod tests {
 
         fn virt_to_phys(&self, va: usize) -> usize {
             va
+        }
+    }
+
+    struct AllocatingMockDma {
+        allocations: StdMutex<StdVec<(usize, usize, usize)>>,
+        share_calls: AtomicUsize,
+        bus_offset: usize,
+    }
+
+    impl AllocatingMockDma {
+        fn new(bus_offset: usize) -> Self {
+            Self {
+                allocations: StdMutex::new(StdVec::new()),
+                share_calls: AtomicUsize::new(0),
+                bus_offset,
+            }
+        }
+    }
+
+    impl Dma for AllocatingMockDma {
+        unsafe fn alloc(&self, size: usize, align: usize) -> Option<usize> {
+            let layout = Layout::from_size_align(size, align).ok()?;
+            // SAFETY: `layout` was constructed by `Layout::from_size_align`.
+            let ptr = unsafe { alloc_zeroed(layout) };
+            if ptr.is_null() {
+                return None;
+            }
+            self.allocations
+                .lock()
+                .expect("allocations mutex")
+                .push((ptr as usize, size, align));
+            Some(ptr as usize)
+        }
+
+        unsafe fn free(&self, addr: usize, size: usize, align: usize) {
+            let mut allocations = self.allocations.lock().expect("allocations mutex");
+            if let Some(index) =
+                allocations
+                    .iter()
+                    .position(|&(base, stored_size, stored_align)| {
+                        base == addr && stored_size == size && stored_align == align
+                    })
+            {
+                let (base, stored_size, stored_align) = allocations.swap_remove(index);
+                let layout =
+                    Layout::from_size_align(stored_size, stored_align).expect("valid layout");
+                // SAFETY: The allocation record proves `base`, `stored_size`,
+                // and `stored_align` match the original allocation layout.
+                unsafe {
+                    dealloc(base as *mut u8, layout);
+                }
+            }
+        }
+
+        unsafe fn map_mmio(&self, _phys: usize, _size: usize) -> Option<usize> {
+            None
+        }
+
+        unsafe fn unmap_mmio(&self, _virt: usize, _size: usize) {}
+
+        fn virt_to_phys(&self, va: usize) -> usize {
+            va + self.bus_offset
+        }
+
+        fn share_for_device(
+            &self,
+            _vaddr: usize,
+            _len: usize,
+            _label: &'static str,
+        ) -> core::result::Result<(), crate::DmaShareError> {
+            self.share_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn scratchpad_share_publishes_hal_bus_addresses() {
+        let host = AllocatingMockDma::new(0x1_0000_0000);
+        let scratchpads = ScratchpadSet::build(&host, 2).expect("scratchpad allocation succeeds");
+        let array_ptr = scratchpads.array.virt() as *const u64;
+        // SAFETY: The test owns the scratchpad array allocation and reads the
+        // two entries allocated above.
+        unsafe {
+            assert_eq!(array_ptr.add(0).read_volatile(), 0);
+            assert_eq!(array_ptr.add(1).read_volatile(), 0);
+        }
+
+        let page0_bus = scratchpads.buffers[0]
+            .try_phys(&host)
+            .expect("page 0 has a bus address");
+        let page1_bus = scratchpads.buffers[1]
+            .try_phys(&host)
+            .expect("page 1 has a bus address");
+        let array_bus = scratchpads
+            .share_for_device(&host)
+            .expect("scratchpad publication succeeds");
+
+        assert_eq!(
+            array_bus,
+            scratchpads
+                .array
+                .try_phys(&host)
+                .expect("array has a bus address")
+        );
+        assert_eq!(host.share_calls.load(Ordering::Relaxed), 3);
+        // SAFETY: The test owns the scratchpad array allocation and reads the
+        // two entries published by `share_for_device`.
+        unsafe {
+            assert_eq!(array_ptr.add(0).read_volatile(), page0_bus);
+            assert_eq!(array_ptr.add(1).read_volatile(), page1_bus);
         }
     }
 
@@ -7537,10 +7659,8 @@ mod tests {
 
     #[test]
     fn port_power_enable_value_preserves_neutral_state_only() {
-        let stale = reg::PORTSC_PED
-            | reg::PORTSC_CSC
-            | reg::PORTSC_PEC
-            | ((reg::SPEED_HIGH as u32) << 10);
+        let stale =
+            reg::PORTSC_PED | reg::PORTSC_CSC | reg::PORTSC_PEC | ((reg::SPEED_HIGH as u32) << 10);
         let powered = port_state_neutral(stale) | reg::PORTSC_PP;
 
         assert_eq!(powered & reg::PORTSC_PED, 0);
@@ -9072,8 +9192,8 @@ mod tests {
     }
 
     #[test]
-    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped()
-     {
+    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped(
+    ) {
         assert_eq!(
             post_start_polling_irq_quiesce_pending_bits(reg::USBCMD_RUN, reg::USBSTS_PCD, 0, true),
             0

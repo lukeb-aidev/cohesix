@@ -331,8 +331,8 @@ def test_gate_summary_marks_jumbled_usb_serial_as_usb_unclean() -> None:
 def test_usb_proof_summary_advances_command_gate() -> None:
     events = normalizer.parse_events(
         [
-            "[local-seat] usb proof_summary gate=3 blocker=cmd-poll-pending "
-            "controller=ready command=no-op-unproven event=missing irq27=timer-only",
+            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout "
+            "controller=ready command=enable-slot-timeout event=missing irq27=timer-only",
         ]
     )
 
@@ -791,7 +791,7 @@ def test_gate_summary_treats_usb_prompt_safe_return_as_event_timeout() -> None:
             "tag=cmd-prompt-safe-return-to-shell "
             "a=0x0000000404024000 b=0 c=256",
             "[local-seat] xhci root-port command-probe "
-            "result=no-op-unproven bus=pcie-window "
+            "result=enable-slot-timeout bus=pcie-window "
             "action=return-to-shell detail=poll-timeout",
         ]
     )
@@ -975,18 +975,19 @@ def test_gate_summary_tracks_usb_pcie_timeout_then_raw_phys_poll_pending() -> No
     events = normalizer.parse_events(
         [
             "[local-seat] xhci root-port command-probe begin "
-            "event_candidate_mask=0x0000 verb=no-op bus=pcie-window",
+            "event_candidate_mask=0x0000 verb=enable-slot-before-port-sample "
+            "bus=pcie-window",
             "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
             "param=0x0000000000000000",
             "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
             "waited=0x0000000000000040 expected_ptr=0x0000000404024000 "
             "event_syncs=0x0000000000000001",
-            "[local-seat] xhci root-port command-probe result=no-op-timeout "
+            "[local-seat] xhci root-port command-probe result=enable-slot-timeout "
             "bus=pcie-window action=retry-raw-phys detail=Timeout",
             "[local-seat] xhci probe fallback mmio=0x0000000600000000 "
-            "from_bus=pcie-window to_bus=phys reason=no-op-timeout",
+            "from_bus=pcie-window to_bus=phys reason=enable-slot-timeout",
             "[local-seat] xhci root-port command-probe begin "
-            "event_candidate_mask=0x0000 verb=no-op bus=phys",
+            "event_candidate_mask=0x0000 verb=enable-slot-before-port-sample bus=phys",
             "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
             "param=0x0000000000000000",
             "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
@@ -1003,11 +1004,12 @@ def test_gate_summary_tracks_usb_pcie_timeout_then_raw_phys_poll_pending() -> No
     assert gates.usb_blocker == "cmd-poll-pending"
 
 
-def test_gate_summary_tracks_usb_pcie_window_no_op_timeout() -> None:
+def test_gate_summary_tracks_usb_pcie_window_enable_slot_timeout() -> None:
     events = normalizer.parse_events(
         [
             "[local-seat] xhci root-port command-probe begin "
-            "event_candidate_mask=0x0000 verb=no-op bus=pcie-window",
+            "event_candidate_mask=0x0000 verb=enable-slot-before-port-sample "
+            "bus=pcie-window",
             "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
             "param=0x0000000000000000",
             "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
@@ -1019,7 +1021,7 @@ def test_gate_summary_tracks_usb_pcie_window_no_op_timeout() -> None:
     gates = normalizer.summarize_gates(events)
 
     assert gates.usb_gate == 3
-    assert gates.usb_blocker == "pcie-window-no-op-timeout"
+    assert gates.usb_blocker == "pcie-window-enable-slot-timeout"
 
 
 def test_gate_summary_tracks_usb_raw_phys_poll_timeout_after_fallback() -> None:
@@ -1195,9 +1197,9 @@ def test_gate_summary_rejects_deferred_capture_after_command_proof() -> None:
             "[local-seat] xhci.diag stage=0x0110 tag=controller-init-complete",
             "[local-seat] xhci root-port sample skipped "
             "reason=platform-reset-portsc-toxic",
-            "[local-seat] xhci root-port command-probe result=no-op-ok",
+            "[local-seat] xhci root-port command-probe result=enable-slot-ok",
             "[local-seat] xhci root-port deferred-capture "
-            "mask=0x0001 source=pi4-linux-capture command_probe=no-op-ok",
+            "mask=0x0001 source=pi4-linux-capture command_probe=enable-slot-ok",
             "[local-seat] usb root-enum deferred-port "
             "port=1 speed=3 source=pi4-linux-capture reset=skip",
         ]
@@ -1473,7 +1475,11 @@ def test_gate_summary_preserves_no_op_event_timeout_without_summary() -> None:
 
 
 def test_gate_summary_preserves_enable_slot_event_timeout_without_summary() -> None:
-    for result in ("enable-slot-unproven", "enable-slot-linux-event-unproven"):
+    for result in (
+        "enable-slot-timeout",
+        "enable-slot-unproven",
+        "enable-slot-linux-event-unproven",
+    ):
         events = normalizer.parse_events(
             [
                 "[local-seat] xhci root-port command-probe "
@@ -2228,6 +2234,7 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
         "cmd-raw-phys-doorbell-proof-timer-preempted": (
             "raw-phys-cmd-doorbell-proof-timer-preempted"
         ),
+        "pcie-window-enable-slot-timeout": "pcie-window-enable-slot-timeout",
         "pcie-window-no-op-timeout": "pcie-window-no-op-timeout",
         "pcie-irq-quiesce-failed": "pcie-irq-quiesce-failed",
         "pcie-irq-quiesce-missing": "pcie-irq-quiesce-missing",
@@ -2363,7 +2370,7 @@ def test_gate_summary_tracks_usb_command_ring_ready_success() -> None:
         [
             "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
             "usb: contract current=controller-ready expected=command-ring-recovery",
-            "[local-seat] xhci root-port command-probe result=no-op-ok",
+            "[local-seat] xhci root-port command-probe result=enable-slot-ok",
         ]
     )
 
@@ -2377,7 +2384,7 @@ def test_gate_summary_keeps_usb_post_command_outcome_blocker() -> None:
     events = normalizer.parse_events(
         [
             "usb: golden_path outcome=root-port-sample-deferred "
-            "progress=controller-ready command_probe=no-op-ok",
+            "progress=controller-ready command_probe=enable-slot-ok",
         ]
     )
 
@@ -2618,6 +2625,25 @@ def test_gate_summary_preserves_partial_hint_visibility_over_ioctl_timeout() -> 
     assert gates.wifi_exact == "cyw43-control-plane-partial-hint-visibility"
 
 
+def test_gate_summary_tracks_wsec_pmk_bad_argument_over_stale_hint() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane step=join "
+            "action=fail err=cyw43 ioctl 0x0000010c failed status=0xfffffffe",
+            "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
+            "exact=cyw43-control-plane-partial-hint-visibility",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "wsec-pmk-bad-argument"
+    assert gates.wifi_exact == "wsec-pmk-bad-argument"
+
+
 def test_gate_summary_tracks_bdc_event_over_stale_partial_hint_visibility() -> None:
     events = normalizer.parse_events(
         [
@@ -2749,6 +2775,25 @@ def test_gate_summary_tracks_root_console_waiting_for_wifi() -> None:
 
     assert gates.wifi_gate == 1
     assert gates.wifi_blocker == "boot-waiting-for-wifi"
+
+
+def test_gate_summary_preserves_deferred_wifi_failure_over_root_wait() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] control-plane snapshot ioctl-timeout "
+            "exact-error=cyw43-control-plane-interrupt-programming-drift",
+            "[pi4-wifi] debug snapshot stage=cyw43-init-control-plane-fail "
+            "exact_error=cyw43-control-plane-partial-hint-visibility",
+            "[net-console] deferred failed detail=cyw43 protocol error: ioctl-timeout",
+            "[net-console] root console waiting "
+            "reason=wifi-not-ready action=wait-for-wifi",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-partial-hint-visibility"
 
 
 def test_gate_summary_tracks_nettest_usb_first_boot_deferral() -> None:

@@ -3350,6 +3350,20 @@ fn control_plane_reply_speculative_frame_len(frame: &[u8]) -> Option<usize> {
 }
 
 #[inline]
+fn control_plane_reply_header_only_status_frame(frame: &[u8], frame_len: usize) -> bool {
+    if frame_len != CYW43_SDPCM_HEADER_LEN || frame.len() < CYW43_SDPCM_HEADER_LEN {
+        return false;
+    }
+    let channel = frame[5] & 0x0f;
+    let payload_start = usize::from(frame[7]);
+    payload_start == frame_len
+        && matches!(
+            channel,
+            CYW43_SDPCM_CHANNEL_CONTROL | CYW43_SDPCM_CHANNEL_EVENT
+        )
+}
+
+#[inline]
 const fn control_plane_reply_rearm_attempts_after_rearm(
     function2_ready: bool,
     next_attempt: u8,
@@ -7078,6 +7092,9 @@ const CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY: usize =
     CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN + CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN;
 const CYW43_SDPCM_PREFIX_MIN_LEN: usize = 8;
 const CYW43_SDPCM_HEADER_LEN: usize = 12;
+const CYW43_SDPCM_CHANNEL_CONTROL: u8 = 0;
+const CYW43_SDPCM_CHANNEL_EVENT: u8 = 1;
+const CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT: u8 = 4;
 const CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS: [usize; 4] = [
     CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
     32,
@@ -7777,12 +7794,15 @@ impl Pi4WifiState {
                 || control_plane_exact_error_is_direct_sdio_transport_blocker(
                     snapshot.control_plane_exact_error,
                 )
+                || control_plane_exact_error_is_pre_function2_clock_blocker(
+                    snapshot.control_plane_exact_error,
+                )
             {
                 let ready = snapshot
                     .chipclkcsr
                     .is_some_and(function2_has_required_ht_clock);
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=debug-probe-ht action=skip-live-chipclkcsr reason=cached-first-reply-blocker exact_error={} chipclk=0x{chipclk:02x}/{} ready={} production_continue=no",
+                    "[pi4-wifi] firmware stage=debug-probe-ht action=skip-live-chipclkcsr reason=cached-terminal-blocker exact_error={} chipclk=0x{chipclk:02x}/{} ready={} production_continue=no",
                     snapshot.control_plane_exact_error,
                     yn(snapshot.chipclkcsr.is_some()),
                     yn(ready),
@@ -8587,6 +8607,7 @@ impl Mailbox {
         self.send_posted(data)?;
 
         let mut wait = 0usize;
+        let mut stray_replies = 0usize;
         loop {
             while self.read_reg(MAILBOX_STATUS0_OFFSET) & MAILBOX_EMPTY != 0 {
                 wait = wait.saturating_add(1);
@@ -8601,9 +8622,15 @@ impl Mailbox {
             if (value & 0xF) == MAILBOX_CHANNEL_PROPERTY {
                 let actual = value & !0xF;
                 if !mailbox_reply_matches_request_page(expected, actual) {
+                    stray_replies = stray_replies.saturating_add(1);
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] mailbox stray reply expected=0x{expected:08x} actual=0x{value:08x} action=ignored",
+                        "[pi4-wifi] mailbox stray reply expected=0x{expected:08x} actual=0x{value:08x} count={stray_replies}/{} action=ignored",
+                        MAILBOX_DRAIN_LIMIT,
                     ));
+                    if stray_replies >= MAILBOX_DRAIN_LIMIT {
+                        self.log_timeout("recv-stray");
+                        return Err(HalError::Unsupported("mailbox-stray-reply-timeout"));
+                    }
                     continue;
                 }
                 if actual != expected {
@@ -12099,15 +12126,18 @@ impl SdioHost {
             self.control_plane_reply_chunk_limit(),
             self.experimental_no_ht_transport,
         ));
-        let mut frame = [0u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY];
-        match self.read_function2_reply_with_linux_recovery(
-            "control-plane-reply-strict-frame-indicated-read",
-            &mut frame,
-        ) {
-            Ok(()) => {
-                let Some(frame_len) = control_plane_reply_speculative_frame_len(&frame) else {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-invalid packet=0x{:02x}{:02x} len_inv=0x{:02x}{:02x} seq=0x{:02x} channel=0x{:02x} credit=0x{:02x} header_len=0x{:02x}",
+        for firstread_attempt in 1..=CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT {
+            let mut frame = [0u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY];
+            match self.read_function2_reply_with_linux_recovery(
+                "control-plane-reply-strict-frame-indicated-read",
+                &mut frame,
+            ) {
+                Ok(()) => {
+                    let Some(frame_len) = control_plane_reply_speculative_frame_len(&frame) else {
+                        emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-invalid attempt={}/{} packet=0x{:02x}{:02x} len_inv=0x{:02x}{:02x} seq=0x{:02x} channel=0x{:02x} credit=0x{:02x} header_len=0x{:02x}",
+                        firstread_attempt,
+                        CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT,
                         frame[1],
                         frame[0],
                         frame[3],
@@ -12117,55 +12147,80 @@ impl SdioHost {
                         frame[9],
                         frame[7],
                     ));
-                    self.log_transport_shadow("control-plane-reply-strict-frame-indicated-invalid");
-                    return Ok(0);
-                };
-                self.commit_control_plane_speculative_frame(&frame, frame_len);
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-ready frame_len={} current_clock={}Hz width={} diagnosis=linux-ib-firstread-recovered-reply",
+                        self.log_transport_shadow(
+                            "control-plane-reply-strict-frame-indicated-invalid",
+                        );
+                        return Ok(0);
+                    };
+                    if self.strict_control_plane_reply_pending
+                        && control_plane_reply_header_only_status_frame(&frame, frame_len)
+                    {
+                        emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-drain-header-only attempt={}/{} channel=0x{:02x} credit=0x{:02x} current_clock={}Hz width={} diagnosis=linux-firstread-status-before-control-reply",
+                        firstread_attempt,
+                        CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT,
+                        frame[5] & 0x0f,
+                        frame[9],
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                    ));
+                        if firstread_attempt < CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT {
+                            continue;
+                        }
+                        return Ok(0);
+                    }
+                    self.commit_control_plane_speculative_frame(&frame, frame_len);
+                    emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-ready frame_len={} firstread_attempt={} current_clock={}Hz width={} diagnosis=linux-ib-firstread-recovered-reply",
                     frame_len,
+                    firstread_attempt,
                     self.current_clock_hz,
                     sdio_bus_width_name(self.desired_bus_width),
                 ));
-                if let Err(err) = self.clear_sdio_irq_source_for_firmware_channel(
-                    "control-plane-reply-strict-frame-indicated-ready",
-                    false,
-                ) {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-clear-deferred err={err}"
-                    ));
+                    match self.clear_sdio_irq_source_for_firmware_channel(
+                        "control-plane-reply-strict-frame-indicated-ready",
+                        false,
+                    ) {
+                        Ok(()) => self.ack_sdio_irq_after_polled_reply_if_pending(
+                            "control-plane-reply-strict-frame-indicated-ready",
+                        )?,
+                        Err(err) => {
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-clear-failed-skip-ack err={err}"
+                            ));
+                            return Err(err);
+                        }
+                    }
+                    self.log_transport_shadow("control-plane-reply-strict-frame-indicated-ready");
+                    return Ok(frame_len);
                 }
-                self.ack_sdio_irq_after_polled_reply_if_pending(
-                    "control-plane-reply-strict-frame-indicated-ready",
-                );
-                self.log_transport_shadow("control-plane-reply-strict-frame-indicated-ready");
-                Ok(frame_len)
-            }
-            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
-                emit_breadcrumb(format_args!(
+                Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                    emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-empty len={} current_clock={}Hz width={} err={err}",
                     CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY,
                     self.current_clock_hz,
                     sdio_bus_width_name(self.desired_bus_width),
                 ));
-                self.log_control_plane_finish_snapshot(
-                    "control-plane-reply-strict-frame-indicated-empty",
-                );
-                Ok(0)
-            }
-            Err(err) => {
-                emit_breadcrumb(format_args!(
+                    self.log_control_plane_finish_snapshot(
+                        "control-plane-reply-strict-frame-indicated-empty",
+                    );
+                    return Ok(0);
+                }
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=control-plane-reply action=strict-frame-indicated-fail len={} current_clock={}Hz width={} err={err}",
                     CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY,
                     self.current_clock_hz,
                     sdio_bus_width_name(self.desired_bus_width),
                 ));
-                self.log_control_plane_finish_snapshot(
-                    "control-plane-reply-strict-frame-indicated-fail",
-                );
-                Err(err)
+                    self.log_control_plane_finish_snapshot(
+                        "control-plane-reply-strict-frame-indicated-fail",
+                    );
+                    return Err(err);
+                }
             }
         }
+        Ok(0)
     }
 
     fn try_capture_strict_control_plane_reply_without_frame_indication(
@@ -12184,17 +12239,20 @@ impl SdioHost {
             self.experimental_no_ht_transport,
             int_status = int_status.unwrap_or(0),
         ));
-        let mut frame = [0u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY];
-        match self.read_function2_reply_with_linux_recovery(
-            "control-plane-reply-post-write-hintless-firstread",
-            &mut frame,
-        ) {
-            Ok(()) => {
-                let Some(frame_len) = control_plane_reply_speculative_frame_len(&frame) else {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-firstread-invalid empty_poll={}/{} packet=0x{:02x}{:02x} len_inv=0x{:02x}{:02x} seq=0x{:02x} channel=0x{:02x} credit=0x{:02x} header_len=0x{:02x}",
+        for firstread_attempt in 1..=CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT {
+            let mut frame = [0u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY];
+            match self.read_function2_reply_with_linux_recovery(
+                "control-plane-reply-post-write-hintless-firstread",
+                &mut frame,
+            ) {
+                Ok(()) => {
+                    let Some(frame_len) = control_plane_reply_speculative_frame_len(&frame) else {
+                        emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-firstread-invalid empty_poll={}/{} attempt={}/{} packet=0x{:02x}{:02x} len_inv=0x{:02x}{:02x} seq=0x{:02x} channel=0x{:02x} credit=0x{:02x} header_len=0x{:02x}",
                         empty_poll,
                         strict_control_plane_post_write_no_irq_limit(),
+                        firstread_attempt,
+                        CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT,
                         frame[1],
                         frame[0],
                         frame[3],
@@ -12204,33 +12262,55 @@ impl SdioHost {
                         frame[9],
                         frame[7],
                     ));
-                    self.log_transport_shadow("control-plane-reply-post-write-hintless-invalid");
-                    return Ok(0);
-                };
-                self.commit_control_plane_speculative_frame(&frame, frame_len);
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-firstread-ready frame_len={} empty_poll={} current_clock={}Hz width={} diagnosis=linux-firstread-without-sideband",
+                        self.log_transport_shadow(
+                            "control-plane-reply-post-write-hintless-invalid",
+                        );
+                        return Ok(0);
+                    };
+                    if control_plane_reply_header_only_status_frame(&frame, frame_len) {
+                        emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-drain-header-only empty_poll={} attempt={}/{} channel=0x{:02x} credit=0x{:02x} current_clock={}Hz width={} diagnosis=linux-firstread-status-before-control-reply",
+                        empty_poll,
+                        firstread_attempt,
+                        CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT,
+                        frame[5] & 0x0f,
+                        frame[9],
+                        self.current_clock_hz,
+                        sdio_bus_width_name(self.desired_bus_width),
+                    ));
+                        if firstread_attempt < CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT {
+                            continue;
+                        }
+                        return Ok(0);
+                    }
+                    self.commit_control_plane_speculative_frame(&frame, frame_len);
+                    emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-firstread-ready frame_len={} empty_poll={} firstread_attempt={} current_clock={}Hz width={} diagnosis=linux-firstread-without-sideband",
                     frame_len,
                     empty_poll,
+                    firstread_attempt,
                     self.current_clock_hz,
                     sdio_bus_width_name(self.desired_bus_width),
                 ));
-                if let Err(err) = self.clear_sdio_irq_source_for_firmware_channel(
-                    "control-plane-reply-post-write-hintless-ready",
-                    false,
-                ) {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-clear-deferred err={err}"
-                    ));
+                    match self.clear_sdio_irq_source_for_firmware_channel(
+                        "control-plane-reply-post-write-hintless-ready",
+                        false,
+                    ) {
+                        Ok(()) => self.ack_sdio_irq_after_polled_reply_if_pending(
+                            "control-plane-reply-post-write-hintless-ready",
+                        )?,
+                        Err(err) => {
+                            emit_breadcrumb(format_args!(
+                                "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-clear-failed-skip-ack err={err}"
+                            ));
+                            return Err(err);
+                        }
+                    }
+                    self.log_transport_shadow("control-plane-reply-post-write-hintless-ready");
+                    return Ok(frame_len);
                 }
-                self.ack_sdio_irq_after_polled_reply_if_pending(
-                    "control-plane-reply-post-write-hintless-ready",
-                );
-                self.log_transport_shadow("control-plane-reply-post-write-hintless-ready");
-                Ok(frame_len)
-            }
-            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
-                emit_breadcrumb(format_args!(
+                Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                    emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-firstread-empty empty_poll={}/{} len={} current_clock={}Hz width={} err={err}",
                     empty_poll,
                     strict_control_plane_post_write_no_irq_limit(),
@@ -12238,13 +12318,13 @@ impl SdioHost {
                     self.current_clock_hz,
                     sdio_bus_width_name(self.desired_bus_width),
                 ));
-                self.log_control_plane_finish_snapshot(
-                    "control-plane-reply-post-write-hintless-empty",
-                );
-                Ok(0)
-            }
-            Err(err) => {
-                emit_breadcrumb(format_args!(
+                    self.log_control_plane_finish_snapshot(
+                        "control-plane-reply-post-write-hintless-empty",
+                    );
+                    return Ok(0);
+                }
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage=control-plane-reply action=post-write-hintless-firstread-fail empty_poll={}/{} len={} current_clock={}Hz width={} err={err}",
                     empty_poll,
                     strict_control_plane_post_write_no_irq_limit(),
@@ -12252,12 +12332,14 @@ impl SdioHost {
                     self.current_clock_hz,
                     sdio_bus_width_name(self.desired_bus_width),
                 ));
-                self.log_control_plane_finish_snapshot(
-                    "control-plane-reply-post-write-hintless-fail",
-                );
-                Err(err)
+                    self.log_control_plane_finish_snapshot(
+                        "control-plane-reply-post-write-hintless-fail",
+                    );
+                    return Err(err);
+                }
             }
         }
+        Ok(0)
     }
 
     fn try_capture_control_plane_reply_full_block_probe(
@@ -14661,12 +14743,24 @@ impl SdioHost {
         Ok(())
     }
 
-    fn ack_sdio_irq_after_polled_reply_if_pending(&mut self, stage: &'static str) {
+    fn ack_sdio_irq_after_polled_reply_if_pending(
+        &mut self,
+        stage: &'static str,
+    ) -> Result<(), HalError> {
         let Some(binding) = self.sdio_irq_binding else {
-            return;
+            return Ok(());
         };
         let sdhci_status = self.read32(SDHCI_INT_STATUS);
         let card_int_still_visible = polled_sdio_reply_requires_irq_ack(true, sdhci_status);
+        if card_int_still_visible {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=sel4-irq-polled-reply-ack-skip reason=card-int-source-still-visible irq={} sdhci=0x{sdhci_status:08x}",
+                binding.irq().0,
+            ));
+            return Err(HalError::Unsupported(
+                "wifi-sdio-polled-reply-source-still-visible",
+            ));
+        }
         match binding.ack_from_hal() {
             Ok(()) => {
                 emit_breadcrumb(format_args!(
@@ -14677,12 +14771,14 @@ impl SdioHost {
                     yn(card_int_still_visible),
                 ));
                 self.enable_sdhci_card_interrupt_signal(stage);
+                Ok(())
             }
             Err(err) => {
                 emit_breadcrumb(format_args!(
                     "[pi4-wifi] firmware stage={stage} action=sel4-irq-polled-reply-ack-fail irq={} err={err} sdhci=0x{sdhci_status:08x}",
                     binding.irq().0,
                 ));
+                Err(err)
             }
         }
     }
@@ -26690,6 +26786,38 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn linux_firstread_header_only_status_frames_are_drainable() {
+        let mut frame = [0u8; CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN];
+        let packet_len = CYW43_SDPCM_HEADER_LEN;
+        let packet_len_u16 = u16::try_from(packet_len).expect("packet length fits");
+        frame[0..2].copy_from_slice(&packet_len_u16.to_le_bytes());
+        frame[2..4].copy_from_slice(&(!packet_len_u16).to_le_bytes());
+        frame[5] = CYW43_SDPCM_CHANNEL_EVENT;
+        frame[7] = u8::try_from(CYW43_SDPCM_HEADER_LEN).expect("header length fits");
+        frame[9] = 0x15;
+
+        assert!(control_plane_reply_header_only_status_frame(
+            &frame, packet_len
+        ));
+
+        frame[5] = CYW43_SDPCM_CHANNEL_CONTROL;
+        assert!(control_plane_reply_header_only_status_frame(
+            &frame, packet_len
+        ));
+
+        frame[5] = 2;
+        assert!(!control_plane_reply_header_only_status_frame(
+            &frame, packet_len
+        ));
+
+        frame[5] = CYW43_SDPCM_CHANNEL_EVENT;
+        frame[7] = u8::try_from(CYW43_SDPCM_HEADER_LEN - 1).expect("header length fits");
+        assert!(!control_plane_reply_header_only_status_frame(
+            &frame, packet_len
+        ));
     }
 
     #[test]

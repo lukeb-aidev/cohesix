@@ -200,7 +200,7 @@ def test_gate_proof_rejects_missing_root_console_prompt(
                 "U-Boot 2026.01-dirty",
                 "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
                 "[cohesix:root-task] Cohesix boot: root-task online",
-                "[local-seat] xhci root-port command-probe result=no-op-ok",
+                "[local-seat] xhci root-port command-probe result=enable-slot-ok",
                 "wifi: firmware-ready",
             ]
         ),
