@@ -1588,6 +1588,32 @@ def test_gate_summary_rejects_legacy_linux_event_generation_as_command_proof() -
         assert gates.usb_blocker != "none"
 
 
+def test_gate_summary_accepts_fresh_linux_recovery_after_uboot_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-timeout bus=pcie-window "
+            "action=recover-linux-event-generation detail=cmd-event-ring-timeout "
+            "event_generation=uboot-poll-preserved-leading-events "
+            "recovery_event_generation=uboot-timeout-linux-fresh-recovery",
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-recovery-ok bus=pcie-window slot=1 "
+            "cleanup=disable-slot-ok action=unlock-port-sampling "
+            "event_generation=uboot-timeout-linux-fresh-recovery "
+            "uboot_event_generation=uboot-poll-preserved-leading-events",
+            "[local-seat] usb proof_summary gate=4 blocker=none "
+            "controller=ready command=enable-slot-recovery-ok "
+            "event=command-completion "
+            "event_generation=uboot-timeout-linux-fresh-recovery",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "none"
+
+
 def test_gate_summary_promotes_usb_controller_not_running_from_live_state() -> None:
     events = normalizer.parse_events(
         [
@@ -2765,7 +2791,7 @@ def test_gate_summary_prefers_boot_control_plane_line_over_later_nettest() -> No
     gates = normalizer.summarize_gates(events)
 
     assert gates.wifi_gate == 7
-    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_blocker == "control-plane-hintless-firstread-no-irq"
     assert gates.wifi_exact == "cyw43-control-plane-hintless-firstread-no-irq"
     assert gates.wifi_phase == "control-plane-reply"
     assert gates.wifi_blocker_line == 2
@@ -2904,7 +2930,7 @@ def test_gate_summary_tracks_hintless_firstread_no_irq_terminal() -> None:
     gates = normalizer.summarize_gates(events)
 
     assert gates.wifi_gate == 7
-    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_blocker == "control-plane-hintless-firstread-no-irq"
     assert gates.wifi_exact == "cyw43-control-plane-hintless-firstread-no-irq"
 
 

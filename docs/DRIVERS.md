@@ -412,9 +412,12 @@ power/reset state.
   reading the real response.
 - After real post-release HT and live Function 2 readiness are proved, the Pi 4
   firmware channel arms the Linux-shaped Function 2 interrupt path
-  (`FUNCTIONINTMASK`, `CCCR.IENx`, and SDHCI `CARD_INT`) through HAL-owned
-  source clear plus seL4 ack. IRQ 158 is the Wi-Fi SDIO interrupt; IRQ 27 remains
-  the seL4 timer and is never Wi-Fi progress evidence.
+  (`HOSTINTMASK`, `CCCR.IENx`, and SDHCI `CARD_INT`) through HAL-owned source
+  clear plus seL4 ack. The SDPCM `FUNCTIONINTMASK` readback is diagnostic on
+  this Pi 4 path; a zero value is not interrupt-programming drift when
+  `CCCR.IENx` is armed and the SDIO-core frame-indication path is live. IRQ 158
+  is the Wi-Fi SDIO interrupt; IRQ 27 remains the seL4 timer and is never Wi-Fi
+  progress evidence.
 - A post-control-write SDIO-core `I_HMB_FRAME_IND` bit is authoritative reply
   progress even when the Function 1 frame-length sideband still reads zero.
   Mirror Linux by reading the fixed Function 2 FIFO at `0x18000000` with the
@@ -525,7 +528,7 @@ active path is Cohesix-owned cold start:
   the Pi 4 outbound-window BAR value through EXT_CFG and read it back. Do not
   assign BARs for bad IDs, bad class, selector echoes, absent link proof, or
   any other tuple.
-- xHCI ownership-register, `USBCMD.RUN`, command-doorbell, and endpoint-doorbell
+- xHCI ownership-register, `USBCMD.RUN`, and endpoint-doorbell
   posted-write flushes use HAL-owned BCM2711 EXT_CFG selector/COMMAND readback
   only. The 2026-05-10 Pi 4 trace proved that even an xHCI capability dword read
   at BAR offset `0x0000` can halt immediately after `USBCMD.RUN`; never use xHCI
@@ -557,6 +560,14 @@ active path is Cohesix-owned cold start:
   write with a publish barrier, not a HAL ownership-register drain. A missing
   platform posted-write hook is a hard failure for the Pi 4 high-BAR VL805
   ownership-register and endpoint-doorbell paths.
+- If that first U-Boot-shaped Enable Slot attempt times out after consuming
+  current-boot PSC events, Cohesix may run exactly one bounded command recovery
+  lane: stop/reset the controller, republish fresh DCBAA/command/event rings,
+  apply Linux-captured event-generation shape (`USBCMD=RUN|INTE`, `DNCTRL=2`,
+  `IMOD=0xa0`, `IMAN=IE`), and submit a new Enable Slot. Only the fresh matching
+  Command Completion Event for that new command advances gate 4; stale
+  Linux-shaped labels or a re-doorbell of the original timed-out command are not
+  proof.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. USB keyboard availability must not depend on the
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local
@@ -589,6 +600,10 @@ active path is Cohesix-owned cold start:
   cleanup for that slot; a cleanup failure is logged and tolerated only as
   command-ring proof, and later enumeration must not assume a pristine slot
   table. Only a completed command may reopen live root-port sampling.
+- After an exact `cmd-event-ring-timeout` on the U-Boot-shaped lane, the bounded
+  recovery lane may use the Linux-captured event-generation register shape, but
+  PCI/GIC delivery remains externally masked and proof still requires a fresh
+  matching command-completion TRB before root-port sampling resumes.
 - Address Device follows U-Boot's EP0 max-packet ordering: low-speed uses 8,
   full-speed tries 64 first with 8 only as fallback, high-speed uses 64, and
   SuperSpeed uses 512. This keeps full-speed keyboard/composite devices on the

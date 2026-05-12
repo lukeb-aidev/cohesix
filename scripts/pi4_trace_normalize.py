@@ -1196,13 +1196,13 @@ def normalize_wifi_blocker(value: str) -> str:
         return "control-plane-rearm-timeout"
     if stripped == "reply-idle-loop":
         return "control-plane-reply-idle-loop"
-    if (
-        "hintless-firstread-no-irq" in lower
-        or "post-write-no-irq" in lower
-        or "control-plane-reply-idle-loop" in lower
-    ):
+    if "hintless-firstread-no-irq" in lower or "post-write-no-irq" in lower:
+        return "control-plane-hintless-firstread-no-irq"
+    if "control-plane-reply-idle-loop" in lower:
         return "control-plane-reply-idle-loop"
     if "control-plane" in lower:
+        if "hintless-firstread-no-irq" in lower or "post-write-no-irq" in lower:
+            return "control-plane-hintless-firstread-no-irq"
         if "sideband" in lower and any(
             token in lower for token in ("unreadable", "timeout", "missing")
         ):
@@ -2001,6 +2001,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     precise_control_plane_blockers = {
         "control-plane-bdc-event",
         "control-plane-cur-etheraddr-len",
+        "control-plane-hintless-firstread-no-irq",
         "control-plane-interrupt-programming-drift",
         "control-plane-interrupts-deferred",
         "control-plane-partial-hint-visibility",
@@ -2115,6 +2116,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane",
             "control-plane-bdc-event",
             "control-plane-cur-etheraddr-len",
+            "control-plane-hintless-firstread-no-irq",
             "control-plane-interrupt-programming-drift",
             "control-plane-interrupts-deferred",
             "control-plane-no-reply",
@@ -2679,6 +2681,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane",
             "control-plane-bdc-event",
             "control-plane-cur-etheraddr-len",
+            "control-plane-hintless-firstread-no-irq",
             "control-plane-interrupt-programming-drift",
             "control-plane-interrupts-deferred",
             "control-plane-no-reply",
@@ -2731,6 +2734,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "control-plane",
                 "control-plane-bdc-event",
                 "control-plane-cur-etheraddr-len",
+                "control-plane-hintless-firstread-no-irq",
                 "control-plane-interrupt-programming-drift",
                 "control-plane-interrupts-deferred",
                 "control-plane-no-reply",
@@ -2796,12 +2800,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     if terminal_ht_timeout_seen and not ht_available_seen and not post_f2_progress_seen:
         gate = min(gate, 4)
         blocker = "ht-clock-timeout"
-    if control_plane_idle_poll_count >= 64 and not control_plane_reply_seen_after_write:
+    if (
+        control_plane_idle_poll_count >= 64
+        and not control_plane_reply_seen_after_write
+        and blocker != "control-plane-hintless-firstread-no-irq"
+    ):
         gate = max(gate, 7)
         post_f2_progress_seen = True
         blocker = "control-plane-reply-idle-loop"
     if join_programming_blocker is not None and blocker in {
         "control-plane",
+        "control-plane-hintless-firstread-no-irq",
         "control-plane-partial-hint-visibility",
         "control-plane-reply-idle-loop",
         "ioctl-timeout",

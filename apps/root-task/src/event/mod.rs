@@ -2735,7 +2735,7 @@ where
         if let Some(history) = crate::local_seat_pi4::latest_xhci_diag_history_status() {
             self.emit_usb_xhci_diag_history(&history);
         } else {
-            self.emit_console_line("usb: xhci_recent total=0 count=0 focus=dcbaap-run");
+            self.emit_console_line("usb: xhci_recent total=0 count=0 focus=latest-xhci-diag");
         }
         #[cfg(all(target_arch = "aarch64", target_os = "none"))]
         if let Some(ports) = crate::local_seat_pi4::latest_xhci_root_port_status() {
@@ -2765,7 +2765,7 @@ where
         history: &crate::local_seat_pi4::UsbXhciDiagHistoryStatus,
     ) {
         let summary = format_message(format_args!(
-            "usb: xhci_recent total={} count={} focus=dcbaap-run",
+            "usb: xhci_recent total={} count={} focus=latest-xhci-diag",
             history.total_lines, history.count,
         ));
         self.emit_console_line(summary.as_str());

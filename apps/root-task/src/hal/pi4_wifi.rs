@@ -3179,6 +3179,17 @@ const fn merge_sdio_core_int_status(
 }
 
 #[inline]
+const fn sdio_irq_frame_indication_should_be_cached(
+    cache_frame_indication: bool,
+    int_status: Option<u32>,
+) -> bool {
+    match int_status {
+        Some(bits) => cache_frame_indication && (bits & I_HMB_FRAME_IND) != 0,
+        None => false,
+    }
+}
+
+#[inline]
 const fn control_plane_reply_uses_low_touch_pure_f2_diagnostics(
     experimental_no_ht_transport: bool,
     hint_reads_unstable: bool,
@@ -5567,6 +5578,28 @@ const fn control_plane_snapshot_match_label(value: Option<u32>, expected: u32) -
 }
 
 #[inline]
+const fn firmware_channel_programs_function_int_mask() -> bool {
+    false
+}
+
+#[inline]
+const fn control_plane_snapshot_function_int_mask_label(
+    value: Option<u32>,
+    ienx: Option<u8>,
+    int_status: Option<u32>,
+) -> &'static str {
+    if firmware_channel_programs_function_int_mask() {
+        control_plane_snapshot_match_label(value, FUNCTIONINTMASK)
+    } else if control_plane_reply_int_status_proves_armed_function2(ienx, int_status) {
+        let _ = value;
+        "linux-unused-frame-ind"
+    } else {
+        let _ = value;
+        "linux-unused"
+    }
+}
+
+#[inline]
 const fn control_plane_snapshot_u32_bit_state_label(value: Option<u32>, bit: u32) -> &'static str {
     match value {
         Some(bits) if (bits & bit) != 0 => "set",
@@ -5909,7 +5942,9 @@ const fn control_plane_snapshot_interrupt_programming_drift(
     if matches!(hostintmask, Some(bits) if bits != HOSTINTMASK) {
         return true;
     }
-    if matches!(function_int_mask, Some(bits) if bits != FUNCTIONINTMASK) {
+    if firmware_channel_programs_function_int_mask()
+        && matches!(function_int_mask, Some(bits) if bits != FUNCTIONINTMASK)
+    {
         return !control_plane_reply_int_status_proves_armed_function2(ienx, int_status);
     }
     false
@@ -12228,6 +12263,7 @@ impl SdioHost {
                     match self.clear_sdio_irq_source_for_firmware_channel(
                         "control-plane-reply-strict-frame-indicated-ready",
                         false,
+                        false,
                     ) {
                         Ok(()) => self.ack_sdio_irq_after_polled_reply_if_pending(
                             "control-plane-reply-strict-frame-indicated-ready",
@@ -12342,6 +12378,7 @@ impl SdioHost {
                 ));
                     match self.clear_sdio_irq_source_for_firmware_channel(
                         "control-plane-reply-post-write-hintless-ready",
+                        false,
                         false,
                     ) {
                         Ok(()) => self.ack_sdio_irq_after_polled_reply_if_pending(
@@ -12854,10 +12891,9 @@ impl SdioHost {
                     ));
                 } else {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=linux-sdio-minimal-strict-order order=mailbox>{function2_order}>hostintmask>watermark>devctl>mesbusy>interrupts hostintmask=0x{hostintmask:08x} fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x} budget={}",
+                        "[pi4-wifi] firmware stage=slow-link-channel-rearm action=linux-sdio-minimal-strict-order order=mailbox>{function2_order}>hostintmask>watermark>devctl>mesbusy>cccr-ienx+sdhci-card-int hostintmask=0x{hostintmask:08x} fn_int_mask_policy=linux-unused ien=0x{ien:02x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x} budget={}",
                         sdio_function_ready_budget_name(function2_ready_budget),
                         hostintmask = HOSTINTMASK,
-                        fn_int_mask = FUNCTIONINTMASK,
                         ien = SDIO_INTERRUPT_ENABLE_MASK,
                         devctl = devctl_programmed,
                         mesbusy = CY_43455_MESBUSYCTRL,
@@ -13162,7 +13198,7 @@ impl SdioHost {
             control_plane_snapshot_u32_bit_state_label(corecontrol, CC_F2RDY),
             control_plane_snapshot_hint_visibility_label(hint_visible),
             control_plane_snapshot_match_label(hostintmask, HOSTINTMASK),
-            control_plane_snapshot_match_label(function_int_mask, FUNCTIONINTMASK),
+            control_plane_snapshot_function_int_mask_label(function_int_mask, ienx, int_status),
             control_plane_snapshot_reply_frame_label(rframe_lo, rframe_hi),
             blocker,
             probe_source,
@@ -14631,22 +14667,31 @@ impl SdioHost {
         allow_function2_ready_bypass: bool,
     ) -> Result<(), HalError> {
         self.clear_and_ack_sdio_irq_for_firmware_channel(stage, allow_function2_ready_bypass)?;
-        self.write_sdio_core_u32_for_firmware_channel(
-            stage,
-            SDPCMD_REG_FUNCTIONINTMASK,
-            FUNCTIONINTMASK,
-            allow_function2_ready_bypass,
-        )?;
+        if firmware_channel_programs_function_int_mask() {
+            self.write_sdio_core_u32_for_firmware_channel(
+                stage,
+                SDPCMD_REG_FUNCTIONINTMASK,
+                FUNCTIONINTMASK,
+                allow_function2_ready_bypass,
+            )?;
+        }
         self.io_direct_write(
             SdioFunction::Function0,
             SDIO_CCCR_IENX,
             SDIO_INTERRUPT_ENABLE_MASK,
         )?;
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=interrupts-armed path=sel4-irq fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x}",
-            fn_int_mask = FUNCTIONINTMASK,
-            ien = SDIO_INTERRUPT_ENABLE_MASK,
-        ));
+        if firmware_channel_programs_function_int_mask() {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=interrupts-armed path=sel4-irq source=functionintmask+cccr-ienx+sdhci-card-int fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x}",
+                fn_int_mask = FUNCTIONINTMASK,
+                ien = SDIO_INTERRUPT_ENABLE_MASK,
+            ));
+        } else {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=interrupts-armed path=sel4-irq source=hostintmask+cccr-ienx+sdhci-card-int fn_int_mask_policy=linux-unused ien=0x{ien:02x}",
+                ien = SDIO_INTERRUPT_ENABLE_MASK,
+            ));
+        }
         let outcome = self.service_sdio_irq_once_for_firmware_channel_with_idle_log(
             stage,
             allow_function2_ready_bypass,
@@ -14686,7 +14731,11 @@ impl SdioHost {
         let binding = self
             .sdio_irq_binding
             .ok_or(HalError::Unsupported("wifi-sdio-irq-unbound"))?;
-        self.clear_sdio_irq_source_for_firmware_channel(stage, allow_function2_ready_bypass)?;
+        self.clear_sdio_irq_source_for_firmware_channel(
+            stage,
+            allow_function2_ready_bypass,
+            false,
+        )?;
         binding.ack_from_hal()?;
         emit_breadcrumb(format_args!(
             "[pi4-wifi] firmware stage={stage} action=sel4-irq-clear-ack irq={} trigger={:?} badge=0x{:x}",
@@ -14698,15 +14747,27 @@ impl SdioHost {
         Ok(())
     }
 
-    fn cache_control_plane_irq_int_status(&mut self, int_status: Option<u32>) {
-        let Some(int_status) = int_status else {
-            return;
-        };
-        if (int_status & I_HMB_FRAME_IND) == 0 {
+    fn cache_control_plane_irq_int_status(
+        &mut self,
+        stage: &'static str,
+        int_status: Option<u32>,
+        cache_frame_indication: bool,
+    ) {
+        if sdio_irq_frame_indication_should_be_cached(cache_frame_indication, int_status) {
+            let int_status = int_status.unwrap_or(0);
+            self.cached_control_plane_irq_int_status =
+                Some(self.cached_control_plane_irq_int_status.unwrap_or(0) | int_status);
             return;
         }
-        self.cached_control_plane_irq_int_status =
-            Some(self.cached_control_plane_irq_int_status.unwrap_or(0) | int_status);
+        if !cache_frame_indication {
+            let Some(cached) = self.cached_control_plane_irq_int_status.take() else {
+                return;
+            };
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=sdio-irq-frame-cache-discard cached=0x{cached:08x} intstatus=0x{int_status:08x} reason=not-irq-service-path",
+                int_status = int_status.unwrap_or(0),
+            ));
+        }
     }
 
     fn take_cached_control_plane_irq_int_status(&mut self) -> Option<u32> {
@@ -14740,7 +14801,11 @@ impl SdioHost {
             return Ok(IrqServiceOutcome::Idle);
         };
         let outcome = binding.poll_and_service_from_hal(|| {
-            self.clear_sdio_irq_source_for_firmware_channel(stage, allow_function2_ready_bypass)
+            self.clear_sdio_irq_source_for_firmware_channel(
+                stage,
+                allow_function2_ready_bypass,
+                true,
+            )
         })?;
         match outcome {
             IrqServiceOutcome::Serviced { badge } => {
@@ -14784,10 +14849,11 @@ impl SdioHost {
         &mut self,
         stage: &'static str,
         allow_function2_ready_bypass: bool,
+        cache_frame_indication: bool,
     ) -> Result<(), HalError> {
         let int_status =
             self.read_control_plane_snapshot_u32(stage, "irq-int-status", SDIO_INT_STATUS);
-        self.cache_control_plane_irq_int_status(int_status);
+        self.cache_control_plane_irq_int_status(stage, int_status, cache_frame_indication);
         let serviced_bits = int_status.unwrap_or(0) & HOSTINTMASK;
         if serviced_bits != 0 {
             self.write_sdio_core_u32_for_firmware_channel(
@@ -15461,9 +15527,8 @@ impl SdioHost {
                     ));
                 } else {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=setup-firmware-channel action=linux-sdio-minimal-strict-order order=mailbox>f2>hostintmask>watermark>devctl>mesbusy>interrupts hostintmask=0x{hostintmask:08x} fn_int_mask=0x{fn_int_mask:08x} ien=0x{ien:02x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
+                        "[pi4-wifi] firmware stage=setup-firmware-channel action=linux-sdio-minimal-strict-order order=mailbox>f2>hostintmask>watermark>devctl>mesbusy>cccr-ienx+sdhci-card-int hostintmask=0x{hostintmask:08x} fn_int_mask_policy=linux-unused ien=0x{ien:02x} watermark=0x{watermark:02x} devctl=0x{devctl:02x} mesbusy=0x{mesbusy:02x}",
                         hostintmask = HOSTINTMASK,
-                        fn_int_mask = FUNCTIONINTMASK,
                         ien = SDIO_INTERRUPT_ENABLE_MASK,
                         devctl = devctl_programmed,
                         mesbusy = CY_43455_MESBUSYCTRL,
@@ -29616,6 +29681,18 @@ mod tests {
             merge_sdio_core_int_status(None, Some(I_HMB_FRAME_IND)),
             Some(I_HMB_FRAME_IND)
         );
+        assert!(sdio_irq_frame_indication_should_be_cached(
+            true,
+            Some(I_HMB_FRAME_IND)
+        ));
+        assert!(!sdio_irq_frame_indication_should_be_cached(
+            false,
+            Some(I_HMB_FRAME_IND)
+        ));
+        assert!(!sdio_irq_frame_indication_should_be_cached(
+            true,
+            Some(I_CHIPACTIVE)
+        ));
         assert!(polled_sdio_reply_requires_irq_ack(true, SDHCI_INT_CARD_INT));
         assert!(!polled_sdio_reply_requires_irq_ack(
             false,
@@ -29625,6 +29702,19 @@ mod tests {
         assert!(sdio_irq_binding_failure_is_terminal());
         assert_eq!(SDPCMD_REG_FUNCTIONINTMASK, 0x34);
         assert_eq!(FUNCTIONINTMASK, u32::from(SDIO_FUNC_ENABLE_2));
+        assert!(!firmware_channel_programs_function_int_mask());
+        assert_eq!(
+            control_plane_snapshot_function_int_mask_label(Some(0), None, None),
+            "linux-unused"
+        );
+        assert_eq!(
+            control_plane_snapshot_function_int_mask_label(
+                Some(0),
+                Some(SDIO_INTERRUPT_ENABLE_MASK),
+                Some(I_HMB_FRAME_IND)
+            ),
+            "linux-unused-frame-ind"
+        );
         assert_eq!(SDIO_INTERRUPT_ENABLE_MASK, 0x07);
         assert_eq!(SDPCMD_REG_TOSBMAILBOX, 0x40);
         assert_eq!(CY_43455_F2_WATERMARK, 0x60);
@@ -30118,6 +30208,24 @@ mod tests {
                 Some(HOSTINTMASK),
                 Some(FUNCTIONINTMASK),
                 None,
+                Some(0),
+                Some(0),
+                Some(CY_43455_F2_WATERMARK),
+                Some(SBSDIO_DEVCTL_F2WM_ENAB),
+                Some(CY_43455_MESBUSYCTRL),
+            ),
+            "state-visible"
+        );
+        assert_eq!(
+            control_plane_snapshot_exact_blocker_label(
+                Some(SDIO_FUNCTION_ENABLE_F2.enable_bit),
+                Some(SDIO_FUNCTION_ENABLE_F2.enable_bit),
+                Some(SDIO_INTERRUPT_ENABLE_MASK),
+                None,
+                4,
+                Some(HOSTINTMASK),
+                Some(0),
+                Some(0),
                 Some(0),
                 Some(0),
                 Some(CY_43455_F2_WATERMARK),

@@ -316,6 +316,11 @@ pub fn unpin(range: &PinnedDmaRange) -> Result<(), CacheError> {
     let policy = cache_policy();
     if cache_ops_requested(policy) {
         if policy.dma_invalidate {
+            if !policy.kernel_ops {
+                log_pin_error(range.label, "cache-kernel-ops-disabled");
+                return Err(CacheError::new(sel4_sys::seL4_InvalidArgument));
+            }
+
             emit_cache_line("invalidate-after-reclaim", range);
             let maintenance = CacheMaintenance::init_thread();
             if let Err(err) = maintenance.invalidate(range.vaddr, range.len) {

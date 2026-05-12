@@ -6011,6 +6011,57 @@ impl<H: Dma> XhciCtrl<H> {
         self.wait_command_poll_only(Some(cmd_addr))
     }
 
+    fn submit_command_fresh_linux_event_recovery_prompt_safe(
+        &self,
+        trb: Trb,
+        timeout_cmd_addr: u64,
+    ) -> Result<Trb> {
+        if runtime_pollsafe_no_fresh_ownership_handoff(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+        ) {
+            emit_xhci_diag(
+                0x0336,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
+            );
+            return Err(UsbError::NotSupported);
+        }
+        emit_xhci_diag(0x03e2, timeout_cmd_addr & !0x0f, 0, 1);
+        self.republish_fresh_command_event_rings_for_prompt_safe_recovery()?;
+        let mut cmd_ring = self.cmd_ring.lock();
+        let (enqueue_before, cycle_before) = cmd_ring.debug_state();
+        let retry_cmd_addr =
+            cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-recovery-submit")?;
+        let (enqueue_after, cycle_after) = cmd_ring.debug_state();
+        emit_xhci_diag(
+            0x03e3,
+            retry_cmd_addr,
+            ((enqueue_before as u64) << 32) | enqueue_after as u64,
+            ((cycle_before as u64) << 1) | (cycle_after as u64),
+        );
+        drop(cmd_ring);
+        ring_write_barrier();
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, retry_cmd_addr, 1, 0);
+        self.emit_command_ring_debug_snapshot(0x0360);
+        self.emit_command_event_ring_debug_snapshot(0x0353);
+        self.enable_linux_command_event_generation_for_probe()?;
+        self.emit_command_gate_plan_snapshot(0x0370, Some(retry_cmd_addr), 2, true);
+        if !self.ring_cmd_doorbell() {
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
+        self.emit_command_gate_plan_snapshot(0x0368, Some(retry_cmd_addr), 3, true);
+        match self.wait_command_prompt_safe(Some(retry_cmd_addr), true) {
+            Ok(evt) => Ok(evt),
+            Err(UsbError::Timeout) => {
+                emit_xhci_diag(0x03e4, retry_cmd_addr, 0, 1);
+                Err(UsbError::Timeout)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     fn submit_command_linux_event_generation_prompt_safe(&self, trb: Trb) -> Result<Trb> {
         if runtime_pollsafe_no_fresh_ownership_handoff(
             self.firmware_handoff,
@@ -6054,38 +6105,7 @@ impl<H: Dma> XhciCtrl<H> {
         match self.wait_command_prompt_safe(Some(cmd_addr), true) {
             Ok(evt) => Ok(evt),
             Err(UsbError::Timeout) => {
-                emit_xhci_diag(0x03e2, cmd_addr, 0, 1);
-                self.republish_fresh_command_event_rings_for_prompt_safe_recovery()?;
-                let mut cmd_ring = self.cmd_ring.lock();
-                let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-                let retry_cmd_addr =
-                    cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-recovery-submit")?;
-                let (enqueue_after, cycle_after) = cmd_ring.debug_state();
-                emit_xhci_diag(
-                    0x03e3,
-                    retry_cmd_addr,
-                    ((enqueue_before as u64) << 32) | enqueue_after as u64,
-                    ((cycle_before as u64) << 1) | (cycle_after as u64),
-                );
-                drop(cmd_ring);
-                ring_write_barrier();
-                emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, retry_cmd_addr, 1, 0);
-                self.emit_command_ring_debug_snapshot(0x0360);
-                self.emit_command_event_ring_debug_snapshot(0x0353);
-                self.enable_linux_command_event_generation_for_probe()?;
-                self.emit_command_gate_plan_snapshot(0x0370, Some(retry_cmd_addr), 2, true);
-                if !self.ring_cmd_doorbell() {
-                    return Err(UsbError::PostedWriteFlushFailed);
-                }
-                self.emit_command_gate_plan_snapshot(0x0368, Some(retry_cmd_addr), 3, true);
-                match self.wait_command_prompt_safe(Some(retry_cmd_addr), true) {
-                    Ok(evt) => Ok(evt),
-                    Err(UsbError::Timeout) => {
-                        emit_xhci_diag(0x03e4, retry_cmd_addr, 0, 1);
-                        Err(UsbError::Timeout)
-                    }
-                    Err(err) => Err(err),
-                }
+                self.submit_command_fresh_linux_event_recovery_prompt_safe(trb, cmd_addr)
             }
             Err(err) => Err(err),
         }
@@ -6137,6 +6157,21 @@ impl<H: Dma> XhciCtrl<H> {
         let evt = match self
             .submit_command_linux_event_generation_prompt_safe(enable_slot_command_trb_for_probe())
         {
+            Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
+            Err(err) => return Err(err),
+            Ok(evt) => evt,
+        };
+        Ok(evt.slot_id())
+    }
+
+    /// Retry Enable Slot after the U-Boot-shaped lane times out by resetting and
+    /// republishing fresh command/event rings before applying Linux event
+    /// generation registers.
+    pub fn probe_enable_slot_fresh_linux_event_recovery_prompt_safe(&self) -> Result<u8> {
+        let evt = match self.submit_command_fresh_linux_event_recovery_prompt_safe(
+            enable_slot_command_trb_for_probe(),
+            0,
+        ) {
             Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
             Err(err) => return Err(err),
             Ok(evt) => evt,
