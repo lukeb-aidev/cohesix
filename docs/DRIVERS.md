@@ -218,12 +218,15 @@ Device-visible address policy is not generic:
 - VL805/xHCI currently publishes `0x00000004_00000000 + CPU physical` for DMA
   pointers and keeps backing allocations below the 4 GiB inbound PCIe DMA
   window. A plain CPU physical address is wrong for xHCI rings on Pi 4.
-- VL805/xHCI command-ring `CRCR` publication writes the high dword before the
+- VL805/xHCI command, transfer, and event rings must be 64-byte aligned before
+  their physical addresses are published. The Pi 4 cold-boot proof uses
+  U-Boot-shaped command/event rings: 64 TRBs and one ERST entry. `CRCR`
+  publication writes the target command-ring pointer directly, without a
+  staged zero or stale snapshot replay, and writes the high dword before the
   low dword because the low dword carries command-ring control bits. Event-ring
-  `ERDP.EHB` acknowledgements are also split into explicit 32-bit MMIO writes
-  with the high dword before the low/control dword, then `IMAN.IP`
-  write-one-to-clear is issued before the Linux-shaped polled command proof
-  re-enables `IMAN.IE`.
+  `ERDP.EHB` acknowledgements are split into explicit 32-bit MMIO writes with
+  the high dword before the low/control dword, matching the U-Boot polling
+  path.
 - Pi 4 mailbox requests use the VideoCore bus aliases selected in `pi4_wifi`.
   Wi-Fi, VL805 reset-notify, and local-seat framebuffer property calls all use
   the shared HAL mailbox call lock so one path cannot drain or consume another
@@ -267,9 +270,10 @@ leave the line stuck.
   interrupt source, acknowledges the SDHCI/seL4 interrupt, and only then
   re-enables the SDHCI `CARD_INT` signal path.
 - Current Pi 4 USB/VL805 is event-ring polled with PCI INTx/MSI delivery
-  masked. The cold-boot command proof may program Linux-shaped xHCI
-  event-generation state (`USBCMD.INTE`, `IMOD`, `IMAN.IE`) only while PCI/GIC
-  delivery remains masked and the event ring is consumed by polling; do not
+  masked. The cold-boot command proof follows U-Boot's poll-only contract:
+  publish rings, start with `USBCMD.RUN` only, leave `USBCMD.INTE` and
+  `IMAN.IE` clear, keep `DNCTRL=0`, ring doorbell `0`, poll for the command
+  completion event, and acknowledge consumed events with `ERDP.EHB`. Do not
   unmask external xHCI interrupt delivery until a milestone explicitly proves
   it.
 
@@ -331,14 +335,27 @@ power/reset state.
   Transport errors remain fatal.
 - Cohesix also applies the Linux attach-time `join_pref` default payload
   (`04 02 08 01 01 02 00 00`) before scan/join defaults. WPA2-PSK join setup
-  must match Linux ordering: configure infrastructure/auth/WPA auth first,
-  enable firmware supplicant with plain `sup_wpa=1`, then program
-  `WLC_SET_WSEC_PMK`. The PMK payload is the 132-byte Linux
+  must match Linux and known-good CYW43 behavior: configure AES security,
+  enable firmware supplicant on the primary BSS with `bsscfg:sup_wpa`,
+  then configure infrastructure/auth/WPA auth before programming
+  `WLC_SET_WSEC_PMK`. The Pi 4 Linux capture shows the plain `sup_wpa`
+  feature probe returning `BCME_UNSUPPORTED`; plain `sup_wpa` must therefore
+  not be a fatal Cohesix join gate on this firmware. The primary PMK payload is
+  the 132-byte Linux
   `brcmf_wsec_pmk_le` shape (`u16 key_len`, `u16 flags`, 128-byte key area).
   For 8-63 byte passphrases Cohesix derives the 32-byte PBKDF2-HMAC-SHA1 PMK
   from SSID + passphrase and sends flags `0`; for 64 ASCII hex PSKs it decodes
-  the 32-byte PMK directly. Sending the raw passphrase in a short PMK struct is
-  firmware-bad-argument drift, not a transport failure.
+  the 32-byte PMK directly. If this Linux PMK shape is rejected with
+  `BCME_BADARG`, Cohesix may retry the known-good CYW43 68-byte passphrase
+  shape (`u16 len`, `u16 flags=1`, 64-byte passphrase area) for non-hex
+  passphrases. Any PMK or supplicant-shape rejection is join-programming drift,
+  not a transport failure.
+- WPA2 join completion must be gated on the firmware supplicant event, not on
+  `WLC_SET_SSID` success. Open networks may complete on a successful
+  `SET_SSID` event; secure networks must subscribe to `SET_SSID`, `AUTH`, and
+  `PSK_SUP`, ignore the early `PSK_SUP` abort status, and treat `PSK_SUP`
+  status 6 as the first safe link-up point. DHCP and data TX must not begin on
+  secure networks before that event.
 - Before the first iovar, Cohesix must drain the Linux-observed startup
   status/credit traffic emitted after `Dongle ready`. The captured first frame
   is a 12-byte SDPCM header-only event/status frame, followed by an empty
@@ -454,29 +471,25 @@ active path is Cohesix-owned cold start:
   the Pi 4 outbound-window BAR value through EXT_CFG and read it back. Do not
   assign BARs for bad IDs, bad class, selector echoes, absent link proof, or
   any other tuple.
-- Doorbell, Linux-shaped command-event setup, and `USBCMD.RUN` posted-write
-  flushes use HAL-owned BCM2711 EXT_CFG selector/COMMAND readback only. The
-  2026-05-10 Pi 4 trace proved that even an xHCI capability dword read at BAR
-  offset `0x0000` can halt immediately after `USBCMD.RUN`; never use xHCI BAR
-  reads, `USBSTS`, or any `PORTSC` as the posted-write drain on this
-  prompt-safe path. Command-timeout recovery follows the same rule:
-  stop/reset/RUN recovery waits are blind bounded settles, not live
-  `USBCMD`/`USBSTS` polls. The active `platform-reset-complete` path uses an
-  extended bounded blind HCRST/CNR settle before publishing fresh rings, and
-  command-timeout recovery reuses that extended settle before retrying the first
-  command. Command timeout diagnostics on that lane report deferred state
-  instead of live `CRCR`, `DCBAAP`, interrupter, or `PORTSC` reads.
+- Doorbell and `USBCMD.RUN` posted-write flushes use HAL-owned BCM2711 EXT_CFG
+  selector/COMMAND readback only. The 2026-05-10 Pi 4 trace proved that even an
+  xHCI capability dword read at BAR offset `0x0000` can halt immediately after
+  `USBCMD.RUN`; never use xHCI BAR reads, `USBSTS`, or any `PORTSC` as the
+  posted-write drain on this prompt-safe path. The active
+  `platform-reset-complete` path uses an extended bounded blind HCRST/CNR
+  settle before publishing fresh rings. Command timeout diagnostics on that
+  lane report deferred state instead of live `CRCR`, `DCBAAP`, interrupter, or
+  `PORTSC` reads.
 - RUN, command-ring recovery, and command-doorbell posted-write drains fail
   closed when the HAL cannot prove the EXT_CFG selector, link/root readiness,
   PCIe IRQ-source masking, or poll-only VL805 COMMAND ownership, or when the
   drain read returns a selector echo or invalid config value.
-- Linux-shaped command/event proof must DMA-publish the command TRB first,
-  issue a device-visible command-ring publish barrier, then drain its own
-  `DNCTRL=0x2`, `IMOD=0xa0`, `ERDP.EHB`, `IMAN.IP`, `IMAN.IE`, and
-  `USBCMD.RUN|INTE` writes immediately before ringing the doorbell. `ERDP.EHB`
-  acknowledgement drains both the high DMA-alias dword and the low/control
-  dword in order. A missing platform posted-write hook is a hard failure on the
-  Pi 4 high-BAR VL805 path.
+- U-Boot-compatible command/event proof must DMA-publish the command TRB first,
+  issue a device-visible command-ring publish barrier, keep interrupt delivery
+  disabled (`USBCMD.INTE=0`, `IMAN.IE=0`, `DNCTRL=0`), then ring doorbell `0`
+  and poll the event ring. `ERDP.EHB` acknowledgement drains both the high
+  DMA-alias dword and the low/control dword in order. A missing platform
+  posted-write hook is a hard failure on the Pi 4 high-BAR VL805 path.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. USB keyboard availability must not depend on the
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local
@@ -494,18 +507,15 @@ active path is Cohesix-owned cold start:
   Cohesix-owned controller. Linux or U-Boot captures must not synthesize a
   connected mask, speed, enabled-port state, or skipped root-port reset.
 - The Pi 4 prompt-safe high-BAR lane proves command/event-ring consumption with
-  Linux-shaped command-event state (`USBCMD.RUN|INTE`, `IMOD=0xa0`, `IMAN.IE`)
-  while PCI INTx/MSI/GIC delivery remains masked. For the fresh Pi 4
-  platform-reset path it preserves already posted port-status events in the
-  event ring, matching the Linux capture where the first Port Status Change
-  Event precedes the first Enable Slot Command Completion Event. It submits the
-  Linux-captured cold-boot first command shape, a bounded Enable Slot, then the
-  command wait skips any leading non-command events before accepting the Enable
-  Slot completion and reopening live root-port sampling. Each skipped event
-  republishes `ERDP.EHB` and drains the high/low dword writes through the HAL
-  posted-write hook before polling the next event-ring slot, so VL805 can see
-  the advanced dequeue pointer before it posts the command completion. On
-  success it immediately submits bounded Disable Slot
+  U-Boot-shaped poll-only command state while PCI INTx/MSI/GIC delivery remains
+  masked. For the fresh Pi 4 platform-reset path it may preserve already posted
+  port-status events in the event ring, then handles them the way U-Boot does:
+  the command wait skips and acknowledges leading non-command events before
+  accepting the Enable Slot completion and reopening live root-port sampling.
+  Each skipped event republishes `ERDP.EHB` and drains the high/low dword
+  writes through the HAL posted-write hook before polling the next event-ring
+  slot, so VL805 can see the advanced dequeue pointer before it posts the
+  command completion. On success it immediately submits bounded Disable Slot
   cleanup for that slot; a cleanup failure is logged and tolerated only as
   command-ring proof, and later enumeration must not assume a pristine slot
   table. Only a completed command may reopen live root-port sampling.

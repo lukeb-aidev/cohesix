@@ -83,17 +83,33 @@ const BROADCOM_OUI: [u8; 3] = [0x00, 0x10, 0x18];
 const EVENT_SET_SSID: u8 = 0;
 const EVENT_AUTH: u8 = 3;
 const EVENT_DEAUTH: u8 = 5;
+const EVENT_ASSOC: u8 = 7;
+const EVENT_REASSOC: u8 = 9;
 const EVENT_DISASSOC: u8 = 11;
+const EVENT_ASSOC_IND: u8 = 12;
+const EVENT_REASSOC_IND: u8 = 13;
 const EVENT_LINK: u8 = 16;
+const EVENT_ROAM: u8 = 19;
+const EVENT_MIC_ERROR: u8 = 33;
+const EVENT_PSK_SUP: u8 = 46;
 const EVENT_IF: u8 = 54;
 const STATUS_SUCCESS: u32 = 0;
+const STATUS_FAIL: u32 = 1;
+const STATUS_NO_NETWORKS: u32 = 3;
+const STATUS_ABORT: u32 = 4;
+const STATUS_UNSOLICITED: u32 = 6;
 const EVENT_MASK_LEN: usize = 24;
 const DEFAULT_SCAN_CHANNEL_TIME_MS: u32 = 40;
 const DEFAULT_SCAN_UNASSOC_TIME_MS: u32 = 40;
 const BCME_UNSUPPORTED: u32 = 0xffff_ffe9;
+const BCME_BADARG: u32 = 0xffff_fffe;
+const BSSCFG_PRIMARY_INDEX: u32 = 0;
 const WSEC_PMK_LEN: usize = 32;
 const WSEC_PMK_KEY_CAPACITY: usize = 128;
 const WSEC_PMK_PAYLOAD_LEN: usize = 4 + WSEC_PMK_KEY_CAPACITY;
+const WSEC_PASSPHRASE_MAX_LEN: usize = 64;
+const WSEC_PASSPHRASE_PAYLOAD_LEN: usize = 4 + WSEC_PASSPHRASE_MAX_LEN;
+const WSEC_FLAG_PASSPHRASE: u16 = 1;
 const WPA2_PSK_PBKDF2_ROUNDS: u16 = 4096;
 const WPA2_PSK_BLOCK_COUNT: u32 = 2;
 const SHA1_BLOCK_LEN: usize = 64;
@@ -323,6 +339,70 @@ fn write_wsec_pmk_payload(
     put_u16_le(payload, 2, 0);
     payload[4..4 + WSEC_PMK_LEN].copy_from_slice(&pmk);
     Ok(kind)
+}
+
+fn write_wsec_passphrase_payload(payload: &mut [u8], psk: &[u8]) -> Result<(), DriverError> {
+    if payload.len() < WSEC_PASSPHRASE_PAYLOAD_LEN {
+        return Err(DriverError::FrameTooLarge);
+    }
+    if !wsec_pmk_passphrase_fallback_allowed(psk) {
+        return Err(DriverError::Config("wifi-psk-invalid-passphrase"));
+    }
+
+    payload[..WSEC_PASSPHRASE_PAYLOAD_LEN].fill(0);
+    put_u16_le(payload, 0, psk.len() as u16);
+    put_u16_le(payload, 2, WSEC_FLAG_PASSPHRASE);
+    payload[4..4 + psk.len()].copy_from_slice(psk);
+    Ok(())
+}
+
+fn wsec_pmk_passphrase_fallback_allowed(psk: &[u8]) -> bool {
+    (8..WSEC_PASSPHRASE_MAX_LEN).contains(&psk.len()) && !psk_is_hex_pmk(psk)
+}
+
+fn psk_is_hex_pmk(input: &[u8]) -> bool {
+    if input.len() != WSEC_PMK_LEN * 2 {
+        return false;
+    }
+    input.iter().copied().all(|byte| hex_nibble(byte).is_some())
+}
+
+fn join_event_result(
+    event: Cyw43Event,
+    secure: bool,
+    auth_status: &mut u32,
+) -> Option<Result<(), DriverError>> {
+    if event.event_type == EVENT_AUTH && event.status != STATUS_SUCCESS {
+        *auth_status = event.status;
+        if secure && event.status == STATUS_FAIL {
+            return Some(Err(DriverError::JoinFailed {
+                status: event.status,
+                auth_status: *auth_status,
+            }));
+        }
+    }
+
+    match event.event_type {
+        EVENT_SET_SSID if event.status == STATUS_SUCCESS && !secure => Some(Ok(())),
+        EVENT_SET_SSID if event.status == STATUS_SUCCESS => None,
+        EVENT_SET_SSID if event.status == STATUS_NO_NETWORKS => {
+            Some(Err(DriverError::JoinFailed {
+                status: event.status,
+                auth_status: *auth_status,
+            }))
+        }
+        EVENT_SET_SSID => Some(Err(DriverError::JoinFailed {
+            status: event.status,
+            auth_status: *auth_status,
+        })),
+        EVENT_PSK_SUP if secure && event.status == STATUS_ABORT => None,
+        EVENT_PSK_SUP if secure && event.status == STATUS_UNSOLICITED => Some(Ok(())),
+        EVENT_PSK_SUP if secure => Some(Err(DriverError::JoinFailed {
+            status: event.status,
+            auth_status: *auth_status,
+        })),
+        _ => None,
+    }
 }
 
 fn decode_hex_pmk(input: &[u8], output: &mut [u8; WSEC_PMK_LEN]) -> bool {
@@ -959,7 +1039,11 @@ impl NetDriverError for DriverError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredJoinState {
     Disabled,
-    Pending { auth_status: u32, polls: u16 },
+    Pending {
+        auth_status: u32,
+        polls: u16,
+        secure: bool,
+    },
     Failed,
 }
 
@@ -967,6 +1051,7 @@ enum DeferredJoinState {
 enum WsecPmkKind {
     Pbkdf2Passphrase,
     HexPmk,
+    FirmwarePassphrase,
 }
 
 impl WsecPmkKind {
@@ -974,6 +1059,7 @@ impl WsecPmkKind {
         match self {
             Self::Pbkdf2Passphrase => "pbkdf2-passphrase",
             Self::HexPmk => "hex-pmk",
+            Self::FirmwarePassphrase => "firmware-passphrase",
         }
     }
 }
@@ -1396,9 +1482,16 @@ impl Cyw43NetDevice {
             self.set_event_mask(&[
                 EVENT_SET_SSID,
                 EVENT_AUTH,
+                EVENT_ASSOC,
+                EVENT_REASSOC,
                 EVENT_LINK,
                 EVENT_DEAUTH,
                 EVENT_DISASSOC,
+                EVENT_ASSOC_IND,
+                EVENT_REASSOC_IND,
+                EVENT_ROAM,
+                EVENT_MIC_ERROR,
+                EVENT_PSK_SUP,
             ])
         );
         control_step!("up", self.ioctl_raw(IoctlType::Set, Ioctl::Up, 0, &[]));
@@ -1545,23 +1638,22 @@ impl Cyw43NetDevice {
     ) -> Result<(), DriverError> {
         let ssid = credentials.ssid().map_err(DriverError::Config)?;
         let psk = credentials.psk().map_err(DriverError::Config)?;
+        let secure = !psk.is_empty();
         self.deferred_join_state = DeferredJoinState::Disabled;
-        if psk.is_empty() {
+        if !secure {
             self.ioctl_set_u32(Ioctl::SetWsec, 0, 0)?;
-            self.set_optional_iovar_u32("sup_wpa", 0)?;
+            self.set_optional_iovar_u32x2("bsscfg:sup_wpa", BSSCFG_PRIMARY_INDEX, 0)?;
             self.ioctl_set_u32(Ioctl::SetInfra, 0, 1)?;
             self.ioctl_set_u32(Ioctl::SetAuth, 0, 0)?;
             self.ioctl_set_u32(Ioctl::SetWpaAuth, 0, WPA_AUTH_DISABLED)?;
             info!("[cyw43] join: auth=open ssid_len={}", ssid.len());
         } else {
             self.ioctl_set_u32(Ioctl::SetWsec, 0, WSEC_AES)?;
+            self.enable_wpa2_firmware_supplicant()?;
             self.ioctl_set_u32(Ioctl::SetInfra, 0, 1)?;
             self.ioctl_set_u32(Ioctl::SetAuth, 0, AUTH_OPEN)?;
             self.set_optional_iovar_u32("mfp", MFP_CAPABLE)?;
             self.ioctl_set_u32(Ioctl::SetWpaAuth, 0, WPA_AUTH_WPA2_PSK)?;
-            self.set_iovar_u32("sup_wpa", 1)?;
-            self.set_optional_iovar_u32("sup_wpa2_eapver", u32::MAX)?;
-            self.set_optional_iovar_u32("sup_wpa_tmo", 2500)?;
             let pmk_kind = self.set_wsec_pmk(ssid.as_bytes(), psk.as_bytes())?;
             info!(
                 "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={} pmk_kind={}",
@@ -1584,20 +1676,30 @@ impl Cyw43NetDevice {
         }
         let _ = self.ioctl_encoded(IoctlType::Set, Ioctl::SetSsid, 0, payload_len)?;
         if wait_for_completion {
-            self.wait_for_join()
+            self.wait_for_join(secure)
         } else {
             self.link_up = false;
             self.deferred_join_state = DeferredJoinState::Pending {
                 auth_status: 0,
                 polls: 0,
+                secure,
             };
             info!(
-                "[cyw43] join pending mode=deferred polls=0 ssid_len={} psk_len={}",
+                "[cyw43] join pending mode=deferred polls=0 ssid_len={} psk_len={} secure={}",
                 ssid.len(),
                 psk.len(),
+                if secure { "yes" } else { "no" },
             );
             Ok(())
         }
+    }
+
+    fn enable_wpa2_firmware_supplicant(&mut self) -> Result<(), DriverError> {
+        self.set_iovar_u32x2("bsscfg:sup_wpa", BSSCFG_PRIMARY_INDEX, 1)?;
+        self.set_optional_iovar_u32x2("bsscfg:sup_wpa2_eapver", BSSCFG_PRIMARY_INDEX, u32::MAX)?;
+        self.set_optional_iovar_u32x2("bsscfg:sup_wpa_tmo", BSSCFG_PRIMARY_INDEX, 2500)?;
+        info!("[cyw43] join: firmware-supplicant path=bsscfg enabled=yes");
+        Ok(())
     }
 
     fn set_wsec_pmk(&mut self, ssid: &[u8], psk: &[u8]) -> Result<WsecPmkKind, DriverError> {
@@ -1606,27 +1708,45 @@ impl Cyw43NetDevice {
             let payload = self.payload_mut(WSEC_PMK_PAYLOAD_LEN)?;
             pmk_kind = write_wsec_pmk_payload(payload, ssid, psk)?;
         }
-        let _ = self.ioctl_encoded(IoctlType::Set, Ioctl::SetWsecPmk, 0, WSEC_PMK_PAYLOAD_LEN)?;
-        Ok(pmk_kind)
+        match self.ioctl_encoded(IoctlType::Set, Ioctl::SetWsecPmk, 0, WSEC_PMK_PAYLOAD_LEN) {
+            Ok(_) => Ok(pmk_kind),
+            Err(DriverError::IoctlFailed { cmd, status })
+                if cmd == Ioctl::SetWsecPmk as u32
+                    && status == BCME_BADARG
+                    && wsec_pmk_passphrase_fallback_allowed(psk) =>
+            {
+                warn!(
+                    "[cyw43] join: linux-pmk rejected action=retry-firmware-passphrase status=0x{status:08x}"
+                );
+                {
+                    let payload = self.payload_mut(WSEC_PASSPHRASE_PAYLOAD_LEN)?;
+                    write_wsec_passphrase_payload(payload, psk)?;
+                }
+                let _ = self.ioctl_encoded(
+                    IoctlType::Set,
+                    Ioctl::SetWsecPmk,
+                    0,
+                    WSEC_PASSPHRASE_PAYLOAD_LEN,
+                )?;
+                Ok(WsecPmkKind::FirmwarePassphrase)
+            }
+            Err(err) => Err(err),
+        }
     }
 
-    fn wait_for_join(&mut self) -> Result<(), DriverError> {
+    fn wait_for_join(&mut self, secure: bool) -> Result<(), DriverError> {
         let mut auth_status = 0;
         for _ in 0..JOIN_WAIT_LOOPS {
             match self.process_next_frame(false)? {
                 RxFrameResult::Event(event) => {
-                    if event.event_type == EVENT_AUTH && event.status != STATUS_SUCCESS {
-                        auth_status = event.status;
-                    } else if event.event_type == EVENT_SET_SSID {
-                        if event.status == STATUS_SUCCESS {
-                            self.link_up = true;
-                            info!("[cyw43] join complete");
-                            return Ok(());
-                        }
-                        return Err(DriverError::JoinFailed {
-                            status: event.status,
-                            auth_status,
-                        });
+                    if let Some(result) = join_event_result(event, secure, &mut auth_status) {
+                        result?;
+                        self.link_up = true;
+                        info!(
+                            "[cyw43] join complete secure={}",
+                            if secure { "yes" } else { "no" }
+                        );
+                        return Ok(());
                     }
                 }
                 RxFrameResult::None | RxFrameResult::Control { .. } | RxFrameResult::Data(_) => {}
@@ -1640,6 +1760,7 @@ impl Cyw43NetDevice {
         let DeferredJoinState::Pending {
             mut auth_status,
             mut polls,
+            secure,
         } = self.deferred_join_state
         else {
             return;
@@ -1648,21 +1769,33 @@ impl Cyw43NetDevice {
         for _ in 0..DEFERRED_JOIN_FRAME_BUDGET {
             match self.process_next_frame(false) {
                 Ok(RxFrameResult::Event(event)) => {
-                    if event.event_type == EVENT_AUTH && event.status != STATUS_SUCCESS {
-                        auth_status = event.status;
-                    } else if event.event_type == EVENT_SET_SSID {
-                        if event.status == STATUS_SUCCESS {
-                            self.link_up = true;
-                            self.deferred_join_state = DeferredJoinState::Disabled;
-                            info!("[cyw43] join complete mode=deferred polls={polls}");
-                        } else {
-                            self.link_up = false;
-                            self.deferred_join_state = DeferredJoinState::Failed;
-                            warn!(
-                                "[cyw43] join failed mode=deferred status=0x{:08x} auth_status=0x{:08x} polls={polls}",
-                                event.status,
-                                auth_status,
-                            );
+                    if let Some(result) = join_event_result(event, secure, &mut auth_status) {
+                        match result {
+                            Ok(()) => {
+                                self.link_up = true;
+                                self.deferred_join_state = DeferredJoinState::Disabled;
+                                info!(
+                                    "[cyw43] join complete mode=deferred polls={polls} secure={}",
+                                    if secure { "yes" } else { "no" },
+                                );
+                            }
+                            Err(DriverError::JoinFailed { status, .. }) => {
+                                self.link_up = false;
+                                self.deferred_join_state = DeferredJoinState::Failed;
+                                warn!(
+                                    "[cyw43] join failed mode=deferred status=0x{:08x} auth_status=0x{:08x} polls={polls}",
+                                    status,
+                                    auth_status,
+                                );
+                            }
+                            Err(err) => {
+                                self.link_up = false;
+                                self.deferred_join_state = DeferredJoinState::Failed;
+                                warn!(
+                                    "[cyw43] join failed mode=deferred reason=event-error auth_status=0x{:08x} polls={polls} err={err}",
+                                    auth_status,
+                                );
+                            }
                         }
                         return;
                     }
@@ -1692,7 +1825,11 @@ impl Cyw43NetDevice {
             return;
         }
 
-        self.deferred_join_state = DeferredJoinState::Pending { auth_status, polls };
+        self.deferred_join_state = DeferredJoinState::Pending {
+            auth_status,
+            polls,
+            secure,
+        };
     }
 
     fn read_mac_address(&mut self) -> EthernetAddress {
@@ -2446,8 +2583,17 @@ impl Cyw43NetDevice {
 
     fn apply_event(&mut self, event: Cyw43Event) {
         match event.event_type {
-            EVENT_SET_SSID | EVENT_LINK => {
+            EVENT_SET_SSID if event.status != STATUS_SUCCESS => {
+                self.link_up = false;
+            }
+            EVENT_LINK => {
                 self.link_up = event.status == STATUS_SUCCESS;
+            }
+            EVENT_PSK_SUP if event.status == STATUS_UNSOLICITED => {
+                self.link_up = true;
+            }
+            EVENT_PSK_SUP if event.status != STATUS_ABORT => {
+                self.link_up = false;
             }
             EVENT_DEAUTH | EVENT_DISASSOC => {
                 self.link_up = false;
@@ -3048,23 +3194,28 @@ mod tests {
         first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
-        ioctl_wait_loops, is_transport_retryable, linux_attach_control_plane_probe_order,
-        linux_first_control_plane_iovar_order, linux_optional_iovar_allows_unsupported,
-        optional_control_plane_iovar_allows_failure, parse_event_payload, parse_rx_sdpcm_header,
-        preserve_cyw43_init_failure_exact_error, promoted_cyw43_init_failure_exact_error,
-        put_u16_le, sdpcm_control_tx_request_len, sdpcm_header_only_status_frame,
-        set_event_mask_bit, speculative_credit_window_after_promoted_timeout_retry,
+        ioctl_wait_loops, is_transport_retryable, join_event_result,
+        linux_attach_control_plane_probe_order, linux_first_control_plane_iovar_order,
+        linux_optional_iovar_allows_unsupported, optional_control_plane_iovar_allows_failure,
+        parse_event_payload, parse_rx_sdpcm_header, preserve_cyw43_init_failure_exact_error,
+        promoted_cyw43_init_failure_exact_error, psk_is_hex_pmk, put_u16_le,
+        sdpcm_control_tx_request_len, sdpcm_header_only_status_frame, set_event_mask_bit,
+        speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
         startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
-        write_sdpcm_control_tx_header, write_wsec_pmk_payload, DriverError, Ioctl, RxFrameResult,
+        write_sdpcm_control_tx_header, write_wsec_passphrase_payload, write_wsec_pmk_payload,
+        wsec_pmk_passphrase_fallback_allowed, Cyw43Event, DriverError, Ioctl, RxFrameResult,
         RxSdpcmHeader, WsecPmkKind, BCME_UNSUPPORTED, BDC_VERSION, BDC_VERSION_SHIFT,
-        CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA, CHANNEL_EVENT, CLM_CHUNK_SIZE, EVENT_AUTH,
-        EVENT_IF, EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_WAIT_LOOPS,
+        BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA, CHANNEL_EVENT,
+        CLM_CHUNK_SIZE, EVENT_ASSOC, EVENT_ASSOC_IND, EVENT_AUTH, EVENT_IF, EVENT_LINK,
+        EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC, EVENT_REASSOC_IND, EVENT_ROAM,
+        EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_WAIT_LOOPS,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
         SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
-        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_SUCCESS, WSEC_PMK_LEN,
-        WSEC_PMK_PAYLOAD_LEN,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_NO_NETWORKS,
+        STATUS_SUCCESS, STATUS_UNSOLICITED, WSEC_FLAG_PASSPHRASE, WSEC_PASSPHRASE_PAYLOAD_LEN,
+        WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
     };
     use crate::hal::HalError;
 
@@ -3146,6 +3297,14 @@ mod tests {
     fn event_constants_match_expected_values() {
         assert_eq!(EVENT_SET_SSID, 0);
         assert_eq!(EVENT_AUTH, 3);
+        assert_eq!(EVENT_ASSOC, 7);
+        assert_eq!(EVENT_REASSOC, 9);
+        assert_eq!(EVENT_ASSOC_IND, 12);
+        assert_eq!(EVENT_REASSOC_IND, 13);
+        assert_eq!(EVENT_LINK, 16);
+        assert_eq!(EVENT_ROAM, 19);
+        assert_eq!(EVENT_MIC_ERROR, 33);
+        assert_eq!(EVENT_PSK_SUP, 46);
         assert_eq!(EVENT_IF, 54);
     }
 
@@ -3157,11 +3316,67 @@ mod tests {
     }
 
     #[test]
+    fn set_event_mask_bit_sets_secure_join_completion_bit() {
+        let mut mask = [0u8; 8];
+        set_event_mask_bit(&mut mask, EVENT_PSK_SUP).expect("PSK event bit should fit");
+        assert_eq!(
+            mask[usize::from(EVENT_PSK_SUP / 8)],
+            1 << (EVENT_PSK_SUP % 8)
+        );
+    }
+
+    #[test]
     fn set_event_mask_bit_rejects_short_mask() {
         let mut mask = [0u8; 1];
         assert!(matches!(
             set_event_mask_bit(&mut mask, EVENT_IF),
             Err(DriverError::Config("wifi-event-mask-too-short"))
+        ));
+    }
+
+    #[test]
+    fn secure_join_waits_for_psk_supplicant_completion() {
+        let mut auth_status = 0;
+        let set_ssid_success = Cyw43Event {
+            event_type: EVENT_SET_SSID,
+            status: STATUS_SUCCESS,
+            ..Cyw43Event::default()
+        };
+        assert!(join_event_result(set_ssid_success, true, &mut auth_status).is_none());
+        assert!(matches!(
+            join_event_result(set_ssid_success, false, &mut auth_status),
+            Some(Ok(()))
+        ));
+
+        let psk_abort = Cyw43Event {
+            event_type: EVENT_PSK_SUP,
+            status: STATUS_ABORT,
+            ..Cyw43Event::default()
+        };
+        assert!(join_event_result(psk_abort, true, &mut auth_status).is_none());
+
+        let psk_keyed = Cyw43Event {
+            event_type: EVENT_PSK_SUP,
+            status: STATUS_UNSOLICITED,
+            ..Cyw43Event::default()
+        };
+        assert!(matches!(
+            join_event_result(psk_keyed, true, &mut auth_status),
+            Some(Ok(()))
+        ));
+    }
+
+    #[test]
+    fn join_event_reports_no_networks_status() {
+        let mut auth_status = 0;
+        let no_networks = Cyw43Event {
+            event_type: EVENT_SET_SSID,
+            status: STATUS_NO_NETWORKS,
+            ..Cyw43Event::default()
+        };
+        assert!(matches!(
+            join_event_result(no_networks, true, &mut auth_status),
+            Some(Err(DriverError::JoinFailed { status, .. })) if status == STATUS_NO_NETWORKS
         ));
     }
 
@@ -3489,6 +3704,34 @@ mod tests {
                 0x1c, 0x1d, 0x1e, 0x1f,
             ]
         );
+    }
+
+    #[test]
+    fn wsec_passphrase_payload_matches_known_good_cyw43_shape() {
+        let mut payload = [0xa5u8; WSEC_PASSPHRASE_PAYLOAD_LEN];
+        write_wsec_passphrase_payload(&mut payload, b"F33dM3!W00f!")
+            .expect("fallback passphrase payload should encode");
+
+        assert_eq!(&payload[0..2], &12u16.to_le_bytes());
+        assert_eq!(&payload[2..4], &WSEC_FLAG_PASSPHRASE.to_le_bytes());
+        assert_eq!(&payload[4..16], b"F33dM3!W00f!");
+        assert!(payload[16..].iter().copied().all(|byte| byte == 0));
+    }
+
+    #[test]
+    fn wsec_passphrase_fallback_excludes_hex_pmk() {
+        assert!(wsec_pmk_passphrase_fallback_allowed(b"F33dM3!W00f!"));
+        assert!(psk_is_hex_pmk(
+            b"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+        ));
+        assert!(!wsec_pmk_passphrase_fallback_allowed(
+            b"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+        ));
+    }
+
+    #[test]
+    fn firmware_supplicant_uses_primary_bsscfg_index() {
+        assert_eq!(BSSCFG_PRIMARY_INDEX, 0);
     }
 
     #[test]

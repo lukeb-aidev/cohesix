@@ -40,6 +40,18 @@ const ADDRESS_RETRY_PATH_KEEP_TT_RECYCLE: u8 = 4;
 const ADDRESS_RETRY_PATH_CONTEXT_STATE: u8 = 5;
 const ADDRESS_RETRY_PATH_DIRECT_FAIL: u8 = 6;
 const ADDRESS_RETRY_PATH_DROP_TT_CONTEXT: u8 = 7;
+const UBOOT_ADDRESS_DEVICE_SETTLE_SPINS: usize = 500_000;
+const UBOOT_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS: usize = 50_000;
+const UBOOT_SET_CONFIGURATION_SETTLE_SPINS: usize = 500_000;
+const UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_LEN: usize = 64;
+const UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN: usize = 8;
+
+#[inline]
+fn spin_for_uboot_settle(spins: usize) {
+    for _ in 0..spins {
+        spin_loop();
+    }
+}
 
 #[inline]
 const fn synthetic_enabled_root_portsc(speed: u8) -> u32 {
@@ -1306,6 +1318,8 @@ impl<H: Dma> UsbDevice<H> {
             return Err(UsbError::CmdFail(completion::CONTEXT_STATE_ERROR));
         }
 
+        spin_for_uboot_settle(UBOOT_ADDRESS_DEVICE_SETTLE_SPINS);
+
         // Allocate ep_rings on heap to reduce stack usage
         let mut ep_rings = Vec::with_capacity(31);
         ep_rings.resize_with(31, || None);
@@ -1632,9 +1646,26 @@ impl<H: Dma> UsbDevice<H> {
 
     /// Get device descriptor
     pub fn get_device_descriptor(&mut self) -> Result<DeviceDesc> {
+        if self.speed == reg::SPEED_FULL {
+            let mut prime_buf = [0u8; UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_LEN];
+            let setup = SetupPacket::get_descriptor(
+                desc_type::DEVICE,
+                0,
+                UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_LEN as u16,
+            );
+            let transferred = self.control_transfer(&setup, Some(&mut prime_buf))?;
+            if transferred < UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN {
+                return Err(UsbError::InvalidDescriptor);
+            }
+            spin_for_uboot_settle(UBOOT_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS);
+        }
+
         let mut buf = [0u8; 18];
         let setup = SetupPacket::get_descriptor(desc_type::DEVICE, 0, 18);
         let transferred = self.control_transfer(&setup, Some(&mut buf))?;
+        if transferred < core::mem::size_of::<DeviceDesc>() {
+            return Err(UsbError::InvalidDescriptor);
+        }
         self.ctrl.emit_diag(
             0x03a7,
             transferred as u64,
@@ -1746,6 +1777,7 @@ impl<H: Dma> UsbDevice<H> {
     pub fn set_configuration(&self, config: u8) -> Result<()> {
         let setup = SetupPacket::set_configuration(config);
         self.control_transfer(&setup, None)?;
+        spin_for_uboot_settle(UBOOT_SET_CONFIGURATION_SETTLE_SPINS);
         Ok(())
     }
 
@@ -2262,6 +2294,15 @@ mod tests {
             root_portsc_for_address_diag(false, reg::SPEED_HIGH, live_portsc),
             live_portsc
         );
+    }
+
+    #[test]
+    fn uboot_enumeration_settles_match_pi4_spin_calibration() {
+        assert_eq!(UBOOT_ADDRESS_DEVICE_SETTLE_SPINS, 500_000);
+        assert_eq!(UBOOT_SET_CONFIGURATION_SETTLE_SPINS, 500_000);
+        assert_eq!(UBOOT_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS, 50_000);
+        assert_eq!(UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_LEN, 64);
+        assert_eq!(UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN, 8);
     }
 
     #[test]

@@ -7,10 +7,11 @@ use crate::{Dma, Result, UsbError};
 
 use core::{
     marker::PhantomData,
-    sync::atomic::{Ordering, compiler_fence},
+    sync::atomic::{compiler_fence, Ordering},
 };
 
-const EVENT_RING_ERST_SEGMENTS: usize = 8;
+const XHCI_RING_ALIGNMENT: usize = 64;
+const EVENT_RING_ERST_SEGMENTS: usize = 1;
 
 /// Transfer Request Block (TRB) - 16 bytes aligned.
 ///
@@ -424,7 +425,7 @@ impl<H: Dma> Ring<H> {
         let mem = PhysMem::alloc(
             host,
             trb_count * core::mem::size_of::<Trb>(),
-            core::mem::align_of::<Trb>(),
+            XHCI_RING_ALIGNMENT,
         )?;
         let mut ring = Self {
             mem,
@@ -551,7 +552,7 @@ impl<H: Dma> EventRing<H> {
         let ring = PhysMem::alloc(
             host,
             trb_count * core::mem::size_of::<Trb>(),
-            core::mem::align_of::<Trb>(),
+            XHCI_RING_ALIGNMENT,
         )?;
         let erst = PhysMem::alloc(host, host.page_size(), ERST_TABLE_ALIGNMENT)?;
 
@@ -699,10 +700,10 @@ impl<H: Dma> EventRing<H> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PhysMem, Ring, Trb, trb_type};
+    use super::{trb_type, PhysMem, Ring, Trb, XHCI_RING_ALIGNMENT};
     use crate::{Dma, DmaShareError};
     use core::sync::atomic::{AtomicUsize, Ordering};
-    use std::alloc::{Layout, alloc_zeroed, dealloc};
+    use std::alloc::{alloc_zeroed, dealloc, Layout};
     use std::sync::Mutex;
     use std::vec::Vec;
 
@@ -836,6 +837,16 @@ mod tests {
     }
 
     #[test]
+    fn command_ring_uses_xhci_required_alignment() {
+        let host = MockDma::default();
+        let ring = Ring::<MockDma>::new(&host, 64).expect("allocate command ring");
+
+        assert_eq!(XHCI_RING_ALIGNMENT, 64);
+        assert_eq!(ring.mem.align(), XHCI_RING_ALIGNMENT);
+        assert_eq!(ring.phys(&host) & 0x3f, 0);
+    }
+
+    #[test]
     fn event_ring_sync_current_calls_host_before_cpu_read() {
         let host = MockDma::default();
         let event_ring = super::EventRing::<MockDma>::new(&host, 8).expect("allocate event ring");
@@ -898,43 +909,33 @@ mod tests {
     }
 
     #[test]
-    fn event_ring_erst_uses_linux_shaped_segment_count() {
+    fn event_ring_erst_uses_uboot_shaped_single_segment() {
         let host = MockDma::default();
-        let event_ring = super::EventRing::<MockDma>::new(&host, 256).expect("allocate event ring");
+        let event_ring = super::EventRing::<MockDma>::new(&host, 64).expect("allocate event ring");
         let entry = event_ring.erst.as_ptr::<super::ErstEntry>();
 
         assert_eq!(core::mem::size_of::<super::ErstEntry>(), 16);
+        assert_eq!(event_ring.ring.align(), XHCI_RING_ALIGNMENT);
+        assert_eq!(event_ring.ring.phys(&host) & 0x3f, 0);
         assert_eq!(event_ring.erst.align(), 64);
-        assert_eq!(event_ring.erst_entries(), 8);
-        for index in 0..8 {
-            // SAFETY: EventRing::new initialized the bounded eight-entry ERST
-            // prefix, and this test reads only that initialized prefix.
-            let observed = unsafe { entry.add(index).read() };
-            assert_eq!(
-                observed.base,
-                event_ring.ring.phys(&host) + (index as u64 * 32 * 16)
-            );
-            assert_eq!(observed.size, 32);
-        }
+        assert_eq!(event_ring.erst.phys(&host) & 0x3f, 0);
+        assert_eq!(event_ring.erst_entries(), 1);
+        // SAFETY: EventRing::new initialized the first ERST entry.
+        let observed = unsafe { entry.read() };
+        assert_eq!(observed.base, event_ring.ring.phys(&host));
+        assert_eq!(observed.size, 64);
     }
 
     #[test]
     fn event_ring_erst_entries_are_hardware_strided() {
         let host = MockDma::default();
-        let event_ring = super::EventRing::<MockDma>::new(&host, 256).expect("allocate event ring");
+        let event_ring = super::EventRing::<MockDma>::new(&host, 64).expect("allocate event ring");
         let bytes = event_ring.erst.as_ptr::<u8>();
 
-        for index in 0..8 {
-            // SAFETY: each xHCI ERST entry is a 16-byte hardware record. The
-            // table is page-sized and EventRing::new initialized the first
-            // eight records, so the byte-stride read stays inside the table.
-            let observed =
-                unsafe { (bytes.add(index * 16) as *const super::ErstEntry).read_unaligned() };
-            assert_eq!(
-                observed.base,
-                event_ring.ring.phys(&host) + (index as u64 * 32 * 16)
-            );
-            assert_eq!(observed.size, 32);
-        }
+        // SAFETY: each xHCI ERST entry is a 16-byte hardware record. The table
+        // is page-sized and EventRing::new initialized the first record.
+        let observed = unsafe { (bytes as *const super::ErstEntry).read_unaligned() };
+        assert_eq!(observed.base, event_ring.ring.phys(&host));
+        assert_eq!(observed.size, 64);
     }
 }

@@ -27,6 +27,7 @@ use alloc::sync::Arc;
 use core::{hint::spin_loop, ptr};
 
 const BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD: u8 = 4;
+const UBOOT_BOOT_KEYBOARD_IDLE_DURATION: u8 = 10;
 
 #[inline]
 const fn has_report_payload(
@@ -869,8 +870,12 @@ impl<H: Dma> HidDevice<H> {
             hid.set_protocol(0)?; // Boot protocol
         }
 
-        // Set idle rate to 0 (only report on change)
-        let _ = hid.set_idle(0, 0);
+        let idle_duration = if hid_type == HidType::Keyboard {
+            UBOOT_BOOT_KEYBOARD_IDLE_DURATION
+        } else {
+            0
+        };
+        let _ = hid.set_idle(idle_duration, 0);
 
         Ok(hid)
     }
@@ -1436,6 +1441,11 @@ mod tests {
                 1,
             )
         );
+    }
+
+    #[test]
+    fn boot_keyboard_idle_duration_matches_uboot_polling_config() {
+        assert_eq!(UBOOT_BOOT_KEYBOARD_IDLE_DURATION, 10);
     }
 
     #[test]

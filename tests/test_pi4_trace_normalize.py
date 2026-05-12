@@ -727,7 +727,7 @@ def test_gate_summary_preserves_command_timeout_over_runtime_unavailable() -> No
             "tag=cmd-recovery-retry-timeout cmd_addr=0x0000000404027000",
             "[local-seat] xhci root-port command-probe "
             "result=enable-slot-timeout bus=pcie-window detail=EnableSlotTimeout "
-            "event_generation=linux-shaped-bounded",
+            "event_generation=uboot-poll-preserved-leading-events",
             "[local-seat] usb probe path pathway=1 attempt=1/1 "
             "outcome=root-port-sample-deferred progress=controller-ready "
             "command_probe=enable-slot-timeout diag_tag=cmd-recovery-retry-timeout",
@@ -789,7 +789,7 @@ def test_gate_summary_treats_usb_prompt_safe_return_as_event_timeout() -> None:
             "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
             "[local-seat] xhci.diag stage=0x0379 "
             "tag=cmd-prompt-safe-return-to-shell "
-            "a=0x0000000404024000 b=0 c=256",
+            "a=0x0000000404024000 b=0 c=64",
             "[local-seat] xhci root-port command-probe "
             "result=enable-slot-timeout bus=pcie-window "
             "action=return-to-shell detail=poll-timeout",
@@ -1502,7 +1502,7 @@ def test_gate_summary_treats_enable_slot_cleanup_failure_as_command_proof() -> N
             "[local-seat] xhci root-port command-probe "
             "result=enable-slot-ok-cleanup-failed "
             "bus=pcie-window slot=1 cleanup=disable-slot-timeout "
-            "event_generation=poll-only",
+            "event_generation=uboot-poll-preserved-leading-events",
         ]
     )
 
@@ -2642,6 +2642,33 @@ def test_gate_summary_tracks_wsec_pmk_bad_argument_over_stale_hint() -> None:
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "wsec-pmk-bad-argument"
     assert gates.wifi_exact == "wsec-pmk-bad-argument"
+    assert gates.wifi_phase == "join"
+
+
+def test_gate_summary_tracks_firmware_supplicant_unsupported_over_stale_hint() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane reply "
+            "cmd=0x00000107 id=31 status=0xffffffe9 response_len=0 copied=0",
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane step=join "
+            "action=fail err=cyw43 ioctl 0x00000107 failed status=0xffffffe9",
+            "wifi: f2_state=linux-configured exact_error="
+            "cyw43-control-plane-partial-hint-visibility",
+            "wifi: f2_gate current=control-plane expected=control-plane-ready "
+            "blocker=control-plane-partial-hint-visibility",
+            "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
+            "exact=cyw43-control-plane-partial-hint-visibility",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "firmware-supplicant-unsupported"
+    assert gates.wifi_exact == "firmware-supplicant-unsupported"
+    assert gates.wifi_phase == "join"
 
 
 def test_gate_summary_tracks_bdc_event_over_stale_partial_hint_visibility() -> None:

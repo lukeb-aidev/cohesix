@@ -4722,41 +4722,26 @@ fn xhci_probe_command_ring_after_event_drain(
     } else {
         "phys"
     };
-    let use_linux_event_generation = pcie_dma_window;
     let event_generation = if preserved_leading_port_events {
-        "linux-shaped-preserved-leading-events"
+        "uboot-poll-preserved-leading-events"
     } else if event_candidate_mask == 0 {
-        if use_linux_event_generation {
-            "linux-shaped-polled"
-        } else {
-            "poll-only"
-        }
-    } else if use_linux_event_generation {
-        "linux-shaped-bounded"
+        "uboot-poll-empty"
     } else {
-        "prompt-safe-poll"
+        "uboot-poll-skip-unexpected"
     };
     let mut line = heapless::String::<320>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=enable-slot-before-port-sample bus={bus} event_generation={event_generation} pci_intx_masked=yes irq27_role=timer-only reason=linux-captured-first-command"
+            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=enable-slot-before-port-sample bus={bus} event_generation={event_generation} pci_intx_masked=yes irq27_role=timer-only reason=uboot-command-contract"
         ),
     );
     boot_log::force_uart_line(line.as_str());
 
-    let enable_slot_result = if use_linux_event_generation {
-        ctrl.probe_enable_slot_linux_event_generation_prompt_safe()
-    } else {
-        ctrl.probe_enable_slot_command_prompt_safe()
-    };
+    let enable_slot_result = ctrl.probe_enable_slot_command_prompt_safe();
     match enable_slot_result {
         Ok(slot_id) => {
-            let cleanup_result = if use_linux_event_generation {
-                ctrl.disable_slot_linux_event_generation_prompt_safe(slot_id)
-            } else {
-                ctrl.disable_slot_command_prompt_safe(slot_id)
-            };
+            let cleanup_result = ctrl.disable_slot_command_prompt_safe(slot_id);
             let cleanup = usb_disable_slot_cleanup_label(cleanup_result);
             let result = if cleanup == "disable-slot-ok" {
                 "enable-slot-ok"
@@ -4767,7 +4752,7 @@ fn xhci_probe_command_ring_after_event_drain(
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci root-port command-probe result={result} bus={bus} slot={slot_id} cleanup={cleanup} action=unlock-port-sampling reason=linux-captured-first-command-before-root-port-sample event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
+                    "[local-seat] xhci root-port command-probe result={result} bus={bus} slot={slot_id} cleanup={cleanup} action=unlock-port-sampling reason=uboot-enable-slot-before-root-port-sample event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
                 ),
             );
             boot_log::force_uart_line(line.as_str());

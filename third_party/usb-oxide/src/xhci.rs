@@ -16,8 +16,8 @@ use spin::Mutex;
 
 const MMIO_INIT_SIZE: usize = 0x1000;
 const MMIO_MAX_SIZE: usize = 0x20_0000;
-const CMD_RING_SIZE: usize = 256;
-const EVENT_RING_SIZE: usize = 256;
+const CMD_RING_SIZE: usize = 64;
+const EVENT_RING_SIZE: usize = 64;
 const STOP_WAIT_SPINS: usize = 10_000_000;
 const RESET_WAIT_SPINS: usize = 10_000_000;
 const PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS: usize = RESET_WAIT_SPINS * 10;
@@ -29,7 +29,7 @@ const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_POLL_ONLY_WAIT_SPINS: usize = 64;
-const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 64;
+const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 1_000;
 const COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL: usize = 250_000;
 const COMMAND_PROMPT_SAFE_REDOORBELL_POLL: usize = 4;
 const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
@@ -39,6 +39,12 @@ const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 const fn prompt_safe_command_recovery_avoids_live_operational_reads() -> bool {
     true
 }
+
+#[inline(always)]
+const fn prompt_safe_command_redoorbell_enabled(linux_event_generation: bool) -> bool {
+    linux_event_generation
+}
+
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
 const COMMAND_RING_DEBUG_TRBS: usize = 4;
@@ -46,7 +52,7 @@ const LINUX_COMMAND_PROBE_DNCTRL: u32 = 0x0000_0002;
 const LINUX_COMMAND_PROBE_IMOD: u32 = 0x0000_00a0;
 const LINUX_COMMAND_PROBE_USBCMD: u32 = reg::USBCMD_RUN | reg::USBCMD_INTE;
 const LINUX_COMMAND_PROBE_DNCTRL_FLUSH_STAGE: u16 = 0x0338;
-const LINUX_COMMAND_PUBLISH_BARRIER_STAGE: u16 = 0x0339;
+const COMMAND_PUBLISH_BARRIER_STAGE: u16 = 0x0339;
 const LINUX_COMMAND_PROBE_IMOD_FLUSH_STAGE: u16 = 0x035d;
 const LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE: u16 = 0x035e;
 const LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE: u16 = 0x035c;
@@ -279,9 +285,7 @@ const fn polling_event_generation_run_usbcmd(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot) {
-        return run_usbcmd | reg::USBCMD_INTE;
-    }
+    let _ = (firmware_handoff, runtime_seed_snapshot);
     run_usbcmd & !reg::USBCMD_INTE
 }
 
@@ -290,9 +294,7 @@ const fn polling_event_generation_iman_value(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot) {
-        return reg::IMAN_IE;
-    }
+    let _ = (firmware_handoff, runtime_seed_snapshot);
     polling_iman_value()
 }
 
@@ -326,9 +328,7 @@ const fn polling_command_proof_dnctrl_value(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> u32 {
-    if runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot) {
-        return LINUX_COMMAND_PROBE_DNCTRL;
-    }
+    let _ = (firmware_handoff, runtime_seed_snapshot);
     0
 }
 
@@ -974,6 +974,19 @@ const fn replay_staged_dcbaap_snapshot_before_publish_with_snapshot(
     // Preserve-state is not selected by Pi 4 local-seat. Keep this generic
     // snapshot helper from replaying a stale current value before a real publish.
     !runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+}
+
+#[inline(always)]
+const fn replay_staged_crcr_snapshot_before_publish_with_snapshot(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+) -> bool {
+    // U-Boot publishes CRCR as the target command-ring pointer, not as a
+    // staged zero followed by the target. The Pi 4 platform-reset path already
+    // owns fresh Cohesix rings, so replaying a synthetic current CRCR value
+    // creates a controller-visible edge that the known-good contract lacks.
+    !runtime_preserve_stop_state_handoff(firmware_handoff, runtime_seed_snapshot)
+        && !runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -3467,15 +3480,20 @@ impl<H: Dma> XhciCtrl<H> {
                 emit_preserve_state_crcr_skip_diag(crcr_offset, current_crcr_publish, crcr);
                 return;
             }
-            Self::write_crcr_reg_u64_done_diag_at(
-                this.mmio,
-                crcr_offset,
-                current_crcr_publish,
-                0x02ac,
-                0x02ad,
-                0x02ae,
-                0x02af,
-            );
+            if replay_staged_crcr_snapshot_before_publish_with_snapshot(
+                this.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+            ) {
+                Self::write_crcr_reg_u64_done_diag_at(
+                    this.mmio,
+                    crcr_offset,
+                    current_crcr_publish,
+                    0x02ac,
+                    0x02ad,
+                    0x02ae,
+                    0x02af,
+                );
+            }
             Self::write_crcr_reg_u64_done_diag_at(
                 this.mmio,
                 crcr_offset,
@@ -5164,6 +5182,7 @@ impl<H: Dma> XhciCtrl<H> {
 
             let Some(trb) = trb else {
                 if !replayed_doorbell
+                    && prompt_safe_command_redoorbell_enabled(linux_event_generation)
                     && poll.saturating_add(1) >= COMMAND_PROMPT_SAFE_REDOORBELL_POLL
                 {
                     emit_xhci_diag(
@@ -5637,6 +5656,8 @@ impl<H: Dma> XhciCtrl<H> {
             ((cycle_before as u64) << 1) | (cycle_after as u64),
         );
         drop(cmd_ring);
+        ring_write_barrier();
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
         self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
@@ -5677,6 +5698,8 @@ impl<H: Dma> XhciCtrl<H> {
             ((cycle_before as u64) << 1) | (cycle_after as u64),
         );
         drop(cmd_ring);
+        ring_write_barrier();
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
         self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
@@ -5730,7 +5753,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         drop(cmd_ring);
         ring_write_barrier();
-        emit_xhci_diag(LINUX_COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
         self.enable_linux_command_event_generation_for_probe()?;
         if !self.ring_cmd_doorbell() {
             return Err(UsbError::PostedWriteFlushFailed);
@@ -5769,7 +5792,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         drop(cmd_ring);
         ring_write_barrier();
-        emit_xhci_diag(LINUX_COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
         self.enable_linux_command_event_generation_for_probe()?;
@@ -5796,7 +5819,7 @@ impl<H: Dma> XhciCtrl<H> {
                 );
                 drop(cmd_ring);
                 ring_write_barrier();
-                emit_xhci_diag(LINUX_COMMAND_PUBLISH_BARRIER_STAGE, retry_cmd_addr, 1, 0);
+                emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, retry_cmd_addr, 1, 0);
                 self.emit_command_ring_debug_snapshot(0x0360);
                 self.emit_command_event_ring_debug_snapshot(0x0353);
                 self.enable_linux_command_event_generation_for_probe()?;
@@ -6344,6 +6367,7 @@ mod tests {
         probe_live_dcbaap_before_staged_publish_with_snapshot,
         prompt_safe_command_recovery_avoids_live_operational_reads,
         prompt_safe_command_timeout_live_snapshot_enabled,
+        replay_staged_crcr_snapshot_before_publish_with_snapshot,
         replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
         reset_completion_blind_settle_spins, reset_usbcmd_seed_before_hcrst,
         reset_usbcmd_seed_before_hcrst_for_init, run_seed_usbcmd, run_usbcmd_needs_live_seed_read,
@@ -6385,11 +6409,12 @@ mod tests {
         use_live_post_reset_seed_reads_for_init, use_live_post_reset_seed_reads_with_snapshot,
         xhci_port_in_range, xhci_slot_in_range, ConstructorPollingScrubMode, ScratchpadSet,
         XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
-        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL,
+        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, CMD_RING_SIZE,
         COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
+        prompt_safe_command_redoorbell_enabled,
         COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
-        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, LINUX_COMMAND_PROBE_DNCTRL,
-        LINUX_COMMAND_PROBE_IMOD, LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
+        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, EVENT_RING_SIZE,
+        LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD, LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
         PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, PORT_CHANGE_BITS, READY_WAIT_PROGRESS_SPINS,
         RESET_WAIT_SPINS, SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
         TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
@@ -7191,6 +7216,18 @@ mod tests {
             XhciFirmwareHandoff::PreserveControllerState,
             stop_state_snapshot,
         ));
+        assert!(replay_staged_crcr_snapshot_before_publish_with_snapshot(
+            XhciFirmwareHandoff::ColdStartFromSnapshot,
+            runtime_ring_snapshot,
+        ));
+        assert!(replay_staged_crcr_snapshot_before_publish_with_snapshot(
+            XhciFirmwareHandoff::ResetlessReinit,
+            stop_state_snapshot,
+        ));
+        assert!(!replay_staged_crcr_snapshot_before_publish_with_snapshot(
+            XhciFirmwareHandoff::PreserveControllerState,
+            stop_state_snapshot,
+        ));
         assert!(preserve_state_dcbaap_write_is_redundant(0, 0));
         assert!(preserve_state_dcbaap_write_is_redundant(0x1000, 0x1000));
         assert!(!preserve_state_dcbaap_write_is_redundant(0, 0x1000));
@@ -7941,7 +7978,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_fresh_ring_handoff_arms_linux_command_event_generation() {
+    fn platform_reset_fresh_ring_handoff_stays_on_uboot_polling_contract() {
         let stop_seed = Some(XhciRuntimeSeedSnapshot {
             usbcmd: Some(0),
             usbsts: Some(reg::USBSTS_HCH),
@@ -7959,14 +7996,14 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            reg::USBCMD_RUN | reg::USBCMD_INTE
+            reg::USBCMD_RUN
         );
         assert_eq!(
             polling_event_generation_iman_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            reg::IMAN_IE
+            polling_iman_value()
         );
         assert_eq!(
             polling_event_generation_run_usbcmd(
@@ -7974,21 +8011,21 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ) & reg::USBCMD_INTE,
-            reg::USBCMD_INTE
+            0
         );
         assert_eq!(
             polling_event_generation_iman_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ) & reg::IMAN_IE,
-            reg::IMAN_IE
+            0
         );
         assert_eq!(
             polling_command_proof_dnctrl_value(
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_seed,
             ),
-            LINUX_COMMAND_PROBE_DNCTRL
+            0
         );
         assert_eq!(
             polling_event_generation_run_usbcmd(reg::USBCMD_RUN, XhciFirmwareHandoff::None, None,),
@@ -8050,12 +8087,16 @@ mod tests {
         assert!(command_timeout_live_snapshot_spins() > 0);
         assert_eq!(command_timeout_live_snapshot_spins(), 32);
         assert_eq!(COMMAND_POLL_ONLY_WAIT_SPINS, 64);
-        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 64);
+        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 1_000);
+        assert_eq!(CMD_RING_SIZE, 64);
+        assert_eq!(EVENT_RING_SIZE, 64);
         assert_eq!(COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, 250_000);
         assert_eq!(COMMAND_PROMPT_SAFE_REDOORBELL_POLL, 4);
         assert!(COMMAND_PROMPT_SAFE_REDOORBELL_POLL < COMMAND_PROMPT_SAFE_WAIT_POLLS);
+        assert!(!prompt_safe_command_redoorbell_enabled(false));
+        assert!(prompt_safe_command_redoorbell_enabled(true));
         assert!(command_timeout_live_snapshot_spins() < COMMAND_POLL_ONLY_WAIT_SPINS);
-        assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS <= COMMAND_POLL_ONLY_WAIT_SPINS);
+        assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS > COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_WAIT_SPINS);
     }
@@ -8352,7 +8393,7 @@ mod tests {
         ));
         assert_eq!(
             polling_command_proof_dnctrl_value(XhciFirmwareHandoff::PlatformResetComplete, None),
-            LINUX_COMMAND_PROBE_DNCTRL
+            0
         );
         assert!(defer_erdp_publish_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
@@ -8454,7 +8495,7 @@ mod tests {
                 XhciFirmwareHandoff::PlatformResetComplete,
                 stop_state_only_snapshot,
             ),
-            LINUX_COMMAND_PROBE_DNCTRL
+            0
         );
         assert!(defer_erdp_publish_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
@@ -8684,6 +8725,10 @@ mod tests {
             None
         ));
         assert!(defer_crcr_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None
+        ));
+        assert!(!replay_staged_crcr_snapshot_before_publish_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None
         ));

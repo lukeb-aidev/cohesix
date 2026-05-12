@@ -1128,6 +1128,19 @@ def normalize_wifi_blocker(value: str) -> str:
         or "ioctl 0x10c" in lower
     ) and ("status=0xfffffffe" in lower or "badarg" in lower or "bad-argument" in lower):
         return "wsec-pmk-bad-argument"
+    if (
+        "sup_wpa" in lower
+        or "firmware-supplicant" in lower
+        or (
+            ("ioctl 0x00000107" in lower or "ioctl 0x107" in lower)
+            and "step=join" in lower
+        )
+    ) and (
+        "status=0xffffffe9" in lower
+        or "bcme_unsupported" in lower
+        or "unsupported" in lower
+    ):
+        return "firmware-supplicant-unsupported"
     if "ioctl-timeout" in lower or "ioctl timeout" in lower:
         return "ioctl-timeout"
     if "bdc-event" in lower:
@@ -1246,6 +1259,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-plane-interrupt-programming-drift",
         "cyw43-control-plane-partial-hint-visibility",
         "wsec-pmk-bad-argument",
+        "firmware-supplicant-unsupported",
     ):
         if reason in lower:
             return reason
@@ -1922,6 +1936,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-interrupts-deferred",
         "control-plane-partial-hint-visibility",
         "control-plane-reply-idle-loop",
+        "firmware-supplicant-unsupported",
         "wsec-pmk-bad-argument",
     }
     specific_sdio_blockers = precise_ht_blockers - direct_sdio_blockers
@@ -1961,6 +1976,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     chipcommon_config_write_active = False
     socram_core_ctrl_stage: str | None = None
     specific_reset_blocker: str | None = None
+    join_programming_blocker: str | None = None
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -1985,6 +2001,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "boot-waiting-for-wifi",
         }:
             explicit_blocker = raw_contract_blocker
+        if (
+            blocker
+            in {
+                "firmware-supplicant-unsupported",
+                "wsec-pmk-bad-argument",
+            }
+            and explicit_blocker == "control-plane-partial-hint-visibility"
+            and raw.startswith("wifi:")
+        ):
+            explicit_blocker = None
+            raw_contract_blocker = "none"
         if raw_contract_blocker in {
             "control-plane",
             "control-plane-bdc-event",
@@ -1996,10 +2023,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-reply-idle-loop",
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
+            "firmware-supplicant-unsupported",
             "ioctl-timeout",
             "wsec-pmk-bad-argument",
         } and explicit_blocker in {None, "cyw43", "nettest-policy-disabled"}:
             explicit_blocker = raw_contract_blocker
+        if explicit_blocker in {
+            "firmware-supplicant-unsupported",
+            "wsec-pmk-bad-argument",
+        }:
+            join_programming_blocker = explicit_blocker
         if "firmware stage=control-plane-write" in raw and "linux-f2-write-shape" in raw:
             control_plane_write_seen = True
             control_plane_reply_seen_after_write = False
@@ -2170,7 +2203,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         ) and " action=fail" in raw:
             gate = max(gate, 7)
             if (
-                blocker in {"control-plane-bdc-event", "wsec-pmk-bad-argument"}
+                blocker
+                in {
+                    "control-plane-bdc-event",
+                    "firmware-supplicant-unsupported",
+                    "wsec-pmk-bad-argument",
+                }
                 and explicit_blocker in precise_control_plane_blockers
             ):
                 blocker = blocker
@@ -2531,6 +2569,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-reply-idle-loop",
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
+            "firmware-supplicant-unsupported",
             "ioctl-timeout",
             "wsec-pmk-bad-argument",
         }:
@@ -2539,7 +2578,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             else:
                 gate = max(gate, 7)
             preserve_precise_control = (
-                blocker in {"control-plane-bdc-event", "wsec-pmk-bad-argument"}
+                blocker
+                in {
+                    "control-plane-bdc-event",
+                    "firmware-supplicant-unsupported",
+                    "wsec-pmk-bad-argument",
+                }
                 and explicit_blocker in precise_control_plane_blockers
             )
             if preserve_precise_control:
@@ -2573,6 +2617,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "control-plane-startup-link-timeout",
                 "firmware-channel-f2",
                 "firmware-ready-timeout",
+                "firmware-supplicant-unsupported",
                 "ioctl-timeout",
                 "mailbox-ready-timeout",
                 "sdpcm-credit-timeout",
@@ -2613,7 +2658,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 3)
             blocker = "firmware-verify-readback"
         elif explicit_blocker:
-            if blocker not in precise_ht_blockers and blocker != "ht-clock-timeout":
+            if (
+                blocker in precise_control_plane_blockers
+                and explicit_blocker in precise_control_plane_blockers | {"control-plane"}
+            ):
+                pass
+            elif blocker not in precise_ht_blockers and blocker != "ht-clock-timeout":
                 blocker = explicit_blocker
 
     if blocker == "function2-disabled" and gate >= 4 and not ht_available_seen:
@@ -2625,6 +2675,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         gate = max(gate, 7)
         post_f2_progress_seen = True
         blocker = "control-plane-reply-idle-loop"
+    if join_programming_blocker is not None and blocker in {
+        "control-plane",
+        "control-plane-partial-hint-visibility",
+        "control-plane-reply-idle-loop",
+        "ioctl-timeout",
+    }:
+        gate = max(gate, 7)
+        blocker = join_programming_blocker
     if blocker in precise_ht_blockers and not ht_available_seen and not post_f2_progress_seen:
         gate = min(gate, 4)
     return gate, blocker
@@ -2655,6 +2713,16 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or "none"
         )
         return "wsec-pmk-bad-argument", phase
+    if normalize_wifi_blocker(event.raw) == "firmware-supplicant-unsupported":
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "none"
+        )
+        return "firmware-supplicant-unsupported", phase
     for key in ("exact", "exact_error", "err", "cause", "detail", "reason"):
         value = event.fields.get(key)
         if value and value not in {"none", "n/a"}:
@@ -2741,6 +2809,11 @@ def summarize_wifi_failure_detail(
             phase = event_phase
             line = event.line
         if candidate == wifi_blocker:
+            if blocker_matched and wifi_blocker in {
+                "wsec-pmk-bad-argument",
+                "firmware-supplicant-unsupported",
+            }:
+                continue
             blocker_matched = True
             exact = event_exact
             if exact == "none" and "sdio cmd53 r5 fail" in raw:
