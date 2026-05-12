@@ -271,3 +271,25 @@ impl SerialDriver for KernelSerialDriver {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pi4_runtime_uart_prefers_mini_uart_before_pl011() {
+        assert_eq!(
+            UART_CANDIDATES,
+            [
+                KernelUartCandidate::QemuPl011,
+                KernelUartCandidate::Pi4MiniUart,
+                KernelUartCandidate::Pi4Pl011,
+            ]
+        );
+        assert_eq!(KernelUartCandidate::Pi4Pl011.kind(), KernelUartKind::Pl011);
+        assert_eq!(
+            KernelUartCandidate::Pi4MiniUart.kind(),
+            KernelUartKind::Bcm2711MiniUart
+        );
+    }
+}

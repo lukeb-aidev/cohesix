@@ -23,8 +23,8 @@ use usb_oxide::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
     hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook,
     set_xhci_port_access_hooks, set_xhci_posted_write_flush_hook, ConfigDesc, DeviceDesc, Dma,
-    DmaShareError, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice, UsbError,
-    XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
+    DmaShareError, EndpointDesc, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice,
+    UsbError, XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
 };
 
 use crate::bootstrap::log as boot_log;
@@ -146,15 +146,33 @@ const XHCI_MAX_PROBE_PORTS: usize = 16;
 const XHCI_PORT_DETECT_PASSES: usize = 4;
 const XHCI_PLATFORM_RESET_PORT_DETECT_PASSES: usize = XHCI_PORT_DETECT_PASSES;
 const XHCI_PORT_DETECT_SETTLE_SPINS: usize = 200_000;
-const XHCI_PORT_DETECT_FINAL_WAIT_MS: u64 = 100;
+const XHCI_ROOT_PORT_DEBOUNCE_TIMEOUT_MS: u64 = 5_000;
+const XHCI_ROOT_PORT_DEBOUNCE_POLL_MS: u64 = 20;
+const XHCI_ROOT_PORT_DEBOUNCE_POLLS: usize =
+    (XHCI_ROOT_PORT_DEBOUNCE_TIMEOUT_MS / XHCI_ROOT_PORT_DEBOUNCE_POLL_MS) as usize;
+const XHCI_PORT_DETECT_FINAL_WAIT_MS: u64 = XHCI_ROOT_PORT_DEBOUNCE_TIMEOUT_MS;
 const XHCI_PORT_EVENT_DRAIN_LIMIT: usize = 16;
 const HUB_ENUM_MAX_DEPTH: usize = 2;
 const HUB_MAX_DOWNSTREAM_PORTS: usize = 15;
 const HUB_DESC_MAX_BYTES: usize = 12;
 const HUB_PORT_STATUS_BYTES: usize = 4;
-const HUB_PORT_STATUS_RETRY_LOOPS: usize = 64;
+const HUB_DEBOUNCE_TIMEOUT_MS: u64 = 5_000;
+const HUB_PORT_STATUS_RETRY_DELAY_MS: u64 = 20;
+const HUB_PORT_STATUS_RETRY_LOOPS: usize =
+    (HUB_DEBOUNCE_TIMEOUT_MS / HUB_PORT_STATUS_RETRY_DELAY_MS) as usize;
 const HUB_PORT_STATUS_QUICK_RETRIES: usize = 4;
 const HUB_SET_FEATURE_RETRIES: usize = 3;
+const HUB_PORT_RESET_MAX_TRIES: usize = 5;
+const HUB_RESET_SHORT_SETTLE_MS: u64 = 20;
+const HUB_RESET_LONG_SETTLE_MS: u64 = 200;
+const HUB_MULTI_TT_ALT_SETTING: u8 = 1;
+const HUB_DELAYED_CHILD_RETRY_COUNT: usize = 1;
+const HUB_DELAYED_CHILD_QUERY_DELAY_MS: u64 = 250;
+const HUB_DELAYED_CHILD_TIMEOUT_MS: u64 = 4_000;
+const HUB_DELAYED_CHILD_POLL_MS: u64 = 20;
+const HUB_DELAYED_CHILD_POWER_CYCLE_OFF_MS: u64 = 100;
+const HUB_DELAYED_CHILD_POLLS: usize =
+    (HUB_DELAYED_CHILD_TIMEOUT_MS / HUB_DELAYED_CHILD_POLL_MS) as usize;
 const HUB_BLIND_PREPARE_RESET_RETRIES: usize = 1;
 const HUB_DISCONNECTED_RECOVERY_POWER_RETRIES: usize = 2;
 // Some downstream hubs report individual switching but stall on eager
@@ -179,8 +197,7 @@ const HUB_PORT_INDEX_CANDIDATES_MAX: usize = 2 + HUB_PORT_IFACE_FALLBACK_MAX as 
 const HUB_INDEX_FALLBACK_ON_STALL_ONLY: bool = true;
 const HUB_POST_CONFIG_SETTLE_MS: u64 = 250;
 const HUB_POWER_SETTLE_MIN_MS: u64 = 200;
-const HUB_RESET_SETTLE_MS: u64 = 100;
-const HUB_PORT_STATUS_RETRY_DELAY_MS: u64 = 20;
+const HUB_RESET_SETTLE_MS: u64 = HUB_RESET_SHORT_SETTLE_MS;
 const HUB_PORT_STATUS_QUICK_RETRY_DELAY_MS: u64 = 10;
 const HUB_SET_FEATURE_RETRY_DELAY_MS: u64 = 10;
 // Hub-class requests (SET/CLEAR_FEATURE, GET_STATUS) can be slower on
@@ -731,6 +748,7 @@ pub(crate) struct UsbProbeRouteStatus {
     pub halt_guard: &'static str,
     pub current_step: &'static str,
     pub next_step: &'static str,
+    pub proof_gate: u8,
     pub progress: &'static str,
     pub outcome: &'static str,
     pub prefer_high: bool,
@@ -796,6 +814,7 @@ pub(crate) struct UsbProbePreflightStatus {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct UsbOwnershipContractStatus {
+    pub proof_gate: u8,
     pub cfg_window: &'static str,
     pub cfg_source: &'static str,
     pub cfg_writes: &'static str,
@@ -838,6 +857,21 @@ impl UsbProbePathProgress {
             Self::ConfigParsed => "config-parsed",
             Self::DeviceConfigured => "device-configured",
             Self::KeyboardReady => "keyboard-ready",
+        }
+    }
+
+    #[inline]
+    const fn proof_gate(self) -> u8 {
+        match self {
+            Self::NoController => 1,
+            Self::ControllerReady => 3,
+            Self::RootPortConnected => 5,
+            Self::DeviceAddressed => 6,
+            Self::DeviceDescriptor
+            | Self::ConfigDescriptor
+            | Self::ConfigParsed
+            | Self::DeviceConfigured => 7,
+            Self::KeyboardReady => 8,
         }
     }
 }
@@ -1156,6 +1190,31 @@ fn usb_probe_next_step(summary: UsbProbePathwaySummary) -> &'static str {
         UsbProbePathProgress::ConfigParsed => "device-configure",
         UsbProbePathProgress::DeviceConfigured => "keyboard-ready",
         UsbProbePathProgress::KeyboardReady => "none",
+    }
+}
+
+#[inline]
+fn usb_probe_summary_proof_gate(summary: UsbProbePathwaySummary) -> u8 {
+    let mut gate = summary.progress.proof_gate();
+    if usb_command_probe_proves_ring(summary.command_probe) {
+        gate = cmp::max(gate, 4);
+    }
+    if summary.connected_mask != 0 {
+        gate = cmp::max(gate, 5);
+    }
+    gate
+}
+
+#[inline]
+const fn usb_ownership_proof_gate(
+    cfg_replay_ready: bool,
+    command_replay_ready: bool,
+    bar0_present: bool,
+) -> u8 {
+    if cfg_replay_ready && command_replay_ready && bar0_present {
+        2
+    } else {
+        1
     }
 }
 
@@ -1491,6 +1550,11 @@ fn usb_ownership_contract_status(
         fresh_ownership,
     );
     UsbOwnershipContractStatus {
+        proof_gate: usb_ownership_proof_gate(
+            cfg_replay_ready,
+            command_replay_ready,
+            bar0.is_some(),
+        ),
         cfg_window,
         cfg_source,
         cfg_writes,
@@ -3550,6 +3614,7 @@ pub(crate) fn latest_usb_probe_route_status() -> Option<UsbProbeRouteStatus> {
         halt_guard: summary.halt_guard,
         current_step: usb_probe_current_step(summary),
         next_step: usb_probe_next_step(summary),
+        proof_gate: usb_probe_summary_proof_gate(summary),
         progress: summary.progress.as_str(),
         outcome: summary.outcome.as_str(),
         prefer_high: summary.prefer_high,
@@ -3843,7 +3908,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0360..=0x036f
             | 0x0370..=0x0377
             | 0x037d..=0x037f
-            | 0x0380..=0x03b2
+            | 0x0380..=0x03bc
             | 0x03c0..=0x03ee
             | 0x03f3..=0x03f6
             | 0x03f8
@@ -3890,6 +3955,7 @@ const fn xhci_diag_stage_force_log(stage: u16) -> bool {
             | 0x035f
             | 0x0368..=0x0377
             | 0x037d..=0x037f
+            | 0x03b3..=0x03bc
             | 0x03c4..=0x03ee
     )
 }
@@ -4037,6 +4103,7 @@ const fn xhci_diag_stage_value_labels(
         0x03ab..=0x03af => Some(("control_state0", "control_state1", "control_state2")),
         0x03b0 | 0x03b1 => Some(("slot_ep", "dequeue", "result")),
         0x03c0..=0x03c3 => Some(("slot_ep", "code_payload", "decode_state")),
+        0x03b3..=0x03bc => Some(("reg_off", "value", "target")),
         0x03c4 => Some(("stop_usbcmd", "live_state_skipped", "policy")),
         0x03c5 | 0x03c8 => Some(("reg_off", "value", "prior")),
         0x03c6 | 0x03c9 | 0x03ca => Some(("waited", "state", "target")),
@@ -4367,6 +4434,16 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03b0 => Some("usb-ep0-recovery-reset"),
         0x03b1 => Some("usb-ep0-recovery-dequeue"),
         0x03b2 => Some("usb-address-direct-fail"),
+        0x03b3 => Some("cmd-ring-publish-dcbaap-low-flush"),
+        0x03b4 => Some("cmd-ring-publish-dcbaap-high-flush"),
+        0x03b5 => Some("cmd-ring-publish-crcr-low-flush"),
+        0x03b6 => Some("cmd-ring-publish-crcr-high-flush"),
+        0x03b7 => Some("cmd-ring-publish-erdp-low-flush"),
+        0x03b8 => Some("cmd-ring-publish-erdp-high-flush"),
+        0x03b9 => Some("cmd-ring-publish-erstsz-flush"),
+        0x03ba => Some("cmd-ring-publish-erstba-low-flush"),
+        0x03bb => Some("cmd-ring-publish-erstba-high-flush"),
+        0x03bc => Some("cmd-ring-publish-config-flush"),
         0x03f3 => Some("usb-dcbaa-slot-out-of-range"),
         0x03f4 => Some("usb-dcbaa-slot-read-out-of-range"),
         0x03f5 => Some("usb-port-read-gated-or-dcbaa-slot-share"),
@@ -4703,11 +4780,42 @@ fn xhci_preserve_leading_port_events_for_command_proof(
     strategy: XhciRuntimeInitStrategy,
     pcie_dma_window: bool,
 ) -> bool {
+    // U-Boot's xhci_wait_for_event() skips and acknowledges unexpected Port
+    // Status Change events while waiting for a command completion. On the Pi 4
+    // seL4 cold path, direct PORTSC reads remain gated, so preserve those
+    // leading PSC events until the bounded Enable Slot command is already
+    // visible to the controller, then consume them in the command wait loop.
     pcie_dma_window
         && matches!(
             strategy.firmware_handoff,
             XhciFirmwareHandoff::PlatformResetComplete
         )
+}
+
+#[inline]
+fn xhci_command_probe_verb_label(
+    event_candidate_mask: u32,
+    preserved_leading_port_events: bool,
+) -> &'static str {
+    if event_candidate_mask == 0 && !preserved_leading_port_events {
+        "no-op"
+    } else {
+        "enable-slot-before-port-sample"
+    }
+}
+
+#[inline]
+fn xhci_command_probe_event_generation_label(
+    event_candidate_mask: u32,
+    preserved_leading_port_events: bool,
+) -> &'static str {
+    if preserved_leading_port_events {
+        "uboot-poll-preserved-leading-events"
+    } else if event_candidate_mask == 0 {
+        "uboot-poll-empty"
+    } else {
+        "uboot-poll-skip-unexpected"
+    }
 }
 
 #[inline]
@@ -4722,72 +4830,117 @@ fn xhci_probe_command_ring_after_event_drain(
     } else {
         "phys"
     };
-    let event_generation = if preserved_leading_port_events {
-        "uboot-poll-preserved-leading-events"
-    } else if event_candidate_mask == 0 {
-        "uboot-poll-empty"
-    } else {
-        "uboot-poll-skip-unexpected"
-    };
+    let verb = xhci_command_probe_verb_label(event_candidate_mask, preserved_leading_port_events);
+    let event_generation = xhci_command_probe_event_generation_label(
+        event_candidate_mask,
+        preserved_leading_port_events,
+    );
     let mut line = heapless::String::<320>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb=enable-slot-before-port-sample bus={bus} event_generation={event_generation} pci_intx_masked=yes irq27_role=timer-only reason=uboot-command-contract"
+            "[local-seat] xhci root-port command-probe begin event_candidate_mask=0x{event_candidate_mask:04x} verb={verb} bus={bus} event_generation={event_generation} pci_intx_masked=yes irq27_role=timer-only reason=uboot-command-contract"
         ),
     );
     boot_log::force_uart_line(line.as_str());
 
-    let enable_slot_result = ctrl.probe_enable_slot_command_prompt_safe();
-    match enable_slot_result {
-        Ok(slot_id) => {
-            let cleanup_result = ctrl.disable_slot_command_prompt_safe(slot_id);
-            let cleanup = usb_disable_slot_cleanup_label(cleanup_result);
-            let result = if cleanup == "disable-slot-ok" {
-                "enable-slot-ok"
-            } else {
-                "enable-slot-ok-cleanup-failed"
-            };
-            let mut line = heapless::String::<320>::new();
-            let _ = core::fmt::Write::write_fmt(
+    if verb == "no-op" {
+        match ctrl.probe_no_op_command_prompt_safe() {
+            Ok(()) => {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci root-port command-probe result=no-op-ok bus={bus} action=unlock-port-sampling reason=empty-event-ring-command-isolation event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                "no-op-ok"
+            }
+            Err(UsbError::Timeout) => {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci root-port command-probe result=no-op-timeout bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180 event_candidate_mask=0x{event_candidate_mask:04x}"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                let mut summary = heapless::String::<320>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut summary,
+                    format_args!(
+                        "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=no-op-timeout event=missing event_generation={event_generation} irq27_role=timer-only pcie_irqs=179,175,180"
+                    ),
+                );
+                boot_log::force_uart_line(summary.as_str());
+                "no-op-timeout"
+            }
+            Err(err) => {
+                let result = usb_no_op_probe_error_label(err);
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] xhci root-port command-probe result={result} bus={bus} action=return-to-shell detail={err:?} event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                result
+            }
+        }
+    } else {
+        let enable_slot_result = ctrl.probe_enable_slot_command_prompt_safe();
+        match enable_slot_result {
+            Ok(slot_id) => {
+                let cleanup_result = ctrl.disable_slot_command_prompt_safe(slot_id);
+                let cleanup = usb_disable_slot_cleanup_label(cleanup_result);
+                let result = if cleanup == "disable-slot-ok" {
+                    "enable-slot-ok"
+                } else {
+                    "enable-slot-ok-cleanup-failed"
+                };
+                let mut line = heapless::String::<320>::new();
+                let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
                     "[local-seat] xhci root-port command-probe result={result} bus={bus} slot={slot_id} cleanup={cleanup} action=unlock-port-sampling reason=uboot-enable-slot-before-root-port-sample event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
                 ),
             );
-            boot_log::force_uart_line(line.as_str());
-            result
-        }
-        Err(UsbError::EnableSlotTimeout | UsbError::Timeout) => {
-            let mut line = heapless::String::<320>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
+                boot_log::force_uart_line(line.as_str());
+                result
+            }
+            Err(UsbError::EnableSlotTimeout | UsbError::Timeout) => {
+                let mut line = heapless::String::<320>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
                 format_args!(
-                    "[local-seat] xhci root-port command-probe result=enable-slot-timeout bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180 event_candidate_mask=0x{event_candidate_mask:04x}"
+                    "[local-seat] xhci root-port command-probe result=enable-slot-timeout bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180 event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
                 ),
             );
-            boot_log::force_uart_line(line.as_str());
-            let mut summary = heapless::String::<320>::new();
-            let _ = core::fmt::Write::write_fmt(
+                boot_log::force_uart_line(line.as_str());
+                let mut summary = heapless::String::<320>::new();
+                let _ = core::fmt::Write::write_fmt(
                 &mut summary,
                 format_args!(
                     "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=enable-slot-timeout event=missing event_generation={event_generation} irq27_role=timer-only pcie_irqs=179,175,180"
                 ),
             );
-            boot_log::force_uart_line(summary.as_str());
-            "enable-slot-timeout"
-        }
-        Err(err) => {
-            let result = usb_enable_slot_probe_error_label(err);
-            let mut line = heapless::String::<256>::new();
-            let _ = core::fmt::Write::write_fmt(
+                boot_log::force_uart_line(summary.as_str());
+                "enable-slot-timeout"
+            }
+            Err(err) => {
+                let result = usb_enable_slot_probe_error_label(err);
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
                     "[local-seat] xhci root-port command-probe result={result} bus={bus} action=return-to-shell detail={err:?} event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
                 ),
             );
-            boot_log::force_uart_line(line.as_str());
-            result
+                boot_log::force_uart_line(line.as_str());
+                result
+            }
         }
     }
 }
@@ -7421,7 +7574,7 @@ fn prepare_vl805_pci_bcm2711(
             return None;
         }
     };
-    let msi_disabled = proof.msi_disabled();
+    let interrupt_modes_quiesced = proof.interrupt_modes_quiesced();
     let pi4_pcie::Pi4Vl805PcieProof {
         status,
         vendor_id,
@@ -7433,6 +7586,7 @@ fn prepare_vl805_pci_bcm2711(
         bar1,
         mmio,
         msi_control_after,
+        msix_control_after,
         ..
     } = proof;
     if mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE || !xhci_mmio_candidate_valid(mmio) {
@@ -7446,14 +7600,15 @@ fn prepare_vl805_pci_bcm2711(
         boot_log::force_uart_line(line.as_str());
         return None;
     }
-    if !msi_disabled {
+    if !interrupt_modes_quiesced {
         remember_vl805_msi_disabled_proof(false);
-        let mut line = heapless::String::<192>::new();
+        let mut line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 bcm2711-pcie reject msi=0x{msi:04x} reason=msi-not-disabled",
+                "[local-seat] vl805 bcm2711-pcie reject msi=0x{msi:04x} msix=0x{msix:04x} reason=interrupt-modes-not-quiesced",
                 msi = msi_control_after.unwrap_or(0),
+                msix = msix_control_after.unwrap_or(0),
             ),
         );
         boot_log::force_uart_line(line.as_str());
@@ -7471,7 +7626,7 @@ fn prepare_vl805_pci_bcm2711(
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] vl805 bcm2711-pcie selected cfg=hal-ext status=0x{status:08x} vid:did={vendor_id:04x}:{device_id:04x} class=0x{class_code:06x} cmd=0x{command_before:04x}->0x{command_after:04x} msi=disabled bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{mmio:016x}"
+            "[local-seat] vl805 bcm2711-pcie selected cfg=hal-ext status=0x{status:08x} vid:did={vendor_id:04x}:{device_id:04x} class=0x{class_code:06x} cmd=0x{command_before:04x}->0x{command_after:04x} interrupts=quiesced bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{mmio:016x}"
         ),
     );
     boot_log::force_uart_line(line.as_str());
@@ -9821,34 +9976,53 @@ impl UsbKeyboard {
                                         strategy.firmware_handoff,
                                         XhciFirmwareHandoff::PlatformResetComplete
                                     ) {
-                                        ctrl.clear_event_handler_busy_for_polling();
-                                        boot_log::force_uart_line(
-                                            "[local-seat] xhci event-handler-busy pre-command ack action=clear-once reason=poll-only-command-proof",
-                                        );
+                                        match ctrl.clear_event_handler_busy_for_polling() {
+                                            Ok(()) => {
+                                                boot_log::force_uart_line(
+                                                    "[local-seat] xhci event-handler-busy pre-command ack action=clear-once reason=poll-only-command-proof",
+                                                );
+                                            }
+                                            Err(err) => {
+                                                command_probe =
+                                                    usb_enable_slot_probe_error_label(err);
+                                                let mut line = heapless::String::<224>::new();
+                                                let _ = core::fmt::Write::write_fmt(
+                                                    &mut line,
+                                                    format_args!(
+                                                        "[local-seat] xhci event-handler-busy pre-command ack action=failed detail={err:?} probe={command_probe}"
+                                                    ),
+                                                );
+                                                boot_log::force_uart_line(line.as_str());
+                                            }
+                                        }
                                     }
-                                    let drained_event_candidate_mask =
-                                        xhci_drain_root_port_change_events(
-                                            ctrl.as_ref(),
-                                            max_ports,
-                                        );
-                                    event_candidate_mask |= drained_event_candidate_mask;
-                                    {
-                                        let mut line = heapless::String::<160>::new();
-                                        let _ = core::fmt::Write::write_fmt(
-                                            &mut line,
-                                            format_args!(
-                                                "[local-seat] xhci root-port command-probe mask-flow drained=0x{drained_event_candidate_mask:04x} probe=0x{event_candidate_mask:04x}"
-                                            ),
-                                        );
-                                        boot_log::force_uart_line(line.as_str());
+                                    if command_probe == "n/a" {
+                                        let drained_event_candidate_mask =
+                                            xhci_drain_root_port_change_events(
+                                                ctrl.as_ref(),
+                                                max_ports,
+                                            );
+                                        event_candidate_mask |= drained_event_candidate_mask;
+                                        {
+                                            let mut line = heapless::String::<160>::new();
+                                            let _ = core::fmt::Write::write_fmt(
+                                                &mut line,
+                                                format_args!(
+                                                    "[local-seat] xhci root-port command-probe mask-flow drained=0x{drained_event_candidate_mask:04x} probe=0x{event_candidate_mask:04x}"
+                                                ),
+                                            );
+                                            boot_log::force_uart_line(line.as_str());
+                                        }
                                     }
                                 }
-                                command_probe = xhci_probe_command_ring_after_event_drain(
-                                    ctrl.as_ref(),
-                                    event_candidate_mask,
-                                    pcie_dma_window,
-                                    preserve_leading_port_events,
-                                );
+                                if command_probe == "n/a" {
+                                    command_probe = xhci_probe_command_ring_after_event_drain(
+                                        ctrl.as_ref(),
+                                        event_candidate_mask,
+                                        pcie_dma_window,
+                                        preserve_leading_port_events,
+                                    );
+                                }
                                 if usb_command_probe_proves_ring(command_probe) {
                                     ctrl.allow_port_register_access_after_command_proof();
                                     bootloader_port_reads_toxic =
@@ -9902,14 +10076,22 @@ impl UsbKeyboard {
                             && final_wait_ms != 0
                         {
                             log_xhci_root_port_statuses(&port_statuses[..max_ports], "detect-zero");
-                            wait_ms(final_wait_ms);
-                            slow_recheck_used = true;
-                            detect_passes_used = detect_passes_used.saturating_add(1);
-                            connected_mask = xhci_sample_root_ports(
-                                ctrl.as_ref(),
-                                max_ports,
-                                &mut port_statuses,
-                            );
+                            let mut elapsed_ms = 0u64;
+                            for _ in 0..XHCI_ROOT_PORT_DEBOUNCE_POLLS {
+                                wait_ms(XHCI_ROOT_PORT_DEBOUNCE_POLL_MS);
+                                elapsed_ms =
+                                    elapsed_ms.saturating_add(XHCI_ROOT_PORT_DEBOUNCE_POLL_MS);
+                                slow_recheck_used = true;
+                                detect_passes_used = detect_passes_used.saturating_add(1);
+                                connected_mask = xhci_sample_root_ports(
+                                    ctrl.as_ref(),
+                                    max_ports,
+                                    &mut port_statuses,
+                                );
+                                if connected_mask != 0 || elapsed_ms >= final_wait_ms {
+                                    break;
+                                }
+                            }
                             log_xhci_root_port_statuses(
                                 &port_statuses[..max_ports],
                                 if connected_mask == 0 {
@@ -10250,7 +10432,10 @@ impl UsbKeyboard {
                                 boot_log::force_uart_line(line.as_str());
                                 continue;
                             };
-                            if let Err(err) = device.set_configuration(config_value) {
+                            let config_endpoints = endpoint_descs_for_config(&config_blob);
+                            if let Err(err) = device
+                                .set_configuration_with_endpoints(config_value, &config_endpoints)
+                            {
                                 let diag_after = read_latest_xhci_diag_snapshot();
                                 usb_probe_pathway_record(
                                     &mut pathway_summary,
@@ -10509,7 +10694,9 @@ impl UsbKeyboard {
                     }
                     continue;
                 }
-                strict_keyboard_candidates = strict_keyboard_candidates.saturating_add(1);
+                if attach_rank == 0 {
+                    strict_keyboard_candidates = strict_keyboard_candidates.saturating_add(1);
+                }
                 if candidate_rank != attach_rank {
                     continue;
                 }
@@ -10533,6 +10720,20 @@ impl UsbKeyboard {
                     return Some(hid);
                 }
             }
+        }
+
+        if strict_keyboard_candidates != 0 {
+            let mut line = heapless::String::<256>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] usb hid protocol-none fallback skipped slot={} reason=strict-keyboard-candidates-failed strict_candidates={}",
+                    device.slot_id(),
+                    strict_keyboard_candidates,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+            return None;
         }
 
         for prefer_hint in [true, false] {
@@ -11062,6 +11263,11 @@ impl UsbKeyboard {
         if max_ports == 0 {
             return None;
         }
+        let hub_multi_tt = if hub_multi_tt {
+            Self::activate_hub_multi_tt(device.as_ref(), hub_interface_number)
+        } else {
+            false
+        };
         let hub_tt_think_time = hub_desc.tt_think_time();
         match device.configure_hub(max_ports as u8, hub_multi_tt) {
             Ok(()) => {
@@ -11518,7 +11724,210 @@ impl UsbKeyboard {
             );
             boot_log::force_uart_line(line.as_str());
         }
+        if attempted_ports > 0
+            && disconnected_recovered == 0
+            && disconnected_pre_reset.saturating_add(unavailable_pre_reset) == attempted_ports
+        {
+            let reason = if unavailable_pre_reset == attempted_ports {
+                "status-error"
+            } else {
+                "no-connection"
+            };
+            if let Some(hid) = Self::delayed_hub_child_rescan(
+                &device,
+                max_ports,
+                hub_interface_number,
+                hub_protocol_code,
+                hub_desc.power_switching_mode(),
+                hub_desc.pwr_on_2_pwr_good,
+                reset_feature,
+                hub_multi_tt,
+                hub_tt_think_time,
+                depth_remaining,
+                saw_keyboard_init_error,
+                reason,
+            ) {
+                return Some(hid);
+            }
+        }
 
+        None
+    }
+
+    fn activate_hub_multi_tt(device: &UsbDevice<SeatDma>, hub_interface_number: u8) -> bool {
+        let setup = SetupPacket::set_interface(hub_interface_number, HUB_MULTI_TT_ALT_SETTING);
+        match device.control_transfer_with_wait_spins(&setup, None, HUB_CLASS_CONTROL_WAIT_SPINS) {
+            Ok(_) => {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub multi-tt activated slot={} iface={} alt={}",
+                        device.slot_id(),
+                        hub_interface_number,
+                        HUB_MULTI_TT_ALT_SETTING,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                true
+            }
+            Err(err) => {
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] hub multi-tt fallback slot={} iface={} alt={} detail={err:?}",
+                        device.slot_id(),
+                        hub_interface_number,
+                        HUB_MULTI_TT_ALT_SETTING,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                false
+            }
+        }
+    }
+
+    fn delayed_hub_child_rescan(
+        device: &Arc<UsbDevice<SeatDma>>,
+        max_ports: usize,
+        hub_interface_number: u8,
+        hub_protocol_code: u8,
+        hub_power_mode: u8,
+        pwr_on_2_pwr_good: u8,
+        reset_feature: u16,
+        hub_multi_tt: bool,
+        hub_tt_think_time: u8,
+        depth_remaining: usize,
+        saw_keyboard_init_error: &mut bool,
+        reason: &str,
+    ) -> Option<HidDevice<SeatDma>> {
+        for attempt in 0..HUB_DELAYED_CHILD_RETRY_COUNT {
+            let retry = attempt.saturating_add(1);
+            let mut line = heapless::String::<256>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] hub delayed-child retry slot={} iface={} reason={} retry={}/{} query_ms={} timeout_ms={}",
+                    device.slot_id(),
+                    hub_interface_number,
+                    reason,
+                    retry,
+                    HUB_DELAYED_CHILD_RETRY_COUNT,
+                    HUB_DELAYED_CHILD_QUERY_DELAY_MS,
+                    HUB_DELAYED_CHILD_TIMEOUT_MS,
+                ),
+            );
+            boot_log::force_uart_line(line.as_str());
+
+            if Self::hub_mode_supports_port_power(hub_power_mode) {
+                Self::hub_power_cycle_ports_for_delayed_rescan(
+                    device.as_ref(),
+                    max_ports,
+                    hub_interface_number,
+                    hub_power_mode,
+                    pwr_on_2_pwr_good,
+                );
+            }
+            wait_ms(HUB_DELAYED_CHILD_QUERY_DELAY_MS);
+
+            for poll in 0..HUB_DELAYED_CHILD_POLLS {
+                for downstream in 1..=max_ports {
+                    let downstream_port = downstream as u8;
+                    let Ok(status) = Self::hub_port_status_read(
+                        device.as_ref(),
+                        hub_interface_number,
+                        downstream_port,
+                        HUB_CLASS_CONTROL_WAIT_SPINS_FAST,
+                    ) else {
+                        continue;
+                    };
+                    if !status.connected() {
+                        continue;
+                    }
+
+                    Self::log_hub_port_status(
+                        device.slot_id(),
+                        downstream_port,
+                        "delayed-child",
+                        status,
+                    );
+                    Self::clear_hub_port_change_bits(
+                        device.as_ref(),
+                        hub_interface_number,
+                        downstream_port,
+                        status,
+                        hub_protocol_code,
+                    );
+                    if !Self::hub_set_feature_with_retry(
+                        device.as_ref(),
+                        hub_interface_number,
+                        downstream_port,
+                        reset_feature,
+                        "delayed-child-reset",
+                        HUB_SET_FEATURE_RETRIES,
+                    ) {
+                        Self::log_hub_port_terminal(
+                            device.slot_id(),
+                            downstream_port,
+                            "delayed-child-reset-failed",
+                        );
+                        continue;
+                    }
+                    wait_ms(HUB_RESET_SETTLE_MS);
+
+                    let Some(ready_status) = Self::wait_hub_port_ready(
+                        device.as_ref(),
+                        hub_interface_number,
+                        downstream_port,
+                        hub_protocol_code,
+                    ) else {
+                        Self::log_hub_port_terminal(
+                            device.slot_id(),
+                            downstream_port,
+                            "delayed-child-ready-timeout",
+                        );
+                        continue;
+                    };
+                    Self::clear_hub_port_change_bits(
+                        device.as_ref(),
+                        hub_interface_number,
+                        downstream_port,
+                        ready_status,
+                        hub_protocol_code,
+                    );
+
+                    let Some(route) = append_route_segment(device.route(), downstream_port) else {
+                        Self::log_hub_port_terminal(
+                            device.slot_id(),
+                            downstream_port,
+                            "delayed-child-route-overflow",
+                        );
+                        continue;
+                    };
+                    let child_speed =
+                        Self::speed_from_hub_port_status(ready_status, hub_protocol_code);
+                    match Self::probe_hub_child_with_route_and_speed(
+                        device,
+                        downstream_port,
+                        route,
+                        child_speed,
+                        hub_multi_tt,
+                        hub_tt_think_time,
+                        depth_remaining,
+                        saw_keyboard_init_error,
+                        "delayed-child",
+                    ) {
+                        HubChildProbeResult::Keyboard(hid) => return Some(hid),
+                        HubChildProbeResult::ProbedNoKeyboard => continue,
+                        HubChildProbeResult::Failed => {}
+                    }
+                }
+                if poll + 1 < HUB_DELAYED_CHILD_POLLS {
+                    wait_ms(HUB_DELAYED_CHILD_POLL_MS);
+                }
+            }
+        }
         None
     }
 
@@ -12031,7 +12440,10 @@ impl UsbKeyboard {
             Self::log_hub_port_terminal(device.slot_id(), downstream_port, "set-config-value-fail");
             return HubChildProbeResult::Failed;
         };
-        if let Err(err) = child.set_configuration(config_value) {
+        let child_config_endpoints = endpoint_descs_for_config(&child_config_blob);
+        if let Err(err) =
+            child.set_configuration_with_endpoints(config_value, &child_config_endpoints)
+        {
             let mut line = heapless::String::<272>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
@@ -12706,6 +13118,57 @@ impl UsbKeyboard {
         wait_ms(cmp::max(pwr_good_ms, HUB_POWER_SETTLE_MIN_MS));
     }
 
+    fn hub_power_cycle_ports_for_delayed_rescan(
+        device: &UsbDevice<SeatDma>,
+        max_ports: usize,
+        hub_interface_number: u8,
+        power_mode: u8,
+        pwr_on_2_pwr_good: u8,
+    ) {
+        let mut cleared_ports = 0usize;
+        let mut powered_ports = 0usize;
+        for downstream in 1..=max_ports {
+            let port = downstream as u8;
+            if Self::hub_clear_feature(device, hub_interface_number, hub_feature::PORT_POWER, port)
+            {
+                cleared_ports = cleared_ports.saturating_add(1);
+            }
+        }
+        wait_ms(HUB_DELAYED_CHILD_POWER_CYCLE_OFF_MS);
+        for downstream in 1..=max_ports {
+            let port = downstream as u8;
+            if Self::hub_set_feature_with_retry(
+                device,
+                hub_interface_number,
+                port,
+                hub_feature::PORT_POWER,
+                "delayed-rescan-set-power",
+                HUB_SET_FEATURE_RETRIES,
+            ) {
+                powered_ports = powered_ports.saturating_add(1);
+            }
+        }
+        let pwr_good_ms = (pwr_on_2_pwr_good as u64).saturating_mul(2);
+        let post_power_wait_ms = cmp::max(pwr_good_ms, HUB_POWER_SETTLE_MIN_MS);
+        wait_ms(post_power_wait_ms);
+        let mut line = heapless::String::<256>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] hub delayed-child power-cycle slot={} iface={} mode={} ports={} cleared={} powered={} off_ms={} post_ms={}",
+                device.slot_id(),
+                hub_interface_number,
+                power_mode,
+                max_ports,
+                cleared_ports,
+                powered_ports,
+                HUB_DELAYED_CHILD_POWER_CYCLE_OFF_MS,
+                post_power_wait_ms,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+    }
+
     fn hub_set_feature_with_retry(
         device: &UsbDevice<SeatDma>,
         hub_interface_number: u8,
@@ -13060,6 +13523,11 @@ impl UsbKeyboard {
         let mut first_seen = None;
         let mut last_seen = None;
         let mut attempts_executed = 0usize;
+        // The initial PORT_RESET was issued by the caller. U-Boot retries the
+        // reset up to five times, switching from a short to a long settle after
+        // the first attempt if the USB2 port does not become enabled.
+        let mut reset_tries = 1usize;
+        let reset_feature = Self::hub_reset_feature(hub_protocol_code);
         for attempt in 0..HUB_PORT_STATUS_RETRY_LOOPS {
             attempts_executed = attempt.saturating_add(1);
             let fast_phase = attempt < HUB_WAIT_READY_FAST_LOOPS;
@@ -13098,11 +13566,42 @@ impl UsbKeyboard {
                     boot_log::force_uart_line(line.as_str());
                     return Some(status);
                 }
+                if hub_protocol_code != hub_protocol::SUPER_SPEED
+                    && status.connected()
+                    && !status.enabled()
+                    && !status.reset()
+                    && reset_tries < HUB_PORT_RESET_MAX_TRIES
+                {
+                    reset_tries = reset_tries.saturating_add(1);
+                    let mut retry_line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut retry_line,
+                        format_args!(
+                            "[local-seat] hub wait reset-retry slot={} iface={} port={} try={}/{} status=0x{:04x} change=0x{:04x}",
+                            device.slot_id(),
+                            hub_interface_number,
+                            port,
+                            reset_tries,
+                            HUB_PORT_RESET_MAX_TRIES,
+                            status.status,
+                            status.change
+                        ),
+                    );
+                    boot_log::force_uart_line(retry_line.as_str());
+                    if Self::hub_set_feature_with_retry(
+                        device,
+                        hub_interface_number,
+                        port,
+                        reset_feature,
+                        "wait-ready-reset-retry",
+                        1,
+                    ) {
+                        wait_ms(HUB_RESET_LONG_SETTLE_MS);
+                    }
+                    continue;
+                }
             }
             if fast_phase {
-                if first_seen.is_none() && attempts_executed >= HUB_WAIT_READY_FAST_LOOPS {
-                    break;
-                }
                 wait_ms(HUB_PORT_STATUS_RETRY_DELAY_MS_FAST);
             } else {
                 wait_ms(HUB_PORT_STATUS_RETRY_DELAY_MS);
@@ -14427,6 +14926,26 @@ fn read_config_desc(config_blob: &[u8]) -> Option<ConfigDesc> {
     Some(unsafe { ptr::read_unaligned(config_blob.as_ptr().cast::<ConfigDesc>()) })
 }
 
+fn endpoint_descs_for_config(config_blob: &[u8]) -> Vec<EndpointDesc> {
+    let mut endpoints = Vec::<EndpointDesc>::new();
+    let mut offset = 0usize;
+    while offset + 2 <= config_blob.len() {
+        let len = config_blob[offset] as usize;
+        let dtype = config_blob[offset + 1];
+        if len == 0 || offset + len > config_blob.len() {
+            break;
+        }
+        if dtype == desc_type::ENDPOINT && len >= mem::size_of::<EndpointDesc>() {
+            // SAFETY: Endpoint descriptors are packed inside the configuration
+            // blob and may be unaligned; copy by value before xHCI setup.
+            let endpoint = unsafe { ptr::read_unaligned(config_blob.as_ptr().add(offset).cast()) };
+            endpoints.push(endpoint);
+        }
+        offset += len;
+    }
+    endpoints
+}
+
 #[inline]
 fn config_value_for_set(config: ConfigDesc) -> Option<u8> {
     // USB SET_CONFIGURATION expects bConfigurationValue, not iConfiguration.
@@ -14514,6 +15033,27 @@ mod driver_coverage_tests {
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
             false,
         ));
+        assert_eq!(xhci_command_probe_verb_label(0, false), "no-op");
+        assert_eq!(
+            xhci_command_probe_event_generation_label(0, false),
+            "uboot-poll-empty"
+        );
+        assert_eq!(
+            xhci_command_probe_verb_label(0x001f, false),
+            "enable-slot-before-port-sample"
+        );
+        assert_eq!(
+            xhci_command_probe_event_generation_label(0x001f, false),
+            "uboot-poll-skip-unexpected"
+        );
+        assert_eq!(
+            xhci_command_probe_verb_label(0, true),
+            "enable-slot-before-port-sample"
+        );
+        assert_eq!(
+            xhci_command_probe_event_generation_label(0, true),
+            "uboot-poll-preserved-leading-events"
+        );
         assert!(!xhci_preserve_leading_port_events_for_command_proof(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::None, false),
             true,
@@ -14687,6 +15227,64 @@ mod driver_coverage_tests {
         assert!(wifi_progress_emit_allowed(true, false));
         assert!(!wifi_progress_emit_allowed(true, true));
         assert!(!wifi_progress_emit_allowed(false, false));
+    }
+
+    #[test]
+    fn hub_ready_gate_uses_uboot_debounce_and_reset_retry_shape() {
+        assert_eq!(HUB_DEBOUNCE_TIMEOUT_MS, 5_000);
+        assert_eq!(HUB_PORT_STATUS_RETRY_DELAY_MS, 20);
+        assert_eq!(HUB_PORT_STATUS_RETRY_LOOPS, 250);
+        assert_eq!(HUB_PORT_RESET_MAX_TRIES, 5);
+        assert_eq!(HUB_RESET_SHORT_SETTLE_MS, 20);
+        assert_eq!(HUB_RESET_LONG_SETTLE_MS, 200);
+        assert_eq!(HUB_RESET_SETTLE_MS, HUB_RESET_SHORT_SETTLE_MS);
+        assert_eq!(XHCI_ROOT_PORT_DEBOUNCE_TIMEOUT_MS, HUB_DEBOUNCE_TIMEOUT_MS);
+        assert_eq!(
+            XHCI_ROOT_PORT_DEBOUNCE_POLL_MS,
+            HUB_PORT_STATUS_RETRY_DELAY_MS
+        );
+        assert_eq!(XHCI_ROOT_PORT_DEBOUNCE_POLLS, HUB_PORT_STATUS_RETRY_LOOPS);
+        assert_eq!(HUB_MULTI_TT_ALT_SETTING, 1);
+        assert_eq!(HUB_DELAYED_CHILD_RETRY_COUNT, 1);
+        assert_eq!(HUB_DELAYED_CHILD_QUERY_DELAY_MS, 250);
+        assert_eq!(HUB_DELAYED_CHILD_TIMEOUT_MS, 4_000);
+        assert_eq!(HUB_DELAYED_CHILD_POWER_CYCLE_OFF_MS, 100);
+    }
+
+    #[test]
+    fn usb_proof_gate_helpers_cover_ownership_command_and_runtime_edges() {
+        let base = UsbProbePathwaySummary::new(
+            0,
+            1,
+            1,
+            "platform-reset-complete",
+            "mailbox-reset-complete",
+            "platform-reset-complete",
+            "none",
+            "skip-live-halt-read",
+            true,
+            true,
+            true,
+        );
+        assert_eq!(super::usb_ownership_proof_gate(true, true, true), 2);
+        assert_eq!(super::usb_ownership_proof_gate(true, false, true), 1);
+        assert_eq!(super::usb_probe_summary_proof_gate(base), 1);
+        assert_eq!(
+            super::usb_probe_summary_proof_gate(UsbProbePathwaySummary {
+                progress: UsbProbePathProgress::ControllerReady,
+                command_probe: "enable-slot-ok",
+                ..base
+            }),
+            4
+        );
+        assert_eq!(
+            super::usb_probe_summary_proof_gate(UsbProbePathwaySummary {
+                progress: UsbProbePathProgress::KeyboardReady,
+                connected_mask: 1,
+                ..base
+            }),
+            8
+        );
     }
 }
 
@@ -15808,6 +16406,7 @@ mod tests {
         let route = super::latest_usb_probe_route_status().expect("route status must exist");
         assert_eq!(route.route, "stop-state-preserve-fallback");
         assert_eq!(route.pathway_idx, 1);
+        assert_eq!(route.proof_gate, 3);
         assert!(route.diag_fresh);
         assert!(!route.irq27_bound);
         assert!(route.bridge_irq_bound);
@@ -15821,6 +16420,68 @@ mod tests {
         assert_eq!(route.diag_value_labels, None);
         assert_eq!(route.event_candidate_mask, 0);
         assert_eq!(route.command_probe, "n/a");
+    }
+
+    #[test]
+    fn usb_probe_summary_proof_gate_covers_all_enumeration_gates() {
+        let base = UsbProbePathwaySummary::new(
+            0,
+            1,
+            1,
+            "platform-reset-complete",
+            "mailbox-reset-complete",
+            "platform-reset-complete",
+            "none",
+            "skip-live-halt-read",
+            true,
+            true,
+            true,
+        );
+        assert_eq!(super::usb_probe_summary_proof_gate(base), 1);
+        assert_eq!(
+            super::usb_probe_summary_proof_gate(UsbProbePathwaySummary {
+                progress: UsbProbePathProgress::ControllerReady,
+                ..base
+            }),
+            3
+        );
+        assert_eq!(
+            super::usb_probe_summary_proof_gate(UsbProbePathwaySummary {
+                progress: UsbProbePathProgress::ControllerReady,
+                command_probe: "enable-slot-ok",
+                ..base
+            }),
+            4
+        );
+        assert_eq!(
+            super::usb_probe_summary_proof_gate(UsbProbePathwaySummary {
+                progress: UsbProbePathProgress::RootPortConnected,
+                connected_mask: 1,
+                ..base
+            }),
+            5
+        );
+        assert_eq!(
+            super::usb_probe_summary_proof_gate(UsbProbePathwaySummary {
+                progress: UsbProbePathProgress::DeviceAddressed,
+                ..base
+            }),
+            6
+        );
+        assert_eq!(
+            super::usb_probe_summary_proof_gate(UsbProbePathwaySummary {
+                progress: UsbProbePathProgress::DeviceConfigured,
+                ..base
+            }),
+            7
+        );
+        assert_eq!(
+            super::usb_probe_summary_proof_gate(UsbProbePathwaySummary {
+                progress: UsbProbePathProgress::KeyboardReady,
+                ..base
+            }),
+            8
+        );
     }
 
     #[test]
@@ -16575,6 +17236,7 @@ mod tests {
             false,
         );
         assert_eq!(status.blocker, "pcie-vl805-config-contract-missing",);
+        assert_eq!(status.proof_gate, 1);
         assert_eq!(status.cfg_window, "capture-witness");
         assert_eq!(status.cfg_source, "linux-capture-static");
         assert_eq!(status.cfg_writes, "disabled-capture-witness");
@@ -16611,7 +17273,16 @@ mod tests {
         assert_eq!(status.command_source, "linux-capture-static");
         assert_eq!(status.fresh_ownership, "blocked");
         assert_eq!(status.blocker, "pcie-vl805-config-contract-missing");
+        assert_eq!(status.proof_gate, 1);
         assert_eq!(status.next_step, "live-ext-cfg-disabled-stay-pollsafe");
+    }
+
+    #[test]
+    fn usb_ownership_proof_gate_requires_live_cfg_command_and_bar0() {
+        assert_eq!(super::usb_ownership_proof_gate(true, true, true), 2);
+        assert_eq!(super::usb_ownership_proof_gate(false, true, true), 1);
+        assert_eq!(super::usb_ownership_proof_gate(true, false, true), 1);
+        assert_eq!(super::usb_ownership_proof_gate(true, true, false), 1);
     }
 
     #[test]
@@ -16912,6 +17583,26 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_label(0x037f),
             Some("cmd-linux-event-iman-ack-done")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x03b3),
+            Some("cmd-ring-publish-dcbaap-low-flush")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x03b6),
+            Some("cmd-ring-publish-crcr-high-flush")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x03b8),
+            Some("cmd-ring-publish-erdp-high-flush")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x03bb),
+            Some("cmd-ring-publish-erstba-high-flush")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x03bc),
+            Some("cmd-ring-publish-config-flush")
         );
         assert_eq!(
             xhci_diag_stage_label(0x0353),
@@ -17684,6 +18375,8 @@ mod tests {
         assert!(super::xhci_diag_stage_after_run(0x03c4));
         assert!(super::xhci_diag_stage_after_run(0x03eb));
         assert!(super::xhci_diag_stage_after_run(0x03ed));
+        assert!(!super::xhci_diag_stage_after_run(0x03b3));
+        assert!(!super::xhci_diag_stage_after_run(0x03bc));
         assert!(!super::xhci_diag_stage_after_run(0x0248));
         assert!(!super::xhci_diag_stage_after_run(0x0213));
     }
@@ -17696,6 +18389,8 @@ mod tests {
         assert!(super::xhci_diag_stage_force_log(0x035f));
         assert!(super::xhci_diag_stage_force_log(0x0368));
         assert!(super::xhci_diag_stage_force_log(0x0377));
+        assert!(super::xhci_diag_stage_force_log(0x03b3));
+        assert!(super::xhci_diag_stage_force_log(0x03bc));
         assert!(super::xhci_diag_stage_force_log(0x03c4));
         assert!(super::xhci_diag_stage_force_log(0x03d0));
         assert!(super::xhci_diag_stage_force_log(0x03e4));
@@ -17954,6 +18649,14 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x037f),
             Some(("iman_off", "iman_ack", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03b5),
+            Some(("reg_off", "value", "target"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03bc),
+            Some(("reg_off", "value", "target"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x03c4),
@@ -19630,6 +20333,28 @@ mod tests {
     #[test]
     fn hub_class_control_wait_budget_matches_default_control_budget() {
         assert_eq!(HUB_CLASS_CONTROL_WAIT_SPINS, 20_000_000);
+    }
+
+    #[test]
+    fn hub_ready_gate_uses_uboot_debounce_and_reset_retry_shape() {
+        assert_eq!(HUB_DEBOUNCE_TIMEOUT_MS, 5_000);
+        assert_eq!(HUB_PORT_STATUS_RETRY_DELAY_MS, 20);
+        assert_eq!(HUB_PORT_STATUS_RETRY_LOOPS, 250);
+        assert_eq!(HUB_PORT_RESET_MAX_TRIES, 5);
+        assert_eq!(HUB_RESET_SHORT_SETTLE_MS, 20);
+        assert_eq!(HUB_RESET_LONG_SETTLE_MS, 200);
+        assert_eq!(HUB_RESET_SETTLE_MS, HUB_RESET_SHORT_SETTLE_MS);
+        assert_eq!(XHCI_ROOT_PORT_DEBOUNCE_TIMEOUT_MS, HUB_DEBOUNCE_TIMEOUT_MS);
+        assert_eq!(
+            XHCI_ROOT_PORT_DEBOUNCE_POLL_MS,
+            HUB_PORT_STATUS_RETRY_DELAY_MS
+        );
+        assert_eq!(XHCI_ROOT_PORT_DEBOUNCE_POLLS, HUB_PORT_STATUS_RETRY_LOOPS);
+        assert_eq!(HUB_MULTI_TT_ALT_SETTING, 1);
+        assert_eq!(HUB_DELAYED_CHILD_RETRY_COUNT, 1);
+        assert_eq!(HUB_DELAYED_CHILD_QUERY_DELAY_MS, 250);
+        assert_eq!(HUB_DELAYED_CHILD_TIMEOUT_MS, 4_000);
+        assert_eq!(HUB_DELAYED_CHILD_POWER_CYCLE_OFF_MS, 100);
     }
 
     #[test]

@@ -40,6 +40,8 @@ use crate::lifecycle;
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
 use crate::net::DefaultNetStack as NetStack;
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+use crate::net::NetPoller;
 use crate::platform::Platform;
 use crate::profile;
 use crate::sel4;
@@ -53,12 +55,11 @@ use heapless::String as HeaplessString;
 type NetStackHandle = NetStack;
 #[cfg(not(feature = "net-console"))]
 type NetStackHandle = ();
-#[cfg(all(feature = "kernel", feature = "net-console"))]
-const DEFERRED_NET_CONSOLE_ROOT_WAIT_LOG_POLLS: usize = 1_048_576;
 
 /// Authoritative entrypoint for userland bring-up and runtime loops. Full boots
-/// must always flow through this handoff so the serial root console comes up;
-/// bootstrap-minimal remains a specialised debug mode only.
+/// must always flow through this handoff so pre-root network gates and the
+/// serial root console are ordered consistently; bootstrap-minimal remains a
+/// specialised debug mode only.
 pub fn main(ctx: BootContext) -> ! {
     log::info!(
         target: "userland",
@@ -116,13 +117,8 @@ pub fn main(ctx: BootContext) -> ! {
     let mut net_stack = take_net_stack(&ctx);
     #[cfg(feature = "net-console")]
     let mut net_unavailable_detail = take_net_unavailable_detail(&ctx);
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    let mut deferred_net_config = take_deferred_net_config(&ctx);
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    let defer_net_console = deferred_net_config.is_some();
-    #[cfg(not(all(feature = "kernel", feature = "net-console")))]
-    let defer_net_console = false;
-
+    #[cfg(feature = "net-console")]
+    let mut net_deferred_config = take_net_deferred_config(&ctx);
     log::info!(
         target: "userland",
         "[userland] event-pump: building console runtime (serial + timer + ipc)"
@@ -158,17 +154,10 @@ pub fn main(ctx: BootContext) -> ! {
             ctx.features.net,
             ctx.features.net_console
         );
-        if defer_net_console {
-            log::info!(
-                target: "net-console",
-                "[net-console] deferred Wi-Fi must complete before root console is announced"
-            );
-        } else {
-            log::info!(
-                target: "net-console",
-                "[net-console] attach before root console start"
-            );
-        }
+        log::info!(
+            target: "net-console",
+            "[net-console] attach before root console start"
+        );
     }
 
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -191,38 +180,46 @@ pub fn main(ctx: BootContext) -> ! {
             "[userland] event-pump: using UART backend={} for shared console I/O",
             uart_backend
         );
-        #[cfg(feature = "net-console")]
+        #[cfg(feature = "kernel")]
+        if let Some(wifi_debug) = wifi_debug.as_mut() {
+            pump = pump.with_wifi_debug(wifi_debug);
+        }
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
         {
-            #[cfg(all(feature = "kernel", feature = "net-console"))]
             if net_stack.is_none() {
-                if let Some(config) = deferred_net_config.take() {
+                if let Some(config) = net_deferred_config.take() {
                     boot_log::force_uart_line(
-                        "[net-console] deferred start action=pre-root-console",
+                        "[net-console] deferred resume reason=pre-root-console action=start-wifi",
                     );
                     log::info!(
                         target: "net-console",
-                        "[net-console] starting deferred Wi-Fi before root console"
+                        "[net-console] deferred resume before serial root console; starting Wi-Fi stack"
                     );
-                    match start_deferred_net_console(ctx.wifi_debug_hal_ptr, config) {
+                    match init_deferred_net_console(config, ctx.wifi_debug_hal_ptr) {
                         Ok(stack) => {
-                            let mac = stack.hardware_address();
-                            let port = stack.console_listen_port();
-                            let mut line = HeaplessString::<128>::new();
+                            let status = stack.status_report();
+                            let mut line = HeaplessString::<192>::new();
                             let _ = write!(
                                 line,
-                                "[net-console] deferred ready backend=cyw43 port={port} mac={mac}"
+                                "[net-console] deferred ready backend={} address_source={} dhcp={} port={}",
+                                status.backend,
+                                status.address_source,
+                                status.dhcp_phase,
+                                crate::net::CONSOLE_TCP_PORT,
                             );
                             boot_log::force_uart_line(line.as_str());
                             log::info!(target: "net-console", "{}", line.as_str());
                             net_stack = Some(stack);
                             net_unavailable_detail = None;
                         }
-                        Err(detail) => {
-                            let mut line = HeaplessString::<192>::new();
+                        Err(err) => {
+                            let mut detail = HeaplessString::<192>::new();
+                            let _ = write!(detail, "{err}");
+                            let mut line = HeaplessString::<224>::new();
                             let _ = write!(
                                 line,
                                 "[net-console] deferred failed detail={}",
-                                detail.as_str()
+                                detail.as_str(),
                             );
                             boot_log::force_uart_line(line.as_str());
                             log::warn!(target: "net-console", "{}", line.as_str());
@@ -231,6 +228,9 @@ pub fn main(ctx: BootContext) -> ! {
                     }
                 }
             }
+        }
+        #[cfg(feature = "net-console")]
+        {
             pump = attach_network(pump, net_stack.as_mut(), net_unavailable_detail.take());
             if pump.net_console_enabled() {
                 log::info!(
@@ -240,18 +240,8 @@ pub fn main(ctx: BootContext) -> ! {
                 );
             }
         }
-        #[cfg(feature = "kernel")]
-        if let Some(wifi_debug) = wifi_debug.as_mut() {
-            pump = pump.with_wifi_debug(wifi_debug);
-        }
-        #[cfg(all(feature = "kernel", feature = "net-console"))]
-        if deferred_net_console_holds_root_console(
-            defer_net_console,
-            pump.net_console_enabled(),
-            pump.net_console_ready_for_root(),
-        ) {
-            wait_for_deferred_net_console_before_root(&mut pump);
-        }
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        wait_for_net_console_before_root_console(&mut pump);
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: root-console.start.begin"
@@ -439,9 +429,9 @@ fn take_net_unavailable_detail(ctx: &BootContext) -> Option<HeaplessString<192>>
     ctx.net_unavailable_detail.borrow_mut().take()
 }
 
-#[cfg(all(feature = "kernel", feature = "net-console"))]
-fn take_deferred_net_config(ctx: &BootContext) -> Option<crate::net::ConsoleNetConfig> {
-    ctx.deferred_net_config.borrow_mut().take()
+#[cfg(feature = "net-console")]
+fn take_net_deferred_config(ctx: &BootContext) -> Option<crate::net::ConsoleNetConfig> {
+    ctx.net_deferred_config.borrow_mut().take()
 }
 
 #[cfg(not(feature = "net-console"))]
@@ -449,45 +439,38 @@ fn take_net_stack(_ctx: &BootContext) -> Option<NetStackHandle> {
     None
 }
 
-#[cfg(all(feature = "kernel", feature = "net-console"))]
-fn start_deferred_net_console(
-    hal_ptr: usize,
-    config: crate::net::ConsoleNetConfig,
-) -> Result<NetStackHandle, HeaplessString<192>> {
-    let Some(hal) = deferred_net_console_hal_from_ptr(hal_ptr) else {
-        let mut detail = HeaplessString::<192>::new();
-        let _ = write!(detail, "deferred net-console HAL unavailable");
-        return Err(detail);
-    };
-
-    crate::net::init_net_console(hal, config).map_err(|err| format_runtime_net_console_error(&err))
+#[cfg(not(feature = "net-console"))]
+fn take_net_deferred_config(_ctx: &BootContext) -> Option<()> {
+    None
 }
 
-#[cfg(all(feature = "kernel", feature = "net-console"))]
-#[allow(unsafe_code)]
-fn deferred_net_console_hal_from_ptr(hal_ptr: usize) -> Option<&'static mut KernelHal<'static>> {
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+fn init_deferred_net_console(
+    config: crate::net::ConsoleNetConfig,
+    hal_ptr: usize,
+) -> Result<NetStackHandle, crate::net::DefaultNetConsoleError> {
     if hal_ptr == 0 {
-        return None;
+        return Err(crate::net::NetConsoleError::InvalidConfig(
+            "deferred-hal-missing",
+        ));
     }
 
-    // SAFETY: `hal_ptr` is the leaked bootstrap `KernelHal` stored in
-    // `BootContext`. This function is called during the single-threaded
-    // pre-console handoff before the event loop attaches Wi-Fi debug access, so
-    // no other mutable HAL reference is active for this operation.
-    Some(unsafe { &mut *(hal_ptr as *mut KernelHal<'static>) })
+    // SAFETY: `hal_ptr` is the leaked bootstrap `KernelHal` pointer already
+    // used by the root-console Wi-Fi debug handle. The deferred resume runs
+    // synchronously before the event loop can dispatch any Wi-Fi debug command,
+    // so no other mutable HAL access is active while the net stack is created.
+    let hal = unsafe { &mut *(hal_ptr as *mut KernelHal<'static>) };
+    crate::net::init_net_console(hal, config)
 }
 
-#[cfg(all(feature = "kernel", feature = "net-console"))]
-const fn deferred_net_console_holds_root_console(
-    deferred_requested: bool,
-    net_console_enabled: bool,
-    net_console_ready: bool,
-) -> bool {
-    deferred_requested && net_console_enabled && !net_console_ready
-}
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+const PRE_ROOT_NET_CONSOLE_WAIT_TIMEOUT_MS: u64 = 60_000;
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+const PRE_ROOT_NET_CONSOLE_WAIT_POLL_LIMIT: u32 = 250_000;
 
-#[cfg(all(feature = "kernel", feature = "net-console"))]
-fn wait_for_deferred_net_console_before_root<
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+fn wait_for_net_console_before_root_console<
+    'a,
     D,
     T,
     I,
@@ -496,71 +479,68 @@ fn wait_for_deferred_net_console_before_root<
     const TX: usize,
     const LINE: usize,
 >(
-    pump: &mut EventPump<'_, D, T, I, V, RX, TX, LINE>,
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
 ) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
-    let mut polls = 0usize;
-    while !pump.net_console_ready_for_root() {
+    if !pump.net_console_enabled() || pump.net_console_ready_for_root() {
+        return;
+    }
+
+    let start_ms = crate::hal::timebase().now_ms();
+    let mut polls = 0u32;
+    boot_log::force_uart_line(
+        "[net-console] root console waiting reason=wifi-not-ready action=wait-for-wifi",
+    );
+    log::info!(
+        target: "net-console",
+        "[net-console] root console waiting for Wi-Fi association/addressing before prompt"
+    );
+
+    loop {
+        if pump.net_console_ready_for_root() {
+            let elapsed_ms = crate::hal::timebase().now_ms().saturating_sub(start_ms);
+            let mut line = HeaplessString::<160>::new();
+            let _ = write!(
+                line,
+                "[net-console] root console wait complete reason=net-ready action=start-serial-root-console elapsed_ms={elapsed_ms} polls={polls}",
+            );
+            boot_log::force_uart_line(line.as_str());
+            log::info!(target: "net-console", "{}", line.as_str());
+            return;
+        }
         if let Some(reason) = pump.net_console_terminal_failure_reason() {
-            let mut line = HeaplessString::<128>::new();
+            let elapsed_ms = crate::hal::timebase().now_ms().saturating_sub(start_ms);
+            let mut line = HeaplessString::<176>::new();
             let _ = write!(
                 line,
-                "[net-console] root console releasing reason={reason} action=serial-diagnostic-shell"
+                "[net-console] root console wait ended reason={reason} action=start-serial-root-console elapsed_ms={elapsed_ms} polls={polls}",
             );
             boot_log::force_uart_line(line.as_str());
             log::warn!(target: "net-console", "{}", line.as_str());
-            break;
+            return;
         }
-        if polls == 0 {
-            boot_log::force_uart_line(
-                "[net-console] root console waiting reason=wifi-not-ready action=wait-for-wifi",
-            );
-            log::warn!(
-                target: "net-console",
-                "[net-console] root console waiting for deferred Wi-Fi net-console readiness"
-            );
-        } else if polls % DEFERRED_NET_CONSOLE_ROOT_WAIT_LOG_POLLS == 0 {
-            let mut line = HeaplessString::<128>::new();
+        let elapsed_ms = crate::hal::timebase().now_ms().saturating_sub(start_ms);
+        if elapsed_ms >= PRE_ROOT_NET_CONSOLE_WAIT_TIMEOUT_MS
+            || polls >= PRE_ROOT_NET_CONSOLE_WAIT_POLL_LIMIT
+        {
+            let mut line = HeaplessString::<192>::new();
             let _ = write!(
                 line,
-                "[net-console] root console still waiting reason=wifi-not-ready action=wait-for-wifi polls={polls}"
+                "[net-console] root console wait ended reason=wifi-not-ready-timeout action=start-serial-root-console elapsed_ms={elapsed_ms} polls={polls}",
             );
             boot_log::force_uart_line(line.as_str());
             log::warn!(target: "net-console", "{}", line.as_str());
+            return;
         }
+
         pump.poll_pre_root_network();
         polls = polls.saturating_add(1);
-        crate::sel4::yield_now();
+        sel4::yield_now();
     }
-    if polls > 0 {
-        let mut line = HeaplessString::<128>::new();
-        let _ = write!(
-            line,
-            "[net-console] root console wait complete action=wifi-ready polls={polls}"
-        );
-        boot_log::force_uart_line(line.as_str());
-        log::info!(target: "net-console", "{}", line.as_str());
-    }
-}
-
-#[cfg(all(feature = "kernel", feature = "net-console"))]
-fn format_runtime_net_console_error<DE: core::fmt::Display>(
-    err: &crate::net::NetConsoleError<DE>,
-) -> HeaplessString<192> {
-    const UNSUPPORTED_PREFIX: &str = "unsupported operation: ";
-
-    let mut rendered = HeaplessString::<192>::new();
-    let _ = write!(rendered, "{err}");
-    let normalized = rendered
-        .strip_prefix(UNSUPPORTED_PREFIX)
-        .unwrap_or(rendered.as_str());
-    let mut detail = HeaplessString::<192>::new();
-    let _ = write!(detail, "{normalized}");
-    detail
 }
 
 #[cfg(feature = "kernel")]
@@ -831,51 +811,4 @@ fn read_cntfrq() -> u64 {
         core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value);
     }
     value
-}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    use super::format_runtime_net_console_error;
-
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    #[test]
-    fn deferred_net_console_error_strips_unsupported_prefix() {
-        let err = crate::net::NetConsoleError::Init(crate::net::NetStackError::Driver(
-            "unsupported operation: cyw43-control-plane-partial-hint-visibility",
-        ));
-
-        assert_eq!(
-            format_runtime_net_console_error(&err).as_str(),
-            "cyw43-control-plane-partial-hint-visibility"
-        );
-    }
-
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    #[test]
-    fn deferred_net_console_error_preserves_plain_detail() {
-        let err = crate::net::NetConsoleError::InvalidConfig("wifi-credentials-missing");
-
-        assert_eq!(
-            format_runtime_net_console_error::<&'static str>(&err).as_str(),
-            "invalid net config: wifi-credentials-missing"
-        );
-    }
-
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    #[test]
-    fn deferred_wifi_pending_stack_is_the_only_path_that_holds_root_console() {
-        assert!(super::deferred_net_console_holds_root_console(
-            true, true, false
-        ));
-        assert!(!super::deferred_net_console_holds_root_console(
-            true, true, true
-        ));
-        assert!(!super::deferred_net_console_holds_root_console(
-            true, false, false
-        ));
-        assert!(!super::deferred_net_console_holds_root_console(
-            false, true, false
-        ));
-    }
 }

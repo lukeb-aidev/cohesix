@@ -757,7 +757,7 @@ fn pi4_local_usb_boot_wifi_cooperation_reason(
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-fn pi4_local_usb_boot_wifi_pending_detail(reason: &str) -> HeaplessString<192> {
+fn pi4_local_usb_boot_wifi_defer_detail(reason: &str) -> HeaplessString<192> {
     let mut detail = heapless::String::<192>::new();
     let _ = write!(
         detail,
@@ -2953,8 +2953,8 @@ pub struct BootContext {
     pub(crate) net_stack: RefCell<Option<NetStack>>,
     #[cfg(feature = "net-console")]
     pub(crate) net_unavailable_detail: RefCell<Option<HeaplessString<192>>>,
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    pub(crate) deferred_net_config: RefCell<Option<crate::net::ConsoleNetConfig>>,
+    #[cfg(feature = "net-console")]
+    pub(crate) net_deferred_config: RefCell<Option<crate::net::ConsoleNetConfig>>,
     #[cfg(feature = "kernel")]
     pub(crate) ninedoor: RefCell<Option<&'static mut NineDoorBridge>>,
     #[cfg(feature = "kernel")]
@@ -4525,7 +4525,23 @@ fn bootstrap<P: Platform>(
     {
         if let Some(mmio) = uart_mmio {
             let mut driver = KernelSerialDriver::from_mmio(mmio);
+            let mut begin_line = heapless::String::<128>::new();
+            let _ = write!(
+                begin_line,
+                "[uart] runtime init begin backend={} paddr=0x{:08x}",
+                driver.label(),
+                mmio.paddr()
+            );
+            boot_log::force_uart_line(begin_line.as_str());
             driver.init();
+            let mut end_line = heapless::String::<128>::new();
+            let _ = write!(
+                end_line,
+                "[uart] runtime init end backend={} paddr=0x{:08x}",
+                driver.label(),
+                mmio.paddr()
+            );
+            boot_log::force_uart_line(end_line.as_str());
             let mut init_line = heapless::String::<96>::new();
             let _ = write!(init_line, "[uart] init OK backend={}", driver.label());
             console.writeln_prefixed(init_line.as_str());
@@ -4576,7 +4592,7 @@ fn bootstrap<P: Platform>(
         boot_guard.record_phase("NetInit");
         check_bootinfo(&mut boot_guard, "[mark] net.init.pre");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let (net_stack, virtio_present, net_init_error, net_backend_label, deferred_net_config) = {
+        let (net_stack, virtio_present, net_init_error, net_backend_label, net_deferred_config) = {
             use crate::net::{
                 console_net_config_with_runtime_policy, init_net_console, NetConsoleError, NetMode,
                 NetPoller,
@@ -4678,12 +4694,12 @@ fn bootstrap<P: Platform>(
                 boot_log::force_uart_line(line.as_str());
                 console.writeln_prefixed(line.as_str());
                 boot_log::force_uart_line(
-                    "[boot] wifi net-console probe deferred; root console waits for Wi-Fi",
-                );
+	                    "[boot] wifi net-console deferred; root console waits for Wi-Fi readiness or terminal failure",
+	                );
                 log::info!(
-                    "[net-console] Pi4 local-seat Wi-Fi net-console probe deferred before root console reason={reason}"
-                );
-                let detail = pi4_local_usb_boot_wifi_pending_detail(reason);
+	                    "[net-console] Pi4 local-seat Wi-Fi net-console deferred to pre-root-console wait reason={reason}"
+	                );
+                let detail = pi4_local_usb_boot_wifi_defer_detail(reason);
                 (None, false, Some(detail), net_backend_label, Some(config))
             } else {
                 match init_net_console(hal, config) {
@@ -4758,8 +4774,10 @@ fn bootstrap<P: Platform>(
         let net_stack = None::<()>;
         check_bootinfo(&mut boot_guard, "[mark] net.init.post");
         boot_guard.record_phase("TimersAndIPC");
-        boot_log::force_uart_line("[boot] net-console init complete; continuing root console boot");
-        log::info!("[boot] net-console init complete; continuing with timers and IPC");
+        boot_log::force_uart_line(
+            "[boot] net-console pre-root decision complete; continuing root console boot",
+        );
+        log::info!("[boot] net-console pre-root decision complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
         let (timer, ipc) = match run_timers_and_ipc_phase(endpoints, bootstrap_ipc) {
             Ok(ok) => ok,
@@ -5002,8 +5020,7 @@ fn bootstrap<P: Platform>(
             tickets: RefCell::new(Some(tickets)),
             net_stack: RefCell::new(net_stack),
             net_unavailable_detail: RefCell::new(net_init_error),
-            #[cfg(all(feature = "kernel", feature = "net-console"))]
-            deferred_net_config: RefCell::new(deferred_net_config),
+            net_deferred_config: RefCell::new(net_deferred_config),
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(Some(ninedoor)),
             #[cfg(feature = "kernel")]
@@ -5024,6 +5041,12 @@ fn bootstrap<P: Platform>(
             timer: RefCell::new(Some(timer)),
             ipc: RefCell::new(Some(ipc)),
             tickets: RefCell::new(Some(tickets)),
+            #[cfg(feature = "net-console")]
+            net_stack: RefCell::new(None),
+            #[cfg(feature = "net-console")]
+            net_unavailable_detail: RefCell::new(None),
+            #[cfg(feature = "net-console")]
+            net_deferred_config: RefCell::new(None),
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(None),
             #[cfg(feature = "kernel")]
@@ -7052,9 +7075,9 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn pi4_local_usb_boot_wifi_pending_detail_is_machine_parseable() {
+    fn pi4_local_usb_boot_wifi_defer_detail_is_machine_parseable() {
         assert_eq!(
-            super::pi4_local_usb_boot_wifi_pending_detail("pi4-local-seat-explicit-wifi").as_str(),
+            super::pi4_local_usb_boot_wifi_defer_detail("pi4-local-seat-explicit-wifi").as_str(),
             "wifi-net-console-pending-before-root-console:pi4-local-seat-explicit-wifi"
         );
     }

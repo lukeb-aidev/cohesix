@@ -1038,6 +1038,7 @@ pub struct NetStack<D: NetDevice> {
     peer_endpoint: Option<(IpAddress, u16)>,
     dhcp_handle: Option<SocketHandle>,
     dhcp: Option<DhcpClient>,
+    dhcp_started: bool,
     udp_beacon_handle: Option<SocketHandle>,
     udp_echo_handle: Option<SocketHandle>,
     tcp_smoke_handle: Option<SocketHandle>,
@@ -1729,6 +1730,13 @@ where
                             Ok(DefaultNetStack::Cyw43(stack))
                         }
                         Err(err) => {
+                            if !cyw43_auto_fallback_allowed(&err) {
+                                let console_err = convert_console_error::<Cyw43DriverError>(err);
+                                warn!(
+                                    "[net-console] auto fallback refused: wifi init failed err={console_err}"
+                                );
+                                return Err(console_err);
+                            }
                             warn!(
                                     "[net-console] auto fallback: wifi init failed err={}; using wired backend",
                                     convert_console_error::<Cyw43DriverError>(err)
@@ -1758,6 +1766,10 @@ where
             Ok(DefaultNetStack::Virtio(stack))
         }
     }
+}
+
+fn cyw43_auto_fallback_allowed(err: &NetStackError<Cyw43DriverError>) -> bool {
+    matches!(err, NetStackError::Driver(driver_err) if driver_err.is_absent())
 }
 
 fn convert_console_error<E>(err: NetStackError<E>) -> DefaultNetConsoleError
@@ -2530,6 +2542,7 @@ impl<D: NetDevice> NetStack<D> {
             peer_endpoint: None,
             dhcp_handle: None,
             dhcp: dhcp_enabled.then(|| DhcpClient::new(console_config.policy.dhcp)),
+            dhcp_started: false,
             udp_beacon_handle: None,
             udp_echo_handle: None,
             tcp_smoke_handle: None,
@@ -2565,9 +2578,7 @@ impl<D: NetDevice> NetStack<D> {
         }
         if dhcp_enabled {
             stack.initialise_dhcp_socket()?;
-            if let Some(client) = stack.dhcp.as_mut() {
-                client.start(mac.0, init_now_ms);
-            }
+            let _ = stack.start_dhcp_if_ready(init_now_ms);
         }
         if stage_policy.allow_selftest {
             stack.initialise_self_test_sockets()?;
@@ -2820,6 +2831,8 @@ impl<D: NetDevice> NetStack<D> {
             false
         };
         activity |= tcp_activity;
+        let dhcp_start_activity = self.start_dhcp_if_ready(now_ms);
+        activity |= dhcp_start_activity;
         let dhcp_activity = self.service_dhcp(now_ms);
         activity |= dhcp_activity;
 
@@ -2872,6 +2885,9 @@ impl<D: NetDevice> NetStack<D> {
         let Some(handle) = self.dhcp_handle else {
             return false;
         };
+        if !self.dhcp_started {
+            return false;
+        }
         let Some(mut client) = self.dhcp.take() else {
             return false;
         };
@@ -3003,6 +3019,31 @@ impl<D: NetDevice> NetStack<D> {
 
         self.dhcp = Some(client);
         activity
+    }
+
+    fn start_dhcp_if_ready(&mut self, now_ms: u64) -> bool {
+        if self.dhcp_started || self.dhcp_handle.is_none() {
+            return false;
+        }
+        let Some(client) = self.dhcp.as_mut() else {
+            return false;
+        };
+        if let Some(status) = self.device.bringup_status_label() {
+            log::debug!(
+                "[dhcp] start deferred reason=device-bringup status={} now_ms={}",
+                status,
+                now_ms
+            );
+            return false;
+        }
+        client.start(self.device.mac().0, now_ms);
+        self.dhcp_started = true;
+        info!(
+            "[dhcp] start ready interface={} now_ms={}",
+            self.device.interface_label(),
+            now_ms
+        );
+        true
     }
 
     fn apply_dhcp_event(&mut self, event: DhcpEvent) -> bool {
@@ -5827,6 +5868,19 @@ mod tests {
 
         let explicit = render_host_selftest_target(Some("example.com:5555"), TCP_SMOKE_PORT, ip);
         assert_eq!(explicit.as_str(), "example.com:5555");
+    }
+
+    #[test]
+    fn cyw43_auto_fallback_only_allows_absent_device() {
+        assert!(cyw43_auto_fallback_allowed(&NetStackError::Driver(
+            Cyw43DriverError::NoDevice
+        )));
+        assert!(!cyw43_auto_fallback_allowed(&NetStackError::Driver(
+            Cyw43DriverError::Protocol("control-plane")
+        )));
+        assert!(!cyw43_auto_fallback_allowed(
+            &NetStackError::SocketStorageInUse
+        ));
     }
 
     #[test]

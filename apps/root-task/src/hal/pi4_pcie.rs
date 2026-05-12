@@ -38,7 +38,9 @@ const BCM2711_PCIE_MSI_INTR2_CLR: usize = 0x4508;
 const BCM2711_PCIE_MSI_INTR2_MASK_SET: usize = 0x4510;
 const BCM2711_PCIE_EXT_CFG_DATA: usize = 0x8000;
 const BCM2711_PCIE_EXT_CFG_INDEX: usize = 0x9000;
+const BCM2711_PCIE_RC_CFG_VENDOR_VENDOR_SPECIFIC_REG1: usize = 0x0188;
 const BCM2711_PCIE_RC_CFG_PRIV1_ID_VAL3: usize = 0x043c;
+const BCM2711_PCIE_RC_CFG_PRIV1_LINK_CAPABILITY: usize = 0x04dc;
 const VL805_XHCI_USBCMD_OFFSET: usize = 0x0020;
 const VL805_XHCI_DOORBELL0_OFFSET: usize = 0x0100;
 const VL805_XHCI_DOORBELL_STRIDE: usize = 4;
@@ -58,7 +60,9 @@ const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_LIMIT_MASK: u32 = 0xfff00000;
 const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT_BASE_MASK: u32 = 0xfff0;
 const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI_BASE_MASK: u32 = 0xff;
 const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI_LIMIT_MASK: u32 = 0xff;
+const PCIE_RC_CFG_VENDOR_SPECIFIC_REG1_ENDIAN_MODE_BAR2_MASK: u32 = 0x0c;
 const PCIE_RC_CFG_PRIV1_ID_VAL3_CLASS_CODE_MASK: u32 = 0x00ff_ffff;
+const PCIE_RC_CFG_PRIV1_LINK_CAPABILITY_ASPM_SUPPORT_MASK: u32 = 0x0c00;
 const PCIE_HARD_DEBUG_SERDES_IDDQ_MASK: u32 = 0x08000000;
 const PCIE_RGR1_SW_INIT_1_INIT_MASK: u32 = 0x2;
 const PCIE_RGR1_SW_INIT_1_PERST_MASK: u32 = 0x1;
@@ -98,10 +102,14 @@ const VL805_POLL_ONLY_COMMAND_REQUIRED: u16 = PCI_COMMAND_MEMORY_SPACE
     | PCI_COMMAND_INTERRUPT_DISABLE;
 const PCI_STATUS_CAPABILITIES_LIST: u16 = 1 << 4;
 const PCI_CAP_ID_MSI: u8 = 0x05;
+const PCI_CAP_ID_MSIX: u8 = 0x11;
 const PCI_CAP_NEXT_MASK: u8 = 0xfc;
 const PCI_CAP_TRAVERSE_LIMIT: usize = 16;
 const PCI_MSI_CONTROL_OFFSET: usize = 2;
 const PCI_MSI_CONTROL_ENABLE: u16 = 1;
+const PCI_MSIX_CONTROL_OFFSET: usize = 2;
+const PCI_MSIX_CONTROL_MASKALL: u16 = 1 << 14;
+const PCI_MSIX_CONTROL_ENABLE: u16 = 1 << 15;
 
 const RPI4_VL805_XHCI_MMIO: usize = 0x0000_0006_0000_0000;
 const RPI4_PCIE_BUS_MMIO_WINDOW_BASE: usize = 0xC000_0000;
@@ -188,6 +196,8 @@ pub struct Pi4Vl805PcieProof {
     pub mmio: usize,
     pub msi_control_before: Option<u16>,
     pub msi_control_after: Option<u16>,
+    pub msix_control_before: Option<u16>,
+    pub msix_control_after: Option<u16>,
 }
 
 impl Pi4Vl805PcieProof {
@@ -195,9 +205,30 @@ impl Pi4Vl805PcieProof {
     pub const fn msi_disabled(self) -> bool {
         match self.msi_control_after {
             Some(control) => vl805_msi_control_disabled(control),
-            None => false,
+            None => true,
         }
     }
+
+    #[must_use]
+    pub const fn msix_quiesced(self) -> bool {
+        match self.msix_control_after {
+            Some(control) => vl805_msix_control_quiesced(control),
+            None => true,
+        }
+    }
+
+    #[must_use]
+    pub const fn interrupt_modes_quiesced(self) -> bool {
+        self.msi_disabled() && self.msix_quiesced()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Vl805InterruptModeProof {
+    msi_control_before: Option<u16>,
+    msi_control_after: Option<u16>,
+    msix_control_before: Option<u16>,
+    msix_control_after: Option<u16>,
 }
 
 impl<'a> KernelHal<'a> {
@@ -669,8 +700,7 @@ fn prove_pi4_vl805_pcie_ownership(
         return Err(HalError::Unsupported("vl805-intx-mask"));
     }
 
-    let (msi_control_before, msi_control_after) =
-        disable_vl805_msi_for_poll_only(index_reg, config_virt)?;
+    let interrupt_proof = quiesce_vl805_interrupt_modes_for_poll_only(index_reg, config_virt)?;
 
     let command_required = vl805_poll_only_bus_master_command(command_masked_after);
     if command_required != command_masked_after {
@@ -705,8 +735,10 @@ fn prove_pi4_vl805_pcie_ownership(
         bar0,
         bar1,
         mmio,
-        msi_control_before: Some(msi_control_before),
-        msi_control_after: Some(msi_control_after),
+        msi_control_before: interrupt_proof.msi_control_before,
+        msi_control_after: interrupt_proof.msi_control_after,
+        msix_control_before: interrupt_proof.msix_control_before,
+        msix_control_after: interrupt_proof.msix_control_after,
     })
 }
 
@@ -919,11 +951,19 @@ fn configure_pi4_pcie_outbound_window(status_page: usize) -> Result<(), HalError
 }
 
 fn configure_pi4_pcie_root_bridge(root_cfg_page: usize) -> Result<(), HalError> {
+    let endian_reg = same_page_reg_virt(
+        root_cfg_page,
+        BCM2711_PCIE_RC_CFG_VENDOR_VENDOR_SPECIFIC_REG1,
+    )?;
     let class_reg = same_page_reg_virt(root_cfg_page, BCM2711_PCIE_RC_CFG_PRIV1_ID_VAL3)?;
+    let link_cap_reg =
+        same_page_reg_virt(root_cfg_page, BCM2711_PCIE_RC_CFG_PRIV1_LINK_CAPABILITY)?;
     let vendor_device = pci_cfg_read_u32(root_cfg_page, PCI_CFG_VENDOR_DEVICE);
     let vendor_id = (vendor_device & 0xffff) as u16;
     let device_id = (vendor_device >> 16) as u16;
     let class_before = pci_cfg_read_u32(root_cfg_page, PCI_CFG_CLASS_REVISION) >> 8;
+    let endian_before = mmio_read_u32(endian_reg);
+    let link_cap_before = mmio_read_u32(link_cap_reg);
 
     mmio_clear_set_bits_u32_flush(
         class_reg,
@@ -956,6 +996,14 @@ fn configure_pi4_pcie_root_bridge(root_cfg_page: usize) -> Result<(), HalError> 
     if command_required != command_before {
         pci_cfg_write_u16(root_cfg_page, PCI_CFG_COMMAND_STATUS, command_required);
     }
+    let endian_after = mmio_clear_bits_u32_flush(
+        endian_reg,
+        PCIE_RC_CFG_VENDOR_SPECIFIC_REG1_ENDIAN_MODE_BAR2_MASK,
+    );
+    let link_cap_after = mmio_clear_bits_u32_flush(
+        link_cap_reg,
+        PCIE_RC_CFG_PRIV1_LINK_CAPABILITY_ASPM_SUPPORT_MASK,
+    );
     fence(Ordering::SeqCst);
     pcie_spin_delay(PCIE_EXT_CFG_SELECT_SETTLE_SPINS);
 
@@ -965,11 +1013,11 @@ fn configure_pi4_pcie_root_bridge(root_cfg_page: usize) -> Result<(), HalError> 
     let pref_after = pci_cfg_read_u32(root_cfg_page, PCI_CFG_PREFETCH_BASE_LIMIT);
     let class_after = pci_cfg_read_u32(root_cfg_page, PCI_CFG_CLASS_REVISION) >> 8;
 
-    let mut line = heapless::String::<320>::new();
+    let mut line = heapless::String::<384>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] vl805 bcm2711-pcie bridge cfg vid:did={vendor_id:04x}:{device_id:04x} class=0x{class_before:06x}->0x{class_after:06x} bus=0x{bus_after:08x} mem=0x{mem_after:08x} prefetch=0x{pref_after:08x} cmd=0x{command_before:04x}->0x{command_after:04x} source=hal-root-port"
+            "[local-seat] vl805 bcm2711-pcie bridge cfg vid:did={vendor_id:04x}:{device_id:04x} class=0x{class_before:06x}->0x{class_after:06x} bus=0x{bus_after:08x} mem=0x{mem_after:08x} prefetch=0x{pref_after:08x} cmd=0x{command_before:04x}->0x{command_after:04x} bar2_endian=0x{endian_before:08x}->0x{endian_after:08x} aspm=0x{link_cap_before:08x}->0x{link_cap_after:08x} source=hal-root-port"
         ),
     );
     boot_log::force_uart_line(line.as_str());
@@ -985,6 +1033,12 @@ fn configure_pi4_pcie_root_bridge(root_cfg_page: usize) -> Result<(), HalError> 
     }
     if (command_after & RPI4_PCIE_BRIDGE_COMMAND_REQUIRED) != RPI4_PCIE_BRIDGE_COMMAND_REQUIRED {
         return Err(HalError::Unsupported("pcie-root-command"));
+    }
+    if (endian_after & PCIE_RC_CFG_VENDOR_SPECIFIC_REG1_ENDIAN_MODE_BAR2_MASK) != 0 {
+        return Err(HalError::Unsupported("pcie-root-bar2-endian"));
+    }
+    if (link_cap_after & PCIE_RC_CFG_PRIV1_LINK_CAPABILITY_ASPM_SUPPORT_MASK) != 0 {
+        return Err(HalError::Unsupported("pcie-root-aspm"));
     }
     Ok(())
 }
@@ -1273,18 +1327,21 @@ const fn post_mailbox_ext_cfg_data_read_deferred(status: u32) -> bool {
     !pcie_status_link_up_and_rc(status)
 }
 
-fn disable_vl805_msi_for_poll_only(
+fn quiesce_vl805_interrupt_modes_for_poll_only(
     index_reg: usize,
     config_virt: usize,
-) -> Result<(u16, u16), HalError> {
+) -> Result<Vl805InterruptModeProof, HalError> {
     let status = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS + 2)?;
+    let mut proof = Vl805InterruptModeProof::default();
     if (status & PCI_STATUS_CAPABILITIES_LIST) == 0 {
         boot_log::force_uart_line(
-            "[local-seat] vl805 bcm2711-pcie msi proof skipped reason=no-cap-list",
+            "[local-seat] vl805 bcm2711-pcie irq-mode proof skipped reason=no-cap-list",
         );
-        return Err(HalError::Unsupported("vl805-msi"));
+        return Ok(proof);
     }
 
+    let mut saw_msi = false;
+    let mut saw_msix = false;
     let mut cap =
         (vl805_cfg_read_u8(index_reg, config_virt, PCI_CFG_CAP_PTR)? & PCI_CAP_NEXT_MASK) as usize;
     for _ in 0..PCI_CAP_TRAVERSE_LIMIT {
@@ -1294,27 +1351,62 @@ fn disable_vl805_msi_for_poll_only(
         let cap_id = vl805_cfg_read_u8(index_reg, config_virt, cap)?;
         let next =
             (vl805_cfg_read_u8(index_reg, config_virt, cap + 1)? & PCI_CAP_NEXT_MASK) as usize;
-        if cap_id == PCI_CAP_ID_MSI {
-            let ctrl_offset = cap + PCI_MSI_CONTROL_OFFSET;
-            let control_before = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset)?;
-            let control_request = vl805_msi_control_disable_value(control_before);
-            if control_request != control_before {
-                vl805_cfg_write_u16(index_reg, config_virt, ctrl_offset, control_request)?;
+        match cap_id {
+            PCI_CAP_ID_MSI => {
+                saw_msi = true;
+                let ctrl_offset = cap + PCI_MSI_CONTROL_OFFSET;
+                let control_before = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset)?;
+                let control_request = vl805_msi_control_disable_value(control_before);
+                if control_request != control_before {
+                    vl805_cfg_write_u16(index_reg, config_virt, ctrl_offset, control_request)?;
+                }
+                let control_after = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset)?;
+                let disabled = vl805_msi_control_disabled(control_after);
+                let mut line = heapless::String::<240>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] vl805 bcm2711-pcie msi proof cap=0x{cap:02x} control=0x{control_before:04x}->0x{control_after:04x} disabled={}",
+                        disabled as u8,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                proof.msi_control_before = Some(control_before);
+                proof.msi_control_after = Some(control_after);
+                if !disabled {
+                    return Err(HalError::Unsupported("vl805-msi"));
+                }
             }
-            let control_after = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset)?;
-            let disabled = vl805_msi_control_disabled(control_after);
-            let mut line = heapless::String::<240>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] vl805 bcm2711-pcie msi proof cap=0x{cap:02x} control=0x{control_before:04x}->0x{control_after:04x} disabled={}",
-                    disabled as u8,
-                ),
-            );
-            boot_log::force_uart_line(line.as_str());
-            return disabled
-                .then_some((control_before, control_after))
-                .ok_or(HalError::Unsupported("vl805-msi"));
+            PCI_CAP_ID_MSIX => {
+                saw_msix = true;
+                let ctrl_offset = cap + PCI_MSIX_CONTROL_OFFSET;
+                let control_before = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset)?;
+                let control_request = vl805_msix_control_quiesce_value(control_before);
+                if control_request != control_before {
+                    vl805_cfg_write_u16(index_reg, config_virt, ctrl_offset, control_request)?;
+                }
+                let control_after = vl805_cfg_read_u16(index_reg, config_virt, ctrl_offset)?;
+                let disabled = vl805_msix_control_disabled(control_after);
+                let maskall = (control_after & PCI_MSIX_CONTROL_MASKALL) != 0;
+                let quiesced = vl805_msix_control_quiesced(control_after);
+                let mut line = heapless::String::<256>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] vl805 bcm2711-pcie msix proof cap=0x{cap:02x} control=0x{control_before:04x}->0x{control_after:04x} disabled={} maskall={} quiesced={}",
+                        disabled as u8,
+                        maskall as u8,
+                        quiesced as u8,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                proof.msix_control_before = Some(control_before);
+                proof.msix_control_after = Some(control_after);
+                if !quiesced {
+                    return Err(HalError::Unsupported("vl805-msix"));
+                }
+            }
+            _ => {}
         }
         if next == 0 || next == cap {
             break;
@@ -1322,10 +1414,17 @@ fn disable_vl805_msi_for_poll_only(
         cap = next;
     }
 
-    boot_log::force_uart_line(
-        "[local-seat] vl805 bcm2711-pcie msi proof skipped reason=msi-cap-missing",
-    );
-    Err(HalError::Unsupported("vl805-msi"))
+    if !saw_msi {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 bcm2711-pcie msi proof skipped reason=msi-cap-missing",
+        );
+    }
+    if !saw_msix {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 bcm2711-pcie msix proof skipped reason=msix-cap-missing",
+        );
+    }
+    Ok(proof)
 }
 
 #[inline]
@@ -1336,6 +1435,21 @@ const fn vl805_msi_control_disable_value(control: u16) -> u16 {
 #[inline]
 const fn vl805_msi_control_disabled(control: u16) -> bool {
     (control & PCI_MSI_CONTROL_ENABLE) == 0
+}
+
+#[inline]
+const fn vl805_msix_control_quiesce_value(control: u16) -> u16 {
+    (control | PCI_MSIX_CONTROL_MASKALL) & !PCI_MSIX_CONTROL_ENABLE
+}
+
+#[inline]
+const fn vl805_msix_control_disabled(control: u16) -> bool {
+    (control & PCI_MSIX_CONTROL_ENABLE) == 0
+}
+
+#[inline]
+const fn vl805_msix_control_quiesced(control: u16) -> bool {
+    vl805_msix_control_disabled(control) && (control & PCI_MSIX_CONTROL_MASKALL) != 0
 }
 
 #[inline]
@@ -1795,6 +1909,10 @@ mod tests {
             PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER
         );
         assert_eq!(BCM2711_ROOT_BRIDGE_CLASS_CODE, 0x0006_0400);
+        assert_eq!(BCM2711_PCIE_RC_CFG_VENDOR_VENDOR_SPECIFIC_REG1, 0x0188);
+        assert_eq!(BCM2711_PCIE_RC_CFG_PRIV1_LINK_CAPABILITY, 0x04dc);
+        assert_eq!(PCIE_RC_CFG_VENDOR_SPECIFIC_REG1_ENDIAN_MODE_BAR2_MASK, 0x0c);
+        assert_eq!(PCIE_RC_CFG_PRIV1_LINK_CAPABILITY_ASPM_SUPPORT_MASK, 0x0c00);
     }
 
     #[test]
@@ -1802,6 +1920,44 @@ mod tests {
         assert_eq!(vl805_msi_control_disable_value(0x00a5), 0x00a4);
         assert!(vl805_msi_control_disabled(0x00a4));
         assert!(!vl805_msi_control_disabled(0x00a5));
+    }
+
+    #[test]
+    fn vl805_msix_control_quiesce_matches_uboot_maskall_disable() {
+        assert_eq!(
+            vl805_msix_control_quiesce_value(PCI_MSIX_CONTROL_ENABLE | 0x003f),
+            PCI_MSIX_CONTROL_MASKALL | 0x003f
+        );
+        assert!(vl805_msix_control_disabled(PCI_MSIX_CONTROL_MASKALL));
+        assert!(!vl805_msix_control_disabled(PCI_MSIX_CONTROL_ENABLE));
+        assert!(vl805_msix_control_quiesced(PCI_MSIX_CONTROL_MASKALL));
+        assert!(!vl805_msix_control_quiesced(0));
+        assert!(!vl805_msix_control_quiesced(PCI_MSIX_CONTROL_ENABLE));
+    }
+
+    #[test]
+    fn vl805_absent_msi_or_msix_capability_is_poll_only_quiesced() {
+        let proof = Pi4Vl805PcieProof {
+            status: BCM2711_PCIE_STATUS_PORT
+                | BCM2711_PCIE_STATUS_DL_ACTIVE
+                | BCM2711_PCIE_STATUS_PHY_LINK_UP,
+            config_virt: 0,
+            vendor_id: VL805_PCI_VENDOR_ID,
+            device_id: VL805_PCI_DEVICE_ID,
+            class_code: VL805_EXPECTED_CLASS_CODE,
+            command_before: 0,
+            command_after: VL805_POLL_ONLY_COMMAND_REQUIRED,
+            bar0: 0xc000_0004,
+            bar1: 0,
+            mmio: RPI4_VL805_XHCI_MMIO,
+            msi_control_before: None,
+            msi_control_after: None,
+            msix_control_before: None,
+            msix_control_after: None,
+        };
+        assert!(proof.msi_disabled());
+        assert!(proof.msix_quiesced());
+        assert!(proof.interrupt_modes_quiesced());
     }
 
     #[test]

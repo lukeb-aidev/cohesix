@@ -2582,12 +2582,13 @@ where
         #[cfg(all(target_arch = "aarch64", target_os = "none"))]
         if let Some(route) = crate::local_seat_pi4::latest_usb_probe_route_status() {
             let route_line = format_message(format_args!(
-                "usb: golden_path route={} attempt={}/{} current={} next={} origin={} handoff={} seed={} halt_guard={} publish_guard={}",
+                "usb: golden_path route={} attempt={}/{} current={} next={} proof_gate={} target_gate=10 origin={} handoff={} seed={} halt_guard={} publish_guard={}",
                 route.route,
                 route.strategy_idx,
                 route.strategy_count,
                 route.current_step,
                 route.next_step,
+                route.proof_gate,
                 route.origin,
                 route.handoff,
                 route.seed,
@@ -2596,10 +2597,11 @@ where
             ));
             self.emit_console_line(route_line.as_str());
             let mut progress_line = format_message(format_args!(
-                "usb: golden_path outcome={} pathway={} progress={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} command_probe={} detect_passes={}",
+                "usb: golden_path outcome={} pathway={} progress={} proof_gate={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} command_probe={} detect_passes={}",
                 route.outcome,
                 route.pathway_idx,
                 route.progress,
+                route.proof_gate,
                 route.policy,
                 if route.prefer_high { "high" } else { "low" },
                 if route.pcie_dma_window {
@@ -2635,9 +2637,10 @@ where
             }
             self.emit_console_line(progress_line.as_str());
             let enum_line = format_message(format_args!(
-                "usb: enum_state phase={} outcome={} port={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} command_probe={} next={}",
+                "usb: enum_state phase={} outcome={} proof_gate={} port={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} command_probe={} next={}",
                 route.progress,
                 route.outcome,
+                route.proof_gate,
                 route.port.unwrap_or(0),
                 route.connected_mask,
                 route.event_candidate_mask,
@@ -2833,7 +2836,8 @@ where
         let guard =
             Self::usb_ownership_publish_guard(status.command_replay_ready, status.fresh_ownership);
         let proof = format_message(format_args!(
-            "usb: ownership_proof cfg_replay={} cfg_live={} cmd_replay={} cmd_live={} cmd={} mailbox={} bar0={} publish_guard={}",
+            "usb: ownership_proof proof_gate={} target_gate=10 cfg_replay={} cfg_live={} cmd_replay={} cmd_live={} cmd={} mailbox={} bar0={} publish_guard={}",
+            status.proof_gate,
             if status.cfg_replay_ready { "yes" } else { "no" },
             Self::usb_ownership_cfg_live_proven(status.cfg_source),
             if status.command_replay_ready {

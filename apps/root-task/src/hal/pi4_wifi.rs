@@ -1813,6 +1813,14 @@ const fn firmware_channel_defers_function2_interrupts(experimental_no_ht_transpo
 }
 
 #[inline]
+const fn firmware_channel_missing_irq_binding_is_terminal(
+    allow_function2_ready_bypass: bool,
+    irq_bound: bool,
+) -> bool {
+    !allow_function2_ready_bypass && !irq_bound
+}
+
+#[inline]
 const fn firmware_channel_watermark(experimental_no_ht_transport: bool) -> u8 {
     let _ = experimental_no_ht_transport;
     CY_43455_F2_WATERMARK
@@ -3439,6 +3447,22 @@ const fn control_plane_frame_request_len(frame_len: usize) -> usize {
 }
 
 #[inline]
+const fn control_plane_linux_firstread_remainder_request_len(frame_len: usize) -> Option<usize> {
+    if frame_len <= CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN {
+        return None;
+    }
+    let remainder_len = frame_len - CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN;
+    let request_len = control_plane_frame_request_len(remainder_len);
+    if CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN + request_len
+        <= CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY
+    {
+        Some(request_len)
+    } else {
+        None
+    }
+}
+
+#[inline]
 const fn control_plane_write_uses_incrementing_addr() -> bool {
     false
 }
@@ -3694,11 +3718,14 @@ fn log_sdio_cmd53_shape(
 fn should_log_sdio_transfer_chunk(
     function: SdioFunction,
     increment_addr: bool,
+    write: bool,
     chunk_len: usize,
     offset: usize,
 ) -> bool {
     if function == SdioFunction::Function2 {
-        return !increment_addr && chunk_len <= CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN;
+        return !increment_addr
+            && (chunk_len <= CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
+                || (!write && chunk_len == CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN));
     }
     if function != SdioFunction::Function1 {
         return false;
@@ -3856,6 +3883,13 @@ const fn backplane_alp_hold_value() -> u8 {
 
 #[inline]
 const fn backplane_sdio_pullup_clear_enabled() -> bool {
+    // Linux clears SBSDIO_FUNC1_SDIOPULLUP during buscore prep, but the Pi 4
+    // seL4 path cannot rely on Linux's MMC retry/retune machinery after a bad
+    // CMD52. The 2026-05-12 hardware log shows this write returning CRC failure
+    // and poisoning the next CCCR speed CMD52 with end-bit errors, while the
+    // same board reaches firmware/join gates when this optional write is
+    // skipped. Keep the register documented and width-gated, but do not issue
+    // it until Cohesix has an SDHCI recovery path that proves the next CMD52.
     false
 }
 
@@ -4035,6 +4069,20 @@ const fn firmware_upload_alp_clock_request_value() -> u8 {
 #[inline]
 const fn firmware_upload_alp_clock_ready(chipclk: u8) -> bool {
     (chipclk & SBSDIO_ALP_AVAIL) != 0
+}
+
+#[inline]
+const fn firmware_upload_alp_timeout_reason(kso_timeout_before_alp: bool) -> &'static str {
+    if kso_timeout_before_alp {
+        "cyw43-kso-timeout-before-alp"
+    } else {
+        "cyw43-alp-clock-timeout-before-upload"
+    }
+}
+
+#[inline]
+fn firmware_upload_kso_error_is_nonterminal(err: &HalError) -> bool {
+    matches!(err, HalError::Unsupported("cyw43-kso-timeout"))
 }
 
 const fn cyw43455_cardcap_command_decode_value() -> u8 {
@@ -5227,7 +5275,8 @@ const SDIO_CMD3: u16 = 3;
 const SDIO_CMD7: u16 = 7;
 const SDIO_CMD52: u16 = 52;
 const SDIO_CMD53: u16 = 53;
-const SDIO_CMD53_COUNT_FIELD_MAX: u16 = 512;
+const SDIO_CMD53_BYTE_COUNT_FIELD_MAX: u16 = 512;
+const SDIO_CMD53_MAX_BLOCK_COUNT: u16 = 511;
 
 const SDIO_R4_READY: u32 = 1 << 31;
 const SDIO_OCR_3V2_3V4: u32 = 0x00FF_8000;
@@ -6860,11 +6909,10 @@ const SDHCI_WRITE_GAP_SPIN_LOOPS: usize = SDHCI_WRITE_DELAY_LOOPS * 32;
 const CYW43_READY_LOOPS: usize = 1_000;
 const CYW43_FUNCTION2_READY_IRQ_PROOF_LOOPS: usize = 1;
 const CYW43_TRANSFER_CHUNK: usize = 256;
-// CYW43455 exposes 32 KiB backplane windows. Cohesix keeps the same windowing
-// contract while capping each SDHCI request below the full-window, 512-block
-// CMD53 edge that left the Pi 4 Function 1 command path rejecting the next
-// SBADDRLOW write in hardware captures.
-const CYW43_FIRMWARE_TRANSFER_CHUNK: usize = 16 * 1024;
+// CYW43455 firmware upload follows Linux's 32 KiB backplane windows. If the
+// seL4 SDHCI path rejects the large CMD53 transfer, the upload loop switches to
+// bounded byte-mode chunks after the first transport error.
+const CYW43_FIRMWARE_TRANSFER_CHUNK: usize = 32 * 1024;
 const CYW43_FIRMWARE_PROGRESS_INTERVAL: usize = 16 * 1024;
 const CYW43_FIRMWARE_WINDOW_RETARGET_SETTLE_LOOPS: usize =
     SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2;
@@ -12689,9 +12737,19 @@ impl SdioHost {
     ) -> Result<(), HalError> {
         let linux_minimal_setup =
             firmware_channel_uses_linux_minimal_setup(self.experimental_no_ht_transport);
+        if firmware_channel_missing_irq_binding_is_terminal(
+            allow_setup_write_bypass,
+            self.sdio_irq_binding.is_some(),
+        ) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=slow-link-channel-rearm action=fail-closed reason=sel4-irq-unbound exact_error=cyw43-function2-interrupt-unbound irq={} timer_irq={} next=bind-sdio-irq158",
+                PI4_WIFI_SDIO_HOST_IRQ,
+                PI4_SEL4_TIMER_IRQ,
+            ));
+            return Err(HalError::Unsupported("cyw43-function2-interrupt-unbound"));
+        }
         let defer_interrupts =
-            firmware_channel_defers_function2_interrupts(self.experimental_no_ht_transport)
-                || self.sdio_irq_binding.is_none();
+            firmware_channel_defers_function2_interrupts(self.experimental_no_ht_transport);
         let watermark = firmware_channel_watermark(self.experimental_no_ht_transport);
         let restore_clock_hz = rearm_firmware_channel_restore_clock_hz(
             self.experimental_no_ht_transport,
@@ -13758,34 +13816,49 @@ impl SdioHost {
             return Ok(());
         }
 
-        let chunk_limit = experimental_function2_fifo_chunk_limit(
+        let transport_chunk_limit = experimental_function2_fifo_chunk_limit(
             function,
             increment_addr,
             write,
             self.experimental_no_ht_transport,
         );
-        if chunk_limit < SDIO_MAX_BYTE_MODE && buffer.len() > chunk_limit {
+        let command_chunk_limit =
+            sdio_extended_command_chunk_limit(function, byte_mode_only, transport_chunk_limit);
+        if command_chunk_limit < buffer.len() {
+            let reason = if command_chunk_limit < transport_chunk_limit {
+                "linux-mmc-cmd53-max-blocks"
+            } else {
+                "experimental-no-ht-f2-fifo"
+            };
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] sdio xfer chunk-limit fn={} op={} addr=0x{addr:05x} len={} limit={} reason=experimental-no-ht-f2-fifo",
+                "[pi4-wifi] sdio xfer chunk-limit fn={} op={} addr=0x{addr:05x} len={} limit={} reason={reason}",
                 function.number(),
                 if write { "write" } else { "read" },
                 buffer.len(),
-                chunk_limit,
+                command_chunk_limit,
             ));
         }
 
         let mut offset = 0usize;
+        let linux_block_mode =
+            !byte_mode_only && sdio_transfer_uses_linux_block_mode(function, buffer.len());
         while offset < buffer.len() {
-            let chunk_len = cmp::min(buffer.len() - offset, chunk_limit);
+            let chunk_len = cmp::min(buffer.len() - offset, command_chunk_limit);
             let chunk = &mut buffer[offset..offset + chunk_len];
             let plan = if byte_mode_only {
                 sdio_byte_mode_transfer_plan(chunk_len, write)?
             } else {
-                sdio_transfer_plan(function, chunk_len, write)?
+                sdio_transfer_plan_with_block_mode(function, chunk_len, write, linux_block_mode)?
             };
             let chunk_addr = sdio_transfer_addr(addr, offset, increment_addr)?;
             if trace_chunks
-                && should_log_sdio_transfer_chunk(function, increment_addr, chunk_len, offset)
+                && should_log_sdio_transfer_chunk(
+                    function,
+                    increment_addr,
+                    write,
+                    chunk_len,
+                    offset,
+                )
             {
                 log_sdio_transfer_chunk(
                     function,
@@ -15221,9 +15294,19 @@ impl SdioHost {
     ) -> Result<(), HalError> {
         let linux_minimal_setup =
             firmware_channel_uses_linux_minimal_setup(self.experimental_no_ht_transport);
+        if firmware_channel_missing_irq_binding_is_terminal(
+            allow_function2_ready_bypass,
+            self.sdio_irq_binding.is_some(),
+        ) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=setup-firmware-channel action=fail-closed reason=sel4-irq-unbound exact_error=cyw43-function2-interrupt-unbound irq={} timer_irq={} next=bind-sdio-irq158",
+                PI4_WIFI_SDIO_HOST_IRQ,
+                PI4_SEL4_TIMER_IRQ,
+            ));
+            return Err(HalError::Unsupported("cyw43-function2-interrupt-unbound"));
+        }
         let defer_interrupts =
-            firmware_channel_defers_function2_interrupts(self.experimental_no_ht_transport)
-                || self.sdio_irq_binding.is_none();
+            firmware_channel_defers_function2_interrupts(self.experimental_no_ht_transport);
         let prearm_cccr_interrupts =
             firmware_channel_prearms_function2_cccr_interrupts(self.experimental_no_ht_transport);
         let watermark = firmware_channel_watermark(self.experimental_no_ht_transport);
@@ -17585,76 +17668,89 @@ impl SdioHost {
         frame_len: usize,
         out: &mut [u8],
     ) -> Result<(), HalError> {
-        let request_len = control_plane_frame_request_len(frame_len);
-        if request_len == frame_len {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=control-plane-read action=linux-f2-read-shape frame_len={} request_len={} padded=no addr_mode={} port=0x{port:05x} window=0x{window:08x}",
-                frame_len,
-                request_len,
-                if control_plane_read_uses_incrementing_addr() {
-                    "increment"
-                } else {
-                    "fixed"
-                },
-                port = control_plane_function2_port_addr(),
-                window = control_plane_function2_window_addr(),
-            ));
-            let result = self.with_control_plane_function2_port(|this, function_addr| {
-                this.io_extended(
-                    SdioFunction::Function2,
-                    function_addr,
-                    control_plane_read_uses_incrementing_addr(),
-                    false,
-                    &mut out[..frame_len],
-                )
-            });
-            if let Err(err) = &result {
-                if control_plane_frame_transfer_error_needs_terminate(err) {
-                    self.recover_failed_function2_frame_transfer(
-                        "control-plane-read",
-                        false,
-                        "linux-rxfail",
-                    );
-                }
-            }
-            result
-        } else {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=control-plane-read action=linux-f2-read-shape frame_len={} request_len={} padded=yes addr_mode={} port=0x{port:05x} window=0x{window:08x}",
-                frame_len,
-                request_len,
-                if control_plane_read_uses_incrementing_addr() {
-                    "increment"
-                } else {
-                    "fixed"
-                },
-                port = control_plane_function2_port_addr(),
-                window = control_plane_function2_window_addr(),
-            ));
-            let mut request = Vec::with_capacity(request_len);
-            request.resize(request_len, 0);
-            let result = self.with_control_plane_function2_port(|this, function_addr| {
-                this.io_extended(
-                    SdioFunction::Function2,
-                    function_addr,
-                    control_plane_read_uses_incrementing_addr(),
-                    false,
-                    &mut request,
-                )
-            });
-            if let Err(err) = &result {
-                if control_plane_frame_transfer_error_needs_terminate(err) {
-                    self.recover_failed_function2_frame_transfer(
-                        "control-plane-read-padded",
-                        false,
-                        "linux-rxfail",
-                    );
-                }
-            }
-            result?;
-            out[..frame_len].copy_from_slice(&request[..frame_len]);
-            Ok(())
+        let first_read_len = CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN;
+        if frame_len > CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY {
+            return Err(HalError::Unsupported("cyw43-control-plane-read-oversize"));
         }
+
+        let mut first_read = [0u8; CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN];
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=control-plane-read action=linux-f2-firstread-shape frame_len={} first_len={} addr_mode={} port=0x{port:05x} window=0x{window:08x}",
+            frame_len,
+            first_read_len,
+            if control_plane_read_uses_incrementing_addr() {
+                "increment"
+            } else {
+                "fixed"
+            },
+            port = control_plane_function2_port_addr(),
+            window = control_plane_function2_window_addr(),
+        ));
+        let first_result = self.with_control_plane_function2_port(|this, function_addr| {
+            this.io_extended(
+                SdioFunction::Function2,
+                function_addr,
+                control_plane_read_uses_incrementing_addr(),
+                false,
+                &mut first_read,
+            )
+        });
+        if let Err(err) = &first_result {
+            if control_plane_frame_transfer_error_needs_terminate(err) {
+                self.recover_failed_function2_frame_transfer(
+                    "control-plane-read-firstread",
+                    false,
+                    "linux-rxfail",
+                );
+            }
+        }
+        first_result?;
+        let first_copy_len = cmp::min(frame_len, first_read_len);
+        out[..first_copy_len].copy_from_slice(&first_read[..first_copy_len]);
+
+        let Some(remainder_request_len) =
+            control_plane_linux_firstread_remainder_request_len(frame_len)
+        else {
+            return Ok(());
+        };
+        let remainder_len = frame_len - first_read_len;
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] firmware stage=control-plane-read action=linux-f2-remainder-shape frame_len={} prefix_len={} remainder_len={} request_len={} padded={} addr_mode={} port=0x{port:05x} window=0x{window:08x}",
+            frame_len,
+            first_read_len,
+            remainder_len,
+            remainder_request_len,
+            yn(remainder_request_len != remainder_len),
+            if control_plane_read_uses_incrementing_addr() {
+                "increment"
+            } else {
+                "fixed"
+            },
+            port = control_plane_function2_port_addr(),
+            window = control_plane_function2_window_addr(),
+        ));
+        let mut remainder = [0u8; CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN];
+        let remainder_result = self.with_control_plane_function2_port(|this, function_addr| {
+            this.io_extended(
+                SdioFunction::Function2,
+                function_addr,
+                control_plane_read_uses_incrementing_addr(),
+                false,
+                &mut remainder[..remainder_request_len],
+            )
+        });
+        if let Err(err) = &remainder_result {
+            if control_plane_frame_transfer_error_needs_terminate(err) {
+                self.recover_failed_function2_frame_transfer(
+                    "control-plane-read-remainder",
+                    false,
+                    "linux-rxfail",
+                );
+            }
+        }
+        remainder_result?;
+        out[first_read_len..frame_len].copy_from_slice(&remainder[..remainder_len]);
+        Ok(())
     }
 
     fn write_frame_with_linux_request_shape(
@@ -17705,8 +17801,10 @@ impl SdioHost {
                 port = control_plane_function2_port_addr(),
                 window = control_plane_function2_window_addr(),
             ));
-            let mut request = Vec::with_capacity(request_len);
-            request.resize(request_len, 0);
+            if request_len > CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY {
+                return Err(HalError::Unsupported("cyw43-control-plane-write-oversize"));
+            }
+            let mut request = [0u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY];
             request[..frame.len()].copy_from_slice(frame);
             let result = self.with_control_plane_function2_port(|this, function_addr| {
                 this.io_extended(
@@ -17714,7 +17812,7 @@ impl SdioHost {
                     function_addr,
                     control_plane_write_uses_incrementing_addr(),
                     true,
-                    &mut request,
+                    &mut request[..request_len],
                 )
             });
             if let Err(err) = &result {
@@ -18713,10 +18811,24 @@ impl SdioHost {
     }
 
     fn ensure_firmware_upload_alp_clock(&mut self, stage: &'static str) -> Result<bool, HalError> {
-        let sleep_csr = self.ensure_kso_awake_for(stage)?;
+        let mut kso_timeout_before_alp = false;
+        let sleep_csr = match self.ensure_kso_awake_for(stage) {
+            Ok(sleep) => Some(sleep),
+            Err(err) if firmware_upload_kso_error_is_nonterminal(&err) => {
+                kso_timeout_before_alp = true;
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=kso-timeout-nonterminal err={err} policy=linux-alp-primary"
+                ));
+                self.log_transport_shadow("firmware-upload-kso-timeout-nonterminal");
+                None
+            }
+            Err(err) => return Err(err),
+        };
         let request = firmware_upload_alp_clock_request_value();
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} request=0x{request:02x} sleep=0x{sleep_csr:02x} mode=linux-alp-only-upload"
+            "[pi4-wifi] firmware stage={stage} request=0x{request:02x} sleep=0x{sleep:02x}/{sleep_set} mode=linux-alp-only-upload",
+            sleep = sleep_csr.unwrap_or(0),
+            sleep_set = yn(sleep_csr.is_some()),
         ));
         self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR, request)?;
         self.remember_chipclkcsr(request);
@@ -18765,14 +18877,9 @@ impl SdioHost {
             self.last_sleepcsr,
             self.last_cardcap,
         );
-        self.cache_ht_clock_timeout_snapshot(
-            stage,
-            last_chipclk,
-            "cyw43-alp-clock-timeout-before-upload",
-        );
-        Err(HalError::Unsupported(
-            "cyw43-alp-clock-timeout-before-upload",
-        ))
+        let reason = firmware_upload_alp_timeout_reason(kso_timeout_before_alp);
+        self.cache_ht_clock_timeout_snapshot(stage, last_chipclk, reason);
+        Err(HalError::Unsupported(reason))
     }
 
     fn post_download_forced_alp_kso_edge_can_continue_to_function2(
@@ -23563,6 +23670,15 @@ fn sdio_transfer_plan(
     len: usize,
     write: bool,
 ) -> Result<SdioTransferPlan, HalError> {
+    sdio_transfer_plan_with_block_mode(function, len, write, false)
+}
+
+fn sdio_transfer_plan_with_block_mode(
+    function: SdioFunction,
+    len: usize,
+    write: bool,
+    linux_block_mode: bool,
+) -> Result<SdioTransferPlan, HalError> {
     let mut transfer_mode = 0u16;
     if !write {
         transfer_mode |= SDHCI_TRNS_READ;
@@ -23570,14 +23686,19 @@ fn sdio_transfer_plan(
     if let Some(block_size) = sdio_function_block_size(function) {
         let block_len = usize::from(block_size);
         // Linux's MMC SDIO core only promotes CMD53 transfers to block mode
-        // once the payload exceeds the byte-mode ceiling. That keeps common
-        // Broadcom firmware and control-plane transfers in byte mode even when
-        // they are aligned to the function block size.
-        if len > SDIO_MAX_BYTE_MODE && len >= block_len && len % block_len == 0 {
+        // once the original payload exceeds the byte-mode ceiling. Once the
+        // helper has entered block mode, aligned remainder commands stay in
+        // block mode too. It also caps one IO_RW_EXTENDED command at 511
+        // blocks, so a 32 KiB brcmfmac RAM window on F1 is emitted as 511
+        // 64-byte blocks plus one final 64-byte block, not as a zero count.
+        if (linux_block_mode || len > SDIO_MAX_BYTE_MODE)
+            && len >= block_len
+            && len % block_len == 0
+        {
             let block_count = u16::try_from(len / block_len)
                 .map_err(|_| HalError::Unsupported("sdhci-block-count"))?;
             if block_count != 0 {
-                if block_count > SDIO_CMD53_COUNT_FIELD_MAX {
+                if block_count > SDIO_CMD53_MAX_BLOCK_COUNT {
                     return Err(HalError::Unsupported("sdhci-block-count"));
                 }
                 transfer_mode |= SDHCI_TRNS_BLK_CNT_EN;
@@ -23587,7 +23708,7 @@ fn sdio_transfer_plan(
                 return Ok(SdioTransferPlan {
                     block_size,
                     block_count,
-                    cmd53_count: sdio_cmd53_count_field(block_count),
+                    cmd53_count: block_count,
                     block_mode: true,
                     transfer_mode,
                 });
@@ -23614,7 +23735,7 @@ fn sdio_transfer_plan(
 
 #[inline]
 const fn sdio_cmd53_count_field(count: u16) -> u16 {
-    if count == SDIO_CMD53_COUNT_FIELD_MAX {
+    if count == SDIO_CMD53_BYTE_COUNT_FIELD_MAX {
         0
     } else {
         count
@@ -23644,6 +23765,28 @@ fn sdio_byte_mode_transfer_plan(len: usize, write: bool) -> Result<SdioTransferP
         block_mode: false,
         transfer_mode,
     })
+}
+
+fn sdio_transfer_uses_linux_block_mode(function: SdioFunction, len: usize) -> bool {
+    if len <= SDIO_MAX_BYTE_MODE {
+        return false;
+    }
+    sdio_function_block_size(function).is_some_and(|block_size| len >= usize::from(block_size))
+}
+
+fn sdio_extended_command_chunk_limit(
+    function: SdioFunction,
+    byte_mode_only: bool,
+    transport_chunk_limit: usize,
+) -> usize {
+    let linux_command_limit = if byte_mode_only {
+        SDIO_MAX_BYTE_MODE
+    } else {
+        sdio_function_block_size(function)
+            .map(|block_size| usize::from(block_size) * usize::from(SDIO_CMD53_MAX_BLOCK_COUNT))
+            .unwrap_or(SDIO_MAX_BYTE_MODE)
+    };
+    cmp::max(1, cmp::min(transport_chunk_limit, linux_command_limit))
 }
 
 fn sdio_function_block_size(function: SdioFunction) -> Option<u16> {
@@ -23822,9 +23965,9 @@ mod tests {
         firmware_activation_clock_target_hz, firmware_bulk_clock_candidates,
         firmware_channel_uses_linux_minimal_setup, firmware_channel_watermark,
         firmware_core_reset_clock_target_hz, firmware_phase_can_retry, firmware_reset_vector,
-        firmware_upload_alp_clock_ready, firmware_upload_alp_clock_request_value, first_mismatch,
-        ht_clock_assist_shadow_is_complete, ht_clock_request_value,
-        ht_clock_retry_can_cutover_to_bounded_no_ht_early,
+        firmware_upload_alp_clock_ready, firmware_upload_alp_clock_request_value,
+        firmware_upload_alp_timeout_reason, first_mismatch, ht_clock_assist_shadow_is_complete,
+        ht_clock_request_value, ht_clock_retry_can_cutover_to_bounded_no_ht_early,
         ht_clock_timeout_can_enter_bounded_no_ht_transport,
         ht_timeout_exact_error_after_firmware_release, is_armcr4_postreset_fragile_read_error,
         is_mailbox_protocol_error, mailbox_tag_name, make_command, merge_u16_word,
@@ -24197,11 +24340,13 @@ mod tests {
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
             false,
+            false,
             4,
             0
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
+            false,
             false,
             16,
             0
@@ -24209,23 +24354,27 @@ mod tests {
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
             true,
+            false,
             64,
             0
         ));
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
             true,
+            false,
             64,
             512
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
             true,
+            false,
             64,
             1024
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function0,
+            false,
             false,
             4,
             0
@@ -24233,11 +24382,13 @@ mod tests {
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function2,
             false,
+            false,
             CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
             0
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function2,
+            false,
             false,
             SDIO_FUNCTION_ENABLE_F2.block_size as usize,
             0
@@ -24245,6 +24396,7 @@ mod tests {
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function2,
             true,
+            false,
             CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
             0
         ));
@@ -24495,11 +24647,14 @@ mod tests {
 
     #[test]
     fn sdio_transfer_plan_matches_linux_firmware_window_block_write() {
-        let write = sdio_transfer_plan(SdioFunction::Function1, 32 * 1024, true)
-            .expect("function1 32 KiB firmware transfer plan");
+        let first_len = usize::from(SDIO_FUNCTION_ENABLE_F1.block_size)
+            * usize::from(SDIO_CMD53_MAX_BLOCK_COUNT);
+        let write =
+            sdio_transfer_plan_with_block_mode(SdioFunction::Function1, first_len, true, true)
+                .expect("function1 firmware transfer plan");
         assert_eq!(write.block_size, SDIO_FUNCTION_ENABLE_F1.block_size);
-        assert_eq!(write.block_count, 512);
-        assert_eq!(write.cmd53_count, 0);
+        assert_eq!(write.block_count, SDIO_CMD53_MAX_BLOCK_COUNT);
+        assert_eq!(write.cmd53_count, SDIO_CMD53_MAX_BLOCK_COUNT);
         assert!(write.block_mode);
         assert_ne!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
         assert_ne!(write.transfer_mode & SDHCI_TRNS_MULTI, 0);
@@ -24513,7 +24668,18 @@ mod tests {
             write,
         );
         assert_eq!(sdio_cmd53_arg_addr(arg), BACKPLANE_32BIT_FLAG);
-        assert_eq!(arg & 0x1ff, 0);
+        assert_eq!(arg & 0x1ff, u32::from(SDIO_CMD53_MAX_BLOCK_COUNT));
+
+        let second = sdio_transfer_plan_with_block_mode(
+            SdioFunction::Function1,
+            usize::from(SDIO_FUNCTION_ENABLE_F1.block_size),
+            true,
+            true,
+        )
+        .expect("function1 final single-block firmware transfer plan");
+        assert!(second.block_mode);
+        assert_eq!(second.block_count, 1);
+        assert_eq!(second.cmd53_count, 1);
     }
 
     #[test]
@@ -24557,21 +24723,41 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_sdio_transfer_chunk_limit_caps_requests_below_full_window() {
+    fn ordinary_sdio_transfer_chunk_limit_splits_linux_full_window_at_511_blocks() {
         let outer_len = firmware_transfer_chunk_limit(false);
-        let inner_limit =
+        let transport_limit =
             experimental_function2_fifo_chunk_limit(SdioFunction::Function1, true, true, false);
-        let inner_len = cmp::min(outer_len, inner_limit);
-        let write = sdio_transfer_plan(SdioFunction::Function1, inner_len, true)
-            .expect("function1 firmware window transfer plan");
+        let command_limit =
+            sdio_extended_command_chunk_limit(SdioFunction::Function1, false, transport_limit);
+        let first_len = cmp::min(outer_len, command_limit);
+        let second_len = outer_len - first_len;
+        let first =
+            sdio_transfer_plan_with_block_mode(SdioFunction::Function1, first_len, true, true)
+                .expect("function1 first firmware command plan");
+        let second =
+            sdio_transfer_plan_with_block_mode(SdioFunction::Function1, second_len, true, true)
+                .expect("function1 second firmware command plan");
 
         assert_eq!(outer_len, CYW43_FIRMWARE_TRANSFER_CHUNK);
-        assert_eq!(inner_len, CYW43_FIRMWARE_TRANSFER_CHUNK);
-        assert!(outer_len < (BACKPLANE_ADDRESS_MASK as usize + 1));
-        assert!(write.block_mode);
-        assert_eq!(write.block_size, SDIO_FUNCTION_ENABLE_F1.block_size);
-        assert_eq!(write.block_count, 256);
-        assert_eq!(write.cmd53_count, 256);
+        assert_eq!(outer_len, BACKPLANE_ADDRESS_MASK as usize + 1);
+        assert_eq!(
+            command_limit,
+            usize::from(SDIO_FUNCTION_ENABLE_F1.block_size)
+                * usize::from(SDIO_CMD53_MAX_BLOCK_COUNT)
+        );
+        assert_eq!(
+            first_len,
+            32 * 1024 - usize::from(SDIO_FUNCTION_ENABLE_F1.block_size)
+        );
+        assert_eq!(second_len, usize::from(SDIO_FUNCTION_ENABLE_F1.block_size));
+        assert!(first.block_mode);
+        assert_eq!(first.block_size, SDIO_FUNCTION_ENABLE_F1.block_size);
+        assert_eq!(first.block_count, SDIO_CMD53_MAX_BLOCK_COUNT);
+        assert_eq!(first.cmd53_count, SDIO_CMD53_MAX_BLOCK_COUNT);
+        assert!(second.block_mode);
+        assert_eq!(second.block_size, SDIO_FUNCTION_ENABLE_F1.block_size);
+        assert_eq!(second.block_count, 1);
+        assert_eq!(second.cmd53_count, 1);
     }
 
     #[test]
@@ -24628,6 +24814,15 @@ mod tests {
         assert!(!firmware_channel_defers_function2_interrupts(false));
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(true));
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(false));
+        assert!(firmware_channel_missing_irq_binding_is_terminal(
+            false, false
+        ));
+        assert!(!firmware_channel_missing_irq_binding_is_terminal(
+            false, true
+        ));
+        assert!(!firmware_channel_missing_irq_binding_is_terminal(
+            true, false
+        ));
     }
 
     #[test]
@@ -26405,6 +26600,31 @@ mod tests {
     }
 
     #[test]
+    fn function2_transfer_logging_keeps_linux_firstread_and_bulk_read_visible() {
+        assert!(should_log_sdio_transfer_chunk(
+            SdioFunction::Function2,
+            false,
+            false,
+            CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
+            0,
+        ));
+        assert!(should_log_sdio_transfer_chunk(
+            SdioFunction::Function2,
+            false,
+            false,
+            CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN,
+            CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
+        ));
+        assert!(!should_log_sdio_transfer_chunk(
+            SdioFunction::Function2,
+            false,
+            true,
+            CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN,
+            0,
+        ));
+    }
+
+    #[test]
     fn diagnostic_prefix_probes_start_with_linux_firstread_size() {
         assert_eq!(
             CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS[0],
@@ -26783,6 +27003,30 @@ mod tests {
             control_plane_reply_remainder_len_from_firstread(
                 &first_read,
                 CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn linux_firstread_request_shape_matches_large_pi4_control_reply() {
+        assert_eq!(
+            control_plane_linux_firstread_remainder_request_len(
+                CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
+            ),
+            None
+        );
+        assert_eq!(
+            control_plane_linux_firstread_remainder_request_len(1448),
+            Some(1536)
+        );
+        assert_eq!(
+            control_plane_linux_firstread_remainder_request_len(2064),
+            Some(CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN)
+        );
+        assert_eq!(
+            control_plane_linux_firstread_remainder_request_len(
+                CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY + 1
             ),
             None
         );
@@ -28203,8 +28447,8 @@ mod tests {
     #[test]
     fn firmware_transfer_stays_fast_until_byte_mode_fallback() {
         assert_eq!(CYW43_TRANSFER_CHUNK, 256);
-        assert_eq!(CYW43_FIRMWARE_TRANSFER_CHUNK, 16 * 1024);
-        assert_eq!(firmware_transfer_chunk_limit(false), 16 * 1024);
+        assert_eq!(CYW43_FIRMWARE_TRANSFER_CHUNK, 32 * 1024);
+        assert_eq!(firmware_transfer_chunk_limit(false), 32 * 1024);
         assert_eq!(firmware_transfer_chunk_limit(true), SDIO_MAX_BYTE_MODE);
         assert!(CYW43_FIRMWARE_WINDOW_RETARGET_SETTLE_LOOPS > 0);
         assert!(!firmware_transfer_uses_byte_mode(false));
@@ -33242,6 +33486,20 @@ mod tests {
         assert!(!firmware_upload_alp_clock_ready(
             SBSDIO_ALP_AVAIL_REQ | SBSDIO_HT_AVAIL_REQ
         ));
+        assert!(firmware_upload_kso_error_is_nonterminal(
+            &HalError::Unsupported("cyw43-kso-timeout")
+        ));
+        assert!(!firmware_upload_kso_error_is_nonterminal(
+            &HalError::Unsupported("sdio-cmd53-r5-error")
+        ));
+        assert_eq!(
+            firmware_upload_alp_timeout_reason(false),
+            "cyw43-alp-clock-timeout-before-upload"
+        );
+        assert_eq!(
+            firmware_upload_alp_timeout_reason(true),
+            "cyw43-kso-timeout-before-alp"
+        );
     }
 
     #[test]
@@ -34322,7 +34580,7 @@ mod tests {
     }
 
     #[test]
-    fn backplane_sdio_pullup_clear_is_disabled_until_f1_sideband_is_stable() {
+    fn backplane_sdio_pullup_clear_is_disabled_until_cmd52_recovery_is_proven() {
         assert!(!backplane_sdio_pullup_clear_enabled());
         assert!(!backplane_sdio_pullup_clear_width_allowed(
             SdioBusWidth::OneBit

@@ -29,6 +29,7 @@ UNSUPPORTED_OPERATION_FIELD_RE = re.compile(
     r"(?P<key>[A-Za-z0-9_.:-]+)=unsupported operation: "
     r"(?P<value>[A-Za-z0-9_.:-]+)"
 )
+CYW43_CONTROL_PLANE_EXACT_RE = re.compile(r"cyw43-control-plane-[a-z0-9-]+")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 WIFI_SECRET_REDACTIONS = (
     re.compile(r"(?i)(coh_wifi_psk=)([^ \t\r\n;]+)"),
@@ -217,6 +218,9 @@ class GateSummary:
     serial_clean: bool = True
     boot_halted: bool = False
     timer_irq27_seen: bool = False
+    sdio_irq158_seen: bool = False
+    sdio_irq158_bound: bool = False
+    sdio_irq158_line: int = 0
     boot_halt_reason: str = "none"
     usb_bootloader_handoff_seen: bool = False
     usb_cold_boot_seen: bool = False
@@ -238,6 +242,9 @@ class GateSummary:
             "SERIAL_CLEAN": "yes" if self.serial_clean else "no",
             "BOOT_HALTED": "yes" if self.boot_halted else "no",
             "TIMER_IRQ27_SEEN": "yes" if self.timer_irq27_seen else "no",
+            "SDIO_IRQ158_SEEN": "yes" if self.sdio_irq158_seen else "no",
+            "SDIO_IRQ158_BOUND": "yes" if self.sdio_irq158_bound else "no",
+            "SDIO_IRQ158_LINE": self.sdio_irq158_line,
             "BOOT_HALT_REASON": self.boot_halt_reason,
             "USB_BOOTLOADER_HANDOFF_SEEN": (
                 "yes" if self.usb_bootloader_handoff_seen else "no"
@@ -475,6 +482,9 @@ def classify_domain(line: str) -> str | None:
         or "action=serial-root-console-first" in lower
         or "action=root-console-wait-for-wifi" in lower
         or "action=wait-for-wifi" in lower
+        or "action=start-wifi" in lower
+        or "root console wait" in lower
+        or "wifi-net-console-deferred-until-root-console" in lower
         or "wifi-net-console-pending-before-root-console" in lower
         or "wifi-not-ready" in lower
         or "deferred failed detail=" in lower
@@ -830,11 +840,13 @@ def usb_progress_gate(value: str | None) -> int | None:
     return USB_PROGRESS_GATES.get(label)
 
 
-def usb_command_probe_success(value: str) -> bool:
+def usb_command_probe_success(value: str, event_generation: str | None = None) -> bool:
     """Return true for command proofs that satisfy the cold-boot poll-only gate."""
 
     label = value.lower().strip()
     if "linux-event-ok" in label:
+        return False
+    if event_generation and "linux-shaped" in event_generation.lower().strip():
         return False
     return label.endswith("-ok") or label.endswith("-ok-cleanup-failed")
 
@@ -1043,6 +1055,10 @@ def normalize_wifi_blocker(value: str) -> str:
         "unsupported operation: sdio-cmd53-r5-error",
     }:
         return "sdio-cmd53-r5-error"
+    if "cyw43-kso-timeout-before-alp" in lower:
+        return "cyw43-kso-timeout-before-alp"
+    if "cyw43-rxglom-unsupported" in lower or "rx glom frame unsupported" in lower:
+        return "cyw43-rxglom-unsupported"
     if (
         "armcr4-prereset-fgc-cmd53-r5-rejected" in lower
         or (
@@ -1108,6 +1124,8 @@ def normalize_wifi_blocker(value: str) -> str:
         return "ht-backplane-cmd53-data-wait"
     if "armcr4-release-readback-unavailable" in lower:
         return "armcr4-release-readback-unavailable"
+    if "function2-interrupt-unbound" in lower or "sel4-irq-unbound" in lower:
+        return "function2-interrupt-unbound"
     if "firmware-channel" in lower or "channel-f2" in lower:
         return "firmware-channel-f2"
     if "firmware-ready" in lower and any(
@@ -1143,6 +1161,8 @@ def normalize_wifi_blocker(value: str) -> str:
         return "firmware-supplicant-unsupported"
     if "ioctl-timeout" in lower or "ioctl timeout" in lower:
         return "ioctl-timeout"
+    if "cur-etheraddr-len" in lower:
+        return "control-plane-cur-etheraddr-len"
     if "bdc-event" in lower:
         return "control-plane-bdc-event"
     if stripped == "interrupt-programming-drift":
@@ -1183,14 +1203,22 @@ def normalize_wifi_blocker(value: str) -> str:
         return "control-plane"
     if (
         "root-console-wait-for-wifi" in lower
+        or ("root console wait" in lower and "wifi-not-ready" in lower)
         or "wifi-net-console-pending-before-root-console" in lower
         or ("wifi-not-ready" in lower and "wait-for-wifi" in lower)
     ):
         return "boot-waiting-for-wifi"
+    if "wifi-net-console-deferred-until-root-console" in lower or (
+        "action=serial-root-console-first" in lower
+        and "pi4-local-seat-" in lower
+        and "wifi" in lower
+    ):
+        return "boot-deferred-root-console"
+    if lower.startswith("pi4-local-seat-") and lower.endswith("-wifi"):
+        return "none"
     if (
         "local-seat-usb-first" in lower
         or "serial-local-seat-first" in lower
-        or "serial-root-console-first" in lower
     ):
         return "boot-deferred-local-seat-usb"
     if (
@@ -1205,8 +1233,12 @@ def normalize_wifi_blocker(value: str) -> str:
         "association" in lower and "failed" in lower
     ):
         return "wifi-association-failed"
+    if "wifi-link-down" in lower:
+        return "wifi-link-down"
     if "dhcp-pending" in lower:
         return "dhcp-pending"
+    if "dhcp-not-started" in lower:
+        return "dhcp-not-started"
     if lower in {"discover-timeout", "request-timeout", "lease-expired"}:
         return "dhcp-failed"
     if "dhcp-failed" in lower or ("dhcp" in lower and "failed" in lower):
@@ -1250,6 +1282,9 @@ def normalize_wifi_exact(value: str) -> str:
     """Preserve exact CYW43 terminal reasons while keeping stable blockers."""
 
     lower = value.lower()
+    control_plane_exact = CYW43_CONTROL_PLANE_EXACT_RE.search(lower)
+    if control_plane_exact is not None:
+        return control_plane_exact.group(0)
     for reason in (
         "cyw43-ht-clock-timeout-before-function2",
         "cyw43-device-on-timeout-before-ht",
@@ -1258,13 +1293,17 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-plane-hintless-firstread-no-irq",
         "cyw43-control-plane-interrupt-programming-drift",
         "cyw43-control-plane-partial-hint-visibility",
+        "cyw43-protocol-error-cur-etheraddr-len",
         "wsec-pmk-bad-argument",
         "firmware-supplicant-unsupported",
+        "cyw43-function2-interrupt-unbound",
     ):
         if reason in lower:
             return reason
     if "bdc-event" in lower:
         return "cyw43-control-plane-bdc-event"
+    if "cur-etheraddr-len" in lower:
+        return "cyw43-protocol-error-cur-etheraddr-len"
     return normalize_wifi_blocker(value)
 
 
@@ -1485,6 +1524,9 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "root-port read-done" in raw or "root-port sample-done" in raw:
             root_port_read_pending = False
             continue
+        explicit_proof_gate = parse_hex_int(fields.get("proof_gate"))
+        if explicit_proof_gate is not None and explicit_proof_gate > 0:
+            gate = max(gate, explicit_proof_gate)
         if raw.startswith("usb: runtime_gate"):
             proof_gate = parse_hex_int(fields.get("proof_gate"))
             if proof_gate is not None and proof_gate > 0:
@@ -1785,9 +1827,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             ):
                 blocker = "cmd-poll-pending"
         elif (
-            usb_command_probe_success(fields.get("command_probe", ""))
+            usb_command_probe_success(
+                fields.get("command_probe", ""),
+                fields.get("event_generation"),
+            )
             or (
-                usb_command_probe_success(fields.get("result", ""))
+                usb_command_probe_success(
+                    fields.get("result", ""),
+                    fields.get("event_generation"),
+                )
                 and "command-probe" in raw
             )
             or fields.get("verdict", "").startswith("command-ring-ready")
@@ -1916,6 +1964,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "firmware-window-cmd52-write",
         "firmware-window-sdhci-int-timeout",
         "firmware-window-sdhci-io-path",
+        "cyw43-kso-timeout-before-alp",
         "sdio-cmd52-write",
         "sdio-cmd52-read",
         "sdio-cmd53-r5-error",
@@ -1932,6 +1981,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     }
     precise_control_plane_blockers = {
         "control-plane-bdc-event",
+        "control-plane-cur-etheraddr-len",
         "control-plane-interrupt-programming-drift",
         "control-plane-interrupts-deferred",
         "control-plane-partial-hint-visibility",
@@ -1970,6 +2020,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     control_plane_write_seen = False
     control_plane_reply_seen_after_write = False
     control_plane_idle_poll_count = 0
+    dhcp_started_seen = False
     linux_probe_attach_seen = False
     linux_probe_pmu_write_active = False
     armcr4_prereset_ioctrl_active = False
@@ -1998,9 +2049,38 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         raw_contract_blocker = normalize_wifi_blocker(raw)
         if raw_contract_blocker in {
             "boot-deferred-local-seat-usb",
+            "boot-deferred-root-console",
             "boot-waiting-for-wifi",
         }:
             explicit_blocker = raw_contract_blocker
+        if raw_contract_blocker in precise_control_plane_blockers:
+            explicit_blocker = raw_contract_blocker
+        if "[dhcp] start ready" in raw:
+            dhcp_started_seen = True
+            gate = max(gate, 8)
+            post_f2_progress_seen = True
+            blocker = "dhcp-pending"
+            continue
+        if raw_contract_blocker == "wifi-link-down" or explicit_blocker == "wifi-link-down":
+            gate = max(gate, 8)
+            post_f2_progress_seen = True
+            blocker = "wifi-link-down"
+            continue
+        if (
+            raw_contract_blocker == "cyw43-rxglom-unsupported"
+            or explicit_blocker == "cyw43-rxglom-unsupported"
+        ):
+            gate = max(gate, 8)
+            post_f2_progress_seen = True
+            blocker = "cyw43-rxglom-unsupported"
+            continue
+        if (
+            raw_contract_blocker == "cyw43-kso-timeout-before-alp"
+            or explicit_blocker == "cyw43-kso-timeout-before-alp"
+        ):
+            gate = max(gate, 4)
+            blocker = "cyw43-kso-timeout-before-alp"
+            continue
         if (
             blocker
             in {
@@ -2015,6 +2095,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if raw_contract_blocker in {
             "control-plane",
             "control-plane-bdc-event",
+            "control-plane-cur-etheraddr-len",
             "control-plane-interrupt-programming-drift",
             "control-plane-interrupts-deferred",
             "control-plane-no-reply",
@@ -2206,6 +2287,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker
                 in {
                     "control-plane-bdc-event",
+                    "control-plane-cur-etheraddr-len",
                     "firmware-supplicant-unsupported",
                     "wsec-pmk-bad-argument",
                 }
@@ -2253,31 +2335,41 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             post_f2_progress_seen = True
             blocker = "none"
         if "[dhcp] tx queued" in raw:
+            dhcp_started_seen = True
             gate = max(gate, 8)
             post_f2_progress_seen = True
             blocker = "dhcp-pending"
             continue
         if "[dhcp] rx transition" in raw:
+            dhcp_started_seen = True
             gate = max(gate, 8)
             post_f2_progress_seen = True
             blocker = "dhcp-pending"
             continue
         if "[dhcp] rx ignored" in raw:
+            dhcp_started_seen = True
             gate = max(gate, 8)
             post_f2_progress_seen = True
             blocker = "dhcp-invalid-packet"
             continue
         if "[dhcp] rx failed" in raw:
+            dhcp_started_seen = True
             gate = max(gate, 8)
             post_f2_progress_seen = True
             blocker = "dhcp-failed"
             continue
         if "[dhcp] failed" in raw or "[dhcp] send failed" in raw:
+            dhcp_started_seen = True
             gate = max(gate, 8)
             post_f2_progress_seen = True
             blocker = "dhcp-failed"
             continue
         if explicit_blocker in {"dhcp-pending", "dhcp-failed"}:
+            if explicit_blocker == "dhcp-pending" and not dhcp_started_seen:
+                gate = max(gate, 8)
+                post_f2_progress_seen = True
+                blocker = "dhcp-not-started"
+                continue
             gate = max(gate, 8)
             post_f2_progress_seen = True
             blocker = explicit_blocker
@@ -2550,6 +2642,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = explicit_blocker
             continue
         if explicit_blocker in {
+            "function2-interrupt-unbound",
             "firmware-channel-f2",
             "firmware-ready-timeout",
             "mailbox-ready-timeout",
@@ -2561,6 +2654,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if explicit_blocker in {
             "control-plane",
             "control-plane-bdc-event",
+            "control-plane-cur-etheraddr-len",
             "control-plane-interrupt-programming-drift",
             "control-plane-interrupts-deferred",
             "control-plane-no-reply",
@@ -2581,6 +2675,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker
                 in {
                     "control-plane-bdc-event",
+                    "control-plane-cur-etheraddr-len",
                     "firmware-supplicant-unsupported",
                     "wsec-pmk-bad-argument",
                 }
@@ -2602,11 +2697,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 7)
             blocker = explicit_blocker
             continue
-        if explicit_blocker in {"boot-deferred-local-seat-usb", "boot-waiting-for-wifi"}:
+        if explicit_blocker in {
+            "boot-deferred-local-seat-usb",
+            "boot-deferred-root-console",
+            "boot-waiting-for-wifi",
+        }:
             gate = max(gate, 1)
             if blocker not in {
                 "control-plane",
                 "control-plane-bdc-event",
+                "control-plane-cur-etheraddr-len",
                 "control-plane-interrupt-programming-drift",
                 "control-plane-interrupts-deferred",
                 "control-plane-no-reply",
@@ -2615,6 +2715,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "control-plane-reply-idle-loop",
                 "control-plane-sideband-unreadable",
                 "control-plane-startup-link-timeout",
+                "function2-interrupt-unbound",
                 "firmware-channel-f2",
                 "firmware-ready-timeout",
                 "firmware-supplicant-unsupported",
@@ -2692,7 +2793,18 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     """Return the exact failure and phase carried by a Wi-Fi event."""
 
     exact = "none"
-    if "bdc-event" in event.raw.lower():
+    raw = event.raw.lower()
+    if "post-write-no-irq-terminal" in raw or "hintless-firstread-no-irq" in raw:
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "control-plane-reply"
+        )
+        return "cyw43-control-plane-hintless-firstread-no-irq", phase
+    if "bdc-event" in raw:
         exact = "cyw43-control-plane-bdc-event"
         phase = (
             event.fields.get("stage")
@@ -2703,6 +2815,16 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or "none"
         )
         return exact, phase
+    if "cur-etheraddr-len" in event.raw.lower():
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "none"
+        )
+        return "cyw43-protocol-error-cur-etheraddr-len", phase
     if normalize_wifi_blocker(event.raw) == "wsec-pmk-bad-argument":
         phase = (
             event.fields.get("stage")
@@ -2739,6 +2861,29 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     return exact, phase
 
 
+def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate: str) -> int:
+    """Rank matching Wi-Fi blocker lines so boot failures beat later commands."""
+
+    raw = event.raw.lower()
+    if candidate != wifi_blocker:
+        return 100
+    if "post-write-no-irq-terminal" in raw:
+        return 0
+    if "[cyw43] control-plane" in raw and "action=fail" in raw:
+        return 1
+    if "[cyw43] iovar" in raw and "failed" in raw:
+        return 2
+    if "[cyw43] init failure" in raw or "boot_failure source=live" in raw:
+        return 3
+    if "[net-console] deferred failed" in raw:
+        return 4
+    if "control-plane snapshot" in raw:
+        return 5
+    if raw.startswith("err nettest") or raw.startswith("ok nettest"):
+        return 90
+    return 10
+
+
 def summarize_wifi_failure_detail(
     events: Iterable[TraceEvent], wifi_blocker: str
 ) -> tuple[str, str, int]:
@@ -2750,6 +2895,7 @@ def summarize_wifi_failure_detail(
     phase = "none"
     line = 0
     blocker_matched = False
+    blocker_priority = 100
     for event in (event for event in events if event.domain == "wifi"):
         raw = event.raw.lower()
         fields = event.fields
@@ -2809,12 +2955,17 @@ def summarize_wifi_failure_detail(
             phase = event_phase
             line = event.line
         if candidate == wifi_blocker:
+            candidate_priority = wifi_failure_detail_priority(event, wifi_blocker, candidate)
+            if blocker_matched and candidate_priority > blocker_priority:
+                continue
             if blocker_matched and wifi_blocker in {
+                "control-plane-cur-etheraddr-len",
                 "wsec-pmk-bad-argument",
                 "firmware-supplicant-unsupported",
             }:
                 continue
             blocker_matched = True
+            blocker_priority = candidate_priority
             exact = event_exact
             if exact == "none" and "sdio cmd53 r5 fail" in raw:
                 exact = "sdio-cmd53-r5-error"
@@ -2850,6 +3001,26 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         and event.fields.get("timer_irq") == "yes"
         for event in event_list
     )
+    sdio_irq158_events = [
+        event
+        for event in event_list
+        if event.domain == "wifi"
+        and event.fields.get("irq") == "158"
+        and (
+            "sdio irq bind" in event.raw.lower()
+            or "sdio irq contract" in event.raw.lower()
+        )
+    ]
+    sdio_irq158_seen = bool(sdio_irq158_events)
+    sdio_irq158_bound = any(
+        "sdio irq bind" in event.raw.lower()
+        or (
+            "sdio irq contract" in event.raw.lower()
+            and event.fields.get("bound") == "1"
+        )
+        for event in sdio_irq158_events
+    )
+    sdio_irq158_line = sdio_irq158_events[0].line if sdio_irq158_events else 0
     if boot_halted:
         boot_halt_reason = "kernel-halt"
     elif timer_irq27_seen:
@@ -2878,6 +3049,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         serial_clean=serial_clean(event_list),
         boot_halted=boot_halted,
         timer_irq27_seen=timer_irq27_seen,
+        sdio_irq158_seen=sdio_irq158_seen,
+        sdio_irq158_bound=sdio_irq158_bound,
+        sdio_irq158_line=sdio_irq158_line,
         boot_halt_reason=boot_halt_reason,
         usb_bootloader_handoff_seen=usb_bootloader_handoff_seen,
         usb_cold_boot_seen=usb_cold_boot_seen,

@@ -29,7 +29,10 @@ const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
 const COMMAND_WAIT_SPINS: usize = 20_000_000;
 const COMMAND_POLL_ONLY_WAIT_SPINS: usize = 64;
-const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 1_000;
+// U-Boot's xHCI command wait uses XHCI_TIMEOUT=5000 ms. The Pi 4 prompt-safe
+// path keeps one event-ring CPU-sync poll per wait slot to preserve that budget
+// without enabling xHCI interrupts.
+const COMMAND_PROMPT_SAFE_WAIT_POLLS: usize = 5_000;
 const COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL: usize = 250_000;
 const COMMAND_PROMPT_SAFE_REDOORBELL_POLL: usize = 4;
 const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
@@ -58,6 +61,16 @@ const LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE: u16 = 0x035e;
 const LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE: u16 = 0x035c;
 const LINUX_COMMAND_PROBE_ERDP_ACK_FLUSH_STAGE: u16 = 0x037e;
 const LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE: u16 = 0x037f;
+const RING_PUBLISH_DCBAAP_FLUSH_LOW_STAGE: u16 = 0x03b3;
+const RING_PUBLISH_DCBAAP_FLUSH_HIGH_STAGE: u16 = 0x03b4;
+const RING_PUBLISH_CRCR_FLUSH_LOW_STAGE: u16 = 0x03b5;
+const RING_PUBLISH_CRCR_FLUSH_HIGH_STAGE: u16 = 0x03b6;
+const RING_PUBLISH_ERDP_FLUSH_LOW_STAGE: u16 = 0x03b7;
+const RING_PUBLISH_ERDP_FLUSH_HIGH_STAGE: u16 = 0x03b8;
+const RING_PUBLISH_ERSTSZ_FLUSH_STAGE: u16 = 0x03b9;
+const RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE: u16 = 0x03ba;
+const RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE: u16 = 0x03bb;
+const RING_PUBLISH_CONFIG_FLUSH_STAGE: u16 = 0x03bc;
 const LINUX_COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE: u16 = 0x03e8;
 const LINUX_COMMAND_RECOVERY_IMOD_FLUSH_STAGE: u16 = 0x03e9;
 const LINUX_COMMAND_RECOVERY_IMAN_ENABLE_FLUSH_STAGE: u16 = 0x03ea;
@@ -1170,7 +1183,6 @@ const fn defer_crcr_publish_with_snapshot(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
     runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
-        || runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -1183,8 +1195,8 @@ const fn defer_erdp_publish_with_snapshot(
     // now defer here too, then skip the fresh publish through the no-ownership
     // policy gate.
     // The Pi 4 mailbox-reset platform lane owns fresh Cohesix rings, but still
-    // needs Linux/U-Boot table-first event-ring publication: ERSTSZ/ERSTBA must
-    // be visible before ERDP hands the dequeue pointer to VL805.
+    // defers ERDP so the publication ladder can mirror U-Boot's initial
+    // event-ring ordering instead of mixing it into generic runtime setup.
     runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_owned_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
@@ -1220,12 +1232,11 @@ const fn deferred_erdp_publish_precedes_erst_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // Runtime-owned handoffs publish a fresh event ring table-first. Stop-state
-    // only seeds are no longer in that set and publish no fresh event-ring
-    // registers until runtime has stronger ring-ownership evidence.
-    let _ = firmware_handoff;
-    let _ = runtime_seed_snapshot;
-    false
+    // U-Boot publishes the initial ERDP pointer before ERSTSZ/ERSTBA. The Pi 4
+    // mailbox-reset path has HAL ownership proof and fresh Cohesix rings, so it
+    // must follow that sequence. Diagnostic snapshot lanes remain table-first or
+    // no-touch according to their runtime seed evidence.
+    runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -1923,26 +1934,18 @@ fn dcbaap_reg_write_ops(offset: usize, _current: u64, target: u64) -> [(usize, u
 
 #[inline(always)]
 fn crcr_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
-    let [low, high] = split_u64_reg_write_ops(offset, val);
-    // CRCR low bits include RCS/command control while bits 63:6 hold the ring
-    // pointer. On Pi 4 VL805 the command ring is published through the high
-    // PCIe DMA alias, so the high dword must be visible before the low dword
-    // exposes RCS and lets the controller fetch the ring.
-    [high, low]
+    // U-Boot's xhci_writeq() publishes CRCR low dword first, then high dword.
+    // Keep the Pi 4 command gate byte-for-byte aligned with that known-good
+    // ordering; the command doorbell remains the explicit fetch trigger.
+    split_u64_reg_write_ops(offset, val)
 }
 
 #[inline(always)]
 fn erdp_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
-    let [low, high] = split_u64_reg_write_ops(offset, val);
-    if (val & reg::ERST_EHB) != 0 {
-        // ERDP low bits include EHB, a write-one-to-clear control bit. When
-        // acknowledging events on VL805, publish the high DMA alias before the
-        // low/control dword so the controller never observes EHB against a
-        // stale or partially published dequeue pointer.
-        [high, low]
-    } else {
-        [low, high]
-    }
+    // U-Boot acknowledges events with xhci_writeq(), which writes low dword
+    // before high dword even when ERST_EHB is set. Mirror that behavior so
+    // command/event-ring polling does not diverge at the VL805 gate.
+    split_u64_reg_write_ops(offset, val)
 }
 
 #[inline(always)]
@@ -2113,6 +2116,78 @@ impl<H: Dma> XhciCtrl<H> {
         }
         emit_xhci_diag(0x03ee, offset as u64, value as u64, stage as u64);
         Err(UsbError::PostedWriteFlushFailed)
+    }
+
+    #[inline(always)]
+    fn flush_required_posted_split_write_ops(
+        &self,
+        ops: [(usize, u32); 2],
+        low_stage: u16,
+        high_stage: u16,
+        target: u64,
+    ) -> Result<()> {
+        let low_offset = ops[0].0;
+        for (reg_offset, reg_value) in ops {
+            let stage = if reg_offset == low_offset {
+                low_stage
+            } else {
+                high_stage
+            };
+            emit_xhci_diag(stage, reg_offset as u64, reg_value as u64, target);
+            self.flush_required_posted_write(reg_offset, reg_value, stage)?;
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn flush_required_posted_u64_write(
+        &self,
+        offset: usize,
+        val: u64,
+        low_stage: u16,
+        high_stage: u16,
+    ) -> Result<()> {
+        self.flush_required_posted_split_write_ops(
+            split_u64_reg_write_ops(offset, val),
+            low_stage,
+            high_stage,
+            val,
+        )
+    }
+
+    #[inline(always)]
+    fn flush_required_posted_dcbaap_write(
+        &self,
+        offset: usize,
+        current: u64,
+        val: u64,
+    ) -> Result<()> {
+        self.flush_required_posted_split_write_ops(
+            dcbaap_reg_write_ops(offset, current, val),
+            RING_PUBLISH_DCBAAP_FLUSH_LOW_STAGE,
+            RING_PUBLISH_DCBAAP_FLUSH_HIGH_STAGE,
+            val,
+        )
+    }
+
+    #[inline(always)]
+    fn flush_required_posted_crcr_write(&self, offset: usize, val: u64) -> Result<()> {
+        self.flush_required_posted_split_write_ops(
+            crcr_reg_write_ops(offset, val),
+            RING_PUBLISH_CRCR_FLUSH_LOW_STAGE,
+            RING_PUBLISH_CRCR_FLUSH_HIGH_STAGE,
+            val,
+        )
+    }
+
+    #[inline(always)]
+    fn flush_required_posted_erdp_write(&self, offset: usize, val: u64) -> Result<()> {
+        self.flush_required_posted_split_write_ops(
+            erdp_reg_write_ops(offset, val),
+            RING_PUBLISH_ERDP_FLUSH_LOW_STAGE,
+            RING_PUBLISH_ERDP_FLUSH_HIGH_STAGE,
+            val,
+        )
     }
 
     #[inline(always)]
@@ -3250,6 +3325,17 @@ impl<H: Dma> XhciCtrl<H> {
                     0x0239,
                     self.firmware_handoff as u64,
                 );
+                emit_xhci_diag(
+                    RING_PUBLISH_CONFIG_FLUSH_STAGE,
+                    (self.op_base - self.mmio + reg::CONFIG) as u64,
+                    config as u64,
+                    self.firmware_handoff as u64,
+                );
+                self.flush_required_posted_write(
+                    self.op_base - self.mmio + reg::CONFIG,
+                    config,
+                    RING_PUBLISH_CONFIG_FLUSH_STAGE,
+                )?;
                 if !skip_post_reset_verification_readbacks {
                     emit_xhci_diag(0x0246, reg::CONFIG as u64, 0, 1);
                     emit_xhci_diag(0x0241, self.read_op::<u32>(reg::CONFIG) as u64, 0, 1);
@@ -3433,11 +3519,18 @@ impl<H: Dma> XhciCtrl<H> {
         };
         if !defer_dcbaap_publish && !skip_fresh_runtime_ownership_publish {
             publish_dcbaap(self);
+            if !preserve_state_dcbaap_publish_is_redundant {
+                self.flush_required_posted_dcbaap_write(
+                    dcbaap_offset,
+                    current_dcbaap_publish,
+                    dcbaa_phys,
+                )?;
+            }
         }
 
-        // Setup command ring. On the mailbox-reset platform path, keep
-        // CRCR from becoming the first live runtime ownership store: seed it
-        // here, then publish it only after ERDP / ERST and deferred DCBAAP.
+        // Setup command ring. The Pi 4 platform-reset path now owns fresh rings,
+        // so CRCR follows U-Boot's DCBAAP-before-CRCR order. Snapshot-backed
+        // diagnostic lanes may still defer CRCR until their runtime seed edges.
         let cmd_ring = self.cmd_ring.lock();
         // Avoid live CRCR reads before reset. Once the controller has reached
         // the post-reset cold-boot path, reuse the live reserved bits as
@@ -3512,6 +3605,7 @@ impl<H: Dma> XhciCtrl<H> {
             } else {
                 Self::write_crcr_reg_u64_diag_at(self.mmio, crcr_offset, crcr, 0x0254, 0x0255);
             }
+            self.flush_required_posted_crcr_write(crcr_offset, crcr)?;
             if preserve_firmware_state {
                 emit_xhci_diag(0x0251, crcr, 1, 0);
             } else if !skip_post_reset_verification_readbacks {
@@ -3573,6 +3667,9 @@ impl<H: Dma> XhciCtrl<H> {
         } else {
             self.write_reg_u64_diag(int_base + reg::ERDP, erdp, 0x0277, 0x0278);
         }
+        if !defer_erdp_publish && !skip_fresh_event_ring_publish {
+            self.flush_required_posted_erdp_write(int_base + reg::ERDP, erdp)?;
+        }
         if skip_fresh_event_ring_publish {
             emit_xhci_diag(
                 0x032f,
@@ -3626,6 +3723,9 @@ impl<H: Dma> XhciCtrl<H> {
                 emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
             };
             publish_deferred_erdp(self.mmio, false);
+            if !preserve_state_erdp_write_is_redundant(current_erdp_publish, erdp) {
+                self.flush_required_posted_erdp_write(int_base + reg::ERDP, erdp)?;
+            }
         }
         let (current_erst_size, current_erstba) = if preserve_firmware_state {
             (0, 0)
@@ -3707,6 +3807,17 @@ impl<H: Dma> XhciCtrl<H> {
                     0x02c4,
                     current_erstsz_publish as u64,
                 );
+                emit_xhci_diag(
+                    RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+                    (int_base + reg::ERSTSZ) as u64,
+                    erst_size as u64,
+                    current_erstsz_publish as u64,
+                );
+                self.flush_required_posted_write(
+                    int_base + reg::ERSTSZ,
+                    erst_size,
+                    RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+                )?;
             }
             emit_xhci_diag(
                 0x02c5,
@@ -3737,6 +3848,16 @@ impl<H: Dma> XhciCtrl<H> {
                     0x02c8,
                     0x02c9,
                 );
+            }
+            if !(preserve_firmware_state
+                && preserve_state_erstba_write_is_redundant(current_erstba_publish, erstba))
+            {
+                self.flush_required_posted_u64_write(
+                    int_base + reg::ERSTBA,
+                    erstba,
+                    RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE,
+                    RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
+                )?;
             }
         }
         if defer_erst_publish
@@ -3774,6 +3895,17 @@ impl<H: Dma> XhciCtrl<H> {
                         0x02c4,
                         current_erstsz_publish as u64,
                     );
+                    emit_xhci_diag(
+                        RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+                        (int_base + reg::ERSTSZ) as u64,
+                        erst_size as u64,
+                        current_erstsz_publish as u64,
+                    );
+                    self.flush_required_posted_write(
+                        int_base + reg::ERSTSZ,
+                        erst_size,
+                        RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+                    )?;
                 }
             }
             emit_xhci_diag(
@@ -3805,6 +3937,16 @@ impl<H: Dma> XhciCtrl<H> {
                     0x02c9,
                 );
             }
+            if !(preserve_firmware_state
+                && preserve_state_erstba_write_is_redundant(current_erstba_publish, erstba))
+            {
+                self.flush_required_posted_u64_write(
+                    int_base + reg::ERSTBA,
+                    erstba,
+                    RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE,
+                    RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
+                )?;
+            }
             emit_xhci_diag(0x02ca, reg::ERSTBA as u64, erstba, 1);
             if !deferred_erst_publish_uses_size_first {
                 emit_xhci_diag(
@@ -3830,6 +3972,17 @@ impl<H: Dma> XhciCtrl<H> {
                         0x02c4,
                         current_erstsz_publish as u64,
                     );
+                    emit_xhci_diag(
+                        RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+                        (int_base + reg::ERSTSZ) as u64,
+                        erst_size as u64,
+                        current_erstsz_publish as u64,
+                    );
+                    self.flush_required_posted_write(
+                        int_base + reg::ERSTSZ,
+                        erst_size,
+                        RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+                    )?;
                 }
             }
         }
@@ -3838,10 +3991,10 @@ impl<H: Dma> XhciCtrl<H> {
             && !publish_deferred_erdp_before_erst
             && !skip_fresh_event_ring_publish
         {
-            // The mailbox-reset platform path must not let ERDP become the
-            // first live event-ring ownership store. Publish the table first,
+            // Non-platform diagnostic lanes publish the event-ring table first,
             // then hand ERDP to the controller with the live dequeue pointer
-            // only. Preserve-state remains a generic diagnostic lane.
+            // only. The Pi 4 platform-reset path follows U-Boot earlier and
+            // does not enter this branch.
             if preserve_firmware_state
                 && preserve_state_erdp_write_is_redundant(current_erdp_publish, erdp)
             {
@@ -3865,6 +4018,7 @@ impl<H: Dma> XhciCtrl<H> {
                 Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
                 emit_xhci_diag(0x02be, target_high.0 as u64, target_high.1 as u64, erdp);
                 emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
+                self.flush_required_posted_erdp_write(int_base + reg::ERDP, erdp)?;
             }
         }
         if preserve_firmware_state {
@@ -3946,6 +4100,13 @@ impl<H: Dma> XhciCtrl<H> {
                 }
                 emit_xhci_diag(0x02a9, reg::DCBAAP as u64, dcbaa_phys, 1);
                 publish_dcbaap(self);
+                if !preserve_state_dcbaap_publish_is_redundant {
+                    self.flush_required_posted_dcbaap_write(
+                        dcbaap_offset,
+                        current_dcbaap_publish,
+                        dcbaa_phys,
+                    )?;
+                }
             }
         }
         if defer_crcr_publish
@@ -3953,6 +4114,9 @@ impl<H: Dma> XhciCtrl<H> {
             && !skip_fresh_runtime_ownership_publish
         {
             publish_crcr(self);
+            if !preserve_state_crcr_publish_is_redundant {
+                self.flush_required_posted_crcr_write(crcr_offset, crcr)?;
+            }
         }
 
         if let Some(scratchpad_array_phys) = deferred_scratchpad_array_phys {
@@ -4349,6 +4513,17 @@ impl<H: Dma> XhciCtrl<H> {
                 staged_current_erst_size as u64,
             );
             emit_xhci_diag(
+                RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+                (int_base + reg::ERSTSZ) as u64,
+                erst_size as u64,
+                staged_current_erst_size as u64,
+            );
+            self.flush_required_posted_write(
+                int_base + reg::ERSTSZ,
+                erst_size,
+                RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+            )?;
+            emit_xhci_diag(
                 0x02ce,
                 (int_base + reg::ERSTBA) as u64,
                 staged_current_erstba,
@@ -4363,6 +4538,12 @@ impl<H: Dma> XhciCtrl<H> {
                 0x02d1,
                 0x02d2,
             );
+            self.flush_required_posted_u64_write(
+                int_base + reg::ERSTBA,
+                erstba,
+                RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE,
+                RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
+            )?;
             emit_xhci_diag(0x02d3, reg::ERSTBA as u64, erstba, 1);
             if preserve_firmware_state
                 && preserve_state_erdp_write_is_redundant(current_erdp_publish, erdp)
@@ -4392,16 +4573,27 @@ impl<H: Dma> XhciCtrl<H> {
                 Self::write_reg_at::<u32>(self.mmio, target_high.0, target_high.1);
                 emit_xhci_diag(0x02be, target_high.0 as u64, target_high.1 as u64, erdp);
                 emit_xhci_diag(0x02bf, reg::ERDP as u64, erdp, 1);
+                self.flush_required_posted_erdp_write(int_base + reg::ERDP, erdp)?;
             }
         }
         if defer_dcbaap_publish_until_after_run && !skip_fresh_runtime_ownership_publish {
             emit_xhci_diag(0x02d4, reg::DCBAAP as u64, dcbaa_phys, 1);
             publish_dcbaap(self);
+            if !preserve_state_dcbaap_publish_is_redundant {
+                self.flush_required_posted_dcbaap_write(
+                    dcbaap_offset,
+                    current_dcbaap_publish,
+                    dcbaa_phys,
+                )?;
+            }
             emit_xhci_diag(0x02d5, reg::DCBAAP as u64, dcbaa_phys, 1);
         }
         if defer_crcr_publish_until_after_run && !skip_fresh_runtime_ownership_publish {
             emit_xhci_diag(0x02d6, reg::CRCR as u64, crcr, current_crcr);
             publish_crcr(self);
+            if !preserve_state_crcr_publish_is_redundant {
+                self.flush_required_posted_crcr_write(crcr_offset, crcr)?;
+            }
             emit_xhci_diag(0x02d7, reg::CRCR as u64, crcr, current_crcr);
         }
         if defer_dnctrl_write_until_after_run && !skip_fresh_runtime_ownership_publish {
@@ -4625,14 +4817,15 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     /// Ring device doorbell
-    pub fn ring_doorbell(&self, slot: u8, target: u8) {
+    pub fn ring_doorbell(&self, slot: u8, target: u8) -> Result<()> {
         let db = reg::doorbell(self.db_offset, slot);
         ring_write_barrier();
         self.write_reg(db, target as u32);
-        let _ = self.flush_posted_write(db, target as u32, 0x031f);
+        self.flush_required_posted_write(db, target as u32, 0x031f)?;
         if !skip_doorbell_readback_after_ring(self.firmware_handoff) {
             let _ = self.read_reg::<u32>(db);
         }
+        Ok(())
     }
 
     /// Update event ring dequeue pointer
@@ -4666,7 +4859,7 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     /// Acknowledge inherited Event Handler Busy state before poll-only drains.
-    pub fn clear_event_handler_busy_for_polling(&self) {
+    pub fn clear_event_handler_busy_for_polling(&self) -> Result<()> {
         let event_ring = self.event_ring.lock();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         let erdp = pre_command_event_handler_erdp(
@@ -4680,10 +4873,20 @@ impl<H: Dma> XhciCtrl<H> {
         emit_xhci_diag(0x031b, (int_base + reg::ERDP) as u64, erdp, 0);
         for (reg_offset, reg_value) in erdp_reg_write_ops(int_base + reg::ERDP, erdp) {
             Self::write_reg_at::<u32>(self.mmio, reg_offset, reg_value);
+            self.flush_required_posted_write(
+                reg_offset,
+                reg_value,
+                LINUX_COMMAND_PROBE_ERDP_ACK_FLUSH_STAGE,
+            )?;
         }
         emit_xhci_diag(0x031c, (int_base + reg::ERDP) as u64, erdp, 0);
         emit_xhci_diag(0x031d, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
         Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, iman_ack);
+        self.flush_required_posted_write(
+            int_base + reg::IMAN,
+            iman_ack,
+            LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE,
+        )?;
         emit_xhci_diag(0x031e, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
         if iman_event_generation != polling_iman_value() {
             emit_xhci_diag(
@@ -4693,6 +4896,11 @@ impl<H: Dma> XhciCtrl<H> {
                 runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
             );
             Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, iman_event_generation);
+            self.flush_required_posted_write(
+                int_base + reg::IMAN,
+                iman_event_generation,
+                LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE,
+            )?;
             emit_xhci_diag(
                 0x0352,
                 (int_base + reg::IMAN) as u64,
@@ -4700,6 +4908,7 @@ impl<H: Dma> XhciCtrl<H> {
                 runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
             );
         }
+        Ok(())
     }
 
     /// Drain inherited pending interrupter state on the polling runtime path.
@@ -5477,6 +5686,17 @@ impl<H: Dma> XhciCtrl<H> {
             0x03cd,
             0,
         );
+        emit_xhci_diag(
+            RING_PUBLISH_CONFIG_FLUSH_STAGE,
+            config_offset as u64,
+            self.max_slots as u64,
+            2,
+        );
+        self.flush_required_posted_write(
+            config_offset,
+            self.max_slots as u32,
+            RING_PUBLISH_CONFIG_FLUSH_STAGE,
+        )?;
         Self::write_dcbaap_reg_u64_done_diag_at(
             self.mmio,
             dcbaap_offset,
@@ -5487,23 +5707,7 @@ impl<H: Dma> XhciCtrl<H> {
             0x03e5,
             0x03e6,
         );
-        Self::write_reg_u32_store_diag_at(
-            self.mmio,
-            int_base + reg::ERSTSZ,
-            erst_entries,
-            0x03d2,
-            0x03d3,
-            0,
-        );
-        Self::write_reg_u64_done_diag_at(
-            self.mmio,
-            int_base + reg::ERSTBA,
-            erst_phys,
-            0x03d4,
-            0x03d5,
-            0x03d6,
-            0x03d7,
-        );
+        self.flush_required_posted_dcbaap_write(dcbaap_offset, 0, dcbaa_phys)?;
         Self::write_reg_u64_done_diag_at(
             self.mmio,
             int_base + reg::ERDP,
@@ -5513,6 +5717,41 @@ impl<H: Dma> XhciCtrl<H> {
             0x03da,
             0x03db,
         );
+        self.flush_required_posted_erdp_write(int_base + reg::ERDP, erdp)?;
+        Self::write_reg_u32_store_diag_at(
+            self.mmio,
+            int_base + reg::ERSTSZ,
+            erst_entries,
+            0x03d2,
+            0x03d3,
+            0,
+        );
+        emit_xhci_diag(
+            RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+            (int_base + reg::ERSTSZ) as u64,
+            erst_entries as u64,
+            2,
+        );
+        self.flush_required_posted_write(
+            int_base + reg::ERSTSZ,
+            erst_entries,
+            RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
+        )?;
+        Self::write_reg_u64_done_diag_at(
+            self.mmio,
+            int_base + reg::ERSTBA,
+            erst_phys,
+            0x03d4,
+            0x03d5,
+            0x03d6,
+            0x03d7,
+        );
+        self.flush_required_posted_u64_write(
+            int_base + reg::ERSTBA,
+            erst_phys,
+            RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE,
+            RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
+        )?;
         Self::write_crcr_reg_u64_done_diag_at(
             self.mmio,
             crcr_offset,
@@ -5522,7 +5761,7 @@ impl<H: Dma> XhciCtrl<H> {
             0x03de,
             0x03df,
         );
-        self.flush_required_posted_write(crcr_offset, crcr as u32, 0x03e0)?;
+        self.flush_required_posted_crcr_write(crcr_offset, crcr)?;
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             self.op_base - self.mmio + reg::DNCTRL,
@@ -6366,7 +6605,7 @@ mod tests {
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
         prompt_safe_command_recovery_avoids_live_operational_reads,
-        prompt_safe_command_timeout_live_snapshot_enabled,
+        prompt_safe_command_redoorbell_enabled, prompt_safe_command_timeout_live_snapshot_enabled,
         replay_staged_crcr_snapshot_before_publish_with_snapshot,
         replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
         reset_completion_blind_settle_spins, reset_usbcmd_seed_before_hcrst,
@@ -6411,7 +6650,6 @@ mod tests {
         XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
         BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, CMD_RING_SIZE,
         COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
-        prompt_safe_command_redoorbell_enabled,
         COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
         COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, EVENT_RING_SIZE,
         LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD, LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
@@ -6424,6 +6662,11 @@ mod tests {
         LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE,
         LINUX_COMMAND_PROBE_IMOD_FLUSH_STAGE, LINUX_COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE,
         LINUX_COMMAND_RECOVERY_IMAN_ENABLE_FLUSH_STAGE, LINUX_COMMAND_RECOVERY_IMOD_FLUSH_STAGE,
+        RING_PUBLISH_CONFIG_FLUSH_STAGE, RING_PUBLISH_CRCR_FLUSH_HIGH_STAGE,
+        RING_PUBLISH_CRCR_FLUSH_LOW_STAGE, RING_PUBLISH_DCBAAP_FLUSH_HIGH_STAGE,
+        RING_PUBLISH_DCBAAP_FLUSH_LOW_STAGE, RING_PUBLISH_ERDP_FLUSH_HIGH_STAGE,
+        RING_PUBLISH_ERDP_FLUSH_LOW_STAGE, RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
+        RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE, RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
     };
     use crate::{reg, ring::trb_type, Dma};
     use alloc::vec;
@@ -7990,6 +8233,7 @@ mod tests {
             erstsz0: None,
         });
 
+        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 5_000);
         assert_eq!(
             polling_event_generation_run_usbcmd(
                 reg::USBCMD_RUN,
@@ -8087,7 +8331,7 @@ mod tests {
         assert!(command_timeout_live_snapshot_spins() > 0);
         assert_eq!(command_timeout_live_snapshot_spins(), 32);
         assert_eq!(COMMAND_POLL_ONLY_WAIT_SPINS, 64);
-        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 1_000);
+        assert_eq!(COMMAND_PROMPT_SAFE_WAIT_POLLS, 5_000);
         assert_eq!(CMD_RING_SIZE, 64);
         assert_eq!(EVENT_RING_SIZE, 64);
         assert_eq!(COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, 250_000);
@@ -8403,7 +8647,7 @@ mod tests {
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
-        assert!(!deferred_erdp_publish_precedes_erst_with_snapshot(
+        assert!(deferred_erdp_publish_precedes_erst_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -8719,12 +8963,12 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_fresh_rings_defers_crcr_until_event_ring_publish() {
+    fn platform_reset_fresh_rings_match_uboot_crcr_and_erdp_publish_order() {
         assert!(runtime_platform_reset_fresh_rings_handoff(
             XhciFirmwareHandoff::PlatformResetComplete,
             None
         ));
-        assert!(defer_crcr_publish_with_snapshot(
+        assert!(!defer_crcr_publish_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None
         ));
@@ -8733,6 +8977,10 @@ mod tests {
             None
         ));
         assert!(defer_erdp_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None
+        ));
+        assert!(deferred_erdp_publish_precedes_erst_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None
         ));
@@ -9729,15 +9977,15 @@ mod tests {
     }
 
     #[test]
-    fn crcr_register_publish_writes_high_before_low_control_bits() {
+    fn crcr_register_publish_matches_uboot_low_then_high_order() {
         let writes = crcr_reg_write_ops(0x18, 0x0000_0004_0402_4001);
-        assert_eq!(writes, [(0x1c, 0x0000_0004), (0x18, 0x0402_4001)]);
+        assert_eq!(writes, [(0x18, 0x0402_4001), (0x1c, 0x0000_0004)]);
     }
 
     #[test]
-    fn erdp_ehb_ack_writes_high_before_low_control_bits() {
+    fn erdp_ehb_ack_matches_uboot_low_then_high_order() {
         let writes = erdp_reg_write_ops(0x18, 0x0000_0004_0402_5008);
-        assert_eq!(writes, [(0x1c, 0x0000_0004), (0x18, 0x0402_5008)]);
+        assert_eq!(writes, [(0x18, 0x0402_5008), (0x1c, 0x0000_0004)]);
     }
 
     #[test]
@@ -9811,6 +10059,82 @@ mod tests {
             int_base + reg::IMAN,
             reg::IMAN_IE,
             LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE,
+            true,
+        ));
+    }
+
+    #[test]
+    fn ring_ownership_register_flushes_fail_closed_without_required_hook() {
+        set_xhci_posted_write_flush_hook(None);
+        let int_base = reg::interrupter_base(0x200, 0);
+        let mmio = 0x6000_0000_0;
+        assert_eq!(RING_PUBLISH_DCBAAP_FLUSH_LOW_STAGE, 0x03b3);
+        assert_eq!(RING_PUBLISH_DCBAAP_FLUSH_HIGH_STAGE, 0x03b4);
+        assert_eq!(RING_PUBLISH_CRCR_FLUSH_LOW_STAGE, 0x03b5);
+        assert_eq!(RING_PUBLISH_CRCR_FLUSH_HIGH_STAGE, 0x03b6);
+        assert_eq!(RING_PUBLISH_ERDP_FLUSH_LOW_STAGE, 0x03b7);
+        assert_eq!(RING_PUBLISH_ERDP_FLUSH_HIGH_STAGE, 0x03b8);
+        assert_eq!(RING_PUBLISH_ERSTSZ_FLUSH_STAGE, 0x03b9);
+        assert_eq!(RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE, 0x03ba);
+        assert_eq!(RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE, 0x03bb);
+        assert_eq!(RING_PUBLISH_CONFIG_FLUSH_STAGE, 0x03bc);
+        for (offset, value, stage) in [
+            (
+                reg::DCBAAP,
+                0x0402_0000,
+                RING_PUBLISH_DCBAAP_FLUSH_LOW_STAGE,
+            ),
+            (
+                reg::DCBAAP + 4,
+                0x0000_0004,
+                RING_PUBLISH_DCBAAP_FLUSH_HIGH_STAGE,
+            ),
+            (reg::CRCR, 0x0402_4001, RING_PUBLISH_CRCR_FLUSH_LOW_STAGE),
+            (
+                reg::CRCR + 4,
+                0x0000_0004,
+                RING_PUBLISH_CRCR_FLUSH_HIGH_STAGE,
+            ),
+            (
+                int_base + reg::ERDP,
+                0x0402_5000,
+                RING_PUBLISH_ERDP_FLUSH_LOW_STAGE,
+            ),
+            (
+                int_base + reg::ERDP + 4,
+                0x0000_0004,
+                RING_PUBLISH_ERDP_FLUSH_HIGH_STAGE,
+            ),
+            (int_base + reg::ERSTSZ, 1, RING_PUBLISH_ERSTSZ_FLUSH_STAGE),
+            (
+                int_base + reg::ERSTBA,
+                0x0402_6000,
+                RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE,
+            ),
+            (
+                int_base + reg::ERSTBA + 4,
+                0x0000_0004,
+                RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
+            ),
+            (reg::CONFIG, 8, RING_PUBLISH_CONFIG_FLUSH_STAGE),
+        ] {
+            assert!(!flush_posted_write_with_policy(
+                mmio, offset, value, stage, true
+            ));
+            assert!(flush_posted_write_with_policy(
+                mmio, offset, value, stage, false
+            ));
+        }
+    }
+
+    #[test]
+    fn endpoint_doorbell_flush_fails_closed_without_required_hook() {
+        set_xhci_posted_write_flush_hook(None);
+        assert!(!flush_posted_write_with_policy(
+            0x6000_0000_0,
+            reg::doorbell(0x100, 1),
+            1,
+            0x031f,
             true,
         ));
     }

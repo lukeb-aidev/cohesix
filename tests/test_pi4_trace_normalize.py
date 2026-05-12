@@ -280,6 +280,9 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_STALE_UEFI_HINT_SEEN": "no",
         "ROOT_CONSOLE_READY": "no",
         "ROOT_PROMPT_SEEN": "no",
+        "SDIO_IRQ158_SEEN": "no",
+        "SDIO_IRQ158_BOUND": "no",
+        "SDIO_IRQ158_LINE": 0,
     }
 
 
@@ -554,6 +557,32 @@ def test_gate_summary_does_not_classify_irq27_as_usb_without_usb_edge() -> None:
     assert gates.usb_blocker == "missing"
     assert gates.timer_irq27_seen
     assert gates.boot_halt_reason == "timer-irq27-observed"
+    assert not gates.sdio_irq158_seen
+    assert gates.to_record()["SDIO_IRQ158_SEEN"] == "no"
+
+
+def test_gate_summary_tracks_wifi_sdio_irq158_separately_from_timer_irq27() -> None:
+    events = normalizer.parse_events(
+        [
+            "Kernel entry via Interrupt, irq 27",
+            "[pi4-wifi] sdio irq bind irq=158 trigger=Level "
+            "handler=3218 notification=3219 badge=159",
+            "[pi4-wifi] sdio irq contract irq=158 trigger=level "
+            "bound=1 badge=0x9f device_clear=sdio-intstatus+sdhci-cardint "
+            "ack=after-clear int_status=0x00000000 int_enable=0x027f003b "
+            "signal=0x00000000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.timer_irq27_seen
+    assert gates.sdio_irq158_seen
+    assert gates.sdio_irq158_bound
+    assert gates.sdio_irq158_line == 2
+    assert gates.to_record()["TIMER_IRQ27_SEEN"] == "yes"
+    assert gates.to_record()["SDIO_IRQ158_SEEN"] == "yes"
+    assert gates.to_record()["SDIO_IRQ158_BOUND"] == "yes"
 
 
 def test_gate_summary_reports_kernel_halt_and_timer_irq27() -> None:
@@ -1513,19 +1542,23 @@ def test_gate_summary_treats_enable_slot_cleanup_failure_as_command_proof() -> N
 
 
 def test_gate_summary_rejects_legacy_linux_event_generation_as_command_proof() -> None:
-    events = normalizer.parse_events(
-        [
-            "[local-seat] xhci root-port command-probe "
-            "result=enable-slot-linux-event-ok-cleanup-failed "
-            "bus=pcie-window slot=1 cleanup=disable-slot-timeout "
-            "event_generation=linux-shaped-bounded",
-        ]
-    )
+    for result in (
+        "enable-slot-linux-event-ok-cleanup-failed",
+        "enable-slot-ok",
+    ):
+        events = normalizer.parse_events(
+            [
+                "[local-seat] xhci root-port command-probe "
+                f"result={result} "
+                "bus=pcie-window slot=1 cleanup=disable-slot-timeout "
+                "event_generation=linux-shaped-bounded",
+            ]
+        )
 
-    gates = normalizer.summarize_gates(events)
+        gates = normalizer.summarize_gates(events)
 
-    assert gates.usb_gate < 4
-    assert gates.usb_blocker != "none"
+        assert gates.usb_gate < 4
+        assert gates.usb_blocker != "none"
 
 
 def test_gate_summary_promotes_usb_controller_not_running_from_live_state() -> None:
@@ -1986,6 +2019,25 @@ def test_gate_summary_classifies_firmware_window_cmd52_write_failure() -> None:
     assert gates.wifi_blocker == "firmware-window-cmd52-write"
 
 
+def test_gate_summary_preserves_kso_timeout_before_alp() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] firmware stage=pre-write-alp-clock "
+            "action=kso-timeout-nonterminal "
+            "err=unsupported operation: cyw43-kso-timeout policy=linux-alp-primary",
+            "[pi4-wifi] firmware stage=pre-write-alp-clock timeout "
+            "csr=0x40 reason=alp-not-ready",
+            "[cyw43] init failure stage=cyw43-load-firmware-fail "
+            "err=unsupported operation: cyw43-kso-timeout-before-alp",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 4
+    assert gates.wifi_blocker == "cyw43-kso-timeout-before-alp"
+
+
 def test_gate_summary_caps_wifi_diag_control_plane_after_pre_f2_cmd52_failure() -> None:
     events = normalizer.parse_events(
         [
@@ -2380,6 +2432,23 @@ def test_gate_summary_tracks_usb_command_ring_ready_success() -> None:
     assert gates.usb_blocker == "none"
 
 
+def test_gate_summary_honors_explicit_usb_proof_gate_fields() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: ownership_proof proof_gate=2 target_gate=10 cfg_replay=yes",
+            "usb: golden_path outcome=pending progress=controller-ready "
+            "proof_gate=3 command_probe=n/a",
+            "usb: golden_path outcome=root-port-sample-deferred "
+            "progress=controller-ready proof_gate=4 command_probe=enable-slot-ok",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "root-port-sample-deferred"
+
+
 def test_gate_summary_keeps_usb_post_command_outcome_blocker() -> None:
     events = normalizer.parse_events(
         [
@@ -2584,6 +2653,27 @@ def test_gate_summary_tracks_wifi_control_plane_step_err_without_snapshot() -> N
     assert gates.wifi_blocker == "ioctl-timeout"
 
 
+def test_gate_summary_tracks_missing_wifi_irq158_as_function2_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
+            "[pi4-wifi] firmware stage=setup-firmware-channel "
+            "action=fail-closed reason=sel4-irq-unbound "
+            "exact_error=cyw43-function2-interrupt-unbound irq=158 "
+            "timer_irq=27 next=bind-sdio-irq158",
+            "Kernel entry via Interrupt, irq 27",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 6
+    assert gates.wifi_blocker == "function2-interrupt-unbound"
+    assert gates.wifi_exact == "cyw43-function2-interrupt-unbound"
+    assert gates.timer_irq27_seen
+    assert not gates.sdio_irq158_bound
+
+
 def test_gate_summary_preserves_interrupts_deferred_over_cyw43_ioctl_timeout() -> None:
     events = normalizer.parse_events(
         [
@@ -2601,6 +2691,7 @@ def test_gate_summary_preserves_interrupts_deferred_over_cyw43_ioctl_timeout() -
 
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "control-plane-interrupts-deferred"
+    assert gates.wifi_exact == "cyw43-control-plane-linux-interrupts-deferred"
 
 
 def test_gate_summary_preserves_partial_hint_visibility_over_ioctl_timeout() -> None:
@@ -2623,6 +2714,34 @@ def test_gate_summary_preserves_partial_hint_visibility_over_ioctl_timeout() -> 
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "control-plane-partial-hint-visibility"
     assert gates.wifi_exact == "cyw43-control-plane-partial-hint-visibility"
+
+
+def test_gate_summary_prefers_boot_control_plane_line_over_later_nettest() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
+            "[pi4-wifi] firmware stage=control-plane-reply "
+            "action=post-write-no-irq-terminal empty_poll=64/64 "
+            "exact_error=",
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=apsta-enable action=fail err=unsupported operation: "
+            "cyw43-control-plane-hintless-firstread-no-irq",
+            "[WARN root_task::drivers::cyw43] [cyw43] init failure "
+            "stage=cyw43-init-control-plane-fail err=unsupported operation: "
+            "cyw43-control-plane-hintless-firstread-no-irq",
+            "cohesix> nettest",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=unsupported operation: cyw43-control-plane-hintless-firstread-no-irq",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_exact == "cyw43-control-plane-hintless-firstread-no-irq"
+    assert gates.wifi_phase == "control-plane-reply"
+    assert gates.wifi_blocker_line == 2
 
 
 def test_gate_summary_tracks_wsec_pmk_bad_argument_over_stale_hint() -> None:
@@ -2790,6 +2909,54 @@ def test_gate_summary_tracks_pi4_wifi_boot_deferral_for_local_seat() -> None:
     assert gates.wifi_blocker == "boot-waiting-for-wifi"
 
 
+def test_gate_summary_keeps_legacy_serial_first_wifi_deferral_blocked() -> None:
+    events = normalizer.parse_events(
+        [
+            "[net-console] deferred reason=pi4-local-seat-explicit-wifi "
+            "action=serial-root-console-first",
+            "Cohesix console ready",
+            "cohesix> ",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 1
+    assert gates.wifi_blocker == "boot-deferred-root-console"
+    assert gates.root_console_ready
+    assert gates.root_prompt_seen
+
+
+def test_gate_summary_tracks_nettest_wifi_deferred_until_root_console() -> None:
+    events = normalizer.parse_events(
+        [
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=wifi-net-console-deferred-until-root-console:"
+            "pi4-local-seat-explicit-wifi",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 1
+    assert gates.wifi_blocker == "boot-deferred-root-console"
+
+
+def test_gate_summary_tracks_pre_root_wifi_pending_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=wifi-net-console-pending-before-root-console:"
+            "pi4-local-seat-explicit-wifi",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 1
+    assert gates.wifi_blocker == "boot-waiting-for-wifi"
+
+
 def test_gate_summary_tracks_root_console_waiting_for_wifi() -> None:
     events = normalizer.parse_events(
         [
@@ -2823,6 +2990,28 @@ def test_gate_summary_preserves_deferred_wifi_failure_over_root_wait() -> None:
     assert gates.wifi_blocker == "control-plane-partial-hint-visibility"
 
 
+def test_gate_summary_preserves_cyw43_mac_length_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=read-mac action=fail err=cyw43 protocol error: "
+            "cur-etheraddr-len",
+            "[net-console] deferred failed detail=cyw43 protocol error: "
+            "cur-etheraddr-len",
+            "[INFO event] [event] root console banner emitted",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-cur-etheraddr-len"
+    assert gates.wifi_exact == "cyw43-protocol-error-cur-etheraddr-len"
+    assert gates.wifi_phase == "read-mac"
+    assert gates.root_console_ready
+    assert not gates.root_prompt_seen
+
+
 def test_gate_summary_tracks_nettest_usb_first_boot_deferral() -> None:
     events = normalizer.parse_events(
         [
@@ -2843,6 +3032,7 @@ def test_gate_summary_tracks_wifi_join_and_dhcp_gates() -> None:
             "[cyw43] ready: mac=02:43:4f:48:58:55 clock=41666666Hz "
             "bus_width=4bit ioex=0x06",
             "[cyw43] join complete mode=deferred polls=3",
+            "[dhcp] start ready interface=wifi now_ms=100",
             "[net] not-ready gate tripped: want=net-selftest reason=dhcp-pending",
         ]
     )
@@ -2851,6 +3041,50 @@ def test_gate_summary_tracks_wifi_join_and_dhcp_gates() -> None:
 
     assert gates.wifi_gate == 8
     assert gates.wifi_blocker == "dhcp-pending"
+
+
+def test_gate_summary_does_not_report_dhcp_pending_before_wifi_start_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cyw43] join complete mode=deferred polls=3",
+            "[net] not-ready gate tripped: want=net-selftest reason=dhcp-pending",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 8
+    assert gates.wifi_blocker == "dhcp-not-started"
+
+
+def test_gate_summary_tracks_link_down_after_join_before_dhcp() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cyw43] join complete mode=deferred polls=3",
+            "[dhcp] start deferred reason=device-bringup "
+            "status=wifi-link-down now_ms=125",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 8
+    assert gates.wifi_blocker == "wifi-link-down"
+
+
+def test_gate_summary_tracks_rxglom_as_explicit_gate8_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cyw43] join complete mode=deferred polls=3",
+            "[cyw43] rx glom frame unsupported len=1024 descriptor=true "
+            "action=drop reason=rxglom-disabled-bounded-rx",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 8
+    assert gates.wifi_blocker == "cyw43-rxglom-unsupported"
 
 
 def test_gate_summary_tracks_wifi_join_pending_evidence() -> None:

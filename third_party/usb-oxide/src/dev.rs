@@ -33,6 +33,8 @@ const CONFIG_DESC_HEADER_RETRIES: usize = 3;
 const MAX_ENDPOINT_CONTEXTS: usize = 31;
 const DEVICE_CONTEXT_ENTRIES: usize = 1 + MAX_ENDPOINT_CONTEXTS;
 const INPUT_CONTEXT_ENTRIES: usize = 2 + MAX_ENDPOINT_CONTEXTS;
+const SLOT_CONTEXT_ENTRIES_SHIFT: u32 = 27;
+const SLOT_CONTEXT_ENTRIES_MASK: u32 = 0x1f << SLOT_CONTEXT_ENTRIES_SHIFT;
 const ADDRESS_RETRY_PATH_CLAMP_TT: u8 = 1;
 const ADDRESS_RETRY_PATH_SINGLE_TT: u8 = 2;
 const ADDRESS_RETRY_PATH_REDUCE_TTT: u8 = 3;
@@ -45,12 +47,127 @@ const UBOOT_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS: usize = 50_000;
 const UBOOT_SET_CONFIGURATION_SETTLE_SPINS: usize = 500_000;
 const UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_LEN: usize = 64;
 const UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN: usize = 8;
+const UBOOT_ROOT_PORT_RESET_MAX_TRIES: usize = 5;
+const UBOOT_ROOT_PORT_RESET_SHORT_RETRY_SPINS: usize = 20_000;
+const UBOOT_ROOT_PORT_RESET_LONG_RETRY_SPINS: usize = 200_000;
+
+#[inline]
+const fn root_port_reset_retry_delay_spins(attempt: usize) -> usize {
+    if attempt == 0 {
+        UBOOT_ROOT_PORT_RESET_SHORT_RETRY_SPINS
+    } else {
+        UBOOT_ROOT_PORT_RESET_LONG_RETRY_SPINS
+    }
+}
+
+#[inline]
+const fn root_port_reset_retry_code(err: UsbError) -> Option<u8> {
+    match err {
+        UsbError::PortResetTimeout => Some(1),
+        UsbError::PortEnableTimeout => Some(2),
+        _ => None,
+    }
+}
+
+fn ep0_mps_candidates_for_speed(slot_speed: u8) -> ([u16; 3], usize) {
+    let mut candidates = [0u16; 3];
+    let mut count = 0usize;
+    let mut push_candidate = |mps: u16| {
+        if !candidates[..count].contains(&mps) && count < candidates.len() {
+            candidates[count] = mps;
+            count += 1;
+        }
+    };
+    match slot_speed {
+        reg::SPEED_LOW => push_candidate(8),
+        // U-Boot initializes non-low-speed EP0 with 64 bytes before Address
+        // Device. Keep 8 bytes as a fallback for strict full-speed devices.
+        reg::SPEED_FULL => {
+            push_candidate(64);
+            push_candidate(8);
+        }
+        reg::SPEED_HIGH => push_candidate(64),
+        reg::SPEED_SUPER | reg::SPEED_SUPER_PLUS => push_candidate(512),
+        _ => {
+            push_candidate(64);
+            push_candidate(8);
+            push_candidate(512);
+        }
+    }
+    (candidates, count)
+}
+
+#[inline]
+const fn slot_context_entries(slot_ctx: SlotContext) -> usize {
+    ((slot_ctx.dw0 & SLOT_CONTEXT_ENTRIES_MASK) >> SLOT_CONTEXT_ENTRIES_SHIFT) as usize
+}
+
+#[inline]
+const fn slot_context_with_entries(mut slot_ctx: SlotContext, entries: usize) -> SlotContext {
+    let clamped_entries = if entries > MAX_ENDPOINT_CONTEXTS {
+        MAX_ENDPOINT_CONTEXTS
+    } else {
+        entries
+    };
+    slot_ctx.dw0 &= !SLOT_CONTEXT_ENTRIES_MASK;
+    slot_ctx.dw0 |= (clamped_entries as u32) << SLOT_CONTEXT_ENTRIES_SHIFT;
+    slot_ctx
+}
+
+#[inline]
+fn endpoint_dci(ep: &EndpointDesc) -> Result<(usize, usize)> {
+    let ep_num = ep.number();
+    if ep_num == 0 || ep_num > 15 {
+        return Err(UsbError::InvEndpoint);
+    }
+    let dci = (ep_num as usize * 2) + if ep.is_in() { 1 } else { 0 };
+    if dci == 0 || dci > MAX_ENDPOINT_CONTEXTS {
+        return Err(UsbError::InvEndpoint);
+    }
+    Ok((dci, dci - 1))
+}
 
 #[inline]
 fn spin_for_uboot_settle(spins: usize) {
     for _ in 0..spins {
         spin_loop();
     }
+}
+
+fn reset_root_port_with_uboot_retries<H: Dma>(ctrl: &XhciCtrl<H>, port: u8) -> Result<()> {
+    let mut last_retryable = UsbError::PortResetTimeout;
+    for attempt in 0..UBOOT_ROOT_PORT_RESET_MAX_TRIES {
+        match ctrl.reset_port(port) {
+            Ok(()) => {
+                ctrl.emit_diag(0x03b3, port as u64, attempt as u64, 0);
+                return Ok(());
+            }
+            Err(err) => {
+                let Some(code) = root_port_reset_retry_code(err) else {
+                    return Err(err);
+                };
+                last_retryable = err;
+                if attempt + 1 >= UBOOT_ROOT_PORT_RESET_MAX_TRIES {
+                    ctrl.emit_diag(
+                        0x03b4,
+                        port as u64,
+                        ((attempt as u64) << 32) | code as u64,
+                        UBOOT_ROOT_PORT_RESET_MAX_TRIES as u64,
+                    );
+                    break;
+                }
+                let delay_spins = root_port_reset_retry_delay_spins(attempt);
+                ctrl.emit_diag(
+                    0x03b2,
+                    port as u64,
+                    ((attempt as u64) << 32) | code as u64,
+                    delay_spins as u64,
+                );
+                spin_for_uboot_settle(delay_spins);
+            }
+        }
+    }
+    Err(last_retryable)
 }
 
 #[inline]
@@ -486,7 +603,7 @@ pub struct UsbDevice<H: Dma> {
 impl<H: Dma> UsbDevice<H> {
     /// Create and address a new USB device on a root hub port.
     pub fn new(ctrl: Arc<XhciCtrl<H>>, port: u8) -> Result<Self> {
-        ctrl.reset_port(port)?;
+        reset_root_port_with_uboot_retries(ctrl.as_ref(), port)?;
         let speed = ctrl.port_speed(port);
         let root_hub_port = port.saturating_add(1);
         Self::new_with_topology(ctrl, port, 0, root_hub_port, speed, None, false)
@@ -748,34 +865,8 @@ impl<H: Dma> UsbDevice<H> {
             ctrl.device_context_entry(slot_id),
         );
 
-        // Build EP0 max-packet candidates. Some controllers/devices are strict
-        // about the initial EP0 MPS used during Address Device.
-        let build_ep0_mps_candidates = |slot_speed: u8| {
-            let mut candidates = [0u16; 3];
-            let mut count = 0usize;
-            let mut push_candidate = |mps: u16| {
-                if !candidates[..count].contains(&mps) && count < 3 {
-                    candidates[count] = mps;
-                    count += 1;
-                }
-            };
-            match slot_speed {
-                reg::SPEED_LOW => push_candidate(8),
-                reg::SPEED_FULL => {
-                    push_candidate(8);
-                    push_candidate(64);
-                }
-                reg::SPEED_HIGH => push_candidate(64),
-                reg::SPEED_SUPER | reg::SPEED_SUPER_PLUS => push_candidate(512),
-                _ => {
-                    push_candidate(8);
-                    push_candidate(64);
-                    push_candidate(512);
-                }
-            }
-            (candidates, count)
-        };
-        let (ep0_mps_candidates, candidate_count) = build_ep0_mps_candidates(enumerated_speed);
+        let (ep0_mps_candidates, candidate_count) =
+            ep0_mps_candidates_for_speed(enumerated_speed);
         let encode_port_state = |portsc: u32| -> u64 {
             let speed = reg::portsc_speed(portsc) as u64;
             let pls = reg::portsc_pls(portsc) as u64;
@@ -1453,7 +1544,7 @@ impl<H: Dma> UsbDevice<H> {
         drop(ep0_ring);
 
         // Ring doorbell for EP0 (target = 1)
-        self.ctrl.ring_doorbell(self.slot_id, 1);
+        self.ctrl.ring_doorbell(self.slot_id, 1)?;
 
         // Wait for completion
         let mut waited = 0usize;
@@ -1828,76 +1919,148 @@ impl<H: Dma> UsbDevice<H> {
         Ok(())
     }
 
-    /// Configure an endpoint (after SET_CONFIGURATION)
-    pub fn configure_endpoint(&self, ep: &EndpointDesc) -> Result<()> {
-        let host = self.ctrl.host();
-
-        let ep_num = ep.number();
+    fn endpoint_context_for_descriptor(&self, ep: &EndpointDesc, ring_phys: u64) -> EndpointContext {
         let is_in = ep.is_in();
         let ep_type = ep.transfer_type();
+        let max_packet_size = ep.max_packet_size;
+        let interval_raw = ep.interval;
 
-        // Endpoint Context Index: EP1 OUT = 2, EP1 IN = 3, EP2 OUT = 4, etc.
-        let dci = (ep_num as usize * 2) + if is_in { 1 } else { 0 };
-        let ring_idx = dci - 1; // rings array is 0-indexed for EP1+
+        // xHCI endpoint type encoding.
+        let xhci_ep_type = match (ep_type, is_in) {
+            (0, _) => 4,     // Control (bidirectional)
+            (1, false) => 1, // Isoch OUT
+            (1, true) => 5,  // Isoch IN
+            (2, false) => 2, // Bulk OUT
+            (2, true) => 6,  // Bulk IN
+            (3, false) => 3, // Interrupt OUT
+            (3, true) => 7,  // Interrupt IN
+            _ => 4,
+        };
 
-        // Allocate transfer ring for this endpoint
-        let ring = Ring::new(host, 256)?;
-        let ring_phys = ring.phys(host);
-
-        // Update input context.
-        // SAFETY: The input-context allocation belongs to this device and is large
-        // enough for the DCI being configured; endpoint descriptors are validated
-        // by the caller before programming the xHCI context fields below.
-        unsafe {
-            *self.input_drop_flags_ptr() = 0; // Drop flags
-            *self.input_add_flags_ptr() = (1 << dci) | 1; // Add flags: this EP + Slot
-
-            // xHCI endpoint type encoding
-            let xhci_ep_type = match (ep_type, is_in) {
-                (0, _) => 4,     // Control (bidirectional)
-                (1, false) => 1, // Isoch OUT
-                (1, true) => 5,  // Isoch IN
-                (2, false) => 2, // Bulk OUT
-                (2, true) => 6,  // Bulk IN
-                (3, false) => 3, // Interrupt OUT
-                (3, true) => 7,  // Interrupt IN
-                _ => 4,
-            };
-
-            // Calculate interval for xHCI (different from USB descriptor)
-            let interval = if self.speed >= reg::SPEED_HIGH {
-                ep.interval.saturating_sub(1)
+        // Calculate interval for xHCI (different from USB descriptor).
+        let interval = if self.speed >= reg::SPEED_HIGH {
+            interval_raw.saturating_sub(1)
+        } else {
+            // For FS/LS, convert ms to 125us frames.
+            let ms = interval_raw.max(1) as u32;
+            let log2_ceil = if ms.is_power_of_two() {
+                ms.trailing_zeros() as u8
             } else {
-                // For FS/LS, convert ms to 125us frames
-                // Use integer log2: find highest set bit
-                let ms = ep.interval.max(1) as u32;
-                let log2_ceil = if ms.is_power_of_two() {
-                    ms.trailing_zeros() as u8
-                } else {
-                    (u32::BITS - ms.leading_zeros()) as u8
-                };
-                log2_ceil + 3
+                (u32::BITS - ms.leading_zeros()) as u8
             };
+            log2_ceil + 3
+        };
 
-            *self.input_ep_ctx_ptr(ring_idx) =
-                EndpointContext::new(xhci_ep_type, ep.max_packet_size, 0, interval, ring_phys);
+        EndpointContext::new(xhci_ep_type, max_packet_size, 0, interval, ring_phys)
+    }
+
+    /// Configure one or more endpoints before forwarding SET_CONFIGURATION.
+    ///
+    /// U-Boot's xHCI backend intercepts SET_CONFIGURATION, issues one
+    /// Configure Endpoint command for the active configuration, and only then
+    /// sends the control request to the device. This mirrors that ordering.
+    pub fn configure_endpoints(&self, endpoints: &[EndpointDesc]) -> Result<()> {
+        if endpoints.is_empty() {
+            return Ok(());
         }
 
-        // Store ring
-        let mut ep_rings = self.ep_rings.lock();
-        ep_rings[ring_idx] = Some(ring);
-        drop(ep_rings);
+        let host = self.ctrl.host();
+        let ctx_stride = self.ctx_stride();
+        let input_ctx_bytes = INPUT_CONTEXT_ENTRIES
+            .checked_mul(ctx_stride)
+            .ok_or(UsbError::OoRam)?;
+        let current_slot_ctx = {
+            // SAFETY: Output slot context is controller-owned memory allocated
+            // for this device and remains mapped while the slot is alive.
+            unsafe { ptr::read_volatile(self.output_slot_ctx_ptr()) }
+        };
+        let current_ep0_ctx = {
+            // SAFETY: EP0 output context has the same lifetime and allocation
+            // invariant as the slot context above.
+            unsafe { ptr::read_volatile(self.output_ep0_ctx_ptr()) }
+        };
 
-        // Configure Endpoint command
+        let mut seen_dci_mask = 0u32;
+        let mut max_dci = slot_context_entries(current_slot_ctx).max(1);
+        let mut staged = Vec::<(usize, usize, Ring<H>, EndpointContext)>::new();
+        for ep in endpoints {
+            let (dci, ring_idx) = endpoint_dci(ep)?;
+            let bit = 1u32 << dci;
+            if (seen_dci_mask & bit) != 0 {
+                continue;
+            }
+            seen_dci_mask |= bit;
+            max_dci = max_dci.max(dci);
+            {
+                let ep_rings = self.ep_rings.lock();
+                if ep_rings[ring_idx].is_some() {
+                    continue;
+                }
+            }
+            let ring = Ring::new(host, 256)?;
+            let ring_phys = ring.phys(host);
+            let ep_ctx = self.endpoint_context_for_descriptor(ep, ring_phys);
+            staged.push((ring_idx, dci, ring, ep_ctx));
+        }
+
+        if staged.is_empty() {
+            return Ok(());
+        }
+
+        let mut add_flags = 1u32; // Slot Context.
+        let input_base = self.input_ctx.as_ptr::<u8>();
+        // SAFETY: `input_ctx` is owned DMA memory sized for the advertised
+        // context stride. Every write below lands within that allocation and
+        // builds a clean U-Boot-shaped Configure Endpoint input context.
+        unsafe {
+            core::ptr::write_bytes(input_base, 0, input_ctx_bytes);
+            *self.input_drop_flags_ptr() = 0;
+            *(input_base.add(ctx_stride) as *mut SlotContext) =
+                slot_context_with_entries(current_slot_ctx, max_dci);
+            *(input_base.add(ctx_stride * 2) as *mut EndpointContext) = current_ep0_ctx;
+            for (ring_idx, dci, _, ep_ctx) in &staged {
+                add_flags |= 1u32 << *dci;
+                *self.input_ep_ctx_ptr(*ring_idx) = *ep_ctx;
+            }
+            *self.input_add_flags_ptr() = add_flags;
+        }
+        compiler_fence(Ordering::Release);
+
+        self.ctrl.emit_diag(
+            0x03b5,
+            ((self.slot_id as u64) << 32) | staged.len() as u64,
+            add_flags as u64,
+            max_dci as u64,
+        );
+
         let trb = Trb {
             param: self.input_ctx.phys(host),
             status: 0,
             control: (trb_type::CONFIGURE_ENDPOINT << 10) | ((self.slot_id as u32) << 24),
         };
-        compiler_fence(Ordering::Release);
         self.ctrl.submit_command(trb)?;
 
+        let mut ep_rings = self.ep_rings.lock();
+        for (ring_idx, _, ring, _) in staged {
+            ep_rings[ring_idx] = Some(ring);
+        }
+
         Ok(())
+    }
+
+    /// Configure an endpoint, returning success when it was already active.
+    pub fn configure_endpoint(&self, ep: &EndpointDesc) -> Result<()> {
+        self.configure_endpoints(core::slice::from_ref(ep))
+    }
+
+    /// Configure xHCI endpoints before sending SET_CONFIGURATION to the device.
+    pub fn set_configuration_with_endpoints(
+        &self,
+        config: u8,
+        endpoints: &[EndpointDesc],
+    ) -> Result<()> {
+        self.configure_endpoints(endpoints)?;
+        self.set_configuration(config)
     }
 
     /// Queue a transfer on an endpoint
@@ -1925,7 +2088,7 @@ impl<H: Dma> UsbDevice<H> {
         drop(ep_rings);
 
         // Ring doorbell
-        self.ctrl.ring_doorbell(self.slot_id, dci as u8);
+        self.ctrl.ring_doorbell(self.slot_id, dci as u8)?;
 
         Ok(())
     }
@@ -2303,6 +2466,35 @@ mod tests {
         assert_eq!(UBOOT_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS, 50_000);
         assert_eq!(UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_LEN, 64);
         assert_eq!(UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN, 8);
+        assert_eq!(UBOOT_ROOT_PORT_RESET_MAX_TRIES, 5);
+        assert_eq!(UBOOT_ROOT_PORT_RESET_SHORT_RETRY_SPINS, 20_000);
+        assert_eq!(UBOOT_ROOT_PORT_RESET_LONG_RETRY_SPINS, 200_000);
+        assert_eq!(root_port_reset_retry_delay_spins(0), 20_000);
+        assert_eq!(root_port_reset_retry_delay_spins(1), 200_000);
+        assert_eq!(
+            root_port_reset_retry_code(UsbError::PortResetTimeout),
+            Some(1)
+        );
+        assert_eq!(
+            root_port_reset_retry_code(UsbError::PortEnableTimeout),
+            Some(2)
+        );
+        assert_eq!(root_port_reset_retry_code(UsbError::DeviceNotFound), None);
+    }
+
+    #[test]
+    fn full_speed_ep0_mps_candidates_match_uboot_order() {
+        let (low, low_count) = ep0_mps_candidates_for_speed(reg::SPEED_LOW);
+        assert_eq!(&low[..low_count], &[8]);
+
+        let (full, full_count) = ep0_mps_candidates_for_speed(reg::SPEED_FULL);
+        assert_eq!(&full[..full_count], &[64, 8]);
+
+        let (high, high_count) = ep0_mps_candidates_for_speed(reg::SPEED_HIGH);
+        assert_eq!(&high[..high_count], &[64]);
+
+        let (unknown, unknown_count) = ep0_mps_candidates_for_speed(0xff);
+        assert_eq!(&unknown[..unknown_count], &[64, 8, 512]);
     }
 
     #[test]

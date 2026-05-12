@@ -346,6 +346,7 @@ run_normalizer() {
         args+=("--expect-not" "WIFI_BLOCKER=unknown")
         args+=("--expect-not" "WIFI_BLOCKER=deferred")
         args+=("--expect-not" "WIFI_BLOCKER=boot-deferred-local-seat-usb")
+        args+=("--expect-not" "WIFI_BLOCKER=boot-deferred-root-console")
         args+=("--expect-not" "WIFI_BLOCKER=boot-waiting-for-wifi")
         args+=("--expect-not" "WIFI_BLOCKER=ht-clock-timeout")
         args+=("--expect-not" "WIFI_BLOCKER=devon-timeout")

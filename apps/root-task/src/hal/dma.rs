@@ -9,7 +9,7 @@
 use crate::bootstrap::log as boot_log;
 use crate::hal::cache::{CacheError, CacheMaintenance};
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), any(test, not(feature = "kernel"))))]
 use std::{string::String, sync::Mutex, vec::Vec};
 
 /// Error surfaced when pinning a DMA range fails validation.
@@ -102,11 +102,12 @@ fn audit_suppressed_for_label(label: &str) -> bool {
         "xhci-scratchpad-page"
             | "xhci-cmd-ring-submit"
             | "xhci-event-ring-debug-prefix"
+            | "xhci-event-ring-prompt-safe"
             | "xhci-event-ring-poll-fast"
     )
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), any(test, not(feature = "kernel"))))]
 static DMA_AUDIT_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn emit_audit_line(line: &str) {
@@ -119,14 +120,17 @@ fn emit_audit_line(line: &str) {
         boot_log::force_uart_line(line);
     }
 
-    #[cfg(not(target_os = "none"))]
+    #[cfg(all(not(target_os = "none"), any(test, not(feature = "kernel"))))]
     {
         let mut guard = DMA_AUDIT_LOG.lock().expect("dma audit log");
         guard.push(line.to_string());
     }
 }
 
-#[cfg(any(test, all(feature = "cache-maintenance", not(feature = "kernel"))))]
+#[cfg(all(
+    not(target_os = "none"),
+    any(test, all(feature = "cache-maintenance", not(feature = "kernel")))
+))]
 pub fn take_audit_log() -> Vec<String> {
     let mut guard = DMA_AUDIT_LOG.lock().expect("dma audit log");
     let mut out = Vec::new();
@@ -370,4 +374,78 @@ fn emit_cache_error(stage: &str, range: &PinnedDmaRange, err: CacheError) {
         ),
     );
     emit_audit_line(line.as_str());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{audit_suppressed_for_label, pin, sync_for_cpu, take_audit_log, unpin};
+    use std::sync::Mutex as StdMutex;
+
+    static DMA_AUDIT_TEST_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn assert_stage_order(lines: &[String], stages: &[&str]) {
+        let mut cursor = 0usize;
+        for stage in stages {
+            let Some((offset, _)) = lines[cursor..]
+                .iter()
+                .enumerate()
+                .find(|(_, line)| line.contains(stage))
+            else {
+                panic!("missing DMA audit stage {stage}; lines={lines:?}");
+            };
+            cursor += offset + 1;
+        }
+    }
+
+    #[test]
+    fn prompt_safe_event_ring_polling_uses_summary_breadcrumbs_not_dma_spam() {
+        assert!(audit_suppressed_for_label("xhci-event-ring-prompt-safe"));
+        assert!(audit_suppressed_for_label("xhci-event-ring-poll-fast"));
+        assert!(!audit_suppressed_for_label("xhci-event-ring-poll"));
+    }
+
+    #[test]
+    fn dma_pin_audit_orders_prepare_clean_and_ready() {
+        let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
+        let _ = take_audit_log();
+
+        let range = pin(0x1000, 0x2000, 0x80, "wifi-sdio-audit-order").expect("pin succeeds");
+
+        assert_eq!(range.vaddr(), 0x1000);
+        assert_eq!(range.paddr(), 0x2000);
+        let lines = take_audit_log();
+        assert_stage_order(&lines, &["prepare", "clean-before-share", "ready"]);
+    }
+
+    #[test]
+    fn dma_sync_for_cpu_audit_orders_invalidate_before_cpu_ready() {
+        let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
+        let _ = take_audit_log();
+
+        let range =
+            sync_for_cpu(0x3000, 0x4000, 0x100, "wifi-sdio-cpu-sync").expect("sync succeeds");
+
+        assert_eq!(range.len(), 0x100);
+        let lines = take_audit_log();
+        assert_stage_order(
+            &lines,
+            &["sync-for-cpu", "invalidate-before-cpu-read", "cpu-ready"],
+        );
+    }
+
+    #[test]
+    fn dma_unpin_audit_orders_reclaim_invalidate_and_reclaimed() {
+        let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
+        let _ = take_audit_log();
+        let range = pin(0x5000, 0x6000, 0x40, "wifi-sdio-reclaim").expect("pin succeeds");
+        let _ = take_audit_log();
+
+        unpin(&range).expect("unpin succeeds");
+
+        let lines = take_audit_log();
+        assert_stage_order(
+            &lines,
+            &["reclaim", "invalidate-after-reclaim", "reclaimed"],
+        );
+    }
 }
