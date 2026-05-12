@@ -325,7 +325,6 @@ fn optional_control_plane_iovar_allows_failure(name: &str, err: &DriverError) ->
                 | "bsscfg:sup_wpa2_eapver"
                 | "bsscfg:sup_wpa_tmo"
                 | "bus:txglom"
-                | "country"
                 | "mfp"
                 | "sup_wpa"
                 | "sup_wpa2_eapver"
@@ -336,6 +335,11 @@ fn optional_control_plane_iovar_allows_failure(name: &str, err: &DriverError) ->
 
 #[inline]
 const fn linux_station_path_enables_apsta() -> bool {
+    false
+}
+
+#[inline]
+const fn linux_station_path_sets_country() -> bool {
     false
 }
 
@@ -433,12 +437,27 @@ const fn join_completion_link_up(
         && (!state.link_down_seen || state.carrier_confirmed)
 }
 
+#[inline]
+const fn join_completion_rule_label(secure: bool, requires_psk_completion: bool) -> &'static str {
+    if secure && requires_psk_completion {
+        "firmware-supplicant-psk-sup"
+    } else {
+        "set-ssid"
+    }
+}
+
 fn join_event_result(
     event: Cyw43Event,
     secure: bool,
     requires_psk_completion: bool,
     state: &mut JoinCompletionState,
 ) -> Option<Result<(), DriverError>> {
+    if secure && !requires_psk_completion {
+        return Some(Err(DriverError::Protocol(
+            "firmware-supplicant-unsupported",
+        )));
+    }
+
     if event.event_type == EVENT_AUTH && event.status != STATUS_SUCCESS {
         state.auth_status = event.status;
         if secure && event.status == STATUS_FAIL {
@@ -1608,7 +1627,14 @@ impl Cyw43NetDevice {
                 "[cyw43] control-plane step=apsta-enable action=skip optional=yes reason=linux-station-path-does-not-enable-apsta"
             );
         }
-        optional_iovar_step!("country-worldwide", "country", self.set_country_worldwide());
+        let country_reason = if linux_station_path_sets_country() {
+            "linux-station-path-country-set-disabled"
+        } else {
+            "linux-station-path-queries-country-later"
+        };
+        info!(
+            "[cyw43] control-plane step=country-worldwide action=skip optional=yes reason={country_reason}"
+        );
         control_step!(
             "linux-preinit-defaults",
             self.apply_linux_preinit_defaults()
@@ -1684,17 +1710,6 @@ impl Cyw43NetDevice {
         }
         info!("[cyw43] clm version bytes={}", printable_len);
         Ok(())
-    }
-
-    fn set_country_worldwide(&mut self) -> Result<(), DriverError> {
-        let payload_len = 12;
-        {
-            let payload = self.payload_mut(payload_len)?;
-            payload[..4].copy_from_slice(b"XX\0\0");
-            put_i32_le(payload, 4, -1);
-            payload[8..12].copy_from_slice(b"XX\0\0");
-        }
-        self.set_iovar_from_payload("country", payload_len)
     }
 
     fn apply_linux_preinit_defaults(&mut self) -> Result<(), DriverError> {
@@ -1820,7 +1835,7 @@ impl Cyw43NetDevice {
             self.program_join_request(ssid)?;
         } else {
             self.ioctl_set_u32(Ioctl::SetWsec, 0, WSEC_AES)?;
-            let firmware_supplicant_enabled = self.enable_wpa2_firmware_supplicant()?;
+            self.enable_wpa2_firmware_supplicant()?;
             self.ioctl_set_u32(Ioctl::SetInfra, 0, 1)?;
             self.ioctl_set_u32(Ioctl::SetAuth, 0, AUTH_OPEN)?;
             self.set_optional_iovar_u32("mfp", MFP_CAPABLE)?;
@@ -1833,7 +1848,7 @@ impl Cyw43NetDevice {
                 pmk_kind.label(),
             );
             self.program_join_request(ssid)?;
-            let requires_psk_completion = firmware_supplicant_enabled;
+            let requires_psk_completion = true;
             if wait_for_completion {
                 return self.wait_for_join(secure, requires_psk_completion);
             }
@@ -1848,7 +1863,7 @@ impl Cyw43NetDevice {
                 "[cyw43] join pending mode=deferred polls=0 ssid_len={} psk_len={} secure=yes fwsup={}",
                 ssid.len(),
                 psk.len(),
-                if firmware_supplicant_enabled { "yes" } else { "no" },
+                "yes",
             );
             return Ok(());
         }
@@ -1889,40 +1904,20 @@ impl Cyw43NetDevice {
         Ok(())
     }
 
-    fn enable_wpa2_firmware_supplicant(&mut self) -> Result<bool, DriverError> {
-        match self.set_iovar_u32x2("bsscfg:sup_wpa", BSSCFG_PRIMARY_INDEX, 1) {
-            Ok(()) => {
-                self.set_optional_iovar_u32x2(
-                    "bsscfg:sup_wpa2_eapver",
-                    BSSCFG_PRIMARY_INDEX,
-                    u32::MAX,
-                )?;
-                self.set_optional_iovar_u32x2("bsscfg:sup_wpa_tmo", BSSCFG_PRIMARY_INDEX, 2500)?;
-                info!("[cyw43] join: firmware-supplicant path=bsscfg requested=yes enabled=yes");
-                Ok(true)
+    fn enable_wpa2_firmware_supplicant(&mut self) -> Result<(), DriverError> {
+        if let Err(err) = self.set_iovar_u32x2("bsscfg:sup_wpa", BSSCFG_PRIMARY_INDEX, 1) {
+            if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED) {
+                warn!(
+                    "[cyw43] join: firmware-supplicant path=bsscfg unsupported action=fail-secure"
+                );
+                return Err(DriverError::Protocol("firmware-supplicant-unsupported"));
             }
-            Err(err) if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED) => {
-                warn!("[cyw43] join: firmware-supplicant path=bsscfg unsupported action=try-plain");
-                match self.set_iovar_u32("sup_wpa", 1) {
-                    Ok(()) => {
-                        self.set_optional_iovar_u32("sup_wpa2_eapver", u32::MAX)?;
-                        self.set_optional_iovar_u32("sup_wpa_tmo", 2500)?;
-                        info!(
-                            "[cyw43] join: firmware-supplicant path=plain requested=yes enabled=yes"
-                        );
-                        Ok(true)
-                    }
-                    Err(plain_err) if ioctl_failed_status(&plain_err) == Some(BCME_UNSUPPORTED) => {
-                        warn!(
-                            "[cyw43] join: firmware-supplicant unsupported action=pmk-setssid-completion"
-                        );
-                        Ok(false)
-                    }
-                    Err(plain_err) => Err(plain_err),
-                }
-            }
-            Err(err) => Err(err),
+            return Err(err);
         }
+        self.set_optional_iovar_u32x2("bsscfg:sup_wpa2_eapver", BSSCFG_PRIMARY_INDEX, u32::MAX)?;
+        self.set_optional_iovar_u32x2("bsscfg:sup_wpa_tmo", BSSCFG_PRIMARY_INDEX, 2500)?;
+        info!("[cyw43] join: firmware-supplicant path=bsscfg requested=yes enabled=yes");
+        Ok(())
     }
 
     fn set_wsec_pmk(&mut self, ssid: &[u8], psk: &[u8]) -> Result<WsecPmkKind, DriverError> {
@@ -1971,9 +1966,17 @@ impl Cyw43NetDevice {
                     {
                         result?;
                         self.link_up = true;
+                        let completion_rule =
+                            join_completion_rule_label(secure, requires_psk_completion);
                         info!(
-                            "[cyw43] join complete secure={}",
-                            if secure { "yes" } else { "no" }
+                            "[cyw43] join complete mode=blocking secure={} completion_rule={} set_ssid={} fwsup={} psk_sup={} psk_status=0x{:08x} carrier={}",
+                            if secure { "yes" } else { "no" },
+                            completion_rule,
+                            if completion.set_ssid_completed { "yes" } else { "no" },
+                            if requires_psk_completion { "yes" } else { "no" },
+                            if completion.psk_completed { "yes" } else { "no" },
+                            if completion.psk_completed { STATUS_UNSOLICITED } else { 0 },
+                            if completion.carrier_confirmed { "yes" } else { "no" },
                         );
                         return Ok(());
                     }
@@ -2006,9 +2009,17 @@ impl Cyw43NetDevice {
                             Ok(()) => {
                                 self.link_up = true;
                                 self.deferred_join_state = DeferredJoinState::Disabled;
+                                let completion_rule =
+                                    join_completion_rule_label(secure, requires_psk_completion);
                                 info!(
-                                    "[cyw43] join complete mode=deferred polls={polls} secure={}",
+                                    "[cyw43] join complete mode=deferred polls={polls} secure={} completion_rule={} set_ssid={} fwsup={} psk_sup={} psk_status=0x{:08x} carrier={}",
                                     if secure { "yes" } else { "no" },
+                                    completion_rule,
+                                    if completion.set_ssid_completed { "yes" } else { "no" },
+                                    if requires_psk_completion { "yes" } else { "no" },
+                                    if completion.psk_completed { "yes" } else { "no" },
+                                    if completion.psk_completed { STATUS_UNSOLICITED } else { 0 },
+                                    if completion.carrier_confirmed { "yes" } else { "no" },
                                 );
                             }
                             Err(DriverError::JoinFailed { status, .. }) => {
@@ -3453,12 +3464,6 @@ fn put_u16_le(buf: &mut [u8], offset: usize, value: u16) {
     }
 }
 
-fn put_i32_le(buf: &mut [u8], offset: usize, value: i32) {
-    if let Some(slot) = buf.get_mut(offset..offset + 4) {
-        slot.copy_from_slice(&value.to_le_bytes());
-    }
-}
-
 fn put_u32_le(buf: &mut [u8], offset: usize, value: u32) {
     if let Some(slot) = buf.get_mut(offset..offset + 4) {
         slot.copy_from_slice(&value.to_le_bytes());
@@ -3501,10 +3506,11 @@ mod tests {
         firmware_mac_address_from_response, first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
-        ioctl_wait_loops, iovar_get_payload_len, is_transport_retryable, join_event_result,
-        linux_attach_control_plane_probe_order, linux_first_control_plane_iovar_order,
-        linux_join_event_mask, linux_optional_iovar_allows_unsupported,
-        linux_station_path_enables_apsta, optional_control_plane_iovar_allows_failure,
+        ioctl_wait_loops, iovar_get_payload_len, is_transport_retryable,
+        join_completion_rule_label, join_event_result, linux_attach_control_plane_probe_order,
+        linux_first_control_plane_iovar_order, linux_join_event_mask,
+        linux_optional_iovar_allows_unsupported, linux_station_path_enables_apsta,
+        linux_station_path_sets_country, optional_control_plane_iovar_allows_failure,
         optional_txbf_allows_failure, parse_event_payload, parse_rx_sdpcm_header,
         preserve_cyw43_init_failure_exact_error, promoted_cyw43_init_failure_exact_error,
         psk_is_hex_pmk, put_u16_le, sdpcm_control_tx_request_len, sdpcm_glom_descriptor,
@@ -3767,7 +3773,7 @@ mod tests {
     }
 
     #[test]
-    fn secure_join_without_firmware_supplicant_uses_set_ssid_completion() {
+    fn secure_join_without_firmware_supplicant_cannot_complete_on_set_ssid() {
         let mut completion = JoinCompletionState::default();
         let set_ssid_success = Cyw43Event {
             event_type: EVENT_SET_SSID,
@@ -3776,8 +3782,19 @@ mod tests {
         };
         assert!(matches!(
             join_event_result(set_ssid_success, true, false, &mut completion),
-            Some(Ok(()))
+            Some(Err(DriverError::Protocol(
+                "firmware-supplicant-unsupported"
+            )))
         ));
+    }
+
+    #[test]
+    fn secure_join_completion_rule_requires_psk_sup() {
+        assert_eq!(
+            join_completion_rule_label(true, true),
+            "firmware-supplicant-psk-sup"
+        );
+        assert_eq!(join_completion_rule_label(false, false), "set-ssid");
     }
 
     #[test]
@@ -4124,6 +4141,13 @@ mod tests {
             }
         ));
         assert!(!optional_control_plane_iovar_allows_failure(
+            "country",
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_UNSUPPORTED,
+            }
+        ));
+        assert!(!optional_control_plane_iovar_allows_failure(
             "apsta",
             &DriverError::IoctlFailed {
                 cmd: Ioctl::SetVar as u32,
@@ -4168,6 +4192,11 @@ mod tests {
     #[test]
     fn linux_station_attach_does_not_enable_apsta() {
         assert!(!linux_station_path_enables_apsta());
+    }
+
+    #[test]
+    fn linux_station_attach_does_not_set_country() {
+        assert!(!linux_station_path_sets_country());
     }
 
     #[test]
@@ -4280,7 +4309,7 @@ mod tests {
     }
 
     #[test]
-    fn secure_firmware_supplicant_unsupported_falls_back_to_plain_probe() {
+    fn secure_firmware_supplicant_unsupported_is_not_optional() {
         assert!(!optional_control_plane_iovar_allows_failure(
             "bsscfg:sup_wpa",
             &DriverError::IoctlFailed {

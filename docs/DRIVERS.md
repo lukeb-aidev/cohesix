@@ -343,14 +343,18 @@ power/reset state.
   512-byte byte-mode CMD53 transfers.
 - Non-captured early iovars must not be hard blockers before this attach proof
   point. Cohesix may attempt station-path compatibility knobs such as
-  `bus:txglom`, `country`, and AMPDU limits, but only after the Linux
-  first-iovar/MAC sequence, and `BCME_UNSUPPORTED` on those non-captured knobs
-  is nonfatal. Transport errors remain fatal. Do not set `apsta=1` on the
-  normal Pi 4 station attach path; Linux reserves that iovar for AP/P2P-style
-  paths, and the 2026-05-12 Cohesix boot proof showed it can move a healthy
-  station attach into a hintless first-read/no-IRQ control-plane stall.
-  Event-mask setup is not optional; at least one join-event subscription path
-  must be proven before `SET_SSID`.
+  `bus:txglom` and AMPDU limits only after the Linux first-iovar/MAC sequence,
+  and `BCME_UNSUPPORTED` on those non-captured knobs is nonfatal. Transport
+  errors remain fatal. Do not set `apsta=1` on the normal Pi 4 station attach
+  path; Linux reserves that iovar for AP/P2P-style paths, and the 2026-05-12
+  Cohesix boot proof showed it can move a healthy station attach into a
+  hintless first-read/no-IRQ control-plane stall. Do not set `country` on the
+  normal Pi 4 station attach path either; the Pi 4 Linux capture reaches
+  country later as a cfg80211/regulatory query path, and the 2026-05-12
+  Cohesix post-`apsta` proof showed an early `country` write can move the same
+  transport into the hintless first-read/no-IRQ stall. Event-mask setup is not
+  optional; at least one join-event subscription path must be proven before
+  `SET_SSID`.
 - Cohesix also applies the Linux attach-time `join_pref` default payload
   (`04 02 08 01 01 02 00 00`) before scan/join defaults. WPA2-PSK join setup
   must match Linux and known-good CYW43 behavior: configure AES security,
@@ -358,12 +362,12 @@ power/reset state.
   then configure infrastructure/auth/WPA auth before programming
   `WLC_SET_WSEC_PMK`. The Pi 4 Linux capture shows the plain `sup_wpa`
   feature probe returning `BCME_UNSUPPORTED`; plain `sup_wpa` must therefore
-  not be a fatal Cohesix join gate on this firmware. The Cohesix Pi 4 path
-  first tries primary-BSS firmware supplicant mode, then tries the plain
-  firmware-supplicant iovar, and if both are explicitly unsupported falls back
-  to the Linux non-firmware-supplicant completion rule while still programming
-  the PMK before `SET_SSID`. Transport errors remain fatal. The primary PMK
-  payload is the 132-byte Linux
+  not authorize or weaken the secure Cohesix join rule. The Cohesix Pi 4 path
+  uses primary-BSS firmware supplicant mode as a hard secure-join gate, and an
+  explicit `BCME_UNSUPPORTED` on `bsscfg:sup_wpa` is reported as
+  `firmware-supplicant-unsupported` instead of falling back to `SET_SSID`-only
+  completion. Transport errors remain fatal. The primary PMK payload is the
+  132-byte Linux
   `brcmf_wsec_pmk_le` shape (`u16 key_len`, `u16 flags`, 128-byte key area).
   For 8-63 byte passphrases Cohesix derives the 32-byte PBKDF2-HMAC-SHA1 PMK
   from SSID + passphrase and sends flags `0`; for 64 ASCII hex PSKs it decodes
@@ -378,15 +382,12 @@ power/reset state.
   subscribe to `SET_SSID`, `AUTH`, and `PSK_SUP`, ignore the early `PSK_SUP`
   abort status, and, when firmware supplicant mode is enabled, require both
   successful `SET_SSID` association progress and `PSK_SUP` status 6 before
-  the data path is released. When the firmware explicitly rejects both
-  supplicant iovars with `BCME_UNSUPPORTED`, Cohesix follows Linux's
-  non-firmware-supplicant carrier rule and releases the data path on
-  successful `SET_SSID` after the PMK has been programmed. DHCP and data TX
-  must not begin before the selected join-completion rule is satisfied; the
-  root-task DHCP client is started only after the Wi-Fi backend reports no
-  pending association status and a live Wi-Fi carrier. A post-join `EVENT_LINK`
-  without the link flag is `wifi-link-down`; it must defer DHCP rather than
-  being normalized as DHCP progress.
+  the data path is released. DHCP and data TX must not begin before that
+  secure completion rule is satisfied; the root-task DHCP client is started
+  only after the Wi-Fi backend reports no pending association status and a
+  live Wi-Fi carrier. A post-join `EVENT_LINK` without the link flag is
+  `wifi-link-down`; it must defer DHCP rather than being normalized as DHCP
+  progress.
 - Join-completion event delivery is a hard gate. Cohesix first programs the
   Linux `event_msgs_ext` shape (`ver=1`, `command=SET_MASK`, `len=27`) using
   the Pi 4 capture mask plus the Cohesix-required `AUTH`, association, and
@@ -535,25 +536,27 @@ active path is Cohesix-owned cold start:
   lane report deferred state instead of live `CRCR`, `DCBAAP`, interrupter, or
   `PORTSC` reads.
 - CONFIG, DCBAAP, CRCR, initial ERDP, ERSTSZ, ERSTBA, RUN, command-ring
-  recovery, command-doorbell, and endpoint-doorbell posted-write drains fail
+  recovery, and endpoint-doorbell posted-write drains fail
   closed when the HAL cannot prove the EXT_CFG selector, link/root readiness,
   PCIe IRQ-source masking, or poll-only VL805 COMMAND ownership, or when the
   drain read returns a selector echo or invalid config value.
 - U-Boot-compatible command/event proof must publish the fresh ring registers in
   U-Boot order on the Pi 4 platform-reset lane (`DCBAAP`, `CRCR`, initial
-  `ERDP`, `ERSTSZ`/`ERSTBA`), DMA-publish the command TRB first, issue a
-  HAL EXT_CFG drain after each controller-ownership register write, DMA-publish
-  the command TRB first, issue a device-visible command-ring publish barrier,
-  then ring doorbell `0` and poll the event ring with the same 5 s command-event
-  budget as U-Boot. Empty event rings use the poll-only No Op probe; event rings
+  `ERDP`, `ERSTSZ`/`ERSTBA`), issue a HAL EXT_CFG drain after each
+  controller-ownership register write, DMA-publish the command TRB first, issue
+  a device-visible command-ring publish barrier, then ring doorbell `0` directly
+  like U-Boot and poll the event ring with the same 5 s command-event budget.
+  Empty event rings use the poll-only No Op probe; event rings
   that already contain current-boot Port Status Change events use the same
   U-Boot-shaped Enable Slot lane: no pre-command `ERDP.EHB` acknowledgement, no
   pre-command PSC drain, and no same-command re-doorbell counted as proof.
   `ERDP.EHB` acknowledgement publishes the low/control dword before the high
   DMA-alias dword and drains both writes through HAL only after an event has
   been consumed. All 64-bit ownership-register publications also drain both low
-  and high dwords. A missing platform posted-write hook is a hard failure on the
-  Pi 4 high-BAR VL805 path.
+  and high dwords. Command doorbell `0` itself is a direct U-Boot-style MMIO
+  write with a publish barrier, not a HAL ownership-register drain. A missing
+  platform posted-write hook is a hard failure for the Pi 4 high-BAR VL805
+  ownership-register and endpoint-doorbell paths.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. USB keyboard availability must not depend on the
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local

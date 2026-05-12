@@ -21,6 +21,18 @@ assert spec.loader is not None
 sys.modules[spec.name] = normalizer
 spec.loader.exec_module(normalizer)
 
+JOIN_COMPLETE_OPEN = (
+    "[cyw43] join complete mode=deferred polls=3 secure=no "
+    "completion_rule=set-ssid set_ssid=yes fwsup=no psk_sup=no "
+    "psk_status=0x00000000 carrier=no"
+)
+
+JOIN_COMPLETE_SECURE = (
+    "[cyw43] join complete mode=deferred polls=3 secure=yes "
+    "completion_rule=firmware-supplicant-psk-sup set_ssid=yes fwsup=yes "
+    "psk_sup=yes psk_status=0x00000006 carrier=yes"
+)
+
 
 def test_usb_trace_line_extracts_stage_and_tokens() -> None:
     event = normalizer.parse_line(
@@ -583,6 +595,21 @@ def test_gate_summary_tracks_wifi_sdio_irq158_separately_from_timer_irq27() -> N
     assert gates.to_record()["TIMER_IRQ27_SEEN"] == "yes"
     assert gates.to_record()["SDIO_IRQ158_SEEN"] == "yes"
     assert gates.to_record()["SDIO_IRQ158_BOUND"] == "yes"
+
+
+def test_gate_summary_does_not_mark_fail_closed_sdio_irq158_bound() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] sdio irq bind irq=158 action=fail-closed "
+            "reason=cap-mint-failed",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.sdio_irq158_seen
+    assert not gates.sdio_irq158_bound
+    assert gates.to_record()["SDIO_IRQ158_BOUND"] == "no"
 
 
 def test_gate_summary_reports_kernel_halt_and_timer_irq27() -> None:
@@ -3031,7 +3058,7 @@ def test_gate_summary_tracks_wifi_join_and_dhcp_gates() -> None:
         [
             "[cyw43] ready: mac=02:43:4f:48:58:55 clock=41666666Hz "
             "bus_width=4bit ioex=0x06",
-            "[cyw43] join complete mode=deferred polls=3",
+            JOIN_COMPLETE_SECURE,
             "[dhcp] start ready interface=wifi now_ms=100",
             "[net] not-ready gate tripped: want=net-selftest reason=dhcp-pending",
         ]
@@ -3043,10 +3070,27 @@ def test_gate_summary_tracks_wifi_join_and_dhcp_gates() -> None:
     assert gates.wifi_blocker == "dhcp-pending"
 
 
+def test_gate_summary_requires_secure_join_completion_proof_fields() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cyw43] ready: mac=02:43:4f:48:58:55 clock=41666666Hz "
+            "bus_width=4bit ioex=0x06",
+            "[cyw43] join complete mode=deferred polls=3 secure=yes "
+            "completion_rule=set-ssid set_ssid=yes fwsup=no psk_sup=no "
+            "psk_status=0x00000000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "join-completion-unproven"
+
+
 def test_gate_summary_does_not_report_dhcp_pending_before_wifi_start_ready() -> None:
     events = normalizer.parse_events(
         [
-            "[cyw43] join complete mode=deferred polls=3",
+            JOIN_COMPLETE_OPEN,
             "[net] not-ready gate tripped: want=net-selftest reason=dhcp-pending",
         ]
     )
@@ -3060,7 +3104,7 @@ def test_gate_summary_does_not_report_dhcp_pending_before_wifi_start_ready() -> 
 def test_gate_summary_tracks_link_down_after_join_before_dhcp() -> None:
     events = normalizer.parse_events(
         [
-            "[cyw43] join complete mode=deferred polls=3",
+            JOIN_COMPLETE_SECURE,
             "[dhcp] start deferred reason=device-bringup "
             "status=wifi-link-down now_ms=125",
         ]
@@ -3075,7 +3119,7 @@ def test_gate_summary_tracks_link_down_after_join_before_dhcp() -> None:
 def test_gate_summary_tracks_rxglom_as_explicit_gate8_blocker() -> None:
     events = normalizer.parse_events(
         [
-            "[cyw43] join complete mode=deferred polls=3",
+            JOIN_COMPLETE_OPEN,
             "[cyw43] rx glom frame unsupported len=1024 descriptor=true "
             "action=drop reason=rxglom-disabled-bounded-rx",
         ]
@@ -3104,7 +3148,7 @@ def test_gate_summary_tracks_wifi_join_pending_evidence() -> None:
 def test_gate_summary_tracks_wifi_dhcp_failure_evidence() -> None:
     events = normalizer.parse_events(
         [
-            "[cyw43] join complete mode=deferred polls=3",
+            JOIN_COMPLETE_OPEN,
             "[dhcp] failed reason=discover-timeout",
         ]
     )
@@ -3118,7 +3162,7 @@ def test_gate_summary_tracks_wifi_dhcp_failure_evidence() -> None:
 def test_gate_summary_tracks_wifi_dhcp_transition_evidence() -> None:
     events = normalizer.parse_events(
         [
-            "[cyw43] join complete mode=deferred polls=3",
+            JOIN_COMPLETE_OPEN,
             "[dhcp] tx queued kind=discover from=selecting to=selecting "
             "len=300 attempts=1 tx_packets=1",
             "[dhcp] rx transition from=selecting to=requesting "

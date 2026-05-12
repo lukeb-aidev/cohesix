@@ -862,6 +862,25 @@ def parse_hex_int(value: str | None) -> int | None:
         return None
 
 
+def wifi_join_complete_proven(fields: dict[str, str]) -> bool:
+    """Return true when a join-complete log carries the required proof fields."""
+
+    secure = fields.get("secure")
+    if secure == "yes":
+        return (
+            fields.get("completion_rule") == "firmware-supplicant-psk-sup"
+            and fields.get("set_ssid") == "yes"
+            and fields.get("fwsup") == "yes"
+            and fields.get("psk_sup") == "yes"
+            and parse_hex_int(fields.get("psk_status")) == 6
+        )
+    if secure == "no":
+        return fields.get("completion_rule") == "set-ssid" and fields.get(
+            "set_ssid"
+        ) == "yes"
+    return False
+
+
 ARMCR4_WRAP_BASES = ("0x18102000", "0x18103000")
 
 
@@ -2306,9 +2325,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = explicit_blocker or "control-plane"
             continue
         if "join complete" in raw:
-            gate = max(gate, 8)
             post_f2_progress_seen = True
-            blocker = "none"
+            if wifi_join_complete_proven(fields):
+                gate = max(gate, 8)
+                blocker = "none"
+            else:
+                gate = max(gate, 7)
+                blocker = "join-completion-unproven"
+            continue
         if "join pending" in raw or "join armed" in raw:
             gate = max(gate, 7)
             post_f2_progress_seen = True
@@ -3013,11 +3037,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     ]
     sdio_irq158_seen = bool(sdio_irq158_events)
     sdio_irq158_bound = any(
-        "sdio irq bind" in event.raw.lower()
-        or (
-            "sdio irq contract" in event.raw.lower()
-            and event.fields.get("bound") == "1"
-        )
+        "sdio irq contract" in event.raw.lower()
+        and event.fields.get("bound") == "1"
         for event in sdio_irq158_events
     )
     sdio_irq158_line = sdio_irq158_events[0].line if sdio_irq158_events else 0

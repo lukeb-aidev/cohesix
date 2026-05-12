@@ -48,6 +48,11 @@ const fn prompt_safe_command_redoorbell_enabled(linux_event_generation: bool) ->
     linux_event_generation
 }
 
+#[inline(always)]
+fn command_doorbell_uses_uboot_direct_publish() -> bool {
+    true
+}
+
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
 const COMMAND_RING_DEBUG_TRBS: usize = 4;
@@ -4804,7 +4809,13 @@ impl<H: Dma> XhciCtrl<H> {
         mmio_write_barrier();
         self.write_reg(db, 0u32);
         mmio_write_barrier();
-        if !self.flush_posted_write(db, 0, 0x031f) {
+        // U-Boot queues and cache-flushes the command TRB, then writes doorbell
+        // 0 directly. Do not turn the command doorbell itself into an ownership
+        // register proof on Pi 4; DCBAAP/CRCR/ERDP/ERST/RUN still use the HAL
+        // posted-write drains that establish VL805 ownership.
+        if !command_doorbell_uses_uboot_direct_publish()
+            && !self.flush_posted_write(db, 0, 0x031f)
+        {
             emit_xhci_diag(0x03ee, db as u64, 0, 0x031f);
             return false;
         }
@@ -6604,6 +6615,7 @@ mod tests {
         preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
+        command_doorbell_uses_uboot_direct_publish,
         prompt_safe_command_recovery_avoids_live_operational_reads,
         prompt_safe_command_redoorbell_enabled, prompt_safe_command_timeout_live_snapshot_enabled,
         replay_staged_crcr_snapshot_before_publish_with_snapshot,
@@ -10137,6 +10149,11 @@ mod tests {
             0x031f,
             true,
         ));
+    }
+
+    #[test]
+    fn command_doorbell_uses_uboot_direct_publish() {
+        assert!(command_doorbell_uses_uboot_direct_publish());
     }
 
     #[test]
