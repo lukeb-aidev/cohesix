@@ -2466,9 +2466,9 @@ fn init_local_seat_runtime<P: Platform>(
                 (false, false) => "absent",
             };
             let action = if xhci_handoff_ready && xhci_irq_quiesced {
-                "trust-high-bar"
+                "trust-high-bar-handoff"
             } else {
-                "reject-high-bar"
+                "reject-untrusted-high-bar-handoff"
             };
             let mut line = heapless::String::<208>::new();
             let _ = write!(

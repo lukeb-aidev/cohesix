@@ -148,6 +148,7 @@ const AUTH_OPEN: u32 = 0x00;
 const MFP_CAPABLE: u32 = 1;
 const WPA_AUTH_DISABLED: u32 = 0x0000;
 const WPA_AUTH_WPA2_PSK: u32 = 0x0080;
+const LINUX_REVINFO_LEN: usize = 68;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FirmwareLayout {
@@ -190,6 +191,7 @@ enum IoctlType {
 #[repr(u32)]
 enum Ioctl {
     Up = 2,
+    GetRevInfo = 98,
     SetInfra = 20,
     SetAuth = 22,
     SetSsid = 26,
@@ -302,13 +304,24 @@ const fn linux_first_control_plane_iovar_order() -> [&'static str; 3] {
 }
 
 #[inline]
-const fn linux_attach_control_plane_probe_order() -> [&'static str; 4] {
+const fn linux_attach_control_plane_probe_order() -> [&'static str; 5] {
     [
         "bus:txglomalign",
         "ulp_sdioctrl",
         "bus:rxglom",
         "cur_etheraddr",
+        "revinfo",
     ]
+}
+
+#[inline]
+const fn linux_station_path_keeps_txglom_configured_before_preinit() -> bool {
+    true
+}
+
+#[inline]
+const fn linux_station_path_keeps_rxglom_configured_before_preinit() -> bool {
+    true
 }
 
 #[inline]
@@ -340,6 +353,31 @@ const fn linux_station_path_enables_apsta() -> bool {
 
 #[inline]
 const fn linux_station_path_sets_country() -> bool {
+    false
+}
+
+#[inline]
+const fn linux_station_path_sets_antdiv_before_join() -> bool {
+    false
+}
+
+#[inline]
+const fn linux_station_path_sets_ampdu_limits_before_join() -> bool {
+    false
+}
+
+#[inline]
+const fn linux_station_path_sets_legacy_gmode() -> bool {
+    false
+}
+
+#[inline]
+const fn linux_station_path_sets_legacy_band() -> bool {
+    false
+}
+
+#[inline]
+const fn linux_station_path_sets_power_mode_before_join() -> bool {
     false
 }
 
@@ -1571,8 +1609,12 @@ impl Cyw43NetDevice {
 
         let linux_probe_order = linux_attach_control_plane_probe_order();
         info!(
-            "[cyw43] control-plane linux-first-iovar-order={}>{}>{}>{}",
-            linux_probe_order[0], linux_probe_order[1], linux_probe_order[2], linux_probe_order[3]
+            "[cyw43] control-plane linux-first-iovar-order={}>{}>{}>{}>{}",
+            linux_probe_order[0],
+            linux_probe_order[1],
+            linux_probe_order[2],
+            linux_probe_order[3],
+            linux_probe_order[4]
         );
         control_step!(
             "linux-startup-status-drain",
@@ -1603,23 +1645,37 @@ impl Cyw43NetDevice {
             "[cyw43] control-plane step=read-mac action=ready order=linux-before-clm mac={}",
             self.mac
         );
+        control_step!("revinfo", self.read_revinfo());
 
         if let Some(clm) = firmware.clm_blob {
             control_step!("clm-download", self.load_clm(clm));
+            control_step!("firmware-version", self.read_firmware_version());
             control_step!("clm-version", self.read_clm_version());
         } else {
             info!("[cyw43] control-plane step=clm-download action=skip");
         }
 
-        optional_iovar_step!(
-            "bus-txglom-disable",
-            "bus:txglom",
-            self.set_iovar_u32("bus:txglom", 0)
-        );
-        control_step!(
-            "bus-rxglom-disable-bounded-rx",
-            self.set_iovar_u32("bus:rxglom", 0)
-        );
+        if linux_station_path_keeps_txglom_configured_before_preinit() {
+            info!(
+                "[cyw43] control-plane step=bus-txglom-disable action=skip optional=yes reason=linux-keeps-sdio-preinit-glom-before-mpc"
+            );
+        } else {
+            optional_iovar_step!(
+                "bus-txglom-disable",
+                "bus:txglom",
+                self.set_iovar_u32("bus:txglom", 0)
+            );
+        }
+        if linux_station_path_keeps_rxglom_configured_before_preinit() {
+            info!(
+                "[cyw43] control-plane step=bus-rxglom-disable-bounded-rx action=skip reason=linux-keeps-sdio-preinit-rxglom-before-mpc"
+            );
+        } else {
+            control_step!(
+                "bus-rxglom-disable-bounded-rx",
+                self.set_iovar_u32("bus:rxglom", 0)
+            );
+        }
         if linux_station_path_enables_apsta() {
             optional_iovar_step!("apsta-enable", "apsta", self.set_iovar_u32("apsta", 1));
         } else {
@@ -1639,25 +1695,55 @@ impl Cyw43NetDevice {
             "linux-preinit-defaults",
             self.apply_linux_preinit_defaults()
         );
-        control_step!(
-            "antenna-diversity",
-            self.ioctl_set_u32(Ioctl::SetAntdiv, 0, 0)
-        );
-        optional_iovar_step!(
-            "ampdu-ba-window",
-            "ampdu_ba_wsize",
-            self.set_iovar_u32("ampdu_ba_wsize", 8)
-        );
-        optional_iovar_step!(
-            "ampdu-mpdu",
-            "ampdu_mpdu",
-            self.set_iovar_u32("ampdu_mpdu", 4)
-        );
+        if linux_station_path_sets_antdiv_before_join() {
+            control_step!(
+                "antenna-diversity",
+                self.ioctl_set_u32(Ioctl::SetAntdiv, 0, 0)
+            );
+        } else {
+            info!(
+                "[cyw43] control-plane step=antenna-diversity action=skip optional=yes reason=linux-station-path-does-not-set-antdiv-before-join"
+            );
+        }
+        if linux_station_path_sets_ampdu_limits_before_join() {
+            optional_iovar_step!(
+                "ampdu-ba-window",
+                "ampdu_ba_wsize",
+                self.set_iovar_u32("ampdu_ba_wsize", 8)
+            );
+            optional_iovar_step!(
+                "ampdu-mpdu",
+                "ampdu_mpdu",
+                self.set_iovar_u32("ampdu_mpdu", 4)
+            );
+        } else {
+            info!(
+                "[cyw43] control-plane step=ampdu-limits action=skip optional=yes reason=linux-station-path-does-not-set-ampdu-limits-before-join"
+            );
+        }
         control_step!("event-mask", self.enable_join_event_messages());
         control_step!("up", self.ioctl_raw(IoctlType::Set, Ioctl::Up, 0, &[]));
-        control_step!("gmode", self.ioctl_set_u32(Ioctl::SetGmode, 0, 1));
-        control_step!("band", self.ioctl_set_u32(Ioctl::SetBand, 0, 0));
-        control_step!("power-mode", self.ioctl_set_u32(Ioctl::SetPm, 0, 0));
+        if linux_station_path_sets_legacy_gmode() {
+            control_step!("gmode", self.ioctl_set_u32(Ioctl::SetGmode, 0, 1));
+        } else {
+            info!(
+                "[cyw43] control-plane step=gmode action=skip optional=yes reason=linux-station-path-does-not-set-legacy-gmode"
+            );
+        }
+        if linux_station_path_sets_legacy_band() {
+            control_step!("band", self.ioctl_set_u32(Ioctl::SetBand, 0, 0));
+        } else {
+            info!(
+                "[cyw43] control-plane step=band action=skip optional=yes reason=linux-station-path-does-not-set-legacy-band"
+            );
+        }
+        if linux_station_path_sets_power_mode_before_join() {
+            control_step!("power-mode", self.ioctl_set_u32(Ioctl::SetPm, 0, 0));
+        } else {
+            info!(
+                "[cyw43] control-plane step=power-mode action=skip optional=yes reason=linux-station-path-does-not-set-power-mode-before-join"
+            );
+        }
         control_step!("join", self.join(credentials, wait_for_join_completion));
         info!("[cyw43] control-plane step=init-complete action=ready");
         Ok(())
@@ -1692,6 +1778,23 @@ impl Cyw43NetDevice {
             offset += chunk_len;
         }
         info!("[cyw43] clm loaded bytes={}", clm.len());
+        Ok(())
+    }
+
+    fn read_firmware_version(&mut self) -> Result<(), DriverError> {
+        let mut version = [0u8; 256];
+        let response_len = self.get_iovar("ver", &mut version)?;
+        if response_len == 0 {
+            return Err(DriverError::Protocol("ver-empty"));
+        }
+        let printable_len = version[..response_len]
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(response_len);
+        if printable_len == 0 {
+            return Err(DriverError::Protocol("ver-empty"));
+        }
+        info!("[cyw43] firmware version bytes={}", printable_len);
         Ok(())
     }
 
@@ -2085,6 +2188,23 @@ impl Cyw43NetDevice {
             mac.copy_from_slice(&response[..mac_len]);
         }
         firmware_mac_address_from_response(mac, response_len)
+    }
+
+    fn read_revinfo(&mut self) -> Result<(), DriverError> {
+        let response = [0u8; LINUX_REVINFO_LEN];
+        let response_len = self.ioctl_raw(IoctlType::Get, Ioctl::GetRevInfo, 0, &response)?;
+        if response_len != LINUX_REVINFO_LEN {
+            return Err(DriverError::Protocol("revinfo-len"));
+        }
+
+        let chip = get_u32_le(&self.control_response, 0).unwrap_or(0);
+        let chip_rev = get_u32_le(&self.control_response, 8).unwrap_or(0);
+        let board_type = get_u32_le(&self.control_response, 16).unwrap_or(0);
+        let board_rev = get_u32_le(&self.control_response, 20).unwrap_or(0);
+        info!(
+            "[cyw43] revinfo chip=0x{chip:08x} chip_rev=0x{chip_rev:08x} board_type=0x{board_type:08x} board_rev=0x{board_rev:08x} len={response_len}"
+        );
+        Ok(())
     }
 
     fn set_iovar_u32(&mut self, name: &str, value: u32) -> Result<(), DriverError> {
@@ -3510,12 +3630,17 @@ mod tests {
         join_completion_rule_label, join_event_result, linux_attach_control_plane_probe_order,
         linux_first_control_plane_iovar_order, linux_join_event_mask,
         linux_optional_iovar_allows_unsupported, linux_station_path_enables_apsta,
-        linux_station_path_sets_country, optional_control_plane_iovar_allows_failure,
-        optional_txbf_allows_failure, parse_event_payload, parse_rx_sdpcm_header,
-        preserve_cyw43_init_failure_exact_error, promoted_cyw43_init_failure_exact_error,
-        psk_is_hex_pmk, put_u16_le, sdpcm_control_tx_request_len, sdpcm_glom_descriptor,
-        sdpcm_header_only_status_frame, set_event_mask_bit,
-        speculative_credit_window_after_promoted_timeout_retry,
+        linux_station_path_keeps_rxglom_configured_before_preinit,
+        linux_station_path_keeps_txglom_configured_before_preinit,
+        linux_station_path_sets_ampdu_limits_before_join,
+        linux_station_path_sets_antdiv_before_join, linux_station_path_sets_country,
+        linux_station_path_sets_legacy_band, linux_station_path_sets_legacy_gmode,
+        linux_station_path_sets_power_mode_before_join,
+        optional_control_plane_iovar_allows_failure, optional_txbf_allows_failure,
+        parse_event_payload, parse_rx_sdpcm_header, preserve_cyw43_init_failure_exact_error,
+        promoted_cyw43_init_failure_exact_error, psk_is_hex_pmk, put_u16_le,
+        sdpcm_control_tx_request_len, sdpcm_glom_descriptor, sdpcm_header_only_status_frame,
+        set_event_mask_bit, speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
         startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
         write_event_msgs_ext_payload, write_sdpcm_control_tx_header, write_wsec_passphrase_payload,
@@ -3528,10 +3653,10 @@ mod tests {
         EVENT_REASSOC_IND, EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_WAIT_LOOPS,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
-        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
-        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_NO_NETWORKS,
-        STATUS_SUCCESS, STATUS_UNSOLICITED, WSEC_FLAG_PASSPHRASE, WSEC_PASSPHRASE_PAYLOAD_LEN,
-        WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
+        LINUX_REVINFO_LEN, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
+        SDPCM_CONTROL_TX_EXT_HEADER_LEN, SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN,
+        STATUS_ABORT, STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED, WSEC_FLAG_PASSPHRASE,
+        WSEC_PASSPHRASE_PAYLOAD_LEN, WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
     };
     use crate::hal::HalError;
 
@@ -4088,9 +4213,18 @@ mod tests {
                 "bus:txglomalign",
                 "ulp_sdioctrl",
                 "bus:rxglom",
-                "cur_etheraddr"
+                "cur_etheraddr",
+                "revinfo"
             ]
         );
+        assert_eq!(Ioctl::GetRevInfo as u32, 98);
+        assert_eq!(LINUX_REVINFO_LEN, 68);
+    }
+
+    #[test]
+    fn linux_sdio_preinit_glom_state_is_preserved_until_preinit_mpc() {
+        assert!(linux_station_path_keeps_txglom_configured_before_preinit());
+        assert!(linux_station_path_keeps_rxglom_configured_before_preinit());
     }
 
     #[test]
@@ -4197,6 +4331,19 @@ mod tests {
     #[test]
     fn linux_station_attach_does_not_set_country() {
         assert!(!linux_station_path_sets_country());
+    }
+
+    #[test]
+    fn linux_station_attach_skips_legacy_gmode_and_band() {
+        assert!(!linux_station_path_sets_legacy_gmode());
+        assert!(!linux_station_path_sets_legacy_band());
+    }
+
+    #[test]
+    fn linux_station_attach_skips_uncaptured_tail_writes_before_join() {
+        assert!(!linux_station_path_sets_antdiv_before_join());
+        assert!(!linux_station_path_sets_ampdu_limits_before_join());
+        assert!(!linux_station_path_sets_power_mode_before_join());
     }
 
     #[test]

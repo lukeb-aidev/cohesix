@@ -2,15 +2,14 @@
 // Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
 // Copyright 2026 Lukas Bower
 use crate::{
-    reg,
-    ring::{completion, trb_type, EventRing, PhysMem, Ring, Trb},
-    Dma, Result, UsbError,
+    Dma, Result, UsbError, reg,
+    ring::{EventRing, PhysMem, Ring, Trb, completion, trb_type},
 };
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
-    sync::atomic::{compiler_fence, AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, Ordering, compiler_fence},
 };
 use spin::Mutex;
 
@@ -21,9 +20,10 @@ const EVENT_RING_SIZE: usize = 64;
 const STOP_WAIT_SPINS: usize = 10_000_000;
 const RESET_WAIT_SPINS: usize = 10_000_000;
 const PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS: usize = RESET_WAIT_SPINS * 10;
-// On Pi 4 mailbox-reset handoff, live operational reads after RUN can enter
-// the seL4 timer interrupt path before userland can recover. Keep prompt-safe
-// command recovery write-only until fresh rings are published and polled.
+// On Pi 4 mailbox-reset handoff, repeated live operational reads after the
+// command doorbell can enter the seL4 timer interrupt path before userland can
+// recover. Recovery uses bounded U-Boot-style blind stop/reset/RUN settles
+// before the doorbell, then keeps the command wait itself prompt-safe.
 const MAILBOX_RESET_POST_SETTLE_SPINS: usize = 1_000_000;
 const READY_WAIT_SPINS: usize = 10_000_000;
 const READY_WAIT_PROGRESS_SPINS: usize = 1_000_000;
@@ -39,17 +39,22 @@ const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 
 #[inline(always)]
-const fn prompt_safe_command_recovery_avoids_live_operational_reads() -> bool {
+const fn prompt_safe_command_recovery_uses_bounded_blind_settles() -> bool {
     true
 }
 
 #[inline(always)]
-const fn prompt_safe_command_redoorbell_enabled(linux_event_generation: bool) -> bool {
-    linux_event_generation
+const fn prompt_safe_command_redoorbell_enabled(_linux_event_generation: bool) -> bool {
+    false
 }
 
 #[inline(always)]
-fn command_doorbell_uses_uboot_direct_publish() -> bool {
+const fn prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue() -> bool {
+    false
+}
+
+#[inline(always)]
+fn command_doorbell_requires_hal_posted_write_drain() -> bool {
     true
 }
 
@@ -76,9 +81,9 @@ const RING_PUBLISH_ERSTSZ_FLUSH_STAGE: u16 = 0x03b9;
 const RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE: u16 = 0x03ba;
 const RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE: u16 = 0x03bb;
 const RING_PUBLISH_CONFIG_FLUSH_STAGE: u16 = 0x03bc;
-const LINUX_COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE: u16 = 0x03e8;
-const LINUX_COMMAND_RECOVERY_IMOD_FLUSH_STAGE: u16 = 0x03e9;
-const LINUX_COMMAND_RECOVERY_IMAN_ENABLE_FLUSH_STAGE: u16 = 0x03ea;
+const COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE: u16 = 0x03e8;
+const COMMAND_RECOVERY_IMOD_FLUSH_STAGE: u16 = 0x03e9;
+const COMMAND_RECOVERY_IMAN_FLUSH_STAGE: u16 = 0x03ea;
 const USBCMD_RUN_SEED_CLEAR_MASK: u32 = USBCMD_INTERRUPT_DELIVERY_MASK
     | reg::USBCMD_HCRST
     | reg::USBCMD_LHCRST
@@ -233,6 +238,11 @@ const fn run_seed_usbcmd(usbcmd: u32) -> u32 {
 #[inline(always)]
 const fn linux_command_probe_usbcmd_seed() -> u32 {
     LINUX_COMMAND_PROBE_USBCMD
+}
+
+#[inline(always)]
+const fn command_recovery_polling_usbcmd_seed() -> u32 {
+    reg::USBCMD_RUN
 }
 
 #[inline(always)]
@@ -1114,8 +1124,7 @@ const fn skip_post_run_interrupter_zeroing_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    let _ = (firmware_handoff, runtime_seed_snapshot);
-    true
+    !runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -2540,10 +2549,10 @@ impl<H: Dma> XhciCtrl<H> {
                 USBSTS_CLEAR_MASK as u64,
             );
         }
-        // U-Boot's poll-only start path does not replay IMOD/IMAN, and Linux
-        // only advances ERDP after software consumes events. Keep this helper
-        // limited to masking command-level interrupt enables; event-ring
-        // progression is driven by poll_event()/wait_command().
+        // This helper handles diagnostic/preserve-state quiesce only. The
+        // U-Boot-equivalent platform-reset lane applies its exact post-RUN
+        // IMOD=0/IMAN=0 stores in init after the controller reaches RUN.
+        // Event-ring progression is driven by poll_event()/wait_command().
         let usbcmd =
             seed_usbcmd.unwrap_or_else(|| Self::read_reg_at::<u32>(mmio, op_offset + reg::USBCMD));
         let masked = masked_usbcmd(usbcmd);
@@ -4499,7 +4508,11 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x026c, (int_base + reg::IMAN) as u64, 0, 1);
         } else {
             emit_xhci_diag(0x0267, (int_base + reg::IMOD) as u64, 0, 1);
+            Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMOD, 0);
+            self.flush_required_posted_write(int_base + reg::IMOD, 0, 0x0267)?;
             emit_xhci_diag(0x0268, (int_base + reg::IMAN) as u64, 0, 1);
+            Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, polling_iman_value());
+            self.flush_required_posted_write(int_base + reg::IMAN, polling_iman_value(), 0x0268)?;
         }
 
         if defer_event_ring_publish_until_after_run && !skip_fresh_event_ring_publish {
@@ -4809,11 +4822,11 @@ impl<H: Dma> XhciCtrl<H> {
         mmio_write_barrier();
         self.write_reg(db, 0u32);
         mmio_write_barrier();
-        // U-Boot queues and cache-flushes the command TRB, then writes doorbell
-        // 0 directly. Do not turn the command doorbell itself into an ownership
-        // register proof on Pi 4; DCBAAP/CRCR/ERDP/ERST/RUN still use the HAL
-        // posted-write drains that establish VL805 ownership.
-        if !command_doorbell_uses_uboot_direct_publish()
+        // U-Boot queues and cache-flushes the command TRB, then writes
+        // DB_VALUE_HOST to doorbell 0. In seL4 userland that same value still
+        // needs the HAL-owned EXT_CFG drain so the posted PCIe write is visible
+        // before the prompt-safe poll loop waits for the command completion.
+        if command_doorbell_requires_hal_posted_write_drain()
             && !self.flush_posted_write(db, 0, 0x031f)
         {
             emit_xhci_diag(0x03ee, db as u64, 0, 0x031f);
@@ -4856,7 +4869,7 @@ impl<H: Dma> XhciCtrl<H> {
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         let erdp = {
             let event_ring = self.event_ring.lock();
-            compose_polling_erdp_ack(event_ring.dequeue_ptr(&*self.host))
+            compose_polling_erdp_ack(event_ring.try_dequeue_ptr(&*self.host)?)
         };
         for (reg_offset, reg_value) in erdp_reg_write_ops(int_base + reg::ERDP, erdp) {
             Self::write_reg_at::<u32>(self.mmio, reg_offset, reg_value);
@@ -4876,7 +4889,7 @@ impl<H: Dma> XhciCtrl<H> {
         let erdp = pre_command_event_handler_erdp(
             self.firmware_handoff,
             self.runtime_seed_snapshot,
-            event_ring.dequeue_ptr(&*self.host),
+            event_ring.try_dequeue_ptr(&*self.host)?,
         );
         let iman_ack = polling_iman_ack_value();
         let iman_event_generation =
@@ -4926,6 +4939,10 @@ impl<H: Dma> XhciCtrl<H> {
     pub fn quiesce_polling_interrupts_post_init(&self) {
         let event_ring = self.event_ring.lock();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
+        let Ok(event_ring_dequeue) = event_ring.try_dequeue_ptr(&*self.host) else {
+            emit_xhci_diag(0x03ef, reg::ERDP as u64, 0, 0);
+            return;
+        };
         let preserve_firmware_state = preserve_firmware_handoff_config(self.firmware_handoff);
         let skip_usbsts_clear_write =
             post_start_polling_irq_quiesce_skip_usbsts_clear(preserve_firmware_state);
@@ -4936,7 +4953,7 @@ impl<H: Dma> XhciCtrl<H> {
             self.mmio,
             self.op_base - self.mmio,
             int_base,
-            event_ring.dequeue_ptr(&*self.host),
+            event_ring_dequeue,
             None,
             skip_imod_write,
             skip_erdp_write,
@@ -4946,7 +4963,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         self.settle_post_start_polling_interrupt_quiesce(
             int_base,
-            event_ring.dequeue_ptr(&*self.host),
+            event_ring_dequeue,
             skip_imod_write,
             skip_erdp_write,
             skip_iman_write,
@@ -5173,7 +5190,10 @@ impl<H: Dma> XhciCtrl<H> {
         let db = reg::doorbell(self.db_offset, 0);
         let expected_ptr = expected_cmd_trb.unwrap_or(0) & !0x0f;
         let expected_cmd_ring = expected_ptr & !((self.host.page_size() as u64).saturating_sub(1));
-        let expected_dcbaap = self.dcbaa.phys(&*self.host);
+        let expected_dcbaap = self.dcbaa.try_phys(&*self.host).unwrap_or_else(|_| {
+            emit_xhci_diag(0x03ef, reg::DCBAAP as u64, 0, phase);
+            0
+        });
         let expected_usbcmd = if linux_event_generation {
             linux_command_probe_usbcmd_seed()
         } else {
@@ -5197,10 +5217,14 @@ impl<H: Dma> XhciCtrl<H> {
             polling_command_proof_dnctrl_value(self.firmware_handoff, self.runtime_seed_snapshot);
         let (expected_erstba, expected_erstsz, expected_erdp) = {
             let event_ring = self.event_ring.lock();
+            let event_dequeue = event_ring.try_dequeue_ptr(&*self.host).unwrap_or_else(|_| {
+                emit_xhci_diag(0x03ef, reg::ERDP as u64, 0, phase);
+                0
+            });
             (
                 event_ring.erst_phys(&*self.host),
                 event_ring.erst_entries(),
-                compose_initial_erdp(event_ring.dequeue_ptr(&*self.host)),
+                compose_initial_erdp(event_dequeue),
             )
         };
 
@@ -5507,6 +5531,10 @@ impl<H: Dma> XhciCtrl<H> {
         {
             return None;
         }
+        if event_ring.try_dequeue_ptr(&*self.host).is_err() {
+            emit_xhci_diag(0x03ef, reg::ERDP as u64, 0, 2);
+            return None;
+        }
         let trb = event_ring.try_dequeue();
         drop(event_ring);
         if trb.is_some() {
@@ -5521,7 +5549,7 @@ impl<H: Dma> XhciCtrl<H> {
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         let erdp = {
             let event_ring = self.event_ring.lock();
-            compose_polling_erdp_ack(event_ring.dequeue_ptr(&*self.host))
+            compose_polling_erdp_ack(event_ring.try_dequeue_ptr(&*self.host)?)
         };
         let iman_ack = polling_iman_ack_value();
         emit_xhci_diag(0x037d, (int_base + reg::ERDP) as u64, erdp, 0);
@@ -5613,10 +5641,11 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     fn reset_controller_for_prompt_safe_command_recovery(&self) -> Result<()> {
-        if !prompt_safe_command_recovery_avoids_live_operational_reads() {
+        if !prompt_safe_command_recovery_uses_bounded_blind_settles() {
             return Err(UsbError::NotSupported);
         }
-        let stop_cmd = masked_usbcmd(linux_command_probe_usbcmd_seed()) & !reg::USBCMD_RUN;
+        let recovery_run_usbcmd = command_recovery_polling_usbcmd_seed();
+        let stop_cmd = masked_usbcmd(recovery_run_usbcmd) & !reg::USBCMD_RUN;
         let usbcmd_offset = self.op_base - self.mmio + reg::USBCMD;
         emit_xhci_diag(0x03c4, stop_cmd as u64, 0, 1);
         Self::write_reg_u32_store_diag_at(
@@ -5625,7 +5654,7 @@ impl<H: Dma> XhciCtrl<H> {
             stop_cmd,
             0x03c5,
             0x03c5,
-            linux_command_probe_usbcmd_seed() as u64,
+            recovery_run_usbcmd as u64,
         );
         if !self.flush_posted_write(usbcmd_offset, stop_cmd, 0x03c5) {
             emit_xhci_diag(0x03ee, usbcmd_offset as u64, stop_cmd as u64, 0x03c5);
@@ -5659,6 +5688,13 @@ impl<H: Dma> XhciCtrl<H> {
         }
         emit_xhci_diag(0x03cb, reset_cmd as u64, reset_settle_spins as u64, 2);
         Ok(())
+    }
+
+    fn wait_recovery_run_ready(&self, run_usbcmd: u32) {
+        for _ in 0..READY_WAIT_SPINS {
+            spin_loop();
+        }
+        emit_xhci_diag(0x03ed, READY_WAIT_SPINS as u64, 1, run_usbcmd as u64);
     }
 
     fn republish_fresh_command_event_rings_for_prompt_safe_recovery(&self) -> Result<()> {
@@ -5719,6 +5755,16 @@ impl<H: Dma> XhciCtrl<H> {
             0x03e6,
         );
         self.flush_required_posted_dcbaap_write(dcbaap_offset, 0, dcbaa_phys)?;
+        Self::write_crcr_reg_u64_done_diag_at(
+            self.mmio,
+            crcr_offset,
+            crcr,
+            0x03dc,
+            0x03dd,
+            0x03de,
+            0x03df,
+        );
+        self.flush_required_posted_crcr_write(crcr_offset, crcr)?;
         Self::write_reg_u64_done_diag_at(
             self.mmio,
             int_base + reg::ERDP,
@@ -5763,78 +5809,69 @@ impl<H: Dma> XhciCtrl<H> {
             RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE,
             RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
         )?;
-        Self::write_crcr_reg_u64_done_diag_at(
-            self.mmio,
-            crcr_offset,
-            crcr,
-            0x03dc,
-            0x03dd,
-            0x03de,
-            0x03df,
-        );
-        self.flush_required_posted_crcr_write(crcr_offset, crcr)?;
+        let recovery_dnctrl =
+            polling_command_proof_dnctrl_value(self.firmware_handoff, self.runtime_seed_snapshot);
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             self.op_base - self.mmio + reg::DNCTRL,
-            LINUX_COMMAND_PROBE_DNCTRL,
+            recovery_dnctrl,
             0x03e7,
             0x03e8,
             0,
         );
         self.flush_required_posted_write(
             self.op_base - self.mmio + reg::DNCTRL,
-            LINUX_COMMAND_PROBE_DNCTRL,
-            LINUX_COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE,
+            recovery_dnctrl,
+            COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE,
         )?;
+        let recovery_imod = 0;
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             int_base + reg::IMOD,
-            LINUX_COMMAND_PROBE_IMOD,
+            recovery_imod,
             0x03e9,
             0x03e9,
             0,
         );
         self.flush_required_posted_write(
             int_base + reg::IMOD,
-            LINUX_COMMAND_PROBE_IMOD,
-            LINUX_COMMAND_RECOVERY_IMOD_FLUSH_STAGE,
+            recovery_imod,
+            COMMAND_RECOVERY_IMOD_FLUSH_STAGE,
         )?;
-        self.ack_event_ring_before_linux_command_generation()?;
+        let recovery_iman =
+            polling_event_generation_iman_value(self.firmware_handoff, self.runtime_seed_snapshot);
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             int_base + reg::IMAN,
-            reg::IMAN_IE,
+            recovery_iman,
             0x03ea,
             0x03ea,
             0,
         );
         self.flush_required_posted_write(
             int_base + reg::IMAN,
-            reg::IMAN_IE,
-            LINUX_COMMAND_RECOVERY_IMAN_ENABLE_FLUSH_STAGE,
+            recovery_iman,
+            COMMAND_RECOVERY_IMAN_FLUSH_STAGE,
         )?;
+        let recovery_run_usbcmd = polling_event_generation_run_usbcmd(
+            command_recovery_polling_usbcmd_seed(),
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+        );
         Self::write_reg_u32_store_diag_at(
             self.mmio,
             self.op_base - self.mmio + reg::USBCMD,
-            linux_command_probe_usbcmd_seed(),
+            recovery_run_usbcmd,
             0x03eb,
             0x03eb,
             1,
         );
         self.flush_required_posted_write(
             self.op_base - self.mmio + reg::USBCMD,
-            linux_command_probe_usbcmd_seed(),
+            recovery_run_usbcmd,
             0x03eb,
         )?;
-        for _ in 0..READY_WAIT_SPINS {
-            spin_loop();
-        }
-        emit_xhci_diag(
-            0x03ed,
-            READY_WAIT_SPINS as u64,
-            0,
-            linux_command_probe_usbcmd_seed() as u64,
-        );
+        self.wait_recovery_run_ready(recovery_run_usbcmd);
         emit_xhci_diag(0x03e1, crcr, erdp, 2);
         Ok(())
     }
@@ -5861,7 +5898,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -5897,7 +5934,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -5939,7 +5976,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -5993,7 +6030,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -6011,7 +6048,7 @@ impl<H: Dma> XhciCtrl<H> {
         self.wait_command_poll_only(Some(cmd_addr))
     }
 
-    fn submit_command_fresh_linux_event_recovery_prompt_safe(
+    fn submit_command_fresh_polling_recovery_prompt_safe(
         &self,
         trb: Trb,
         timeout_cmd_addr: u64,
@@ -6033,7 +6070,7 @@ impl<H: Dma> XhciCtrl<H> {
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
         let retry_cmd_addr =
-            cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-recovery-submit")?;
+            cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-recovery-submit")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x03e3,
@@ -6046,13 +6083,29 @@ impl<H: Dma> XhciCtrl<H> {
         emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, retry_cmd_addr, 1, 0);
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
-        self.enable_linux_command_event_generation_for_probe()?;
-        self.emit_command_gate_plan_snapshot(0x0370, Some(retry_cmd_addr), 2, true);
+        let interrupt_recovery_event_generation =
+            prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue();
+        if interrupt_recovery_event_generation {
+            self.enable_linux_command_event_generation_for_probe()?;
+        }
+        self.emit_command_gate_plan_snapshot(
+            0x0370,
+            Some(retry_cmd_addr),
+            2,
+            interrupt_recovery_event_generation,
+        );
         if !self.ring_cmd_doorbell() {
             return Err(UsbError::PostedWriteFlushFailed);
         }
-        self.emit_command_gate_plan_snapshot(0x0368, Some(retry_cmd_addr), 3, true);
-        match self.wait_command_prompt_safe(Some(retry_cmd_addr), true) {
+        self.emit_command_gate_plan_snapshot(
+            0x0368,
+            Some(retry_cmd_addr),
+            3,
+            interrupt_recovery_event_generation,
+        );
+        match self
+            .wait_command_prompt_safe(Some(retry_cmd_addr), interrupt_recovery_event_generation)
+        {
             Ok(evt) => Ok(evt),
             Err(UsbError::Timeout) => {
                 emit_xhci_diag(0x03e4, retry_cmd_addr, 0, 1);
@@ -6083,7 +6136,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -6105,7 +6158,7 @@ impl<H: Dma> XhciCtrl<H> {
         match self.wait_command_prompt_safe(Some(cmd_addr), true) {
             Ok(evt) => Ok(evt),
             Err(UsbError::Timeout) => {
-                self.submit_command_fresh_linux_event_recovery_prompt_safe(trb, cmd_addr)
+                self.submit_command_fresh_polling_recovery_prompt_safe(trb, cmd_addr)
             }
             Err(err) => Err(err),
         }
@@ -6165,10 +6218,9 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     /// Retry Enable Slot after the U-Boot-shaped lane times out by resetting and
-    /// republishing fresh command/event rings before applying Linux event
-    /// generation registers.
-    pub fn probe_enable_slot_fresh_linux_event_recovery_prompt_safe(&self) -> Result<u8> {
-        let evt = match self.submit_command_fresh_linux_event_recovery_prompt_safe(
+    /// republishing fresh command/event rings while keeping interrupts masked.
+    pub fn probe_enable_slot_fresh_polling_recovery_prompt_safe(&self) -> Result<u8> {
+        let evt = match self.submit_command_fresh_polling_recovery_prompt_safe(
             enable_slot_command_trb_for_probe(),
             0,
         ) {
@@ -6616,9 +6668,20 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
+        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, CMD_RING_SIZE,
+        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
+        COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
+        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, ConstructorPollingScrubMode,
+        EVENT_RING_SIZE, LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD,
+        LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE, PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS,
+        PORT_CHANGE_BITS, READY_WAIT_PROGRESS_SPINS, RESET_WAIT_SPINS, SKIP_HCRST_DURING_INIT,
+        ScratchpadSet, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
+        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
+        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
         blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, command_diag_live_reads_allowed,
-        command_poll_only_should_sync_event_ring, command_timeout_live_snapshot_enabled,
+        command_doorbell_requires_hal_posted_write_drain, command_poll_only_should_sync_event_ring,
+        command_recovery_polling_usbcmd_seed, command_timeout_live_snapshot_enabled,
         command_timeout_live_snapshot_spins, command_wait_should_sync_event_ring,
         compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base,
         compose_erst_size, compose_initial_erdp, compose_polling_erdp_ack, compose_run_usbcmd,
@@ -6650,9 +6713,9 @@ mod tests {
         preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
-        command_doorbell_uses_uboot_direct_publish,
-        prompt_safe_command_recovery_avoids_live_operational_reads,
+        prompt_safe_command_recovery_uses_bounded_blind_settles,
         prompt_safe_command_redoorbell_enabled, prompt_safe_command_timeout_live_snapshot_enabled,
+        prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue,
         replay_staged_crcr_snapshot_before_publish_with_snapshot,
         replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
         reset_completion_blind_settle_spins, reset_usbcmd_seed_before_hcrst,
@@ -6693,33 +6756,24 @@ mod tests {
         use_live_config_seed_reads, use_live_config_seed_reads_for_init,
         use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
         use_live_post_reset_seed_reads_for_init, use_live_post_reset_seed_reads_with_snapshot,
-        xhci_port_in_range, xhci_slot_in_range, ConstructorPollingScrubMode, ScratchpadSet,
-        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
-        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, CMD_RING_SIZE,
-        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
-        COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
-        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, EVENT_RING_SIZE,
-        LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD, LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
-        PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, PORT_CHANGE_BITS, READY_WAIT_PROGRESS_SPINS,
-        RESET_WAIT_SPINS, SKIP_HCRST_DURING_INIT, TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE,
-        TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE, XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
+        xhci_port_in_range, xhci_slot_in_range,
     };
     use super::{
-        LINUX_COMMAND_PROBE_DNCTRL_FLUSH_STAGE, LINUX_COMMAND_PROBE_ERDP_ACK_FLUSH_STAGE,
-        LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE,
-        LINUX_COMMAND_PROBE_IMOD_FLUSH_STAGE, LINUX_COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE,
-        LINUX_COMMAND_RECOVERY_IMAN_ENABLE_FLUSH_STAGE, LINUX_COMMAND_RECOVERY_IMOD_FLUSH_STAGE,
+        COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE, COMMAND_RECOVERY_IMAN_FLUSH_STAGE,
+        COMMAND_RECOVERY_IMOD_FLUSH_STAGE, LINUX_COMMAND_PROBE_DNCTRL_FLUSH_STAGE,
+        LINUX_COMMAND_PROBE_ERDP_ACK_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE,
+        LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMOD_FLUSH_STAGE,
         RING_PUBLISH_CONFIG_FLUSH_STAGE, RING_PUBLISH_CRCR_FLUSH_HIGH_STAGE,
         RING_PUBLISH_CRCR_FLUSH_LOW_STAGE, RING_PUBLISH_DCBAAP_FLUSH_HIGH_STAGE,
         RING_PUBLISH_DCBAAP_FLUSH_LOW_STAGE, RING_PUBLISH_ERDP_FLUSH_HIGH_STAGE,
         RING_PUBLISH_ERDP_FLUSH_LOW_STAGE, RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
         RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE, RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
     };
-    use crate::{reg, ring::trb_type, Dma};
+    use crate::{Dma, reg, ring::trb_type};
     use alloc::vec;
     use core::sync::atomic::{AtomicUsize, Ordering};
     use std::{
-        alloc::{alloc_zeroed, dealloc, Layout},
+        alloc::{Layout, alloc_zeroed, dealloc},
         sync::Mutex as StdMutex,
         vec::Vec as StdVec,
     };
@@ -8179,8 +8233,11 @@ mod tests {
     }
 
     #[test]
-    fn prompt_safe_command_recovery_is_write_only() {
-        assert!(prompt_safe_command_recovery_avoids_live_operational_reads());
+    fn prompt_safe_command_recovery_uses_bounded_blind_settles_before_command_wait() {
+        assert!(prompt_safe_command_recovery_uses_bounded_blind_settles());
+        assert!(!prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue());
+        assert_eq!(command_recovery_polling_usbcmd_seed(), reg::USBCMD_RUN);
+        assert_eq!(command_recovery_polling_usbcmd_seed() & reg::USBCMD_INTE, 0);
         assert_eq!(
             masked_usbcmd(linux_command_probe_usbcmd_seed()) & !reg::USBCMD_RUN,
             0
@@ -8385,7 +8442,7 @@ mod tests {
         assert_eq!(COMMAND_PROMPT_SAFE_REDOORBELL_POLL, 4);
         assert!(COMMAND_PROMPT_SAFE_REDOORBELL_POLL < COMMAND_PROMPT_SAFE_WAIT_POLLS);
         assert!(!prompt_safe_command_redoorbell_enabled(false));
-        assert!(prompt_safe_command_redoorbell_enabled(true));
+        assert!(!prompt_safe_command_redoorbell_enabled(true));
         assert!(command_timeout_live_snapshot_spins() < COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS > COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);
@@ -8719,6 +8776,10 @@ mod tests {
             None,
         ));
         assert!(runtime_handoff_needs_uboot_style_run_write(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+        ));
+        assert!(!skip_post_run_interrupter_zeroing_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
         ));
@@ -9532,8 +9593,8 @@ mod tests {
     }
 
     #[test]
-    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped(
-    ) {
+    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped()
+     {
         assert_eq!(
             post_start_polling_irq_quiesce_pending_bits(reg::USBCMD_RUN, reg::USBSTS_PCD, 0, true),
             0
@@ -10070,9 +10131,9 @@ mod tests {
         assert_eq!(LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE, 0x035e);
         assert_eq!(LINUX_COMMAND_PROBE_ERDP_ACK_FLUSH_STAGE, 0x037e);
         assert_eq!(LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE, 0x037f);
-        assert_eq!(LINUX_COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE, 0x03e8);
-        assert_eq!(LINUX_COMMAND_RECOVERY_IMOD_FLUSH_STAGE, 0x03e9);
-        assert_eq!(LINUX_COMMAND_RECOVERY_IMAN_ENABLE_FLUSH_STAGE, 0x03ea);
+        assert_eq!(COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE, 0x03e8);
+        assert_eq!(COMMAND_RECOVERY_IMOD_FLUSH_STAGE, 0x03e9);
+        assert_eq!(COMMAND_RECOVERY_IMAN_FLUSH_STAGE, 0x03ea);
         assert!(!flush_posted_write_with_policy(
             0x6000_0000_0,
             reg::DNCTRL,
@@ -10175,8 +10236,15 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_doorbell_flush_fails_closed_without_required_hook() {
+    fn command_and_endpoint_doorbell_flushes_fail_closed_without_required_hook() {
         set_xhci_posted_write_flush_hook(None);
+        assert!(!flush_posted_write_with_policy(
+            0x6000_0000_0,
+            reg::doorbell(0x100, 0),
+            0,
+            0x031f,
+            true,
+        ));
         assert!(!flush_posted_write_with_policy(
             0x6000_0000_0,
             reg::doorbell(0x100, 1),
@@ -10187,8 +10255,8 @@ mod tests {
     }
 
     #[test]
-    fn command_doorbell_uses_uboot_direct_publish() {
-        assert!(command_doorbell_uses_uboot_direct_publish());
+    fn command_doorbell_requires_hal_posted_write_drain() {
+        assert!(command_doorbell_requires_hal_posted_write_drain());
     }
 
     #[test]

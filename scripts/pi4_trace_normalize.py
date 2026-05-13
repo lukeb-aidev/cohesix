@@ -840,14 +840,27 @@ def usb_progress_gate(value: str | None) -> int | None:
     return USB_PROGRESS_GATES.get(label)
 
 
-def usb_command_probe_success(value: str, event_generation: str | None = None) -> bool:
+def usb_command_probe_success(
+    value: str,
+    event_generation: str | None = None,
+    cleanup_generation: str | None = None,
+    recovery_source: str | None = None,
+) -> bool:
     """Return true for command proofs that satisfy the cold-boot poll-only gate."""
 
     label = value.lower().strip()
+    cleanup = (cleanup_generation or "").lower().strip()
+    recovery = (recovery_source or "").lower().strip()
+    if label.startswith("no-op-"):
+        return False
     if "linux-event-ok" in label:
         return False
     if event_generation and "linux-shaped" in event_generation.lower().strip():
         return False
+    if cleanup and "linux" in cleanup:
+        return False
+    if label.startswith("enable-slot-recovery-ok"):
+        return cleanup == "uboot-poll-only" and recovery == "enable-slot-timeout"
     return label.endswith("-ok") or label.endswith("-ok-cleanup-failed")
 
 
@@ -1178,6 +1191,8 @@ def normalize_wifi_blocker(value: str) -> str:
         or "unsupported" in lower
     ):
         return "firmware-supplicant-unsupported"
+    if "control-plane step=gmode" in lower and "action=fail" in lower:
+        return "control-plane-legacy-gmode-stall"
     if "ioctl-timeout" in lower or "ioctl timeout" in lower:
         return "ioctl-timeout"
     if "cur-etheraddr-len" in lower:
@@ -1196,6 +1211,12 @@ def normalize_wifi_blocker(value: str) -> str:
         return "control-plane-rearm-timeout"
     if stripped == "reply-idle-loop":
         return "control-plane-reply-idle-loop"
+    if "host-card-int-no-dongle-source" in lower:
+        return "control-plane-host-card-int-no-dongle-source"
+    if "host-card-int-source-unreadable" in lower:
+        return "control-plane-host-card-int-source-unreadable"
+    if "no-frame-indication-after-write" in lower or "no-frame-source" in lower:
+        return "control-plane-no-frame-indication-after-write"
     if "hintless-firstread-no-irq" in lower or "post-write-no-irq" in lower:
         return "control-plane-hintless-firstread-no-irq"
     if "control-plane-reply-idle-loop" in lower:
@@ -1203,6 +1224,12 @@ def normalize_wifi_blocker(value: str) -> str:
     if "control-plane" in lower:
         if "hintless-firstread-no-irq" in lower or "post-write-no-irq" in lower:
             return "control-plane-hintless-firstread-no-irq"
+        if "host-card-int-no-dongle-source" in lower:
+            return "control-plane-host-card-int-no-dongle-source"
+        if "host-card-int-source-unreadable" in lower:
+            return "control-plane-host-card-int-source-unreadable"
+        if "no-frame-indication-after-write" in lower or "no-frame-source" in lower:
+            return "control-plane-no-frame-indication-after-write"
         if "sideband" in lower and any(
             token in lower for token in ("unreadable", "timeout", "missing")
         ):
@@ -1310,7 +1337,11 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-device-on-timeout-before-function2",
         "cyw43-control-plane-bdc-event",
         "cyw43-control-plane-hintless-firstread-no-irq",
+        "cyw43-control-plane-host-card-int-no-dongle-source",
+        "cyw43-control-plane-host-card-int-source-unreadable",
         "cyw43-control-plane-interrupt-programming-drift",
+        "cyw43-control-plane-legacy-gmode-stall",
+        "cyw43-control-plane-no-frame-indication-after-write",
         "cyw43-control-plane-partial-hint-visibility",
         "cyw43-protocol-error-cur-etheraddr-len",
         "wsec-pmk-bad-argument",
@@ -1387,6 +1418,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     command_probe_bus: str | None = None
     command_probe_verb: str | None = None
     command_timeout_detail: str | None = None
+    command_recovery_source: str | None = None
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
     precise_command_timeout_details = {
@@ -1555,6 +1587,16 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if "usb proof_summary" in raw:
             proof_gate = parse_hex_int(fields.get("gate"))
+            proof_command_valid = usb_command_probe_success(
+                fields.get("command", ""),
+                fields.get("event_generation"),
+                fields.get("cleanup_generation"),
+                fields.get("recovery_source") or command_recovery_source,
+            )
+            if proof_gate == 4 and not proof_command_valid:
+                gate = max(gate, 3)
+                blocker = "cmd-event-ring-timeout"
+                continue
             if proof_gate is not None and proof_gate > 0:
                 gate = max(gate, proof_gate)
             proof_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
@@ -1615,6 +1657,13 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         }:
             command_probe_bus = fields["bus"]
             command_probe_verb = fields.get("verb")
+        if (
+            "command-probe" in raw
+            and fields.get("action") == "recover-polling-event-generation"
+            and fields.get("recovery_event_generation")
+            == "uboot-timeout-polling-fresh-recovery"
+        ):
+            command_recovery_source = fields.get("result")
         for key in ("progress", "phase", "current", "outcome"):
             progress_gate = usb_progress_gate(fields.get(key))
             if progress_gate is not None:
@@ -1849,11 +1898,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             usb_command_probe_success(
                 fields.get("command_probe", ""),
                 fields.get("event_generation"),
+                fields.get("cleanup_generation"),
+                fields.get("recovery_source") or command_recovery_source,
             )
             or (
                 usb_command_probe_success(
                     fields.get("result", ""),
                     fields.get("event_generation"),
+                    fields.get("cleanup_generation"),
+                    fields.get("recovery_source") or command_recovery_source,
                 )
                 and "command-probe" in raw
             )
@@ -1865,6 +1918,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = outcome_blocker
             else:
                 blocker = "none"
+        elif (
+            "command-probe" in raw
+            and fields.get("result", "").startswith("enable-slot-recovery-ok")
+        ):
+            gate = max(gate, 3)
+            blocker = "cmd-event-ring-timeout"
         else:
             for key in (
                 "blocker",
@@ -2002,8 +2061,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-bdc-event",
         "control-plane-cur-etheraddr-len",
         "control-plane-hintless-firstread-no-irq",
+        "control-plane-host-card-int-no-dongle-source",
+        "control-plane-host-card-int-source-unreadable",
         "control-plane-interrupt-programming-drift",
         "control-plane-interrupts-deferred",
+        "control-plane-legacy-gmode-stall",
+        "control-plane-no-frame-indication-after-write",
         "control-plane-partial-hint-visibility",
         "control-plane-reply-idle-loop",
         "firmware-supplicant-unsupported",
@@ -2048,6 +2111,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     socram_core_ctrl_stage: str | None = None
     specific_reset_blocker: str | None = None
     join_programming_blocker: str | None = None
+    legacy_gmode_stall_seen = False
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -2067,6 +2131,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if value and value not in {"none", "n/a"}:
                 explicit_blocker = normalize_wifi_blocker(value)
         raw_contract_blocker = normalize_wifi_blocker(raw)
+        if raw_contract_blocker == "control-plane-legacy-gmode-stall":
+            legacy_gmode_stall_seen = True
         if raw_contract_blocker in {
             "boot-deferred-local-seat-usb",
             "boot-deferred-root-console",
@@ -2119,6 +2185,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-hintless-firstread-no-irq",
             "control-plane-interrupt-programming-drift",
             "control-plane-interrupts-deferred",
+            "control-plane-legacy-gmode-stall",
             "control-plane-no-reply",
             "control-plane-partial-hint-visibility",
             "control-plane-rearm-timeout",
@@ -2433,6 +2500,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 and explicit_blocker == "sdio-cmd53-r5-error"
             ):
                 blocker = blocker
+            elif (
+                blocker in precise_control_plane_blockers
+                and explicit_blocker in precise_control_plane_blockers
+            ):
+                blocker = blocker
             elif blocker in precise_control_plane_blockers and explicit_blocker in {
                 "ioctl-timeout",
                 "cyw43",
@@ -2712,6 +2784,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = blocker
             elif (
                 blocker in precise_control_plane_blockers
+                and explicit_blocker in precise_control_plane_blockers
+            ):
+                blocker = blocker
+            elif (
+                blocker in precise_control_plane_blockers
                 and explicit_blocker in {"control-plane", "ioctl-timeout", "cyw43"}
             ):
                 blocker = blocker
@@ -2817,6 +2894,15 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     }:
         gate = max(gate, 7)
         blocker = join_programming_blocker
+    if legacy_gmode_stall_seen and blocker in {
+        "control-plane",
+        "control-plane-partial-hint-visibility",
+        "control-plane-reply-idle-loop",
+        "control-plane-sideband-unreadable",
+        "ioctl-timeout",
+    }:
+        gate = max(gate, 7)
+        blocker = "control-plane-legacy-gmode-stall"
     if blocker in precise_ht_blockers and not ht_available_seen and not post_f2_progress_seen:
         gate = min(gate, 4)
     return gate, blocker
@@ -2827,6 +2913,32 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
 
     exact = "none"
     raw = event.raw.lower()
+    if normalize_wifi_blocker(event.raw) == "control-plane-legacy-gmode-stall":
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "gmode"
+        )
+        return "cyw43-control-plane-legacy-gmode-stall", phase
+    if (
+        "post-write-no-frame-source-terminal" in raw
+        or "hintless-firstread-no-frame-source-terminal" in raw
+    ):
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "control-plane-reply"
+        )
+        exact = event.fields.get("exact_error") or event.fields.get("exact")
+        if exact and exact not in {"none", "n/a"}:
+            return normalize_wifi_exact(exact), phase
+        return "cyw43-control-plane-no-frame-indication-after-write", phase
     if "post-write-no-irq-terminal" in raw or "hintless-firstread-no-irq" in raw:
         phase = (
             event.fields.get("stage")
@@ -2900,6 +3012,10 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
     raw = event.raw.lower()
     if candidate != wifi_blocker:
         return 100
+    if "post-write-no-frame-source-terminal" in raw:
+        return 0
+    if "hintless-firstread-no-frame-source-terminal" in raw:
+        return 0
     if "post-write-no-irq-terminal" in raw:
         return 0
     if "[cyw43] control-plane" in raw and "action=fail" in raw:

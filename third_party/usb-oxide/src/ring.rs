@@ -7,7 +7,7 @@ use crate::{Dma, Result, UsbError};
 
 use core::{
     marker::PhantomData,
-    sync::atomic::{compiler_fence, Ordering},
+    sync::atomic::{Ordering, compiler_fence},
 };
 
 const XHCI_RING_ALIGNMENT: usize = 64;
@@ -363,6 +363,26 @@ impl<H: Dma> PhysMem<H> {
             .ok_or(UsbError::DmaSync)
     }
 
+    /// Prepares a subrange for device access and returns its bus address.
+    pub fn share_range_for_device(
+        &self,
+        host: &H,
+        offset: usize,
+        len: usize,
+        label: &'static str,
+    ) -> Result<u64> {
+        let end = offset.checked_add(len).ok_or(UsbError::DmaSync)?;
+        if len == 0 || end > self.size {
+            return Err(UsbError::DmaSync);
+        }
+        let vaddr = self.addr.checked_add(offset).ok_or(UsbError::DmaSync)?;
+        host.share_for_device(vaddr, len, label)
+            .map_err(|_| UsbError::DmaSync)?;
+        host.try_virt_to_phys(vaddr)
+            .map(|addr| addr as u64)
+            .ok_or(UsbError::DmaSync)
+    }
+
     /// Makes a device-written subrange visible before CPU reads.
     pub fn sync_for_cpu_range(
         &self,
@@ -495,6 +515,35 @@ impl<H: Dma> Ring<H> {
     pub fn enqueue_and_sync(&mut self, host: &H, trb: Trb, label: &'static str) -> Result<u64> {
         let addr = self.try_enqueue(host, trb)?;
         self.sync_for_device(host, label)?;
+        Ok(addr)
+    }
+
+    /// Enqueues one TRB, then publishes only the device-visible TRB cache line.
+    pub fn enqueue_and_sync_trb(&mut self, host: &H, trb: Trb, label: &'static str) -> Result<u64> {
+        let enqueue_before = self.enqueue;
+        let addr = self.try_enqueue(host, trb)?;
+        compiler_fence(Ordering::Release);
+        let offset = enqueue_before
+            .checked_mul(core::mem::size_of::<Trb>())
+            .ok_or(UsbError::DmaSync)?;
+        let wrapped = self.enqueue == 0;
+        let published =
+            self.mem
+                .share_range_for_device(host, offset, core::mem::size_of::<Trb>(), label)?;
+        if published != addr {
+            return Err(UsbError::DmaSync);
+        }
+        if wrapped {
+            let link_offset = (self.size - 1)
+                .checked_mul(core::mem::size_of::<Trb>())
+                .ok_or(UsbError::DmaSync)?;
+            self.mem.share_range_for_device(
+                host,
+                link_offset,
+                core::mem::size_of::<Trb>(),
+                label,
+            )?;
+        }
         Ok(addr)
     }
 
@@ -689,10 +738,6 @@ impl<H: Dma> EventRing<H> {
         Some(second)
     }
 
-    pub fn dequeue_ptr(&self, host: &H) -> u64 {
-        self.ring.phys(host) + (self.dequeue * 16) as u64
-    }
-
     pub fn try_dequeue_ptr(&self, host: &H) -> Result<u64> {
         Ok(self.ring.try_phys(host)? + (self.dequeue * 16) as u64)
     }
@@ -700,10 +745,10 @@ impl<H: Dma> EventRing<H> {
 
 #[cfg(test)]
 mod tests {
-    use super::{trb_type, PhysMem, Ring, Trb, XHCI_RING_ALIGNMENT};
+    use super::{PhysMem, Ring, Trb, XHCI_RING_ALIGNMENT, trb_type};
     use crate::{Dma, DmaShareError};
     use core::sync::atomic::{AtomicUsize, Ordering};
-    use std::alloc::{alloc_zeroed, dealloc, Layout};
+    use std::alloc::{Layout, alloc_zeroed, dealloc};
     use std::sync::Mutex;
     use std::vec::Vec;
 
@@ -831,6 +876,40 @@ mod tests {
         assert_eq!(
             host.last_share_len.load(Ordering::Relaxed),
             8 * core::mem::size_of::<Trb>()
+        );
+        let observed = ring.debug_trb_at(0).expect("debug trb");
+        assert_eq!(observed.control, (trb_type::NO_OP_CMD << 10) | 1);
+    }
+
+    #[test]
+    fn ring_enqueue_and_sync_trb_publishes_only_submitted_trb() {
+        let host = MockDma::default();
+        let mut ring = Ring::<MockDma>::new(&host, 8).expect("allocate ring");
+        host.share_calls.store(0, Ordering::Relaxed);
+        host.last_share_vaddr.store(0, Ordering::Relaxed);
+        host.last_share_len.store(0, Ordering::Relaxed);
+
+        let addr = ring
+            .enqueue_and_sync_trb(
+                &host,
+                Trb {
+                    param: 0,
+                    status: 0,
+                    control: trb_type::NO_OP_CMD << 10,
+                },
+                "cmd-submit",
+            )
+            .expect("sync submitted trb");
+
+        assert_eq!(addr, ring.phys(&host));
+        assert_eq!(host.share_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            host.last_share_vaddr.load(Ordering::Relaxed),
+            ring.mem.virt()
+        );
+        assert_eq!(
+            host.last_share_len.load(Ordering::Relaxed),
+            core::mem::size_of::<Trb>()
         );
         let observed = ring.debug_trb_at(0).expect("debug trb");
         assert_eq!(observed.control, (trb_type::NO_OP_CMD << 10) | 1);

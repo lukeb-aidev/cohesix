@@ -313,19 +313,23 @@ power/reset state.
   `hwhdr`, and record the unpadded frame length plus tail padding in `hwext`.
   The first CLM frame is therefore a 1456-byte unpadded frame with an SDIO
   request length of 1536 and `tail_pad=80`, matching the Pi 4 Linux capture.
-  The driver queries `clmver` after upload before continuing with the remaining
-  preinit commands.
+  The driver queries firmware `ver` and then `clmver` after upload before
+  continuing with the remaining preinit commands.
 - CLM must not be the first meaningful BCDC/iovar exchange. Linux proves the
   initial control-plane path with small iovars first: set
   `bus:txglomalign=8`, query `ulp_sdioctrl` while accepting the captured
-  `BCME_UNSUPPORTED` result, set `bus:rxglom=1`, then query
-  `cur_etheraddr`. Cohesix follows that order before CLM so the first Function
-  2 replies are small Linux-shaped 64-byte first-read transactions rather than
-  a large CLM transfer. After that attach proof, Cohesix disables
-  `bus:rxglom` again until a bounded no-allocation RX-glom deaggregator is
-  present; this keeps the DHCP/data path on single BDC frames instead of
-  accepting Linux superframes that the current userspace driver cannot split
-  safely.
+  `BCME_UNSUPPORTED` result, set `bus:rxglom=1`, query `cur_etheraddr`, then
+  issue Linux's mandatory `BRCMF_C_GET_REVINFO` (`cmd=98`) before CLM. Cohesix
+  follows that order before CLM so the first Function 2 replies are small
+  Linux-shaped 64-byte first-read transactions rather than a large CLM
+  transfer. After that attach proof, Cohesix keeps the
+  `bus:txglom`/`bus:rxglom` state established by the Linux-style SDIO preinit
+  path through firmware `ver`, `clmver`, and `mpc`. Disabling `bus:rxglom` as a
+  local safety shortcut before `mpc` is not Linux-equivalent and the
+  2026-05-13 Cohesix boot trace showed it can move an otherwise working
+  control plane into a host-`CARD_INT`/no-dongle-source stall. RX-glom data
+  limits belong at the post-attach receive path, not in the preinit transport
+  order.
 - The first Linux-order control writes use the plain 12-byte SDPCM header. The
   8-byte SDPCM hardware-extension header is enabled only after `bus:rxglom`
   succeeds, matching `brcmfmac`'s `tx_hdrlen` transition. Sending
@@ -354,7 +358,15 @@ power/reset state.
   Cohesix post-`apsta` proof showed an early `country` write can move the same
   transport into the hintless first-read/no-IRQ stall. Event-mask setup is not
   optional; at least one join-event subscription path must be proven before
-  `SET_SSID`.
+  `SET_SSID`. The normal Pi 4 station attach tail must also avoid local legacy
+  writes that are absent from the Linux capture before join. The 2026-05-13
+  Cohesix trace proved firmware `ver`, `clmver`, `mpc`, `join_pref`,
+  scan timing, event-mask, and `WLC_UP`, then stalled at legacy
+  `WLC_SET_GMODE` (`cmd=110`) with host `CARD_INT` latched and no dongle reply
+  source. Cohesix now skips early `WLC_SET_GMODE`, `WLC_SET_BAND`,
+  `WLC_SET_ANTDIV`, local AMPDU-limit writes, and `WLC_SET_PM` on the
+  station attach path unless a later Linux-equivalent gate proves they belong
+  there.
 - Cohesix also applies the Linux attach-time `join_pref` default payload
   (`04 02 08 01 01 02 00 00`) before scan/join defaults. WPA2-PSK join setup
   must match Linux and known-good CYW43 behavior: configure AES security,
@@ -403,6 +415,12 @@ power/reset state.
   This is a seL4 HAL adaptation, not a new hardware requirement; do not enable
   the pullup clear until the SDHCI path proves Linux-equivalent CMD52 recovery
   across the immediately following sideband access.
+- During Pi 4 host reset, a stale bootloader `CMD_INHIBIT` bit in SDHCI
+  `PRESENT_STATE` is not proof of a Cohesix command in flight. Match the Linux
+  SDHCI reset order by proving power/card presence, programming the startup
+  card clock, then issuing the command/data reset and requiring inhibit clear
+  before the first SDIO command. Logs must distinguish this bounded pre-clock
+  recovery edge from a real post-command `sdhci-inhibit-timeout`.
 - Before the first iovar, Cohesix must drain the Linux-observed startup
   status/credit traffic emitted after `Dongle ready`. The captured first frame
   is a 12-byte SDPCM header-only event/status frame, followed by an empty
@@ -418,6 +436,17 @@ power/reset state.
   `CCCR.IENx` is armed and the SDIO-core frame-indication path is live. IRQ 158
   is the Wi-Fi SDIO interrupt; IRQ 27 remains the seL4 timer and is never Wi-Fi
   progress evidence.
+- A polled Function 2 control reply may leave SDHCI `CARD_INT` visible after
+  the dongle-side `SDIO_INT_STATUS` source has already been read and cleared.
+  That is a stale host interrupt latch to clear and acknowledge, not a terminal
+  `wifi-sdio-polled-reply-source-still-visible` blocker. It remains terminal
+  only when the dongle-side source cannot be read before the seL4 IRQ ack.
+- SDIO IRQ logs must separate host interrupt delivery from dongle source proof.
+  A seL4 IRQ 158 notification or SDHCI `CARD_INT` latch with
+  `SDIO_INT_STATUS=0` is logged as host-latch/no-dongle-source evidence; only a
+  nonzero dongle source bit, `I_HMB_FRAME_IND`, or a valid Function 2 SDPCM
+  header proves control-plane reply progress. IRQ 27 remains the seL4 timer and
+  is never part of this proof.
 - A post-control-write SDIO-core `I_HMB_FRAME_IND` bit is authoritative reply
   progress even when the Function 1 frame-length sideband still reads zero.
   Mirror Linux by reading the fixed Function 2 FIFO at `0x18000000` with the
@@ -483,9 +512,10 @@ power/reset state.
   truly absent or Wi-Fi credentials are missing. CYW43 protocol, HAL transport,
   firmware, join, and post-Function-2 errors are Wi-Fi gate evidence and must
   remain fatal so gates 7 and 8 cannot be hidden by the wired backend.
-- Because Cohesix disables `bus:rxglom` until a bounded deaggregator exists,
-  any received SDPCM glom channel frame after attach is terminal gate-8
-  evidence (`cyw43-rxglom-unsupported`) rather than silent dropped data.
+- Until a bounded deaggregator exists, any received SDPCM glom channel frame
+  after attach is terminal gate-8 evidence (`cyw43-rxglom-unsupported`) rather
+  than silent dropped data. Do not prevent that evidence by changing Linux's
+  preinit `bus:rxglom=1` transport order before `mpc`.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
@@ -539,35 +569,51 @@ active path is Cohesix-owned cold start:
   lane report deferred state instead of live `CRCR`, `DCBAAP`, interrupter, or
   `PORTSC` reads.
 - CONFIG, DCBAAP, CRCR, initial ERDP, ERSTSZ, ERSTBA, RUN, command-ring
-  recovery, and endpoint-doorbell posted-write drains fail
+  recovery, command-doorbell, and endpoint-doorbell posted-write drains fail
   closed when the HAL cannot prove the EXT_CFG selector, link/root readiness,
   PCIe IRQ-source masking, or poll-only VL805 COMMAND ownership, or when the
   drain read returns a selector echo or invalid config value.
 - U-Boot-compatible command/event proof must publish the fresh ring registers in
   U-Boot order on the Pi 4 platform-reset lane (`DCBAAP`, `CRCR`, initial
   `ERDP`, `ERSTSZ`/`ERSTBA`), issue a HAL EXT_CFG drain after each
-  controller-ownership register write, DMA-publish the command TRB first, issue
-  a device-visible command-ring publish barrier, then ring doorbell `0` directly
-  like U-Boot and poll the event ring with the same 5 s command-event budget.
-  Empty event rings use the poll-only No Op probe; event rings
-  that already contain current-boot Port Status Change events use the same
-  U-Boot-shaped Enable Slot lane: no pre-command `ERDP.EHB` acknowledgement, no
+  controller-ownership register write, start the controller with `USBCMD.RUN`,
+  then apply U-Boot's poll-only post-start interrupter state (`IMOD=0`,
+  `IMAN=0`) through HAL-drained writes. It must DMA-publish the submitted command TRB as
+  the exact 16-byte device-visible cache range U-Boot flushes, issue a
+  device-visible command-ring publish barrier, then write U-Boot's
+  `DB_VALUE_HOST` to doorbell `0` and drain that posted write through the
+  HAL-owned EXT_CFG path before polling the event ring with the same 5 s
+  command-event budget.
+  The command proof is Enable Slot, matching U-Boot's first non-root-hub xHCI
+  allocation gate. Already-posted current-boot Port Status Change events remain
+  on the event ring and are skipped/acknowledged while the Enable Slot command
+  is outstanding. No Op is only a diagnostic helper and must not unlock
+  root-port sampling. There is no pre-command `ERDP.EHB` acknowledgement, no
   pre-command PSC drain, and no same-command re-doorbell counted as proof.
   `ERDP.EHB` acknowledgement publishes the low/control dword before the high
   DMA-alias dword and drains both writes through HAL only after an event has
-  been consumed. All 64-bit ownership-register publications also drain both low
-  and high dwords. Command doorbell `0` itself is a direct U-Boot-style MMIO
-  write with a publish barrier, not a HAL ownership-register drain. A missing
-  platform posted-write hook is a hard failure for the Pi 4 high-BAR VL805
-  ownership-register and endpoint-doorbell paths.
-- If that first U-Boot-shaped Enable Slot attempt times out after consuming
+  been consumed; if the event-ring dequeue pointer cannot be translated to the
+  device-visible DMA address, the path fails closed instead of publishing
+  `ERDP.EHB` against address zero. All 64-bit ownership-register publications
+  also drain both low and high dwords. Command doorbell `0` itself still uses the U-Boot command
+  value, but seL4 userland must drain that posted PCIe write through HAL-owned
+  EXT_CFG selector/COMMAND readback; it must not use an xHCI BAR read as the
+  drain. A missing platform posted-write hook is a hard failure for the Pi 4
+  high-BAR VL805 ownership-register, command-doorbell, and endpoint-doorbell
+  paths.
+- If the first U-Boot-shaped Enable Slot attempt times out after consuming
   current-boot PSC events, Cohesix may run exactly one bounded command recovery
-  lane: stop/reset the controller, republish fresh DCBAA/command/event rings,
-  apply Linux-captured event-generation shape (`USBCMD=RUN|INTE`, `DNCTRL=2`,
-  `IMOD=0xa0`, `IMAN=IE`), and submit a new Enable Slot. Only the fresh matching
-  Command Completion Event for that new command advances gate 4; stale
-  Linux-shaped labels or a re-doorbell of the original timed-out command are not
-  proof.
+  lane: stop/reset the controller with blind prompt-safe settles, republish
+  fresh DCBAA/command/event rings in U-Boot register order (`DCBAAP`, `CRCR`,
+  initial `ERDP`, `ERSTSZ`, `ERSTBA`), keep the interrupter poll-only
+  (`DNCTRL=0`, `IMOD=0`, `IMAN=0`, `USBCMD=RUN`), and submit a new Enable Slot.
+  The recovery lane still must not use xHCI BAR reads, `USBSTS`, or `PORTSC` as
+  proof before command completion, and it must not replay Linux-shaped
+  event-generation writes or `ERDP.EHB` acknowledgement before the retry command
+  completes. Only the fresh matching Command Completion Event for that new
+  command advances gate 4; stale Linux-shaped labels, pre-command status reads,
+  post-enqueue event-generation replay, interrupt-delivery bits without MSI
+  ownership, or a same-command re-doorbell are not proof.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. USB keyboard availability must not depend on the
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local
@@ -596,14 +642,15 @@ active path is Cohesix-owned cold start:
   drain. Each skipped event republishes `ERDP.EHB` and drains the low/high dword
   writes through the HAL posted-write hook before polling the next event-ring
   slot, so VL805 can see the advanced dequeue pointer while the command is
-  outstanding. On success it immediately submits bounded Disable Slot
+  outstanding. On success it immediately submits bounded poll-only Disable Slot
   cleanup for that slot; a cleanup failure is logged and tolerated only as
   command-ring proof, and later enumeration must not assume a pristine slot
-  table. Only a completed command may reopen live root-port sampling.
+  table. Linux-shaped cleanup or event-generation writes cannot advance gate 4.
+  Only a completed command may reopen live root-port sampling.
 - After an exact `cmd-event-ring-timeout` on the U-Boot-shaped lane, the bounded
-  recovery lane may use the Linux-captured event-generation register shape, but
-  PCI/GIC delivery remains externally masked and proof still requires a fresh
-  matching command-completion TRB before root-port sampling resumes.
+  recovery lane remains U-Boot poll-only unless a later milestone implements the
+  full Linux MSI ownership contract. Proof still requires a fresh matching
+  command-completion TRB before root-port sampling resumes.
 - Address Device follows U-Boot's EP0 max-packet ordering: low-speed uses 8,
   full-speed tries 64 first with 8 only as fallback, high-speed uses 64, and
   SuperSpeed uses 512. This keeps full-speed keyboard/composite devices on the
@@ -616,7 +663,12 @@ active path is Cohesix-owned cold start:
 - Root-port reset before Address Device follows the U-Boot retry envelope:
   retry reset/enable timeouts up to five attempts with a short first settle and
   longer subsequent settles, but do not synthesize a device when live root-port
-  evidence says no connection.
+  evidence says no connection. On the Pi 4 `platform-reset-complete` lane,
+  after command/event-ring proof has reopened live port access, Cohesix also
+  performs one extra bounded root-port reset/settle cycle before Address Device.
+  That extra cycle is a Cohesix-owned cleanup for keyboards or hubs that U-Boot
+  may have configured before `bootm`; it never runs before fresh command proof
+  and never substitutes for controller ring adoption.
 - The current boot-compatible keyboard/trackpad combo is treated as a normal
   HID composite device. Linux captures identify SINO WEALTH `258a:0f0a`, with
   interface 0 as Boot Keyboard (`Sub=01`, `Prot=01`) and interface 1 as a
@@ -886,7 +938,9 @@ Required Cohesix shape:
 - MSI remains disabled unless the milestone explicitly proves it.
 - Keyboard enumeration must use live cold-boot root-port sampling and reset
   after command/event-ring proof; Linux/U-Boot captures are layout diagnostics
-  only and do not authorize deferred port enumeration.
+  only and do not authorize deferred port enumeration. Any U-Boot-stale keyboard
+  cleanup must be a post-command-proof Cohesix root-port reset, not a
+  bootloader-state handoff.
 - Cold-boot high-BAR xHCI must not touch generic Broadcom wrapper AXI
   attribute registers; BCM2711 PCIe AXI/outbound-window setup is a HAL
   root-complex responsibility, not a VL805 BAR responsibility.

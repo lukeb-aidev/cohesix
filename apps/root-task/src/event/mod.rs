@@ -2527,7 +2527,7 @@ where
         ));
         self.emit_console_line(plan_line.as_str());
         let irq_line = format_message(format_args!(
-            "usb: irq_contract preflight expected=bridge+intx post_ready={} poll_only={} irq27=timer-only",
+            "usb: irq_contract preflight expected=bridge+intx+msi post_ready={} poll_only={} irq27=timer-only",
             status.post_ready_irq,
             if status.poll_only { "yes" } else { "no" },
         ));
@@ -2596,9 +2596,12 @@ where
                 Self::usb_publish_guard_for_origin(route.origin),
             ));
             self.emit_console_line(route_line.as_str());
-            let mut progress_line = format_message(format_args!(
-                "usb: golden_path outcome={} pathway={} progress={} proof_gate={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} command_probe={} detect_passes={}",
+            let mut progress_line = HeaplessString::<512>::new();
+            let _ = write!(
+                progress_line,
+                "usb: golden_path outcome={} command_probe={} pathway={} progress={} proof_gate={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} detect_passes={}",
                 route.outcome,
+                route.command_probe,
                 route.pathway_idx,
                 route.progress,
                 route.proof_gate,
@@ -2612,9 +2615,8 @@ where
                 if route.poll_only { "yes" } else { "no" },
                 route.connected_mask,
                 route.event_candidate_mask,
-                route.command_probe,
                 route.detect_passes,
-            ));
+            );
             if let Some(port) = route.port {
                 let _ = write!(progress_line, " port={port}");
             }
@@ -2649,10 +2651,11 @@ where
             ));
             self.emit_console_line(enum_line.as_str());
             let irq_line = format_message(format_args!(
-                "usb: irq_contract irq27={} bridge={} intx={} controller_gate={}",
+                "usb: irq_contract irq27={} bridge={} intx={} msi={} controller_gate={}",
                 if route.irq27_bound { "yes" } else { "no" },
                 if route.bridge_irq_bound { "yes" } else { "no" },
                 if route.intx_irq_bound { "yes" } else { "no" },
+                if route.msi_irq_bound { "yes" } else { "no" },
                 route.controller_gate,
             ));
             self.emit_console_line(irq_line.as_str());

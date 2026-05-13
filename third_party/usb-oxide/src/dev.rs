@@ -50,6 +50,13 @@ const UBOOT_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN: usize = 8;
 const UBOOT_ROOT_PORT_RESET_MAX_TRIES: usize = 5;
 const UBOOT_ROOT_PORT_RESET_SHORT_RETRY_SPINS: usize = 20_000;
 const UBOOT_ROOT_PORT_RESET_LONG_RETRY_SPINS: usize = 200_000;
+const STALE_BOOTLOADER_ROOT_PORT_RESET_SETTLE_SPINS: usize = 200_000;
+const ROOT_PORT_RESET_RETRY_STAGE: u16 = 0x0400;
+const ROOT_PORT_RESET_OK_STAGE: u16 = 0x0401;
+const ROOT_PORT_RESET_FAILED_STAGE: u16 = 0x0402;
+const STALE_BOOTLOADER_ROOT_PORT_RESET_BEGIN_STAGE: u16 = 0x0403;
+const STALE_BOOTLOADER_ROOT_PORT_RESET_OK_STAGE: u16 = 0x0404;
+const STALE_BOOTLOADER_ROOT_PORT_RESET_FAILED_STAGE: u16 = 0x0405;
 
 #[inline]
 const fn root_port_reset_retry_delay_spins(attempt: usize) -> usize {
@@ -66,6 +73,18 @@ const fn root_port_reset_retry_code(err: UsbError) -> Option<u8> {
         UsbError::PortResetTimeout => Some(1),
         UsbError::PortEnableTimeout => Some(2),
         _ => None,
+    }
+}
+
+#[inline]
+const fn root_port_reset_error_code(err: UsbError) -> u8 {
+    match err {
+        UsbError::PortResetTimeout => 1,
+        UsbError::PortEnableTimeout => 2,
+        UsbError::DeviceNotFound => 3,
+        UsbError::InvPort => 4,
+        UsbError::NotSupported => 5,
+        _ => 0xff,
     }
 }
 
@@ -139,7 +158,7 @@ fn reset_root_port_with_uboot_retries<H: Dma>(ctrl: &XhciCtrl<H>, port: u8) -> R
     for attempt in 0..UBOOT_ROOT_PORT_RESET_MAX_TRIES {
         match ctrl.reset_port(port) {
             Ok(()) => {
-                ctrl.emit_diag(0x03b3, port as u64, attempt as u64, 0);
+                ctrl.emit_diag(ROOT_PORT_RESET_OK_STAGE, port as u64, attempt as u64, 0);
                 return Ok(());
             }
             Err(err) => {
@@ -149,7 +168,7 @@ fn reset_root_port_with_uboot_retries<H: Dma>(ctrl: &XhciCtrl<H>, port: u8) -> R
                 last_retryable = err;
                 if attempt + 1 >= UBOOT_ROOT_PORT_RESET_MAX_TRIES {
                     ctrl.emit_diag(
-                        0x03b4,
+                        ROOT_PORT_RESET_FAILED_STAGE,
                         port as u64,
                         ((attempt as u64) << 32) | code as u64,
                         UBOOT_ROOT_PORT_RESET_MAX_TRIES as u64,
@@ -158,7 +177,7 @@ fn reset_root_port_with_uboot_retries<H: Dma>(ctrl: &XhciCtrl<H>, port: u8) -> R
                 }
                 let delay_spins = root_port_reset_retry_delay_spins(attempt);
                 ctrl.emit_diag(
-                    0x03b2,
+                    ROOT_PORT_RESET_RETRY_STAGE,
                     port as u64,
                     ((attempt as u64) << 32) | code as u64,
                     delay_spins as u64,
@@ -168,6 +187,35 @@ fn reset_root_port_with_uboot_retries<H: Dma>(ctrl: &XhciCtrl<H>, port: u8) -> R
         }
     }
     Err(last_retryable)
+}
+
+fn reset_root_port_with_stale_bootloader_cleanup<H: Dma>(
+    ctrl: &XhciCtrl<H>,
+    port: u8,
+) -> Result<()> {
+    reset_root_port_with_uboot_retries(ctrl, port)?;
+    ctrl.emit_diag(
+        STALE_BOOTLOADER_ROOT_PORT_RESET_BEGIN_STAGE,
+        port as u64,
+        STALE_BOOTLOADER_ROOT_PORT_RESET_SETTLE_SPINS as u64,
+        1,
+    );
+    spin_for_uboot_settle(STALE_BOOTLOADER_ROOT_PORT_RESET_SETTLE_SPINS);
+    match ctrl.reset_port(port) {
+        Ok(()) => {
+            ctrl.emit_diag(STALE_BOOTLOADER_ROOT_PORT_RESET_OK_STAGE, port as u64, 0, 1);
+            Ok(())
+        }
+        Err(err) => {
+            ctrl.emit_diag(
+                STALE_BOOTLOADER_ROOT_PORT_RESET_FAILED_STAGE,
+                port as u64,
+                root_port_reset_error_code(err) as u64,
+                1,
+            );
+            Err(err)
+        }
+    }
 }
 
 #[inline]
@@ -609,6 +657,15 @@ impl<H: Dma> UsbDevice<H> {
         Self::new_with_topology(ctrl, port, 0, root_hub_port, speed, None, false)
     }
 
+    /// Create and address a new root-port device after an extra post-command-proof
+    /// reset cycle for ports that may have hosted a U-Boot keyboard session.
+    pub fn new_with_stale_bootloader_root_reset(ctrl: Arc<XhciCtrl<H>>, port: u8) -> Result<Self> {
+        reset_root_port_with_stale_bootloader_cleanup(ctrl.as_ref(), port)?;
+        let speed = ctrl.port_speed(port);
+        let root_hub_port = port.saturating_add(1);
+        Self::new_with_topology(ctrl, port, 0, root_hub_port, speed, None, false)
+    }
+
     /// Create and address a root-port device when platform firmware already
     /// left the root port enabled and live PORTSC access is not prompt-safe.
     pub fn new_assume_enabled_root_port(
@@ -865,8 +922,7 @@ impl<H: Dma> UsbDevice<H> {
             ctrl.device_context_entry(slot_id),
         );
 
-        let (ep0_mps_candidates, candidate_count) =
-            ep0_mps_candidates_for_speed(enumerated_speed);
+        let (ep0_mps_candidates, candidate_count) = ep0_mps_candidates_for_speed(enumerated_speed);
         let encode_port_state = |portsc: u32| -> u64 {
             let speed = reg::portsc_speed(portsc) as u64;
             let pls = reg::portsc_pls(portsc) as u64;
@@ -1919,7 +1975,11 @@ impl<H: Dma> UsbDevice<H> {
         Ok(())
     }
 
-    fn endpoint_context_for_descriptor(&self, ep: &EndpointDesc, ring_phys: u64) -> EndpointContext {
+    fn endpoint_context_for_descriptor(
+        &self,
+        ep: &EndpointDesc,
+        ring_phys: u64,
+    ) -> EndpointContext {
         let is_in = ep.is_in();
         let ep_type = ep.transfer_type();
         let max_packet_size = ep.max_packet_size;
@@ -2469,6 +2529,13 @@ mod tests {
         assert_eq!(UBOOT_ROOT_PORT_RESET_MAX_TRIES, 5);
         assert_eq!(UBOOT_ROOT_PORT_RESET_SHORT_RETRY_SPINS, 20_000);
         assert_eq!(UBOOT_ROOT_PORT_RESET_LONG_RETRY_SPINS, 200_000);
+        assert_eq!(STALE_BOOTLOADER_ROOT_PORT_RESET_SETTLE_SPINS, 200_000);
+        assert_eq!(ROOT_PORT_RESET_RETRY_STAGE, 0x0400);
+        assert_eq!(ROOT_PORT_RESET_OK_STAGE, 0x0401);
+        assert_eq!(ROOT_PORT_RESET_FAILED_STAGE, 0x0402);
+        assert_eq!(STALE_BOOTLOADER_ROOT_PORT_RESET_BEGIN_STAGE, 0x0403);
+        assert_eq!(STALE_BOOTLOADER_ROOT_PORT_RESET_OK_STAGE, 0x0404);
+        assert_eq!(STALE_BOOTLOADER_ROOT_PORT_RESET_FAILED_STAGE, 0x0405);
         assert_eq!(root_port_reset_retry_delay_spins(0), 20_000);
         assert_eq!(root_port_reset_retry_delay_spins(1), 200_000);
         assert_eq!(
@@ -2480,6 +2547,9 @@ mod tests {
             Some(2)
         );
         assert_eq!(root_port_reset_retry_code(UsbError::DeviceNotFound), None);
+        assert_eq!(root_port_reset_error_code(UsbError::PortResetTimeout), 1);
+        assert_eq!(root_port_reset_error_code(UsbError::PortEnableTimeout), 2);
+        assert_eq!(root_port_reset_error_code(UsbError::DeviceNotFound), 3);
     }
 
     #[test]
