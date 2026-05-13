@@ -8784,7 +8784,7 @@ mod tests {
     fn wifi_join_security_exact_error_reports_join_gate() {
         let mut fake = FakeWifiDebug::new();
         fake.snapshot.debug_snapshot_stage = "cyw43-init-control-plane-fail";
-        fake.snapshot.control_plane_exact_error = "cyw43-join-security-wsec-first-loop";
+        fake.snapshot.control_plane_exact_error = "cyw43-join-security-wpa-auth-initial-loop";
         fake.snapshot.control_plane_sdhci_read_diag = "f1-reply-read-command-error";
         fake.snapshot.control_plane_f2_state = "linux-configured";
         fake.snapshot.control_plane_bootstrap_phase = "steady-state";

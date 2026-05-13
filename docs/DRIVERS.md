@@ -374,12 +374,13 @@ power/reset state.
   are proven.
 - Cohesix also applies the Linux attach-time `join_pref` default payload
   (`04 02 08 01 01 02 00 00`) before scan/join defaults. WPA2-PSK join setup
-  must match Linux and known-good CYW43 behavior: program the primary-BSS
-  initial WPA2 version mask (`wpa_auth=0x00c0`), D11 auth (`auth=0`), AES
-  security (`wsec=0x0004`), optional MFP only when an RSN IE proves it, final
-  WPA2-PSK AKM (`wpa_auth=0x0080`), firmware supplicant (`sup_wpa=1`), then
-  `WLC_SET_WSEC_PMK` before the primary `join` iovar. `infra=1` is not part of
-  the Linux connect-time station command sequence. For the primary BSS
+  must match Linux and known-good CYW43 behavior: program the supported
+  WPA2-PSK/CCMP RSN IE through `wpaie`, then the primary-BSS initial WPA2
+  version mask (`wpa_auth=0x00c0`), D11 auth (`auth=0`), AES security
+  (`wsec=0x0004`), optional MFP only when a captured RSN/MFP policy proves it,
+  final WPA2-PSK AKM (`wpa_auth=0x0080`), firmware supplicant (`sup_wpa=1`),
+  then `WLC_SET_WSEC_PMK` before the primary `join` iovar. `infra=1` is not
+  part of the Linux connect-time station command sequence. For the primary BSS
   (`bsscfgidx=0`), Linux `brcmf_fil_bsscfg_*` collapses to the plain iovar name
   and data; Cohesix must not send a literal `bsscfg:` wrapper or leading zero
   BSS index on Pi 4 station joins. The Pi 4 Linux capture shows the plain
@@ -417,6 +418,15 @@ power/reset state.
   driver must preserve that exact join-security gate into `wifi diag` instead
   of collapsing the post-failure shell output into a lower-level Function 1 or
   Function 2 visibility symptom.
+- The 2026-05-13 22:45 trace proves the ordered-security image was flashed and
+  reaches the first `wpa_auth` iovar before any `auth`, `wsec`, supplicant, PMK,
+  or join-submit command. A late async `EVENT_IF` arrived in the ioctl reply
+  window, after which the HAL cleared only host-side IRQ158 latches with
+  `progress=no` until the bounded no-progress fail-fast. Root-task now keeps the
+  control-reply wait active across non-control frames, sends the Linux
+  connect-time RSN IE (`wpaie`) before initial `wpa_auth`, and reports the live
+  frontier as `join-security-wpa-auth-initial-loop` instead of reusing the
+  stale `wsec` label.
 - WPA2 join completion must be gated on the firmware supplicant event, not on
   `WLC_SET_SSID` success when firmware supplicant mode is available. Open
   networks may complete on a successful `SET_SSID` event. Secure networks must
@@ -613,8 +623,9 @@ active path is Cohesix-owned cold start:
   composition preserves the low
   `CMD_RING_RSVD_BITS` exactly as U-Boot does before OR-ing the command-ring
   pointer and producer cycle; when the seL4 prompt-safe lane cannot live-read
-  `CRCR`, it uses the Pi 4 captured running low-bit seed instead of publishing
-  a zero reserved-bit seed. The U-Boot `DNCTRL=0` write is also HAL-drained
+  `CRCR` and has no trusted snapshot, it publishes from a zero reserved-bit
+  seed instead of synthesizing Linux's later observed `CRCR` running-status
+  bit. The U-Boot `DNCTRL=0` write is also HAL-drained
   before `USBCMD.RUN`. It must DMA-publish the submitted command TRB as
   the exact 16-byte device-visible cache range U-Boot flushes, issue a
   completion-grade command-ring publish barrier, then write U-Boot's
@@ -645,8 +656,9 @@ active path is Cohesix-owned cold start:
   initial `ERDP`, `ERSTSZ`, `ERSTBA`), write `DNCTRL=0`, start the controller
   with `USBCMD=RUN`, then apply the U-Boot post-start poll-only interrupter
   state (`IMOD=0`, `IMAN=0`) before submitting a new Enable Slot. Recovery
-  reuses the same prompt-safe Pi 4 `CRCR` low-bit seed when no trusted snapshot
-  or live read is available.
+  uses the same U-Boot cold-publish `CRCR` rule: preserve low bits from a
+  trusted snapshot or live read, otherwise publish from a zero reserved-bit
+  seed.
   The recovery lane still must not use xHCI BAR reads, `USBSTS`, or `PORTSC` as
   proof before command completion, and it must not replay Linux-shaped
   event-generation writes or `ERDP.EHB` acknowledgement before the retry command

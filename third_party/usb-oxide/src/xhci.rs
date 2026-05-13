@@ -65,7 +65,8 @@ const COMMAND_RING_DEBUG_TRBS: usize = 4;
 const LINUX_COMMAND_PROBE_DNCTRL: u32 = 0x0000_0002;
 const LINUX_COMMAND_PROBE_IMOD: u32 = 0x0000_00a0;
 const LINUX_COMMAND_PROBE_USBCMD: u32 = reg::USBCMD_RUN | reg::USBCMD_INTE;
-const PI4_CRCR_RUNNING_LOW_BIT_SEED: u64 = 1 << 3;
+#[cfg(test)]
+const PI4_CRCR_RUNNING_STATUS_BIT: u64 = 1 << 3;
 const LINUX_COMMAND_PROBE_DNCTRL_FLUSH_STAGE: u16 = 0x0338;
 const COMMAND_PUBLISH_BARRIER_STAGE: u16 = 0x0339;
 const LINUX_COMMAND_PROBE_IMOD_FLUSH_STAGE: u16 = 0x035d;
@@ -2002,21 +2003,20 @@ fn compose_crcr(current: u64, ring_ptr: u64, cycle_state: bool) -> u64 {
 
 #[inline(always)]
 fn prompt_safe_crcr_publish_seed(
-    handoff: XhciFirmwareHandoff,
+    _handoff: XhciFirmwareHandoff,
     snapshot: Option<XhciRuntimeSeedSnapshot>,
-    live_seed_reads: bool,
+    _live_seed_reads: bool,
 ) -> u64 {
-    snapshot.and_then(|seed| seed.crcr).unwrap_or_else(|| {
-        // Linux and U-Boot evidence show VL805 can report CRCR low bit 3 set
-        // while the software command-ring pointer remains authoritative. On
-        // the Pi 4 prompt-safe path we cannot live-read CRCR, so keep that
-        // observed low-bit seed instead of inventing a fully zero seed.
-        if handoff == XhciFirmwareHandoff::PlatformResetComplete && !live_seed_reads {
-            PI4_CRCR_RUNNING_LOW_BIT_SEED
-        } else {
-            0
-        }
-    })
+    if let Some(crcr) = snapshot.and_then(|seed| seed.crcr) {
+        crcr
+    } else {
+        // U-Boot preserves CRCR reserved/status bits only from the live CRCR
+        // value it just read. Linux can later report CRCR bit 3 set while the
+        // controller is running, but that is not a synthetic cold-publish seed
+        // after Cohesix has performed its own HCRST and has no trusted CRCR
+        // snapshot. Publish fresh rings from a zero seed in that case.
+        0
+    }
 }
 
 #[inline(always)]
@@ -5103,8 +5103,6 @@ impl<H: Dma> XhciCtrl<H> {
             };
 
             if let Some(trb) = trb {
-                self.update_erdp()?;
-
                 if trb.trb_type() == trb_type::COMMAND_COMPLETION as u8 {
                     let code = trb.completion_code();
                     let completion_ptr = trb.param & !0x0f;
@@ -5124,6 +5122,7 @@ impl<H: Dma> XhciCtrl<H> {
                                 expected_ptr,
                                 trb.control as u64,
                             );
+                            self.update_erdp()?;
                             continue;
                         }
                     }
@@ -5146,8 +5145,10 @@ impl<H: Dma> XhciCtrl<H> {
                             trb.slot_id() as u64,
                             trb.endpoint_id() as u64,
                         );
+                        self.update_erdp()?;
                         return Err(UsbError::CmdFail(code));
                     }
+                    self.update_erdp()?;
                     return Ok(trb);
                 }
 
@@ -5161,6 +5162,7 @@ impl<H: Dma> XhciCtrl<H> {
                     );
                     other_event_logs = other_event_logs.saturating_add(1);
                 }
+                self.update_erdp()?;
             }
 
             waited = waited.saturating_add(1);
@@ -5379,8 +5381,6 @@ impl<H: Dma> XhciCtrl<H> {
             };
 
             if let Some(trb) = trb {
-                self.update_erdp()?;
-
                 if trb.trb_type() == trb_type::COMMAND_COMPLETION as u8 {
                     let code = trb.completion_code();
                     let completion_ptr = trb.param & !0x0f;
@@ -5400,6 +5400,7 @@ impl<H: Dma> XhciCtrl<H> {
                                 expected_ptr,
                                 trb.control as u64,
                             );
+                            self.update_erdp()?;
                             continue;
                         }
                     }
@@ -5411,8 +5412,10 @@ impl<H: Dma> XhciCtrl<H> {
                     );
                     if code != completion::SUCCESS {
                         emit_xhci_diag(0x030d, code as u64, trb.slot_id() as u64, 0);
+                        self.update_erdp()?;
                         return Err(UsbError::CmdFail(code));
                     }
+                    self.update_erdp()?;
                     return Ok(trb);
                 }
 
@@ -5426,6 +5429,7 @@ impl<H: Dma> XhciCtrl<H> {
                     );
                     other_event_logs = other_event_logs.saturating_add(1);
                 }
+                self.update_erdp()?;
             }
 
             waited = waited.saturating_add(1);
@@ -5507,7 +5511,6 @@ impl<H: Dma> XhciCtrl<H> {
                 }
                 continue;
             };
-            self.update_erdp()?;
 
             if trb.trb_type() == trb_type::COMMAND_COMPLETION as u8 {
                 let code = trb.completion_code();
@@ -5523,6 +5526,7 @@ impl<H: Dma> XhciCtrl<H> {
                     );
                     if !ptr_match {
                         emit_xhci_diag(0x030c, completion_ptr, expected_ptr, trb.control as u64);
+                        self.update_erdp()?;
                         for _ in 0..COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL {
                             spin_loop();
                         }
@@ -5537,8 +5541,10 @@ impl<H: Dma> XhciCtrl<H> {
                 );
                 if code != completion::SUCCESS {
                     emit_xhci_diag(0x030d, code as u64, trb.slot_id() as u64, 0);
+                    self.update_erdp()?;
                     return Err(UsbError::CmdFail(code));
                 }
+                self.update_erdp()?;
                 return Ok(trb);
             }
 
@@ -5549,6 +5555,7 @@ impl<H: Dma> XhciCtrl<H> {
                 ((trb.status as u64) << 32) | trb.control as u64,
                 trb.trb_type() as u64,
             );
+            self.update_erdp()?;
             for _ in 0..COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL {
                 spin_loop();
             }
@@ -6831,7 +6838,7 @@ mod tests {
         COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
         COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, EVENT_RING_SIZE,
         LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD, LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
-        PI4_CRCR_RUNNING_LOW_BIT_SEED, PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, PORT_CHANGE_BITS,
+        PI4_CRCR_RUNNING_STATUS_BIT, PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, PORT_CHANGE_BITS,
         READY_WAIT_PROGRESS_SPINS, RESET_WAIT_SPINS, SKIP_HCRST_DURING_INIT,
         TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
         XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
@@ -10393,11 +10400,11 @@ mod tests {
     }
 
     #[test]
-    fn platform_reset_prompt_safe_crcr_seed_matches_pi4_capture() {
-        assert_eq!(PI4_CRCR_RUNNING_LOW_BIT_SEED, 0x8);
+    fn platform_reset_prompt_safe_crcr_seed_uses_uboot_cold_seed_without_snapshot() {
+        assert_eq!(PI4_CRCR_RUNNING_STATUS_BIT, 0x8);
         assert_eq!(
             prompt_safe_crcr_publish_seed(XhciFirmwareHandoff::PlatformResetComplete, None, false),
-            PI4_CRCR_RUNNING_LOW_BIT_SEED
+            0
         );
         assert_eq!(
             prompt_safe_crcr_publish_seed(
@@ -10427,8 +10434,8 @@ mod tests {
     }
 
     #[test]
-    fn crcr_publish_keeps_pi4_captured_running_low_bit() {
-        let composed = compose_crcr(PI4_CRCR_RUNNING_LOW_BIT_SEED, 0x0404_0020_00, true);
+    fn crcr_publish_preserves_captured_running_status_only_from_snapshot() {
+        let composed = compose_crcr(PI4_CRCR_RUNNING_STATUS_BIT, 0x0404_0020_00, true);
         assert_eq!(composed & reg::CMD_RING_RSVD_BITS, 0x9);
         assert_eq!(composed & !reg::CMD_RING_RSVD_BITS, 0x0404_0020_00);
     }

@@ -109,6 +109,14 @@ WIFI_PROGRESS_GATES = {
     "dhcp-lease": 9,
     "nettest-passed": 10,
 }
+JOIN_SECURITY_EXACT_BY_BLOCKER = {
+    "join-security-wpaie-loop": "cyw43-join-security-wpaie-loop",
+    "join-security-wpa-auth-initial-loop": "cyw43-join-security-wpa-auth-initial-loop",
+    "join-security-wpa-auth-final-loop": "cyw43-join-security-wpa-auth-final-loop",
+    "join-security-auth-loop": "cyw43-join-security-auth-loop",
+    "join-security-wsec-first-loop": "cyw43-join-security-wsec-first-loop",
+    "join-security-sup-wpa-loop": "cyw43-join-security-sup-wpa-loop",
+}
 USB_OUTCOME_BLOCKERS = {
     "address-failed",
     "config-descriptor",
@@ -1279,12 +1287,29 @@ def normalize_wifi_blocker(value: str) -> str:
         or "iovar set failed name=bsscfg:wsec" in lower
     ):
         return "primary-bsscfg-wrapper-join-security-loop"
+    if "join-security-wpaie-loop" in lower or "iovar set failed name=wpaie" in lower:
+        return "join-security-wpaie-loop"
+    if (
+        "join-security-wpa-auth-initial-loop" in lower
+        or "join-security-wpa-auth-first-loop" in lower
+        or "join-security-wpa-auth-initial-no-reply" in lower
+    ):
+        return "join-security-wpa-auth-initial-loop"
+    if (
+        "join-security-wpa-auth-final-loop" in lower
+        or "join-security-wpa-auth-final-no-reply" in lower
+    ):
+        return "join-security-wpa-auth-final-loop"
+    if "join-security-auth-loop" in lower or "iovar set failed name=auth" in lower:
+        return "join-security-auth-loop"
     if (
         "join-security-wsec-first-loop" in lower
         or "iovar set failed name=wsec" in lower
         or "iovar no-progress-after-frame name=wsec" in lower
     ):
         return "join-security-wsec-first-loop"
+    if "join-security-sup-wpa-loop" in lower or "iovar set failed name=sup_wpa" in lower:
+        return "join-security-sup-wpa-loop"
     if "join-programming-host-latch-loop" in lower:
         return "join-programming-host-latch-loop"
     if "join-pending" in lower or "association-pending" in lower:
@@ -1356,6 +1381,12 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-plane-interrupt-programming-drift",
         "cyw43-join-programming-host-latch-loop",
         "cyw43-primary-bsscfg-wrapper-join-security-loop",
+        "cyw43-join-security-wpaie-loop",
+        "cyw43-join-security-wpa-auth-initial-loop",
+        "cyw43-join-security-wpa-auth-final-loop",
+        "cyw43-join-security-auth-loop",
+        "cyw43-join-security-wsec-first-loop",
+        "cyw43-join-security-sup-wpa-loop",
         "cyw43-control-plane-legacy-gmode-stall",
         "cyw43-control-plane-no-frame-indication-after-write",
         "cyw43-control-plane-partial-hint-visibility",
@@ -2029,6 +2060,29 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     return gate, blocker
 
 
+def join_security_blocker_for_iovar(
+    name: str | None, wpa_auth_ready_count: int
+) -> str | None:
+    """Return the precise join-security blocker for the active iovar."""
+
+    if not name:
+        return None
+    normalized = name.lower()
+    if normalized == "wpaie":
+        return "join-security-wpaie-loop"
+    if normalized == "wpa_auth":
+        if wpa_auth_ready_count == 0:
+            return "join-security-wpa-auth-initial-loop"
+        return "join-security-wpa-auth-final-loop"
+    if normalized == "auth":
+        return "join-security-auth-loop"
+    if normalized == "wsec":
+        return "join-security-wsec-first-loop"
+    if normalized == "sup_wpa":
+        return "join-security-sup-wpa-loop"
+    return None
+
+
 def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     """Summarize the WiFi CYW43455 proof gate from HT through nettest."""
 
@@ -2131,6 +2185,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     join_programming_blocker: str | None = None
     join_begin_seen = False
     join_completion_seen = False
+    join_security_pending_iovar: str | None = None
+    join_security_wpa_auth_ready_count = 0
     join_programming_host_latch_only_count = 0
     join_programming_f1_status_count = 0
     legacy_gmode_stall_seen = False
@@ -2158,6 +2214,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "[cyw43] control-plane step=join action=begin" in raw:
             join_begin_seen = True
             join_completion_seen = False
+            join_security_pending_iovar = None
+            join_security_wpa_auth_ready_count = 0
             join_programming_host_latch_only_count = 0
             join_programming_f1_status_count = 0
             gate = max(gate, 7)
@@ -2226,9 +2284,30 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "wsec-pmk-bad-argument",
         } and explicit_blocker in {None, "cyw43", "nettest-policy-disabled"}:
             explicit_blocker = raw_contract_blocker
+        if join_begin_seen and "[cyw43] iovar set begin" in raw:
+            iovar_name = fields.get("name")
+            if iovar_name in {
+                "wpaie",
+                "wpa_auth",
+                "auth",
+                "wsec",
+                "sup_wpa",
+            }:
+                join_security_pending_iovar = iovar_name
+        if join_begin_seen and "[cyw43] iovar set ready" in raw:
+            iovar_name = fields.get("name")
+            if iovar_name == "wpa_auth":
+                join_security_wpa_auth_ready_count += 1
+            if iovar_name == join_security_pending_iovar:
+                join_security_pending_iovar = None
         if explicit_blocker in {
             "firmware-supplicant-unsupported",
+            "join-security-wpaie-loop",
+            "join-security-wpa-auth-initial-loop",
+            "join-security-wpa-auth-final-loop",
+            "join-security-auth-loop",
             "join-security-wsec-first-loop",
+            "join-security-sup-wpa-loop",
             "primary-bsscfg-wrapper-join-security-loop",
             "wsec-pmk-bad-argument",
         }:
@@ -2239,11 +2318,23 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             join_programming_blocker = "primary-bsscfg-wrapper-join-security-loop"
         if join_begin_seen and (
             "iovar set failed name=wsec" in raw
-            or "ioctl no-progress-after-frame" in raw
         ):
             gate = max(gate, 7)
             post_f2_progress_seen = True
             join_programming_blocker = "join-security-wsec-first-loop"
+        if join_begin_seen and (
+            "[cyw43] iovar set failed" in raw
+            or "ioctl no-progress-after-frame" in raw
+        ):
+            iovar_name = fields.get("name") or join_security_pending_iovar
+            precise_join_blocker = join_security_blocker_for_iovar(
+                iovar_name, join_security_wpa_auth_ready_count
+            )
+            if precise_join_blocker is not None:
+                gate = max(gate, 7)
+                post_f2_progress_seen = True
+                join_programming_blocker = precise_join_blocker
+                blocker = precise_join_blocker
         if "firmware stage=control-plane-write" in raw and "linux-f2-write-shape" in raw:
             control_plane_write_seen = True
             control_plane_reply_seen_after_write = False
@@ -2445,6 +2536,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "cyw43",
             }:
                 blocker = blocker
+            elif blocker in JOIN_SECURITY_EXACT_BY_BLOCKER and explicit_blocker in {
+                "cyw43",
+                "ioctl-timeout",
+            }:
+                blocker = blocker
             elif blocker not in precise_ht_blockers:
                 blocker = explicit_blocker or "control-plane"
             continue
@@ -2564,6 +2660,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             ):
                 blocker = blocker
             elif blocker in precise_control_plane_blockers and explicit_blocker in {
+                "ioctl-timeout",
+                "cyw43",
+            }:
+                blocker = blocker
+            elif blocker in JOIN_SECURITY_EXACT_BY_BLOCKER and explicit_blocker in {
                 "ioctl-timeout",
                 "cyw43",
             }:
@@ -2927,6 +3028,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 and explicit_blocker in precise_control_plane_blockers | {"control-plane"}
             ):
                 pass
+            elif blocker in JOIN_SECURITY_EXACT_BY_BLOCKER and explicit_blocker in {
+                "cyw43",
+                "ioctl-timeout",
+            }:
+                pass
             elif blocker not in precise_ht_blockers and blocker != "ht-clock-timeout":
                 blocker = explicit_blocker
 
@@ -2992,8 +3098,11 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
         return "cyw43-control-plane-legacy-gmode-stall", phase
     if normalize_wifi_blocker(event.raw) == "join-programming-host-latch-loop":
         return "cyw43-join-programming-host-latch-loop", "join"
-    if normalize_wifi_blocker(event.raw) == "join-security-wsec-first-loop":
-        return "cyw43-join-security-wsec-first-loop", "join"
+    join_security_exact = JOIN_SECURITY_EXACT_BY_BLOCKER.get(
+        normalize_wifi_blocker(event.raw)
+    )
+    if join_security_exact is not None:
+        return join_security_exact, "join"
     if normalize_wifi_blocker(event.raw) == "primary-bsscfg-wrapper-join-security-loop":
         return "cyw43-primary-bsscfg-wrapper-join-security-loop", "join"
     if (
@@ -3119,11 +3228,15 @@ def summarize_wifi_failure_detail(
     blocker_matched = False
     blocker_priority = 100
     join_begin_seen = False
+    join_security_pending_iovar: str | None = None
+    join_security_wpa_auth_ready_count = 0
     for event in (event for event in events if event.domain == "wifi"):
         raw = event.raw.lower()
         fields = event.fields
         if "[cyw43] control-plane step=join action=begin" in raw:
             join_begin_seen = True
+            join_security_pending_iovar = None
+            join_security_wpa_auth_ready_count = 0
         if (
             "prereset-fgc-clock" in raw
             or (
@@ -3174,6 +3287,33 @@ def summarize_wifi_failure_detail(
             and "iovar set failed name=bsscfg:" in raw
         ):
             candidate = "primary-bsscfg-wrapper-join-security-loop"
+        if join_begin_seen and "[cyw43] iovar set begin" in raw:
+            iovar_name = fields.get("name")
+            if iovar_name in {
+                "wpaie",
+                "wpa_auth",
+                "auth",
+                "wsec",
+                "sup_wpa",
+            }:
+                join_security_pending_iovar = iovar_name
+        if join_begin_seen and "[cyw43] iovar set ready" in raw:
+            iovar_name = fields.get("name")
+            if iovar_name == "wpa_auth":
+                join_security_wpa_auth_ready_count += 1
+            if iovar_name == join_security_pending_iovar:
+                join_security_pending_iovar = None
+        if wifi_blocker in JOIN_SECURITY_EXACT_BY_BLOCKER and join_begin_seen and (
+            "[cyw43] iovar set failed" in raw
+            or "ioctl no-progress-after-frame" in raw
+        ):
+            iovar_name = fields.get("name") or join_security_pending_iovar
+            candidate = (
+                join_security_blocker_for_iovar(
+                    iovar_name, join_security_wpa_auth_ready_count
+                )
+                or candidate
+            )
         if (
             wifi_blocker == "join-security-wsec-first-loop"
             and join_begin_seen
@@ -3216,8 +3356,8 @@ def summarize_wifi_failure_detail(
             exact = event_exact
             if candidate == "join-programming-host-latch-loop":
                 exact = "cyw43-join-programming-host-latch-loop"
-            if candidate == "join-security-wsec-first-loop":
-                exact = "cyw43-join-security-wsec-first-loop"
+            if candidate in JOIN_SECURITY_EXACT_BY_BLOCKER:
+                exact = JOIN_SECURITY_EXACT_BY_BLOCKER[candidate]
             if candidate == "primary-bsscfg-wrapper-join-security-loop":
                 exact = "cyw43-primary-bsscfg-wrapper-join-security-loop"
             if exact == "none" and "sdio cmd53 r5 fail" in raw:
@@ -3228,7 +3368,7 @@ def summarize_wifi_failure_detail(
                 "join"
                 if candidate
                 in {
-                    "join-security-wsec-first-loop",
+                    *JOIN_SECURITY_EXACT_BY_BLOCKER.keys(),
                     "join-programming-host-latch-loop",
                     "primary-bsscfg-wrapper-join-security-loop",
                 }

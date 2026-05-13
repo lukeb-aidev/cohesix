@@ -3398,6 +3398,69 @@ def test_gate_summary_reports_wsec_first_join_security_loop() -> None:
     assert gates.wifi_blocker_line > 0
 
 
+def test_gate_summary_reports_wpa_auth_initial_join_security_loop() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=join action=begin",
+            "[INFO root_task::drivers::cyw43] [cyw43] iovar set begin "
+            "name=wpa_auth len=4",
+            "[pi4-wifi] firmware stage=control-plane-write "
+            "action=linux-f2-write-shape frame_len=52",
+            "[INFO root_task::drivers::cyw43] [cyw43] event type=54 "
+            "flags=0x0000 status=0x00000000 reason=0x00000000 auth=0x00000000",
+            *[
+                "[pi4-wifi] firmware stage=control-plane-reply "
+                "action=sdio-irq-host-latch-cleared irq=158 badge=0x9f "
+                "source=0x00000000 source_readable=y card_int=y progress=no"
+                for _ in range(8)
+            ],
+            "[WARN root_task::drivers::cyw43] [cyw43] ioctl "
+            "no-progress-after-frame cmd=0x00000107 id=19 no_progress_polls=128 "
+            "nonmatching_frames=1 cached_exact_error= action=fail-fast",
+            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "name=wpa_auth err=cyw43 protocol error: ioctl-no-progress-after-frame",
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=join action=fail err=cyw43 protocol error: ioctl-no-progress-after-frame",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "join-security-wpa-auth-initial-loop"
+    assert gates.wifi_exact == "cyw43-join-security-wpa-auth-initial-loop"
+    assert gates.wifi_phase == "join"
+    assert gates.wifi_blocker_line > 0
+
+
+def test_gate_summary_reports_wpa_auth_final_join_security_loop() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=join action=begin",
+            "[INFO root_task::drivers::cyw43] [cyw43] iovar set begin "
+            "name=wpa_auth len=4",
+            "[INFO root_task::drivers::cyw43] [cyw43] iovar set ready "
+            "name=wpa_auth len=4",
+            "[INFO root_task::drivers::cyw43] [cyw43] iovar set begin "
+            "name=wpa_auth len=4",
+            "[WARN root_task::drivers::cyw43] [cyw43] ioctl "
+            "no-progress-after-frame cmd=0x00000107 id=24 no_progress_polls=128 "
+            "nonmatching_frames=1 cached_exact_error= action=fail-fast",
+            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "name=wpa_auth err=cyw43 protocol error: ioctl-no-progress-after-frame",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "join-security-wpa-auth-final-loop"
+    assert gates.wifi_exact == "cyw43-join-security-wpa-auth-final-loop"
+    assert gates.wifi_phase == "join"
+
+
 def test_gate_summary_tracks_wifi_dhcp_failure_evidence() -> None:
     events = normalizer.parse_events(
         [

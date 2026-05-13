@@ -88,10 +88,11 @@ const EVENT_SET_SSID: u8 = 0;
 const EVENT_AUTH: u8 = 3;
 const EVENT_DEAUTH: u8 = 5;
 const EVENT_ASSOC: u8 = 7;
+const EVENT_ASSOC_IND: u8 = 8;
 const EVENT_REASSOC: u8 = 9;
+const EVENT_REASSOC_IND: u8 = 10;
 const EVENT_DISASSOC: u8 = 11;
-const EVENT_ASSOC_IND: u8 = 12;
-const EVENT_REASSOC_IND: u8 = 13;
+const EVENT_DISASSOC_IND: u8 = 12;
 const EVENT_LINK: u8 = 16;
 const EVENT_ROAM: u8 = 19;
 const EVENT_MIC_ERROR: u8 = 33;
@@ -111,7 +112,7 @@ const LINUX_EVENTMSGS_EXT_MASK: [u8; EVENT_MASK_LEN] = [
     0x61, 0x15, 0x0b, 0x00, 0x02, 0x42, 0xc0, 0x11, 0x60, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0x00, 0x00, 0x00,
 ];
-const JOIN_COMPLETION_EVENTS: [u8; 12] = [
+const JOIN_COMPLETION_EVENTS: [u8; 13] = [
     EVENT_SET_SSID,
     EVENT_AUTH,
     EVENT_ASSOC,
@@ -119,6 +120,7 @@ const JOIN_COMPLETION_EVENTS: [u8; 12] = [
     EVENT_LINK,
     EVENT_DEAUTH,
     EVENT_DISASSOC,
+    EVENT_DISASSOC_IND,
     EVENT_ASSOC_IND,
     EVENT_REASSOC_IND,
     EVENT_ROAM,
@@ -152,6 +154,10 @@ const WPA_AUTH_DISABLED: u32 = 0x0000;
 const WPA_AUTH_WPA2_UNSPECIFIED: u32 = 0x0040;
 const WPA_AUTH_WPA2_PSK: u32 = 0x0080;
 const WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED: u32 = WPA_AUTH_WPA2_UNSPECIFIED | WPA_AUTH_WPA2_PSK;
+const WPA2_PSK_CCMP_RSN_IE: [u8; 22] = [
+    0x30, 0x14, 0x01, 0x00, 0x00, 0x0f, 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f, 0xac, 0x04, 0x01, 0x00,
+    0x00, 0x0f, 0xac, 0x02, 0x00, 0x00,
+];
 const LINUX_REVINFO_LEN: usize = 68;
 const WIFI_SSID_MAX_LEN: usize = 32;
 const LINUX_EXT_JOIN_SSID_OFFSET: usize = 0;
@@ -507,12 +513,17 @@ const fn linux_wpa2_join_sets_mfp_without_rsn_ie() -> bool {
 fn join_security_iovar_name(name: &str) -> bool {
     matches!(
         name,
-        "auth" | "wsec" | "wpa_auth" | "sup_wpa" | "sup_wpa2_eapver" | "sup_wpa_tmo"
+        "auth" | "wpaie" | "wsec" | "wpa_auth" | "sup_wpa" | "sup_wpa2_eapver" | "sup_wpa_tmo"
     )
 }
 
 fn join_security_iovar_failure_exact_error(name: &str, err: &DriverError) -> Option<&'static str> {
     match (name, err) {
+        (
+            "wpaie",
+            DriverError::Protocol("ioctl-timeout")
+            | DriverError::Protocol("ioctl-no-progress-after-frame"),
+        ) => Some("cyw43-join-security-wpaie-loop"),
         (
             "wsec",
             DriverError::Protocol("ioctl-timeout")
@@ -520,6 +531,42 @@ fn join_security_iovar_failure_exact_error(name: &str, err: &DriverError) -> Opt
         ) => Some("cyw43-join-security-wsec-first-loop"),
         _ => None,
     }
+}
+
+fn join_security_wpa_auth_stage(value: u32) -> &'static str {
+    match value {
+        WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED => "initial",
+        WPA_AUTH_WPA2_PSK => "final",
+        _ => "unknown",
+    }
+}
+
+fn join_security_wpa_auth_failure_exact_error(
+    value: u32,
+    err: &DriverError,
+) -> Option<&'static str> {
+    match (value, err) {
+        (
+            WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED,
+            DriverError::Protocol("ioctl-timeout")
+            | DriverError::Protocol("ioctl-no-progress-after-frame"),
+        ) => Some("cyw43-join-security-wpa-auth-initial-loop"),
+        (
+            WPA_AUTH_WPA2_PSK,
+            DriverError::Protocol("ioctl-timeout")
+            | DriverError::Protocol("ioctl-no-progress-after-frame"),
+        ) => Some("cyw43-join-security-wpa-auth-final-loop"),
+        _ => None,
+    }
+}
+
+fn join_iovar_fallback_allows_set_ssid(err: &DriverError) -> bool {
+    matches!(
+        err,
+        DriverError::IoctlFailed { cmd, status }
+            if *cmd == Ioctl::SetVar as u32
+                && matches!(*status, BCME_UNSUPPORTED | BCME_BADARG)
+    )
 }
 
 fn wsec_pmk_passphrase_fallback_allowed(psk: &[u8]) -> bool {
@@ -2028,20 +2075,22 @@ impl Cyw43NetDevice {
             );
             self.program_join_request(ssid)?;
         } else {
-            self.set_primary_bsscfg_u32("wpa_auth", WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED)?;
+            self.set_iovar_bytes("wpaie", &WPA2_PSK_CCMP_RSN_IE)?;
+            self.set_join_security_wpa_auth(WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED)?;
             self.set_primary_bsscfg_u32("auth", AUTH_OPEN)?;
             self.set_primary_bsscfg_u32("wsec", WSEC_AES)?;
             if linux_wpa2_join_sets_mfp_without_rsn_ie() {
                 self.set_optional_iovar_u32("mfp", MFP_CAPABLE)?;
             }
-            self.set_primary_bsscfg_u32("wpa_auth", WPA_AUTH_WPA2_PSK)?;
+            self.set_join_security_wpa_auth(WPA_AUTH_WPA2_PSK)?;
             self.enable_wpa2_firmware_supplicant()?;
             let pmk_kind = self.set_wsec_pmk(ssid.as_bytes(), psk.as_bytes())?;
             info!(
-                "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={} pmk_kind={} control=linux-primary-bsscfg order=wpa_auth-initial-auth-wsec-wpa_auth-final-sup_wpa-pmk initial_wpa_auth=0x{WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED:04x} final_wpa_auth=0x{WPA_AUTH_WPA2_PSK:04x}",
+                "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={} pmk_kind={} control=linux-primary-bsscfg order=wpaie-wpa_auth-initial-auth-wsec-wpa_auth-final-sup_wpa-pmk rsn_ie_len={} initial_wpa_auth=0x{WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED:04x} final_wpa_auth=0x{WPA_AUTH_WPA2_PSK:04x}",
                 ssid.len(),
                 psk.len(),
                 pmk_kind.label(),
+                WPA2_PSK_CCMP_RSN_IE.len(),
             );
             self.program_join_request(ssid)?;
             let requires_psk_completion = true;
@@ -2094,6 +2143,12 @@ impl Cyw43NetDevice {
                 return Ok(());
             }
             Err(err) => {
+                if !join_iovar_fallback_allows_set_ssid(&err) {
+                    warn!(
+                        "[cyw43] join request path=primary-bsscfg:join action=fail-no-fallback err={err}"
+                    );
+                    return Err(err);
+                }
                 warn!(
                     "[cyw43] join request path=primary-bsscfg:join action=fallback-set-ssid err={err}"
                 );
@@ -2343,6 +2398,23 @@ impl Cyw43NetDevice {
 
     fn set_primary_bsscfg_u32(&mut self, name: &str, value: u32) -> Result<(), DriverError> {
         self.set_iovar_u32(name, value)
+    }
+
+    fn set_join_security_wpa_auth(&mut self, value: u32) -> Result<(), DriverError> {
+        match self.set_primary_bsscfg_u32("wpa_auth", value) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if let Some(exact_error) = join_security_wpa_auth_failure_exact_error(value, &err) {
+                    let stage = join_security_wpa_auth_stage(value);
+                    warn!(
+                        "[cyw43] iovar set failed name=wpa_auth stage={stage} value=0x{value:04x} err={err} exact={exact_error}"
+                    );
+                    Err(DriverError::Hal(HalError::Unsupported(exact_error)))
+                } else {
+                    Err(err)
+                }
+            }
+        }
     }
 
     fn set_optional_iovar_u32(
@@ -2789,6 +2861,7 @@ impl Cyw43NetDevice {
                     self.log_pending_ioctl_frame("ioctl-response-error");
                     self.state
                         .log_cyw43_control_plane_snapshot("ioctl-response-error");
+                    self.state.finish_cyw43_control_plane_reply_wait();
                     return Err(err);
                 }
                 Ok(
@@ -2800,8 +2873,10 @@ impl Cyw43NetDevice {
                     },
                 ) if control_response_matches(&result, cmd, expected_id) => {
                     if status != STATUS_SUCCESS {
+                        self.state.finish_cyw43_control_plane_reply_wait();
                         return Err(DriverError::IoctlFailed { cmd, status });
                     }
+                    self.state.finish_cyw43_control_plane_reply_wait();
                     return Ok(response_len);
                 }
                 Ok(RxFrameResult::None) => {
@@ -2825,6 +2900,7 @@ impl Cyw43NetDevice {
                         self.log_pending_ioctl_frame("ioctl-no-progress-after-frame");
                         self.state
                             .log_cyw43_control_plane_snapshot("ioctl-no-progress-after-frame");
+                        self.state.finish_cyw43_control_plane_reply_wait();
                         return Err(DriverError::Protocol("ioctl-no-progress-after-frame"));
                     }
                 }
@@ -2866,6 +2942,7 @@ impl Cyw43NetDevice {
         );
         self.log_pending_ioctl_frame("ioctl-timeout");
         self.state.log_cyw43_control_plane_snapshot("ioctl-timeout");
+        self.state.finish_cyw43_control_plane_reply_wait();
         Err(DriverError::Protocol(
             preserved_exact_error.unwrap_or("ioctl-timeout"),
         ))
@@ -3818,10 +3895,11 @@ mod tests {
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
         ioctl_no_progress_after_nonmatching_frames, ioctl_wait_loops, iovar_get_payload_len,
         is_transport_retryable, join_completion_rule_label, join_event_result,
-        join_security_iovar_failure_exact_error, join_security_iovar_name,
-        linux_attach_control_plane_probe_order, linux_first_control_plane_iovar_order,
-        linux_join_event_mask, linux_optional_iovar_allows_unsupported,
-        linux_station_path_enables_apsta,
+        join_iovar_fallback_allows_set_ssid, join_security_iovar_failure_exact_error,
+        join_security_iovar_name, join_security_wpa_auth_failure_exact_error,
+        join_security_wpa_auth_stage, linux_attach_control_plane_probe_order,
+        linux_first_control_plane_iovar_order, linux_join_event_mask,
+        linux_optional_iovar_allows_unsupported, linux_station_path_enables_apsta,
         linux_station_path_keeps_rxglom_configured_before_preinit,
         linux_station_path_keeps_txglom_configured_before_preinit,
         linux_station_path_sets_ampdu_limits_before_join,
@@ -3839,19 +3917,20 @@ mod tests {
         write_linux_bsscfg_join_payload, write_sdpcm_control_tx_header,
         write_wsec_passphrase_payload, write_wsec_pmk_payload,
         wsec_pmk_passphrase_fallback_allowed, Cyw43Event, DriverError, Ioctl, JoinCompletionState,
-        RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_UNSUPPORTED, BDC_VERSION,
+        RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_BADARG, BCME_UNSUPPORTED, BDC_VERSION,
         BDC_VERSION_SHIFT, BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA,
         CHANNEL_EVENT, CHANNEL_GLOM, CLM_CHUNK_SIZE, EVENTMSGS_EXT_SET_MASK, EVENTMSGS_EXT_VER,
-        EVENT_ASSOC, EVENT_ASSOC_IND, EVENT_AUTH, EVENT_FLAG_LINK, EVENT_IF, EVENT_LINK,
-        EVENT_MASK_LEN, EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC, EVENT_REASSOC_IND,
-        EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_NO_PROGRESS_AFTER_NONMATCHING_LIMIT,
-        IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, LINUX_BSSCFG_JOIN_PAYLOAD_LEN,
-        LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN, LINUX_EXT_JOIN_SCAN_OFFSET,
-        LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
-        SDPCM_CONTROL_TX_EXT_HEADER_LEN, SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN,
-        STATUS_ABORT, STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED, WPA_AUTH_WPA2_PSK,
+        EVENT_ASSOC, EVENT_ASSOC_IND, EVENT_AUTH, EVENT_DISASSOC_IND, EVENT_FLAG_LINK, EVENT_IF,
+        EVENT_LINK, EVENT_MASK_LEN, EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC,
+        EVENT_REASSOC_IND, EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN,
+        IOCTL_NO_PROGRESS_AFTER_NONMATCHING_LIMIT, IOCTL_WAIT_LOOPS,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
+        LINUX_BSSCFG_JOIN_PAYLOAD_LEN, LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN,
+        LINUX_EXT_JOIN_SCAN_OFFSET, LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_NO_NETWORKS,
+        STATUS_SUCCESS, STATUS_UNSOLICITED, WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK,
         WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WSEC_FLAG_PASSPHRASE, WSEC_PASSPHRASE_PAYLOAD_LEN,
         WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
     };
@@ -3936,9 +4015,10 @@ mod tests {
         assert_eq!(EVENT_SET_SSID, 0);
         assert_eq!(EVENT_AUTH, 3);
         assert_eq!(EVENT_ASSOC, 7);
+        assert_eq!(EVENT_ASSOC_IND, 8);
         assert_eq!(EVENT_REASSOC, 9);
-        assert_eq!(EVENT_ASSOC_IND, 12);
-        assert_eq!(EVENT_REASSOC_IND, 13);
+        assert_eq!(EVENT_REASSOC_IND, 10);
+        assert_eq!(EVENT_DISASSOC_IND, 12);
         assert_eq!(EVENT_LINK, 16);
         assert_eq!(EVENT_ROAM, 19);
         assert_eq!(EVENT_MIC_ERROR, 33);
@@ -3976,7 +4056,7 @@ mod tests {
         assert_eq!(payload[2], EVENT_MASK_LEN as u8);
         assert_eq!(payload[3], 0);
         assert_eq!(payload[4], 0xe9);
-        assert_eq!(payload[5], 0x3f);
+        assert_eq!(payload[5], 0x1f);
         assert_eq!(payload[6], 0x0b);
         assert_eq!(payload[8], 0x02);
         assert_eq!(payload[9], 0x42);
@@ -3986,7 +4066,10 @@ mod tests {
             EVENT_SET_SSID,
             EVENT_AUTH,
             EVENT_ASSOC,
+            EVENT_ASSOC_IND,
             EVENT_REASSOC,
+            EVENT_REASSOC_IND,
+            EVENT_DISASSOC_IND,
             EVENT_LINK,
             EVENT_PSK_SUP,
         ] {
@@ -4568,9 +4651,20 @@ mod tests {
     }
 
     #[test]
+    fn secure_join_rsn_ie_matches_wpa2_psk_ccmp_shape() {
+        assert_eq!(WPA2_PSK_CCMP_RSN_IE.len(), 22);
+        assert_eq!(&WPA2_PSK_CCMP_RSN_IE[0..2], &[0x30, 0x14]);
+        assert_eq!(&WPA2_PSK_CCMP_RSN_IE[2..4], &1u16.to_le_bytes());
+        assert_eq!(&WPA2_PSK_CCMP_RSN_IE[4..8], &[0x00, 0x0f, 0xac, 0x04]);
+        assert_eq!(&WPA2_PSK_CCMP_RSN_IE[10..14], &[0x00, 0x0f, 0xac, 0x04]);
+        assert_eq!(&WPA2_PSK_CCMP_RSN_IE[16..20], &[0x00, 0x0f, 0xac, 0x02]);
+    }
+
+    #[test]
     fn join_security_iovar_logging_covers_current_gate_names() {
         for name in [
             "auth",
+            "wpaie",
             "wsec",
             "wpa_auth",
             "sup_wpa",
@@ -4606,6 +4700,62 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn wpa_auth_ioctl_timeout_preserves_join_security_stage_gate() {
+        assert_eq!(
+            join_security_wpa_auth_stage(WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED),
+            "initial"
+        );
+        assert_eq!(join_security_wpa_auth_stage(WPA_AUTH_WPA2_PSK), "final");
+        assert_eq!(
+            join_security_wpa_auth_failure_exact_error(
+                WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED,
+                &DriverError::Protocol("ioctl-no-progress-after-frame"),
+            ),
+            Some("cyw43-join-security-wpa-auth-initial-loop")
+        );
+        assert_eq!(
+            join_security_wpa_auth_failure_exact_error(
+                WPA_AUTH_WPA2_PSK,
+                &DriverError::Protocol("ioctl-timeout"),
+            ),
+            Some("cyw43-join-security-wpa-auth-final-loop")
+        );
+    }
+
+    #[test]
+    fn wpaie_ioctl_timeout_preserves_join_security_gate() {
+        assert_eq!(
+            join_security_iovar_failure_exact_error(
+                "wpaie",
+                &DriverError::Protocol("ioctl-no-progress-after-frame"),
+            ),
+            Some("cyw43-join-security-wpaie-loop")
+        );
+    }
+
+    #[test]
+    fn join_iovar_fallback_excludes_transport_failures() {
+        assert!(join_iovar_fallback_allows_set_ssid(
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_UNSUPPORTED,
+            },
+        ));
+        assert!(join_iovar_fallback_allows_set_ssid(
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_BADARG,
+            },
+        ));
+        assert!(!join_iovar_fallback_allows_set_ssid(
+            &DriverError::Protocol("ioctl-no-progress-after-frame"),
+        ));
+        assert!(!join_iovar_fallback_allows_set_ssid(
+            &DriverError::Protocol("ioctl-timeout"),
+        ));
     }
 
     #[test]

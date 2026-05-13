@@ -8101,6 +8101,10 @@ impl Pi4WifiState {
         promote_cached_wifi_debug_snapshot_exact_error(exact_error);
     }
 
+    pub fn finish_cyw43_control_plane_reply_wait(&mut self) {
+        self.host.finish_control_plane_reply_wait();
+    }
+
     #[must_use]
     pub const fn cyw43_control_plane_probe_pending(&self) -> bool {
         self.host.experimental_control_plane_write_probe_pending
@@ -9704,7 +9708,6 @@ impl SdioHost {
             self.clear_control_plane_startup_link_rescue_cycles();
         }
         self.clear_last_function2_frame_recovery();
-        self.strict_control_plane_reply_pending = false;
         self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
         self.experimental_control_plane_reply_rearm_attempts = 0;
         self.experimental_control_plane_reply_rearm_empty_polls = 0;
@@ -9714,6 +9717,16 @@ impl SdioHost {
 
     fn clear_control_plane_speculative_reply_frame(&mut self) {
         self.experimental_control_plane_speculative_frame_len = 0;
+    }
+
+    fn finish_control_plane_reply_wait(&mut self) {
+        self.strict_control_plane_reply_pending = false;
+        self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
+        self.experimental_control_plane_reply_rearm_attempts = 0;
+        self.experimental_control_plane_reply_rearm_empty_polls = 0;
+        self.experimental_control_plane_promoted_probe_pending = false;
+        self.experimental_control_plane_linux_rxskip_pending = false;
+        self.clear_control_plane_speculative_reply_frame();
     }
 
     fn clear_control_plane_startup_link_stabilization(&mut self) {
@@ -17543,7 +17556,6 @@ impl SdioHost {
                 self.clear_control_plane_startup_link_rescue_cycles();
             }
             self.clear_control_plane_speculative_reply_frame();
-            self.strict_control_plane_reply_pending = false;
             self.experimental_control_plane_reply_rearm_mode = control_plane_reply_rearm_none();
             self.experimental_control_plane_reply_rearm_empty_polls = 0;
             return Ok(frame_len);
