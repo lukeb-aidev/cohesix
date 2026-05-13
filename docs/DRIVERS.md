@@ -374,14 +374,16 @@ power/reset state.
   are proven.
 - Cohesix also applies the Linux attach-time `join_pref` default payload
   (`04 02 08 01 01 02 00 00`) before scan/join defaults. WPA2-PSK join setup
-  must match Linux and known-good CYW43 behavior: configure primary-BSS
-  `wsec`, enable firmware supplicant on the primary BSS with `sup_wpa`, then
-  configure `infra`, `auth`, and `wpa_auth` before programming
-  `WLC_SET_WSEC_PMK`. For the primary BSS (`bsscfgidx=0`), Linux
-  `brcmf_fil_bsscfg_*` collapses to the plain iovar name and data; Cohesix must
-  not send a literal `bsscfg:` wrapper or leading zero BSS index on Pi 4 station
-  joins. The Pi 4 Linux
-  capture shows the plain `sup_wpa`
+  must match Linux and known-good CYW43 behavior: program the primary-BSS
+  initial WPA2 version mask (`wpa_auth=0x00c0`), D11 auth (`auth=0`), AES
+  security (`wsec=0x0004`), optional MFP only when an RSN IE proves it, final
+  WPA2-PSK AKM (`wpa_auth=0x0080`), firmware supplicant (`sup_wpa=1`), then
+  `WLC_SET_WSEC_PMK` before the primary `join` iovar. `infra=1` is not part of
+  the Linux connect-time station command sequence. For the primary BSS
+  (`bsscfgidx=0`), Linux `brcmf_fil_bsscfg_*` collapses to the plain iovar name
+  and data; Cohesix must not send a literal `bsscfg:` wrapper or leading zero
+  BSS index on Pi 4 station joins. The Pi 4 Linux capture shows the plain
+  `sup_wpa`
   feature probe returning `BCME_UNSUPPORTED`; plain `sup_wpa` must therefore
   not authorize or weaken the secure Cohesix join rule. The Cohesix Pi 4 path
   uses primary-BSS firmware supplicant mode as a hard secure-join gate, and an
@@ -407,7 +409,14 @@ power/reset state.
   the firmware accepted the command. The 2026-05-13 20:40 trace exposed a
   Cohesix-only wrapper drift (`bsscfg:wsec` with a leading zero index) at this
   gate; proof tooling reports that old image as
-  `primary-bsscfg-wrapper-join-security-loop`.
+  `primary-bsscfg-wrapper-join-security-loop`. The 2026-05-13 22:00 trace
+  superseded that wrapper blocker: the image sent plain `wsec` first and then
+  stayed in IRQ158 host-latch/no-dongle-source polling until the `wsec` ioctl
+  timed out. Linux sends initial `wpa_auth` and `auth` before `wsec`; proof
+  tooling reports that old image as `join-security-wsec-first-loop`. The
+  driver must preserve that exact join-security gate into `wifi diag` instead
+  of collapsing the post-failure shell output into a lower-level Function 1 or
+  Function 2 visibility symptom.
 - WPA2 join completion must be gated on the firmware supplicant event, not on
   `WLC_SET_SSID` success when firmware supplicant mode is available. Open
   networks may complete on a successful `SET_SSID` event. Secure networks must
@@ -463,10 +472,10 @@ power/reset state.
   only when the dongle-side source cannot be read before the seL4 IRQ ack.
 - SDIO IRQ logs must separate host interrupt delivery from dongle source proof.
   A seL4 IRQ 158 notification or SDHCI `CARD_INT` latch with
-  `SDIO_INT_STATUS=0` is logged as host-latch/no-dongle-source evidence; only a
-  nonzero dongle source bit, `I_HMB_FRAME_IND`, or a valid Function 2 SDPCM
-  header proves control-plane reply progress. IRQ 27 remains the seL4 timer and
-  is never part of this proof.
+  `SDIO_INT_STATUS=0` is logged as host-latch/no-dongle-source evidence with
+  `progress=no`; only a nonzero dongle source bit, `I_HMB_FRAME_IND`, or a valid
+  Function 2 SDPCM header proves control-plane reply progress. IRQ 27 remains
+  the seL4 timer and is never part of this proof.
 - A post-control-write SDIO-core `I_HMB_FRAME_IND` bit is authoritative reply
   progress even when the Function 1 frame-length sideband still reads zero.
   Mirror Linux by reading the fixed Function 2 FIFO at `0x18000000` with the
@@ -598,7 +607,10 @@ active path is Cohesix-owned cold start:
   `ERDP`, `ERSTSZ`/`ERSTBA`), issue a HAL EXT_CFG drain after each
   controller-ownership register write, start the controller with `USBCMD.RUN`,
   then apply U-Boot's poll-only post-start interrupter state (`IMOD=0`,
-  `IMAN=0`) through HAL-drained writes. `CRCR` composition preserves the low
+  `IMAN=0`) through HAL-drained writes. DCBAA slot `0` must be rewritten with
+  the HAL-returned scratchpad pointer-array bus address after scratchpad
+  publication, then shared again before `DCBAAP` is made visible. `CRCR`
+  composition preserves the low
   `CMD_RING_RSVD_BITS` exactly as U-Boot does before OR-ing the command-ring
   pointer and producer cycle; when the seL4 prompt-safe lane cannot live-read
   `CRCR`, it uses the Pi 4 captured running low-bit seed instead of publishing

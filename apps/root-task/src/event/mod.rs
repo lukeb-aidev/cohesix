@@ -3639,6 +3639,7 @@ where
                     | "cyw43-device-on-timeout-before-ht"
                     | "cyw43-device-on-timeout-before-function2"
             ) || exact_error.starts_with("cyw43-control-plane-")
+                || exact_error.starts_with("cyw43-join-security-")
                 || exact_error.starts_with("cyw43-function2-")
                 || Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error))
     }
@@ -3674,6 +3675,9 @@ where
         let exact_error = snapshot.control_plane_exact_error;
         if Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error) {
             return ("firmware-core-control-edge", "firmware-core-control");
+        }
+        if exact_error.starts_with("cyw43-join-security-") {
+            return ("join-security-edge", "join-security");
         }
         if exact_error.is_empty()
             && snapshot.control_plane_no_ht_transport
@@ -3755,6 +3759,9 @@ where
         if Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error) {
             return "firmware-core-control";
         }
+        if exact_error.starts_with("cyw43-join-security-") {
+            return "join-security";
+        }
         if exact_error.is_empty()
             && snapshot.control_plane_no_ht_transport
             && snapshot.control_plane_bootstrap_phase == "startup-link-recovery"
@@ -3824,6 +3831,7 @@ where
             "firmware-core-control" => "firmware-upload",
             "function2-ready" => "setup-firmware-channel",
             "function2-interrupts" => "mailbox-ready",
+            "join-security" => "join-submit",
             "setup-firmware-channel" => "wait-firmware-ready",
             "startup-link-recovery" => "first-function2-reply",
             "function1-sideband" => "first-function2-reply",
@@ -3842,6 +3850,11 @@ where
                 ))
         {
             "startup-link-f2"
+        } else if snapshot
+            .control_plane_exact_error
+            .starts_with("cyw43-join-security-")
+        {
+            "join-security"
         } else if snapshot
             .control_plane_exact_error
             .starts_with("cyw43-control-plane-sideband-")
@@ -3881,6 +3894,8 @@ where
         let exact_error = snapshot.control_plane_exact_error;
         if Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error) {
             "firmware-core-control"
+        } else if exact_error.starts_with("cyw43-join-security-") {
+            "join-security"
         } else if exact_error.starts_with("cyw43-function2-reply-") {
             "direct-f2-reply"
         } else if exact_error
@@ -3915,6 +3930,7 @@ where
             "firmware-core-control" => "f1-backplane-core-control",
             "function2-ready" => "ioex=0x06+iordy=0x06",
             "function2-interrupts" => "linux-f2-interrupts-armed",
+            "join-security" => "linux-wpa2-security-order",
             "setup-firmware-channel" => "mailbox-version-readable",
             "startup-link-recovery" => "reply-rearm-complete",
             "function1-sideband" => "f1-sideband-readable",
@@ -3950,6 +3966,10 @@ where
             "function2-interrupts" => format_message(format_args!(
                 "f2_state={}+reply_mode={}",
                 snapshot.control_plane_f2_state, snapshot.control_plane_reply_mode,
+            )),
+            "join-security" => format_message(format_args!(
+                "exact={}+sdhci={}",
+                snapshot.control_plane_exact_error, snapshot.control_plane_sdhci_read_diag,
             )),
             "setup-firmware-channel" => format_message(format_args!(
                 "clock={}Hz+safe_reason={}",
@@ -8757,6 +8777,49 @@ mod tests {
             KernelConsoleTestPump::wifi_contract_expected(&fake.snapshot),
             "chipclkcsr-ht-avail"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_join_security_exact_error_reports_join_gate() {
+        let mut fake = FakeWifiDebug::new();
+        fake.snapshot.debug_snapshot_stage = "cyw43-init-control-plane-fail";
+        fake.snapshot.control_plane_exact_error = "cyw43-join-security-wsec-first-loop";
+        fake.snapshot.control_plane_sdhci_read_diag = "f1-reply-read-command-error";
+        fake.snapshot.control_plane_f2_state = "linux-configured";
+        fake.snapshot.control_plane_bootstrap_phase = "steady-state";
+        fake.snapshot.control_plane_no_ht_transport = false;
+        fake.snapshot.control_plane_probe_pending = false;
+        fake.snapshot.io_enable = Some(0x06);
+        fake.snapshot.io_ready = Some(0x06);
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_capture_verdict(&fake.snapshot),
+            ("join-security-edge", "join-security")
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_golden_path_current_step(&fake.snapshot),
+            "join-security"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_golden_path_next_step(&fake.snapshot),
+            "join-submit"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_contract_path(&fake.snapshot),
+            "join-security"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_contract_blocker_class(&fake.snapshot),
+            "join-security"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_contract_expected(&fake.snapshot),
+            "linux-wpa2-security-order"
+        );
+        assert!(KernelConsoleTestPump::wifi_diag_should_skip_ht_probe(
+            &fake.snapshot
+        ));
     }
 
     #[cfg(feature = "kernel")]

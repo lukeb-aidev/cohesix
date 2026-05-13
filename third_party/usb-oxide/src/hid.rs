@@ -14,13 +14,13 @@
 //! - LED control for keyboards
 
 use crate::{
-    Dma, Result, UsbError,
     desc::{
-        EndpointDesc, InterfaceDesc, SetupPacket, class, desc_type, ep_type, hid_protocol,
-        hid_subclass,
+        class, desc_type, ep_type, hid_protocol, hid_subclass, EndpointDesc, InterfaceDesc,
+        SetupPacket,
     },
     dev::UsbDevice,
-    ring::{PhysMem, completion, trb_type},
+    ring::{completion, trb_type, PhysMem},
+    Dma, Result, UsbError,
 };
 
 use alloc::sync::Arc;
@@ -164,7 +164,11 @@ fn decode_bitmap_keyboard_bits(
         }
     }
 
-    if count == 0 { None } else { Some(report) }
+    if count == 0 {
+        None
+    } else {
+        Some(report)
+    }
 }
 
 #[inline]
@@ -1249,7 +1253,11 @@ pub fn scancode_to_ascii(scancode: u8, shift: bool) -> Option<char> {
 
     if (scancode as usize) < table.len() {
         let c = table[scancode as usize];
-        if c != 0 { Some(c as char) } else { None }
+        if c != 0 {
+            Some(c as char)
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -1306,10 +1314,10 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardDecodeMode, KeyboardDecodeTransition, KeyboardProtocolMode,
         decode_keyboard_report_payload, decode_keyboard_report_payload_boot_compatible,
         forced_keyboard_profile, has_report_payload, keyboard_decode_transition,
-        keyboard_endpoint_id_matches, keyboard_usage_code_valid, UBOOT_BOOT_KEYBOARD_IDLE_DURATION,
+        keyboard_endpoint_id_matches, keyboard_usage_code_valid, KeyboardDecodeMode,
+        KeyboardDecodeTransition, KeyboardProtocolMode, UBOOT_BOOT_KEYBOARD_IDLE_DURATION,
     };
     use crate::ring::completion;
 

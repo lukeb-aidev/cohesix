@@ -3359,6 +3359,45 @@ def test_gate_summary_reports_primary_bsscfg_wrapper_join_security_loop() -> Non
     assert gates.wifi_blocker_line > 0
 
 
+def test_gate_summary_reports_wsec_first_join_security_loop() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "reply cmd=0x00000002 id=18 status=0x00000000 response_len=0",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=up action=ready",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=join action=begin",
+            "[pi4-wifi] firmware stage=control-plane-write "
+            "action=linux-f2-write-shape frame_len=48",
+            *[
+                "[pi4-wifi] sdio xfer chunk fn=1 op=read base=0x0c020 "
+                "chunk=0x0c020 off=0 len=4 inc=1"
+                for _ in range(16)
+            ],
+            *[
+                "[pi4-wifi] firmware stage=control-plane-reply "
+                "action=sdio-irq-device-clear intstatus=0x00800000/y "
+                "serviced=0x00000000 sdhci=0x00000100 card_int=true "
+                "source_state=host-card-int-latch-only"
+                for _ in range(8)
+            ],
+            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "name=wsec err=cyw43 protocol error: ioctl-timeout",
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=join action=fail err=cyw43 protocol error: ioctl-timeout",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "join-security-wsec-first-loop"
+    assert gates.wifi_exact == "cyw43-join-security-wsec-first-loop"
+    assert gates.wifi_phase == "join"
+    assert gates.wifi_blocker_line > 0
+
+
 def test_gate_summary_tracks_wifi_dhcp_failure_evidence() -> None:
     events = normalizer.parse_events(
         [

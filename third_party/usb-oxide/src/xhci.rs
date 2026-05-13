@@ -84,6 +84,7 @@ const RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE: u16 = 0x03ba;
 const RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE: u16 = 0x03bb;
 const RING_PUBLISH_CONFIG_FLUSH_STAGE: u16 = 0x03bc;
 const RING_PUBLISH_DNCTRL_FLUSH_STAGE: u16 = 0x03bd;
+const RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE: u16 = 0x03be;
 const COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE: u16 = 0x03e8;
 const COMMAND_RECOVERY_IMOD_FLUSH_STAGE: u16 = 0x03e9;
 const COMMAND_RECOVERY_IMAN_FLUSH_STAGE: u16 = 0x03ea;
@@ -1939,6 +1940,23 @@ impl<H: Dma> ScratchpadSet<H> {
 }
 
 #[inline(always)]
+fn publish_dcbaa_scratchpad_array<H: Dma>(
+    dcbaa: &PhysMem<H>,
+    scratchpad_array_bus: u64,
+    defer: bool,
+) -> u64 {
+    let published = if defer { 0 } else { scratchpad_array_bus };
+    // SAFETY: DCBAA entry 0 is the xHCI scratchpad pointer-array slot. The
+    // caller owns the DCBAA allocation and publishes either the HAL-proven bus
+    // address or zero when a deferred ownership lane intentionally withholds it.
+    unsafe {
+        dcbaa.as_ptr::<u64>().write_volatile(published);
+    }
+    compiler_fence(Ordering::Release);
+    published
+}
+
+#[inline(always)]
 fn split_u64_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
     [(offset, val as u32), (offset + 4, (val >> 32) as u32)]
 }
@@ -2769,11 +2787,7 @@ impl<H: Dma> XhciCtrl<H> {
         let scratchpad = if max_scratchpad > 0 {
             let set = ScratchpadSet::build(&*host, max_scratchpad as usize)?;
             let scratchpad_array_phys = set.array.try_phys(&*host)?;
-            // SAFETY: DCBAA entry 0 is the scratchpad array pointer; `dcbaa`
-            // is the owned controller DCBAA allocation.
-            unsafe {
-                dcbaa.as_ptr::<u64>().write_volatile(scratchpad_array_phys);
-            }
+            publish_dcbaa_scratchpad_array(&dcbaa, scratchpad_array_phys, false);
             emit_xhci_diag(0x010b, scratchpad_array_phys, max_scratchpad as u64, 0);
             Some(set)
         } else {
@@ -3389,15 +3403,21 @@ impl<H: Dma> XhciCtrl<H> {
         } else {
             None
         };
+        if let Some(scratchpad_array_phys) = scratchpad_array_phys {
+            let published_scratchpad_array = publish_dcbaa_scratchpad_array(
+                &self.dcbaa,
+                scratchpad_array_phys,
+                defer_scratchpad_array_publish,
+            );
+            emit_xhci_diag(
+                RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE,
+                scratchpad_array_phys,
+                published_scratchpad_array,
+                u64::from(defer_scratchpad_array_publish),
+            );
+        }
         let deferred_scratchpad_array_phys =
             scratchpad_array_phys.filter(|_| defer_scratchpad_array_publish);
-        if deferred_scratchpad_array_phys.is_some() {
-            // SAFETY: DCBAA entry 0 is the controller-owned scratchpad pointer;
-            // it is intentionally kept clear until DCBAAP/CRCR/ERST are live.
-            unsafe {
-                self.dcbaa.as_ptr::<u64>().write_volatile(0);
-            }
-        }
         let dcbaa_phys = self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa")?;
         let dcbaap_offset = self.op_base - self.mmio + reg::DCBAAP;
         let snapshot_dcbaap = trusted_runtime_seed_snapshot
@@ -4165,13 +4185,7 @@ impl<H: Dma> XhciCtrl<H> {
 
         if let Some(scratchpad_array_phys) = deferred_scratchpad_array_phys {
             if !skip_fresh_runtime_ownership_publish {
-                // SAFETY: DCBAA entry 0 remains controller-init-owned state and
-                // is republished only after DCBAAP/CRCR/ERST are live.
-                unsafe {
-                    self.dcbaa
-                        .as_ptr::<u64>()
-                        .write_volatile(scratchpad_array_phys);
-                }
+                publish_dcbaa_scratchpad_array(&self.dcbaa, scratchpad_array_phys, false);
                 let _ = self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa")?;
             }
         }
@@ -5277,7 +5291,15 @@ impl<H: Dma> XhciCtrl<H> {
 
         emit_xhci_diag(
             base_stage + 1,
-            expected_cmd_ring | 1,
+            compose_crcr(
+                prompt_safe_crcr_publish_seed(
+                    self.firmware_handoff,
+                    self.runtime_seed_snapshot,
+                    false,
+                ),
+                expected_cmd_ring,
+                true,
+            ),
             expected_dcbaap,
             ((self.db_offset as u64) << 32) | db as u64,
         );
@@ -6758,10 +6780,11 @@ mod tests {
         preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
-        prompt_safe_command_recovery_uses_bounded_blind_settles, prompt_safe_command_redoorbell_enabled,
-        prompt_safe_command_timeout_live_snapshot_enabled, prompt_safe_crcr_publish_seed,
+        prompt_safe_command_recovery_uses_bounded_blind_settles,
+        prompt_safe_command_redoorbell_enabled, prompt_safe_command_timeout_live_snapshot_enabled,
+        prompt_safe_crcr_publish_seed,
         prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue,
-        replay_staged_crcr_snapshot_before_publish_with_snapshot,
+        publish_dcbaa_scratchpad_array, replay_staged_crcr_snapshot_before_publish_with_snapshot,
         replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
         reset_completion_blind_settle_spins, reset_usbcmd_seed_before_hcrst,
         reset_usbcmd_seed_before_hcrst_for_init, run_seed_usbcmd, run_usbcmd_needs_live_seed_read,
@@ -6814,18 +6837,22 @@ mod tests {
         XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
     };
     use super::{
-        COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE, COMMAND_RECOVERY_IMAN_FLUSH_STAGE,
-        COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE, COMMAND_RECOVERY_IMOD_FLUSH_STAGE,
+        COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE, COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE,
+        COMMAND_RECOVERY_IMAN_FLUSH_STAGE, COMMAND_RECOVERY_IMOD_FLUSH_STAGE,
         LINUX_COMMAND_PROBE_DNCTRL_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE,
         LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMOD_FLUSH_STAGE,
         RING_PUBLISH_CONFIG_FLUSH_STAGE, RING_PUBLISH_CRCR_FLUSH_HIGH_STAGE,
         RING_PUBLISH_CRCR_FLUSH_LOW_STAGE, RING_PUBLISH_DCBAAP_FLUSH_HIGH_STAGE,
-        RING_PUBLISH_DCBAAP_FLUSH_LOW_STAGE, RING_PUBLISH_ERDP_FLUSH_HIGH_STAGE,
-        RING_PUBLISH_ERDP_FLUSH_LOW_STAGE, RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
-        RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE, RING_PUBLISH_ERSTSZ_FLUSH_STAGE,
-        RING_PUBLISH_DNCTRL_FLUSH_STAGE,
+        RING_PUBLISH_DCBAAP_FLUSH_LOW_STAGE, RING_PUBLISH_DNCTRL_FLUSH_STAGE,
+        RING_PUBLISH_ERDP_FLUSH_HIGH_STAGE, RING_PUBLISH_ERDP_FLUSH_LOW_STAGE,
+        RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE, RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE,
+        RING_PUBLISH_ERSTSZ_FLUSH_STAGE, RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE,
     };
-    use crate::{reg, ring::trb_type, Dma};
+    use crate::{
+        reg,
+        ring::{trb_type, PhysMem},
+        Dma,
+    };
     use alloc::vec;
     use core::sync::atomic::{AtomicUsize, Ordering};
     use std::{
@@ -6961,6 +6988,31 @@ mod tests {
         unsafe {
             assert_eq!(array_ptr.add(0).read_volatile(), page0_bus);
             assert_eq!(array_ptr.add(1).read_volatile(), page1_bus);
+        }
+    }
+
+    #[test]
+    fn dcbaa_scratchpad_slot_uses_hal_bus_address_after_share() {
+        let host = AllocatingMockDma::new(0x1_0000_0000);
+        let dcbaa = PhysMem::alloc(&host, 3 * core::mem::size_of::<u64>(), 64)
+            .expect("dcbaa allocation succeeds");
+        let scratchpads = ScratchpadSet::build(&host, 2).expect("scratchpad allocation succeeds");
+        let array_bus = scratchpads
+            .share_for_device(&host)
+            .expect("scratchpad publication succeeds");
+        let published = publish_dcbaa_scratchpad_array(&dcbaa, array_bus, false);
+        assert_eq!(published, array_bus);
+
+        // SAFETY: The test owns the DCBAA allocation and reads slot 0.
+        unsafe {
+            assert_eq!(dcbaa.as_ptr::<u64>().read_volatile(), array_bus);
+        }
+
+        let deferred = publish_dcbaa_scratchpad_array(&dcbaa, array_bus, true);
+        assert_eq!(deferred, 0);
+        // SAFETY: The test owns the DCBAA allocation and reads slot 0.
+        unsafe {
+            assert_eq!(dcbaa.as_ptr::<u64>().read_volatile(), 0);
         }
     }
 
@@ -10243,6 +10295,7 @@ mod tests {
         assert_eq!(RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE, 0x03bb);
         assert_eq!(RING_PUBLISH_CONFIG_FLUSH_STAGE, 0x03bc);
         assert_eq!(RING_PUBLISH_DNCTRL_FLUSH_STAGE, 0x03bd);
+        assert_eq!(RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE, 0x03be);
         for (offset, value, stage) in [
             (
                 reg::DCBAAP,

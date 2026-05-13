@@ -1279,6 +1279,12 @@ def normalize_wifi_blocker(value: str) -> str:
         or "iovar set failed name=bsscfg:wsec" in lower
     ):
         return "primary-bsscfg-wrapper-join-security-loop"
+    if (
+        "join-security-wsec-first-loop" in lower
+        or "iovar set failed name=wsec" in lower
+        or "iovar no-progress-after-frame name=wsec" in lower
+    ):
+        return "join-security-wsec-first-loop"
     if "join-programming-host-latch-loop" in lower:
         return "join-programming-host-latch-loop"
     if "join-pending" in lower or "association-pending" in lower:
@@ -2222,6 +2228,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             explicit_blocker = raw_contract_blocker
         if explicit_blocker in {
             "firmware-supplicant-unsupported",
+            "join-security-wsec-first-loop",
             "primary-bsscfg-wrapper-join-security-loop",
             "wsec-pmk-bad-argument",
         }:
@@ -2230,6 +2237,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 7)
             post_f2_progress_seen = True
             join_programming_blocker = "primary-bsscfg-wrapper-join-security-loop"
+        if join_begin_seen and (
+            "iovar set failed name=wsec" in raw
+            or "ioctl no-progress-after-frame" in raw
+        ):
+            gate = max(gate, 7)
+            post_f2_progress_seen = True
+            join_programming_blocker = "join-security-wsec-first-loop"
         if "firmware stage=control-plane-write" in raw and "linux-f2-write-shape" in raw:
             control_plane_write_seen = True
             control_plane_reply_seen_after_write = False
@@ -2978,6 +2992,8 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
         return "cyw43-control-plane-legacy-gmode-stall", phase
     if normalize_wifi_blocker(event.raw) == "join-programming-host-latch-loop":
         return "cyw43-join-programming-host-latch-loop", "join"
+    if normalize_wifi_blocker(event.raw) == "join-security-wsec-first-loop":
+        return "cyw43-join-security-wsec-first-loop", "join"
     if normalize_wifi_blocker(event.raw) == "primary-bsscfg-wrapper-join-security-loop":
         return "cyw43-primary-bsscfg-wrapper-join-security-loop", "join"
     if (
@@ -3158,6 +3174,15 @@ def summarize_wifi_failure_detail(
             and "iovar set failed name=bsscfg:" in raw
         ):
             candidate = "primary-bsscfg-wrapper-join-security-loop"
+        if (
+            wifi_blocker == "join-security-wsec-first-loop"
+            and join_begin_seen
+            and (
+                "iovar set failed name=wsec" in raw
+                or "ioctl no-progress-after-frame" in raw
+            )
+        ):
+            candidate = "join-security-wsec-first-loop"
         if "sdio cmd53 r5 fail" in raw:
             if socram_core_ctrl_stage == "prereset-zero-ioctrl":
                 candidate = "socram-prereset-zero-cmd53-r5-rejected"
@@ -3191,6 +3216,8 @@ def summarize_wifi_failure_detail(
             exact = event_exact
             if candidate == "join-programming-host-latch-loop":
                 exact = "cyw43-join-programming-host-latch-loop"
+            if candidate == "join-security-wsec-first-loop":
+                exact = "cyw43-join-security-wsec-first-loop"
             if candidate == "primary-bsscfg-wrapper-join-security-loop":
                 exact = "cyw43-primary-bsscfg-wrapper-join-security-loop"
             if exact == "none" and "sdio cmd53 r5 fail" in raw:
@@ -3201,6 +3228,7 @@ def summarize_wifi_failure_detail(
                 "join"
                 if candidate
                 in {
+                    "join-security-wsec-first-loop",
                     "join-programming-host-latch-loop",
                     "primary-bsscfg-wrapper-join-security-loop",
                 }

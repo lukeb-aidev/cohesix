@@ -14957,8 +14957,13 @@ impl SdioHost {
                 } else {
                     "sdio-irq-notification-acked"
                 };
+                let progress = if self.last_sdio_irq_clear_serviced_bits != 0 {
+                    "yes"
+                } else {
+                    "no"
+                };
                 emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} action={action} irq={} badge=0x{badge:x} source=0x{:08x} source_readable={} card_int={}",
+                    "[pi4-wifi] firmware stage={stage} action={action} irq={} badge=0x{badge:x} source=0x{:08x} source_readable={} card_int={} progress={progress}",
                     binding.irq().0,
                     self.last_sdio_irq_clear_serviced_bits,
                     yn(self.last_sdio_irq_clear_int_status_readable),

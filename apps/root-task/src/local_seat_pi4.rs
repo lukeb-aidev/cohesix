@@ -3924,7 +3924,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0360..=0x036f
             | 0x0370..=0x0377
             | 0x037d..=0x037f
-            | 0x0380..=0x03bd
+            | 0x0380..=0x03be
             | 0x03c0..=0x03ef
             | 0x03f3..=0x03f6
             | 0x03f8
@@ -3973,7 +3973,7 @@ const fn xhci_diag_stage_force_log(stage: u16) -> bool {
             | 0x035f
             | 0x0368..=0x0377
             | 0x037d..=0x037f
-            | 0x03b3..=0x03bd
+            | 0x03b3..=0x03be
             | 0x03c4..=0x03ee
             | 0x0400..=0x0405
     )
@@ -4123,6 +4123,7 @@ const fn xhci_diag_stage_value_labels(
         0x03b0 | 0x03b1 => Some(("slot_ep", "dequeue", "result")),
         0x03c0..=0x03c3 => Some(("slot_ep", "code_payload", "decode_state")),
         0x03b3..=0x03bd => Some(("reg_off", "value", "target")),
+        0x03be => Some(("scratchpad_array", "published", "deferred")),
         0x03c4 => Some(("stop_usbcmd", "live_state_skipped", "policy")),
         0x03c5 | 0x03c8 => Some(("reg_off", "value", "prior")),
         0x03c7 => Some(("settle_spins", "target", "policy")),
@@ -4470,6 +4471,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03bb => Some("cmd-ring-publish-erstba-high-flush"),
         0x03bc => Some("cmd-ring-publish-config-flush"),
         0x03bd => Some("cmd-ring-publish-dnctrl-flush"),
+        0x03be => Some("cmd-ring-publish-scratchpad-array"),
         0x03ef => Some("dma-address-translate-failed"),
         0x03f3 => Some("usb-dcbaa-slot-out-of-range"),
         0x03f4 => Some("usb-dcbaa-slot-read-out-of-range"),
@@ -17778,6 +17780,10 @@ mod tests {
             Some("cmd-ring-publish-dnctrl-flush")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x03be),
+            Some("cmd-ring-publish-scratchpad-array")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x0353),
             Some("cmd-event-ring-before-0")
         );
@@ -18577,6 +18583,7 @@ mod tests {
         assert!(!super::xhci_diag_stage_after_run(0x03b3));
         assert!(!super::xhci_diag_stage_after_run(0x03bc));
         assert!(!super::xhci_diag_stage_after_run(0x03bd));
+        assert!(!super::xhci_diag_stage_after_run(0x03be));
         assert!(!super::xhci_diag_stage_after_run(0x0248));
         assert!(!super::xhci_diag_stage_after_run(0x0213));
     }
@@ -18592,6 +18599,7 @@ mod tests {
         assert!(super::xhci_diag_stage_force_log(0x03b3));
         assert!(super::xhci_diag_stage_force_log(0x03bc));
         assert!(super::xhci_diag_stage_force_log(0x03bd));
+        assert!(super::xhci_diag_stage_force_log(0x03be));
         assert!(super::xhci_diag_stage_force_log(0x03c4));
         assert!(super::xhci_diag_stage_force_log(0x03d0));
         assert!(super::xhci_diag_stage_force_log(0x03e4));
@@ -18864,6 +18872,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x03bd),
             Some(("reg_off", "value", "target"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03be),
+            Some(("scratchpad_array", "published", "deferred"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x03c4),
