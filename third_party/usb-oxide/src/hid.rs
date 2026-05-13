@@ -1309,7 +1309,7 @@ mod tests {
         KeyboardDecodeMode, KeyboardDecodeTransition, KeyboardProtocolMode,
         decode_keyboard_report_payload, decode_keyboard_report_payload_boot_compatible,
         forced_keyboard_profile, has_report_payload, keyboard_decode_transition,
-        keyboard_endpoint_id_matches, keyboard_usage_code_valid,
+        keyboard_endpoint_id_matches, keyboard_usage_code_valid, UBOOT_BOOT_KEYBOARD_IDLE_DURATION,
     };
     use crate::ring::completion;
 

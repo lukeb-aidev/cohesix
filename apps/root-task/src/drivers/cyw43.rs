@@ -65,6 +65,7 @@ const DEFERRED_JOIN_POLL_LIMIT: u16 = 1_200;
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
 const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
+const POST_UP_EVENT_DRAIN_BUDGET: usize = 8;
 
 const CHANNEL_CONTROL: u8 = 0;
 const CHANNEL_EVENT: u8 = 1;
@@ -147,8 +148,16 @@ const WSEC_AES: u32 = 0x04;
 const AUTH_OPEN: u32 = 0x00;
 const MFP_CAPABLE: u32 = 1;
 const WPA_AUTH_DISABLED: u32 = 0x0000;
+const WPA_AUTH_WPA2_UNSPECIFIED: u32 = 0x0040;
 const WPA_AUTH_WPA2_PSK: u32 = 0x0080;
+const WPA_AUTH_LINUX_WPA2_PSK: u32 = WPA_AUTH_WPA2_UNSPECIFIED | WPA_AUTH_WPA2_PSK;
 const LINUX_REVINFO_LEN: usize = 68;
+const WIFI_SSID_MAX_LEN: usize = 32;
+const LINUX_EXT_JOIN_SSID_OFFSET: usize = 0;
+const LINUX_EXT_JOIN_SCAN_OFFSET: usize = LINUX_EXT_JOIN_SSID_OFFSET + 36;
+const LINUX_EXT_JOIN_ASSOC_OFFSET: usize = LINUX_EXT_JOIN_SCAN_OFFSET + 20;
+const LINUX_EXT_JOIN_PARAMS_LEN: usize = LINUX_EXT_JOIN_ASSOC_OFFSET + 12;
+const LINUX_BSSCFG_JOIN_PAYLOAD_LEN: usize = LINUX_EXT_JOIN_PARAMS_LEN;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FirmwareLayout {
@@ -437,6 +446,56 @@ fn write_wsec_passphrase_payload(payload: &mut [u8], psk: &[u8]) -> Result<(), D
     put_u16_le(payload, 0, psk.len() as u16);
     put_u16_le(payload, 2, WSEC_FLAG_PASSPHRASE);
     payload[4..4 + psk.len()].copy_from_slice(psk);
+    Ok(())
+}
+
+fn legacy_set_ssid_payload_len(ssid: &str) -> Result<usize, DriverError> {
+    if ssid.len() > WIFI_SSID_MAX_LEN {
+        return Err(DriverError::Config("wifi-ssid-too-long"));
+    }
+    Ok(36)
+}
+
+fn write_legacy_set_ssid_payload(payload: &mut [u8], ssid: &str) -> Result<(), DriverError> {
+    let payload_len = legacy_set_ssid_payload_len(ssid)?;
+    if payload.len() < payload_len {
+        return Err(DriverError::FrameTooLarge);
+    }
+    payload[..payload_len].fill(0);
+    put_u32_le(
+        payload,
+        0,
+        u32::try_from(ssid.len()).map_err(|_| DriverError::Config("wifi-ssid-too-long"))?,
+    );
+    payload[4..4 + ssid.len()].copy_from_slice(ssid.as_bytes());
+    Ok(())
+}
+
+fn write_linux_bsscfg_join_payload(payload: &mut [u8], ssid: &str) -> Result<(), DriverError> {
+    if ssid.len() > WIFI_SSID_MAX_LEN {
+        return Err(DriverError::Config("wifi-ssid-too-long"));
+    }
+    if payload.len() < LINUX_BSSCFG_JOIN_PAYLOAD_LEN {
+        return Err(DriverError::FrameTooLarge);
+    }
+
+    payload[..LINUX_BSSCFG_JOIN_PAYLOAD_LEN].fill(0);
+    put_u32_le(
+        payload,
+        LINUX_EXT_JOIN_SSID_OFFSET,
+        u32::try_from(ssid.len()).map_err(|_| DriverError::Config("wifi-ssid-too-long"))?,
+    );
+    payload[LINUX_EXT_JOIN_SSID_OFFSET + 4..LINUX_EXT_JOIN_SSID_OFFSET + 4 + ssid.len()]
+        .copy_from_slice(ssid.as_bytes());
+
+    payload[LINUX_EXT_JOIN_SCAN_OFFSET] = 0xff;
+    put_u32_le(payload, LINUX_EXT_JOIN_SCAN_OFFSET + 4, u32::MAX);
+    put_u32_le(payload, LINUX_EXT_JOIN_SCAN_OFFSET + 8, u32::MAX);
+    put_u32_le(payload, LINUX_EXT_JOIN_SCAN_OFFSET + 12, u32::MAX);
+    put_u32_le(payload, LINUX_EXT_JOIN_SCAN_OFFSET + 16, u32::MAX);
+
+    payload[LINUX_EXT_JOIN_ASSOC_OFFSET..LINUX_EXT_JOIN_ASSOC_OFFSET + 6].fill(0xff);
+    put_u32_le(payload, LINUX_EXT_JOIN_ASSOC_OFFSET + 8, 0);
     Ok(())
 }
 
@@ -1723,6 +1782,7 @@ impl Cyw43NetDevice {
         }
         control_step!("event-mask", self.enable_join_event_messages());
         control_step!("up", self.ioctl_raw(IoctlType::Set, Ioctl::Up, 0, &[]));
+        control_step!("post-up-event-drain", self.drain_post_up_events());
         if linux_station_path_sets_legacy_gmode() {
             control_step!("gmode", self.ioctl_set_u32(Ioctl::SetGmode, 0, 1));
         } else {
@@ -1929,23 +1989,26 @@ impl Cyw43NetDevice {
         let secure = !psk.is_empty();
         self.deferred_join_state = DeferredJoinState::Disabled;
         if !secure {
-            self.ioctl_set_u32(Ioctl::SetWsec, 0, 0)?;
+            self.set_primary_bsscfg_u32("wsec", 0)?;
             self.set_optional_iovar_u32("sup_wpa", 0)?;
-            self.ioctl_set_u32(Ioctl::SetInfra, 0, 1)?;
-            self.ioctl_set_u32(Ioctl::SetAuth, 0, 0)?;
-            self.ioctl_set_u32(Ioctl::SetWpaAuth, 0, WPA_AUTH_DISABLED)?;
-            info!("[cyw43] join: auth=open ssid_len={}", ssid.len());
+            self.set_primary_bsscfg_u32("infra", 1)?;
+            self.set_primary_bsscfg_u32("auth", 0)?;
+            self.set_primary_bsscfg_u32("wpa_auth", WPA_AUTH_DISABLED)?;
+            info!(
+                "[cyw43] join: auth=open ssid_len={} control=linux-primary-bsscfg",
+                ssid.len()
+            );
             self.program_join_request(ssid)?;
         } else {
-            self.ioctl_set_u32(Ioctl::SetWsec, 0, WSEC_AES)?;
+            self.set_primary_bsscfg_u32("wsec", WSEC_AES)?;
             self.enable_wpa2_firmware_supplicant()?;
-            self.ioctl_set_u32(Ioctl::SetInfra, 0, 1)?;
-            self.ioctl_set_u32(Ioctl::SetAuth, 0, AUTH_OPEN)?;
+            self.set_primary_bsscfg_u32("infra", 1)?;
+            self.set_primary_bsscfg_u32("auth", AUTH_OPEN)?;
             self.set_optional_iovar_u32("mfp", MFP_CAPABLE)?;
-            self.ioctl_set_u32(Ioctl::SetWpaAuth, 0, WPA_AUTH_WPA2_PSK)?;
+            self.set_primary_bsscfg_u32("wpa_auth", WPA_AUTH_LINUX_WPA2_PSK)?;
             let pmk_kind = self.set_wsec_pmk(ssid.as_bytes(), psk.as_bytes())?;
             info!(
-                "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={} pmk_kind={}",
+                "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={} pmk_kind={} control=linux-primary-bsscfg wpa_auth=0x{WPA_AUTH_LINUX_WPA2_PSK:04x}",
                 ssid.len(),
                 psk.len(),
                 pmk_kind.label(),
@@ -1992,34 +2055,58 @@ impl Cyw43NetDevice {
     }
 
     fn program_join_request(&mut self, ssid: &str) -> Result<(), DriverError> {
-        let payload_len = 36;
+        match self.program_bsscfg_join_request(ssid) {
+            Ok(()) => {
+                info!(
+                    "[cyw43] join request path=primary-bsscfg:join action=ready ssid_len={}",
+                    ssid.len()
+                );
+                return Ok(());
+            }
+            Err(err) => {
+                warn!(
+                    "[cyw43] join request path=primary-bsscfg:join action=fallback-set-ssid err={err}"
+                );
+            }
+        }
+        self.program_set_ssid_request(ssid)
+    }
+
+    fn program_bsscfg_join_request(&mut self, ssid: &str) -> Result<(), DriverError> {
+        {
+            let payload = self.payload_mut(LINUX_BSSCFG_JOIN_PAYLOAD_LEN)?;
+            write_linux_bsscfg_join_payload(payload, ssid)?;
+        }
+        self.set_iovar_from_payload("join", LINUX_BSSCFG_JOIN_PAYLOAD_LEN)
+    }
+
+    fn program_set_ssid_request(&mut self, ssid: &str) -> Result<(), DriverError> {
+        let payload_len = legacy_set_ssid_payload_len(ssid)?;
         {
             let payload = self.payload_mut(payload_len)?;
-            payload.fill(0);
-            put_u32_le(
-                payload,
-                0,
-                u32::try_from(ssid.len()).map_err(|_| DriverError::Config("wifi-ssid-too-long"))?,
-            );
-            payload[4..4 + ssid.len()].copy_from_slice(ssid.as_bytes());
+            write_legacy_set_ssid_payload(payload, ssid)?;
         }
         let _ = self.ioctl_encoded(IoctlType::Set, Ioctl::SetSsid, 0, payload_len)?;
+        info!(
+            "[cyw43] join request path=set-ssid action=ready ssid_len={}",
+            ssid.len()
+        );
         Ok(())
     }
 
     fn enable_wpa2_firmware_supplicant(&mut self) -> Result<(), DriverError> {
-        if let Err(err) = self.set_iovar_u32x2("bsscfg:sup_wpa", BSSCFG_PRIMARY_INDEX, 1) {
+        if let Err(err) = self.set_iovar_u32("sup_wpa", 1) {
             if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED) {
                 warn!(
-                    "[cyw43] join: firmware-supplicant path=bsscfg unsupported action=fail-secure"
+                    "[cyw43] join: firmware-supplicant path=primary-bsscfg unsupported action=fail-secure"
                 );
                 return Err(DriverError::Protocol("firmware-supplicant-unsupported"));
             }
             return Err(err);
         }
-        self.set_optional_iovar_u32x2("bsscfg:sup_wpa2_eapver", BSSCFG_PRIMARY_INDEX, u32::MAX)?;
-        self.set_optional_iovar_u32x2("bsscfg:sup_wpa_tmo", BSSCFG_PRIMARY_INDEX, 2500)?;
-        info!("[cyw43] join: firmware-supplicant path=bsscfg requested=yes enabled=yes");
+        self.set_optional_iovar_u32("sup_wpa2_eapver", u32::MAX)?;
+        self.set_optional_iovar_u32("sup_wpa_tmo", 2500)?;
+        info!("[cyw43] join: firmware-supplicant path=primary-bsscfg requested=yes enabled=yes");
         Ok(())
     }
 
@@ -2222,6 +2309,10 @@ impl Cyw43NetDevice {
             put_u32_le(payload, 4, second);
         }
         self.set_iovar_from_payload(name, 8)
+    }
+
+    fn set_primary_bsscfg_u32(&mut self, name: &str, value: u32) -> Result<(), DriverError> {
+        self.set_iovar_u32(name, value)
     }
 
     fn set_optional_iovar_u32(
@@ -2744,6 +2835,34 @@ impl Cyw43NetDevice {
                 LINUX_STARTUP_STATUS_DRAIN_BUDGET
             );
         }
+        Ok(())
+    }
+
+    fn drain_post_up_events(&mut self) -> Result<(), DriverError> {
+        let mut drained = 0usize;
+        let mut idle = 0usize;
+        for _ in 0..POST_UP_EVENT_DRAIN_BUDGET {
+            match self.process_next_frame(false)? {
+                RxFrameResult::None => {
+                    idle = idle.saturating_add(1);
+                    if idle >= 2 {
+                        break;
+                    }
+                }
+                result => {
+                    drained = drained.saturating_add(1);
+                    idle = 0;
+                    info!(
+                        "[cyw43] control-plane post-up event-drain action=drain result={} drained={drained}",
+                        rx_frame_result_name(&result)
+                    );
+                }
+            }
+            spin_loop();
+        }
+        info!(
+            "[cyw43] control-plane post-up event-drain action=ready drained={drained} idle_polls={idle}"
+        );
         Ok(())
     }
 
@@ -3643,19 +3762,23 @@ mod tests {
         set_event_mask_bit, speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
         startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
-        write_event_msgs_ext_payload, write_sdpcm_control_tx_header, write_wsec_passphrase_payload,
-        write_wsec_pmk_payload, wsec_pmk_passphrase_fallback_allowed, Cyw43Event, DriverError,
-        Ioctl, JoinCompletionState, RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_UNSUPPORTED,
-        BDC_VERSION, BDC_VERSION_SHIFT, BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN, CHANNEL_CONTROL,
-        CHANNEL_DATA, CHANNEL_EVENT, CHANNEL_GLOM, CLM_CHUNK_SIZE, EVENTMSGS_EXT_SET_MASK,
-        EVENTMSGS_EXT_VER, EVENT_ASSOC, EVENT_ASSOC_IND, EVENT_AUTH, EVENT_FLAG_LINK, EVENT_IF,
-        EVENT_LINK, EVENT_MASK_LEN, EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC,
-        EVENT_REASSOC_IND, EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_WAIT_LOOPS,
+        write_event_msgs_ext_payload, write_legacy_set_ssid_payload,
+        write_linux_bsscfg_join_payload, write_sdpcm_control_tx_header,
+        write_wsec_passphrase_payload, write_wsec_pmk_payload,
+        wsec_pmk_passphrase_fallback_allowed, Cyw43Event, DriverError, Ioctl, JoinCompletionState,
+        RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_UNSUPPORTED, BDC_VERSION,
+        BDC_VERSION_SHIFT, BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA,
+        CHANNEL_EVENT, CHANNEL_GLOM, CLM_CHUNK_SIZE, EVENTMSGS_EXT_SET_MASK, EVENTMSGS_EXT_VER,
+        EVENT_ASSOC, EVENT_ASSOC_IND, EVENT_AUTH, EVENT_FLAG_LINK, EVENT_IF, EVENT_LINK,
+        EVENT_MASK_LEN, EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC, EVENT_REASSOC_IND,
+        EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_WAIT_LOOPS,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
-        LINUX_REVINFO_LEN, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
-        SDPCM_CONTROL_TX_EXT_HEADER_LEN, SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN,
-        STATUS_ABORT, STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED, WSEC_FLAG_PASSPHRASE,
+        LINUX_BSSCFG_JOIN_PAYLOAD_LEN, LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN,
+        LINUX_EXT_JOIN_SCAN_OFFSET, LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_NO_NETWORKS,
+        STATUS_SUCCESS, STATUS_UNSOLICITED, WPA_AUTH_LINUX_WPA2_PSK, WSEC_FLAG_PASSPHRASE,
         WSEC_PASSPHRASE_PAYLOAD_LEN, WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
     };
     use crate::hal::HalError;
@@ -4324,6 +4447,51 @@ mod tests {
     }
 
     #[test]
+    fn linux_primary_bsscfg_join_payload_matches_brcmfmac_unpinned_join_shape() {
+        let mut payload = [0xa5u8; LINUX_BSSCFG_JOIN_PAYLOAD_LEN];
+        write_linux_bsscfg_join_payload(&mut payload, "cohesix")
+            .expect("linux bsscfg join payload should encode");
+
+        assert_eq!(
+            &payload[LINUX_EXT_JOIN_SSID_OFFSET..LINUX_EXT_JOIN_SSID_OFFSET + 4],
+            &7u32.to_le_bytes()
+        );
+        assert_eq!(
+            &payload[LINUX_EXT_JOIN_SSID_OFFSET + 4..LINUX_EXT_JOIN_SSID_OFFSET + 11],
+            b"cohesix"
+        );
+        assert_eq!(payload[LINUX_EXT_JOIN_SCAN_OFFSET], 0xff);
+        assert_eq!(
+            &payload[LINUX_EXT_JOIN_SCAN_OFFSET + 4..LINUX_EXT_JOIN_SCAN_OFFSET + 8],
+            &u32::MAX.to_le_bytes()
+        );
+        assert_eq!(
+            &payload[LINUX_EXT_JOIN_ASSOC_OFFSET..LINUX_EXT_JOIN_ASSOC_OFFSET + 6],
+            &[0xff; 6]
+        );
+        assert_eq!(
+            &payload[LINUX_EXT_JOIN_ASSOC_OFFSET + 8..LINUX_EXT_JOIN_ASSOC_OFFSET + 12],
+            &0u32.to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn legacy_set_ssid_payload_remains_linux_fallback_shape() {
+        let mut payload = [0xa5u8; 36];
+        write_legacy_set_ssid_payload(&mut payload, "cohesix")
+            .expect("legacy set ssid payload should encode");
+
+        assert_eq!(&payload[0..4], &7u32.to_le_bytes());
+        assert_eq!(&payload[4..11], b"cohesix");
+        assert!(payload[11..].iter().copied().all(|byte| byte == 0));
+    }
+
+    #[test]
+    fn secure_join_uses_linux_wpa2_psk_or_unspecified_auth_mask() {
+        assert_eq!(WPA_AUTH_LINUX_WPA2_PSK, 0x00c0);
+    }
+
+    #[test]
     fn linux_station_attach_does_not_enable_apsta() {
         assert!(!linux_station_path_enables_apsta());
     }
@@ -4451,8 +4619,10 @@ mod tests {
     }
 
     #[test]
-    fn firmware_supplicant_uses_primary_bsscfg_index() {
+    fn primary_bsscfg_zero_uses_plain_iovar_payloads() {
         assert_eq!(BSSCFG_PRIMARY_INDEX, 0);
+        assert_eq!(LINUX_EXT_JOIN_SSID_OFFSET, 0);
+        assert_eq!(LINUX_BSSCFG_JOIN_PAYLOAD_LEN, LINUX_EXT_JOIN_PARAMS_LEN);
     }
 
     #[test]

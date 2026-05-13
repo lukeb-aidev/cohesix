@@ -1273,6 +1273,14 @@ def normalize_wifi_blocker(value: str) -> str:
         or "association-timeout" in lower
     ):
         return "join-timeout"
+    if (
+        "primary-bsscfg-wrapper-join-security-loop" in lower
+        or ("iovar set failed name=bsscfg:" in lower and "step=join" in lower)
+        or "iovar set failed name=bsscfg:wsec" in lower
+    ):
+        return "primary-bsscfg-wrapper-join-security-loop"
+    if "join-programming-host-latch-loop" in lower:
+        return "join-programming-host-latch-loop"
     if "join-pending" in lower or "association-pending" in lower:
         return "join-pending"
     if "wifi-association-failed" in lower or (
@@ -1340,6 +1348,8 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-plane-host-card-int-no-dongle-source",
         "cyw43-control-plane-host-card-int-source-unreadable",
         "cyw43-control-plane-interrupt-programming-drift",
+        "cyw43-join-programming-host-latch-loop",
+        "cyw43-primary-bsscfg-wrapper-join-security-loop",
         "cyw43-control-plane-legacy-gmode-stall",
         "cyw43-control-plane-no-frame-indication-after-write",
         "cyw43-control-plane-partial-hint-visibility",
@@ -2065,6 +2075,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-host-card-int-source-unreadable",
         "control-plane-interrupt-programming-drift",
         "control-plane-interrupts-deferred",
+        "join-programming-host-latch-loop",
+        "primary-bsscfg-wrapper-join-security-loop",
         "control-plane-legacy-gmode-stall",
         "control-plane-no-frame-indication-after-write",
         "control-plane-partial-hint-visibility",
@@ -2111,6 +2123,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     socram_core_ctrl_stage: str | None = None
     specific_reset_blocker: str | None = None
     join_programming_blocker: str | None = None
+    join_begin_seen = False
+    join_completion_seen = False
+    join_programming_host_latch_only_count = 0
+    join_programming_f1_status_count = 0
     legacy_gmode_stall_seen = False
     for event in wifi_events:
         raw = event.raw.lower()
@@ -2133,6 +2149,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         raw_contract_blocker = normalize_wifi_blocker(raw)
         if raw_contract_blocker == "control-plane-legacy-gmode-stall":
             legacy_gmode_stall_seen = True
+        if "[cyw43] control-plane step=join action=begin" in raw:
+            join_begin_seen = True
+            join_completion_seen = False
+            join_programming_host_latch_only_count = 0
+            join_programming_f1_status_count = 0
+            gate = max(gate, 7)
+            post_f2_progress_seen = True
         if raw_contract_blocker in {
             "boot-deferred-local-seat-usb",
             "boot-deferred-root-console",
@@ -2199,9 +2222,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             explicit_blocker = raw_contract_blocker
         if explicit_blocker in {
             "firmware-supplicant-unsupported",
+            "primary-bsscfg-wrapper-join-security-loop",
             "wsec-pmk-bad-argument",
         }:
             join_programming_blocker = explicit_blocker
+        if join_begin_seen and "iovar set failed name=bsscfg:" in raw:
+            gate = max(gate, 7)
+            post_f2_progress_seen = True
+            join_programming_blocker = "primary-bsscfg-wrapper-join-security-loop"
         if "firmware stage=control-plane-write" in raw and "linux-f2-write-shape" in raw:
             control_plane_write_seen = True
             control_plane_reply_seen_after_write = False
@@ -2221,6 +2249,19 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             and ("base=0x0c020" in raw or "chunk=0x0c020" in raw)
         ):
             control_plane_idle_poll_count += 1
+        if join_begin_seen and not join_completion_seen:
+            if (
+                "sdio xfer chunk" in raw
+                and "fn=1" in raw
+                and "op=read" in raw
+                and ("base=0x0c020" in raw or "chunk=0x0c020" in raw)
+            ):
+                join_programming_f1_status_count += 1
+            if (
+                "stage=control-plane-reply" in raw
+                and "source_state=host-card-int-latch-only" in raw
+            ):
+                join_programming_host_latch_only_count += 1
         if raw_contract_blocker in {
             "pre-f2-core-control",
             "firmware-core-control",
@@ -2394,6 +2435,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = explicit_blocker or "control-plane"
             continue
         if "join complete" in raw:
+            join_completion_seen = True
             post_f2_progress_seen = True
             if wifi_join_complete_proven(fields):
                 gate = max(gate, 8)
@@ -2403,11 +2445,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = "join-completion-unproven"
             continue
         if "join pending" in raw or "join armed" in raw:
+            join_completion_seen = True
             gate = max(gate, 7)
             post_f2_progress_seen = True
             blocker = "join-pending"
             continue
         if "join failed" in raw:
+            join_completion_seen = True
             gate = max(gate, 7)
             post_f2_progress_seen = True
             blocker = normalize_wifi_blocker(raw)
@@ -2894,6 +2938,15 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     }:
         gate = max(gate, 7)
         blocker = join_programming_blocker
+    if (
+        join_begin_seen
+        and not join_completion_seen
+        and join_programming_host_latch_only_count >= 8
+        and join_programming_f1_status_count >= 16
+    ):
+        gate = max(gate, 7)
+        post_f2_progress_seen = True
+        blocker = join_programming_blocker or "join-programming-host-latch-loop"
     if legacy_gmode_stall_seen and blocker in {
         "control-plane",
         "control-plane-partial-hint-visibility",
@@ -2923,6 +2976,10 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or "gmode"
         )
         return "cyw43-control-plane-legacy-gmode-stall", phase
+    if normalize_wifi_blocker(event.raw) == "join-programming-host-latch-loop":
+        return "cyw43-join-programming-host-latch-loop", "join"
+    if normalize_wifi_blocker(event.raw) == "primary-bsscfg-wrapper-join-security-loop":
+        return "cyw43-primary-bsscfg-wrapper-join-security-loop", "join"
     if (
         "post-write-no-frame-source-terminal" in raw
         or "hintless-firstread-no-frame-source-terminal" in raw
@@ -3045,9 +3102,12 @@ def summarize_wifi_failure_detail(
     line = 0
     blocker_matched = False
     blocker_priority = 100
+    join_begin_seen = False
     for event in (event for event in events if event.domain == "wifi"):
         raw = event.raw.lower()
         fields = event.fields
+        if "[cyw43] control-plane step=join action=begin" in raw:
+            join_begin_seen = True
         if (
             "prereset-fgc-clock" in raw
             or (
@@ -3085,6 +3145,19 @@ def summarize_wifi_failure_detail(
             and ("base=0x0c020" in raw or "chunk=0x0c020" in raw)
         ):
             candidate = "control-plane-reply-idle-loop"
+        if (
+            wifi_blocker == "join-programming-host-latch-loop"
+            and join_begin_seen
+            and "stage=control-plane-reply" in raw
+            and "source_state=host-card-int-latch-only" in raw
+        ):
+            candidate = "join-programming-host-latch-loop"
+        if (
+            wifi_blocker == "primary-bsscfg-wrapper-join-security-loop"
+            and join_begin_seen
+            and "iovar set failed name=bsscfg:" in raw
+        ):
+            candidate = "primary-bsscfg-wrapper-join-security-loop"
         if "sdio cmd53 r5 fail" in raw:
             if socram_core_ctrl_stage == "prereset-zero-ioctrl":
                 candidate = "socram-prereset-zero-cmd53-r5-rejected"
@@ -3116,11 +3189,22 @@ def summarize_wifi_failure_detail(
             blocker_matched = True
             blocker_priority = candidate_priority
             exact = event_exact
+            if candidate == "join-programming-host-latch-loop":
+                exact = "cyw43-join-programming-host-latch-loop"
+            if candidate == "primary-bsscfg-wrapper-join-security-loop":
+                exact = "cyw43-primary-bsscfg-wrapper-join-security-loop"
             if exact == "none" and "sdio cmd53 r5 fail" in raw:
                 exact = "sdio-cmd53-r5-error"
             if exact == "none":
                 exact = candidate
             phase = (
+                "join"
+                if candidate
+                in {
+                    "join-programming-host-latch-loop",
+                    "primary-bsscfg-wrapper-join-security-loop",
+                }
+                else
                 socram_core_ctrl_stage
                 or fields.get("stage")
                 or event.stage

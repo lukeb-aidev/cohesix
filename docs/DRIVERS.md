@@ -268,14 +268,14 @@ leave the line stuck.
   re-enables the SDHCI `CARD_INT` signal path.
 - Current Pi 4 USB/VL805 is event-ring polled with PCI INTx/MSI/MSI-X delivery
   masked. The cold-boot command proof publishes fresh rings, starts with
-  `USBCMD.RUN`, and acknowledges consumed events with `ERDP.EHB`. If no
-  current-boot port-status events are present, the first command is a No Op
-  isolation probe. If port-status events are present, local-seat preserves them
-  until after it DMA-publishes Enable Slot and rings doorbell `0`; the wait loop
-  then skips and acknowledges those PSC events exactly as U-Boot does while
-  still accepting only the matching Command Completion Event as gate-4 proof.
-  Do not unmask external xHCI interrupt delivery until a milestone explicitly
-  proves it.
+  `USBCMD.RUN`, and acknowledges consumed events with `ERDP.EHB`. The gate-3/4
+  proof command is Enable Slot; No Op is diagnostic-only and must not advance
+  root-port sampling. Local-seat preserves already-posted current-boot PSC
+  events until after it DMA-publishes Enable Slot and rings doorbell `0`; the
+  wait loop then skips and acknowledges those PSC events exactly as U-Boot does
+  while still accepting only the matching Command Completion Event as gate-4
+  proof. Do not unmask external xHCI interrupt delivery until a milestone
+  explicitly proves it.
 
 ### SDIO/CYW43455
 
@@ -360,23 +360,32 @@ power/reset state.
   optional; at least one join-event subscription path must be proven before
   `SET_SSID`. The normal Pi 4 station attach tail must also avoid local legacy
   writes that are absent from the Linux capture before join. The 2026-05-13
-  Cohesix trace proved firmware `ver`, `clmver`, `mpc`, `join_pref`,
+  19:04 Cohesix trace proved firmware `ver`, `clmver`, `mpc`, `join_pref`,
   scan timing, event-mask, and `WLC_UP`, then stalled at legacy
   `WLC_SET_GMODE` (`cmd=110`) with host `CARD_INT` latched and no dongle reply
   source. Cohesix now skips early `WLC_SET_GMODE`, `WLC_SET_BAND`,
   `WLC_SET_ANTDIV`, local AMPDU-limit writes, and `WLC_SET_PM` on the
   station attach path unless a later Linux-equivalent gate proves they belong
-  there.
+  there. The 20:12 follow-up trace superseded that frontier: it reached join
+  programming, drained an `EVENT_IF`, then spun on Function 1 `0x0c020`
+  host-latch/no-dongle-source polls. Proof tooling must report that live edge
+  as `join-programming-host-latch-loop`; earlier ARMCR4 CMD53 R5 errors in the
+  same trace are recovered history once later control-plane replies and `UP`
+  are proven.
 - Cohesix also applies the Linux attach-time `join_pref` default payload
   (`04 02 08 01 01 02 00 00`) before scan/join defaults. WPA2-PSK join setup
-  must match Linux and known-good CYW43 behavior: configure AES security,
-  enable firmware supplicant on the primary BSS with `bsscfg:sup_wpa`,
-  then configure infrastructure/auth/WPA auth before programming
-  `WLC_SET_WSEC_PMK`. The Pi 4 Linux capture shows the plain `sup_wpa`
+  must match Linux and known-good CYW43 behavior: configure primary-BSS
+  `wsec`, enable firmware supplicant on the primary BSS with `sup_wpa`, then
+  configure `infra`, `auth`, and `wpa_auth` before programming
+  `WLC_SET_WSEC_PMK`. For the primary BSS (`bsscfgidx=0`), Linux
+  `brcmf_fil_bsscfg_*` collapses to the plain iovar name and data; Cohesix must
+  not send a literal `bsscfg:` wrapper or leading zero BSS index on Pi 4 station
+  joins. The Pi 4 Linux
+  capture shows the plain `sup_wpa`
   feature probe returning `BCME_UNSUPPORTED`; plain `sup_wpa` must therefore
   not authorize or weaken the secure Cohesix join rule. The Cohesix Pi 4 path
   uses primary-BSS firmware supplicant mode as a hard secure-join gate, and an
-  explicit `BCME_UNSUPPORTED` on `bsscfg:sup_wpa` is reported as
+  explicit `BCME_UNSUPPORTED` on secure-path `sup_wpa` is reported as
   `firmware-supplicant-unsupported` instead of falling back to `SET_SSID`-only
   completion. Transport errors remain fatal. The primary PMK payload is the
   132-byte Linux
@@ -388,6 +397,17 @@ power/reset state.
   shape (`u16 len`, `u16 flags=1`, 64-byte passphrase area) for non-hex
   passphrases. Any PMK or supplicant-shape rejection is join-programming drift,
   not a transport failure.
+- Join programming must use Linux's station command shape. After `WLC_UP`,
+  Cohesix drains bounded post-`UP` interface events before the first join
+  security command, then sends the upstream primary-BSS `join` extended payload.
+  Only an explicit `join` iovar failure may fall back to the legacy
+  `WLC_SET_SSID` payload. A pre-join Function 1 host-latch loop is not
+  association progress, DHCP progress, or IRQ progress; it is a join-programming
+  blocker until a control reply, `join pending`, or terminal join event proves
+  the firmware accepted the command. The 2026-05-13 20:40 trace exposed a
+  Cohesix-only wrapper drift (`bsscfg:wsec` with a leading zero index) at this
+  gate; proof tooling reports that old image as
+  `primary-bsscfg-wrapper-join-security-loop`.
 - WPA2 join completion must be gated on the firmware supplicant event, not on
   `WLC_SET_SSID` success when firmware supplicant mode is available. Open
   networks may complete on a successful `SET_SSID` event. Secure networks must
@@ -568,19 +588,24 @@ active path is Cohesix-owned cold start:
   settle before publishing fresh rings. Command timeout diagnostics on that
   lane report deferred state instead of live `CRCR`, `DCBAAP`, interrupter, or
   `PORTSC` reads.
-- CONFIG, DCBAAP, CRCR, initial ERDP, ERSTSZ, ERSTBA, RUN, command-ring
-  recovery, command-doorbell, and endpoint-doorbell posted-write drains fail
-  closed when the HAL cannot prove the EXT_CFG selector, link/root readiness,
-  PCIe IRQ-source masking, or poll-only VL805 COMMAND ownership, or when the
-  drain read returns a selector echo or invalid config value.
+- CONFIG, DCBAAP, CRCR, initial ERDP, ERSTSZ, ERSTBA, DNCTRL, RUN,
+  command-ring recovery, command-doorbell, and endpoint-doorbell posted-write
+  drains fail closed when the HAL cannot prove the EXT_CFG selector, link/root
+  readiness, PCIe IRQ-source masking, or poll-only VL805 COMMAND ownership, or
+  when the drain read returns a selector echo or invalid config value.
 - U-Boot-compatible command/event proof must publish the fresh ring registers in
   U-Boot order on the Pi 4 platform-reset lane (`DCBAAP`, `CRCR`, initial
   `ERDP`, `ERSTSZ`/`ERSTBA`), issue a HAL EXT_CFG drain after each
   controller-ownership register write, start the controller with `USBCMD.RUN`,
   then apply U-Boot's poll-only post-start interrupter state (`IMOD=0`,
-  `IMAN=0`) through HAL-drained writes. It must DMA-publish the submitted command TRB as
+  `IMAN=0`) through HAL-drained writes. `CRCR` composition preserves the low
+  `CMD_RING_RSVD_BITS` exactly as U-Boot does before OR-ing the command-ring
+  pointer and producer cycle; when the seL4 prompt-safe lane cannot live-read
+  `CRCR`, it uses the Pi 4 captured running low-bit seed instead of publishing
+  a zero reserved-bit seed. The U-Boot `DNCTRL=0` write is also HAL-drained
+  before `USBCMD.RUN`. It must DMA-publish the submitted command TRB as
   the exact 16-byte device-visible cache range U-Boot flushes, issue a
-  device-visible command-ring publish barrier, then write U-Boot's
+  completion-grade command-ring publish barrier, then write U-Boot's
   `DB_VALUE_HOST` to doorbell `0` and drain that posted write through the
   HAL-owned EXT_CFG path before polling the event ring with the same 5 s
   command-event budget.
@@ -605,8 +630,11 @@ active path is Cohesix-owned cold start:
   current-boot PSC events, Cohesix may run exactly one bounded command recovery
   lane: stop/reset the controller with blind prompt-safe settles, republish
   fresh DCBAA/command/event rings in U-Boot register order (`DCBAAP`, `CRCR`,
-  initial `ERDP`, `ERSTSZ`, `ERSTBA`), keep the interrupter poll-only
-  (`DNCTRL=0`, `IMOD=0`, `IMAN=0`, `USBCMD=RUN`), and submit a new Enable Slot.
+  initial `ERDP`, `ERSTSZ`, `ERSTBA`), write `DNCTRL=0`, start the controller
+  with `USBCMD=RUN`, then apply the U-Boot post-start poll-only interrupter
+  state (`IMOD=0`, `IMAN=0`) before submitting a new Enable Slot. Recovery
+  reuses the same prompt-safe Pi 4 `CRCR` low-bit seed when no trusted snapshot
+  or live read is available.
   The recovery lane still must not use xHCI BAR reads, `USBSTS`, or `PORTSC` as
   proof before command completion, and it must not replay Linux-shaped
   event-generation writes or `ERDP.EHB` acknowledgement before the retry command
@@ -1015,8 +1043,8 @@ bundle applies. Use the focused aliases:
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet`
   covers GENET descriptor, ring, link, and DMA address invariants.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43`
-  covers CYW43 protocol state, first-reply recovery, and bounded SDPCM/CDC
-  behavior.
+  covers CYW43 protocol state, Linux-shaped join payloads, first-reply
+  recovery, and bounded SDPCM/CDC behavior.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet`
   covers GENET HAL MMIO coverage and DMA policy.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie`
