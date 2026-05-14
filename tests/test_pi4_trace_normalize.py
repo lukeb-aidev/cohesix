@@ -2934,6 +2934,24 @@ def test_gate_summary_tracks_firmware_supplicant_unsupported_over_stale_hint() -
     assert gates.wifi_phase == "join"
 
 
+def test_gate_summary_labels_direct_firmware_supplicant_failure_as_join_security() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "path=primary-plain unsupported status=0xffffffe9 action=try-bsscfg-wrapper "
+            "reason=known-good-cyw43-fwsup-shape",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "firmware-supplicant-unsupported"
+    assert gates.wifi_exact == "firmware-supplicant-unsupported"
+    assert gates.wifi_phase == "join-security"
+
+
 def test_gate_summary_tracks_bdc_event_over_stale_partial_hint_visibility() -> None:
     events = normalizer.parse_events(
         [
@@ -3357,6 +3375,27 @@ def test_gate_summary_reports_primary_bsscfg_wrapper_join_security_loop() -> Non
     assert gates.wifi_exact == "cyw43-primary-bsscfg-wrapper-join-security-loop"
     assert gates.wifi_phase == "join"
     assert gates.wifi_blocker_line > 0
+
+
+def test_gate_summary_reports_bsscfg_supplicant_wrapper_join_security_loop() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=join action=begin",
+            "[INFO root_task::drivers::cyw43] [cyw43] iovar set begin "
+            "name=bsscfg:sup_wpa len=8",
+            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "name=bsscfg:sup_wpa err=cyw43 protocol error: ioctl-no-progress-after-frame "
+            "exact=cyw43-join-security-bsscfg-sup-wpa-loop",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "join-security-bsscfg-sup-wpa-loop"
+    assert gates.wifi_exact == "cyw43-join-security-bsscfg-sup-wpa-loop"
+    assert gates.wifi_phase == "join"
 
 
 def test_gate_summary_reports_wsec_first_join_security_loop() -> None:

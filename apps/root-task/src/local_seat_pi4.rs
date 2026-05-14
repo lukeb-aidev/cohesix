@@ -3930,6 +3930,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x03f8
             | 0x03fb
             | 0x03fc..=0x03fd
+            | 0x03fe..=0x03ff
             | 0x0400..=0x0405
     )
 }
@@ -3959,6 +3960,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x03f8
             | 0x03fb
             | 0x03fc..=0x03fd
+            | 0x03fe..=0x03ff
             | 0x0400..=0x0405
     )
 }
@@ -3975,6 +3977,7 @@ const fn xhci_diag_stage_force_log(stage: u16) -> bool {
             | 0x037d..=0x037f
             | 0x03b3..=0x03be
             | 0x03c4..=0x03ee
+            | 0x03fe..=0x03ff
             | 0x0400..=0x0405
     )
 }
@@ -4148,6 +4151,8 @@ const fn xhci_diag_stage_value_labels(
         0x03fb => Some(("max_ports", "allowed", "policy")),
         0x03fc => Some(("port_or_limit", "portsc_or_max_ports", "power_value")),
         0x03fd => Some(("port", "portsc", "settle_spins")),
+        0x03fe => Some(("erdp_low_off", "erdp_low", "policy")),
+        0x03ff => Some(("erdp_high_off", "erdp_high", "policy")),
         0x0400 => Some(("port", "retry_state", "delay_spins")),
         0x0401 => Some(("port", "attempt", "result")),
         0x0402 => Some(("port", "retry_state", "max_tries")),
@@ -4482,6 +4487,8 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03fb => Some("usb-port-access-after-command-proof"),
         0x03fc => Some("usb-root-port-power-on"),
         0x03fd => Some("usb-root-port-power-on-settled"),
+        0x03fe => Some("cmd-event-erdp-ack-low-flush"),
+        0x03ff => Some("cmd-event-erdp-ack-high-flush"),
         0x0400 => Some("usb-root-port-reset-retry"),
         0x0401 => Some("usb-root-port-reset-ok"),
         0x0402 => Some("usb-root-port-reset-failed"),
@@ -15295,12 +15302,28 @@ mod driver_coverage_tests {
             Some("cmd-linux-event-iman-ack-done")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x03fe),
+            Some("cmd-event-erdp-ack-low-flush")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x03ff),
+            Some("cmd-event-erdp-ack-high-flush")
+        );
+        assert_eq!(
             xhci_diag_stage_value_labels(0x037d),
             Some(("erdp_off", "erdp_ack", "policy"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x037f),
             Some(("iman_off", "iman_ack", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03fe),
+            Some(("erdp_low_off", "erdp_low", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03ff),
+            Some(("erdp_high_off", "erdp_high", "policy"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x03ee),
@@ -17756,6 +17779,14 @@ mod tests {
             Some("cmd-linux-event-iman-ack-done")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x03fe),
+            Some("cmd-event-erdp-ack-low-flush")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x03ff),
+            Some("cmd-event-erdp-ack-high-flush")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x03b3),
             Some("cmd-ring-publish-dcbaap-low-flush")
         );
@@ -18860,6 +18891,14 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x037f),
             Some(("iman_off", "iman_ack", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03fe),
+            Some(("erdp_low_off", "erdp_low", "policy"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03ff),
+            Some(("erdp_high_off", "erdp_high", "policy"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x03b5),

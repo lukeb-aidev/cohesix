@@ -363,6 +363,11 @@ fn optional_control_plane_iovar_allows_failure(name: &str, err: &DriverError) ->
 }
 
 #[inline]
+const fn firmware_supplicant_wrapper_fallback_allowed() -> bool {
+    true
+}
+
+#[inline]
 const fn linux_station_path_enables_apsta() -> bool {
     false
 }
@@ -513,7 +518,16 @@ const fn linux_wpa2_join_sets_mfp_without_rsn_ie() -> bool {
 fn join_security_iovar_name(name: &str) -> bool {
     matches!(
         name,
-        "auth" | "wpaie" | "wsec" | "wpa_auth" | "sup_wpa" | "sup_wpa2_eapver" | "sup_wpa_tmo"
+        "auth"
+            | "wpaie"
+            | "wsec"
+            | "wpa_auth"
+            | "sup_wpa"
+            | "sup_wpa2_eapver"
+            | "sup_wpa_tmo"
+            | "bsscfg:sup_wpa"
+            | "bsscfg:sup_wpa2_eapver"
+            | "bsscfg:sup_wpa_tmo"
     )
 }
 
@@ -529,6 +543,16 @@ fn join_security_iovar_failure_exact_error(name: &str, err: &DriverError) -> Opt
             DriverError::Protocol("ioctl-timeout")
             | DriverError::Protocol("ioctl-no-progress-after-frame"),
         ) => Some("cyw43-join-security-wsec-first-loop"),
+        (
+            "sup_wpa",
+            DriverError::Protocol("ioctl-timeout")
+            | DriverError::Protocol("ioctl-no-progress-after-frame"),
+        ) => Some("cyw43-join-security-sup-wpa-loop"),
+        (
+            "bsscfg:sup_wpa",
+            DriverError::Protocol("ioctl-timeout")
+            | DriverError::Protocol("ioctl-no-progress-after-frame"),
+        ) => Some("cyw43-join-security-bsscfg-sup-wpa-loop"),
         _ => None,
     }
 }
@@ -594,6 +618,28 @@ struct JoinCompletionState {
     link_down_seen: bool,
     set_ssid_completed: bool,
     psk_completed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FirmwareSupplicantPath {
+    PrimaryPlain,
+    BsscfgWrapper,
+}
+
+impl FirmwareSupplicantPath {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::PrimaryPlain => "primary-plain",
+            Self::BsscfgWrapper => "bsscfg-wrapper",
+        }
+    }
+
+    const fn order_label(self) -> &'static str {
+        match self {
+            Self::PrimaryPlain => "sup_wpa",
+            Self::BsscfgWrapper => "sup_wpa-or-bsscfg_sup_wpa",
+        }
+    }
 }
 
 #[inline]
@@ -2082,13 +2128,15 @@ impl Cyw43NetDevice {
                 self.set_optional_iovar_u32("mfp", MFP_CAPABLE)?;
             }
             self.set_join_security_wpa_auth(WPA_AUTH_WPA2_PSK)?;
-            self.enable_wpa2_firmware_supplicant()?;
+            let firmware_supplicant_path = self.enable_wpa2_firmware_supplicant()?;
             let pmk_kind = self.set_wsec_pmk(ssid.as_bytes(), psk.as_bytes())?;
             info!(
-                "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={} pmk_kind={} control=linux-primary-bsscfg order=wpaie-wpa_auth-initial-auth-wsec-wpa_auth-final-sup_wpa-pmk rsn_ie_len={} initial_wpa_auth=0x{WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED:04x} final_wpa_auth=0x{WPA_AUTH_WPA2_PSK:04x}",
+                "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={} pmk_kind={} control=linux-primary-bsscfg fwsup_path={} order=wpaie-wpa_auth-initial-auth-wsec-wpa_auth-final-{}-pmk rsn_ie_len={} initial_wpa_auth=0x{WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED:04x} final_wpa_auth=0x{WPA_AUTH_WPA2_PSK:04x}",
                 ssid.len(),
                 psk.len(),
                 pmk_kind.label(),
+                firmware_supplicant_path.label(),
+                firmware_supplicant_path.order_label(),
                 WPA2_PSK_CCMP_RSN_IE.len(),
             );
             self.program_join_request(ssid)?;
@@ -2178,22 +2226,63 @@ impl Cyw43NetDevice {
         Ok(())
     }
 
-    fn enable_wpa2_firmware_supplicant(&mut self) -> Result<(), DriverError> {
-        if let Err(err) = self.set_iovar_u32("sup_wpa", 1) {
-            if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED) {
+    fn enable_wpa2_firmware_supplicant(&mut self) -> Result<FirmwareSupplicantPath, DriverError> {
+        match self.set_iovar_u32("sup_wpa", 1) {
+            Ok(()) => {
+                self.set_optional_iovar_u32("sup_wpa2_eapver", u32::MAX)?;
+                self.set_optional_iovar_u32("sup_wpa_tmo", 2500)?;
+                info!(
+                    "[cyw43] join: firmware-supplicant path=primary-plain requested=yes enabled=yes"
+                );
+                Ok(FirmwareSupplicantPath::PrimaryPlain)
+            }
+            Err(err)
+                if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED)
+                    && firmware_supplicant_wrapper_fallback_allowed() =>
+            {
+                warn!(
+                    "[cyw43] join: firmware-supplicant path=primary-plain unsupported status=0x{BCME_UNSUPPORTED:08x} action=try-bsscfg-wrapper reason=known-good-cyw43-fwsup-shape"
+                );
+                self.enable_wpa2_firmware_supplicant_bsscfg_wrapper()
+            }
+            Err(err) if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED) => {
                 self.state
                     .promote_cached_control_plane_exact_error("firmware-supplicant-unsupported");
                 warn!(
-                    "[cyw43] join: firmware-supplicant path=primary-bsscfg unsupported status=0x{BCME_UNSUPPORTED:08x} action=fail-secure reason=host-eapol-supplicant-required"
+                    "[cyw43] join: firmware-supplicant path=primary-plain unsupported status=0x{BCME_UNSUPPORTED:08x} action=fail-secure reason=host-eapol-supplicant-required"
                 );
-                return Err(DriverError::Protocol("firmware-supplicant-unsupported"));
+                Err(DriverError::Protocol("firmware-supplicant-unsupported"))
             }
-            return Err(err);
+            Err(err) => Err(err),
         }
-        self.set_optional_iovar_u32("sup_wpa2_eapver", u32::MAX)?;
-        self.set_optional_iovar_u32("sup_wpa_tmo", 2500)?;
-        info!("[cyw43] join: firmware-supplicant path=primary-bsscfg requested=yes enabled=yes");
-        Ok(())
+    }
+
+    fn enable_wpa2_firmware_supplicant_bsscfg_wrapper(
+        &mut self,
+    ) -> Result<FirmwareSupplicantPath, DriverError> {
+        match self.set_iovar_u32x2("bsscfg:sup_wpa", BSSCFG_PRIMARY_INDEX, 1) {
+            Ok(()) => {
+                self.set_optional_iovar_u32x2(
+                    "bsscfg:sup_wpa2_eapver",
+                    BSSCFG_PRIMARY_INDEX,
+                    u32::MAX,
+                )?;
+                self.set_optional_iovar_u32x2("bsscfg:sup_wpa_tmo", BSSCFG_PRIMARY_INDEX, 2500)?;
+                info!(
+                    "[cyw43] join: firmware-supplicant path=bsscfg-wrapper requested=yes enabled=yes bsscfgidx={BSSCFG_PRIMARY_INDEX}"
+                );
+                Ok(FirmwareSupplicantPath::BsscfgWrapper)
+            }
+            Err(err) if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED) => {
+                self.state
+                    .promote_cached_control_plane_exact_error("firmware-supplicant-unsupported");
+                warn!(
+                    "[cyw43] join: firmware-supplicant path=bsscfg-wrapper unsupported status=0x{BCME_UNSUPPORTED:08x} action=fail-secure reason=host-eapol-supplicant-required"
+                );
+                Err(DriverError::Protocol("firmware-supplicant-unsupported"))
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn set_wsec_pmk(&mut self, ssid: &[u8], psk: &[u8]) -> Result<WsecPmkKind, DriverError> {
@@ -3917,13 +4006,13 @@ mod tests {
         write_event_msgs_ext_payload, write_legacy_set_ssid_payload,
         write_linux_bsscfg_join_payload, write_sdpcm_control_tx_header,
         write_wsec_passphrase_payload, write_wsec_pmk_payload,
-        wsec_pmk_passphrase_fallback_allowed, Cyw43Event, DriverError, Ioctl, JoinCompletionState,
-        RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_BADARG, BCME_UNSUPPORTED, BDC_VERSION,
-        BDC_VERSION_SHIFT, BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA,
-        CHANNEL_EVENT, CHANNEL_GLOM, CLM_CHUNK_SIZE, EVENTMSGS_EXT_SET_MASK, EVENTMSGS_EXT_VER,
-        EVENT_ASSOC, EVENT_ASSOC_IND, EVENT_AUTH, EVENT_DISASSOC_IND, EVENT_FLAG_LINK, EVENT_IF,
-        EVENT_LINK, EVENT_MASK_LEN, EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC,
-        EVENT_REASSOC_IND, EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN,
+        wsec_pmk_passphrase_fallback_allowed, Cyw43Event, DriverError, FirmwareSupplicantPath,
+        Ioctl, JoinCompletionState, RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_BADARG,
+        BCME_UNSUPPORTED, BDC_VERSION, BDC_VERSION_SHIFT, BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN,
+        CHANNEL_CONTROL, CHANNEL_DATA, CHANNEL_EVENT, CHANNEL_GLOM, CLM_CHUNK_SIZE,
+        EVENTMSGS_EXT_SET_MASK, EVENTMSGS_EXT_VER, EVENT_ASSOC, EVENT_ASSOC_IND, EVENT_AUTH,
+        EVENT_DISASSOC_IND, EVENT_FLAG_LINK, EVENT_IF, EVENT_LINK, EVENT_MASK_LEN, EVENT_MIC_ERROR,
+        EVENT_PSK_SUP, EVENT_REASSOC, EVENT_REASSOC_IND, EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN,
         IOCTL_NO_PROGRESS_AFTER_NONMATCHING_LIMIT, IOCTL_WAIT_LOOPS,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
@@ -4685,6 +4774,9 @@ mod tests {
             "sup_wpa",
             "sup_wpa2_eapver",
             "sup_wpa_tmo",
+            "bsscfg:sup_wpa",
+            "bsscfg:sup_wpa2_eapver",
+            "bsscfg:sup_wpa_tmo",
         ] {
             assert!(join_security_iovar_name(name));
         }
@@ -4748,6 +4840,32 @@ mod tests {
                 &DriverError::Protocol("ioctl-no-progress-after-frame"),
             ),
             Some("cyw43-join-security-wpaie-loop")
+        );
+    }
+
+    #[test]
+    fn bsscfg_supplicant_wrapper_timeout_preserves_join_security_gate() {
+        assert_eq!(
+            join_security_iovar_failure_exact_error(
+                "sup_wpa",
+                &DriverError::Protocol("ioctl-no-progress-after-frame"),
+            ),
+            Some("cyw43-join-security-sup-wpa-loop")
+        );
+        assert_eq!(
+            join_security_iovar_failure_exact_error(
+                "bsscfg:sup_wpa",
+                &DriverError::Protocol("ioctl-no-progress-after-frame"),
+            ),
+            Some("cyw43-join-security-bsscfg-sup-wpa-loop")
+        );
+        assert_eq!(
+            FirmwareSupplicantPath::BsscfgWrapper.label(),
+            "bsscfg-wrapper"
+        );
+        assert_eq!(
+            FirmwareSupplicantPath::BsscfgWrapper.order_label(),
+            "sup_wpa-or-bsscfg_sup_wpa"
         );
     }
 

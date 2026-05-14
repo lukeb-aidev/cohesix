@@ -378,23 +378,26 @@ power/reset state.
   WPA2-PSK/CCMP RSN IE through `wpaie`, then the primary-BSS initial WPA2
   version mask (`wpa_auth=0x00c0`), D11 auth (`auth=0`), AES security
   (`wsec=0x0004`), optional MFP only when a captured RSN/MFP policy proves it,
-  final WPA2-PSK AKM (`wpa_auth=0x0080`), firmware supplicant (`sup_wpa=1`),
-  then `WLC_SET_WSEC_PMK` before the primary `join` iovar. `infra=1` is not
-  part of the Linux connect-time station command sequence. For the primary BSS
-  (`bsscfgidx=0`), Linux `brcmf_fil_bsscfg_*` collapses to the plain iovar name
-  and data; Cohesix must not send a literal `bsscfg:` wrapper or leading zero
-  BSS index on Pi 4 station joins. The Pi 4 Linux capture shows the plain
-  `sup_wpa`
-  feature probe returning `BCME_UNSUPPORTED`; the same Linux run still connects
-  because host `wpa_supplicant` handles EAPOL and key install outside the
+  final WPA2-PSK AKM (`wpa_auth=0x0080`), firmware supplicant, then
+  `WLC_SET_WSEC_PMK` before the primary `join` iovar. `infra=1` is not part of
+  the Linux connect-time station command sequence. For the primary BSS
+  (`bsscfgidx=0`), Linux `brcmf_fil_bsscfg_*` collapses most station connect
+  commands to the plain iovar name and data, so Cohesix must keep `wpaie`,
+  `wpa_auth`, `auth`, `wsec`, and `join` on the plain primary path. The Pi 4
+  Linux capture shows the plain `sup_wpa` feature probe returning
+  `BCME_UNSUPPORTED`; the same Linux run still connects because host
+  `wpa_supplicant` handles EAPOL and key install outside the
   firmware-supplicant path. Milestone 26b does not authorize an in-VM supplicant
-  stack, so plain `sup_wpa` failure must not authorize or weaken the secure
-  Cohesix join rule. The Cohesix Pi 4 path uses primary-BSS firmware supplicant
-  mode as a hard secure-join gate, and an explicit `BCME_UNSUPPORTED` on
-  secure-path `sup_wpa` is reported and preserved in `wifi diag` as
-  `firmware-supplicant-unsupported` instead of falling back to `SET_SSID`-only
-  completion or a lower-level transport hint. Transport errors remain fatal. The
-  primary PMK payload is the
+  stack, so `sup_wpa` failure must not authorize or weaken the secure Cohesix
+  join rule. Cohesix may, after an explicit plain `sup_wpa` `BCME_UNSUPPORTED`,
+  try the known-good CYW43 firmware-supplicant wrapper shape
+  (`bsscfg:sup_wpa`, `bsscfgidx=0`, value `1`) plus wrapper-scoped optional
+  `sup_wpa2_eapver` and `sup_wpa_tmo`. That exception is limited to firmware
+  supplicant offload; it must not reintroduce wrapper-shaped `wsec` or join
+  programming. If both firmware-supplicant shapes are unsupported, Cohesix
+  reports and preserves `firmware-supplicant-unsupported` in `wifi diag` instead
+  of falling back to `SET_SSID`-only completion or a lower-level transport hint.
+  Transport errors remain fatal. The primary PMK payload is the
   132-byte Linux
   `brcmf_wsec_pmk_le` shape (`u16 key_len`, `u16 flags`, 128-byte key area).
   For 8-63 byte passphrases Cohesix derives the 32-byte PBKDF2-HMAC-SHA1 PMK
@@ -651,7 +654,10 @@ active path is Cohesix-owned cold start:
   been consumed; if the event-ring dequeue pointer cannot be translated to the
   device-visible DMA address, the path fails closed instead of publishing
   `ERDP.EHB` against address zero. All 64-bit ownership-register publications
-  also drain both low and high dwords. Command doorbell `0` itself still uses the U-Boot command
+  also drain both low and high dwords. Runtime `ERDP.EHB` ack logs must identify
+  the low/control flush separately from the high DMA-alias flush so Gate 3 proof
+  does not collapse both halves into one ambiguous stage. Command doorbell `0`
+  itself still uses the U-Boot command
   value, but seL4 userland must drain that posted PCIe write through HAL-owned
   EXT_CFG selector/COMMAND readback; it must not use an xHCI BAR read as the
   drain. A missing platform posted-write hook is a hard failure for the Pi 4
@@ -664,9 +670,11 @@ active path is Cohesix-owned cold start:
   initial `ERDP`, `ERSTSZ`, `ERSTBA`), write `DNCTRL=0`, start the controller
   with `USBCMD=RUN`, then apply the U-Boot post-start poll-only interrupter
   state (`IMOD=0`, `IMAN=0`) before submitting a new Enable Slot. Recovery
-  uses the same U-Boot cold-publish `CRCR` rule: preserve low bits from a
-  trusted snapshot or live read, otherwise publish from a zero reserved-bit
-  seed.
+  uses the same U-Boot cold-publish `CRCR` rule: after its local HCRST settle,
+  the Pi 4 `platform-reset-complete` recovery lane performs the pre-`RUN` live
+  `CRCR` seed read and preserves those low bits before writing the fresh command
+  ring pointer. Other recovery lanes preserve low bits from a trusted snapshot or
+  publish from a zero reserved-bit seed when no live read is allowed.
   The recovery lane still must not use xHCI BAR reads, `USBSTS`, or `PORTSC` as
   proof before command completion, and it must not replay Linux-shaped
   event-generation writes or `ERDP.EHB` acknowledgement before the retry command

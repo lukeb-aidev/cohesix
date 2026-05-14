@@ -74,6 +74,8 @@ const LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE: u16 = 0x035e;
 const LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE: u16 = 0x035c;
 const COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE: u16 = 0x037e;
 const LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE: u16 = 0x037f;
+const COMMAND_EVENT_ERDP_ACK_LOW_FLUSH_STAGE: u16 = 0x03fe;
+const COMMAND_EVENT_ERDP_ACK_HIGH_FLUSH_STAGE: u16 = 0x03ff;
 const RING_PUBLISH_DCBAAP_FLUSH_LOW_STAGE: u16 = 0x03b3;
 const RING_PUBLISH_DCBAAP_FLUSH_HIGH_STAGE: u16 = 0x03b4;
 const RING_PUBLISH_CRCR_FLUSH_LOW_STAGE: u16 = 0x03b5;
@@ -2258,6 +2260,28 @@ impl<H: Dma> XhciCtrl<H> {
             RING_PUBLISH_ERDP_FLUSH_HIGH_STAGE,
             val,
         )
+    }
+
+    #[inline(always)]
+    fn write_and_flush_required_erdp_ack(&self, int_base: usize, erdp: u64) -> Result<()> {
+        let [(low_offset, low_value), (high_offset, high_value)] =
+            erdp_reg_write_ops(int_base + reg::ERDP, erdp);
+        for (reg_offset, reg_value, stage) in [
+            (
+                low_offset,
+                low_value,
+                COMMAND_EVENT_ERDP_ACK_LOW_FLUSH_STAGE,
+            ),
+            (
+                high_offset,
+                high_value,
+                COMMAND_EVENT_ERDP_ACK_HIGH_FLUSH_STAGE,
+            ),
+        ] {
+            Self::write_reg_at::<u32>(self.mmio, reg_offset, reg_value);
+            self.flush_required_posted_write(reg_offset, reg_value, stage)?;
+        }
+        Ok(())
     }
 
     #[inline(always)]
@@ -4946,14 +4970,7 @@ impl<H: Dma> XhciCtrl<H> {
             let event_ring = self.event_ring.lock();
             compose_polling_erdp_ack(event_ring.try_dequeue_ptr(&*self.host)?)
         };
-        for (reg_offset, reg_value) in erdp_reg_write_ops(int_base + reg::ERDP, erdp) {
-            Self::write_reg_at::<u32>(self.mmio, reg_offset, reg_value);
-            self.flush_required_posted_write(
-                reg_offset,
-                reg_value,
-                COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE,
-            )?;
-        }
+        self.write_and_flush_required_erdp_ack(int_base, erdp)?;
         Ok(())
     }
 
@@ -4970,14 +4987,7 @@ impl<H: Dma> XhciCtrl<H> {
         let iman_event_generation =
             polling_event_generation_iman_value(self.firmware_handoff, self.runtime_seed_snapshot);
         emit_xhci_diag(0x031b, (int_base + reg::ERDP) as u64, erdp, 0);
-        for (reg_offset, reg_value) in erdp_reg_write_ops(int_base + reg::ERDP, erdp) {
-            Self::write_reg_at::<u32>(self.mmio, reg_offset, reg_value);
-            self.flush_required_posted_write(
-                reg_offset,
-                reg_value,
-                COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE,
-            )?;
-        }
+        self.write_and_flush_required_erdp_ack(int_base, erdp)?;
         emit_xhci_diag(0x031c, (int_base + reg::ERDP) as u64, erdp, 0);
         emit_xhci_diag(0x031d, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
         Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, iman_ack);
@@ -5643,15 +5653,13 @@ impl<H: Dma> XhciCtrl<H> {
         };
         let iman_ack = polling_iman_ack_value();
         emit_xhci_diag(0x037d, (int_base + reg::ERDP) as u64, erdp, 0);
-        for (reg_offset, reg_value) in erdp_reg_write_ops(int_base + reg::ERDP, erdp) {
-            Self::write_reg_at::<u32>(self.mmio, reg_offset, reg_value);
-            self.flush_required_posted_write(
-                reg_offset,
-                reg_value,
-                COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE,
-            )?;
-        }
-        emit_xhci_diag(0x037e, (int_base + reg::ERDP) as u64, erdp, 0);
+        self.write_and_flush_required_erdp_ack(int_base, erdp)?;
+        emit_xhci_diag(
+            COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE,
+            (int_base + reg::ERDP) as u64,
+            erdp,
+            0,
+        );
         Self::write_reg_at::<u32>(self.mmio, int_base + reg::IMAN, iman_ack);
         emit_xhci_diag(0x037f, (int_base + reg::IMAN) as u64, iman_ack as u64, 0);
         self.flush_required_posted_write(
@@ -5797,11 +5805,6 @@ impl<H: Dma> XhciCtrl<H> {
         let (event_ring_phys, erst_phys) = event_ring.share_for_device(&*self.host)?;
         let event_ring_dequeue = event_ring.try_dequeue_ptr(&*self.host)?;
         let erdp = compose_initial_erdp(event_ring_dequeue);
-        let crcr = compose_crcr(
-            prompt_safe_crcr_publish_seed(self.firmware_handoff, self.runtime_seed_snapshot, false),
-            cmd_ring_phys,
-            true,
-        );
         let erst_entries = event_ring.erst_entries();
         let int_base = reg::interrupter_base(self.rt_base as u32 - self.mmio as u32, 0);
         let config_offset = self.op_base - self.mmio + reg::CONFIG;
@@ -5811,6 +5814,19 @@ impl<H: Dma> XhciCtrl<H> {
         emit_xhci_diag(0x03d0, cmd_ring_phys, event_ring_phys, erst_phys);
         emit_xhci_diag(0x03d1, event_ring_dequeue, erdp, u64::from(erst_entries));
         self.reset_controller_for_prompt_safe_command_recovery()?;
+        let crcr_seed = if platform_reset_uses_uboot_crcr_seed_read_after_hcrst(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+            self.skip_initial_live_operational_reads,
+        ) {
+            emit_xhci_diag(0x0253, reg::CRCR as u64, 0, 3);
+            let current = self.read_op_u64(reg::CRCR);
+            emit_xhci_diag(0x0251, current, reg::CMD_RING_RSVD_BITS, 3);
+            current
+        } else {
+            prompt_safe_crcr_publish_seed(self.firmware_handoff, self.runtime_seed_snapshot, false)
+        };
+        let crcr = compose_crcr(crcr_seed, cmd_ring_phys, true);
         {
             let mut current = self.cmd_ring.lock();
             *current = cmd_ring;
@@ -6865,7 +6881,8 @@ mod tests {
         XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
     };
     use super::{
-        COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE, COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE,
+        COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE, COMMAND_EVENT_ERDP_ACK_HIGH_FLUSH_STAGE,
+        COMMAND_EVENT_ERDP_ACK_LOW_FLUSH_STAGE, COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE,
         COMMAND_RECOVERY_IMAN_FLUSH_STAGE, COMMAND_RECOVERY_IMOD_FLUSH_STAGE,
         LINUX_COMMAND_PROBE_DNCTRL_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE,
         LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE, LINUX_COMMAND_PROBE_IMOD_FLUSH_STAGE,
@@ -10300,6 +10317,8 @@ mod tests {
         assert_eq!(LINUX_COMMAND_PROBE_IMAN_ENABLE_FLUSH_STAGE, 0x035e);
         assert_eq!(COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE, 0x037e);
         assert_eq!(LINUX_COMMAND_PROBE_IMAN_ACK_FLUSH_STAGE, 0x037f);
+        assert_eq!(COMMAND_EVENT_ERDP_ACK_LOW_FLUSH_STAGE, 0x03fe);
+        assert_eq!(COMMAND_EVENT_ERDP_ACK_HIGH_FLUSH_STAGE, 0x03ff);
         assert_eq!(COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE, 0x03e8);
         assert_eq!(COMMAND_RECOVERY_IMOD_FLUSH_STAGE, 0x03e9);
         assert_eq!(COMMAND_RECOVERY_IMAN_FLUSH_STAGE, 0x03ea);
@@ -10321,7 +10340,14 @@ mod tests {
             0x6000_0000_0,
             int_base + reg::ERDP,
             0x0402_5058,
-            COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE,
+            COMMAND_EVENT_ERDP_ACK_LOW_FLUSH_STAGE,
+            true,
+        ));
+        assert!(!flush_posted_write_with_policy(
+            0x6000_0000_0,
+            int_base + reg::ERDP + 4,
+            0x0000_0004,
+            COMMAND_EVENT_ERDP_ACK_HIGH_FLUSH_STAGE,
             true,
         ));
         assert!(!flush_posted_write_with_policy(

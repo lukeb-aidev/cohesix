@@ -3249,6 +3249,19 @@ where
         ));
         self.emit_console_line(control.as_str());
 
+        if Self::wifi_exact_error_is_join_security_blocker(snapshot.control_plane_exact_error) {
+            let attribution = format_message(format_args!(
+                "wifi: attribution={} transport={} sdhci={} f2={} failing_iovar={} status={}",
+                Self::wifi_join_security_attribution(snapshot),
+                Self::wifi_join_security_transport_label(snapshot),
+                snapshot.control_plane_sdhci_read_diag,
+                snapshot.control_plane_f2_state,
+                Self::wifi_join_security_failing_iovar(snapshot),
+                Self::wifi_join_security_status(snapshot),
+            ));
+            self.emit_console_line(attribution.as_str());
+        }
+
         let verdict_line = format_message(format_args!(
             "wifi: verdict={verdict} focus={focus} bootstrap={}",
             snapshot.control_plane_bootstrap_phase,
@@ -3648,6 +3661,57 @@ where
                 || Self::wifi_exact_error_is_join_security_blocker(exact_error)
                 || exact_error.starts_with("cyw43-function2-")
                 || Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_join_security_attribution(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if snapshot.control_plane_exact_error == "firmware-supplicant-unsupported"
+            && Self::wifi_sdhci_read_diag_is_clear(snapshot.control_plane_sdhci_read_diag)
+            && snapshot.control_plane_f2_state == "linux-configured"
+        {
+            "firmware-feature-boundary"
+        } else {
+            "join-security-command-boundary"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_join_security_transport_label(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if Self::wifi_sdhci_read_diag_is_clear(snapshot.control_plane_sdhci_read_diag)
+            && snapshot.control_plane_f2_state == "linux-configured"
+        {
+            "healthy"
+        } else {
+            "needs-inspection"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_sdhci_read_diag_is_clear(diag: &str) -> bool {
+        diag.is_empty() || matches!(diag.as_bytes(), b"none")
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_join_security_failing_iovar(snapshot: &WifiDebugSnapshot) -> &'static str {
+        match snapshot.control_plane_exact_error {
+            "firmware-supplicant-unsupported" | "cyw43-join-security-sup-wpa-loop" => "sup_wpa",
+            "cyw43-join-security-bsscfg-sup-wpa-loop" => "bsscfg:sup_wpa",
+            "cyw43-join-security-wpaie-loop" => "wpaie",
+            "cyw43-join-security-wpa-auth-initial-loop"
+            | "cyw43-join-security-wpa-auth-final-loop" => "wpa_auth",
+            "cyw43-join-security-auth-loop" => "auth",
+            "cyw43-join-security-wsec-first-loop" => "wsec",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_join_security_status(snapshot: &WifiDebugSnapshot) -> &'static str {
+        if snapshot.control_plane_exact_error == "firmware-supplicant-unsupported" {
+            "0xffffffe9"
+        } else {
+            "n/a"
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -8833,6 +8897,7 @@ mod tests {
         let mut fake = FakeWifiDebug::new();
         fake.snapshot.debug_snapshot_stage = "cyw43-init-control-plane-fail";
         fake.snapshot.control_plane_exact_error = "firmware-supplicant-unsupported";
+        fake.snapshot.control_plane_sdhci_read_diag = "none";
         fake.snapshot.control_plane_f2_state = "linux-configured";
         fake.snapshot.control_plane_bootstrap_phase = "steady-state";
         fake.snapshot.control_plane_no_ht_transport = false;
@@ -8855,6 +8920,22 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_reply_contract_blocker_class(&fake.snapshot),
             "join-security"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_attribution(&fake.snapshot),
+            "firmware-feature-boundary"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_transport_label(&fake.snapshot),
+            "healthy"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_failing_iovar(&fake.snapshot),
+            "sup_wpa"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_status(&fake.snapshot),
+            "0xffffffe9"
         );
         assert!(KernelConsoleTestPump::wifi_diag_should_skip_ht_probe(
             &fake.snapshot

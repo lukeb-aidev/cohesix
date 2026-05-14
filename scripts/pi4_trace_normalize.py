@@ -116,6 +116,7 @@ JOIN_SECURITY_EXACT_BY_BLOCKER = {
     "join-security-auth-loop": "cyw43-join-security-auth-loop",
     "join-security-wsec-first-loop": "cyw43-join-security-wsec-first-loop",
     "join-security-sup-wpa-loop": "cyw43-join-security-sup-wpa-loop",
+    "join-security-bsscfg-sup-wpa-loop": "cyw43-join-security-bsscfg-sup-wpa-loop",
 }
 USB_OUTCOME_BLOCKERS = {
     "address-failed",
@@ -1282,6 +1283,11 @@ def normalize_wifi_blocker(value: str) -> str:
     ):
         return "join-timeout"
     if (
+        "join-security-bsscfg-sup-wpa-loop" in lower
+        or "iovar set failed name=bsscfg:sup_wpa" in lower
+    ):
+        return "join-security-bsscfg-sup-wpa-loop"
+    if (
         "primary-bsscfg-wrapper-join-security-loop" in lower
         or ("iovar set failed name=bsscfg:" in lower and "step=join" in lower)
         or "iovar set failed name=bsscfg:wsec" in lower
@@ -1387,6 +1393,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-join-security-auth-loop",
         "cyw43-join-security-wsec-first-loop",
         "cyw43-join-security-sup-wpa-loop",
+        "cyw43-join-security-bsscfg-sup-wpa-loop",
         "cyw43-control-plane-legacy-gmode-stall",
         "cyw43-control-plane-no-frame-indication-after-write",
         "cyw43-control-plane-partial-hint-visibility",
@@ -2080,6 +2087,8 @@ def join_security_blocker_for_iovar(
         return "join-security-wsec-first-loop"
     if normalized == "sup_wpa":
         return "join-security-sup-wpa-loop"
+    if normalized == "bsscfg:sup_wpa":
+        return "join-security-bsscfg-sup-wpa-loop"
     return None
 
 
@@ -2292,6 +2301,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "auth",
                 "wsec",
                 "sup_wpa",
+                "bsscfg:sup_wpa",
             }:
                 join_security_pending_iovar = iovar_name
         if join_begin_seen and "[cyw43] iovar set ready" in raw:
@@ -2308,6 +2318,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "join-security-auth-loop",
             "join-security-wsec-first-loop",
             "join-security-sup-wpa-loop",
+            "join-security-bsscfg-sup-wpa-loop",
             "primary-bsscfg-wrapper-join-security-loop",
             "wsec-pmk-bad-argument",
         }:
@@ -3169,7 +3180,7 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or event.fields.get("current")
             or event.fields.get("focus")
             or event.stage
-            or "none"
+            or "join-security"
         )
         return "firmware-supplicant-unsupported", phase
     for key in ("exact", "exact_error", "err", "cause", "detail", "reason"):
@@ -3295,6 +3306,7 @@ def summarize_wifi_failure_detail(
                 "auth",
                 "wsec",
                 "sup_wpa",
+                "bsscfg:sup_wpa",
             }:
                 join_security_pending_iovar = iovar_name
         if join_begin_seen and "[cyw43] iovar set ready" in raw:
