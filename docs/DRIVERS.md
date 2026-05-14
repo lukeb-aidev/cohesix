@@ -385,12 +385,16 @@ power/reset state.
   and data; Cohesix must not send a literal `bsscfg:` wrapper or leading zero
   BSS index on Pi 4 station joins. The Pi 4 Linux capture shows the plain
   `sup_wpa`
-  feature probe returning `BCME_UNSUPPORTED`; plain `sup_wpa` must therefore
-  not authorize or weaken the secure Cohesix join rule. The Cohesix Pi 4 path
-  uses primary-BSS firmware supplicant mode as a hard secure-join gate, and an
-  explicit `BCME_UNSUPPORTED` on secure-path `sup_wpa` is reported as
+  feature probe returning `BCME_UNSUPPORTED`; the same Linux run still connects
+  because host `wpa_supplicant` handles EAPOL and key install outside the
+  firmware-supplicant path. Milestone 26b does not authorize an in-VM supplicant
+  stack, so plain `sup_wpa` failure must not authorize or weaken the secure
+  Cohesix join rule. The Cohesix Pi 4 path uses primary-BSS firmware supplicant
+  mode as a hard secure-join gate, and an explicit `BCME_UNSUPPORTED` on
+  secure-path `sup_wpa` is reported and preserved in `wifi diag` as
   `firmware-supplicant-unsupported` instead of falling back to `SET_SSID`-only
-  completion. Transport errors remain fatal. The primary PMK payload is the
+  completion or a lower-level transport hint. Transport errors remain fatal. The
+  primary PMK payload is the
   132-byte Linux
   `brcmf_wsec_pmk_le` shape (`u16 key_len`, `u16 flags`, 128-byte key area).
   For 8-63 byte passphrases Cohesix derives the 32-byte PBKDF2-HMAC-SHA1 PMK
@@ -430,15 +434,15 @@ power/reset state.
 - WPA2 join completion must be gated on the firmware supplicant event, not on
   `WLC_SET_SSID` success when firmware supplicant mode is available. Open
   networks may complete on a successful `SET_SSID` event. Secure networks must
-  subscribe to `SET_SSID`, `AUTH`, and `PSK_SUP`, ignore the early `PSK_SUP`
-  abort status, and, when firmware supplicant mode is enabled, require both
-  successful `SET_SSID` association progress and `PSK_SUP` status 6 before
-  the data path is released. DHCP and data TX must not begin before that
-  secure completion rule is satisfied; the root-task DHCP client is started
-  only after the Wi-Fi backend reports no pending association status and a
-  live Wi-Fi carrier. A post-join `EVENT_LINK` without the link flag is
-  `wifi-link-down`; it must defer DHCP rather than being normalized as DHCP
-  progress.
+  subscribe to `SET_SSID`, `AUTH`, and `PSK_SUP`; when firmware supplicant mode
+  is enabled, require both successful `SET_SSID` association progress and
+  `PSK_SUP` status 6 before the data path is released. Any other `PSK_SUP`
+  status is a failed secure join, not a pending-success edge. DHCP and data TX
+  must not begin before that secure completion rule is satisfied; the root-task
+  DHCP client is started only after the Wi-Fi backend reports no pending
+  association status and a live Wi-Fi carrier. A post-join `EVENT_LINK` without
+  the link flag is `wifi-link-down`; it must defer DHCP rather than being
+  normalized as DHCP progress.
 - Join-completion event delivery is a hard gate. Cohesix first programs the
   Linux `event_msgs_ext` shape (`ver=1`, `command=SET_MASK`, `len=27`) using
   the Pi 4 capture mask plus the Cohesix-required `AUTH`, association, and
@@ -602,7 +606,9 @@ active path is Cohesix-owned cold start:
   only. The 2026-05-10 Pi 4 trace proved that even an xHCI capability dword read
   at BAR offset `0x0000` can halt immediately after `USBCMD.RUN`; never use xHCI
   BAR reads, `USBSTS`, or any `PORTSC` as the posted-write drain on this
-  prompt-safe path. The active
+  prompt-safe path. The only live xHCI BAR read permitted on the Pi 4
+  `platform-reset-complete` command gate is U-Boot's pre-`RUN` `CRCR` seed read
+  after the HAL mailbox reset and blind HCRST settle. The active
   `platform-reset-complete` path uses an extended bounded blind HCRST/CNR
   settle before publishing fresh rings. Command timeout diagnostics on that
   lane report deferred state instead of live `CRCR`, `DCBAAP`, interrupter, or
@@ -622,10 +628,12 @@ active path is Cohesix-owned cold start:
   publication, then shared again before `DCBAAP` is made visible. `CRCR`
   composition preserves the low
   `CMD_RING_RSVD_BITS` exactly as U-Boot does before OR-ing the command-ring
-  pointer and producer cycle; when the seL4 prompt-safe lane cannot live-read
-  `CRCR` and has no trusted snapshot, it publishes from a zero reserved-bit
-  seed instead of synthesizing Linux's later observed `CRCR` running-status
-  bit. The U-Boot `DNCTRL=0` write is also HAL-drained
+  pointer and producer cycle. On the Pi 4 `platform-reset-complete` lane, that
+  means one pre-`RUN` live `CRCR` seed read after HCRST; when another seL4
+  prompt-safe lane cannot live-read `CRCR` and has no trusted snapshot, it
+  publishes from a zero reserved-bit seed instead of synthesizing Linux's later
+  observed `CRCR` running-status bit. The U-Boot `DNCTRL=0` write is also
+  HAL-drained
   before `USBCMD.RUN`. It must DMA-publish the submitted command TRB as
   the exact 16-byte device-visible cache range U-Boot flushes, issue a
   completion-grade command-ring publish barrier, then write U-Boot's

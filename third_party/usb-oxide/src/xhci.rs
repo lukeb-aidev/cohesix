@@ -596,6 +596,17 @@ const fn use_live_post_reset_seed_reads_for_init(
 }
 
 #[inline(always)]
+const fn platform_reset_uses_uboot_crcr_seed_read_after_hcrst(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+    skip_initial_live_operational_reads: bool,
+) -> bool {
+    skip_initial_live_operational_reads
+        && matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete)
+        && runtime_seed_snapshot.is_none()
+}
+
+#[inline(always)]
 const fn use_live_config_seed_reads_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
@@ -3594,12 +3605,22 @@ impl<H: Dma> XhciCtrl<H> {
         // so CRCR follows U-Boot's DCBAAP-before-CRCR order. Snapshot-backed
         // diagnostic lanes may still defer CRCR until their runtime seed edges.
         let cmd_ring = self.cmd_ring.lock();
-        // Avoid live CRCR reads before reset. Once the controller has reached
-        // the post-reset cold-boot path, seed CRCR from a trusted snapshot or
-        // the Pi 4 captured low-bit shape while still skipping extra
-        // verification reads on diagnostic snapshot paths.
+        // Avoid live CRCR reads before reset. Once the Pi 4 mailbox/HCRST path
+        // owns the controller and is still pre-RUN, mirror U-Boot's CRCR readq
+        // seed so low control/status bits are preserved from hardware instead
+        // of assumed. Other prompt-safe lanes still use trusted snapshots or a
+        // zero cold seed and keep extra verification reads suppressed.
         let current_crcr = if preserve_firmware_state {
             0
+        } else if platform_reset_uses_uboot_crcr_seed_read_after_hcrst(
+            self.firmware_handoff,
+            trusted_runtime_seed_snapshot,
+            self.skip_initial_live_operational_reads,
+        ) {
+            emit_xhci_diag(0x0253, reg::CRCR as u64, 0, 2);
+            let current = self.read_op_u64(reg::CRCR);
+            emit_xhci_diag(0x0251, current, reg::CMD_RING_RSVD_BITS, 2);
+            current
         } else if !probe_live_crcr_before_staged_publish_with_snapshot(
             self.firmware_handoff,
             trusted_runtime_seed_snapshot,
@@ -6773,9 +6794,9 @@ mod tests {
         halt_revalidation_needed, initial_live_operational_read_hazard,
         linux_command_probe_usbcmd_seed, masked_usbcmd, no_op_command_trb_for_probe,
         parse_controller_params, platform_reset_dcbaap_publish_blocked_with_snapshot,
-        polling_command_proof_dnctrl_value, polling_event_generation_iman_value,
-        polling_event_generation_run_usbcmd, polling_iman_ack_value, polling_iman_value,
-        port_ready_for_enumeration, port_state_neutral,
+        platform_reset_uses_uboot_crcr_seed_read_after_hcrst, polling_command_proof_dnctrl_value,
+        polling_event_generation_iman_value, polling_event_generation_run_usbcmd,
+        polling_iman_ack_value, polling_iman_value, port_ready_for_enumeration, port_state_neutral,
         post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear, pre_command_event_handler_erdp,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
@@ -9138,6 +9159,39 @@ mod tests {
             XhciFirmwareHandoff::None,
             None,
             true,
+        ));
+    }
+
+    #[test]
+    fn platform_reset_reenables_only_uboot_crcr_seed_read_after_hcrst() {
+        assert!(platform_reset_uses_uboot_crcr_seed_read_after_hcrst(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+            true,
+        ));
+        assert!(!platform_reset_uses_uboot_crcr_seed_read_after_hcrst(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            Some(XhciRuntimeSeedSnapshot {
+                usbcmd: None,
+                usbsts: None,
+                iman0: None,
+                dcbaap: None,
+                crcr: Some(0x8),
+                erstba0: None,
+                erdp0: None,
+                erstsz0: None,
+            }),
+            true,
+        ));
+        assert!(!platform_reset_uses_uboot_crcr_seed_read_after_hcrst(
+            XhciFirmwareHandoff::None,
+            None,
+            true,
+        ));
+        assert!(!platform_reset_uses_uboot_crcr_seed_read_after_hcrst(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+            false,
         ));
     }
 

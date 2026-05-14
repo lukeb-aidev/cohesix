@@ -685,7 +685,6 @@ fn join_event_result(
                 auth_status: state.auth_status,
             }))
         }
-        EVENT_PSK_SUP if secure && event.status == STATUS_ABORT => None,
         EVENT_PSK_SUP if secure && event.status == STATUS_UNSOLICITED => {
             state.psk_completed = true;
             if join_completion_link_up(requires_psk_completion, *state) {
@@ -2108,7 +2107,7 @@ impl Cyw43NetDevice {
                 "[cyw43] join pending mode=deferred polls=0 ssid_len={} psk_len={} secure=yes fwsup={}",
                 ssid.len(),
                 psk.len(),
-                "yes",
+                if requires_psk_completion { "yes" } else { "no" },
             );
             return Ok(());
         }
@@ -2182,8 +2181,10 @@ impl Cyw43NetDevice {
     fn enable_wpa2_firmware_supplicant(&mut self) -> Result<(), DriverError> {
         if let Err(err) = self.set_iovar_u32("sup_wpa", 1) {
             if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED) {
+                self.state
+                    .promote_cached_control_plane_exact_error("firmware-supplicant-unsupported");
                 warn!(
-                    "[cyw43] join: firmware-supplicant path=primary-bsscfg unsupported action=fail-secure"
+                    "[cyw43] join: firmware-supplicant path=primary-bsscfg unsupported status=0x{BCME_UNSUPPORTED:08x} action=fail-secure reason=host-eapol-supplicant-required"
                 );
                 return Err(DriverError::Protocol("firmware-supplicant-unsupported"));
             }
@@ -4105,13 +4106,6 @@ mod tests {
             Some(Ok(()))
         ));
 
-        let psk_abort = Cyw43Event {
-            event_type: EVENT_PSK_SUP,
-            status: STATUS_ABORT,
-            ..Cyw43Event::default()
-        };
-        assert!(join_event_result(psk_abort, true, true, &mut completion).is_none());
-
         let psk_keyed = Cyw43Event {
             event_type: EVENT_PSK_SUP,
             status: STATUS_UNSOLICITED,
@@ -4121,6 +4115,27 @@ mod tests {
             join_event_result(psk_keyed, true, true, &mut completion),
             Some(Ok(()))
         ));
+    }
+
+    #[test]
+    fn secure_join_rejects_non_completed_psk_supplicant_statuses() {
+        for status in [STATUS_ABORT, 5, 7, 8] {
+            let mut completion = JoinCompletionState::default();
+            let event = Cyw43Event {
+                event_type: EVENT_PSK_SUP,
+                status,
+                ..Cyw43Event::default()
+            };
+
+            assert!(matches!(
+                join_event_result(event, true, true, &mut completion),
+                Some(Err(DriverError::JoinFailed {
+                    status: observed,
+                    ..
+                })) if observed == status
+            ));
+            assert!(!completion.psk_completed);
+        }
     }
 
     #[test]

@@ -2359,6 +2359,7 @@ fn control_plane_exact_error_is_generic_no_reply(reason: &str) -> bool {
 #[inline]
 fn control_plane_exact_error_is_more_informative(reason: &str) -> bool {
     control_plane_exact_error_is_first_reply_blocker(reason)
+        || control_plane_exact_error_is_terminal_driver_blocker(reason)
         || matches!(
             reason,
             "cyw43-control-plane-state-visible-no-reply"
@@ -2379,6 +2380,12 @@ fn control_plane_exact_error_is_direct_sdio_transport_blocker(reason: &str) -> b
         reason,
         "sdio-cmd52-read" | "sdio-cmd52-write" | "sdio-cmd53-r5-error"
     )
+}
+
+#[inline]
+fn control_plane_exact_error_is_terminal_driver_blocker(reason: &str) -> bool {
+    matches!(reason, "firmware-supplicant-unsupported")
+        || reason.starts_with("cyw43-join-security-")
 }
 
 #[inline]
@@ -6440,7 +6447,9 @@ fn wifi_debug_snapshot_should_be_cached(snapshot: &WifiDebugSnapshot) -> bool {
 
 #[inline]
 fn remember_wifi_driver_failure_exact_error(exact_error: &'static str) {
-    if control_plane_exact_error_is_direct_sdio_transport_blocker(exact_error) {
+    if control_plane_exact_error_is_direct_sdio_transport_blocker(exact_error)
+        || control_plane_exact_error_is_terminal_driver_blocker(exact_error)
+    {
         *LAST_WIFI_DRIVER_FAILURE_EXACT.lock() = Some(exact_error);
     }
 }
@@ -6463,10 +6472,13 @@ fn control_plane_exact_error_preserving_driver_failure(
     let Some(driver_failure) = driver_failure else {
         return exact_error;
     };
-    if !control_plane_exact_error_is_direct_sdio_transport_blocker(driver_failure) {
+    if control_plane_exact_error_is_pre_function2_clock_blocker(exact_error) {
         return exact_error;
     }
-    if control_plane_exact_error_is_pre_function2_clock_blocker(exact_error) {
+    if control_plane_exact_error_is_terminal_driver_blocker(driver_failure) {
+        return driver_failure;
+    }
+    if !control_plane_exact_error_is_direct_sdio_transport_blocker(driver_failure) {
         return exact_error;
     }
     if exact_error.is_empty()
@@ -6490,6 +6502,7 @@ fn promote_cached_wifi_debug_snapshot_exact_error(exact_error: &'static str) {
     if !exact_error.starts_with("cyw43-function2-reply-")
         && !hintless_firstread_no_irq
         && !control_plane_exact_error_is_direct_sdio_transport_blocker(exact_error)
+        && !control_plane_exact_error_is_terminal_driver_blocker(exact_error)
     {
         return;
     }
@@ -33532,6 +33545,18 @@ mod tests {
             "cyw43-control-plane-hintless-firstread-no-irq",
         );
         assert_eq!(snapshot.control_plane_sdhci_read_diag, "none");
+
+        promote_cached_wifi_debug_snapshot_exact_error("firmware-supplicant-unsupported");
+
+        let snapshot = LAST_WIFI_DEBUG_SNAPSHOT
+            .lock()
+            .as_ref()
+            .copied()
+            .expect("cached snapshot");
+        assert_eq!(
+            snapshot.control_plane_exact_error,
+            "firmware-supplicant-unsupported",
+        );
     }
 
     #[test]
@@ -33556,6 +33581,20 @@ mod tests {
                 Some("sdio-cmd53-r5-error"),
             ),
             "cyw43-function2-reply-read-stall-no-buffer-ready"
+        );
+        assert_eq!(
+            control_plane_exact_error_preserving_driver_failure(
+                "cyw43-control-plane-partial-hint-visibility",
+                Some("firmware-supplicant-unsupported"),
+            ),
+            "firmware-supplicant-unsupported"
+        );
+        assert_eq!(
+            control_plane_exact_error_preserving_driver_failure(
+                "cyw43-ht-clock-timeout-before-function2",
+                Some("firmware-supplicant-unsupported"),
+            ),
+            "cyw43-ht-clock-timeout-before-function2"
         );
     }
 

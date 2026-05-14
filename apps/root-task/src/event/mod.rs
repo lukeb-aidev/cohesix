@@ -3630,6 +3630,12 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_exact_error_is_join_security_blocker(exact_error: &str) -> bool {
+        exact_error.starts_with("cyw43-join-security-")
+            || exact_error == "firmware-supplicant-unsupported"
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_exact_error_is_terminal_diag_blocker(exact_error: &str) -> bool {
         !exact_error.is_empty()
             && (matches!(
@@ -3639,7 +3645,7 @@ where
                     | "cyw43-device-on-timeout-before-ht"
                     | "cyw43-device-on-timeout-before-function2"
             ) || exact_error.starts_with("cyw43-control-plane-")
-                || exact_error.starts_with("cyw43-join-security-")
+                || Self::wifi_exact_error_is_join_security_blocker(exact_error)
                 || exact_error.starts_with("cyw43-function2-")
                 || Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error))
     }
@@ -3676,7 +3682,7 @@ where
         if Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error) {
             return ("firmware-core-control-edge", "firmware-core-control");
         }
-        if exact_error.starts_with("cyw43-join-security-") {
+        if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
             return ("join-security-edge", "join-security");
         }
         if exact_error.is_empty()
@@ -3759,7 +3765,7 @@ where
         if Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error) {
             return "firmware-core-control";
         }
-        if exact_error.starts_with("cyw43-join-security-") {
+        if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
             return "join-security";
         }
         if exact_error.is_empty()
@@ -3850,10 +3856,9 @@ where
                 ))
         {
             "startup-link-f2"
-        } else if snapshot
-            .control_plane_exact_error
-            .starts_with("cyw43-join-security-")
-        {
+        } else if Self::wifi_exact_error_is_join_security_blocker(
+            snapshot.control_plane_exact_error,
+        ) {
             "join-security"
         } else if snapshot
             .control_plane_exact_error
@@ -3894,7 +3899,7 @@ where
         let exact_error = snapshot.control_plane_exact_error;
         if Self::wifi_exact_error_is_direct_sdio_transport_blocker(exact_error) {
             "firmware-core-control"
-        } else if exact_error.starts_with("cyw43-join-security-") {
+        } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
             "join-security"
         } else if exact_error.starts_with("cyw43-function2-reply-") {
             "direct-f2-reply"
@@ -8816,6 +8821,40 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_contract_expected(&fake.snapshot),
             "linux-wpa2-security-order"
+        );
+        assert!(KernelConsoleTestPump::wifi_diag_should_skip_ht_probe(
+            &fake.snapshot
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_firmware_supplicant_unsupported_reports_join_gate() {
+        let mut fake = FakeWifiDebug::new();
+        fake.snapshot.debug_snapshot_stage = "cyw43-init-control-plane-fail";
+        fake.snapshot.control_plane_exact_error = "firmware-supplicant-unsupported";
+        fake.snapshot.control_plane_f2_state = "linux-configured";
+        fake.snapshot.control_plane_bootstrap_phase = "steady-state";
+        fake.snapshot.control_plane_no_ht_transport = false;
+        fake.snapshot.control_plane_probe_pending = false;
+        fake.snapshot.io_enable = Some(0x06);
+        fake.snapshot.io_ready = Some(0x06);
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_capture_verdict(&fake.snapshot),
+            ("join-security-edge", "join-security")
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_golden_path_current_step(&fake.snapshot),
+            "join-security"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_contract_path(&fake.snapshot),
+            "join-security"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_reply_contract_blocker_class(&fake.snapshot),
+            "join-security"
         );
         assert!(KernelConsoleTestPump::wifi_diag_should_skip_ht_probe(
             &fake.snapshot
