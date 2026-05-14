@@ -4075,19 +4075,19 @@ const fn xhci_diag_stage_value_labels(
         0x0316 => Some(("erdp_ack", "iman_ip", "usbsts_clear")),
         0x0300 => Some(("param", "status_control", "poll_only")),
         0x0301 => Some(("param", "status_control", "completion_code")),
-        0x0303 => Some(("cmd_addr", "enqueue", "cycle")),
+        0x0303 => Some(("cmd_bus_addr", "enqueue", "cycle")),
         0x0304 => Some(("completion_ptr", "expected_ptr", "match")),
         0x0308 => Some(("param", "status_control", "trb_type")),
         0x030b => Some(("waited", "expected_ptr", "event_syncs")),
         0x030c => Some(("completion_ptr", "expected_ptr", "control")),
         0x030d => Some(("completion_code", "slot_id", "live_reads")),
         0x030e => Some(("param", "status_control", "trb_type")),
-        0x030f | 0x031a | 0x031f => Some(("doorbell", "target", "skip_readback")),
+        0x030f | 0x031a | 0x031f => Some(("doorbell_off", "db_value", "skip_readback")),
         0x0317 | 0x0318 | 0x0319 => Some(("attempt", "usbcmd", "usbsts_iman")),
         0x0320 => Some(("usbcmd", "masked_usbcmd", "masked_bits")),
         0x0332 | 0x0333 => Some(("iman", "masked_iman", "seed_flags")),
         0x0337 | 0x0338 => Some(("dnctrl_off", "dnctrl", "policy")),
-        0x0339 => Some(("cmd_addr", "barrier", "policy")),
+        0x0339 => Some(("cmd_bus_addr", "barrier", "policy")),
         0x0350 => Some(("run_usbcmd", "event_run_usbcmd", "seed_flags")),
         0x0351 | 0x0352 => Some(("iman_off", "iman", "seed_flags")),
         0x0353..=0x035a => Some(("param", "status_control", "index_dequeue_cycle")),
@@ -4106,6 +4106,7 @@ const fn xhci_diag_stage_value_labels(
         0x0375 => Some(("usbcmd_usbsts", "iman_erstsz", "dcbaap")),
         0x0376 => Some(("erstba", "erdp", "phase")),
         0x0377 => Some(("expected_ptr", "event_syncs", "live_snapshot_deferred")),
+        0x037a => Some(("expected_ptr", "event_syncs", "psc_events")),
         0x037d | 0x037e => Some(("erdp_off", "erdp_ack", "policy")),
         0x037f => Some(("iman_off", "iman_ack", "policy")),
         0x0380 => Some(("attempt_speed", "slot_mps", "slot_recycles")),
@@ -4126,7 +4127,7 @@ const fn xhci_diag_stage_value_labels(
         0x03b0 | 0x03b1 => Some(("slot_ep", "dequeue", "result")),
         0x03c0..=0x03c3 => Some(("slot_ep", "code_payload", "decode_state")),
         0x03b3..=0x03bd => Some(("reg_off", "value", "target")),
-        0x03be => Some(("scratchpad_array", "published", "deferred")),
+        0x03be => Some(("scratchpad_array", "published", "publish_phase")),
         0x03c4 => Some(("stop_usbcmd", "live_state_skipped", "policy")),
         0x03c5 | 0x03c8 => Some(("reg_off", "value", "prior")),
         0x03c7 => Some(("settle_spins", "target", "policy")),
@@ -4139,8 +4140,8 @@ const fn xhci_diag_stage_value_labels(
         0x03d4..=0x03df => Some(("reg_off", "reg_value", "target")),
         0x03e0 => Some(("flush_off", "flush_value", "policy")),
         0x03e1 => Some(("crcr", "erdp", "recovered")),
-        0x03e2 | 0x03e4 => Some(("cmd_addr", "status", "recovery")),
-        0x03e3 => Some(("cmd_addr", "enqueue_state", "cycle_state")),
+        0x03e2 | 0x03e4 => Some(("cmd_bus_addr", "status", "recovery")),
+        0x03e3 => Some(("cmd_bus_addr", "enqueue_state", "cycle_state")),
         0x03e7..=0x03eb => Some(("reg_off", "value", "policy")),
         0x03ec => Some(("waited", "usbsts", "run_usbcmd")),
         0x03ed => Some(("settle_spins", "poll_safe", "run_usbcmd")),
@@ -10087,30 +10088,6 @@ impl UsbKeyboard {
                                         "[local-seat] xhci root-port command-probe mask-flow drained=preserved probe=0x0000 reason=linux-first-port-event-before-enable-slot",
                                     );
                                 } else {
-                                    if matches!(
-                                        strategy.firmware_handoff,
-                                        XhciFirmwareHandoff::PlatformResetComplete
-                                    ) {
-                                        match ctrl.clear_event_handler_busy_for_polling() {
-                                            Ok(()) => {
-                                                boot_log::force_uart_line(
-                                                    "[local-seat] xhci event-handler-busy pre-command ack action=clear-once reason=poll-only-command-proof",
-                                                );
-                                            }
-                                            Err(err) => {
-                                                command_probe =
-                                                    usb_enable_slot_probe_error_label(err);
-                                                let mut line = heapless::String::<224>::new();
-                                                let _ = core::fmt::Write::write_fmt(
-                                                    &mut line,
-                                                    format_args!(
-                                                        "[local-seat] xhci event-handler-busy pre-command ack action=failed detail={err:?} probe={command_probe}"
-                                                    ),
-                                                );
-                                                boot_log::force_uart_line(line.as_str());
-                                            }
-                                        }
-                                    }
                                     if command_probe == "n/a" {
                                         let drained_event_candidate_mask =
                                             xhci_drain_root_port_change_events(
@@ -18774,15 +18751,15 @@ mod tests {
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x030f),
-            Some(("doorbell", "target", "skip_readback"))
+            Some(("doorbell_off", "db_value", "skip_readback"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x031a),
-            Some(("doorbell", "target", "skip_readback"))
+            Some(("doorbell_off", "db_value", "skip_readback"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x031f),
-            Some(("doorbell", "target", "skip_readback"))
+            Some(("doorbell_off", "db_value", "skip_readback"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0353),
@@ -18854,7 +18831,7 @@ mod tests {
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0339),
-            Some(("cmd_addr", "barrier", "policy"))
+            Some(("cmd_bus_addr", "barrier", "policy"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0346),
@@ -18914,7 +18891,7 @@ mod tests {
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x03be),
-            Some(("scratchpad_array", "published", "deferred"))
+            Some(("scratchpad_array", "published", "publish_phase"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x03c4),

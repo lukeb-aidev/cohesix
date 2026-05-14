@@ -199,9 +199,14 @@ pub fn main(ctx: BootContext) -> ! {
                         Ok(stack) => {
                             let status = stack.status_report();
                             let mut line = HeaplessString::<192>::new();
+                            let state = if status.address_source == "wifi-host-eapol-required" {
+                                "deferred blocked"
+                            } else {
+                                "deferred ready"
+                            };
                             let _ = write!(
                                 line,
-                                "[net-console] deferred ready backend={} address_source={} dhcp={} port={}",
+                                "[net-console] {state} backend={} address_source={} dhcp={} port={}",
                                 status.backend,
                                 status.address_source,
                                 status.dhcp_phase,

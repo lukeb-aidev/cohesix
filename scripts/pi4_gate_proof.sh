@@ -283,6 +283,8 @@ run_normalizer() {
         args+=("--expect-min" "USB_GATE=3" "--expect-min" "WIFI_GATE=1")
         args+=("--expect" "SERIAL_CLEAN=yes")
         args+=("--expect" "BOOT_HALTED=no")
+        args+=("--expect" "PANIC_SEEN=no")
+        args+=("--expect" "PANIC_REASON=none")
         args+=("--expect" "TIMER_IRQ27_SEEN=no")
         args+=("--expect" "USB_BOOTLOADER_HANDOFF_SEEN=no")
         args+=("--expect" "USB_COLD_BOOT_SEEN=yes")

@@ -3375,6 +3375,21 @@ fn bootstrap<P: Platform>(
         let bootinfo_snapshot = state.snapshot();
         match state.verify("snapshot", "[mark] bootinfo.snapshot") {
             Ok(()) => {}
+            Err(BootInfoCanaryError::Canary {
+                phase,
+                mark,
+                pre,
+                post,
+                expected_pre,
+                expected_post,
+            }) => {
+                let msg = format!(
+                    "bootinfo canary validation failed phase={phase} mark={mark}: pre=0x{pre:016x} post=0x{post:016x} expected_pre=0x{expected_pre:016x} expected_post=0x{expected_post:016x}",
+                );
+                boot_log::force_uart_line(&msg);
+                log::error!("{}", msg);
+                return Err(BootError::Fatal(msg));
+            }
             Err(BootInfoCanaryError::Snapshot { mark, error }) => {
                 let msg = format!(
                     "bootinfo snapshot validation failed at {mark}: {error}",
@@ -4709,7 +4724,15 @@ fn bootstrap<P: Platform>(
                         let port = stack.console_listen_port();
                         let status = stack.status_report();
                         let mut ok_line = heapless::String::<160>::new();
-                        if status.address_source == "wifi-associating" {
+                        if status.address_source == "wifi-host-eapol-required" {
+                            let _ = write!(
+                                ok_line,
+                                "[net-console] blocked-link backend={} detail={} dhcp={} port={port} mac={mac}",
+                                status.backend,
+                                status.address_source,
+                                status.dhcp_phase,
+                            );
+                        } else if status.address_source == "wifi-associating" {
                             let _ = write!(
                                 ok_line,
                                 "[net-console] pending-link backend={} detail={} port={port} mac={mac}",

@@ -45,8 +45,11 @@ const fn prompt_safe_command_recovery_uses_bounded_blind_settles() -> bool {
 }
 
 #[inline(always)]
-const fn prompt_safe_command_redoorbell_enabled(_linux_event_generation: bool) -> bool {
-    false
+const fn prompt_safe_command_redoorbell_enabled(
+    linux_event_generation: bool,
+    drained_port_status_events: usize,
+) -> bool {
+    linux_event_generation && drained_port_status_events != 0
 }
 
 #[inline(always)]
@@ -1198,7 +1201,12 @@ const fn defer_scratchpad_array_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
+    // U-Boot publishes DCBAAP, CRCR, ERDP, ERSTSZ, and ERSTBA before it
+    // writes DCBAA slot 0 with the scratchpad pointer array. The Pi 4
+    // platform-reset lane owns fresh Cohesix rings, so mirror that cold-start
+    // ordering instead of exposing a populated scratchpad slot before DCBAAP.
     runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
+        || runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
 
 #[inline(always)]
@@ -4230,8 +4238,15 @@ impl<H: Dma> XhciCtrl<H> {
 
         if let Some(scratchpad_array_phys) = deferred_scratchpad_array_phys {
             if !skip_fresh_runtime_ownership_publish {
-                publish_dcbaa_scratchpad_array(&self.dcbaa, scratchpad_array_phys, false);
+                let published_scratchpad_array =
+                    publish_dcbaa_scratchpad_array(&self.dcbaa, scratchpad_array_phys, false);
                 let _ = self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa")?;
+                emit_xhci_diag(
+                    RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE,
+                    scratchpad_array_phys,
+                    published_scratchpad_array,
+                    2,
+                );
             }
         }
 
@@ -4918,9 +4933,9 @@ impl<H: Dma> XhciCtrl<H> {
         let db = reg::doorbell(self.db_offset, 0);
         let skip_readback = skip_doorbell_readback_after_ring(self.firmware_handoff);
         emit_xhci_diag(0x030f, db as u64, 0, u64::from(skip_readback));
-        mmio_write_barrier();
+        ring_write_barrier();
         self.write_reg(db, 0u32);
-        mmio_write_barrier();
+        ring_write_barrier();
         // U-Boot queues and cache-flushes the command TRB, then writes
         // DB_VALUE_HOST to doorbell 0. In seL4 userland that same value still
         // needs the HAL-owned EXT_CFG drain so the posted PCIe write is visible
@@ -5512,6 +5527,7 @@ impl<H: Dma> XhciCtrl<H> {
     ) -> Result<Trb> {
         let mut event_syncs = 0usize;
         let mut last_non_command_event = None;
+        let mut drained_port_status_events = 0usize;
         let mut replayed_doorbell = false;
         for poll in 0..COMMAND_PROMPT_SAFE_WAIT_POLLS {
             let trb = {
@@ -5523,14 +5539,17 @@ impl<H: Dma> XhciCtrl<H> {
 
             let Some(trb) = trb else {
                 if !replayed_doorbell
-                    && prompt_safe_command_redoorbell_enabled(linux_event_generation)
+                    && prompt_safe_command_redoorbell_enabled(
+                        linux_event_generation,
+                        drained_port_status_events,
+                    )
                     && poll.saturating_add(1) >= COMMAND_PROMPT_SAFE_REDOORBELL_POLL
                 {
                     emit_xhci_diag(
                         0x037a,
                         expected_cmd_trb.unwrap_or(0) & !0x0f,
                         event_syncs as u64,
-                        u64::from(linux_event_generation),
+                        drained_port_status_events as u64,
                     );
                     if !self.ring_cmd_doorbell() {
                         return Err(UsbError::PostedWriteFlushFailed);
@@ -5580,6 +5599,10 @@ impl<H: Dma> XhciCtrl<H> {
             }
 
             last_non_command_event = Some(trb);
+            let is_port_status_change = trb.trb_type() == trb_type::PORT_STATUS_CHANGE as u8;
+            if is_port_status_change {
+                drained_port_status_events = drained_port_status_events.saturating_add(1);
+            }
             emit_xhci_diag(
                 0x0308,
                 trb.param,
@@ -5587,6 +5610,14 @@ impl<H: Dma> XhciCtrl<H> {
                 trb.trb_type() as u64,
             );
             self.update_erdp()?;
+            if is_port_status_change {
+                emit_xhci_diag(
+                    0x037b,
+                    drained_port_status_events as u64,
+                    COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL as u64,
+                    event_syncs as u64,
+                );
+            }
             for _ in 0..COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL {
                 spin_loop();
             }
@@ -6098,13 +6129,9 @@ impl<H: Dma> XhciCtrl<H> {
         drop(cmd_ring);
         ring_write_barrier();
         emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
-        self.emit_command_ring_debug_snapshot(0x0360);
-        self.emit_command_event_ring_debug_snapshot(0x0353);
-        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
         if !self.ring_cmd_doorbell() {
             return Err(UsbError::PostedWriteFlushFailed);
         }
-        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, false);
         match self.wait_command_prompt_safe(Some(cmd_addr), false) {
             Ok(trb) => Ok(trb),
             Err(UsbError::Timeout) => {
@@ -6199,28 +6226,14 @@ impl<H: Dma> XhciCtrl<H> {
         drop(cmd_ring);
         ring_write_barrier();
         emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, retry_cmd_addr, 1, 0);
-        self.emit_command_ring_debug_snapshot(0x0360);
-        self.emit_command_event_ring_debug_snapshot(0x0353);
         let interrupt_recovery_event_generation =
             prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue();
         if interrupt_recovery_event_generation {
             self.enable_linux_command_event_generation_for_probe()?;
         }
-        self.emit_command_gate_plan_snapshot(
-            0x0370,
-            Some(retry_cmd_addr),
-            2,
-            interrupt_recovery_event_generation,
-        );
         if !self.ring_cmd_doorbell() {
             return Err(UsbError::PostedWriteFlushFailed);
         }
-        self.emit_command_gate_plan_snapshot(
-            0x0368,
-            Some(retry_cmd_addr),
-            3,
-            interrupt_recovery_event_generation,
-        );
         match self
             .wait_command_prompt_safe(Some(retry_cmd_addr), interrupt_recovery_event_generation)
         {
@@ -7798,7 +7811,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_runtime_snapshot_defers_scratchpad_array_publish() {
+    fn trusted_runtime_and_platform_reset_defer_scratchpad_array_publish() {
         let snapshot = Some(XhciRuntimeSeedSnapshot {
             usbcmd: None,
             usbsts: None,
@@ -7812,6 +7825,10 @@ mod tests {
         assert!(defer_scratchpad_array_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
             snapshot,
+        ));
+        assert!(defer_scratchpad_array_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
         ));
         assert!(!defer_scratchpad_array_publish_with_snapshot(
             XhciFirmwareHandoff::ColdStartFromSnapshot,
@@ -8594,8 +8611,9 @@ mod tests {
         assert_eq!(COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, 250_000);
         assert_eq!(COMMAND_PROMPT_SAFE_REDOORBELL_POLL, 4);
         assert!(COMMAND_PROMPT_SAFE_REDOORBELL_POLL < COMMAND_PROMPT_SAFE_WAIT_POLLS);
-        assert!(!prompt_safe_command_redoorbell_enabled(false));
-        assert!(!prompt_safe_command_redoorbell_enabled(true));
+        assert!(!prompt_safe_command_redoorbell_enabled(false, 0));
+        assert!(!prompt_safe_command_redoorbell_enabled(false, 1));
+        assert!(prompt_safe_command_redoorbell_enabled(true, 1));
         assert!(command_timeout_live_snapshot_spins() < COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS > COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);
@@ -9271,6 +9289,10 @@ mod tests {
             None
         ));
         assert!(defer_erdp_publish_with_snapshot(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None
+        ));
+        assert!(defer_scratchpad_array_publish_with_snapshot(
             XhciFirmwareHandoff::PlatformResetComplete,
             None
         ));

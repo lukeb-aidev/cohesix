@@ -229,6 +229,52 @@ def test_gate_proof_rejects_missing_root_console_prompt(
     assert "ROOT_PROMPT_SEEN expected yes got no" in result.stderr
 
 
+def test_gate_proof_rejects_root_task_panic(tmp_path: pathlib.Path) -> None:
+    """Default hardware proof must fail on root-task panic evidence."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "U-Boot 2026.01-dirty",
+                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix:root-task] Cohesix boot: root-task online",
+                "[local-seat] xhci root-port command-probe result=enable-slot-ok",
+                "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
+                "BOOTINFO_SNAPSHOT_CORRUPTED phase=net.init last_mark=net.init.device "
+                "pre=0x0b0f1ce5ca4ecafe post=0x00000000001e2839 "
+                "expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef",
+                "[PANIC] panicked at apps/root-task/src/bootstrap/bootinfo_snapshot.rs:499:9:",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "PANIC_SEEN=yes" in result.stdout
+    assert "PANIC_REASON=bootinfo-snapshot-corrupted" in result.stdout
+    assert "PANIC_SEEN expected no got yes" in result.stderr
+
+
 def test_gate_proof_rejects_stale_uefi_usb_hint(tmp_path: pathlib.Path) -> None:
     """The default proof loop must fail if a stale pre-cold-boot image ran."""
 

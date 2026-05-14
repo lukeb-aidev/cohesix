@@ -568,7 +568,7 @@ QEMU runs with `-serial mon:stdio` and a user-net device that forwards TCP/UDP p
 
 ### Network self-test (`nettest` / `netstats`)
 - Console grammar is unchanged across profiles; `nettest` and `netstats` names/ACK-ERR-END behavior remain stable.
-- `nettest` refusal details are deterministic when the stack cannot start a run: `detail=dhcp-pending`, `detail=not-ready:<root-ep|ipc-buffer|cspace-window|bootstrap-commit>`, `detail=policy-disabled`, or `detail=selftest-disabled`.
+- `nettest` refusal details are deterministic when the stack cannot start a run: `detail=dhcp-pending`, `detail=wifi-associating`, `detail=wifi-host-eapol-required`, `detail=wifi-association-failed`, `detail=wifi-link-down`, `detail=not-ready:<root-ep|ipc-buffer|cspace-window|bootstrap-commit>`, `detail=policy-disabled`, or `detail=selftest-disabled`.
 - `netstats` reports deterministic target fields: `backend=<label> enabled=<bool> running=<bool> udp=<ip:port> tcp=<ip:port> last=<result>`.
 - QEMU behavior is unchanged (`127.0.0.1:{31338,31339}` hostfwd workflows remain valid).
 - Pi 4 `pi4-uboot-aarch64` uses the active control-plane address (wired GENETv5 or Wi-Fi CYW43455) and reports `backend=bcmgenet-v5` because the compiler-visible Pi 4 backend owns both interface choices.

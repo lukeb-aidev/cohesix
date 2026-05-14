@@ -231,6 +231,8 @@ class GateSummary:
     sdio_irq158_bound: bool = False
     sdio_irq158_line: int = 0
     boot_halt_reason: str = "none"
+    panic_seen: bool = False
+    panic_reason: str = "none"
     usb_bootloader_handoff_seen: bool = False
     usb_cold_boot_seen: bool = False
     usb_stale_uefi_hint_seen: bool = False
@@ -255,6 +257,8 @@ class GateSummary:
             "SDIO_IRQ158_BOUND": "yes" if self.sdio_irq158_bound else "no",
             "SDIO_IRQ158_LINE": self.sdio_irq158_line,
             "BOOT_HALT_REASON": self.boot_halt_reason,
+            "PANIC_SEEN": "yes" if self.panic_seen else "no",
+            "PANIC_REASON": self.panic_reason,
             "USB_BOOTLOADER_HANDOFF_SEEN": (
                 "yes" if self.usb_bootloader_handoff_seen else "no"
             ),
@@ -441,6 +445,12 @@ def classify_domain(line: str) -> str | None:
 
     lower = line.lower()
     if (
+        line.startswith("BOOTINFO_SNAPSHOT_CORRUPTED")
+        or "[panic]" in lower
+        or lower.startswith("[cohesix:root-task] panic")
+    ):
+        return "kernel"
+    if (
         line.startswith("cohesix>")
         or "cohesix console ready" in lower
         or "root console ready" in lower
@@ -492,6 +502,8 @@ def classify_domain(line: str) -> str | None:
         or "action=root-console-wait-for-wifi" in lower
         or "action=wait-for-wifi" in lower
         or "action=start-wifi" in lower
+        or "bringup_status=wifi-" in lower
+        or ("device initialized" in lower and "interface=wifi" in lower)
         or "root console wait" in lower
         or "wifi-net-console-deferred-until-root-console" in lower
         or "wifi-net-console-pending-before-root-console" in lower
@@ -567,6 +579,25 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
         fields = {**fields, "halt": "yes", "reason": "kernel-halt"}
         stage = "halt"
         message = "halt reason=kernel-halt"
+    elif line.startswith("BOOTINFO_SNAPSHOT_CORRUPTED"):
+        fields = {
+            **fields,
+            "halt": "yes",
+            "panic": "yes",
+            "bootinfo_corrupted": "yes",
+            "reason": "bootinfo-snapshot-corrupted",
+        }
+        stage = "bootinfo-snapshot-corrupted"
+        message = "panic reason=bootinfo-snapshot-corrupted"
+    elif "[PANIC]" in line or "panic: panicked at" in line:
+        fields = {
+            **fields,
+            "halt": "yes",
+            "panic": "yes",
+            "reason": "root-task-panic",
+        }
+        stage = "panic"
+        message = "panic reason=root-task-panic"
     elif line.startswith("Kernel entry via Interrupt"):
         irq = line.rsplit("irq ", 1)[-1] if "irq " in line else "unknown"
         fields = {
@@ -625,9 +656,14 @@ def filter_events(events: Iterable[TraceEvent], domains: set[str]) -> list[Trace
 
 
 def serial_clean(events: Iterable[TraceEvent]) -> bool:
-    """Return false when parsed proof evidence includes corrupted serial segments."""
+    """Return false when parsed proof evidence includes corruption or a panic."""
 
-    return all("serial_error" not in event.fields for event in events)
+    return all(
+        "serial_error" not in event.fields
+        and event.fields.get("panic") != "yes"
+        and event.fields.get("bootinfo_corrupted") != "yes"
+        for event in events
+    )
 
 
 def summarize_events(events: Iterable[TraceEvent]) -> dict[str, object]:
@@ -1188,6 +1224,12 @@ def normalize_wifi_blocker(value: str) -> str:
     ) and ("status=0xfffffffe" in lower or "badarg" in lower or "bad-argument" in lower):
         return "wsec-pmk-bad-argument"
     if (
+        "host-eapol-required" in lower
+        or "wifi-host-eapol-required" in lower
+        or "completion_rule=host-eapol-required" in lower
+    ):
+        return "host-eapol-required"
+    if (
         "sup_wpa" in lower
         or "firmware-supplicant" in lower
         or (
@@ -1400,6 +1442,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-protocol-error-cur-etheraddr-len",
         "wsec-pmk-bad-argument",
         "firmware-supplicant-unsupported",
+        "host-eapol-required",
         "cyw43-function2-interrupt-unbound",
     ):
         if reason in lower:
@@ -1459,6 +1502,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     blocker = "unknown"
     saw_command_submit = False
     saw_command_doorbell = False
+    saw_command_doorbell_hal_flush = False
     saw_command_doorbell_write_pending = False
     saw_command_event_ring_before = False
     saw_command_timeout_plan = False
@@ -1600,6 +1644,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if "vl805 posted-write flush" in raw:
             run_posted_flush_pending = False
+            if (
+                parse_hex_int(fields.get("stage")) == 0x031F
+                and fields.get("source", "").lower() == "hal-ext-cfg"
+            ):
+                saw_command_doorbell_hal_flush = True
         if "xhci.diag stage=0x0111" in raw or tag == "brcm-axi-setup-read":
             brcm_axi_read_pending = True
             gate = max(gate, 3)
@@ -1941,13 +1990,17 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = "cmd-poll-pending"
         elif tag in {"cmd-doorbell-write-done", "cmd-doorbell-post-barrier"}:
             saw_command_doorbell = True
-            saw_command_doorbell_write_pending = False
+            saw_command_doorbell_write_pending = not saw_command_doorbell_hal_flush
             gate = max(gate, 3)
             if (
                 command_timeout_detail is None
-                and blocker in {"unknown", "none"}
+                and blocker in {"unknown", "none", "cmd-poll-pending"}
             ):
-                blocker = "cmd-poll-pending"
+                blocker = (
+                    "cmd-poll-pending"
+                    if saw_command_doorbell_hal_flush
+                    else "cmd-doorbell-flush-unproven"
+                )
         elif (
             usb_command_probe_success(
                 fields.get("command_probe", ""),
@@ -2151,6 +2204,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-partial-hint-visibility",
         "control-plane-reply-idle-loop",
         "firmware-supplicant-unsupported",
+        "host-eapol-required",
         "wsec-pmk-bad-argument",
     }
     specific_sdio_blockers = precise_ht_blockers - direct_sdio_blockers
@@ -2267,6 +2321,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker
             in {
                 "firmware-supplicant-unsupported",
+                "host-eapol-required",
                 "wsec-pmk-bad-argument",
             }
             and explicit_blocker == "control-plane-partial-hint-visibility"
@@ -2289,6 +2344,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
             "firmware-supplicant-unsupported",
+            "host-eapol-required",
             "ioctl-timeout",
             "wsec-pmk-bad-argument",
         } and explicit_blocker in {None, "cyw43", "nettest-policy-disabled"}:
@@ -2312,6 +2368,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 join_security_pending_iovar = None
         if explicit_blocker in {
             "firmware-supplicant-unsupported",
+            "host-eapol-required",
             "join-security-wpaie-loop",
             "join-security-wpa-auth-initial-loop",
             "join-security-wpa-auth-final-loop",
@@ -2523,17 +2580,25 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "control-plane step=init-complete action=ready" in raw or "[cyw43] ready:" in raw:
             gate = max(gate, 7)
             post_f2_progress_seen = True
-            blocker = "none"
+            if blocker not in {
+                "firmware-supplicant-unsupported",
+                "host-eapol-required",
+                "wsec-pmk-bad-argument",
+            }:
+                blocker = "none"
         if (
             "control-plane step=" in raw or "control-plane preinit step=" in raw
         ) and " action=fail" in raw:
             gate = max(gate, 7)
-            if (
+            if explicit_blocker == "wsec-pmk-bad-argument":
+                blocker = explicit_blocker
+            elif (
                 blocker
                 in {
                     "control-plane-bdc-event",
                     "control-plane-cur-etheraddr-len",
                     "firmware-supplicant-unsupported",
+                    "host-eapol-required",
                     "wsec-pmk-bad-argument",
                 }
                 and explicit_blocker in precise_control_plane_blockers
@@ -2569,7 +2634,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             join_completion_seen = True
             gate = max(gate, 7)
             post_f2_progress_seen = True
-            blocker = "join-pending"
+            if explicit_blocker == "host-eapol-required":
+                blocker = explicit_blocker
+            else:
+                blocker = "join-pending"
             continue
         if "join failed" in raw:
             join_completion_seen = True
@@ -2933,6 +3001,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
             "firmware-supplicant-unsupported",
+            "host-eapol-required",
             "ioctl-timeout",
             "wsec-pmk-bad-argument",
         }:
@@ -2946,11 +3015,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     "control-plane-bdc-event",
                     "control-plane-cur-etheraddr-len",
                     "firmware-supplicant-unsupported",
+                    "host-eapol-required",
                     "wsec-pmk-bad-argument",
                 }
                 and explicit_blocker in precise_control_plane_blockers
             )
-            if preserve_precise_control:
+            if explicit_blocker == "wsec-pmk-bad-argument":
+                blocker = explicit_blocker
+            elif preserve_precise_control:
                 blocker = blocker
             elif (
                 blocker in precise_control_plane_blockers
@@ -2994,6 +3066,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "firmware-channel-f2",
                 "firmware-ready-timeout",
                 "firmware-supplicant-unsupported",
+                "host-eapol-required",
                 "ioctl-timeout",
                 "mailbox-ready-timeout",
                 "sdpcm-credit-timeout",
@@ -3183,6 +3256,16 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or "join-security"
         )
         return "firmware-supplicant-unsupported", phase
+    if normalize_wifi_blocker(event.raw) == "host-eapol-required":
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "join-security"
+        )
+        return "host-eapol-required", phase
     for key in ("exact", "exact_error", "err", "cause", "detail", "reason"):
         value = event.fields.get(key)
         if value and value not in {"none", "n/a"}:
@@ -3360,7 +3443,6 @@ def summarize_wifi_failure_detail(
             if blocker_matched and wifi_blocker in {
                 "control-plane-cur-etheraddr-len",
                 "wsec-pmk-bad-argument",
-                "firmware-supplicant-unsupported",
             }:
                 continue
             blocker_matched = True
@@ -3404,7 +3486,18 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     wifi_exact, wifi_phase, wifi_blocker_line = summarize_wifi_failure_detail(
         event_list, wifi_blocker
     )
-    boot_halted = any(
+    panic_events = [
+        event
+        for event in event_list
+        if event.domain == "kernel"
+        and (
+            event.fields.get("panic") == "yes"
+            or event.fields.get("bootinfo_corrupted") == "yes"
+        )
+    ]
+    panic_seen = bool(panic_events)
+    panic_reason = panic_events[0].fields.get("reason", "root-task-panic") if panic_seen else "none"
+    boot_halted = panic_seen or any(
         event.domain == "kernel" and event.fields.get("halt") == "yes"
         for event in event_list
     )
@@ -3431,7 +3524,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         for event in sdio_irq158_events
     )
     sdio_irq158_line = sdio_irq158_events[0].line if sdio_irq158_events else 0
-    if boot_halted:
+    if panic_seen:
+        boot_halt_reason = panic_reason
+    elif boot_halted:
         boot_halt_reason = "kernel-halt"
     elif timer_irq27_seen:
         boot_halt_reason = "timer-irq27-observed"
@@ -3463,6 +3558,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         sdio_irq158_bound=sdio_irq158_bound,
         sdio_irq158_line=sdio_irq158_line,
         boot_halt_reason=boot_halt_reason,
+        panic_seen=panic_seen,
+        panic_reason=panic_reason,
         usb_bootloader_handoff_seen=usb_bootloader_handoff_seen,
         usb_cold_boot_seen=usb_cold_boot_seen,
         usb_stale_uefi_hint_seen=usb_stale_uefi_hint_seen,

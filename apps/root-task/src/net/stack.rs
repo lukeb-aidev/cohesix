@@ -117,6 +117,15 @@ const fn self_test_enabled_for_backend(backend: NetBackend) -> bool {
         || matches!(backend, NetBackend::BcmGenet)
 }
 
+fn dhcp_phase_for_bringup_status(status: &'static str) -> &'static str {
+    match status.as_bytes() {
+        b"wifi-host-eapol-required" => "host-eapol-required",
+        b"wifi-association-failed" => "failed",
+        b"wifi-link-down" => "link-down",
+        _ => "associating",
+    }
+}
+
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNetStatic;
 #[cfg(not(feature = "net-backend-virtio"))]
@@ -841,7 +850,9 @@ fn log_bootinfo_mark<DE>(
         );
         if let Err(err) = state.verify("net.init", mark) {
             match err {
-                BootInfoCanaryError::Snapshot { .. } | BootInfoCanaryError::Diverged { .. } => {
+                BootInfoCanaryError::Canary { .. }
+                | BootInfoCanaryError::Snapshot { .. }
+                | BootInfoCanaryError::Diverged { .. } => {
                     log::error!(
                         "[bootinfo:net] canary divergence mark={mark} attempt_id=0x{:016x} err={err:?}",
                         attempt.id
@@ -2441,11 +2452,13 @@ impl<D: NetDevice> NetStack<D> {
         let mut device = Box::new(D::create_with_stage(hal, &console_config, stage)?);
         BOOTINFO_WINDOW_GUARD.check("net.init.device.post");
         let mac = device.mac();
+        let bringup_status = device.bringup_status_label().unwrap_or("ready");
         info!(
-            "[net-console] {} device online: mac={} interface={}",
+            "[net-console] {} device initialized: mac={} interface={} bringup_status={}",
             D::name(),
             mac,
-            device.interface_label()
+            device.interface_label(),
+            bringup_status
         );
 
         let attempt = *init_guard.attempt();
@@ -5480,6 +5493,15 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         if !self.self_test.enabled {
             return NetSelfTestStartResult::SelfTestDisabled;
         }
+        if let Some(status) = self.device.bringup_status_label() {
+            if let Some(result) = NetSelfTestStartResult::from_bringup_status(status) {
+                if !self.session_state.not_ready_logged {
+                    self.session_state.not_ready_logged = true;
+                    log::warn!("[net] not-ready gate tripped: want=net-selftest reason={status}");
+                }
+                return result;
+            }
+        }
         if matches!(self.mode, NetMode::Dhcp) && self.ip == Ipv4Address::UNSPECIFIED {
             if !self.session_state.not_ready_logged {
                 self.session_state.not_ready_logged = true;
@@ -5601,11 +5623,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         let (address_source, dhcp_phase) = if let Some(status) = self.device.bringup_status_label()
         {
             let phase = if matches!(self.mode, NetMode::Dhcp) {
-                if status == "wifi-association-failed" {
-                    "failed"
-                } else {
-                    "associating"
-                }
+                dhcp_phase_for_bringup_status(status)
             } else {
                 "disabled"
             };

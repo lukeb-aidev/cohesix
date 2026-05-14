@@ -287,6 +287,8 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "BOOT_HALTED": "no",
         "TIMER_IRQ27_SEEN": "no",
         "BOOT_HALT_REASON": "none",
+        "PANIC_SEEN": "no",
+        "PANIC_REASON": "none",
         "USB_BOOTLOADER_HANDOFF_SEEN": "no",
         "USB_COLD_BOOT_SEEN": "no",
         "USB_STALE_UEFI_HINT_SEEN": "no",
@@ -341,6 +343,27 @@ def test_gate_summary_marks_jumbled_usb_serial_as_usb_unclean() -> None:
     assert gates.serial_clean is False
     assert events[0].domain == "usb"
     assert events[0].fields["serial_error"] == "usb-prefix-glued"
+
+
+def test_gate_summary_marks_bootinfo_panic_as_unclean_halt() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::net::stack] [bootinfo:net] mark=net.init.device "
+            "pre=0x0b0f1ce5ca4ecafe post=0x00000000001e2839",
+            "BOOTINFO_SNAPSHOT_CORRUPTED phase=net.init last_mark=net.init.device "
+            "pre=0x0b0f1ce5ca4ecafe post=0x00000000001e2839 "
+            "expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef",
+            "[PANIC] panicked at apps/root-task/src/bootstrap/bootinfo_snapshot.rs:499:9:",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.serial_clean is False
+    assert gates.boot_halted is True
+    assert gates.to_record()["PANIC_SEEN"] == "yes"
+    assert gates.to_record()["PANIC_REASON"] == "bootinfo-snapshot-corrupted"
+    assert gates.to_record()["BOOT_HALT_REASON"] == "bootinfo-snapshot-corrupted"
 
 
 def test_usb_proof_summary_advances_command_gate() -> None:
@@ -519,6 +542,9 @@ def test_gate_summary_tracks_usb_command_doorbell_timer_as_poll_pending() -> Non
             "usb: contract current=controller-ready expected=command-ring-recovery",
             "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
             "doorbell=0x000000000100 target=0x0",
+            "[local-seat] vl805 posted-write flush stage=0x031f "
+            "role=command-doorbell offset=0x0100 value=0x00000000 "
+            "source=hal-ext-cfg",
             "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
             "doorbell=0x000000000100 target=0x0",
             "Kernel entry via Interrupt, irq 27",
@@ -531,6 +557,24 @@ def test_gate_summary_tracks_usb_command_doorbell_timer_as_poll_pending() -> Non
 
     assert gates.usb_gate == 3
     assert gates.usb_blocker == "cmd-poll-pending"
+
+
+def test_gate_summary_requires_hal_flush_for_command_doorbell_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
+            "usb: contract current=controller-ready expected=command-ring-recovery",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
+            "doorbell=0x000000000100 target=0x0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-doorbell-flush-unproven"
 
 
 def test_gate_summary_tracks_usb_halt_during_command_doorbell_write() -> None:
@@ -1015,6 +1059,9 @@ def test_gate_summary_resets_usb_timeout_detail_on_later_cmd_submit() -> None:
             "param=0x0000000000000000",
             "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
             "doorbell=0x000000000100 target=0x0",
+            "[local-seat] vl805 posted-write flush stage=0x031f "
+            "role=command-doorbell offset=0x0100 value=0x00000000 "
+            "source=hal-ext-cfg",
             "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
             "doorbell=0x000000000100 target=0x0",
             "Kernel entry via Interrupt, irq 27",
@@ -1048,6 +1095,9 @@ def test_gate_summary_tracks_usb_pcie_timeout_then_raw_phys_poll_pending() -> No
             "param=0x0000000000000000",
             "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
             "doorbell=0x000000000100 target=0x0",
+            "[local-seat] vl805 posted-write flush stage=0x031f "
+            "role=command-doorbell offset=0x0100 value=0x00000000 "
+            "source=hal-ext-cfg",
             "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
             "doorbell=0x000000000100 target=0x0",
             "Kernel entry via Interrupt, irq 27",
@@ -1115,6 +1165,9 @@ def test_gate_summary_latest_boot_drops_stale_usb_timeout() -> None:
         "param=0x0000000000000000",
         "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
         "doorbell=0x000000000100 target=0x0",
+        "[local-seat] vl805 posted-write flush stage=0x031f "
+        "role=command-doorbell offset=0x0100 value=0x00000000 "
+        "source=hal-ext-cfg",
         "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
         "doorbell=0x000000000100 target=0x0",
         "Kernel entry via Interrupt, irq 27",
@@ -2908,6 +2961,39 @@ def test_gate_summary_tracks_wsec_pmk_bad_argument_over_stale_hint() -> None:
     assert gates.wifi_phase == "join"
 
 
+def test_gate_summary_tracks_wsec_pmk_bad_argument_after_supplicant_fallbacks() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "path=primary-plain unsupported status=0xffffffe9 action=try-bsscfg-wrapper "
+            "reason=known-good-cyw43-fwsup-shape",
+            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "path=bsscfg-wrapper unsupported status=0xffffffe9 "
+            "action=continue-host-eapol-required reason=firmware-offload-unavailable",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane reply "
+            "cmd=0x0000010c id=26 status=0xfffffffe response_len=0 copied=0",
+            "[WARN root_task::drivers::cyw43] [cyw43] join: linux-pmk rejected "
+            "action=retry-legacy-hex-pmk status=0xfffffffe",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane reply "
+            "cmd=0x0000010c id=27 status=0xfffffffe response_len=0 copied=0",
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane step=join "
+            "action=fail err=cyw43 ioctl 0x0000010c failed status=0xfffffffe",
+            "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
+            "exact=cyw43-control-plane-partial-hint-visibility",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "wsec-pmk-bad-argument"
+    assert gates.wifi_exact == "wsec-pmk-bad-argument"
+    assert gates.wifi_phase == "join"
+    assert gates.wifi_blocker_line == 8
+
+
 def test_gate_summary_tracks_firmware_supplicant_unsupported_over_stale_hint() -> None:
     events = normalizer.parse_events(
         [
@@ -2950,6 +3036,79 @@ def test_gate_summary_labels_direct_firmware_supplicant_failure_as_join_security
     assert gates.wifi_blocker == "firmware-supplicant-unsupported"
     assert gates.wifi_exact == "firmware-supplicant-unsupported"
     assert gates.wifi_phase == "join-security"
+
+
+def test_gate_summary_prefers_terminal_wrapper_supplicant_failure_line() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "path=primary-plain unsupported status=0xffffffe9 action=try-bsscfg-wrapper "
+            "reason=known-good-cyw43-fwsup-shape",
+            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "path=bsscfg-wrapper unsupported status=0xffffffe9 action=fail-secure "
+            "reason=host-eapol-supplicant-required",
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane step=join "
+            "action=fail err=cyw43 protocol error: firmware-supplicant-unsupported",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_blocker == "firmware-supplicant-unsupported"
+    assert gates.wifi_exact == "firmware-supplicant-unsupported"
+    assert gates.wifi_phase == "join"
+    assert gates.wifi_blocker_line == 4
+
+
+def test_gate_summary_reports_host_eapol_required_after_probe_join() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "path=bsscfg-wrapper unsupported status=0xffffffe9 "
+            "action=continue-host-eapol-required reason=firmware-offload-unavailable",
+            "[INFO root_task::drivers::cyw43] [cyw43] join pending mode=deferred "
+            "polls=0 ssid_len=6 psk_len=12 secure=yes fwsup=no "
+            "completion_rule=host-eapol-required",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "host-eapol-required"
+    assert gates.wifi_exact == "host-eapol-required"
+    assert gates.wifi_phase == "join-security"
+
+
+def test_gate_summary_preserves_host_eapol_after_ready_and_panic() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] sdio irq bind irq=158 trigger=Level handler=3225 "
+            "notification=3226 badge=159",
+            "[INFO root_task::drivers::cyw43] [cyw43] join pending mode=deferred "
+            "polls=0 ssid_len=12 psk_len=12 secure=yes fwsup=no "
+            "completion_rule=host-eapol-required",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=ready",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=init-complete action=ready",
+            "[INFO root_task::drivers::cyw43] [cyw43] ready: mac=88-a2-9e-66-59-10 "
+            "clock=41666666Hz bus_width=4 ioex=0x06",
+            "[INFO root_task::net::stack] [net-console] cyw43455 device initialized: "
+            "mac=88-a2-9e-66-59-10 interface=wifi bringup_status=wifi-host-eapol-required",
+            "BOOTINFO_SNAPSHOT_CORRUPTED phase=net.init last_mark=net.init.device "
+            "pre=0x0b0f1ce5ca4ecafe post=0x00000000001e2839 "
+            "expected_pre=0x0b0f1ce5ca4ecafe expected_post=0x9ddf1ce5f00dbeef",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "host-eapol-required"
+    assert gates.wifi_exact == "host-eapol-required"
+    assert gates.panic_seen is True
+    assert gates.serial_clean is False
 
 
 def test_gate_summary_tracks_bdc_event_over_stale_partial_hint_visibility() -> None:

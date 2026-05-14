@@ -160,7 +160,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - Explicit scale proof (not part of the fast stage):
   - `cargo test -p nine-door --features scale-tests --test shard_scale sharded_attach_1k_scale_gate_exports_metrics -- --nocapture`
 
-Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `USB_BLOCKER=usbcmd-run-preserved-reset-bit`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, `WIFI_BLOCKER=ht-clock-timeout`, `BOOT_HALTED=yes`, or `TIMER_IRQ27_SEEN=yes`.
+Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `USB_BLOCKER=usbcmd-run-preserved-reset-bit`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, `WIFI_BLOCKER=ht-clock-timeout`, `BOOT_HALTED=yes`, `PANIC_SEEN=yes`, `PANIC_REASON=bootinfo-snapshot-corrupted`, or `TIMER_IRQ27_SEEN=yes`.
 
 ### 3) QEMU boot + TCP console baseline
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
@@ -544,6 +544,7 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
     - `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`
   - `nettest` refusal detail must preserve the reason when the run cannot start:
     - `detail=dhcp-pending`
+    - `detail=wifi-associating`, `detail=wifi-host-eapol-required`, `detail=wifi-association-failed`, or `detail=wifi-link-down`
     - `detail=not-ready:<root-ep|ipc-buffer|cspace-window|bootstrap-commit>`
     - `detail=policy-disabled` or `detail=selftest-disabled` when the profile/runtime disables self-test
   - explicit `wifi` now supports both `static` and `dhcp` through the HAL-backed CYW43455 path; `auto` remains DHCP-only with wired fallback limited to CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack, and final 26b completion still requires Pi 4 hardware captures proving join + DHCP and that attach/join fallback behavior.

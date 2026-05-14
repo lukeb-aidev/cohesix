@@ -379,6 +379,18 @@ const fn vl805_xhci_flush_live_proof_failure(
     }
 }
 
+const fn vl805_xhci_flush_stage_role(stage: u16, offset: usize) -> &'static str {
+    match (stage, offset) {
+        (0x03fe, _) => "runtime-erdp-ack-low",
+        (0x03ff, _) => "runtime-erdp-ack-high",
+        (0x03b7, _) => "ring-publish-erdp-low",
+        (0x03b8, _) => "ring-publish-erdp-high",
+        (0x031f, 0x0100) => "command-doorbell",
+        (_, 0x0100) => "doorbell",
+        (_, _) => "generic-mmio",
+    }
+}
+
 /// Flushes posted VL805 xHCI MMIO writes through HAL-owned read drains.
 pub fn vl805_xhci_flush_posted_write(
     mmio_virt: usize,
@@ -386,14 +398,15 @@ pub fn vl805_xhci_flush_posted_write(
     value: u32,
     stage: u16,
 ) -> bool {
+    let role = vl805_xhci_flush_stage_role(stage, offset);
     let config_page = PCIE_EXT_DATA_PAGE_VIRT.load(Ordering::Acquire);
     let index_page = PCIE_EXT_INDEX_PAGE_VIRT.load(Ordering::Acquire);
     if config_page == 0 || index_page == 0 {
-        let mut line = heapless::String::<192>::new();
+        let mut line = heapless::String::<256>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 posted-write flush skipped stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} reason=no-ext-cfg mmio=0x{mmio_virt:016x}"
+                "[local-seat] vl805 posted-write flush skipped stage=0x{stage:04x} role={role} offset=0x{offset:04x} value=0x{value:08x} reason=no-ext-cfg mmio=0x{mmio_virt:016x}"
             ),
         );
         boot_log::force_uart_line(line.as_str());
@@ -417,7 +430,7 @@ pub fn vl805_xhci_flush_posted_write(
     let bar_drain_skipped = vl805_xhci_flush_skips_bar_drain(stage, offset);
     fence(Ordering::SeqCst);
     if !vl805_ext_cfg_flush_read_valid(selected, command_status) {
-        let mut line = heapless::String::<256>::new();
+        let mut line = heapless::String::<320>::new();
         let reason = if selected != VL805_PCI_DEV_ADDR {
             "selector"
         } else if vl805_ext_cfg_selector_echo(command_status) {
@@ -428,7 +441,7 @@ pub fn vl805_xhci_flush_posted_write(
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 posted-write flush failed stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} reason={reason} mmio=0x{mmio_virt:016x} source=hal-ext-cfg"
+                "[local-seat] vl805 posted-write flush failed stage=0x{stage:04x} role={role} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} reason={reason} mmio=0x{mmio_virt:016x} source=hal-ext-cfg"
             ),
         );
         boot_log::force_uart_line(line.as_str());
@@ -439,29 +452,29 @@ pub fn vl805_xhci_flush_posted_write(
         pi4_pcie_irq_sources_masked_proven(),
         command_status,
     ) {
-        let mut line = heapless::String::<288>::new();
+        let mut line = heapless::String::<320>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 posted-write flush failed stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} reason={reason} mmio=0x{mmio_virt:016x} source=hal-ext-cfg"
+                "[local-seat] vl805 posted-write flush failed stage=0x{stage:04x} role={role} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} reason={reason} mmio=0x{mmio_virt:016x} source=hal-ext-cfg"
             ),
         );
         boot_log::force_uart_line(line.as_str());
         return false;
     }
-    let mut line = heapless::String::<320>::new();
+    let mut line = heapless::String::<384>::new();
     if bar_drain_skipped {
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 posted-write flush stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} bar_drain=skipped reason=pi4-run-doorbell-xhci-read-toxic mmio=0x{mmio_virt:016x} source=hal-ext-cfg"
+                "[local-seat] vl805 posted-write flush stage=0x{stage:04x} role={role} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} bar_drain=skipped reason=pi4-run-doorbell-xhci-read-toxic mmio=0x{mmio_virt:016x} source=hal-ext-cfg"
             ),
         );
     } else {
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 posted-write flush stage=0x{stage:04x} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} source=hal-ext-cfg"
+                "[local-seat] vl805 posted-write flush stage=0x{stage:04x} role={role} offset=0x{offset:04x} value=0x{value:08x} selected=0x{selected:08x} cmdstat=0x{command_status:08x} source=hal-ext-cfg"
             ),
         );
     }
@@ -1303,16 +1316,39 @@ fn mask_and_clear_pcie_irq_sources(status_page_virt: usize) {
         let cpu_clear = mmio_write_u32_flush(cpu_clr, u32::MAX);
         let msi_mask = mmio_write_u32_flush(msi_mask_set, u32::MAX);
         let msi_clear = mmio_write_u32_flush(msi_clr, u32::MAX);
-        PCIE_IRQ_SOURCES_MASKED_PROVEN.store(1, Ordering::Release);
+        let trusted_readback =
+            pcie_irq_source_mask_readback_trusted(cpu_mask, cpu_clear, msi_mask, msi_clear);
+        if trusted_readback {
+            PCIE_IRQ_SOURCES_MASKED_PROVEN.store(1, Ordering::Release);
+        }
         let mut line = heapless::String::<192>::new();
-        let _ = core::fmt::Write::write_fmt(
-            &mut line,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie irq sources masked source=hal-ext-cfg readback=0x{cpu_mask:08x}/0x{cpu_clear:08x}/0x{msi_mask:08x}/0x{msi_clear:08x}"
-            ),
-        );
+        if trusted_readback {
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 bcm2711-pcie irq sources masked proof=trusted source=hal-ext-cfg readback=0x{cpu_mask:08x}/0x{cpu_clear:08x}/0x{msi_mask:08x}/0x{msi_clear:08x}"
+                ),
+            );
+        } else {
+            let _ = core::fmt::Write::write_fmt(
+                &mut line,
+                format_args!(
+                    "[local-seat] vl805 bcm2711-pcie irq sources masked proof=untrusted reason=sentinel-readback source=hal-ext-cfg readback=0x{cpu_mask:08x}/0x{cpu_clear:08x}/0x{msi_mask:08x}/0x{msi_clear:08x}"
+                ),
+            );
+        }
         boot_log::force_uart_line(line.as_str());
     }
+}
+
+#[inline]
+const fn pcie_irq_source_mask_readback_trusted(
+    cpu_mask: u32,
+    cpu_clear: u32,
+    msi_mask: u32,
+    msi_clear: u32,
+) -> bool {
+    cpu_mask != u32::MAX && cpu_clear != u32::MAX && msi_mask != u32::MAX && msi_clear != u32::MAX
 }
 
 #[inline]
@@ -2010,6 +2046,24 @@ mod tests {
             vl805_xhci_flush_live_proof_failure(true, true, ready_command_status),
             None
         );
+    }
+
+    #[test]
+    fn pcie_irq_source_mask_proof_rejects_sentinel_readbacks() {
+        assert!(!pcie_irq_source_mask_readback_trusted(
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX
+        ));
+        assert!(!pcie_irq_source_mask_readback_trusted(0, u32::MAX, 0, 0));
+        assert!(pcie_irq_source_mask_readback_trusted(0, 0, 0, 0));
+        assert!(pcie_irq_source_mask_readback_trusted(
+            0x0000_0001,
+            0,
+            0x0000_0002,
+            0
+        ));
     }
 
     #[test]

@@ -2384,8 +2384,10 @@ fn control_plane_exact_error_is_direct_sdio_transport_blocker(reason: &str) -> b
 
 #[inline]
 fn control_plane_exact_error_is_terminal_driver_blocker(reason: &str) -> bool {
-    matches!(reason, "firmware-supplicant-unsupported")
-        || reason.starts_with("cyw43-join-security-")
+    matches!(
+        reason,
+        "firmware-supplicant-unsupported" | "host-eapol-required" | "wsec-pmk-bad-argument"
+    ) || reason.starts_with("cyw43-join-security-")
 }
 
 #[inline]
@@ -6426,9 +6428,11 @@ fn firmware_contract_should_use_cached_snapshot(
     cached_evidence.armcr4_release_attempts != 0
         && cached_snapshot.card_ready
         && cached_evidence.armcr4_release_attempts >= live_armcr4_release_attempts
-        && control_plane_exact_error_is_pre_function2_clock_blocker(
+        && (control_plane_exact_error_is_pre_function2_clock_blocker(
             cached_snapshot.control_plane_exact_error,
-        )
+        ) || control_plane_exact_error_is_terminal_driver_blocker(
+            cached_snapshot.control_plane_exact_error,
+        ))
 }
 
 #[inline]
@@ -33591,6 +33595,13 @@ mod tests {
         );
         assert_eq!(
             control_plane_exact_error_preserving_driver_failure(
+                "cyw43-control-plane-partial-hint-visibility",
+                Some("wsec-pmk-bad-argument"),
+            ),
+            "wsec-pmk-bad-argument"
+        );
+        assert_eq!(
+            control_plane_exact_error_preserving_driver_failure(
                 "cyw43-ht-clock-timeout-before-function2",
                 Some("firmware-supplicant-unsupported"),
             ),
@@ -35196,6 +35207,18 @@ mod tests {
         ));
         assert!(!firmware_contract_should_use_cached_snapshot(
             false, 2, &snapshot, evidence,
+        ));
+        let join_security_snapshot = WifiDebugSnapshot {
+            control_plane_exact_error: "host-eapol-required",
+            control_plane_f2_state: "linux-configured",
+            debug_snapshot_stage: "cyw43-init-control-plane-fail",
+            ..snapshot
+        };
+        assert!(firmware_contract_should_use_cached_snapshot(
+            true,
+            0,
+            &join_security_snapshot,
+            evidence,
         ));
         assert_eq!(
             sdio_function_contract_state_label(

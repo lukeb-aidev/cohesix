@@ -1,6 +1,6 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Defines the bootstrap/bootinfo_snapshot module for root-task.
+// Purpose: Snapshot seL4 BootInfo and guard the copied bootstrap metadata against corruption.
 // Author: Lukas Bower
 //! BootInfo snapshotting utilities that defend against corruption during early bootstrap.
 #![allow(unsafe_code)]
@@ -17,7 +17,7 @@ use crate::bootinfo_layout::{post_canary_offset, POST_CANARY_BYTES};
 use crate::bootstrap::log::force_uart_line;
 use crate::sel4::{BootInfo, BootInfoError, BootInfoView, IPC_PAGE_BYTES};
 
-const MAX_CANARY_LINE: usize = 192;
+const MAX_CANARY_LINE: usize = 256;
 const MAX_BOOTINFO_ALLOC: usize = 64 * 1024;
 const HIGH_32_MASK: usize = 0xffff_ffff_0000_0000;
 const BOOTINFO_CANARY_PRE: u64 = 0x0b0f_1ce5_ca4e_cafe;
@@ -324,6 +324,14 @@ impl From<BootInfoError> for BootInfoSnapshotError {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BootInfoCanaryError {
+    Canary {
+        phase: &'static str,
+        mark: &'static str,
+        pre: u64,
+        post: u64,
+        expected_pre: u64,
+        expected_post: u64,
+    },
     Diverged {
         mark: &'static str,
         expected: BootInfoSnapshot,
@@ -480,22 +488,55 @@ impl BootInfoState {
         Ok(())
     }
 
-    fn check_canaries(&self, phase: &'static str, last_mark: &'static str) {
-        let (pre, post) = self.canary_values();
-        if pre == BOOTINFO_CANARY_PRE && post == BOOTINFO_CANARY_POST {
-            return;
-        }
-
+    fn format_canary_corruption_line(
+        &self,
+        phase: &'static str,
+        last_mark: &'static str,
+        pre: u64,
+        post: u64,
+    ) -> String<MAX_CANARY_LINE> {
         let mut line = String::<MAX_CANARY_LINE>::new();
         let _ = core::fmt::write(
             &mut line,
             format_args!(
-                "BOOTINFO_SNAPSHOT_CORRUPTED phase={phase} last_mark={last_mark} pre=0x{pre:016x} post=0x{post:016x} expected_pre=0x{exp_pre:016x} expected_post=0x{exp_post:016x}",
+                "BOOTINFO_SNAPSHOT_CORRUPTED phase={phase} last_mark={last_mark} pre=0x{pre:016x} post=0x{post:016x} expected_pre=0x{exp_pre:016x} expected_post=0x{exp_post:016x} post_addr=0x{post_addr:016x}",
                 exp_pre = BOOTINFO_CANARY_PRE,
                 exp_post = BOOTINFO_CANARY_POST,
+                post_addr = self.snapshot.post_canary_addr(),
             ),
         );
+        line
+    }
+
+    fn check_canaries_result(
+        &self,
+        phase: &'static str,
+        last_mark: &'static str,
+    ) -> Result<(), BootInfoCanaryError> {
+        let (pre, post) = self.canary_values();
+        if pre == BOOTINFO_CANARY_PRE && post == BOOTINFO_CANARY_POST {
+            return Ok(());
+        }
+
+        let line = self.format_canary_corruption_line(phase, last_mark, pre, post);
         force_uart_line(line.as_str());
+        Err(BootInfoCanaryError::Canary {
+            phase,
+            mark: last_mark,
+            pre,
+            post,
+            expected_pre: BOOTINFO_CANARY_PRE,
+            expected_post: BOOTINFO_CANARY_POST,
+        })
+    }
+
+    fn check_canaries(&self, phase: &'static str, last_mark: &'static str) {
+        if self.check_canaries_result(phase, last_mark).is_ok() {
+            return;
+        }
+
+        let (pre, post) = self.canary_values();
+        let line = self.format_canary_corruption_line(phase, last_mark, pre, post);
         panic!("{}", line.as_str());
     }
 
@@ -522,7 +563,7 @@ impl BootInfoState {
         phase: &'static str,
         mark: &'static str,
     ) -> Result<(), BootInfoCanaryError> {
-        self.check_canaries(phase, mark);
+        self.check_canaries_result(phase, mark)?;
         let observed = BootInfoSnapshot::from_view(&self.view).map_err(|err| {
             BootInfoCanaryError::Snapshot {
                 mark,

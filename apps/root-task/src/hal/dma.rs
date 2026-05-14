@@ -100,11 +100,15 @@ fn audit_suppressed_for_label(label: &str) -> bool {
     matches!(
         label,
         "xhci-scratchpad-page"
-            | "xhci-cmd-ring-submit"
             | "xhci-event-ring-debug-prefix"
             | "xhci-event-ring-prompt-safe"
             | "xhci-event-ring-poll-fast"
     )
+}
+
+#[inline]
+fn device_publish_uses_clean_invalidate(label: &str) -> bool {
+    label.starts_with("xhci-")
 }
 
 #[cfg(all(not(target_os = "none"), any(test, not(feature = "kernel"))))]
@@ -172,7 +176,7 @@ pub fn pin(
         let _ = core::fmt::write(
             &mut line,
             format_args!(
-                "[dma][share] prepare label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+                "[dma][share] prepare label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
                 range.label, range.vaddr, range.paddr, range.len,
             ),
         );
@@ -190,11 +194,28 @@ pub fn pin(
 
         let maintenance = CacheMaintenance::init_thread();
         if policy.dma_clean {
+            let clean_invalidate =
+                policy.dma_invalidate && device_publish_uses_clean_invalidate(label);
             if !suppress_audit {
-                emit_cache_line("clean-before-share", &range);
+                let stage = if clean_invalidate {
+                    "clean-invalidate-before-share"
+                } else {
+                    "clean-before-share"
+                };
+                emit_cache_line(stage, &range);
             }
-            if let Err(err) = maintenance.clean(range.vaddr, range.len) {
-                emit_cache_error("clean-before-share", &range, err);
+            let clean_result = if clean_invalidate {
+                maintenance.clean_invalidate(range.vaddr, range.len)
+            } else {
+                maintenance.clean(range.vaddr, range.len)
+            };
+            if let Err(err) = clean_result {
+                let stage = if clean_invalidate {
+                    "clean-invalidate-before-share"
+                } else {
+                    "clean-before-share"
+                };
+                emit_cache_error(stage, &range, err);
                 return Err(PinError::CacheFailure(err));
             }
         }
@@ -215,7 +236,7 @@ pub fn pin(
         let _ = core::fmt::write(
             &mut ready,
             format_args!(
-                "[dma][share] ready label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+                "[dma][share] ready label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
                 range.label, range.vaddr, range.paddr, range.len,
             ),
         );
@@ -259,7 +280,7 @@ pub fn sync_for_cpu(
         let _ = core::fmt::write(
             &mut line,
             format_args!(
-                "[dma][share] sync-for-cpu label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+                "[dma][share] sync-for-cpu label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
                 range.label, range.vaddr, range.paddr, range.len,
             ),
         );
@@ -290,7 +311,7 @@ pub fn sync_for_cpu(
         let _ = core::fmt::write(
             &mut ready,
             format_args!(
-                "[dma][share] cpu-ready label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+                "[dma][share] cpu-ready label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
                 range.label, range.vaddr, range.paddr, range.len,
             ),
         );
@@ -307,7 +328,7 @@ pub fn unpin(range: &PinnedDmaRange) -> Result<(), CacheError> {
     let _ = core::fmt::write(
         &mut line,
         format_args!(
-            "[dma][share] reclaim label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+            "[dma][share] reclaim label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
             range.label, range.vaddr, range.paddr, range.len,
         ),
     );
@@ -334,7 +355,7 @@ pub fn unpin(range: &PinnedDmaRange) -> Result<(), CacheError> {
     let _ = core::fmt::write(
         &mut done,
         format_args!(
-            "[dma][share] reclaimed label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+            "[dma][share] reclaimed label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
             range.label, range.vaddr, range.paddr, range.len,
         ),
     );
@@ -356,7 +377,7 @@ fn emit_cache_line(stage: &str, range: &PinnedDmaRange) {
     let _ = core::fmt::write(
         &mut line,
         format_args!(
-            "[dma][cache] {} label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x}",
+            "[dma][cache] {} label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
             stage, range.label, range.vaddr, range.paddr, range.len,
         ),
     );
@@ -368,7 +389,7 @@ fn emit_cache_error(stage: &str, range: &PinnedDmaRange, err: CacheError) {
     let _ = core::fmt::write(
         &mut line,
         format_args!(
-            "[dma][cache] {} failed label={} vaddr=0x{:016x} paddr=0x{:016x} len=0x{:08x} err={} kind={:?}",
+            "[dma][cache] {} failed label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x} err={} kind={:?}",
             stage,
             range.label,
             range.vaddr,
@@ -407,6 +428,7 @@ mod tests {
         assert!(audit_suppressed_for_label("xhci-event-ring-prompt-safe"));
         assert!(audit_suppressed_for_label("xhci-event-ring-poll-fast"));
         assert!(!audit_suppressed_for_label("xhci-event-ring-poll"));
+        assert!(!audit_suppressed_for_label("xhci-cmd-ring-submit"));
     }
 
     #[test]
@@ -420,6 +442,25 @@ mod tests {
         assert_eq!(range.paddr(), 0x2000);
         let lines = take_audit_log();
         assert_stage_order(&lines, &["prepare", "clean-before-share", "ready"]);
+    }
+
+    #[test]
+    fn xhci_dma_publish_uses_clean_invalidate_like_uboot_flush() {
+        let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
+        let _ = take_audit_log();
+
+        let range = pin(0x7000, 0x8000, 0x10, "xhci-cmd-ring-submit").expect("pin succeeds");
+
+        assert_eq!(range.len(), 0x10);
+        let lines = take_audit_log();
+        assert_stage_order(
+            &lines,
+            &["prepare", "clean-invalidate-before-share", "ready"],
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("clean-before-share")),
+            "xHCI publish should use clean+invalidate, not clean-only: {lines:?}"
+        );
     }
 
     #[test]

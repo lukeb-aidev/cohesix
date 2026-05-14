@@ -206,6 +206,10 @@ device-specific bus-address policy.
   and `hal::dma::unpin` before reclaim.
 - Cache clean/invalidate/unify operations go only through `hal::cache`, whose
   labels come from the local generated seL4 bindings.
+- xHCI device-publish labels (`xhci-*`) use `hal::dma::pin` with
+  clean+invalidate before handoff, matching U-Boot's `xhci_flush_cache()`
+  behavior for controller-visible rings, contexts, and transfer buffers while
+  keeping SDIO/Wi-Fi DMA on its existing clean-only publish path.
 - Never DMA into stack memory, parser buffers, unbounded heap buffers, or memory
   whose lifetime is not tied to a HAL frame/ring owner.
 - Descriptor rings and packet buffers must be fixed-size, auditable, and have
@@ -272,10 +276,10 @@ leave the line stuck.
   proof command is Enable Slot; No Op is diagnostic-only and must not advance
   root-port sampling. Local-seat preserves already-posted current-boot PSC
   events until after it DMA-publishes Enable Slot and rings doorbell `0`; the
-  wait loop then skips and acknowledges those PSC events exactly as U-Boot does
-  while still accepting only the matching Command Completion Event as gate-4
-  proof. Do not unmask external xHCI interrupt delivery until a milestone
-  explicitly proves it.
+  wait loop then skips and acknowledges those PSC events, inserts the same
+  bounded prompt-safe wait used for other unexpected events, and still accepts
+  only the matching Command Completion Event as gate-4 proof. Do not unmask
+  external xHCI interrupt delivery until a milestone explicitly proves it.
 
 ### SDIO/CYW43455
 
@@ -387,26 +391,33 @@ power/reset state.
   Linux capture shows the plain `sup_wpa` feature probe returning
   `BCME_UNSUPPORTED`; the same Linux run still connects because host
   `wpa_supplicant` handles EAPOL and key install outside the
-  firmware-supplicant path. Milestone 26b does not authorize an in-VM supplicant
-  stack, so `sup_wpa` failure must not authorize or weaken the secure Cohesix
-  join rule. Cohesix may, after an explicit plain `sup_wpa` `BCME_UNSUPPORTED`,
-  try the known-good CYW43 firmware-supplicant wrapper shape
+  firmware-supplicant path. Milestone 26b authorizes bounded WPA2-PSK join
+  sequencing, but no data path may be released on `SET_SSID` alone, so `sup_wpa`
+  failure must not authorize or weaken the secure Cohesix join rule. Cohesix may,
+  after an explicit plain `sup_wpa` `BCME_UNSUPPORTED`, try the known-good
+  CYW43 firmware-supplicant wrapper shape
   (`bsscfg:sup_wpa`, `bsscfgidx=0`, value `1`) plus wrapper-scoped optional
   `sup_wpa2_eapver` and `sup_wpa_tmo`. That exception is limited to firmware
   supplicant offload; it must not reintroduce wrapper-shaped `wsec` or join
-  programming. If both firmware-supplicant shapes are unsupported, Cohesix
-  reports and preserves `firmware-supplicant-unsupported` in `wifi diag` instead
-  of falling back to `SET_SSID`-only completion or a lower-level transport hint.
-  Transport errors remain fatal. The primary PMK payload is the
-  132-byte Linux
+  programming. `WLC_SET_WSEC_PMK` is a firmware-supplicant-offload command in
+  the Pi 4 station path; if both firmware-supplicant shapes are unsupported,
+  Cohesix skips PMK programming, submits the primary join request, and exports
+  `host-eapol-required` as the next secure boundary. Until a host
+  EAPOL/key-install path completes the secure handshake, Cohesix keeps DHCP and
+  data TX disabled and must not fall back to `SET_SSID`-only completion or a
+  lower-level transport hint. The 2026-05-14 22:11 trace proves the corrected
+  boundary: plain `sup_wpa` and wrapper `bsscfg:sup_wpa` both return
+  `BCME_UNSUPPORTED`/`0xffffffe9`, and the old Cohesix image then incorrectly
+  tried `WLC_SET_WSEC_PMK` twice before receiving `BCME_BADARG`/`0xfffffffe`.
+  Transport errors remain fatal. When firmware supplicant offload is enabled,
+  the primary PMK payload is the 132-byte Linux
   `brcmf_wsec_pmk_le` shape (`u16 key_len`, `u16 flags`, 128-byte key area).
   For 8-63 byte passphrases Cohesix derives the 32-byte PBKDF2-HMAC-SHA1 PMK
   from SSID + passphrase and sends flags `0`; for 64 ASCII hex PSKs it decodes
-  the 32-byte PMK directly. If this Linux PMK shape is rejected with
-  `BCME_BADARG`, Cohesix may retry the known-good CYW43 68-byte passphrase
-  shape (`u16 len`, `u16 flags=1`, 64-byte passphrase area) for non-hex
-  passphrases. Any PMK or supplicant-shape rejection is join-programming drift,
-  not a transport failure.
+  the 32-byte PMK directly. A `BCME_BADARG` response to
+  `WLC_SET_WSEC_PMK` is preserved as `wsec-pmk-bad-argument`, not masked by
+  later SDIO hint probes. Any PMK or supplicant-shape rejection is
+  join-programming drift, not a transport failure.
 - Join programming must use Linux's station command shape. After `WLC_UP`,
   Cohesix drains bounded post-`UP` interface events before the first join
   security command, then sends the upstream primary-BSS `join` extended payload.
@@ -434,15 +445,24 @@ power/reset state.
   connect-time RSN IE (`wpaie`) before initial `wpa_auth`, and reports the live
   frontier as `join-security-wpa-auth-initial-loop` instead of reusing the
   stale `wsec` label.
-- WPA2 join completion must be gated on the firmware supplicant event, not on
-  `WLC_SET_SSID` success when firmware supplicant mode is available. Open
-  networks may complete on a successful `SET_SSID` event. Secure networks must
-  subscribe to `SET_SSID`, `AUTH`, and `PSK_SUP`; when firmware supplicant mode
-  is enabled, require both successful `SET_SSID` association progress and
-  `PSK_SUP` status 6 before the data path is released. Any other `PSK_SUP`
-  status is a failed secure join, not a pending-success edge. DHCP and data TX
-  must not begin before that secure completion rule is satisfied; the root-task
-  DHCP client is started only after the Wi-Fi backend reports no pending
+- WPA2 join completion must be gated on cryptographic completion, not on
+  `WLC_SET_SSID` success. Open networks may complete on a successful `SET_SSID`
+  event. Secure networks must subscribe to `SET_SSID`, `AUTH`, and `PSK_SUP`;
+  when firmware supplicant mode is enabled, require both successful `SET_SSID`
+  association progress and `PSK_SUP` status 6 before the data path is released.
+  When firmware supplicant mode is unsupported, the only valid next state is
+  `host-eapol-required`; EAPOL frames may be logged as proof, but DHCP and data
+  TX stay blocked until a bounded host EAPOL/key-install implementation proves
+  completion. Device construction after this boundary must report a precise
+  bring-up status such as `wifi-host-eapol-required`; it is not proof that the
+  Wi-Fi data path is online. Deferred join timeout and prompt-side `nettest`
+  diagnostics must preserve `wifi-host-eapol-required` instead of collapsing the
+  failure into generic association or DHCP status. Any root-task panic after
+  that line is a boot blocker and proof tooling must preserve the host-EAPOL
+  Wi-Fi blocker rather than rewriting it to `none`. Any other `PSK_SUP` status
+  is a failed secure join, not a pending-success edge. DHCP and data TX must not
+  begin before that secure completion rule is satisfied; the root-task DHCP
+  client is started only after the Wi-Fi backend reports no pending
   association status and a live Wi-Fi carrier. A post-join `EVENT_LINK` without
   the link flag is `wifi-link-down`; it must defer DHCP rather than being
   normalized as DHCP progress.
@@ -620,15 +640,18 @@ active path is Cohesix-owned cold start:
   command-ring recovery, command-doorbell, and endpoint-doorbell posted-write
   drains fail closed when the HAL cannot prove the EXT_CFG selector, link/root
   readiness, PCIe IRQ-source masking, or poll-only VL805 COMMAND ownership, or
-  when the drain read returns a selector echo or invalid config value.
+  when the drain read returns a selector echo or invalid config value. PCIe
+  IRQ-source masking proof must reject all-ones sentinel readbacks and log that
+  edge as untrusted instead of setting the posted-write proof latch.
 - U-Boot-compatible command/event proof must publish the fresh ring registers in
   U-Boot order on the Pi 4 platform-reset lane (`DCBAAP`, `CRCR`, initial
   `ERDP`, `ERSTSZ`/`ERSTBA`), issue a HAL EXT_CFG drain after each
   controller-ownership register write, start the controller with `USBCMD.RUN`,
   then apply U-Boot's poll-only post-start interrupter state (`IMOD=0`,
-  `IMAN=0`) through HAL-drained writes. DCBAA slot `0` must be rewritten with
-  the HAL-returned scratchpad pointer-array bus address after scratchpad
-  publication, then shared again before `DCBAAP` is made visible. `CRCR`
+  `IMAN=0`) through HAL-drained writes. On that lane, DCBAA slot `0` must stay
+  zero while `DCBAAP`, `CRCR`, `ERDP`, `ERSTSZ`, and `ERSTBA` are published,
+  then be rewritten with the HAL-returned scratchpad pointer-array bus address
+  and shared again before `DNCTRL=0`. `CRCR`
   composition preserves the low
   `CMD_RING_RSVD_BITS` exactly as U-Boot does before OR-ing the command-ring
   pointer and producer cycle. On the Pi 4 `platform-reset-complete` lane, that
@@ -638,17 +661,24 @@ active path is Cohesix-owned cold start:
   observed `CRCR` running-status bit. The U-Boot `DNCTRL=0` write is also
   HAL-drained
   before `USBCMD.RUN`. It must DMA-publish the submitted command TRB as
-  the exact 16-byte device-visible cache range U-Boot flushes, issue a
-  completion-grade command-ring publish barrier, then write U-Boot's
-  `DB_VALUE_HOST` to doorbell `0` and drain that posted write through the
-  HAL-owned EXT_CFG path before polling the event ring with the same 5 s
-  command-event budget.
+  the exact 16-byte device-visible cache range U-Boot flushes, using HAL
+  clean+invalidate rather than clean-only publication. The TRB publish order is
+  part of the contract: parameter low, parameter high, status, then the control
+  dword with the cycle bit last, matching U-Boot's `queue_trb()` ownership
+  handoff. Cohesix then issues a completion-grade command-ring
+  publish barrier, writes U-Boot's `DB_VALUE_HOST` to doorbell `0`, and drains
+  that posted write through the HAL-owned EXT_CFG path before polling the event
+  ring with the same 5 s command-event budget.
   The command proof is Enable Slot, matching U-Boot's first non-root-hub xHCI
   allocation gate. Already-posted current-boot Port Status Change events remain
   on the event ring and are skipped/acknowledged while the Enable Slot command
-  is outstanding. No Op is only a diagnostic helper and must not unlock
-  root-port sampling. There is no pre-command `ERDP.EHB` acknowledgement, no
-  pre-command PSC drain, and no same-command re-doorbell counted as proof.
+  is outstanding. The U-Boot-shaped Enable Slot lane must not perform a
+  same-command re-doorbell or pre-poll event-ring debug sync; after the DB0
+  posted-write flush it immediately enters the command-event wait and only the
+  matching Command Completion Event can advance the gate. No Op is only a
+  diagnostic helper and must not unlock root-port sampling. There is no
+  pre-command `ERDP.EHB` acknowledgement, no pre-command PSC drain, and no
+  same-command re-doorbell counted as proof.
   `ERDP.EHB` acknowledgement publishes the low/control dword before the high
   DMA-alias dword and drains both writes through HAL only after an event has
   been consumed; if the event-ring dequeue pointer cannot be translated to the
@@ -709,8 +739,10 @@ active path is Cohesix-owned cold start:
   completion is accepted. Direct `PORTSC` reads remain blocked during this
   drain. Each skipped event republishes `ERDP.EHB` and drains the low/high dword
   writes through the HAL posted-write hook before polling the next event-ring
-  slot, so VL805 can see the advanced dequeue pointer while the command is
-  outstanding. On success it immediately submits bounded poll-only Disable Slot
+  slot; skipped PSC events also take one bounded prompt-safe settle before the
+  next sync so command completions racing behind preserved PSCs are not hidden
+  by a tight ERDP update loop. On success it immediately submits bounded
+  poll-only Disable Slot
   cleanup for that slot; a cleanup failure is logged and tolerated only as
   command-ring proof, and later enumeration must not assume a pristine slot
   table. Linux-shaped cleanup or event-generation writes cannot advance gate 4.

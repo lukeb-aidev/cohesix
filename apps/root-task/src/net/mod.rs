@@ -613,6 +613,10 @@ pub enum NetSelfTestStartResult {
     PolicyDisabled,
     SelfTestDisabled,
     DhcpPending,
+    WifiAssociating,
+    WifiHostEapolRequired,
+    WifiAssociationFailed,
+    WifiLinkDown,
     NotReadyRootEp,
     NotReadyIpcBuffer,
     NotReadyCspaceWindow,
@@ -628,6 +632,10 @@ impl NetSelfTestStartResult {
             Self::PolicyDisabled => Some("detail=policy-disabled"),
             Self::SelfTestDisabled => Some("detail=selftest-disabled"),
             Self::DhcpPending => Some("detail=dhcp-pending"),
+            Self::WifiAssociating => Some("detail=wifi-associating"),
+            Self::WifiHostEapolRequired => Some("detail=wifi-host-eapol-required"),
+            Self::WifiAssociationFailed => Some("detail=wifi-association-failed"),
+            Self::WifiLinkDown => Some("detail=wifi-link-down"),
             Self::NotReadyRootEp => Some("detail=not-ready:root-ep"),
             Self::NotReadyIpcBuffer => Some("detail=not-ready:ipc-buffer"),
             Self::NotReadyCspaceWindow => Some("detail=not-ready:cspace-window"),
@@ -643,6 +651,17 @@ impl NetSelfTestStartResult {
             "cspace-window" => Self::NotReadyCspaceWindow,
             "bootstrap-commit" => Self::NotReadyBootstrapCommit,
             _ => Self::Unsupported,
+        }
+    }
+
+    #[must_use]
+    pub fn from_bringup_status(status: &'static str) -> Option<Self> {
+        match status.as_bytes() {
+            b"wifi-associating" => Some(Self::WifiAssociating),
+            b"wifi-host-eapol-required" => Some(Self::WifiHostEapolRequired),
+            b"wifi-association-failed" => Some(Self::WifiAssociationFailed),
+            b"wifi-link-down" => Some(Self::WifiLinkDown),
+            _ => None,
         }
     }
 }

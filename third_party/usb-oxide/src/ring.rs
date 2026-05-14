@@ -7,7 +7,7 @@ use crate::{Dma, Result, UsbError};
 
 use core::{
     marker::PhantomData,
-    sync::atomic::{Ordering, compiler_fence},
+    sync::atomic::{compiler_fence, Ordering},
 };
 
 const XHCI_RING_ALIGNMENT: usize = 64;
@@ -75,6 +75,40 @@ impl Trb {
     /// Returns the transfer length.
     pub fn transfer_length(&self) -> u32 {
         self.status & 0x1ffff
+    }
+
+    /// Returns the four 32-bit TRB fields in U-Boot queue_trb() order.
+    fn uboot_dword_fields(self) -> [u32; 4] {
+        [
+            (self.param as u32).to_le(),
+            ((self.param >> 32) as u32).to_le(),
+            self.status.to_le(),
+            self.control.to_le(),
+        ]
+    }
+
+    /// Publishes a producer-owned TRB with the control/cycle dword last.
+    ///
+    /// xHCI treats the cycle bit in the control dword as the ownership handoff.
+    /// U-Boot writes the four 32-bit fields in order and flushes the 16-byte
+    /// record before ringing DB0; keep the same observable order here.
+    unsafe fn write_producer_ordered(self, dst: *mut Trb) {
+        let fields = self.uboot_dword_fields();
+        let dst = dst.cast::<u32>();
+        // SAFETY: the caller provides a valid 16-byte TRB slot. The first three
+        // volatile dword stores publish parameter/status before ownership.
+        unsafe {
+            dst.add(0).write_volatile(fields[0]);
+            dst.add(1).write_volatile(fields[1]);
+            dst.add(2).write_volatile(fields[2]);
+        }
+        compiler_fence(Ordering::Release);
+        // SAFETY: same bounded TRB slot; this final volatile store publishes
+        // the control dword and cycle bit as the ownership handoff.
+        unsafe {
+            dst.add(3).write_volatile(fields[3]);
+        }
+        compiler_fence(Ordering::Release);
     }
 }
 
@@ -483,19 +517,17 @@ impl<H: Dma> Ring<H> {
         Ok(())
     }
 
-    fn trbs(&self) -> &mut [Trb] {
-        // SAFETY: `Ring::new` allocates `self.size * size_of::<Trb>()` bytes
-        // aligned for `Trb`, and all mutable access to the ring goes through
-        // the owning `Ring` under the caller's lock.
-        unsafe { core::slice::from_raw_parts_mut(self.mem.as_ptr(), self.size) }
-    }
-
     /// Enqueues one TRB and returns its device-visible address.
     pub fn try_enqueue(&mut self, host: &H, mut trb: Trb) -> Result<u64> {
         trb.set_cycle(self.cycle);
         let ring_phys = self.mem.try_phys(host)?;
         let addr = ring_phys + (self.enqueue * 16) as u64;
-        self.trbs()[self.enqueue] = trb;
+        let slot = self.enqueue;
+        // SAFETY: `slot` is the current producer index within a ring allocated
+        // for exactly `self.size` TRBs; only the owning producer mutates it.
+        unsafe {
+            trb.write_producer_ordered(self.mem.as_ptr::<Trb>().add(slot));
+        }
         self.enqueue += 1;
 
         if self.enqueue >= self.size - 1 {
@@ -503,7 +535,12 @@ impl<H: Dma> Ring<H> {
             link.param = ring_phys;
             link.control = (trb_type::LINK << 10) | 2;
             link.set_cycle(self.cycle);
-            self.trbs()[self.enqueue] = link;
+            let link_slot = self.enqueue;
+            // SAFETY: `link_slot` is the reserved final link TRB in the
+            // allocated ring and is mutated only by the owning producer.
+            unsafe {
+                link.write_producer_ordered(self.mem.as_ptr::<Trb>().add(link_slot));
+            }
             self.enqueue = 0;
             self.cycle = !self.cycle;
         }
@@ -567,7 +604,11 @@ impl<H: Dma> Ring<H> {
         link.param = self.mem.try_phys(host)?;
         link.control = (trb_type::LINK << 10) | 2; // Toggle cycle
         link.set_cycle(self.cycle);
-        self.trbs()[last] = link;
+        // SAFETY: `last` is the reserved final link TRB in the freshly
+        // allocated ring, and no device can observe it before initial share.
+        unsafe {
+            link.write_producer_ordered(self.mem.as_ptr::<Trb>().add(last));
+        }
         Ok(())
     }
 
@@ -745,10 +786,10 @@ impl<H: Dma> EventRing<H> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PhysMem, Ring, Trb, XHCI_RING_ALIGNMENT, trb_type};
+    use super::{trb_type, PhysMem, Ring, Trb, XHCI_RING_ALIGNMENT};
     use crate::{Dma, DmaShareError};
     use core::sync::atomic::{AtomicUsize, Ordering};
-    use std::alloc::{Layout, alloc_zeroed, dealloc};
+    use std::alloc::{alloc_zeroed, dealloc, Layout};
     use std::sync::Mutex;
     use std::vec::Vec;
 
@@ -828,6 +869,44 @@ mod tests {
             self.last_share_len.store(len, Ordering::Relaxed);
             Ok(())
         }
+    }
+
+    #[test]
+    fn trb_uboot_dword_fields_keep_cycle_handoff_last() {
+        let mut trb = Trb {
+            param: 0x1122_3344_5566_7788,
+            status: 0xaabb_ccdd,
+            control: trb_type::ENABLE_SLOT << 10,
+        };
+        trb.set_cycle(true);
+
+        let fields = trb.uboot_dword_fields();
+
+        assert_eq!(u32::from_le(fields[0]), 0x5566_7788);
+        assert_eq!(u32::from_le(fields[1]), 0x1122_3344);
+        assert_eq!(u32::from_le(fields[2]), 0xaabb_ccdd);
+        assert_eq!(u32::from_le(fields[3]), (trb_type::ENABLE_SLOT << 10) | 1);
+    }
+
+    #[test]
+    fn trb_ordered_write_preserves_uboot_field_layout() {
+        let mut slot = Trb::new();
+        let mut trb = Trb {
+            param: 0x0102_0304_0506_0708,
+            status: 0x090a_0b0c,
+            control: trb_type::NO_OP_CMD << 10,
+        };
+        trb.set_cycle(true);
+
+        // SAFETY: the stack slot is a valid, aligned TRB destination for this
+        // single producer-side publication test.
+        unsafe {
+            trb.write_producer_ordered(&mut slot);
+        }
+
+        assert_eq!(slot.param, trb.param);
+        assert_eq!(slot.status, trb.status);
+        assert_eq!(slot.control, trb.control);
     }
 
     #[test]

@@ -218,7 +218,9 @@ fn net_status_allows_root_console(status: &NetStatusReport) -> bool {
 #[cfg(feature = "net-console")]
 fn net_status_terminal_failure_reason(status: &NetStatusReport) -> Option<&'static str> {
     match status.address_source {
-        "wifi-association-failed" | "dhcp-failed" => Some(status.address_source),
+        "wifi-host-eapol-required" | "wifi-association-failed" | "dhcp-failed" => {
+            Some(status.address_source)
+        }
         _ => None,
     }
 }
@@ -3645,7 +3647,10 @@ where
     #[cfg(feature = "kernel")]
     fn wifi_exact_error_is_join_security_blocker(exact_error: &str) -> bool {
         exact_error.starts_with("cyw43-join-security-")
-            || exact_error == "firmware-supplicant-unsupported"
+            || matches!(
+                exact_error,
+                "firmware-supplicant-unsupported" | "host-eapol-required" | "wsec-pmk-bad-argument"
+            )
     }
 
     #[cfg(feature = "kernel")]
@@ -3670,6 +3675,16 @@ where
             && snapshot.control_plane_f2_state == "linux-configured"
         {
             "firmware-feature-boundary"
+        } else if snapshot.control_plane_exact_error == "host-eapol-required"
+            && Self::wifi_sdhci_read_diag_is_clear(snapshot.control_plane_sdhci_read_diag)
+            && snapshot.control_plane_f2_state == "linux-configured"
+        {
+            "host-supplicant-boundary"
+        } else if snapshot.control_plane_exact_error == "wsec-pmk-bad-argument"
+            && Self::wifi_sdhci_read_diag_is_clear(snapshot.control_plane_sdhci_read_diag)
+            && snapshot.control_plane_f2_state == "linux-configured"
+        {
+            "join-credential-boundary"
         } else {
             "join-security-command-boundary"
         }
@@ -3694,7 +3709,10 @@ where
     #[cfg(feature = "kernel")]
     fn wifi_join_security_failing_iovar(snapshot: &WifiDebugSnapshot) -> &'static str {
         match snapshot.control_plane_exact_error {
-            "firmware-supplicant-unsupported" | "cyw43-join-security-sup-wpa-loop" => "sup_wpa",
+            "firmware-supplicant-unsupported" => "sup_wpa,bsscfg:sup_wpa",
+            "host-eapol-required" => "eapol",
+            "wsec-pmk-bad-argument" => "WLC_SET_WSEC_PMK",
+            "cyw43-join-security-sup-wpa-loop" => "sup_wpa",
             "cyw43-join-security-bsscfg-sup-wpa-loop" => "bsscfg:sup_wpa",
             "cyw43-join-security-wpaie-loop" => "wpaie",
             "cyw43-join-security-wpa-auth-initial-loop"
@@ -3709,6 +3727,10 @@ where
     fn wifi_join_security_status(snapshot: &WifiDebugSnapshot) -> &'static str {
         if snapshot.control_plane_exact_error == "firmware-supplicant-unsupported" {
             "0xffffffe9"
+        } else if snapshot.control_plane_exact_error == "host-eapol-required" {
+            "host-required"
+        } else if snapshot.control_plane_exact_error == "wsec-pmk-bad-argument" {
+            "0xfffffffe"
         } else {
             "n/a"
         }
@@ -6590,6 +6612,13 @@ mod tests {
         status.address_source = "dhcp-pending";
         status.dhcp_phase = "selecting";
         assert!(!super::net_status_allows_root_console(&status));
+        status.address_source = "wifi-host-eapol-required";
+        status.dhcp_phase = "host-eapol-required";
+        assert!(!super::net_status_allows_root_console(&status));
+        assert_eq!(
+            super::net_status_terminal_failure_reason(&status),
+            Some("wifi-host-eapol-required")
+        );
         status.address_source = "wifi-association-failed";
         status.dhcp_phase = "failed";
         assert!(!super::net_status_allows_root_console(&status));
@@ -7323,6 +7352,36 @@ mod tests {
             .expect("serial output must be utf8");
         assert!(
             rendered.contains("ERR NETTEST reason=policy detail=dhcp-pending"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn nettest_reports_wifi_host_eapol_required_detail() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.start_result = NetSelfTestStartResult::WifiHostEapolRequired;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"nettest\n");
+
+        pump.poll();
+        pump.poll();
+
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR NETTEST reason=policy detail=wifi-host-eapol-required"),
             "{rendered}"
         );
     }
@@ -8931,7 +8990,7 @@ mod tests {
         );
         assert_eq!(
             KernelConsoleTestPump::wifi_join_security_failing_iovar(&fake.snapshot),
-            "sup_wpa"
+            "sup_wpa,bsscfg:sup_wpa"
         );
         assert_eq!(
             KernelConsoleTestPump::wifi_join_security_status(&fake.snapshot),
@@ -8940,6 +8999,74 @@ mod tests {
         assert!(KernelConsoleTestPump::wifi_diag_should_skip_ht_probe(
             &fake.snapshot
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_host_eapol_required_reports_join_gate() {
+        let mut fake = FakeWifiDebug::new();
+        fake.snapshot.debug_snapshot_stage = "cyw43-init-control-plane-fail";
+        fake.snapshot.control_plane_exact_error = "host-eapol-required";
+        fake.snapshot.control_plane_sdhci_read_diag = "none";
+        fake.snapshot.control_plane_f2_state = "linux-configured";
+        fake.snapshot.control_plane_bootstrap_phase = "steady-state";
+        fake.snapshot.io_enable = Some(0x06);
+        fake.snapshot.io_ready = Some(0x06);
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_capture_verdict(&fake.snapshot),
+            ("join-security-edge", "join-security")
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_attribution(&fake.snapshot),
+            "host-supplicant-boundary"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_failing_iovar(&fake.snapshot),
+            "eapol"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_status(&fake.snapshot),
+            "host-required"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_wsec_pmk_bad_argument_reports_join_gate() {
+        let mut fake = FakeWifiDebug::new();
+        fake.snapshot.debug_snapshot_stage = "cyw43-init-control-plane-fail";
+        fake.snapshot.control_plane_exact_error = "wsec-pmk-bad-argument";
+        fake.snapshot.control_plane_sdhci_read_diag = "none";
+        fake.snapshot.control_plane_f2_state = "linux-configured";
+        fake.snapshot.control_plane_bootstrap_phase = "steady-state";
+        fake.snapshot.io_enable = Some(0x06);
+        fake.snapshot.io_ready = Some(0x06);
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_capture_verdict(&fake.snapshot),
+            ("join-security-edge", "join-security")
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_golden_path_current_step(&fake.snapshot),
+            "join-security"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_attribution(&fake.snapshot),
+            "join-credential-boundary"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_transport_label(&fake.snapshot),
+            "healthy"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_failing_iovar(&fake.snapshot),
+            "WLC_SET_WSEC_PMK"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_status(&fake.snapshot),
+            "0xfffffffe"
+        );
     }
 
     #[cfg(feature = "kernel")]
