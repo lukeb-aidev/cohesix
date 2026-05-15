@@ -3016,7 +3016,11 @@ where
         if route.controller_gate != "none" {
             route.controller_gate
         } else if route.command_probe == "enable-slot-ok" {
-            "safe-port-state"
+            if route.proof_gate >= 8 && route.next_step != "none" {
+                route.next_step
+            } else {
+                "safe-port-state"
+            }
         } else if route.command_probe == "no-op-ok" {
             "safe-port-event-required"
         } else if route.command_probe != "n/a" {

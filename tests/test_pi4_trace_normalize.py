@@ -580,6 +580,27 @@ def test_gate_summary_requires_hal_flush_for_command_doorbell_proof() -> None:
     assert gates.usb_blocker == "cmd-doorbell-flush-unproven"
 
 
+def test_gate_summary_endpoint_doorbell_does_not_prove_command_flush() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
+            "usb: contract current=controller-ready expected=command-ring-recovery",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000100 target=0x0",
+            "[local-seat] vl805 posted-write flush stage=0x031f "
+            "role=endpoint-doorbell offset=0x010c value=0x00000004 "
+            "source=hal-ext-cfg",
+            "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
+            "doorbell=0x000000000100 target=0x0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-doorbell-flush-unproven"
+
+
 def test_gate_summary_tracks_usb_halt_during_command_doorbell_write() -> None:
     events = normalizer.parse_events(
         [

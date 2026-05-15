@@ -386,6 +386,7 @@ static XHCI_MMIO_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_MMIO_PIN_REUSE_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DMA_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DIAG_LINE_COUNT: AtomicU32 = AtomicU32::new(0);
+static XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
 static XHCI_DIAG_LAST_STAGE: AtomicU32 = AtomicU32::new(0);
 static XHCI_DIAG_LAST_A: AtomicUsize = AtomicUsize::new(0);
 static XHCI_DIAG_LAST_B: AtomicUsize = AtomicUsize::new(0);
@@ -1835,6 +1836,7 @@ pub struct Pi4LocalSeat {
     display: Option<HdmiTextSink>,
     keyboard: Option<UsbKeyboard>,
     keyboard_init_attempted: bool,
+    keyboard_online_displayed: bool,
     prompt_safe_probe_armed: bool,
     xhci_mmio_hint: Option<usize>,
     xhci_pci_cmd: Option<u16>,
@@ -1851,6 +1853,14 @@ impl core::fmt::Debug for Pi4LocalSeat {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Pi4LocalSeat").finish_non_exhaustive()
     }
+}
+
+#[inline]
+const fn keyboard_online_display_should_publish(
+    already_displayed: bool,
+    bytes_written: usize,
+) -> bool {
+    !already_displayed && bytes_written > 0
 }
 
 #[inline]
@@ -1990,6 +2000,7 @@ impl Pi4LocalSeat {
             display,
             keyboard: None,
             keyboard_init_attempted: false,
+            keyboard_online_displayed: false,
             prompt_safe_probe_armed: false,
             xhci_mmio_hint,
             xhci_pci_cmd: hints.xhci_pci_cmd,
@@ -2232,8 +2243,12 @@ impl Pi4LocalSeat {
             usb_progress_finish();
 
             if self.keyboard.is_some() {
-                self.write_line("[cohesix] local-seat USB keyboard online");
-                boot_log::force_uart_line("[local-seat] pi4 keyboard runtime init result=online");
+                self.write_line(
+                    "[cohesix] local-seat USB keyboard detected; waiting for first key",
+                );
+                boot_log::force_uart_line(
+                    "[local-seat] pi4 keyboard runtime init result=attached gate=8 online=0",
+                );
             } else if let Some(err) = keyboard_error {
                 if prompt_safe_probe {
                     self.keyboard_init_attempted = false;
@@ -2262,8 +2277,18 @@ impl Pi4LocalSeat {
 
         match self.keyboard.as_mut() {
             Some(keyboard) => {
-                let written = keyboard.poll_bytes(out);
-                let scroll_rows = keyboard.take_pending_display_scroll_rows();
+                let (written, scroll_rows) = {
+                    let written = keyboard.poll_bytes(out);
+                    let scroll_rows = keyboard.take_pending_display_scroll_rows();
+                    (written, scroll_rows)
+                };
+                if keyboard_online_display_should_publish(self.keyboard_online_displayed, written) {
+                    self.write_line("[cohesix] local-seat USB keyboard online");
+                    boot_log::force_uart_line(
+                        "[local-seat] pi4 keyboard runtime proof result=online gate=10 source=first-byte",
+                    );
+                    self.keyboard_online_displayed = true;
+                }
                 if scroll_rows != 0 {
                     self.scroll_display_rows(scroll_rows);
                 }
@@ -3432,6 +3457,9 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
         XHCI_DIAG_HISTORY_B[history_slot].store(b as usize, Ordering::Release);
         XHCI_DIAG_HISTORY_C[history_slot].store(c as usize, Ordering::Release);
     }
+    if xhci_diag_stage_hot_loop_suppressed(stage) {
+        return;
+    }
     if line_no > XHCI_DIAG_MAX_LINES && !xhci_diag_stage_force_log(stage) {
         if line_no == XHCI_DIAG_MAX_LINES.saturating_add(1) {
             boot_log::force_uart_line("[local-seat] xhci.diag suppressed (rate-limited)");
@@ -3463,6 +3491,7 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
 #[inline]
 fn reset_latest_xhci_diag_snapshot() {
     XHCI_DIAG_LINE_COUNT.store(0, Ordering::Release);
+    XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT.store(0, Ordering::Release);
     XHCI_DIAG_LAST_STAGE.store(0, Ordering::Release);
     XHCI_DIAG_LAST_A.store(0, Ordering::Release);
     XHCI_DIAG_LAST_B.store(0, Ordering::Release);
@@ -3936,6 +3965,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x03fc..=0x03fd
             | 0x03fe..=0x03ff
             | 0x0400..=0x0406
+            | 0x0410..=0x0415
     )
 }
 
@@ -3966,6 +3996,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x03fc..=0x03fd
             | 0x03fe..=0x03ff
             | 0x0400..=0x0406
+            | 0x0410..=0x0415
     )
 }
 
@@ -3984,7 +4015,24 @@ const fn xhci_diag_stage_force_log(stage: u16) -> bool {
             | 0x03c4..=0x03ee
             | 0x03fe..=0x03ff
             | 0x0400..=0x0406
+            | 0x0410..=0x0414
     )
+}
+
+#[inline]
+fn xhci_diag_stage_hot_loop_suppressed(stage: u16) -> bool {
+    if stage != 0x0415 {
+        return false;
+    }
+    let count = XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    if count == 5 {
+        boot_log::force_uart_line(
+            "[local-seat] xhci.diag stage=0x0415 tag=usb-transfer-trb-queued suppressed reason=hot-poll-loop",
+        );
+    }
+    count > 4
 }
 
 #[inline]
@@ -4176,6 +4224,10 @@ const fn xhci_diag_stage_value_labels(
         0x0404 => Some(("port", "result", "profile")),
         0x0405 => Some(("port", "error", "profile")),
         0x0406 => Some(("psc_count", "psc_mask", "event_syncs")),
+        0x0410 | 0x0411 | 0x0412 | 0x0413 | 0x0414 => {
+            Some(("param", "status_control", "source_depth"))
+        }
+        0x0415 => Some(("slot_dci", "ring_len", "status_control")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4527,6 +4579,12 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0404 => Some("usb-stale-uboot-root-port-reset-ok"),
         0x0405 => Some("usb-stale-uboot-root-port-reset-failed"),
         0x0406 => Some("cmd-prompt-safe-psc-preserved"),
+        0x0410 => Some("event-transfer-preserved"),
+        0x0411 => Some("event-transfer-preserve-overflow"),
+        0x0412 => Some("event-transfer-replayed-matching"),
+        0x0413 => Some("event-transfer-replayed-raw"),
+        0x0414 => Some("event-transfer-preserved-during-filtered-poll"),
+        0x0415 => Some("usb-transfer-trb-queued"),
         0x03c0 => Some("usb-hid-report-event"),
         0x03c1 => Some("usb-hid-report-decode-fail"),
         0x03c2 => Some("usb-hid-report-empty"),
@@ -5097,11 +5155,11 @@ fn xhci_probe_command_ring_after_event_drain(
             };
             let mut line = heapless::String::<320>::new();
             let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] xhci root-port command-probe result={result} bus={bus} slot={slot_id} cleanup={cleanup} cleanup_generation=uboot-poll-only action=unlock-port-sampling reason=uboot-enable-slot-before-root-port-sample event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
-                    ),
-                );
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci root-port command-probe result={result} bus={bus} slot={slot_id} cleanup={cleanup} cleanup_generation=uboot-poll-only action=unlock-port-sampling reason=uboot-enable-slot-before-root-port-sample event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
+                ),
+            );
             boot_log::force_uart_line(line.as_str());
             result
         }
@@ -5117,19 +5175,19 @@ fn xhci_probe_command_ring_after_event_drain(
         Err(UsbError::EnableSlotTimeout | UsbError::Timeout) => {
             let mut line = heapless::String::<320>::new();
             let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] xhci root-port command-probe result=enable-slot-timeout bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180 event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
-                    ),
-                );
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci root-port command-probe result=enable-slot-timeout bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180 event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
+                ),
+            );
             boot_log::force_uart_line(line.as_str());
             let mut summary = heapless::String::<320>::new();
             let _ = core::fmt::Write::write_fmt(
-                    &mut summary,
-                    format_args!(
-                        "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=enable-slot-timeout event=missing event_generation={event_generation} irq27_role=timer-only pcie_irqs=179,175,180"
-                    ),
-                );
+                &mut summary,
+                format_args!(
+                    "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command=enable-slot-timeout event=missing event_generation={event_generation} irq27_role=timer-only pcie_irqs=179,175,180"
+                ),
+            );
             boot_log::force_uart_line(summary.as_str());
             "enable-slot-timeout"
         }
@@ -5137,11 +5195,11 @@ fn xhci_probe_command_ring_after_event_drain(
             let result = usb_enable_slot_probe_error_label(err);
             let mut line = heapless::String::<256>::new();
             let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] xhci root-port command-probe result={result} bus={bus} action=return-to-shell detail={err:?} event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
-                    ),
-                );
+                &mut line,
+                format_args!(
+                    "[local-seat] xhci root-port command-probe result={result} bus={bus} action=return-to-shell detail={err:?} event_candidate_mask=0x{event_candidate_mask:04x} event_generation={event_generation}"
+                ),
+            );
             boot_log::force_uart_line(line.as_str());
             result
         }
@@ -7985,6 +8043,7 @@ fn retry_vl805_pci_bcm2711_after_mailbox_reset(
 
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
+    _hub_keepalive: Vec<Arc<UsbDevice<SeatDma>>>,
     _xhci_irq_guard: Option<XhciIrqGuard>,
     last_keys: [u8; 6],
     caps_lock_on: bool,
@@ -7992,7 +8051,10 @@ struct UsbKeyboard {
     led_error_logged: bool,
     first_report_logged: bool,
     first_no_report_logged: bool,
+    first_non_empty_report_logged: bool,
+    first_unmapped_key_logged: bool,
     first_byte_logged: bool,
+    first_printable_byte_logged: bool,
     pending_display_scroll_rows: i8,
 }
 
@@ -8455,9 +8517,38 @@ struct HubInterfaceInfo {
 }
 
 enum HubChildProbeResult {
-    Keyboard(HidDevice<SeatDma>),
+    Keyboard(KeyboardAttach),
     ProbedNoKeyboard,
     Failed,
+}
+
+struct KeyboardAttach {
+    hid: HidDevice<SeatDma>,
+    hub_keepalive: Vec<Arc<UsbDevice<SeatDma>>>,
+}
+
+impl KeyboardAttach {
+    fn new(hid: HidDevice<SeatDma>) -> Self {
+        Self {
+            hid,
+            hub_keepalive: Vec::new(),
+        }
+    }
+
+    fn keep_hub(mut self, hub: &Arc<UsbDevice<SeatDma>>, downstream_port: u8) -> Self {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] usb hid keepalive hub_slot={} port={} reason=keyboard-path",
+                hub.slot_id(),
+                downstream_port,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        self.hub_keepalive.push(hub.clone());
+        self
+    }
 }
 
 impl HubPortStatus {
@@ -10704,7 +10795,7 @@ impl UsbKeyboard {
 
                             let keyboard_init_error_before = saw_keyboard_init_error;
                             let device = Arc::new(device);
-                            if let Some(hid) = Self::probe_device_for_keyboard(
+                            if let Some(attached) = Self::probe_device_for_keyboard(
                                 device,
                                 device_desc,
                                 &config_blob,
@@ -10726,9 +10817,20 @@ impl UsbKeyboard {
                                 log_usb_probe_pathway_summary(&pathway_summary);
                                 log_usb_probe_best_pathway("keyboard-ready", &pathway_summary);
                                 mark_usb_runtime_keyboard_ready();
+                                let KeyboardAttach { hid, hub_keepalive } = attached;
+                                let keepalive_len = hub_keepalive.len();
                                 hid.device().ctrl().host().seal_runtime();
+                                let mut keepalive_line = heapless::String::<160>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut keepalive_line,
+                                    format_args!(
+                                        "[local-seat] usb hid keyboard path retained hubs={keepalive_len}"
+                                    ),
+                                );
+                                boot_log::force_uart_line(keepalive_line.as_str());
                                 return Ok(Self {
                                     hid,
+                                    _hub_keepalive: hub_keepalive,
                                     _xhci_irq_guard: xhci_irq_guard,
                                     last_keys: [0; 6],
                                     caps_lock_on: false,
@@ -10736,7 +10838,10 @@ impl UsbKeyboard {
                                     led_error_logged: false,
                                     first_report_logged: false,
                                     first_no_report_logged: false,
+                                    first_non_empty_report_logged: false,
+                                    first_unmapped_key_logged: false,
                                     first_byte_logged: false,
+                                    first_printable_byte_logged: false,
                                     pending_display_scroll_rows: 0,
                                 });
                             }
@@ -10831,7 +10936,7 @@ impl UsbKeyboard {
         config_blob: &[u8],
         depth_remaining: usize,
         saw_keyboard_init_error: &mut bool,
-    ) -> Option<HidDevice<SeatDma>> {
+    ) -> Option<KeyboardAttach> {
         if let Some(hid) =
             Self::attach_hid_keyboard(device.clone(), config_blob, saw_keyboard_init_error)
         {
@@ -10885,7 +10990,7 @@ impl UsbKeyboard {
         device: Arc<UsbDevice<SeatDma>>,
         config_blob: &[u8],
         saw_keyboard_init_error: &mut bool,
-    ) -> Option<HidDevice<SeatDma>> {
+    ) -> Option<KeyboardAttach> {
         let interfaces = find_hid_interfaces(config_blob);
         let mut protocol_none_candidates = Vec::<(
             usb_oxide::InterfaceDesc,
@@ -10948,7 +11053,7 @@ impl UsbKeyboard {
                     track_failures,
                     saw_keyboard_init_error,
                 ) {
-                    return Some(hid);
+                    return Some(KeyboardAttach::new(hid));
                 }
             }
         }
@@ -10989,7 +11094,7 @@ impl UsbKeyboard {
                     false,
                     saw_keyboard_init_error,
                 ) {
-                    return Some(hid);
+                    return Some(KeyboardAttach::new(hid));
                 }
             }
         }
@@ -11011,7 +11116,7 @@ impl UsbKeyboard {
                     false,
                     saw_keyboard_init_error,
                 ) {
-                    return Some(hid);
+                    return Some(KeyboardAttach::new(hid));
                 }
             }
         }
@@ -11437,7 +11542,7 @@ impl UsbKeyboard {
         hub_interface_number: u8,
         depth_remaining: usize,
         saw_keyboard_init_error: &mut bool,
-    ) -> Option<HidDevice<SeatDma>> {
+    ) -> Option<KeyboardAttach> {
         if hub_protocol_code == hub_protocol::SUPER_SPEED {
             let hub_depth = cmp::min(route_depth(device.route()), 4);
             match device.set_hub_depth(hub_depth) {
@@ -11659,7 +11764,7 @@ impl UsbKeyboard {
                                 saw_keyboard_init_error,
                                 "disconnected-pre-reset",
                             ) {
-                                HubChildProbeResult::Keyboard(hid) => return Some(hid),
+                                HubChildProbeResult::Keyboard(attached) => return Some(attached),
                                 HubChildProbeResult::ProbedNoKeyboard => {
                                     continue;
                                 }
@@ -11729,7 +11834,7 @@ impl UsbKeyboard {
                     saw_keyboard_init_error,
                     blind_source,
                 ) {
-                    HubChildProbeResult::Keyboard(hid) => return Some(hid),
+                    HubChildProbeResult::Keyboard(attached) => return Some(attached),
                     HubChildProbeResult::ProbedNoKeyboard => {
                         continue;
                     }
@@ -11848,7 +11953,7 @@ impl UsbKeyboard {
                 saw_keyboard_init_error,
                 "status-path",
             ) {
-                HubChildProbeResult::Keyboard(hid) => return Some(hid),
+                HubChildProbeResult::Keyboard(attached) => return Some(attached),
                 HubChildProbeResult::ProbedNoKeyboard => continue,
                 HubChildProbeResult::Failed => {
                     let mut line = heapless::String::<256>::new();
@@ -11901,7 +12006,7 @@ impl UsbKeyboard {
                             depth_remaining,
                             saw_keyboard_init_error,
                         ) {
-                            HubChildProbeResult::Keyboard(hid) => return Some(hid),
+                            HubChildProbeResult::Keyboard(attached) => return Some(attached),
                             HubChildProbeResult::ProbedNoKeyboard | HubChildProbeResult::Failed => {
                                 continue;
                             }
@@ -11964,7 +12069,7 @@ impl UsbKeyboard {
             } else {
                 "no-connection"
             };
-            if let Some(hid) = Self::delayed_hub_child_rescan(
+            if let Some(attached) = Self::delayed_hub_child_rescan(
                 &device,
                 max_ports,
                 hub_interface_number,
@@ -11978,7 +12083,7 @@ impl UsbKeyboard {
                 saw_keyboard_init_error,
                 reason,
             ) {
-                return Some(hid);
+                return Some(attached);
             }
         }
 
@@ -12032,7 +12137,7 @@ impl UsbKeyboard {
         depth_remaining: usize,
         saw_keyboard_init_error: &mut bool,
         reason: &str,
-    ) -> Option<HidDevice<SeatDma>> {
+    ) -> Option<KeyboardAttach> {
         for attempt in 0..HUB_DELAYED_CHILD_RETRY_COUNT {
             let retry = attempt.saturating_add(1);
             let mut line = heapless::String::<256>::new();
@@ -12149,7 +12254,7 @@ impl UsbKeyboard {
                         saw_keyboard_init_error,
                         "delayed-child",
                     ) {
-                        HubChildProbeResult::Keyboard(hid) => return Some(hid),
+                        HubChildProbeResult::Keyboard(attached) => return Some(attached),
                         HubChildProbeResult::ProbedNoKeyboard => continue,
                         HubChildProbeResult::Failed => {}
                     }
@@ -12206,7 +12311,9 @@ impl UsbKeyboard {
                 saw_keyboard_init_error,
                 source,
             ) {
-                HubChildProbeResult::Keyboard(hid) => return HubChildProbeResult::Keyboard(hid),
+                HubChildProbeResult::Keyboard(attached) => {
+                    return HubChildProbeResult::Keyboard(attached);
+                }
                 HubChildProbeResult::ProbedNoKeyboard => {
                     return HubChildProbeResult::ProbedNoKeyboard;
                 }
@@ -12261,7 +12368,9 @@ impl UsbKeyboard {
             saw_keyboard_init_error,
             "status-retry",
         ) {
-            HubChildProbeResult::Keyboard(hid) => return HubChildProbeResult::Keyboard(hid),
+            HubChildProbeResult::Keyboard(attached) => {
+                return HubChildProbeResult::Keyboard(attached);
+            }
             HubChildProbeResult::ProbedNoKeyboard => return HubChildProbeResult::ProbedNoKeyboard,
             HubChildProbeResult::Failed => {}
         }
@@ -12337,7 +12446,9 @@ impl UsbKeyboard {
                 saw_keyboard_init_error,
                 "status-fallback",
             ) {
-                HubChildProbeResult::Keyboard(hid) => return HubChildProbeResult::Keyboard(hid),
+                HubChildProbeResult::Keyboard(attached) => {
+                    return HubChildProbeResult::Keyboard(attached);
+                }
                 HubChildProbeResult::ProbedNoKeyboard => {
                     return HubChildProbeResult::ProbedNoKeyboard;
                 }
@@ -12705,7 +12816,7 @@ impl UsbKeyboard {
         boot_log::force_uart_line(line.as_str());
 
         let child = Arc::new(child);
-        if let Some(hid) = Self::probe_device_for_keyboard(
+        if let Some(attached) = Self::probe_device_for_keyboard(
             child,
             child_desc,
             &child_config_blob,
@@ -12713,7 +12824,7 @@ impl UsbKeyboard {
             saw_keyboard_init_error,
         ) {
             Self::log_hub_port_terminal(device.slot_id(), downstream_port, "keyboard-found");
-            return HubChildProbeResult::Keyboard(hid);
+            return HubChildProbeResult::Keyboard(attached.keep_hub(device, downstream_port));
         }
         Self::log_hub_port_terminal(device.slot_id(), downstream_port, "not-keyboard");
         HubChildProbeResult::ProbedNoKeyboard
@@ -14127,6 +14238,25 @@ impl UsbKeyboard {
                     self.first_report_logged = true;
                     mark_usb_runtime_first_report();
                 }
+                if !self.first_non_empty_report_logged && report.keys.iter().any(|key| *key != 0) {
+                    let mut line = heapless::String::<256>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] usb hid first non-empty report modifiers=0x{:02x} shift={} keys={:02x},{:02x},{:02x},{:02x},{:02x},{:02x}",
+                            report.modifiers,
+                            report.shift() as u8,
+                            report.keys[0],
+                            report.keys[1],
+                            report.keys[2],
+                            report.keys[3],
+                            report.keys[4],
+                            report.keys[5]
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    self.first_non_empty_report_logged = true;
+                }
                 report
             }
             Ok(None) => {
@@ -14144,7 +14274,7 @@ impl UsbKeyboard {
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] usb hid queue-read failed stage=first-report detail=usb-queue-read err={err:?}"
+                            "[local-seat] usb hid poll failed stage=first-report detail=interrupt-in err={err:?}"
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
@@ -14188,34 +14318,66 @@ impl UsbKeyboard {
                 }
                 continue;
             }
-            if let Some(ch) = keyboard_scancode_to_char(key, shift) {
-                if written >= out.len() {
-                    break;
-                }
-                let mut effective = ch;
-                if self.caps_lock_on && effective.is_ascii_alphabetic() {
-                    effective = if shift {
-                        effective.to_ascii_lowercase()
-                    } else {
-                        effective.to_ascii_uppercase()
-                    };
-                }
-                if !self.first_byte_logged {
-                    let mut line = heapless::String::<160>::new();
+            let Some(ch) = keyboard_scancode_to_char(key, shift) else {
+                if !self.first_unmapped_key_logged {
+                    let mut line = heapless::String::<256>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] runtime keyboard first-byte read=1 ascii=0x{:02x} key=0x{key:02x} shift={} caps={}",
-                            effective as u8, shift as u8, self.caps_lock_on as u8,
+                            "[local-seat] usb hid first unmapped usage key=0x{key:02x} shift={} caps={} keys={:02x},{:02x},{:02x},{:02x},{:02x},{:02x}",
+                            shift as u8,
+                            self.caps_lock_on as u8,
+                            report.keys[0],
+                            report.keys[1],
+                            report.keys[2],
+                            report.keys[3],
+                            report.keys[4],
+                            report.keys[5]
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
-                    self.first_byte_logged = true;
-                    mark_usb_runtime_first_byte();
+                    self.first_unmapped_key_logged = true;
                 }
-                out[written] = effective as u8;
-                written = written.saturating_add(1);
+                continue;
+            };
+            if written >= out.len() {
+                break;
             }
+            let mut effective = ch;
+            if self.caps_lock_on && effective.is_ascii_alphabetic() {
+                effective = if shift {
+                    effective.to_ascii_lowercase()
+                } else {
+                    effective.to_ascii_uppercase()
+                };
+            }
+            if !self.first_byte_logged {
+                let mut line = heapless::String::<160>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] runtime keyboard first-byte read=1 ascii=0x{:02x} key=0x{key:02x} shift={} caps={}",
+                        effective as u8, shift as u8, self.caps_lock_on as u8,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                self.first_byte_logged = true;
+                mark_usb_runtime_first_byte();
+            }
+            if !self.first_printable_byte_logged && !effective.is_ascii_control() {
+                let mut line = heapless::String::<176>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] runtime keyboard first-printable-byte ascii=0x{:02x} key=0x{key:02x} shift={} caps={}",
+                        effective as u8, shift as u8, self.caps_lock_on as u8,
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                self.first_printable_byte_logged = true;
+            }
+            out[written] = effective as u8;
+            written = written.saturating_add(1);
         }
 
         self.last_keys = report.keys;
@@ -15506,6 +15668,26 @@ mod driver_coverage_tests {
     }
 
     #[test]
+    fn hid_usage_ascii_mapping_covers_root_console_keys() {
+        assert_eq!(keyboard_scancode_to_char(scancode::A, false), Some('a'));
+        assert_eq!(keyboard_scancode_to_char(scancode::A, true), Some('A'));
+        assert_eq!(keyboard_scancode_to_char(scancode::Z, false), Some('z'));
+        assert_eq!(keyboard_scancode_to_char(scancode::N1, false), Some('1'));
+        assert_eq!(keyboard_scancode_to_char(scancode::N1, true), Some('!'));
+        assert_eq!(keyboard_scancode_to_char(scancode::SPACE, false), Some(' '));
+        assert_eq!(keyboard_scancode_to_char(scancode::MINUS, false), Some('-'));
+        assert_eq!(keyboard_scancode_to_char(scancode::MINUS, true), Some('_'));
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::ENTER, false),
+            Some('\n')
+        );
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::KP_ENTER, false),
+            Some('\n')
+        );
+    }
+
+    #[test]
     fn hub_ready_gate_uses_uboot_debounce_and_reset_retry_shape() {
         assert_eq!(HUB_DEBOUNCE_TIMEOUT_MS, 5_000);
         assert_eq!(HUB_PORT_STATUS_RETRY_DELAY_MS, 20);
@@ -15569,6 +15751,27 @@ mod driver_coverage_tests {
             }),
             8
         );
+    }
+
+    #[test]
+    fn driver_coverage_keyboard_online_display_waits_for_console_byte_proof() {
+        assert!(!keyboard_online_display_should_publish(false, 0));
+        assert!(keyboard_online_display_should_publish(false, 1));
+        assert!(!keyboard_online_display_should_publish(true, 1));
+    }
+
+    #[test]
+    fn driver_coverage_xhci_transfer_trb_queued_diag_is_hot_loop_bounded() {
+        XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT.store(0, Ordering::Release);
+
+        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0415));
+        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0415));
+        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0415));
+        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0415));
+        assert!(xhci_diag_stage_hot_loop_suppressed(0x0415));
+        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0414));
+
+        XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT.store(0, Ordering::Release);
     }
 }
 
@@ -16805,6 +17008,13 @@ mod tests {
         assert_eq!(byte.proof_gate, 10);
         assert_eq!(byte.next_step, "none");
         assert_eq!(byte.blocker, "none");
+    }
+
+    #[test]
+    fn keyboard_online_display_waits_for_console_byte_proof() {
+        assert!(!super::keyboard_online_display_should_publish(false, 0));
+        assert!(super::keyboard_online_display_should_publish(false, 1));
+        assert!(!super::keyboard_online_display_should_publish(true, 1));
     }
 
     #[test]
@@ -18797,6 +19007,7 @@ mod tests {
         assert!(super::xhci_diag_stage_force_log(0x0400));
         assert!(super::xhci_diag_stage_force_log(0x0405));
         assert!(super::xhci_diag_stage_force_log(0x0406));
+        assert!(!super::xhci_diag_stage_force_log(0x0415));
         assert!(!super::xhci_diag_stage_force_log(0x0248));
     }
 
@@ -21107,6 +21318,22 @@ mod tests {
         assert!(wifi_progress_emit_allowed(true, false));
         assert!(!wifi_progress_emit_allowed(true, true));
         assert!(!wifi_progress_emit_allowed(false, false));
+    }
+
+    #[test]
+    fn hid_usage_ascii_mapping_covers_root_console_keys() {
+        assert_eq!(keyboard_scancode_to_char(scancode::A, false), Some('a'));
+        assert_eq!(keyboard_scancode_to_char(scancode::A, true), Some('A'));
+        assert_eq!(keyboard_scancode_to_char(scancode::Z, false), Some('z'));
+        assert_eq!(keyboard_scancode_to_char(scancode::N1, false), Some('1'));
+        assert_eq!(keyboard_scancode_to_char(scancode::N1, true), Some('!'));
+        assert_eq!(keyboard_scancode_to_char(scancode::SPACE, false), Some(' '));
+        assert_eq!(keyboard_scancode_to_char(scancode::MINUS, false), Some('-'));
+        assert_eq!(keyboard_scancode_to_char(scancode::MINUS, true), Some('_'));
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::ENTER, false),
+            Some('\n')
+        );
     }
 
     #[test]

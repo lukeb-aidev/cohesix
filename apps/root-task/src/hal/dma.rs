@@ -104,6 +104,9 @@ fn audit_suppressed_for_label(label: &str) -> bool {
             | "xhci-event-ring-prompt-safe"
             | "xhci-event-ring-poll"
             | "xhci-event-ring-poll-fast"
+            | "xhci-hid-report-buffer"
+            | "xhci-transfer-buffer"
+            | "xhci-transfer-ring-submit"
     )
 }
 
@@ -429,6 +432,9 @@ mod tests {
         assert!(audit_suppressed_for_label("xhci-event-ring-prompt-safe"));
         assert!(audit_suppressed_for_label("xhci-event-ring-poll"));
         assert!(audit_suppressed_for_label("xhci-event-ring-poll-fast"));
+        assert!(audit_suppressed_for_label("xhci-hid-report-buffer"));
+        assert!(audit_suppressed_for_label("xhci-transfer-buffer"));
+        assert!(audit_suppressed_for_label("xhci-transfer-ring-submit"));
         assert!(!audit_suppressed_for_label("xhci-cmd-ring-submit-full"));
     }
 

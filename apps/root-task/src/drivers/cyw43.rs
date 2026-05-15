@@ -284,6 +284,7 @@ enum IoctlType {
 enum Ioctl {
     Up = 2,
     SetPromisc = 10,
+    GetBssid = 23,
     GetRevInfo = 98,
     SetInfra = 20,
     SetAuth = 22,
@@ -1743,6 +1744,22 @@ const fn host_eapol_start_poll_due(polls: u16) -> bool {
     polls == 1 || polls == 512 || polls == 4_096 || polls == 8_192 || polls == 16_384
 }
 
+#[inline]
+const fn host_eapol_start_uses_pae_group(sent: u8) -> bool {
+    sent % 2 == 0
+}
+
+fn host_eapol_start_destination(
+    ap_mac: [u8; ETHER_ADDR_LEN],
+    sent: u8,
+) -> ([u8; ETHER_ADDR_LEN], &'static str) {
+    if host_eapol_start_uses_pae_group(sent) || !host_eapol_mac_known(ap_mac) {
+        (PAE_GROUP_ADDR, "pae-group")
+    } else {
+        (ap_mac, "ap")
+    }
+}
+
 fn host_eapol_deferred_progress_error_is_transient(err: &DriverError) -> bool {
     match err {
         DriverError::Hal(HalError::Unsupported(_)) => true,
@@ -1806,6 +1823,7 @@ struct HostWpaState {
     gtk_installed: bool,
     m4_sent: bool,
     eapol_start_sent: u8,
+    ap_mac_source: &'static str,
 }
 
 impl HostWpaState {
@@ -1825,6 +1843,7 @@ impl HostWpaState {
             gtk_installed: false,
             m4_sent: false,
             eapol_start_sent: 0,
+            ap_mac_source: "none",
         }
     }
 
@@ -1833,8 +1852,12 @@ impl HostWpaState {
     }
 
     fn ap_mac_known(self) -> bool {
-        self.ap_mac.iter().any(|byte| *byte != 0)
+        host_eapol_mac_known(self.ap_mac)
     }
+}
+
+fn host_eapol_mac_known(mac: [u8; ETHER_ADDR_LEN]) -> bool {
+    mac.iter().any(|byte| *byte != 0)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2022,6 +2045,22 @@ fn ethernet_src(packet: &[u8]) -> Result<[u8; 6], DriverError> {
         .ok_or(DriverError::Protocol("eapol-src-mac"))?;
     mac.copy_from_slice(slot);
     Ok(mac)
+}
+
+fn ethernet_dst(packet: &[u8]) -> Result<[u8; 6], DriverError> {
+    let mut mac = [0u8; 6];
+    let slot = packet
+        .get(..6)
+        .ok_or(DriverError::Protocol("eapol-dst-mac"))?;
+    mac.copy_from_slice(slot);
+    Ok(mac)
+}
+
+fn host_eapol_packet_dst_allowed(packet: &[u8], station_mac: [u8; 6]) -> bool {
+    matches!(
+        ethernet_dst(packet),
+        Ok(dst) if dst == station_mac || dst == PAE_GROUP_ADDR
+    )
 }
 
 fn ethernet_addr_less(left: &[u8; 6], right: &[u8; 6]) -> bool {
@@ -3183,7 +3222,7 @@ impl Cyw43NetDevice {
                 self.arm_host_eapol_proof_window("join-submit", ssid.len(), psk.len());
                 self.service_host_eapol_proof_window("join-submit", wait_for_completion);
                 if wait_for_completion {
-                    if self.link_up && self.associated {
+                    if self.host_eapol_secure_complete() {
                         info!(
                             "[cyw43] join complete mode=join-submit completion_rule=host-eapol-required result=host-eapol-complete action=allow-dhcp"
                         );
@@ -3266,6 +3305,8 @@ impl Cyw43NetDevice {
         let mut post_assoc_polls = 0usize;
         let mut association_event = "none";
         let mut association_poll = 0usize;
+        let mut transient_errors = 0usize;
+        let mut last_transient_error: Option<DriverError> = None;
         let mut error: Option<DriverError> = None;
 
         while total_polls < HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS {
@@ -3288,6 +3329,21 @@ impl Cyw43NetDevice {
                     empty_polls = empty_polls.saturating_add(1);
                     spin_loop();
                 }
+                Err(err) if host_eapol_deferred_progress_error_is_transient(&err) => {
+                    transient_errors = transient_errors.saturating_add(1);
+                    if transient_errors == 1
+                        || total_polls == HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS
+                        || total_polls == HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS
+                    {
+                        warn!(
+                            "[cyw43] host-eapol transient-rx-error mode={mode} phase=join-submit-proof polls={total_polls} assoc={} eapol_rx={} err={err} action=keep-waiting-m1",
+                            yes_no(self.associated),
+                            self.host_eapol_rx_packets,
+                        );
+                    }
+                    last_transient_error = Some(err);
+                    spin_loop();
+                }
                 Err(err) => {
                     error = Some(err);
                     break;
@@ -3296,7 +3352,7 @@ impl Cyw43NetDevice {
             if total_polls <= u16::MAX as usize {
                 self.maybe_send_host_eapol_start(total_polls as u16, "join-submit-proof");
             }
-            if self.host_eapol_rx_packets != start_eapol {
+            if self.host_eapol_rx_packets != start_eapol && self.host_eapol_secure_complete() {
                 break;
             }
             if association_event == "none" {
@@ -3314,14 +3370,29 @@ impl Cyw43NetDevice {
         let eapol_delta = self.host_eapol_rx_packets.saturating_sub(start_eapol);
         drop(wifi_breadcrumb_guard);
         let action = host_eapol_proof_after_window_action(terminal_after_window);
-        match error {
-            Some(err) => warn!(
-                "[cyw43] host-eapol proof window result=error mode={mode} polls={total_polls} assoc={association_event} assoc_poll={association_poll} post_assoc_polls={post_assoc_polls} eapol_rx_delta={eapol_delta} eapol_rx_total={} events={event_frames} control={control_frames} empty_polls={empty_polls} err={err} action={action}",
+        if let Some(err) = error {
+            warn!(
+                "[cyw43] host-eapol proof window result=error mode={mode} polls={total_polls} assoc={association_event} assoc_poll={association_poll} post_assoc_polls={post_assoc_polls} err={err} action={action}"
+            );
+        } else {
+            info!(
+                "[cyw43] host-eapol proof window result={} mode={mode} polls={total_polls} assoc={association_event} assoc_poll={association_poll} post_assoc_polls={post_assoc_polls} action={action}",
+                if self.host_eapol_secure_complete() {
+                    "secure-complete"
+                } else if eapol_delta == 0 {
+                    "not-yet-seen"
+                } else {
+                    "eapol-partial"
+                },
+            );
+        }
+        match last_transient_error.as_ref() {
+            Some(err) => info!(
+                "[cyw43] host-eapol proof counters mode={mode} eapol_rx_delta={eapol_delta} eapol_rx_total={} events={event_frames} control={control_frames} empty_polls={empty_polls} transient_errors={transient_errors} last_transient={err}",
                 self.host_eapol_rx_packets,
             ),
             None => info!(
-                "[cyw43] host-eapol proof window result={} mode={mode} polls={total_polls} assoc={association_event} assoc_poll={association_poll} post_assoc_polls={post_assoc_polls} eapol_rx_delta={eapol_delta} eapol_rx_total={} events={event_frames} control={control_frames} empty_polls={empty_polls} action={action}",
-                if eapol_delta == 0 { "not-yet-seen" } else { "eapol-seen" },
+                "[cyw43] host-eapol proof counters mode={mode} eapol_rx_delta={eapol_delta} eapol_rx_total={} events={event_frames} control={control_frames} empty_polls={empty_polls} transient_errors={transient_errors} last_transient=none",
                 self.host_eapol_rx_packets,
             ),
         }
@@ -3505,11 +3576,9 @@ impl Cyw43NetDevice {
         {
             return;
         }
-        let dst = if self.host_wpa.ap_mac_known() {
-            self.host_wpa.ap_mac
-        } else {
-            PAE_GROUP_ADDR
-        };
+        self.refresh_host_eapol_bssid("eapol-start");
+        let (dst, dst_label) =
+            host_eapol_start_destination(self.host_wpa.ap_mac, self.host_wpa.eapol_start_sent);
         let sta = self.mac.0;
         let mut frame = [0u8; ETH_HEADER_LEN + EAPOL_HEADER_LEN];
         let frame_len = match write_eapol_start_frame(&mut frame, &dst, &sta) {
@@ -3525,8 +3594,10 @@ impl Cyw43NetDevice {
             Ok(()) => {
                 self.host_wpa.eapol_start_sent = self.host_wpa.eapol_start_sent.saturating_add(1);
                 info!(
-                    "[cyw43] host-eapol action=eapol-start mode={mode} polls={polls} dst={} sent={} result=trigger-m1",
-                    if dst == PAE_GROUP_ADDR { "pae-group" } else { "ap" },
+                    "[cyw43] host-eapol action=eapol-start mode={mode} polls={polls} dst={dst_label} dst_mac={} ap_mac={} ap_source={} sent={} result=trigger-m1",
+                    EthernetAddress(dst),
+                    EthernetAddress(self.host_wpa.ap_mac),
+                    self.host_wpa.ap_mac_source,
                     self.host_wpa.eapol_start_sent,
                 );
             }
@@ -3536,11 +3607,65 @@ impl Cyw43NetDevice {
         }
     }
 
+    fn host_eapol_secure_complete(&self) -> bool {
+        self.link_up
+            && self.associated
+            && self.host_wpa.m1_seen
+            && self.host_wpa.m2_sent
+            && self.host_wpa.m4_sent
+            && self.host_wpa.ptk_installed
+            && self.host_wpa.gtk_installed
+    }
+
+    fn refresh_host_eapol_bssid(&mut self, reason: &'static str) {
+        if !self.associated
+            || self.host_wpa.m1_seen
+            || self.host_wpa.ap_mac_source == "get-bssid"
+            || !deferred_join_requires_host_eapol(self.deferred_join_state)
+        {
+            return;
+        }
+
+        let request = [0u8; ETHER_ADDR_LEN];
+        match self.ioctl_raw(IoctlType::Get, Ioctl::GetBssid, 0, &request) {
+            Ok(response_len) if response_len >= ETHER_ADDR_LEN => {
+                let mut bssid = [0u8; ETHER_ADDR_LEN];
+                bssid.copy_from_slice(&self.control_response[..ETHER_ADDR_LEN]);
+                if host_eapol_ap_mac_candidate(bssid, self.mac.0)
+                    && !mac_is_station_local_alias(bssid, self.mac.0)
+                {
+                    let previous = self.host_wpa.ap_mac;
+                    self.host_wpa.ap_mac = bssid;
+                    self.host_wpa.ap_mac_source = "get-bssid";
+                    info!(
+                        "[cyw43] host-eapol bssid refresh action=ready reason={reason} bssid={} previous={} source=wlc-get-bssid next=alternate-pae-group-and-ap",
+                        EthernetAddress(bssid),
+                        EthernetAddress(previous),
+                    );
+                } else {
+                    warn!(
+                        "[cyw43] host-eapol bssid refresh action=skip reason={reason} bssid={} source=wlc-get-bssid detail=not-ap-candidate next=pae-group",
+                        EthernetAddress(bssid),
+                    );
+                }
+            }
+            Ok(response_len) => warn!(
+                "[cyw43] host-eapol bssid refresh action=skip reason={reason} response_len={response_len} source=wlc-get-bssid detail=short-reply next=pae-group"
+            ),
+            Err(err) => warn!(
+                "[cyw43] host-eapol bssid refresh action=skip reason={reason} err={err} source=wlc-get-bssid detail=query-failed next=pae-group"
+            ),
+        }
+    }
+
     fn handle_host_eapol_frame(
         &mut self,
         packet: &[u8],
         proof: HostEapolFrameProof,
     ) -> Result<&'static str, DriverError> {
+        if !host_eapol_packet_dst_allowed(packet, self.mac.0) {
+            return Err(DriverError::Protocol("host-eapol-foreign-dst"));
+        }
         if !proof.body_len_valid || proof.descriptor_type != EAPOL_KEY_DESCRIPTOR_RSN {
             return Err(DriverError::Protocol("host-eapol-malformed"));
         }
@@ -3562,7 +3687,14 @@ impl Cyw43NetDevice {
         if !self.host_wpa.pmk_valid {
             return Err(DriverError::Protocol("host-eapol-pmk-missing"));
         }
-        if !proof.pairwise || !proof.ack || proof.mic || !proof.nonce_present {
+        if !proof.pairwise
+            || !proof.ack
+            || proof.mic
+            || proof.install
+            || proof.secure
+            || proof.encrypted_key_data
+            || !proof.nonce_present
+        {
             return Err(DriverError::Protocol("host-eapol-m1-shape"));
         }
         let body =
@@ -3570,6 +3702,7 @@ impl Cyw43NetDevice {
         let ap_mac = ethernet_src(packet)?;
         let sta_mac = self.mac.0;
         self.host_wpa.ap_mac = ap_mac;
+        self.host_wpa.ap_mac_source = "m1-src";
         self.host_wpa.anonce.copy_from_slice(
             &body[EAPOL_KEY_BODY_NONCE_OFFSET..EAPOL_KEY_BODY_NONCE_OFFSET + WPA_NONCE_LEN],
         );
@@ -4832,7 +4965,11 @@ impl Cyw43NetDevice {
                 proof.key_data_len,
                 proof.next_action,
                 action,
-                if self.link_up { "host-eapol-complete" } else { "host-eapol-pending" },
+                if self.host_eapol_secure_complete() {
+                    "host-eapol-complete"
+                } else {
+                    "host-eapol-pending"
+                },
             );
             return Ok(RxFrameResult::None);
         }
@@ -4877,8 +5014,9 @@ impl Cyw43NetDevice {
             return;
         };
         self.host_wpa.ap_mac = ap_mac;
+        self.host_wpa.ap_mac_source = source;
         info!(
-            "[cyw43] host-eapol ap-mac seed source={source} event={label} mac={} event_addr={} event_src={} action=unicast-eapol-start",
+            "[cyw43] host-eapol ap-mac seed source={source} event={label} mac={} event_addr={} event_src={} action=query-bssid-before-eapol-start",
             EthernetAddress(ap_mac),
             EthernetAddress(event.addr),
             EthernetAddress(event.src_mac),
@@ -5590,16 +5728,17 @@ mod tests {
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
         host_eapol_association_event_label, host_eapol_deferred_poll_log_due,
         host_eapol_deferred_progress_error_is_transient, host_eapol_event_ap_mac_candidate,
-        host_eapol_frame_proof, host_eapol_key_body, host_eapol_proof_after_window_action,
-        host_eapol_start_poll_due, initial_control_plane_bootstrap_policy_label,
-        initial_control_plane_data_clock_target_hz, ioctl_no_progress_after_nonmatching_frames,
-        ioctl_wait_loops, iovar_get_payload_len, is_transport_retryable,
-        join_completion_timeout_reason, join_event_result, join_iovar_fallback_allows_set_ssid,
-        join_security_iovar_failure_exact_error, join_security_iovar_name,
-        join_security_wpa_auth_failure_exact_error, join_security_wpa_auth_stage,
-        linux_attach_control_plane_probe_order, linux_first_control_plane_iovar_order,
-        linux_join_event_mask, linux_optional_iovar_allows_unsupported,
-        linux_station_path_enables_apsta,
+        host_eapol_frame_proof, host_eapol_key_body, host_eapol_packet_dst_allowed,
+        host_eapol_proof_after_window_action, host_eapol_start_destination,
+        host_eapol_start_poll_due, host_eapol_start_uses_pae_group,
+        initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
+        ioctl_no_progress_after_nonmatching_frames, ioctl_wait_loops, iovar_get_payload_len,
+        is_transport_retryable, join_completion_timeout_reason, join_event_result,
+        join_iovar_fallback_allows_set_ssid, join_security_iovar_failure_exact_error,
+        join_security_iovar_name, join_security_wpa_auth_failure_exact_error,
+        join_security_wpa_auth_stage, linux_attach_control_plane_probe_order,
+        linux_first_control_plane_iovar_order, linux_join_event_mask,
+        linux_optional_iovar_allows_unsupported, linux_station_path_enables_apsta,
         linux_station_path_keeps_rxglom_configured_before_preinit,
         linux_station_path_keeps_txglom_configured_before_preinit,
         linux_station_path_sets_ampdu_limits_before_join,
@@ -6282,6 +6421,42 @@ mod tests {
     }
 
     #[test]
+    fn host_eapol_start_alternates_pae_group_and_ap_bssid() {
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+
+        assert!(host_eapol_start_uses_pae_group(0));
+        assert!(!host_eapol_start_uses_pae_group(1));
+        assert_eq!(
+            host_eapol_start_destination(ap, 0),
+            (PAE_GROUP_ADDR, "pae-group")
+        );
+        assert_eq!(host_eapol_start_destination(ap, 1), (ap, "ap"));
+        assert_eq!(
+            host_eapol_start_destination([0; ETHER_ADDR_LEN], 1),
+            (PAE_GROUP_ADDR, "pae-group")
+        );
+    }
+
+    #[test]
+    fn host_eapol_admission_rejects_foreign_destinations() {
+        let sta = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let foreign = [0x02, 0x00, 0x5e, 0x00, 0x53, 0x01];
+        let mut packet = [0u8; ETH_HEADER_LEN + EAPOL_HEADER_LEN];
+
+        packet[..6].copy_from_slice(&sta);
+        packet[6..12].copy_from_slice(&ap);
+        put_u16_be(&mut packet, 12, ETH_P_EAPOL);
+        assert!(host_eapol_packet_dst_allowed(&packet, sta));
+
+        packet[..6].copy_from_slice(&PAE_GROUP_ADDR);
+        assert!(host_eapol_packet_dst_allowed(&packet, sta));
+
+        packet[..6].copy_from_slice(&foreign);
+        assert!(!host_eapol_packet_dst_allowed(&packet, sta));
+    }
+
+    #[test]
     fn host_eapol_rx_admission_payload_matches_brcmfmac_mcast_shape() {
         let mut payload = [0xffu8; HOST_EAPOL_MCAST_LIST_PAYLOAD_LEN];
 
@@ -6918,6 +7093,7 @@ mod tests {
                 "revinfo"
             ]
         );
+        assert_eq!(Ioctl::GetBssid as u32, 23);
         assert_eq!(Ioctl::GetRevInfo as u32, 98);
         assert_eq!(LINUX_REVINFO_LEN, 68);
     }

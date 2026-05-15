@@ -19,7 +19,7 @@ use crate::{
         SetupPacket,
     },
     dev::UsbDevice,
-    ring::{completion, trb_type, PhysMem},
+    ring::{completion, PhysMem},
     Dma, Result, UsbError,
 };
 
@@ -297,6 +297,7 @@ const fn keyboard_decode_transition(
 }
 
 #[inline]
+#[cfg(test)]
 const fn keyboard_endpoint_id_matches(ep_num: u8, endpoint_id: u8) -> bool {
     let dci_in = (ep_num << 1) | 1;
     let ep_index = ep_num << 1;
@@ -945,16 +946,8 @@ impl<H: Dma> HidDevice<H> {
     }
 
     #[inline]
-    const fn endpoint_id_matches_keyboard_in(&self, endpoint_id: u8) -> bool {
-        // Different xHCI implementations/reporting paths have surfaced three
-        // encodings for interrupt-IN endpoint IDs in transfer events:
-        // - DCI (spec):      ep_num*2 + 1
-        // - Endpoint index:  ep_num*2
-        // - Endpoint number: ep_num
-        //
-        // Accept all three to keep keyboard polling resilient across firmware
-        // and controller variations seen in Pi4 local-seat bring-up.
-        keyboard_endpoint_id_matches(self.ep_in, endpoint_id)
+    const fn accepted_in_endpoint_ids(&self) -> [u8; 3] {
+        [self.expected_in_endpoint_id(), self.ep_in << 1, self.ep_in]
     }
 
     fn reset_keyboard_profile(
@@ -1003,18 +996,15 @@ impl<H: Dma> HidDevice<H> {
         // Drain a bounded number of events so unrelated hub chatter does not
         // indefinitely starve keyboard transfer completions.
         const HID_EVENT_BUDGET: usize = 128;
+        let endpoint_ids = self.accepted_in_endpoint_ids();
         for _ in 0..HID_EVENT_BUDGET {
-            let Some(evt) = self.device.ctrl().poll_event() else {
+            let Some(evt) = self
+                .device
+                .ctrl()
+                .poll_transfer_event_for_slot_endpoint_ids(self.device.slot_id(), &endpoint_ids)
+            else {
                 return Ok(None);
             };
-            if evt.trb_type() != trb_type::TRANSFER_EVENT as u8 {
-                continue;
-            }
-            if evt.slot_id() != self.device.slot_id()
-                || !self.endpoint_id_matches_keyboard_in(evt.endpoint_id())
-            {
-                continue;
-            }
 
             let code = evt.completion_code();
             let payload_len =
@@ -1028,6 +1018,12 @@ impl<H: Dma> HidDevice<H> {
                     | u64::from(self.keyboard_report_offset),
             );
             if has_report_payload(code, self.ep_max_packet as usize, evt.transfer_length(), 7) {
+                self.report_buf.sync_for_cpu_range(
+                    self.device.ctrl().host(),
+                    0,
+                    payload_len.min(self.ep_max_packet as usize),
+                    "xhci-hid-report-buffer",
+                )?;
                 // SAFETY: report_buf is the DMA buffer backing this submitted interrupt-IN
                 // transfer, and payload_len is clamped to the allocated endpoint packet size.
                 let payload = unsafe {
@@ -1120,17 +1116,15 @@ impl<H: Dma> HidDevice<H> {
         }
 
         const HID_EVENT_BUDGET: usize = 128;
-        let expected_ep_id = self.expected_in_endpoint_id();
+        let endpoint_ids = self.accepted_in_endpoint_ids();
         for _ in 0..HID_EVENT_BUDGET {
-            let Some(evt) = self.device.ctrl().poll_event() else {
+            let Some(evt) = self
+                .device
+                .ctrl()
+                .poll_transfer_event_for_slot_endpoint_ids(self.device.slot_id(), &endpoint_ids)
+            else {
                 return None;
             };
-            if evt.trb_type() != trb_type::TRANSFER_EVENT as u8 {
-                continue;
-            }
-            if evt.slot_id() != self.device.slot_id() || evt.endpoint_id() != expected_ep_id {
-                continue;
-            }
             let code = evt.completion_code();
             if has_report_payload(
                 code,
@@ -1138,6 +1132,21 @@ impl<H: Dma> HidDevice<H> {
                 evt.transfer_length(),
                 core::mem::size_of::<MouseReport>(),
             ) {
+                let payload_len =
+                    (self.ep_max_packet as usize).saturating_sub(evt.transfer_length() as usize);
+                if self
+                    .report_buf
+                    .sync_for_cpu_range(
+                        self.device.ctrl().host(),
+                        0,
+                        payload_len.min(self.ep_max_packet as usize),
+                        "xhci-hid-report-buffer",
+                    )
+                    .is_err()
+                {
+                    let _ = self.queue_read();
+                    return None;
+                }
                 // SAFETY: `has_report_payload` proved the completed transfer
                 // contains a full boot-protocol mouse report in `report_buf`.
                 let report = unsafe { *(self.report_buf.as_ptr::<MouseReport>()) };
@@ -1316,8 +1325,9 @@ mod tests {
     use super::{
         decode_keyboard_report_payload, decode_keyboard_report_payload_boot_compatible,
         forced_keyboard_profile, has_report_payload, keyboard_decode_transition,
-        keyboard_endpoint_id_matches, keyboard_usage_code_valid, KeyboardDecodeMode,
-        KeyboardDecodeTransition, KeyboardProtocolMode, UBOOT_BOOT_KEYBOARD_IDLE_DURATION,
+        keyboard_endpoint_id_matches, keyboard_usage_code_valid, scancode, scancode_to_ascii,
+        KeyboardDecodeMode, KeyboardDecodeTransition, KeyboardProtocolMode,
+        UBOOT_BOOT_KEYBOARD_IDLE_DURATION,
     };
     use crate::ring::completion;
 
@@ -1485,5 +1495,17 @@ mod tests {
         assert!(keyboard_usage_code_valid(0xE7));
         assert!(!keyboard_usage_code_valid(0x03));
         assert!(!keyboard_usage_code_valid(0xE8));
+    }
+
+    #[test]
+    fn scancode_to_ascii_uses_usb_hid_keyboard_usage_ids() {
+        assert_eq!(scancode_to_ascii(scancode::A, false), Some('a'));
+        assert_eq!(scancode_to_ascii(scancode::A, true), Some('A'));
+        assert_eq!(scancode_to_ascii(scancode::Z, false), Some('z'));
+        assert_eq!(scancode_to_ascii(scancode::N1, false), Some('1'));
+        assert_eq!(scancode_to_ascii(scancode::N1, true), Some('!'));
+        assert_eq!(scancode_to_ascii(scancode::ENTER, false), Some('\n'));
+        assert_eq!(scancode_to_ascii(scancode::SPACE, false), Some(' '));
+        assert_eq!(scancode_to_ascii(scancode::SLASH, true), Some('?'));
     }
 }

@@ -3335,6 +3335,77 @@ fn control_plane_reply_header_frame_len(frame: &[u8]) -> Option<usize> {
 }
 
 #[inline]
+fn cyw43_sdpcm_tx_channel(frame: &[u8]) -> Option<u8> {
+    let packet_len = cyw43_sdpcm_tx_packet_len(frame)?;
+    if let Some(channel) = cyw43_sdpcm_tx_channel_at(
+        frame,
+        CYW43_SDPCM_HWHDR_LEN,
+        CYW43_SDPCM_HEADER_LEN,
+        packet_len,
+    ) {
+        return Some(channel);
+    }
+    cyw43_sdpcm_tx_channel_at(
+        frame,
+        CYW43_SDPCM_HEADER_LEN,
+        CYW43_SDPCM_HEADER_LEN + 8,
+        packet_len,
+    )
+}
+
+#[inline]
+fn cyw43_sdpcm_tx_packet_len(frame: &[u8]) -> Option<usize> {
+    if frame.len() < CYW43_SDPCM_PREFIX_MIN_LEN {
+        return None;
+    }
+    let packet_len = usize::from(u16::from_le_bytes([frame[0], frame[1]]));
+    if packet_len == 0 || packet_len > frame.len() {
+        return None;
+    }
+    let packet_len_u16 = u16::try_from(packet_len).ok()?;
+    let len_inv = u16::from_le_bytes([frame[2], frame[3]]);
+    if len_inv != !packet_len_u16 {
+        return None;
+    }
+    Some(packet_len)
+}
+
+#[inline]
+fn cyw43_sdpcm_tx_channel_at(
+    frame: &[u8],
+    sw_header_offset: usize,
+    min_data_offset: usize,
+    packet_len: usize,
+) -> Option<u8> {
+    let sw_header = frame.get(sw_header_offset..sw_header_offset + 4)?;
+    let data_offset = usize::from(sw_header[3]);
+    if !(min_data_offset..=packet_len).contains(&data_offset) {
+        return None;
+    }
+    Some(sw_header[1] & 0x0f)
+}
+
+#[inline]
+const fn cyw43_sdpcm_tx_stage_name(channel: u8) -> &'static str {
+    match channel {
+        CYW43_SDPCM_CHANNEL_CONTROL => "control-plane-write",
+        CYW43_SDPCM_CHANNEL_EVENT => "event-plane-write",
+        CYW43_SDPCM_CHANNEL_DATA => "data-plane-write",
+        _ => "sdpcm-frame-write",
+    }
+}
+
+#[inline]
+const fn cyw43_sdpcm_tx_channel_name(channel: u8) -> &'static str {
+    match channel {
+        CYW43_SDPCM_CHANNEL_CONTROL => "control",
+        CYW43_SDPCM_CHANNEL_EVENT => "event",
+        CYW43_SDPCM_CHANNEL_DATA => "data",
+        _ => "other",
+    }
+}
+
+#[inline]
 fn control_plane_reply_remainder_len_from_firstread(
     first_read: &[u8],
     frame_capacity: usize,
@@ -7228,9 +7299,11 @@ const CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN: usize =
 const CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY: usize =
     CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN + CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN;
 const CYW43_SDPCM_PREFIX_MIN_LEN: usize = 8;
+const CYW43_SDPCM_HWHDR_LEN: usize = 4;
 const CYW43_SDPCM_HEADER_LEN: usize = 12;
 const CYW43_SDPCM_CHANNEL_CONTROL: u8 = 0;
 const CYW43_SDPCM_CHANNEL_EVENT: u8 = 1;
+const CYW43_SDPCM_CHANNEL_DATA: u8 = 2;
 const CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT: u8 = 4;
 const CYW43_CONTROL_PLANE_DIAGNOSTIC_PREFIX_PROBE_LENS: [usize; 4] = [
     CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
@@ -18263,6 +18336,29 @@ impl SdioHost {
         let first_control_plane_write_pending = self.experimental_control_plane_write_probe_pending;
         let promoted_probe_pending = self.experimental_control_plane_promoted_probe_pending;
         let frame_len = frame.len();
+        let channel =
+            cyw43_sdpcm_tx_channel(frame).ok_or(HalError::Unsupported("cyw43-sdpcm-tx-header"))?;
+        if channel != CYW43_SDPCM_CHANNEL_CONTROL {
+            let stale_control_reply_wait = self.strict_control_plane_reply_pending
+                || control_plane_reply_rearm_pending(
+                    self.experimental_control_plane_reply_rearm_mode,
+                )
+                || self.experimental_control_plane_promoted_probe_pending
+                || self.experimental_control_plane_linux_rxskip_pending;
+            if stale_control_reply_wait {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={} action=clear-stale-control-reply-wait channel={} frame_len={} reason=sdpcm-data-event-write-has-no-control-reply",
+                    cyw43_sdpcm_tx_stage_name(channel),
+                    cyw43_sdpcm_tx_channel_name(channel),
+                    frame_len,
+                ));
+                self.finish_control_plane_reply_wait();
+            }
+            self.clear_control_plane_sideband_unreadable_recovery_cycles();
+            self.experimental_control_plane_write_probe_pending = false;
+            return self
+                .write_frame_with_linux_request_shape(frame, cyw43_sdpcm_tx_stage_name(channel));
+        }
         self.clear_control_plane_sideband_unreadable_recovery_cycles();
         self.experimental_control_plane_write_probe_pending = false;
         let finish_successful_write = |this: &mut Self| -> Result<(), HalError> {
@@ -30667,6 +30763,76 @@ mod tests {
         assert_eq!(control_plane_function2_port_addr(), BACKPLANE_32BIT_FLAG);
         assert!(!control_plane_read_uses_incrementing_addr());
         assert!(!control_plane_write_uses_incrementing_addr());
+    }
+
+    #[test]
+    fn sdpcm_tx_channel_distinguishes_control_and_data_writes() {
+        let mut frame = [0u8; 20];
+        let packet_len = CYW43_SDPCM_HEADER_LEN + 4;
+        let packet_len_u16 = u16::try_from(packet_len).expect("test packet length fits");
+        frame[0..2].copy_from_slice(&packet_len_u16.to_le_bytes());
+        frame[2..4].copy_from_slice((!packet_len_u16).to_le_bytes().as_slice());
+        frame[7] = u8::try_from(CYW43_SDPCM_HEADER_LEN).expect("header length fits");
+
+        frame[5] = CYW43_SDPCM_CHANNEL_CONTROL;
+        assert_eq!(
+            cyw43_sdpcm_tx_channel(&frame),
+            Some(CYW43_SDPCM_CHANNEL_CONTROL)
+        );
+        assert_eq!(
+            cyw43_sdpcm_tx_stage_name(CYW43_SDPCM_CHANNEL_CONTROL),
+            "control-plane-write"
+        );
+
+        frame[5] = CYW43_SDPCM_CHANNEL_DATA | 0x80;
+        frame[7] = u8::try_from(CYW43_SDPCM_HEADER_LEN + 2).expect("data offset fits");
+        assert_eq!(
+            cyw43_sdpcm_tx_channel(&frame),
+            Some(CYW43_SDPCM_CHANNEL_DATA)
+        );
+        assert_eq!(
+            cyw43_sdpcm_tx_stage_name(CYW43_SDPCM_CHANNEL_DATA),
+            "data-plane-write"
+        );
+    }
+
+    #[test]
+    fn sdpcm_tx_channel_accepts_extended_control_tx_header() {
+        let mut frame = [0u8; 64];
+        let header_len = CYW43_SDPCM_HEADER_LEN + 8;
+        let packet_len = header_len + 16;
+        let packet_len_u16 = u16::try_from(packet_len).expect("test packet length fits");
+        frame[0..2].copy_from_slice(&packet_len_u16.to_le_bytes());
+        frame[2..4].copy_from_slice((!packet_len_u16).to_le_bytes().as_slice());
+        let sw_header_offset = CYW43_SDPCM_HEADER_LEN;
+        frame[sw_header_offset + 1] = CYW43_SDPCM_CHANNEL_CONTROL;
+        frame[sw_header_offset + 3] = u8::try_from(header_len).expect("header length fits");
+
+        assert_eq!(
+            cyw43_sdpcm_tx_channel(&frame),
+            Some(CYW43_SDPCM_CHANNEL_CONTROL)
+        );
+        assert_eq!(
+            cyw43_sdpcm_tx_stage_name(CYW43_SDPCM_CHANNEL_CONTROL),
+            "control-plane-write"
+        );
+    }
+
+    #[test]
+    fn sdpcm_tx_channel_rejects_malformed_headers() {
+        let mut frame = [0u8; 20];
+        let packet_len = CYW43_SDPCM_HEADER_LEN + 4;
+        let packet_len_u16 = u16::try_from(packet_len).expect("test packet length fits");
+        frame[0..2].copy_from_slice(&packet_len_u16.to_le_bytes());
+        frame[2..4].copy_from_slice(&packet_len_u16.to_le_bytes());
+        frame[5] = CYW43_SDPCM_CHANNEL_DATA;
+        frame[7] = u8::try_from(CYW43_SDPCM_HEADER_LEN).expect("header length fits");
+        assert_eq!(cyw43_sdpcm_tx_channel(&frame), None);
+
+        frame[2..4].copy_from_slice((!packet_len_u16).to_le_bytes().as_slice());
+        frame[7] = u8::try_from(CYW43_SDPCM_HEADER_LEN - 1).expect("header length fits");
+        frame[CYW43_SDPCM_HEADER_LEN + 3] = 0;
+        assert_eq!(cyw43_sdpcm_tx_channel(&frame), None);
     }
 
     #[test]

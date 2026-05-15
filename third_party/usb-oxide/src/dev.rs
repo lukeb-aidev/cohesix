@@ -51,6 +51,8 @@ const UBOOT_ROOT_PORT_RESET_MAX_TRIES: usize = 5;
 const UBOOT_ROOT_PORT_RESET_SHORT_RETRY_SPINS: usize = 20_000;
 const UBOOT_ROOT_PORT_RESET_LONG_RETRY_SPINS: usize = 200_000;
 const STALE_BOOTLOADER_ROOT_PORT_RESET_SETTLE_SPINS: usize = 200_000;
+const XHCI_TRB_ISP: u32 = 1 << 2;
+const XHCI_TRB_IOC: u32 = 1 << 5;
 const ROOT_PORT_RESET_RETRY_STAGE: u16 = 0x0400;
 const ROOT_PORT_RESET_OK_STAGE: u16 = 0x0401;
 const ROOT_PORT_RESET_FAILED_STAGE: u16 = 0x0402;
@@ -252,6 +254,27 @@ fn endpoint_dci(ep: &EndpointDesc) -> Result<(usize, usize)> {
         return Err(UsbError::InvEndpoint);
     }
     Ok((dci, dci - 1))
+}
+
+#[inline]
+const fn xhci_normal_transfer_control(is_in: bool) -> u32 {
+    let mut control = (trb_type::NORMAL << 10) | XHCI_TRB_IOC;
+    if is_in {
+        control |= XHCI_TRB_ISP;
+    }
+    control
+}
+
+#[inline]
+fn xhci_transfer_queue_plan(ep_num: u8, is_in: bool) -> Result<(usize, usize, u32)> {
+    if ep_num == 0 || ep_num > 15 {
+        return Err(UsbError::InvEndpoint);
+    }
+    let dci = (ep_num as usize * 2) + if is_in { 1 } else { 0 };
+    if dci == 0 || dci > MAX_ENDPOINT_CONTEXTS {
+        return Err(UsbError::InvEndpoint);
+    }
+    Ok((dci, dci - 1, xhci_normal_transfer_control(is_in)))
 }
 
 #[inline]
@@ -1717,10 +1740,11 @@ impl<H: Dma> UsbDevice<H> {
         // Wait for completion
         let mut waited = 0usize;
         let mut data_stage_remaining: Option<u32> = None;
+        let control_endpoint_ids = [1u8];
         loop {
-            if let Some(evt) = self.ctrl.poll_event()
-                && evt.trb_type() == trb_type::TRANSFER_EVENT as u8
-                && evt.slot_id() == self.slot_id
+            if let Some(evt) = self
+                .ctrl
+                .poll_transfer_event_for_slot_endpoint_ids(self.slot_id, &control_endpoint_ids)
             {
                 let completion_ptr = evt.param & !0x0f;
                 let ep_id = evt.endpoint_id();
@@ -1797,31 +1821,49 @@ impl<H: Dma> UsbDevice<H> {
                         let transferred = if data_len > 0 {
                             let remaining =
                                 data_stage_remaining.unwrap_or_else(|| evt.transfer_length());
-                            if data_stage_remaining.is_none() {
-                                let mut sample = [0u8; 8];
-                                let sample_len = core::cmp::min(sample.len(), data_len);
-                                if let Some(buf) = &data_buf {
-                                    // SAFETY: `sample_len` is capped to both the
-                                    // stack sample and DMA buffer lengths.
-                                    unsafe {
-                                        core::ptr::copy_nonoverlapping(
-                                            buf.as_ptr::<u8>(),
-                                            sample.as_mut_ptr(),
-                                            sample_len,
-                                        );
-                                    }
-                                }
-                                self.ctrl.emit_diag(
-                                    0x03a6,
-                                    ((setup.length as u64) << 32) | (evt.transfer_length() as u64),
-                                    remaining as u64,
-                                    u64::from_le_bytes(sample),
-                                );
-                            }
                             (setup.length as usize).saturating_sub(remaining as usize)
                         } else {
                             0
                         };
+
+                        if data_dir
+                            && transferred != 0
+                            && let Some(buf) = &data_buf
+                            && let Err(err) = buf.sync_for_cpu_range(
+                                host,
+                                0,
+                                transferred.min(data_len),
+                                "xhci-control-buffer-cpu",
+                            )
+                        {
+                            if let Some(buf) = data_buf {
+                                buf.free(host);
+                            }
+                            return Err(err);
+                        }
+
+                        if data_len > 0 && data_stage_remaining.is_none() {
+                            let mut sample = [0u8; 8];
+                            let sample_len = core::cmp::min(sample.len(), transferred);
+                            if let Some(buf) = &data_buf {
+                                // SAFETY: `sample_len` is capped to both the
+                                // stack sample and DMA buffer lengths, and IN
+                                // buffers were synchronized for CPU access above.
+                                unsafe {
+                                    core::ptr::copy_nonoverlapping(
+                                        buf.as_ptr::<u8>(),
+                                        sample.as_mut_ptr(),
+                                        sample_len,
+                                    );
+                                }
+                            }
+                            self.ctrl.emit_diag(
+                                0x03a6,
+                                ((setup.length as u64) << 32) | (evt.transfer_length() as u64),
+                                transferred as u64,
+                                u64::from_le_bytes(sample),
+                            );
+                        }
 
                         // Copy data back for IN transfers
                         if data_dir && let (Some(buf), Some(d)) = (&data_buf, &mut data) {
@@ -2242,8 +2284,7 @@ impl<H: Dma> UsbDevice<H> {
         buf: &PhysMem<H>,
         len: usize,
     ) -> Result<()> {
-        let dci = (ep_num as usize * 2) + if is_in { 1 } else { 0 };
-        let ring_idx = dci - 1;
+        let (dci, ring_idx, trb_control) = xhci_transfer_queue_plan(ep_num, is_in)?;
 
         let mut ep_rings = self.ep_rings.lock();
         let ring = ep_rings[ring_idx].as_mut().ok_or(UsbError::InvEndpoint)?;
@@ -2253,8 +2294,14 @@ impl<H: Dma> UsbDevice<H> {
         let trb = Trb {
             param: buf_bus,
             status: len as u32,
-            control: (trb_type::NORMAL << 10) | (1 << 5), // IOC
+            control: trb_control,
         };
+        self.ctrl.emit_diag(
+            0x0415,
+            ((self.slot_id as u64) << 32) | dci as u64,
+            ((ring_idx as u64) << 32) | len as u64,
+            ((trb.status as u64) << 32) | trb.control as u64,
+        );
         ring.enqueue_and_sync(host, trb, "xhci-transfer-ring-submit")?;
         drop(ep_rings);
 
@@ -2711,6 +2758,35 @@ mod tests {
         assert_eq!((ctx.dw1 >> 8) & 0xff, 0);
         assert_eq!((ctx.dw1 >> 16) & 0xffff, 8);
         assert_eq!(ctx.dw4, 0x0008_0008);
+    }
+
+    #[test]
+    fn interrupt_in_queue_plan_matches_uboot_flags_and_doorbell_target() {
+        let (in_dci, in_ring_idx, in_control) =
+            xhci_transfer_queue_plan(1, true).expect("EP1 IN should be valid");
+        let (out_dci, out_ring_idx, out_control) =
+            xhci_transfer_queue_plan(1, false).expect("EP1 OUT should be valid");
+
+        assert_eq!(in_dci, 3);
+        assert_eq!(in_ring_idx, 2);
+        assert_eq!(
+            in_control & (trb_type::NORMAL << 10),
+            trb_type::NORMAL << 10
+        );
+        assert_ne!(in_control & XHCI_TRB_IOC, 0);
+        assert_ne!(in_control & XHCI_TRB_ISP, 0);
+        assert_eq!(out_dci, 2);
+        assert_eq!(out_ring_idx, 1);
+        assert_eq!(
+            out_control & (trb_type::NORMAL << 10),
+            trb_type::NORMAL << 10
+        );
+        assert_ne!(out_control & XHCI_TRB_IOC, 0);
+        assert_eq!(out_control & XHCI_TRB_ISP, 0);
+        assert!(matches!(
+            xhci_transfer_queue_plan(0, true),
+            Err(UsbError::InvEndpoint)
+        ));
     }
 
     #[test]

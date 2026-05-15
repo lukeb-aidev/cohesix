@@ -1701,6 +1701,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             run_posted_flush_pending = False
             if (
                 parse_hex_int(fields.get("stage")) == 0x031F
+                and fields.get("role", "").lower() == "command-doorbell"
                 and fields.get("source", "").lower() == "hal-ext-cfg"
             ):
                 saw_command_doorbell_hal_flush = True

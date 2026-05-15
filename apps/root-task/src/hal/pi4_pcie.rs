@@ -43,9 +43,13 @@ const BCM2711_PCIE_RC_CFG_PRIV1_ID_VAL3: usize = 0x043c;
 const BCM2711_PCIE_RC_CFG_PRIV1_LINK_CAPABILITY: usize = 0x04dc;
 const VL805_XHCI_USBCMD_OFFSET: usize = 0x0020;
 const VL805_XHCI_DOORBELL0_OFFSET: usize = 0x0100;
+const VL805_XHCI_DOORBELL_APERTURE_END: usize = 0x0200;
 const VL805_XHCI_DOORBELL_STRIDE: usize = 4;
 const VL805_XHCI_DOORBELL_FLUSH_STAGE: u16 = 0x031f;
 const VL805_XHCI_RUN_FLUSH_STAGE: u16 = 0x02e5;
+const VL805_FLUSH_LOG_RUNTIME_ERDP_LOW: usize = 1 << 0;
+const VL805_FLUSH_LOG_RUNTIME_ERDP_HIGH: usize = 1 << 1;
+const VL805_FLUSH_LOG_ENDPOINT_DOORBELL: usize = 1 << 2;
 const BCM2711_PCIE_RGR1_SW_INIT_1: usize = 0x9210;
 
 const PCIE_MISC_MISC_CTRL_SCB_ACCESS_EN_MASK: u32 = 0x1000;
@@ -66,6 +70,8 @@ const PCIE_RC_CFG_PRIV1_LINK_CAPABILITY_ASPM_SUPPORT_MASK: u32 = 0x0c00;
 const PCIE_HARD_DEBUG_SERDES_IDDQ_MASK: u32 = 0x08000000;
 const PCIE_RGR1_SW_INIT_1_INIT_MASK: u32 = 0x2;
 const PCIE_RGR1_SW_INIT_1_PERST_MASK: u32 = 0x1;
+
+static VL805_FLUSH_SUCCESS_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
 const BCM2711_PCIE_STATUS_PORT: u32 = 0x80;
 const BCM2711_PCIE_STATUS_DL_ACTIVE: u32 = 0x20;
@@ -455,6 +461,7 @@ pub fn vl805_xhci_port_write32(
 const fn vl805_xhci_flush_is_doorbell(stage: u16, offset: usize) -> bool {
     stage == VL805_XHCI_DOORBELL_FLUSH_STAGE
         && offset >= VL805_XHCI_DOORBELL0_OFFSET
+        && offset < VL805_XHCI_DOORBELL_APERTURE_END
         && (offset - VL805_XHCI_DOORBELL0_OFFSET) % VL805_XHCI_DOORBELL_STRIDE == 0
 }
 
@@ -506,8 +513,40 @@ const fn vl805_xhci_flush_stage_role(stage: u16, offset: usize) -> &'static str 
         (0x03b7, _) => "ring-publish-erdp-low",
         (0x03b8, _) => "ring-publish-erdp-high",
         (0x031f, 0x0100) => "command-doorbell",
-        (_, 0x0100) => "doorbell",
+        (_, 0x0100) => "doorbell0",
+        (_, offset)
+            if offset > VL805_XHCI_DOORBELL0_OFFSET
+                && offset < VL805_XHCI_DOORBELL_APERTURE_END
+                && (offset - VL805_XHCI_DOORBELL0_OFFSET) % VL805_XHCI_DOORBELL_STRIDE == 0 =>
+        {
+            "endpoint-doorbell"
+        }
+        (_, VL805_XHCI_USBCMD_OFFSET) if vl805_xhci_flush_is_run_write(stage, offset) => {
+            "run-command"
+        }
         (_, _) => "generic-mmio",
+    }
+}
+
+const fn vl805_xhci_flush_success_log_mask(stage: u16, offset: usize) -> Option<usize> {
+    match (stage, offset) {
+        (0x03fe, _) => Some(VL805_FLUSH_LOG_RUNTIME_ERDP_LOW),
+        (0x03ff, _) => Some(VL805_FLUSH_LOG_RUNTIME_ERDP_HIGH),
+        (_, offset)
+            if offset > VL805_XHCI_DOORBELL0_OFFSET
+                && offset < VL805_XHCI_DOORBELL_APERTURE_END
+                && (offset - VL805_XHCI_DOORBELL0_OFFSET) % VL805_XHCI_DOORBELL_STRIDE == 0 =>
+        {
+            Some(VL805_FLUSH_LOG_ENDPOINT_DOORBELL)
+        }
+        (_, _) => None,
+    }
+}
+
+fn vl805_xhci_flush_should_log_success(stage: u16, offset: usize) -> bool {
+    match vl805_xhci_flush_success_log_mask(stage, offset) {
+        Some(mask) => VL805_FLUSH_SUCCESS_LOGGED.fetch_or(mask, Ordering::AcqRel) & mask == 0,
+        None => true,
     }
 }
 
@@ -640,6 +679,9 @@ pub fn vl805_xhci_flush_posted_write(
         );
         boot_log::force_uart_line(line.as_str());
         return false;
+    }
+    if !vl805_xhci_flush_should_log_success(stage, offset) {
+        return true;
     }
     let mut line = heapless::String::<512>::new();
     if bar_drain_skipped {
@@ -1013,12 +1055,12 @@ fn ensure_pi4_pcie_root_ready(
 
     let mut begin = heapless::String::<208>::new();
     let _ = core::fmt::Write::write_fmt(
-            &mut begin,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie root-init begin stage={} status_before=0x{status_before:08x} source=hal",
-                phase.label()
-            ),
-        );
+        &mut begin,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie root-init begin stage={} status_before=0x{status_before:08x} source=hal",
+            phase.label()
+        ),
+    );
     boot_log::force_uart_line(begin.as_str());
 
     mmio_set_bits_u32_flush(
@@ -1071,10 +1113,10 @@ fn ensure_pi4_pcie_root_ready(
 
     let mut done = heapless::String::<320>::new();
     let _ = core::fmt::Write::write_fmt(
-            &mut done,
-            format_args!(
-                "[local-seat] vl805 bcm2711-pcie root-init done stage={} status_before=0x{status_before:08x} status_after=0x{status_after:08x} ready={} polls={polls} post_perst_ms={} poll_window_ms={} poll_interval_ms={} delay_scale={} write_flush=readback retry={}",
-                phase.label(),
+        &mut done,
+        format_args!(
+            "[local-seat] vl805 bcm2711-pcie root-init done stage={} status_before=0x{status_before:08x} status_after=0x{status_after:08x} ready={} polls={polls} post_perst_ms={} poll_window_ms={} poll_interval_ms={} delay_scale={} write_flush=readback retry={}",
+            phase.label(),
             ready as u8,
             PCIE_POST_PERST_SETTLE_MS,
             PCIE_LINK_POLL_TOTAL_MS,
@@ -1442,7 +1484,9 @@ fn map_device_exact(
         let mut line = heapless::String::<192>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
-            format_args!("[local-seat] {label} map exact miss paddr=0x{paddr:016x} reason=no-device-coverage"),
+            format_args!(
+                "[local-seat] {label} map exact miss paddr=0x{paddr:016x} reason=no-device-coverage"
+            ),
         );
         boot_log::force_uart_line(line.as_str());
         return Err(HalError::Unsupported("device-coverage"));
@@ -1636,9 +1680,7 @@ fn quiesce_vl805_interrupt_modes_for_poll_only(
                     &mut line,
                     format_args!(
                         "[local-seat] vl805 bcm2711-pcie msix proof cap=0x{cap:02x} control=0x{control_before:04x}->0x{control_after:04x} disabled={} maskall={} quiesced={}",
-                        disabled as u8,
-                        maskall as u8,
-                        quiesced as u8,
+                        disabled as u8, maskall as u8, quiesced as u8,
                     ),
                 );
                 boot_log::force_uart_line(line.as_str());
@@ -2324,13 +2366,36 @@ mod tests {
         assert!(!vl805_xhci_flush_is_run_write(0x02e5, 0x0100));
         assert!(!vl805_xhci_flush_is_doorbell(0x031f, 0x00fc));
         assert!(!vl805_xhci_flush_is_doorbell(0x031f, 0x0102));
+        assert!(!vl805_xhci_flush_is_doorbell(0x031f, 0x0200));
+        assert!(!vl805_xhci_flush_is_doorbell(0x031f, 0x0224));
         assert!(vl805_xhci_flush_skips_bar_drain(0x031f, 0x0100));
         assert!(vl805_xhci_flush_skips_bar_drain(0x031f, 0x0104));
         assert!(vl805_xhci_flush_skips_bar_drain(0x02e5, 0x0020));
         assert!(!vl805_xhci_flush_skips_bar_drain(0x031f, 0x00fc));
+        assert!(!vl805_xhci_flush_skips_bar_drain(0x031f, 0x0224));
         assert!(!vl805_xhci_flush_skips_bar_drain(0x02e5, 0x0100));
         assert_eq!(vl805_xhci_flush_stage_role(0x0118, 0x0c08), "brcm-axiwra");
         assert_eq!(vl805_xhci_flush_stage_role(0x0119, 0x0c0c), "brcm-axirda");
+        assert_eq!(
+            vl805_xhci_flush_stage_role(0x031f, 0x010c),
+            "endpoint-doorbell"
+        );
+        assert_eq!(
+            vl805_xhci_flush_success_log_mask(0x031f, 0x010c),
+            Some(VL805_FLUSH_LOG_ENDPOINT_DOORBELL)
+        );
+        assert_eq!(
+            vl805_xhci_flush_success_log_mask(0x03fe, 0x0238),
+            Some(VL805_FLUSH_LOG_RUNTIME_ERDP_LOW)
+        );
+        assert_eq!(
+            vl805_xhci_flush_success_log_mask(0x03ff, 0x023c),
+            Some(VL805_FLUSH_LOG_RUNTIME_ERDP_HIGH)
+        );
+        assert_eq!(vl805_xhci_flush_success_log_mask(0x031f, 0x0100), None);
+        assert_eq!(vl805_xhci_flush_success_log_mask(0x0267, 0x0224), None);
+        assert_eq!(vl805_xhci_flush_stage_role(0x0267, 0x0224), "generic-mmio");
+        assert_eq!(vl805_xhci_flush_stage_role(0x0268, 0x0220), "generic-mmio");
         assert!(vl805_ext_cfg_flush_read_valid(
             VL805_PCI_DEV_ADDR,
             0x0018_0546

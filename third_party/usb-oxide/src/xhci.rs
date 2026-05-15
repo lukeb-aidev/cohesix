@@ -37,6 +37,8 @@ const COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL: usize = 250_000;
 const COMMAND_PROMPT_SAFE_REDOORBELL_POLL: usize = 4;
 const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
+const PENDING_TRANSFER_EVENT_CAPACITY: usize = 8;
+const TRANSFER_EVENT_POLL_SCAN_BUDGET: usize = 16;
 
 #[inline(always)]
 const fn prompt_safe_command_recovery_uses_bounded_reset_handshake() -> bool {
@@ -1952,11 +1954,89 @@ pub struct XhciCtrl<H: Dma> {
     scratchpad: Option<ScratchpadSet<H>>,
     cmd_ring: Mutex<Box<Ring<H>>>,
     event_ring: Mutex<Box<EventRing<H>>>,
+    pending_transfer_events: Mutex<PendingTransferEvents>,
     host: Arc<H>,
     skip_initial_live_operational_reads: bool,
     port_register_access_allowed: AtomicBool,
     posted_write_flush_required: bool,
     last_command_timeout_trb: AtomicU64,
+}
+
+#[derive(Clone, Copy)]
+struct PendingTransferEvents {
+    entries: [Trb; PENDING_TRANSFER_EVENT_CAPACITY],
+    head: usize,
+    len: usize,
+}
+
+impl PendingTransferEvents {
+    const fn new() -> Self {
+        Self {
+            entries: [Trb::new(); PENDING_TRANSFER_EVENT_CAPACITY],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    const fn len(&self) -> usize {
+        self.len
+    }
+
+    fn push(&mut self, trb: Trb) -> bool {
+        if self.len == PENDING_TRANSFER_EVENT_CAPACITY {
+            return false;
+        }
+        let tail = (self.head + self.len) % PENDING_TRANSFER_EVENT_CAPACITY;
+        self.entries[tail] = trb;
+        self.len += 1;
+        true
+    }
+
+    fn pop_front(&mut self) -> Option<Trb> {
+        if self.len == 0 {
+            return None;
+        }
+        let trb = self.entries[self.head];
+        self.head = (self.head + 1) % PENDING_TRANSFER_EVENT_CAPACITY;
+        self.len -= 1;
+        Some(trb)
+    }
+
+    fn pop_matching(&mut self, slot_id: u8, endpoint_ids: &[u8]) -> Option<Trb> {
+        let mut match_index = None;
+        for offset in 0..self.len {
+            let index = (self.head + offset) % PENDING_TRANSFER_EVENT_CAPACITY;
+            let trb = self.entries[index];
+            if transfer_event_matches_slot_endpoint(trb, slot_id, endpoint_ids) {
+                match_index = Some(offset);
+                break;
+            }
+        }
+        let match_index = match match_index {
+            Some(index) => index,
+            None => return None,
+        };
+        let trb = self.entries[(self.head + match_index) % PENDING_TRANSFER_EVENT_CAPACITY];
+        for offset in match_index..self.len.saturating_sub(1) {
+            let dst = (self.head + offset) % PENDING_TRANSFER_EVENT_CAPACITY;
+            let src = (self.head + offset + 1) % PENDING_TRANSFER_EVENT_CAPACITY;
+            self.entries[dst] = self.entries[src];
+        }
+        self.len -= 1;
+        Some(trb)
+    }
+}
+
+#[inline]
+fn endpoint_id_is_allowed(endpoint_id: u8, endpoint_ids: &[u8]) -> bool {
+    endpoint_ids.iter().any(|candidate| *candidate == endpoint_id)
+}
+
+#[inline]
+fn transfer_event_matches_slot_endpoint(trb: Trb, slot_id: u8, endpoint_ids: &[u8]) -> bool {
+    trb.trb_type() == trb_type::TRANSFER_EVENT as u8
+        && trb.slot_id() == slot_id
+        && endpoint_id_is_allowed(trb.endpoint_id(), endpoint_ids)
 }
 
 /// Snapshot of xHCI command/event ring state for timeout diagnostics.
@@ -2938,6 +3018,7 @@ impl<H: Dma> XhciCtrl<H> {
             scratchpad,
             cmd_ring: Mutex::new(cmd_ring),
             event_ring: Mutex::new(event_ring),
+            pending_transfer_events: Mutex::new(PendingTransferEvents::new()),
             host,
             skip_initial_live_operational_reads: params.skip_initial_live_operational_reads,
             port_register_access_allowed: AtomicBool::new(params.port_register_access_allowed),
@@ -5294,6 +5375,66 @@ impl<H: Dma> XhciCtrl<H> {
     /// When `expected_cmd_trb` is provided, completion events for other
     /// command TRBs are ignored (with diagnostic breadcrumbs) until the
     /// expected command completes.
+    fn preserve_transfer_event_from_command_wait(&self, trb: Trb, source_stage: u16) {
+        if trb.trb_type() != trb_type::TRANSFER_EVENT as u8 {
+            return;
+        }
+        let (stored, depth) = {
+            let mut pending = self.pending_transfer_events.lock();
+            let stored = pending.push(trb);
+            (stored, pending.len())
+        };
+        emit_xhci_diag(
+            if stored { 0x0410 } else { 0x0411 },
+            trb.param,
+            ((trb.status as u64) << 32) | trb.control as u64,
+            ((source_stage as u64) << 32) | depth as u64,
+        );
+    }
+
+    fn pop_pending_transfer_event_matching(&self, slot_id: u8, endpoint_ids: &[u8]) -> Option<Trb> {
+        let (trb, depth) = {
+            let mut pending = self.pending_transfer_events.lock();
+            let trb = pending.pop_matching(slot_id, endpoint_ids);
+            (trb, pending.len())
+        };
+        if let Some(trb) = trb {
+            emit_xhci_diag(
+                0x0412,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                depth as u64,
+            );
+            Some(trb)
+        } else {
+            None
+        }
+    }
+
+    fn pop_pending_transfer_event(&self) -> Option<Trb> {
+        let (trb, depth) = {
+            let mut pending = self.pending_transfer_events.lock();
+            let trb = pending.pop_front();
+            (trb, pending.len())
+        };
+        if let Some(trb) = trb {
+            emit_xhci_diag(
+                0x0413,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                depth as u64,
+            );
+            Some(trb)
+        } else {
+            None
+        }
+    }
+
+    /// Wait for command completion.
+    ///
+    /// When `expected_cmd_trb` is provided, completion events for other
+    /// command TRBs are ignored (with diagnostic breadcrumbs) until the
+    /// expected command completes.
     pub fn wait_command(&self, expected_cmd_trb: Option<u64>) -> Result<Trb> {
         let mut waited = 0usize;
         let mut other_event_logs = 0usize;
@@ -5369,6 +5510,7 @@ impl<H: Dma> XhciCtrl<H> {
                     );
                     other_event_logs = other_event_logs.saturating_add(1);
                 }
+                self.preserve_transfer_event_from_command_wait(trb, 0x0308);
                 self.update_erdp()?;
             }
 
@@ -5636,6 +5778,7 @@ impl<H: Dma> XhciCtrl<H> {
                     );
                     other_event_logs = other_event_logs.saturating_add(1);
                 }
+                self.preserve_transfer_event_from_command_wait(trb, 0x0308);
                 self.update_erdp()?;
             }
 
@@ -5772,6 +5915,7 @@ impl<H: Dma> XhciCtrl<H> {
                 ((trb.status as u64) << 32) | trb.control as u64,
                 trb.trb_type() as u64,
             );
+            self.preserve_transfer_event_from_command_wait(trb, 0x0308);
             self.update_erdp()?;
             if is_port_status_change {
                 emit_xhci_diag(
@@ -5816,8 +5960,57 @@ impl<H: Dma> XhciCtrl<H> {
         Err(UsbError::Timeout)
     }
 
+    /// Poll for a transfer event for a specific slot and endpoint set.
+    ///
+    /// Command waits may encounter transfer events while they are waiting for a
+    /// later command completion. Those transfer events have already advanced
+    /// ERDP, so they are preserved in a small software queue and replayed only
+    /// to the matching endpoint consumer.
+    pub fn poll_transfer_event_for_slot_endpoint_ids(
+        &self,
+        slot_id: u8,
+        endpoint_ids: &[u8],
+    ) -> Option<Trb> {
+        if let Some(trb) = self.pop_pending_transfer_event_matching(slot_id, endpoint_ids) {
+            return Some(trb);
+        }
+
+        for _ in 0..TRANSFER_EVENT_POLL_SCAN_BUDGET {
+            let trb = {
+                let mut event_ring = self.event_ring.lock();
+                if event_ring
+                    .sync_current_for_cpu(&*self.host, "xhci-event-ring-poll")
+                    .is_err()
+                {
+                    return None;
+                }
+                if event_ring.try_dequeue_ptr(&*self.host).is_err() {
+                    emit_xhci_diag(0x03ef, reg::ERDP as u64, 0, 2);
+                    return None;
+                }
+                event_ring.try_dequeue()
+            };
+
+            let Some(trb) = trb else {
+                return None;
+            };
+            if self.update_erdp().is_err() {
+                return None;
+            }
+            if transfer_event_matches_slot_endpoint(trb, slot_id, endpoint_ids) {
+                return Some(trb);
+            }
+            self.preserve_transfer_event_from_command_wait(trb, 0x0414);
+        }
+
+        None
+    }
+
     /// Poll for transfer events (non-blocking)
     pub fn poll_event(&self) -> Option<Trb> {
+        if let Some(trb) = self.pop_pending_transfer_event() {
+            return Some(trb);
+        }
         let mut event_ring = self.event_ring.lock();
         if event_ring
             .sync_current_for_cpu(&*self.host, "xhci-event-ring-poll")
@@ -7269,7 +7462,7 @@ mod tests {
     };
     use crate::{
         Dma, reg,
-        ring::{PhysMem, trb_type},
+        ring::{PhysMem, Trb, trb_type},
     };
     use alloc::vec;
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -7297,6 +7490,59 @@ mod tests {
         fn virt_to_phys(&self, va: usize) -> usize {
             va
         }
+    }
+
+    const fn transfer_event(slot: u8, endpoint: u8, marker: u64) -> Trb {
+        Trb {
+            param: marker,
+            status: 0,
+            control: (trb_type::TRANSFER_EVENT << 10)
+                | ((endpoint as u32) << 16)
+                | ((slot as u32) << 24),
+        }
+    }
+
+    #[test]
+    fn pending_transfer_events_filter_by_slot_and_endpoint_without_dropping_others() {
+        let mut pending = super::PendingTransferEvents::new();
+        let keyboard = transfer_event(3, 3, 0x3333);
+        let control = transfer_event(3, 1, 0x3111);
+        let other_slot = transfer_event(4, 3, 0x4333);
+
+        assert!(pending.push(other_slot));
+        assert!(pending.push(keyboard));
+        assert!(pending.push(control));
+
+        let matched = pending
+            .pop_matching(3, &[3])
+            .expect("keyboard endpoint should be replayed");
+        assert_eq!(matched.param, keyboard.param);
+        assert_eq!(pending.len(), 2);
+
+        assert_eq!(
+            pending
+                .pop_matching(3, &[1])
+                .expect("control endpoint remains queued")
+                .param,
+            control.param
+        );
+        assert_eq!(
+            pending
+                .pop_matching(4, &[3])
+                .expect("other slot event remains queued")
+                .param,
+            other_slot.param
+        );
+        assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
+    fn pending_transfer_events_enforce_bounded_capacity() {
+        let mut pending = super::PendingTransferEvents::new();
+        for index in 0..super::PENDING_TRANSFER_EVENT_CAPACITY {
+            assert!(pending.push(transfer_event(1, 3, index as u64)));
+        }
+        assert!(!pending.push(transfer_event(1, 3, 0xffff)));
     }
 
     struct AllocatingMockDma {

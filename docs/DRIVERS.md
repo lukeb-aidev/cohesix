@@ -409,6 +409,18 @@ power/reset state.
   `01:80:c2:00:00:03`, `allmulti=1`, optional `WLC_SET_PROMISC=0`), and then
   keeps the deferred EAPOL-only receive lane alive with low-level SDIO
   breadcrumbs suppressed even after a terminal `host-eapol-required` verdict.
+  HAL Function 2 writes must preserve the SDPCM channel boundary: control
+  channel writes may arm a bounded ioctl-reply wait, but data/event channel
+  writes such as EAPOL-Start must not arm or inherit a control-plane reply wait.
+  The current as-built host-EAPOL implementation contains bounded M1/M3
+  admission, M2/M4 transmit, and PTK/GTK `wsec_key` install logic, but the last
+  proven Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-062728.log`) did not
+  receive M1. That hardware state is not a Wi-Fi connection: proof tooling
+  reports `WIFI_GATE=7`, `WIFI_BLOCKER=host-eapol-required`, and prompt-side
+  `nettest` reports `wifi-host-eapol-pending`. The next valid success trace must
+  show `host-eapol action=send-m2`, `host-eapol action=send-m4`,
+  `host-eapol action=install-wsec-key kind=ptk`, `kind=gtk`, and final
+  `join complete mode=host-eapol secure=yes` before DHCP or data TX is enabled.
   Any observed 4-way frame is classified as `m1`, `m3`,
   `group-key`, malformed, or unexpected station-originated traffic, and the log
   records the exact next required host action (`derive-ptk-send-m2`,
@@ -472,13 +484,13 @@ power/reset state.
   association progress and `PSK_SUP` status 6 before the data path is released.
   When firmware supplicant mode is unsupported, the only valid live next state
   is `wifi-host-eapol-pending`; EAPOL frames may be logged as proof, but DHCP
-  and data TX stay blocked until a bounded host EAPOL/key-install implementation
-  proves completion. Device construction after this boundary must report a precise
-  bring-up status such as `wifi-host-eapol-pending`; it is not proof that the
-  Wi-Fi data path is online. Deferred boot joins may keep the EAPOL-only receive
-  lane running after the proof window, but the driver must suppress repetitive
-  low-level SDIO breadcrumbs and continue dropping non-EAPOL data until the
-  secure boundary is complete. Blocking join attempts and timed-out deferred
+  and data TX stay blocked until the bounded host EAPOL/key-install path reports
+  secure completion. Device construction after this boundary must report a
+  precise bring-up status such as `wifi-host-eapol-pending`; it is not proof
+  that the Wi-Fi data path is online. Deferred boot joins may keep the EAPOL-only
+  receive lane running after the proof window, but the driver must suppress
+  repetitive low-level SDIO breadcrumbs and continue dropping non-EAPOL data
+  until the secure boundary is complete. Blocking join attempts and timed-out deferred
   attempts must stop normal smoltcp receive polling so the root console is not
   flooded with no-progress Function 1 `SDIO_INT_STATUS` latch reads;
   prompt-side `wifi diag`, `wifi retry`, and related diagnostics remain the
@@ -487,19 +499,23 @@ power/reset state.
   association evidence (`SET_SSID`, association, or link-up) and then spends
   the EAPOL proof budget so the AP has a post-association M1 window. Successful
   association/link events may seed the AP/BSSID from the Broadcom event address
-  or Ethernet source when the address is a valid unicast AP candidate, but the
-  Broadcom event `addr` field is authoritative over a local-admin Ethernet
-  source that aliases the station/P2P device address. The seed log must include
-  both raw candidates. EAPOL-Start may then target the AP before M1 while still
-  letting M1 overwrite the AP MAC with the authenticated frame source. Cohesix
+  or Ethernet source when the address is a valid unicast AP candidate, but that
+  seed is only a hint: before host EAPOL-Start, Cohesix must issue
+  `WLC_GET_BSSID` (`cmd=23`) and prefer the firmware-reported associated BSSID
+  when it is a valid AP candidate. The seed log must include both raw event
+  candidates, and the EAPOL-Start log must include the resolved destination MAC.
+  EAPOL-Start alternates the PAE group address and the resolved AP/BSSID before
+  M1 while still letting M1 overwrite the AP MAC with the authenticated frame
+  source. Cohesix
   parses the EAPOL/EAPOL-Key envelope
   for proof (`m1`/`m3` shape, key-info bits, replay-counter presence, and
   key-data length) and may complete the bounded host handshake only after M2,
-  M4, and `wsec_key` PTK/GTK install succeed. Deferred join timeout and prompt-side
-  `nettest` diagnostics must preserve
-  `wifi-host-eapol-required` instead of collapsing the failure into generic
-  association or DHCP status. Any
-  root-task panic after that line is a boot blocker and proof tooling must
+  M4, and `wsec_key` PTK/GTK install succeed. Deferred join timeout and
+  prompt-side `nettest` diagnostics must preserve `wifi-host-eapol-pending`
+  while the deferred receive lane is still alive and `wifi-host-eapol-required`
+  after the terminal proof window closes, instead of collapsing the failure into
+  generic association or DHCP status. Any root-task panic after that line is a
+  boot blocker and proof tooling must
   preserve the host-EAPOL Wi-Fi blocker rather than rewriting it to `none`. Any
   other `PSK_SUP` status is a failed secure join, not a pending-success edge.
   DHCP and data TX must not begin before that secure completion rule is
@@ -866,6 +882,30 @@ active path is Cohesix-owned cold start:
   publishes `Max ESIT Payload=8`, and sets `Average TRB Length=8`. A configured
   HID endpoint with those fields missing is a Gate 8/9 scheduler failure, not a
   reset, command-ring, event-ring, or IRQ27 issue.
+- HID interrupt-IN transfer TRBs must also match U-Boot's normal-transfer
+  completion flags: `IOC` is always set and `ISP` is set for IN endpoints so
+  short keyboard reports generate transfer events. The endpoint doorbell write
+  uses the xHCI DCI target (`3` for endpoint `0x81`), and HAL logs aligned
+  doorbells beyond doorbell `0` as `role=endpoint-doorbell`. Command waits must
+  preserve any non-command transfer event they drain while waiting for a later
+  command completion, then replay it to the matching endpoint poller; otherwise
+  the first HID report can be acknowledged in ERDP and lost before Gate 8 sees
+  it. CPU-side HID/control descriptor reads must invalidate the DMA buffer after
+  the transfer event before decoding device-written bytes.
+- For keyboards behind a USB hub, the local-seat runtime must retain the hub
+  device slot for as long as the HID keyboard is attached. Dropping the hub
+  `UsbDevice` disables that xHCI slot and can silently orphan the interrupt-IN
+  pipe after Gate 8. HDMI may show `local-seat USB keyboard online` only after
+  the existing runtime first-byte proof reaches Gate 10; enumeration-only
+  Gate 8 is reported as detected/pending input. Gate 10 proves at least one
+  byte entered the root-console path. It is not full keyboard closure unless a
+  printable key is also proven. Printable-key closure is separately evidenced
+  by the first non-empty HID report and first printable-byte diagnostic, while
+  the first unmapped HID usage is logged once if decode rejects a key. The
+  current Pi 4 hardware frontier has proven Enter (`key=0x28`,
+  `ascii=0x0a`) through Gate 10 but has not yet proven a printable letter byte.
+  Treat `USB_BLOCKER=none` in that state as "xHCI/HID first-byte path works",
+  not as proof that all boot-keyboard usages are usable.
 - Root-port reset before Address Device follows the U-Boot retry envelope:
   retry reset/enable timeouts up to five attempts with a short first settle and
   longer subsequent settles, but do not synthesize a device when live root-port
@@ -880,7 +920,11 @@ active path is Cohesix-owned cold start:
   interface 0 as Boot Keyboard (`Sub=01`, `Prot=01`) and interface 1 as a
   protocol-none touchpad. Cohesix local-seat enumeration must rank the Boot
   Keyboard interface as the primary target; the protocol-none touchpad must not
-  displace keyboard bring-up.
+  displace keyboard bring-up. The keyboard decode contract consumes USB HID
+  Usage Page `0x07` usage IDs (`A=0x04`, Enter `0x28`, keypad Enter `0x58`),
+  not PS/2 set scancodes. If Enter works but letters do not, the next proof
+  target is the actual non-empty HID report and printable/unmapped usage
+  diagnostics, not a controller reset, command-ring, DMA-alias, or IRQ27 path.
 - Cold-owned external VL805 high-BAR lanes (`None` and
   `platform-reset-complete` without a runtime seed) follow U-Boot's Pi 4 PCI
   xHCI path (`USB_XHCI_PCI`). Cohesix must not apply the Broadcom generic xHCI
@@ -1155,7 +1199,8 @@ Required Cohesix shape:
   VL805 BAR. Root-port reads known to be toxic still stay behind explicit HAL
   gates and fresh command-completion proof.
 - Root-port reads known to be toxic must stay behind explicit HAL gates.
-- USB keyboard feeds only the existing root-console parser.
+- USB keyboard feeds only the existing root-console parser after decoding USB
+  HID Usage Page `0x07` keyboard usages to bounded ASCII/control bytes.
 - Operator proof uses a single 10-gate USB ladder: 1 controller candidate, 2 live
   PCIe/VL805 ownership, 3 controller-ready, 4 command-ring completion, 5
   root-port connection, 6 device address, 7 descriptors/configuration, 8 HID
