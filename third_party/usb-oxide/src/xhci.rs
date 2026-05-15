@@ -62,6 +62,16 @@ fn command_doorbell_requires_hal_posted_write_drain() -> bool {
     true
 }
 
+#[inline(always)]
+const fn command_port_status_event_mask(param: u64) -> u32 {
+    let port_id = ((param >> 24) & 0xff) as u32;
+    if port_id == 0 || port_id > 32 {
+        0
+    } else {
+        1u32 << (port_id - 1)
+    }
+}
+
 const COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS: usize = 1_000_000;
 const COMMAND_EVENT_RING_DEBUG_TRBS: usize = 4;
 const COMMAND_RING_DEBUG_TRBS: usize = 4;
@@ -94,6 +104,9 @@ const RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE: u16 = 0x03be;
 const COMMAND_RECOVERY_DNCTRL_FLUSH_STAGE: u16 = 0x03e8;
 const COMMAND_RECOVERY_IMOD_FLUSH_STAGE: u16 = 0x03e9;
 const COMMAND_RECOVERY_IMAN_FLUSH_STAGE: u16 = 0x03ea;
+const LINUX_CAPTURED_FRESH_SUBMIT_MODE: u64 = 6;
+const LINUX_CAPTURED_FRESH_RECOVERY_POLICY: u64 = 2;
+const LINUX_CAPTURED_FRESH_BARRIER_POLICY: u64 = 6;
 const USBCMD_RUN_SEED_CLEAR_MASK: u32 = USBCMD_INTERRUPT_DELIVERY_MASK
     | reg::USBCMD_HCRST
     | reg::USBCMD_LHCRST
@@ -5528,6 +5541,7 @@ impl<H: Dma> XhciCtrl<H> {
         let mut event_syncs = 0usize;
         let mut last_non_command_event = None;
         let mut drained_port_status_events = 0usize;
+        let mut drained_port_status_mask = 0u32;
         let mut replayed_doorbell = false;
         for poll in 0..COMMAND_PROMPT_SAFE_WAIT_POLLS {
             let trb = {
@@ -5602,6 +5616,7 @@ impl<H: Dma> XhciCtrl<H> {
             let is_port_status_change = trb.trb_type() == trb_type::PORT_STATUS_CHANGE as u8;
             if is_port_status_change {
                 drained_port_status_events = drained_port_status_events.saturating_add(1);
+                drained_port_status_mask |= command_port_status_event_mask(trb.param);
             }
             emit_xhci_diag(
                 0x0308,
@@ -5612,9 +5627,9 @@ impl<H: Dma> XhciCtrl<H> {
             self.update_erdp()?;
             if is_port_status_change {
                 emit_xhci_diag(
-                    0x037b,
+                    0x0406,
                     drained_port_status_events as u64,
-                    COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL as u64,
+                    u64::from(drained_port_status_mask),
                     event_syncs as u64,
                 );
             }
@@ -6039,7 +6054,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit-full")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -6075,7 +6090,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit-full")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -6085,7 +6100,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         drop(cmd_ring);
         ring_write_barrier();
-        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 1);
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
         self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
@@ -6118,7 +6133,7 @@ impl<H: Dma> XhciCtrl<H> {
         self.last_command_timeout_trb.store(0, Ordering::Relaxed);
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit-full")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -6128,7 +6143,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         drop(cmd_ring);
         ring_write_barrier();
-        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 1);
         if !self.ring_cmd_doorbell() {
             return Err(UsbError::PostedWriteFlushFailed);
         }
@@ -6170,7 +6185,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit-full")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -6180,7 +6195,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         drop(cmd_ring);
         ring_write_barrier();
-        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 3);
         self.enable_linux_command_event_generation_for_probe()?;
         if !self.ring_cmd_doorbell() {
             return Err(UsbError::PostedWriteFlushFailed);
@@ -6215,7 +6230,7 @@ impl<H: Dma> XhciCtrl<H> {
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
         let retry_cmd_addr =
-            cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-recovery-submit")?;
+            cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-recovery-submit-full")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x03e3,
@@ -6225,7 +6240,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         drop(cmd_ring);
         ring_write_barrier();
-        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, retry_cmd_addr, 1, 0);
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, retry_cmd_addr, 1, 5);
         let interrupt_recovery_event_generation =
             prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue();
         if interrupt_recovery_event_generation {
@@ -6249,7 +6264,11 @@ impl<H: Dma> XhciCtrl<H> {
         }
     }
 
-    fn submit_command_linux_event_generation_prompt_safe(&self, trb: Trb) -> Result<Trb> {
+    fn submit_command_linux_event_generation_prompt_safe_inner(
+        &self,
+        trb: Trb,
+        fresh_polling_recovery_on_timeout: bool,
+    ) -> Result<Trb> {
         if runtime_pollsafe_no_fresh_ownership_handoff(
             self.firmware_handoff,
             self.runtime_seed_snapshot,
@@ -6270,7 +6289,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         let mut cmd_ring = self.cmd_ring.lock();
         let (enqueue_before, cycle_before) = cmd_ring.debug_state();
-        let cmd_addr = cmd_ring.enqueue_and_sync_trb(&*self.host, trb, "xhci-cmd-ring-submit")?;
+        let cmd_addr = cmd_ring.enqueue_and_sync(&*self.host, trb, "xhci-cmd-ring-submit-full")?;
         let (enqueue_after, cycle_after) = cmd_ring.debug_state();
         emit_xhci_diag(
             0x0303,
@@ -6280,7 +6299,7 @@ impl<H: Dma> XhciCtrl<H> {
         );
         drop(cmd_ring);
         ring_write_barrier();
-        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 0);
+        emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 3);
         self.emit_command_ring_debug_snapshot(0x0360);
         self.emit_command_event_ring_debug_snapshot(0x0353);
         self.enable_linux_command_event_generation_for_probe()?;
@@ -6291,8 +6310,88 @@ impl<H: Dma> XhciCtrl<H> {
         self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, true);
         match self.wait_command_prompt_safe(Some(cmd_addr), true) {
             Ok(evt) => Ok(evt),
-            Err(UsbError::Timeout) => {
+            Err(UsbError::Timeout) if fresh_polling_recovery_on_timeout => {
                 self.submit_command_fresh_polling_recovery_prompt_safe(trb, cmd_addr)
+            }
+            Err(UsbError::Timeout) => Err(UsbError::Timeout),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn submit_command_linux_event_generation_prompt_safe(&self, trb: Trb) -> Result<Trb> {
+        self.submit_command_linux_event_generation_prompt_safe_inner(trb, true)
+    }
+
+    fn submit_command_linux_event_generation_once_prompt_safe(&self, trb: Trb) -> Result<Trb> {
+        self.submit_command_linux_event_generation_prompt_safe_inner(trb, false)
+    }
+
+    fn submit_command_linux_captured_fresh_event_generation_prompt_safe(
+        &self,
+        trb: Trb,
+    ) -> Result<Trb> {
+        if runtime_pollsafe_no_fresh_ownership_handoff(
+            self.firmware_handoff,
+            self.runtime_seed_snapshot,
+        ) {
+            emit_xhci_diag(
+                0x0336,
+                trb.param,
+                ((trb.status as u64) << 32) | trb.control as u64,
+                runtime_seed_snapshot_flag_bits(self.runtime_seed_snapshot),
+            );
+            return Err(UsbError::NotSupported);
+        }
+        emit_xhci_diag(
+            0x0300,
+            trb.param,
+            ((trb.status as u64) << 32) | trb.control as u64,
+            LINUX_CAPTURED_FRESH_SUBMIT_MODE,
+        );
+        let prior_timeout_cmd = self.last_command_timeout_trb.load(Ordering::Relaxed) & !0x0f;
+        emit_xhci_diag(0x03e2, prior_timeout_cmd, 0, LINUX_CAPTURED_FRESH_RECOVERY_POLICY);
+        self.republish_fresh_command_event_rings_for_prompt_safe_recovery()?;
+        self.enable_linux_command_event_generation_for_probe()?;
+        let mut cmd_ring = self.cmd_ring.lock();
+        let (enqueue_before, cycle_before) = cmd_ring.debug_state();
+        let cmd_addr = cmd_ring.enqueue_and_sync(
+            &*self.host,
+            trb,
+            "xhci-cmd-ring-linux-captured-submit-full",
+        )?;
+        let (enqueue_after, cycle_after) = cmd_ring.debug_state();
+        emit_xhci_diag(
+            0x0303,
+            cmd_addr,
+            ((enqueue_before as u64) << 32) | enqueue_after as u64,
+            ((cycle_before as u64) << 1) | (cycle_after as u64),
+        );
+        drop(cmd_ring);
+        ring_write_barrier();
+        emit_xhci_diag(
+            COMMAND_PUBLISH_BARRIER_STAGE,
+            cmd_addr,
+            LINUX_CAPTURED_FRESH_RECOVERY_POLICY,
+            LINUX_CAPTURED_FRESH_BARRIER_POLICY,
+        );
+        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, true);
+        if !self.ring_cmd_doorbell() {
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
+        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, true);
+        match self.wait_command_prompt_safe(Some(cmd_addr), true) {
+            Ok(evt) => {
+                self.last_command_timeout_trb.store(0, Ordering::Relaxed);
+                Ok(evt)
+            }
+            Err(UsbError::Timeout) => {
+                emit_xhci_diag(
+                    0x03e4,
+                    cmd_addr,
+                    prior_timeout_cmd,
+                    LINUX_CAPTURED_FRESH_RECOVERY_POLICY,
+                );
+                Err(UsbError::Timeout)
             }
             Err(err) => Err(err),
         }
@@ -6351,6 +6450,18 @@ impl<H: Dma> XhciCtrl<H> {
         Ok(evt.slot_id())
     }
 
+    /// Probe Enable Slot with exactly one Linux-captured event-generation attempt.
+    pub fn probe_enable_slot_linux_captured_event_generation_prompt_safe(&self) -> Result<u8> {
+        let evt = match self.submit_command_linux_captured_fresh_event_generation_prompt_safe(
+            enable_slot_command_trb_for_probe(),
+        ) {
+            Err(UsbError::Timeout) => return Err(UsbError::EnableSlotTimeout),
+            Err(err) => return Err(err),
+            Ok(evt) => evt,
+        };
+        Ok(evt.slot_id())
+    }
+
     /// Retry Enable Slot after the U-Boot-shaped lane times out by resetting and
     /// republishing fresh command/event rings while keeping interrupts masked.
     pub fn probe_enable_slot_fresh_polling_recovery_prompt_safe(&self) -> Result<u8> {
@@ -6368,6 +6479,17 @@ impl<H: Dma> XhciCtrl<H> {
     /// Disable a slot using the same bounded command proof lane.
     pub fn disable_slot_linux_event_generation_prompt_safe(&self, slot_id: u8) -> Result<()> {
         self.submit_command_linux_event_generation_prompt_safe(
+            disable_slot_command_trb_for_probe(slot_id),
+        )?;
+        Ok(())
+    }
+
+    /// Disable a slot with exactly one Linux-captured event-generation attempt.
+    pub fn disable_slot_linux_captured_event_generation_prompt_safe(
+        &self,
+        slot_id: u8,
+    ) -> Result<()> {
+        self.submit_command_linux_event_generation_once_prompt_safe(
             disable_slot_command_trb_for_probe(slot_id),
         )?;
         Ok(())
@@ -6805,8 +6927,9 @@ mod tests {
         blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, command_diag_live_reads_allowed,
         command_doorbell_requires_hal_posted_write_drain, command_poll_only_should_sync_event_ring,
-        command_recovery_polling_usbcmd_seed, command_timeout_live_snapshot_enabled,
-        command_timeout_live_snapshot_spins, command_wait_should_sync_event_ring,
+        command_port_status_event_mask, command_recovery_polling_usbcmd_seed,
+        command_timeout_live_snapshot_enabled, command_timeout_live_snapshot_spins,
+        command_wait_should_sync_event_ring,
         compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base,
         compose_erst_size, compose_initial_erdp, compose_polling_erdp_ack, compose_run_usbcmd,
         constructor_polling_scrub_mode, constructor_polling_scrub_mode_from_params,
@@ -6887,7 +7010,9 @@ mod tests {
         COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
         COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
         COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, EVENT_RING_SIZE,
-        LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD, LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
+        LINUX_CAPTURED_FRESH_BARRIER_POLICY, LINUX_CAPTURED_FRESH_RECOVERY_POLICY,
+        LINUX_CAPTURED_FRESH_SUBMIT_MODE, LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD,
+        LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
         PI4_CRCR_RUNNING_STATUS_BIT, PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, PORT_CHANGE_BITS,
         READY_WAIT_PROGRESS_SPINS, RESET_WAIT_SPINS, SKIP_HCRST_DURING_INIT,
         TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
@@ -8618,6 +8743,22 @@ mod tests {
         assert!(COMMAND_PROMPT_SAFE_WAIT_POLLS > COMMAND_POLL_ONLY_WAIT_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS);
         assert!(COMMAND_POLL_ONLY_WAIT_SPINS < COMMAND_WAIT_SPINS);
+    }
+
+    #[test]
+    fn linux_captured_fallback_uses_distinct_fresh_recovery_policy() {
+        assert_eq!(LINUX_CAPTURED_FRESH_SUBMIT_MODE, 6);
+        assert_eq!(LINUX_CAPTURED_FRESH_RECOVERY_POLICY, 2);
+        assert_eq!(LINUX_CAPTURED_FRESH_BARRIER_POLICY, 6);
+        assert!(!prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue());
+    }
+
+    #[test]
+    fn prompt_safe_command_wait_reports_preserved_psc_port_mask() {
+        assert_eq!(command_port_status_event_mask(1 << 24), 0x0000_0001);
+        assert_eq!(command_port_status_event_mask(4 << 24), 0x0000_0008);
+        assert_eq!(command_port_status_event_mask(0), 0);
+        assert_eq!(command_port_status_event_mask(33 << 24), 0);
     }
 
     #[test]

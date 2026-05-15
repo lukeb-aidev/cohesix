@@ -129,7 +129,7 @@ fn cache_maintenance_dma_sync_for_cpu_can_suppress_hot_poll_audit() {
 }
 
 #[test]
-fn cache_maintenance_dma_pin_can_suppress_xhci_hot_path_audit() {
+fn cache_maintenance_dma_pin_handles_xhci_audit_profiles() {
     let _guard = DMA_TEST_LOCK.lock().expect("cache test lock");
     let _ = dma::take_audit_log();
     set_test_error(None);
@@ -141,11 +141,20 @@ fn cache_maintenance_dma_pin_can_suppress_xhci_hot_path_audit() {
         "xHCI scratchpad page sharing keeps cache maintenance but suppresses repetitive UART audit lines"
     );
 
-    let range =
-        dma::pin(0x5000, 0x7000, 0x1000, "xhci-cmd-ring-submit").expect("command ring submit pin");
-    assert_eq!(range.label(), "xhci-cmd-ring-submit");
+    let range = dma::pin(0x5000, 0x7000, 0x1000, "xhci-cmd-ring-submit-full")
+        .expect("command ring submit pin");
+    assert_eq!(range.label(), "xhci-cmd-ring-submit-full");
+    let lines = dma::take_audit_log();
     assert!(
-        dma::take_audit_log().is_empty(),
-        "xHCI command submit sharing keeps cache maintenance but suppresses one-shot hot-path UART audit lines"
+        lines
+            .iter()
+            .any(|line| line.contains("[dma][cache] clean-invalidate-before-share")),
+        "xHCI command-ring publication keeps the audit visible and uses clean+invalidate: {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("[dma][cache] clean-before-share")),
+        "xHCI command-ring publication must not use clean-only publication: {lines:?}"
     );
 }

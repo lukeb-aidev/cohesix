@@ -428,7 +428,7 @@ mod tests {
         assert!(audit_suppressed_for_label("xhci-event-ring-prompt-safe"));
         assert!(audit_suppressed_for_label("xhci-event-ring-poll-fast"));
         assert!(!audit_suppressed_for_label("xhci-event-ring-poll"));
-        assert!(!audit_suppressed_for_label("xhci-cmd-ring-submit"));
+        assert!(!audit_suppressed_for_label("xhci-cmd-ring-submit-full"));
     }
 
     #[test]
@@ -449,9 +449,9 @@ mod tests {
         let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
         let _ = take_audit_log();
 
-        let range = pin(0x7000, 0x8000, 0x10, "xhci-cmd-ring-submit").expect("pin succeeds");
+        let range = pin(0x7000, 0x8000, 0x400, "xhci-cmd-ring-submit-full").expect("pin succeeds");
 
-        assert_eq!(range.len(), 0x10);
+        assert_eq!(range.len(), 0x400);
         let lines = take_audit_log();
         assert_stage_order(
             &lines,

@@ -66,6 +66,7 @@ const IOCTL_NO_PROGRESS_AFTER_NONMATCHING_LIMIT: usize = 128;
 const JOIN_WAIT_LOOPS: usize = 64_000;
 const DEFERRED_JOIN_FRAME_BUDGET: usize = 8;
 const DEFERRED_JOIN_POLL_LIMIT: u16 = 1_200;
+const HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS: usize = 24;
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
 const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
@@ -84,6 +85,16 @@ const DOWNLOAD_TYPE_CLM: u16 = 2;
 const ETH_HEADER_LEN: usize = 14;
 const ETH_P_LINK_CTL: u16 = 0x886c;
 const ETH_P_EAPOL: u16 = 0x888e;
+const EAPOL_HEADER_LEN: usize = 4;
+const EAPOL_PACKET_TYPE_KEY: u8 = 3;
+const EAPOL_KEY_MIN_BODY_LEN: usize = 95;
+const EAPOL_KEY_INFO_KEY_VERSION_MASK: u16 = 0x0007;
+const EAPOL_KEY_INFO_KEY_TYPE: u16 = 0x0008;
+const EAPOL_KEY_INFO_INSTALL: u16 = 0x0040;
+const EAPOL_KEY_INFO_ACK: u16 = 0x0080;
+const EAPOL_KEY_INFO_MIC: u16 = 0x0100;
+const EAPOL_KEY_INFO_SECURE: u16 = 0x0200;
+const EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA: u16 = 0x1000;
 const BCMILCP_SUBTYPE_VENDOR_LONG: u16 = 32769;
 const BCMILCP_BCM_SUBTYPE_EVENT: u16 = 1;
 const BROADCOM_OUI: [u8; 3] = [0x00, 0x10, 0x18];
@@ -1491,8 +1502,15 @@ fn deferred_join_requires_host_eapol(state: DeferredJoinState) -> bool {
         DeferredJoinState::Pending {
             completion_rule: JoinCompletionRule::HostEapolRequired,
             ..
+        } | DeferredJoinState::Failed {
+            reason: "host-eapol-required"
         }
     )
+}
+
+#[inline]
+fn deferred_join_allows_rx_polling(state: DeferredJoinState) -> bool {
+    !matches!(state, DeferredJoinState::Failed { .. })
 }
 
 #[inline]
@@ -1531,6 +1549,116 @@ impl WsecPmkKind {
             Self::LegacyHexPmk => "legacy-hex-pmk",
             Self::HostEapolDeferred => "host-eapol-deferred",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HostEapolFrameProof {
+    eapol_version: u8,
+    packet_type: u8,
+    body_len: u16,
+    body_len_valid: bool,
+    descriptor_type: u8,
+    key_info: u16,
+    key_version: u16,
+    key_data_len: u16,
+    replay_counter_nonzero: bool,
+    message: &'static str,
+}
+
+fn host_eapol_frame_proof(packet: &[u8]) -> HostEapolFrameProof {
+    let Some(eapol) = packet.get(ETH_HEADER_LEN..) else {
+        return host_eapol_malformed_proof("short-ethernet");
+    };
+    let eapol_version = eapol.first().copied().unwrap_or(0);
+    let packet_type = eapol.get(1).copied().unwrap_or(0);
+    let body_len = get_u16_be(eapol, 2).unwrap_or(0);
+    if eapol.len() < EAPOL_HEADER_LEN {
+        return HostEapolFrameProof {
+            eapol_version,
+            packet_type,
+            body_len,
+            body_len_valid: false,
+            ..host_eapol_malformed_proof("short-eapol")
+        };
+    }
+
+    let body = &eapol[EAPOL_HEADER_LEN..];
+    let body_len_available = usize::from(body_len) <= body.len();
+    if packet_type != EAPOL_PACKET_TYPE_KEY {
+        return HostEapolFrameProof {
+            eapol_version,
+            packet_type,
+            body_len,
+            body_len_valid: body_len_available,
+            message: "non-key",
+            ..host_eapol_malformed_proof("non-key")
+        };
+    }
+    let key_body_len_valid = body_len_available && usize::from(body_len) >= EAPOL_KEY_MIN_BODY_LEN;
+    if !key_body_len_valid || body.len() < EAPOL_KEY_MIN_BODY_LEN {
+        return HostEapolFrameProof {
+            eapol_version,
+            packet_type,
+            body_len,
+            body_len_valid: key_body_len_valid,
+            message: "short-key",
+            ..host_eapol_malformed_proof("short-key")
+        };
+    }
+
+    let descriptor_type = body[0];
+    let key_info = get_u16_be(body, 1).unwrap_or(0);
+    let key_data_len = get_u16_be(body, 93).unwrap_or(0);
+    let replay_counter_nonzero = body[5..13].iter().any(|byte| *byte != 0);
+    HostEapolFrameProof {
+        eapol_version,
+        packet_type,
+        body_len,
+        body_len_valid: key_body_len_valid,
+        descriptor_type,
+        key_info,
+        key_version: key_info & EAPOL_KEY_INFO_KEY_VERSION_MASK,
+        key_data_len,
+        replay_counter_nonzero,
+        message: classify_eapol_key_message(key_info),
+    }
+}
+
+const fn host_eapol_malformed_proof(message: &'static str) -> HostEapolFrameProof {
+    HostEapolFrameProof {
+        eapol_version: 0,
+        packet_type: 0,
+        body_len: 0,
+        body_len_valid: false,
+        descriptor_type: 0,
+        key_info: 0,
+        key_version: 0,
+        key_data_len: 0,
+        replay_counter_nonzero: false,
+        message,
+    }
+}
+
+const fn classify_eapol_key_message(key_info: u16) -> &'static str {
+    let pairwise = key_info & EAPOL_KEY_INFO_KEY_TYPE != 0;
+    let ack = key_info & EAPOL_KEY_INFO_ACK != 0;
+    let mic = key_info & EAPOL_KEY_INFO_MIC != 0;
+    let install = key_info & EAPOL_KEY_INFO_INSTALL != 0;
+    let secure = key_info & EAPOL_KEY_INFO_SECURE != 0;
+    let encrypted = key_info & EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA != 0;
+    if pairwise && ack && !mic {
+        "m1"
+    } else if pairwise && !ack && mic && !secure {
+        "m2"
+    } else if pairwise && ack && mic && install && encrypted {
+        "m3"
+    } else if pairwise && !ack && mic && secure {
+        "m4"
+    } else if !pairwise && mic {
+        "group-key"
+    } else {
+        "unknown"
     }
 }
 
@@ -2269,6 +2397,16 @@ impl Cyw43NetDevice {
                 WPA2_PSK_CCMP_RSN_IE.len(),
             );
             self.program_join_request(ssid)?;
+            if matches!(completion_rule, JoinCompletionRule::HostEapolRequired) {
+                self.arm_host_eapol_proof_window("join-submit", ssid.len(), psk.len());
+                self.service_host_eapol_proof_window("join-submit");
+                self.mark_host_eapol_required("join-submit", ssid.len(), psk.len());
+                return if wait_for_completion {
+                    Err(DriverError::Protocol("host-eapol-required"))
+                } else {
+                    Ok(())
+                };
+            }
             if wait_for_completion {
                 return self.wait_for_join(secure, completion_rule);
             }
@@ -2307,6 +2445,77 @@ impl Cyw43NetDevice {
             );
             Ok(())
         }
+    }
+
+    fn arm_host_eapol_proof_window(&mut self, mode: &'static str, ssid_len: usize, psk_len: usize) {
+        self.link_up = false;
+        self.deferred_join_state = DeferredJoinState::Pending {
+            completion: JoinCompletionState::default(),
+            polls: 0,
+            secure: true,
+            completion_rule: JoinCompletionRule::HostEapolRequired,
+        };
+        self.state
+            .promote_cached_control_plane_exact_error("host-eapol-required");
+        info!(
+            "[cyw43] host-eapol proof window armed mode={mode} polls={} rx_poll=eapol-only dhcp=blocked tx=blocked ssid_len={ssid_len} psk_len={psk_len}",
+            HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS,
+        );
+    }
+
+    fn service_host_eapol_proof_window(&mut self, mode: &'static str) {
+        let start_eapol = self.host_eapol_rx_packets;
+        let mut event_frames = 0usize;
+        let mut control_frames = 0usize;
+        let mut empty_polls = 0usize;
+        let mut error: Option<DriverError> = None;
+
+        for _ in 0..HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS {
+            match self.process_next_frame(false) {
+                Ok(RxFrameResult::Event(_)) => event_frames = event_frames.saturating_add(1),
+                Ok(RxFrameResult::Control { .. }) => {
+                    control_frames = control_frames.saturating_add(1)
+                }
+                Ok(RxFrameResult::Data(_)) => {}
+                Ok(RxFrameResult::None) => {
+                    empty_polls = empty_polls.saturating_add(1);
+                    spin_loop();
+                }
+                Err(err) => {
+                    error = Some(err);
+                    break;
+                }
+            }
+            if self.host_eapol_rx_packets != start_eapol {
+                break;
+            }
+        }
+
+        let eapol_delta = self.host_eapol_rx_packets.saturating_sub(start_eapol);
+        match error {
+            Some(err) => warn!(
+                "[cyw43] host-eapol proof window result=error mode={mode} eapol_rx_delta={eapol_delta} eapol_rx_total={} events={event_frames} control={control_frames} empty_polls={empty_polls} err={err} action=terminal-host-eapol-required",
+                self.host_eapol_rx_packets,
+            ),
+            None => info!(
+                "[cyw43] host-eapol proof window result={} mode={mode} eapol_rx_delta={eapol_delta} eapol_rx_total={} events={event_frames} control={control_frames} empty_polls={empty_polls} action=terminal-host-eapol-required",
+                if eapol_delta == 0 { "not-yet-seen" } else { "eapol-seen" },
+                self.host_eapol_rx_packets,
+            ),
+        }
+    }
+
+    fn mark_host_eapol_required(&mut self, mode: &'static str, ssid_len: usize, psk_len: usize) {
+        self.link_up = false;
+        self.deferred_join_state = DeferredJoinState::Failed {
+            reason: "host-eapol-required",
+        };
+        self.state
+            .promote_cached_control_plane_exact_error("host-eapol-required");
+        warn!(
+            "[cyw43] join failed reason=host-eapol-required rx_poll=disabled dhcp=blocked tx=blocked mode={mode} ssid_len={ssid_len} psk_len={psk_len} eapol_rx={}",
+            self.host_eapol_rx_packets,
+        );
     }
 
     fn program_join_request(&mut self, ssid: &str) -> Result<(), DriverError> {
@@ -3448,10 +3657,21 @@ impl Cyw43NetDevice {
             self.host_eapol_rx_packets = self.host_eapol_rx_packets.saturating_add(1);
             self.state
                 .promote_cached_control_plane_exact_error("host-eapol-required");
+            let proof = host_eapol_frame_proof(packet);
             warn!(
-                "[cyw43] host-eapol frame seen count={} len={} action=drop reason=host-eapol-supplicant-required",
+                "[cyw43] host-eapol proof count={} msg={} len={} eapol_ver={} type={} body_len={} body_ok={} key_desc={} key_info=0x{:04x} key_ver={} replay={} kde_len={} action=drop status=host-eapol-required",
                 self.host_eapol_rx_packets,
+                proof.message,
                 packet.len(),
+                proof.eapol_version,
+                proof.packet_type,
+                proof.body_len,
+                if proof.body_len_valid { "yes" } else { "no" },
+                proof.descriptor_type,
+                proof.key_info,
+                proof.key_version,
+                if proof.replay_counter_nonzero { "yes" } else { "no" },
+                proof.key_data_len,
             );
             return Ok(RxFrameResult::None);
         }
@@ -3487,6 +3707,10 @@ impl Cyw43NetDevice {
     }
 
     fn poll_rx(&mut self) -> Option<HeaplessVec<u8, MAX_FRAME_LEN>> {
+        if !deferred_join_allows_rx_polling(self.deferred_join_state) {
+            return None;
+        }
+
         if matches!(self.deferred_join_state, DeferredJoinState::Pending { .. }) {
             self.service_deferred_join();
             if !self.link_up {
@@ -4143,18 +4367,20 @@ mod tests {
         control_plane_retry_after_reply_wait_uses_promoted_link,
         control_plane_retry_after_startup_link_reply_failure_target_clock_hz,
         control_response_copy_len, control_response_matches, control_tx_payload_offset_for_header,
-        deferred_join_bringup_status_label, derive_wpa2_psk_pmk, event_link_state_update,
+        deferred_join_allows_rx_polling, deferred_join_bringup_status_label,
+        deferred_join_requires_host_eapol, derive_wpa2_psk_pmk, event_link_state_update,
         event_msgs_ext_payload_len, firmware_mac_address_from_response,
         first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
-        initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
-        ioctl_no_progress_after_nonmatching_frames, ioctl_wait_loops, iovar_get_payload_len,
-        is_transport_retryable, join_completion_timeout_reason, join_event_result,
-        join_iovar_fallback_allows_set_ssid, join_security_iovar_failure_exact_error,
-        join_security_iovar_name, join_security_wpa_auth_failure_exact_error,
-        join_security_wpa_auth_stage, linux_attach_control_plane_probe_order,
-        linux_first_control_plane_iovar_order, linux_join_event_mask,
-        linux_optional_iovar_allows_unsupported, linux_station_path_enables_apsta,
+        host_eapol_frame_proof, initial_control_plane_bootstrap_policy_label,
+        initial_control_plane_data_clock_target_hz, ioctl_no_progress_after_nonmatching_frames,
+        ioctl_wait_loops, iovar_get_payload_len, is_transport_retryable,
+        join_completion_timeout_reason, join_event_result, join_iovar_fallback_allows_set_ssid,
+        join_security_iovar_failure_exact_error, join_security_iovar_name,
+        join_security_wpa_auth_failure_exact_error, join_security_wpa_auth_stage,
+        linux_attach_control_plane_probe_order, linux_first_control_plane_iovar_order,
+        linux_join_event_mask, linux_optional_iovar_allows_unsupported,
+        linux_station_path_enables_apsta,
         linux_station_path_keeps_rxglom_configured_before_preinit,
         linux_station_path_keeps_txglom_configured_before_preinit,
         linux_station_path_sets_ampdu_limits_before_join,
@@ -4175,19 +4401,23 @@ mod tests {
         FirmwareSupplicantPath, Ioctl, JoinCompletionRule, JoinCompletionState, RxFrameResult,
         RxSdpcmHeader, WsecPmkKind, BCME_BADARG, BCME_UNSUPPORTED, BDC_VERSION, BDC_VERSION_SHIFT,
         BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA, CHANNEL_EVENT,
-        CHANNEL_GLOM, CLM_CHUNK_SIZE, EVENTMSGS_EXT_SET_MASK, EVENTMSGS_EXT_VER, EVENT_ASSOC,
+        CHANNEL_GLOM, CLM_CHUNK_SIZE, EAPOL_HEADER_LEN, EAPOL_KEY_INFO_ACK,
+        EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA, EAPOL_KEY_INFO_INSTALL, EAPOL_KEY_INFO_KEY_TYPE,
+        EAPOL_KEY_INFO_MIC, EAPOL_KEY_INFO_SECURE, EAPOL_KEY_MIN_BODY_LEN, EAPOL_PACKET_TYPE_KEY,
+        ETH_HEADER_LEN, ETH_P_EAPOL, EVENTMSGS_EXT_SET_MASK, EVENTMSGS_EXT_VER, EVENT_ASSOC,
         EVENT_ASSOC_IND, EVENT_AUTH, EVENT_DISASSOC_IND, EVENT_FLAG_LINK, EVENT_IF, EVENT_LINK,
         EVENT_MASK_LEN, EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC, EVENT_REASSOC_IND,
-        EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN, IOCTL_NO_PROGRESS_AFTER_NONMATCHING_LIMIT,
-        IOCTL_WAIT_LOOPS, IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT,
-        IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, LINUX_BSSCFG_JOIN_PAYLOAD_LEN,
-        LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN, LINUX_EXT_JOIN_SCAN_OFFSET,
-        LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
-        SDPCM_CONTROL_TX_EXT_HEADER_LEN, SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN,
-        STATUS_ABORT, STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED, WPA2_PSK_CCMP_RSN_IE,
-        WPA_AUTH_WPA2_PSK, WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WSEC_FLAG_PASSPHRASE,
-        WSEC_LEGACY_HEX_PMK_LEN, WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
+        EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN, HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS,
+        IOCTL_NO_PROGRESS_AFTER_NONMATCHING_LIMIT, IOCTL_WAIT_LOOPS,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
+        IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
+        LINUX_BSSCFG_JOIN_PAYLOAD_LEN, LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN,
+        LINUX_EXT_JOIN_SCAN_OFFSET, LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_NO_NETWORKS,
+        STATUS_SUCCESS, STATUS_UNSOLICITED, WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK,
+        WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WSEC_FLAG_PASSPHRASE, WSEC_LEGACY_HEX_PMK_LEN,
+        WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
     };
     use crate::hal::HalError;
 
@@ -4569,6 +4799,109 @@ mod tests {
     }
 
     #[test]
+    fn failed_join_state_blocks_normal_rx_polling() {
+        let pending = DeferredJoinState::Pending {
+            completion: JoinCompletionState::default(),
+            polls: 0,
+            secure: true,
+            completion_rule: JoinCompletionRule::HostEapolRequired,
+        };
+        assert!(deferred_join_allows_rx_polling(DeferredJoinState::Disabled));
+        assert!(deferred_join_allows_rx_polling(pending));
+        assert!(!deferred_join_allows_rx_polling(
+            DeferredJoinState::Failed {
+                reason: "host-eapol-required",
+            }
+        ));
+        assert!(!deferred_join_allows_rx_polling(
+            DeferredJoinState::Failed {
+                reason: "join-timeout",
+            }
+        ));
+    }
+
+    #[test]
+    fn host_eapol_terminal_state_still_allows_explicit_eapol_proof() {
+        assert!(HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS <= 32);
+        assert!(deferred_join_requires_host_eapol(
+            DeferredJoinState::Failed {
+                reason: "host-eapol-required",
+            }
+        ));
+        assert!(!deferred_join_requires_host_eapol(
+            DeferredJoinState::Failed {
+                reason: "join-timeout",
+            }
+        ));
+    }
+
+    #[test]
+    fn host_eapol_proof_classifies_pairwise_message_1() {
+        let packet = host_eapol_key_packet(EAPOL_KEY_INFO_KEY_TYPE | EAPOL_KEY_INFO_ACK, 0);
+
+        let proof = host_eapol_frame_proof(&packet);
+
+        assert_eq!(proof.eapol_version, 2);
+        assert_eq!(proof.packet_type, EAPOL_PACKET_TYPE_KEY);
+        assert_eq!(proof.body_len, EAPOL_KEY_MIN_BODY_LEN as u16);
+        assert!(proof.body_len_valid);
+        assert_eq!(proof.descriptor_type, 2);
+        assert_eq!(proof.message, "m1");
+        assert_eq!(proof.key_version, 0);
+        assert!(proof.replay_counter_nonzero);
+    }
+
+    #[test]
+    fn host_eapol_proof_classifies_pairwise_message_3() {
+        let packet = host_eapol_key_packet(
+            EAPOL_KEY_INFO_KEY_TYPE
+                | EAPOL_KEY_INFO_ACK
+                | EAPOL_KEY_INFO_MIC
+                | EAPOL_KEY_INFO_INSTALL
+                | EAPOL_KEY_INFO_SECURE
+                | EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA
+                | 2,
+            24,
+        );
+
+        let proof = host_eapol_frame_proof(&packet);
+
+        assert_eq!(proof.message, "m3");
+        assert_eq!(proof.key_version, 2);
+        assert_eq!(proof.key_data_len, 24);
+    }
+
+    #[test]
+    fn host_eapol_proof_rejects_truncated_key_body() {
+        let mut packet = host_eapol_key_packet(EAPOL_KEY_INFO_KEY_TYPE | EAPOL_KEY_INFO_ACK, 0);
+        put_u16_be(
+            &mut packet,
+            ETH_HEADER_LEN + 2,
+            EAPOL_KEY_MIN_BODY_LEN as u16 + 1,
+        );
+
+        let proof = host_eapol_frame_proof(&packet);
+
+        assert_eq!(proof.message, "short-key");
+        assert!(!proof.body_len_valid);
+    }
+
+    #[test]
+    fn host_eapol_proof_rejects_short_declared_key_body() {
+        let mut packet = host_eapol_key_packet(EAPOL_KEY_INFO_KEY_TYPE | EAPOL_KEY_INFO_ACK, 0);
+        put_u16_be(
+            &mut packet,
+            ETH_HEADER_LEN + 2,
+            EAPOL_KEY_MIN_BODY_LEN as u16 - 1,
+        );
+
+        let proof = host_eapol_frame_proof(&packet);
+
+        assert_eq!(proof.message, "short-key");
+        assert!(!proof.body_len_valid);
+    }
+
+    #[test]
     fn deferred_join_link_event_waits_for_join_completion_state() {
         let link_success = Cyw43Event {
             flags: EVENT_FLAG_LINK,
@@ -4585,6 +4918,35 @@ mod tests {
             ..Cyw43Event::default()
         };
         assert_eq!(event_link_state_update(link_down, false), Some(false));
+    }
+
+    fn host_eapol_key_packet(
+        key_info: u16,
+        key_data_len: u16,
+    ) -> [u8; ETH_HEADER_LEN + EAPOL_HEADER_LEN + EAPOL_KEY_MIN_BODY_LEN] {
+        let mut packet = [0u8; ETH_HEADER_LEN + EAPOL_HEADER_LEN + EAPOL_KEY_MIN_BODY_LEN];
+        packet[0..6].copy_from_slice(&[0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
+        packet[6..12].copy_from_slice(&[0x02, 0x43, 0x4f, 0x48, 0x58, 0x55]);
+        put_u16_be(&mut packet, 12, ETH_P_EAPOL);
+        packet[ETH_HEADER_LEN] = 2;
+        packet[ETH_HEADER_LEN + 1] = EAPOL_PACKET_TYPE_KEY;
+        put_u16_be(
+            &mut packet,
+            ETH_HEADER_LEN + 2,
+            EAPOL_KEY_MIN_BODY_LEN as u16,
+        );
+        let body = ETH_HEADER_LEN + EAPOL_HEADER_LEN;
+        packet[body] = 2;
+        put_u16_be(&mut packet, body + 1, key_info);
+        packet[body + 12] = 1;
+        put_u16_be(&mut packet, body + 93, key_data_len);
+        packet
+    }
+
+    fn put_u16_be(buf: &mut [u8], offset: usize, value: u16) {
+        if let Some(slot) = buf.get_mut(offset..offset + 2) {
+            slot.copy_from_slice(&value.to_be_bytes());
+        }
     }
 
     #[test]

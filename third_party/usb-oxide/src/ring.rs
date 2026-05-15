@@ -555,35 +555,6 @@ impl<H: Dma> Ring<H> {
         Ok(addr)
     }
 
-    /// Enqueues one TRB, then publishes only the device-visible TRB cache line.
-    pub fn enqueue_and_sync_trb(&mut self, host: &H, trb: Trb, label: &'static str) -> Result<u64> {
-        let enqueue_before = self.enqueue;
-        let addr = self.try_enqueue(host, trb)?;
-        compiler_fence(Ordering::Release);
-        let offset = enqueue_before
-            .checked_mul(core::mem::size_of::<Trb>())
-            .ok_or(UsbError::DmaSync)?;
-        let wrapped = self.enqueue == 0;
-        let published =
-            self.mem
-                .share_range_for_device(host, offset, core::mem::size_of::<Trb>(), label)?;
-        if published != addr {
-            return Err(UsbError::DmaSync);
-        }
-        if wrapped {
-            let link_offset = (self.size - 1)
-                .checked_mul(core::mem::size_of::<Trb>())
-                .ok_or(UsbError::DmaSync)?;
-            self.mem.share_range_for_device(
-                host,
-                link_offset,
-                core::mem::size_of::<Trb>(),
-                label,
-            )?;
-        }
-        Ok(addr)
-    }
-
     /// Returns `(enqueue_index, producer_cycle)` for diagnostics.
     pub fn debug_state(&self) -> (usize, bool) {
         (self.enqueue, self.cycle)
@@ -961,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn ring_enqueue_and_sync_trb_publishes_only_submitted_trb() {
+    fn ring_enqueue_and_sync_publishes_full_ring_for_command_visibility() {
         let host = MockDma::default();
         let mut ring = Ring::<MockDma>::new(&host, 8).expect("allocate ring");
         host.share_calls.store(0, Ordering::Relaxed);
@@ -969,7 +940,7 @@ mod tests {
         host.last_share_len.store(0, Ordering::Relaxed);
 
         let addr = ring
-            .enqueue_and_sync_trb(
+            .enqueue_and_sync(
                 &host,
                 Trb {
                     param: 0,
@@ -988,7 +959,7 @@ mod tests {
         );
         assert_eq!(
             host.last_share_len.load(Ordering::Relaxed),
-            core::mem::size_of::<Trb>()
+            8 * core::mem::size_of::<Trb>()
         );
         let observed = ring.debug_trb_at(0).expect("debug trb");
         assert_eq!(observed.control, (trb_type::NO_OP_CMD << 10) | 1);

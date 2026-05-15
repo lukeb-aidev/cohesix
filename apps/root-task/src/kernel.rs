@@ -4727,16 +4727,18 @@ fn bootstrap<P: Platform>(
                         if status.address_source == "wifi-host-eapol-required" {
                             let _ = write!(
                                 ok_line,
-                                "[net-console] blocked-link backend={} detail={} dhcp={} port={port} mac={mac}",
+                                "[net-console] blocked-link backend={} active={} detail={} dhcp={} port={port} mac={mac}",
                                 status.backend,
+                                status.active_interface,
                                 status.address_source,
                                 status.dhcp_phase,
                             );
                         } else if status.address_source == "wifi-associating" {
                             let _ = write!(
                                 ok_line,
-                                "[net-console] pending-link backend={} detail={} port={port} mac={mac}",
+                                "[net-console] pending-link backend={} active={} detail={} port={port} mac={mac}",
                                 status.backend,
+                                status.active_interface,
                                 status.address_source,
                             );
                         } else if status.mode == "dhcp" && status.address_source == "dhcp-pending" {

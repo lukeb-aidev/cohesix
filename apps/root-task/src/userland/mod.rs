@@ -206,8 +206,9 @@ pub fn main(ctx: BootContext) -> ! {
                             };
                             let _ = write!(
                                 line,
-                                "[net-console] {state} backend={} address_source={} dhcp={} port={}",
+                                "[net-console] {state} backend={} active={} address_source={} dhcp={} port={}",
                                 status.backend,
+                                status.active_interface,
                                 status.address_source,
                                 status.dhcp_phase,
                                 crate::net::CONSOLE_TCP_PORT,

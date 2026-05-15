@@ -968,6 +968,29 @@ def test_gate_summary_keeps_usb_timeout_plan_ahead_of_timer_halt() -> None:
     assert gates.usb_blocker == "cmd-live-timeout-snapshot-missing"
 
 
+def test_gate_summary_reports_linux_captured_command_queued_behind_stale_crcr() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x036c tag=cmd-gate-timeout-plan-0 "
+            "expected_usbcmd_usbsts=0x0000000500000000 "
+            "expected_ptr=0x000000040404f010",
+            "[local-seat] xhci.diag stage=0x036d tag=cmd-gate-timeout-plan-1 "
+            "crcr_plan=0x000000040404f001 "
+            "dcbaap_plan=0x000000040402b000",
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-linux-captured-timeout bus=pcie-window "
+            "action=return-to-shell detail=cmd-event-ring-timeout",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-stale-crcr-dequeue"
+
+
 def test_gate_summary_promotes_prompt_safe_event_ring_timeout_snapshot() -> None:
     events = normalizer.parse_events(
         [
@@ -1639,6 +1662,70 @@ def test_gate_summary_rejects_legacy_linux_event_generation_as_command_proof() -
 
         assert gates.usb_gate < 4
         assert gates.usb_blocker != "none"
+
+
+def test_gate_summary_accepts_linux_captured_fallback_after_uboot_recovery_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-timeout bus=pcie-window "
+            "action=recover-polling-event-generation detail=cmd-event-ring-timeout "
+            "event_generation=uboot-poll-preserved-leading-events "
+            "recovery_event_generation=uboot-timeout-polling-fresh-recovery",
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-recovery-timeout bus=pcie-window "
+            "action=probe-linux-captured-event-generation "
+            "detail=cmd-event-ring-timeout "
+            "event_generation=uboot-timeout-polling-fresh-recovery "
+            "uboot_event_generation=uboot-poll-preserved-leading-events "
+            "fallback_event_generation=linux-captured-command-event-generation-after-uboot-timeout",
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-linux-captured-ok-cleanup-failed "
+            "bus=pcie-window slot=1 cleanup=disable-slot-timeout "
+            "cleanup_generation=linux-captured-command-event-generation "
+            "action=unlock-port-sampling "
+            "reason=linux-captured-command-event-generation-after-uboot-timeout "
+            "recovery_source=enable-slot-recovery-timeout "
+            "event_generation=linux-captured-command-event-generation-after-uboot-timeout "
+            "uboot_event_generation=uboot-poll-preserved-leading-events "
+            "uboot_recovery_event_generation=uboot-timeout-polling-fresh-recovery",
+            "[local-seat] usb proof_summary gate=4 blocker=none "
+            "controller=ready "
+            "command=enable-slot-linux-captured-ok-cleanup-failed "
+            "event=command-completion "
+            "cleanup_generation=linux-captured-command-event-generation "
+            "recovery_source=enable-slot-recovery-timeout "
+            "event_generation=linux-captured-command-event-generation-after-uboot-timeout",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "none"
+
+
+def test_gate_summary_rejects_linux_captured_fallback_without_recovery_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-timeout bus=pcie-window "
+            "action=return-to-shell detail=cmd-event-ring-timeout "
+            "event_generation=uboot-poll-preserved-leading-events",
+            "[local-seat] xhci root-port command-probe "
+            "result=enable-slot-linux-captured-ok "
+            "bus=pcie-window slot=1 cleanup=disable-slot-ok "
+            "cleanup_generation=linux-captured-command-event-generation "
+            "action=unlock-port-sampling "
+            "reason=linux-captured-command-event-generation-after-uboot-timeout "
+            "event_generation=linux-captured-command-event-generation-after-uboot-timeout",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-event-ring-timeout"
 
 
 def test_gate_summary_rejects_recovery_with_linux_cleanup_generation() -> None:
@@ -3071,6 +3158,61 @@ def test_gate_summary_reports_host_eapol_required_after_probe_join() -> None:
             "[INFO root_task::drivers::cyw43] [cyw43] join pending mode=deferred "
             "polls=0 ssid_len=6 psk_len=12 secure=yes fwsup=no "
             "completion_rule=host-eapol-required",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "host-eapol-required"
+    assert gates.wifi_exact == "host-eapol-required"
+    assert gates.wifi_phase == "join-security"
+
+
+def test_gate_summary_reports_host_eapol_required_after_fail_closed_join_submit() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "path=bsscfg-wrapper unsupported status=0xffffffe9 "
+            "action=continue-host-eapol-required reason=firmware-offload-unavailable",
+            "[INFO root_task::drivers::cyw43] [cyw43] join request "
+            "path=primary-bsscfg:join action=ready ssid_len=12",
+            "[WARN root_task::drivers::cyw43] [cyw43] join failed "
+            "reason=host-eapol-required rx_poll=disabled dhcp=blocked tx=blocked "
+            "mode=join-submit ssid_len=12 psk_len=12",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "host-eapol-required"
+    assert gates.wifi_exact == "host-eapol-required"
+    assert gates.wifi_phase == "join-security"
+
+
+def test_gate_summary_reports_host_eapol_required_after_proof_window() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "path=bsscfg-wrapper unsupported status=0xffffffe9 "
+            "action=continue-host-eapol-required reason=firmware-offload-unavailable",
+            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol proof window "
+            "armed mode=join-submit polls=24 rx_poll=eapol-only dhcp=blocked "
+            "tx=blocked ssid_len=12 psk_len=12",
+            "[WARN root_task::drivers::cyw43] [cyw43] host-eapol proof count=1 "
+            "msg=m1 len=117 eapol_ver=2 type=3 body_len=99 body_ok=yes "
+            "key_desc=2 key_info=0x008a key_ver=2 replay=yes kde_len=0 "
+            "action=drop status=host-eapol-required",
+            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol proof window "
+            "result=eapol-seen mode=join-submit eapol_rx_delta=1 "
+            "eapol_rx_total=1 events=2 control=0 empty_polls=3 "
+            "action=terminal-host-eapol-required",
+            "[WARN root_task::drivers::cyw43] [cyw43] join failed "
+            "reason=host-eapol-required rx_poll=disabled dhcp=blocked tx=blocked "
+            "mode=join-submit ssid_len=12 psk_len=12 eapol_rx=1",
         ]
     )
 

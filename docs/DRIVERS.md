@@ -404,8 +404,11 @@ power/reset state.
   Cohesix skips PMK programming, submits the primary join request, and exports
   `host-eapol-required` as the next secure boundary. Until a host
   EAPOL/key-install path completes the secure handshake, Cohesix keeps DHCP and
-  data TX disabled and must not fall back to `SET_SSID`-only completion or a
-  lower-level transport hint. The 2026-05-14 22:11 trace proves the corrected
+  data TX disabled, runs only a bounded join-submit EAPOL proof window, parks
+  the normal RX poller after that terminal boundary, and must not fall back to
+  `SET_SSID`-only completion or a lower-level transport hint. Explicit
+  diagnostic commands may still probe the HAL-owned SDIO/control path. The
+  2026-05-14 22:11 trace proves the corrected
   boundary: plain `sup_wpa` and wrapper `bsscfg:sup_wpa` both return
   `BCME_UNSUPPORTED`/`0xffffffe9`, and the old Cohesix image then incorrectly
   tried `WLC_SET_WSEC_PMK` twice before receiving `BCME_BADARG`/`0xfffffffe`.
@@ -455,14 +458,22 @@ power/reset state.
   TX stay blocked until a bounded host EAPOL/key-install implementation proves
   completion. Device construction after this boundary must report a precise
   bring-up status such as `wifi-host-eapol-required`; it is not proof that the
-  Wi-Fi data path is online. Deferred join timeout and prompt-side `nettest`
-  diagnostics must preserve `wifi-host-eapol-required` instead of collapsing the
-  failure into generic association or DHCP status. Any root-task panic after
-  that line is a boot blocker and proof tooling must preserve the host-EAPOL
-  Wi-Fi blocker rather than rewriting it to `none`. Any other `PSK_SUP` status
-  is a failed secure join, not a pending-success edge. DHCP and data TX must not
-  begin before that secure completion rule is satisfied; the root-task DHCP
-  client is started only after the Wi-Fi backend reports no pending
+  Wi-Fi data path is online. Normal smoltcp receive polling must stop once that
+  state is terminal so the root console is not flooded with no-progress Function
+  1 `SDIO_INT_STATUS` latch reads; prompt-side `wifi diag`, `wifi retry`, and
+  related diagnostics remain the explicit way to ask the HAL for another live
+  probe. During the join-submit proof window, Cohesix may parse only the
+  EAPOL/EAPOL-Key envelope for proof (`m1`/`m3` shape, key-info bits,
+  replay-counter presence, and key-data length); that proof hook must still
+  drop the frame and keep DHCP/data TX blocked. Deferred join timeout and
+  prompt-side `nettest` diagnostics must preserve `wifi-host-eapol-required`
+  instead of collapsing the failure into generic association or DHCP status. Any
+  root-task panic after that line is a boot blocker and proof tooling must
+  preserve the host-EAPOL Wi-Fi blocker rather than rewriting it to `none`. Any
+  other `PSK_SUP` status is a failed secure join, not a pending-success edge.
+  DHCP and data TX must not begin before that secure completion rule is
+  satisfied; the root-task DHCP client is started only after the Wi-Fi backend
+  reports no pending
   association status and a live Wi-Fi carrier. A post-join `EVENT_LINK` without
   the link flag is `wifi-link-down`; it must defer DHCP rather than being
   normalized as DHCP progress.
@@ -618,17 +629,20 @@ active path is Cohesix-owned cold start:
 - HAL reselects VL805 `01:00.0` via BCM2711 `EXT_CFG_INDEX` before each
   `EXT_CFG_DATA` access and rejects selector echoes.
 - Ownership can promote only on exact live `1106:3483`, class `0x0c0330`,
-  BAR0 translation, COMMAND readback, and poll-only proof that INTx is masked,
+  BAR0 translation, COMMAND readback, command-proof PCIe Device Control
+  (`DevCtl=0x200f`: 128-byte MPS, 512-byte MRRS, error reporting, Relaxed
+  Ordering clear, and No Snoop clear), and poll-only proof that INTx is masked,
   MSI is disabled when present, and MSI-X is mask-all/disabled when present.
 - If the exact VL805 tuple appears with an unassigned 64-bit BAR, HAL may assign
   the Pi 4 outbound-window BAR value through EXT_CFG and read it back. Do not
   assign BARs for bad IDs, bad class, selector echoes, absent link proof, or
   any other tuple.
 - xHCI ownership-register, `USBCMD.RUN`, and endpoint-doorbell
-  posted-write flushes use HAL-owned BCM2711 EXT_CFG selector/COMMAND readback
-  only. The 2026-05-10 Pi 4 trace proved that even an xHCI capability dword read
-  at BAR offset `0x0000` can halt immediately after `USBCMD.RUN`; never use xHCI
-  BAR reads, `USBSTS`, or any `PORTSC` as the posted-write drain on this
+  posted-write flushes use HAL-owned BCM2711 EXT_CFG selector/COMMAND readback,
+  endpoint BAR readback, and root bridge status, never xHCI BAR drains. The
+  2026-05-10 Pi 4 trace proved that even an xHCI capability dword read at BAR
+  offset `0x0000` can halt immediately after `USBCMD.RUN`; never use xHCI BAR
+  reads, `USBSTS`, or any `PORTSC` as the posted-write drain on this
   prompt-safe path. The only live xHCI BAR read permitted on the Pi 4
   `platform-reset-complete` command gate is U-Boot's pre-`RUN` `CRCR` seed read
   after the HAL mailbox reset and blind HCRST settle. The active
@@ -660,15 +674,15 @@ active path is Cohesix-owned cold start:
   publishes from a zero reserved-bit seed instead of synthesizing Linux's later
   observed `CRCR` running-status bit. The U-Boot `DNCTRL=0` write is also
   HAL-drained
-  before `USBCMD.RUN`. It must DMA-publish the submitted command TRB as
-  the exact 16-byte device-visible cache range U-Boot flushes, using HAL
-  clean+invalidate rather than clean-only publication. The TRB publish order is
-  part of the contract: parameter low, parameter high, status, then the control
-  dword with the cycle bit last, matching U-Boot's `queue_trb()` ownership
-  handoff. Cohesix then issues a completion-grade command-ring
-  publish barrier, writes U-Boot's `DB_VALUE_HOST` to doorbell `0`, and drains
-  that posted write through the HAL-owned EXT_CFG path before polling the event
-  ring with the same 5 s command-event budget.
+  before `USBCMD.RUN`. It must write the submitted command TRB in U-Boot
+  `queue_trb()` order: parameter low, parameter high, status, then the control
+  dword with the cycle bit last. Cohesix then DMA-publishes the whole
+  command-ring allocation with HAL clean+invalidate before issuing the
+  completion-grade command-ring publish barrier. This is stricter than U-Boot's
+  16-byte cache flush while preserving the same ownership handoff. Cohesix then
+  writes U-Boot's `DB_VALUE_HOST` to doorbell `0` and drains that posted write
+  through the HAL-owned EXT_CFG/endpoint-BAR/root-status path before polling the
+  event ring with the same 5 s command-event budget.
   The command proof is Enable Slot, matching U-Boot's first non-root-hub xHCI
   allocation gate. Already-posted current-boot Port Status Change events remain
   on the event ring and are skipped/acknowledged while the Enable Slot command
@@ -689,10 +703,10 @@ active path is Cohesix-owned cold start:
   does not collapse both halves into one ambiguous stage. Command doorbell `0`
   itself still uses the U-Boot command
   value, but seL4 userland must drain that posted PCIe write through HAL-owned
-  EXT_CFG selector/COMMAND readback; it must not use an xHCI BAR read as the
-  drain. A missing platform posted-write hook is a hard failure for the Pi 4
-  high-BAR VL805 ownership-register, command-doorbell, and endpoint-doorbell
-  paths.
+  EXT_CFG selector/COMMAND readback plus endpoint BAR and root bridge status
+  readbacks; it must not use an xHCI BAR read as the drain. A missing platform
+  posted-write hook is a hard failure for the Pi 4 high-BAR VL805
+  ownership-register, command-doorbell, and endpoint-doorbell paths.
 - If the first U-Boot-shaped Enable Slot attempt times out after consuming
   current-boot PSC events, Cohesix may run exactly one bounded command recovery
   lane: stop/reset the controller with blind prompt-safe settles, republish
@@ -706,12 +720,26 @@ active path is Cohesix-owned cold start:
   ring pointer. Other recovery lanes preserve low bits from a trusted snapshot or
   publish from a zero reserved-bit seed when no live read is allowed.
   The recovery lane still must not use xHCI BAR reads, `USBSTS`, or `PORTSC` as
-  proof before command completion, and it must not replay Linux-shaped
-  event-generation writes or `ERDP.EHB` acknowledgement before the retry command
-  completes. Only the fresh matching Command Completion Event for that new
-  command advances gate 4; stale Linux-shaped labels, pre-command status reads,
-  post-enqueue event-generation replay, interrupt-delivery bits without MSI
-  ownership, or a same-command re-doorbell are not proof.
+  proof before command completion, and it must not acknowledge `ERDP.EHB` before
+  the retry command completes. If both the cold U-Boot-shaped Enable Slot and
+  this fresh U-Boot-shaped recovery lane time out while current-boot PSC events
+  prove that the event ring is live, Cohesix may run one bounded
+  Linux-captured command-event-generation fallback. That fallback is not
+  U-Boot proof; it must be logged as
+  `linux-captured-command-event-generation-after-uboot-timeout`, use a
+  one-shot command path with no hidden retry, reset and republish fresh
+  command/event rings again so the fallback Enable Slot TRB is at the published
+  `CRCR` dequeue pointer, perform the Linux-captured event-ring/IMAN
+  acknowledgement through HAL-drained paths, write the captured Linux
+  command-event controls (`DNCTRL=2`, `IMOD=0xa0`, `IMAN.IE`, and
+  `USBCMD.RUN|INTE`), then ring DB0 for that fresh Enable Slot command. A
+  fallback command queued behind an already timed-out TRB is
+  `cmd-stale-crcr-dequeue`, not proof. Only a matching Command Completion Event
+  from that bounded fallback advances gate 4, and the cleanup lane must identify
+  `cleanup_generation=linux-captured-command-event-generation`. Stale legacy
+  Linux-shaped labels, pre-command status reads, post-enqueue event-generation
+  replay without the preceding U-Boot recovery timeout, interrupt-delivery bits
+  without MSI ownership, or a same-command re-doorbell are not proof.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. USB keyboard availability must not depend on the
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local

@@ -891,16 +891,26 @@ def usb_command_probe_success(
     cleanup_generation: str | None = None,
     recovery_source: str | None = None,
 ) -> bool:
-    """Return true for command proofs that satisfy the cold-boot poll-only gate."""
+    """Return true for command proofs that satisfy the Pi 4 command gate."""
 
     label = value.lower().strip()
+    event = (event_generation or "").lower().strip()
     cleanup = (cleanup_generation or "").lower().strip()
     recovery = (recovery_source or "").lower().strip()
     if label.startswith("no-op-"):
         return False
+    if label in {
+        "enable-slot-linux-captured-ok",
+        "enable-slot-linux-captured-ok-cleanup-failed",
+    }:
+        return (
+            event == "linux-captured-command-event-generation-after-uboot-timeout"
+            and cleanup == "linux-captured-command-event-generation"
+            and recovery == "enable-slot-recovery-timeout"
+        )
     if "linux-event-ok" in label:
         return False
-    if event_generation and "linux-shaped" in event_generation.lower().strip():
+    if event and "linux-shaped" in event:
         return False
     if cleanup and "linux" in cleanup:
         return False
@@ -1517,6 +1527,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     command_probe_verb: str | None = None
     command_timeout_detail: str | None = None
     command_recovery_source: str | None = None
+    command_timeout_expected_ptr: int | None = None
+    command_timeout_crcr_plan: int | None = None
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
     precise_command_timeout_details = {
@@ -1534,6 +1546,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "cmd-poll-pending",
         "cmd-doorbell-write-halt",
         "cmd-submit-proof-timer-preempted",
+        "cmd-stale-crcr-dequeue",
     }
     stale_command_timeout_details = precise_command_timeout_details - {"cmd-poll-pending"}
     for event in event_list:
@@ -1718,8 +1731,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 elif proof_blocker == "cmd-poll-pending":
                     gate = max(gate, 4)
                 if (
-                    command_timeout_detail == "usbcmd-run-preserved-reset-bit"
-                    and proof_blocker == "cmd-event-ring-timeout"
+                    proof_blocker == "cmd-event-ring-timeout"
+                    and command_timeout_detail in stale_command_timeout_details
                 ):
                     blocker = command_timeout_detail
                 else:
@@ -1901,6 +1914,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = "unknown"
             if run_usbcmd_preserved_reset_bit:
                 blocker = "usbcmd-run-preserved-reset-bit"
+            command_timeout_expected_ptr = None
+            command_timeout_crcr_plan = None
             gate = max(gate, 3)
         if (
             "cmd-poll-only-timeout" in raw
@@ -1929,12 +1944,28 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = command_timeout_detail
         elif tag.startswith("cmd-event-ring-timeout"):
             gate = max(gate, 3)
-            if command_timeout_detail != "usbcmd-run-preserved-reset-bit":
+            if command_timeout_detail not in {
+                "usbcmd-run-preserved-reset-bit",
+                "cmd-stale-crcr-dequeue",
+            }:
                 command_timeout_detail = "cmd-event-ring-timeout"
             blocker = command_timeout_detail
         elif tag.startswith("cmd-gate-timeout-plan"):
             gate = max(gate, 3)
             saw_command_timeout_plan = True
+            if tag == "cmd-gate-timeout-plan-0":
+                command_timeout_expected_ptr = parse_hex_int(fields.get("expected_ptr"))
+                command_timeout_crcr_plan = None
+            elif tag == "cmd-gate-timeout-plan-1":
+                command_timeout_crcr_plan = parse_hex_int(fields.get("crcr_plan"))
+                if (
+                    command_timeout_expected_ptr is not None
+                    and command_timeout_crcr_plan is not None
+                    and command_timeout_expected_ptr != (command_timeout_crcr_plan & ~0xF)
+                ):
+                    command_timeout_detail = "cmd-stale-crcr-dequeue"
+                    blocker = command_timeout_detail
+                    continue
             if command_timeout_detail is None:
                 command_timeout_detail = "cmd-live-timeout-snapshot-missing"
             blocker = command_timeout_detail
@@ -2043,6 +2074,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             ):
                 value = fields.get(key)
                 if value and value not in {"none", "n/a"}:
+                    value_label = value.lower().strip()
                     normalized_value = normalize_usb_blocker(value)
                     if (
                         key == "result"
@@ -2058,6 +2090,19 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     ):
                         gate = max(gate, 3)
                         blocker = "cmd-event-ring-timeout"
+                    elif key == "result" and value_label in {
+                        "enable-slot-linux-captured-ok",
+                        "enable-slot-linux-captured-ok-cleanup-failed",
+                    }:
+                        gate = max(gate, 3)
+                        blocker = "cmd-event-ring-timeout"
+                    elif (
+                        key == "result"
+                        and value_label == "enable-slot-linux-captured-timeout"
+                        and command_timeout_detail in stale_command_timeout_details
+                    ):
+                        gate = max(gate, 3)
+                        blocker = command_timeout_detail
                     elif (
                         normalized_value in USB_OUTCOME_BLOCKERS
                         and command_timeout_detail in stale_command_timeout_details

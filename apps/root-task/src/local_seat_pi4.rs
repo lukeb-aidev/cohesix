@@ -3931,7 +3931,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x03fb
             | 0x03fc..=0x03fd
             | 0x03fe..=0x03ff
-            | 0x0400..=0x0405
+            | 0x0400..=0x0406
     )
 }
 
@@ -3961,7 +3961,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x03fb
             | 0x03fc..=0x03fd
             | 0x03fe..=0x03ff
-            | 0x0400..=0x0405
+            | 0x0400..=0x0406
     )
 }
 
@@ -3978,7 +3978,7 @@ const fn xhci_diag_stage_force_log(stage: u16) -> bool {
             | 0x03b3..=0x03be
             | 0x03c4..=0x03ee
             | 0x03fe..=0x03ff
-            | 0x0400..=0x0405
+            | 0x0400..=0x0406
     )
 }
 
@@ -4160,6 +4160,7 @@ const fn xhci_diag_stage_value_labels(
         0x0403 => Some(("port", "delay_spins", "profile")),
         0x0404 => Some(("port", "result", "profile")),
         0x0405 => Some(("port", "error", "profile")),
+        0x0406 => Some(("psc_count", "psc_mask", "event_syncs")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4496,6 +4497,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0403 => Some("usb-stale-uboot-root-port-reset-begin"),
         0x0404 => Some("usb-stale-uboot-root-port-reset-ok"),
         0x0405 => Some("usb-stale-uboot-root-port-reset-failed"),
+        0x0406 => Some("cmd-prompt-safe-psc-preserved"),
         0x03c0 => Some("usb-hid-report-event"),
         0x03c1 => Some("usb-hid-report-decode-fail"),
         0x03c2 => Some("usb-hid-report-empty"),
@@ -4828,6 +4830,8 @@ fn usb_command_probe_proves_ring(label: &str) -> bool {
             | "enable-slot-ok-cleanup-failed"
             | "enable-slot-recovery-ok"
             | "enable-slot-recovery-ok-cleanup-failed"
+            | "enable-slot-linux-captured-ok"
+            | "enable-slot-linux-captured-ok-cleanup-failed"
     )
 }
 
@@ -4932,23 +4936,84 @@ fn xhci_probe_enable_slot_fresh_recovery_after_timeout(
         }
         Err(err @ (UsbError::EnableSlotTimeout | UsbError::Timeout)) => {
             let result = usb_enable_slot_recovery_probe_error_label(err);
-            let mut line = heapless::String::<384>::new();
+            let linux_event_generation =
+                "linux-captured-command-event-generation-after-uboot-timeout";
+            let linux_cleanup_generation = "linux-captured-command-event-generation";
+            let mut line = heapless::String::<640>::new();
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] xhci root-port command-probe result={result} bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180 event_candidate_mask=0x{event_candidate_mask:04x} event_generation={recovery_event_generation} uboot_event_generation={event_generation}"
+                    "[local-seat] xhci root-port command-probe result={result} bus={bus} action=probe-linux-captured-event-generation detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180 event_candidate_mask=0x{event_candidate_mask:04x} event_generation={recovery_event_generation} uboot_event_generation={event_generation} fallback_event_generation={linux_event_generation}"
                 ),
             );
             boot_log::force_uart_line(line.as_str());
-            let mut summary = heapless::String::<384>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut summary,
-                format_args!(
-                    "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command={result} event=missing event_generation={recovery_event_generation} uboot_event_generation={event_generation} irq27_role=timer-only pcie_irqs=179,175,180"
-                ),
-            );
-            boot_log::force_uart_line(summary.as_str());
-            result
+            match ctrl.probe_enable_slot_linux_captured_event_generation_prompt_safe() {
+                Ok(slot_id) => {
+                    let cleanup_result =
+                        ctrl.disable_slot_linux_captured_event_generation_prompt_safe(slot_id);
+                    let cleanup = usb_disable_slot_cleanup_label(cleanup_result);
+                    let result = if cleanup == "disable-slot-ok" {
+                        "enable-slot-linux-captured-ok"
+                    } else {
+                        "enable-slot-linux-captured-ok-cleanup-failed"
+                    };
+                    let mut line = heapless::String::<640>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci root-port command-probe result={result} bus={bus} slot={slot_id} cleanup={cleanup} cleanup_generation={linux_cleanup_generation} action=unlock-port-sampling reason=linux-captured-command-event-generation-after-uboot-timeout recovery_source=enable-slot-recovery-timeout event_candidate_mask=0x{event_candidate_mask:04x} event_generation={linux_event_generation} uboot_event_generation={event_generation} uboot_recovery_event_generation={recovery_event_generation}"
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    let mut summary = heapless::String::<640>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut summary,
+                        format_args!(
+                            "[local-seat] usb proof_summary gate=4 blocker=none controller=ready command={result} event=command-completion cleanup_generation={linux_cleanup_generation} recovery_source=enable-slot-recovery-timeout event_generation={linux_event_generation} uboot_event_generation={event_generation} uboot_recovery_event_generation={recovery_event_generation} irq27_role=timer-only pcie_irqs=179,175,180"
+                        ),
+                    );
+                    boot_log::force_uart_line(summary.as_str());
+                    result
+                }
+                Err(UsbError::EnableSlotTimeout | UsbError::Timeout) => {
+                    let result = "enable-slot-linux-captured-timeout";
+                    let mut line = heapless::String::<640>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci root-port command-probe result={result} bus={bus} action=return-to-shell detail=cmd-event-ring-timeout irq27_role=timer-only pcie_irqs=179,175,180 event_candidate_mask=0x{event_candidate_mask:04x} event_generation={linux_event_generation} uboot_event_generation={event_generation} uboot_recovery_event_generation={recovery_event_generation} recovery_source=enable-slot-recovery-timeout"
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    let mut summary = heapless::String::<640>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut summary,
+                        format_args!(
+                            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command={result} event=missing event_generation={linux_event_generation} uboot_event_generation={event_generation} uboot_recovery_event_generation={recovery_event_generation} recovery_source=enable-slot-recovery-timeout irq27_role=timer-only pcie_irqs=179,175,180"
+                        ),
+                    );
+                    boot_log::force_uart_line(summary.as_str());
+                    result
+                }
+                Err(err) => {
+                    let result = match &err {
+                        UsbError::CmdFail(_) => "enable-slot-linux-captured-command-failed",
+                        UsbError::PostedWriteFlushFailed => {
+                            "enable-slot-linux-captured-posted-flush-failed"
+                        }
+                        _ => "enable-slot-linux-captured-error",
+                    };
+                    let mut line = heapless::String::<640>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] xhci root-port command-probe result={result} bus={bus} action=return-to-shell detail={err:?} event_candidate_mask=0x{event_candidate_mask:04x} event_generation={linux_event_generation} uboot_event_generation={event_generation} uboot_recovery_event_generation={recovery_event_generation} recovery_source=enable-slot-recovery-timeout"
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    result
+                }
+            }
         }
         Err(err) => {
             let result = usb_enable_slot_recovery_probe_error_label(err);
@@ -7684,6 +7749,7 @@ fn prepare_vl805_pci_bcm2711(
         }
     };
     let interrupt_modes_quiesced = proof.interrupt_modes_quiesced();
+    let pcie_device_control_ready = proof.pcie_device_control_ready();
     let pi4_pcie::Pi4Vl805PcieProof {
         status,
         vendor_id,
@@ -7696,6 +7762,7 @@ fn prepare_vl805_pci_bcm2711(
         mmio,
         msi_control_after,
         msix_control_after,
+        pcie_devctl_after,
         ..
     } = proof;
     if mmio != RPI4_XHCI_MMIO_HIGH_CANDIDATE || !xhci_mmio_candidate_valid(mmio) {
@@ -7723,6 +7790,18 @@ fn prepare_vl805_pci_bcm2711(
         boot_log::force_uart_line(line.as_str());
         return None;
     }
+    if !pcie_device_control_ready {
+        let mut line = heapless::String::<224>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 bcm2711-pcie reject devctl=0x{devctl:04x} reason=pcie-devctl-not-ready",
+                devctl = pcie_devctl_after.unwrap_or(0),
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        return None;
+    }
     remember_vl805_msi_disabled_proof(true);
     if !ensure_vl805_config_replay_irq_sinks(hal) {
         boot_log::force_uart_line(
@@ -7731,11 +7810,12 @@ fn prepare_vl805_pci_bcm2711(
         return None;
     }
 
-    let mut line = heapless::String::<384>::new();
+    let mut line = heapless::String::<512>::new();
     let _ = core::fmt::Write::write_fmt(
         &mut line,
         format_args!(
-            "[local-seat] vl805 bcm2711-pcie selected cfg=hal-ext status=0x{status:08x} vid:did={vendor_id:04x}:{device_id:04x} class=0x{class_code:06x} cmd=0x{command_before:04x}->0x{command_after:04x} interrupts=quiesced bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{mmio:016x}"
+            "[local-seat] vl805 bcm2711-pcie selected cfg=hal-ext status=0x{status:08x} vid:did={vendor_id:04x}:{device_id:04x} class=0x{class_code:06x} cmd=0x{command_before:04x}->0x{command_after:04x} devctl=0x{devctl:04x} interrupts=quiesced bar=0x{bar0:08x}/0x{bar1:08x} mmio=0x{mmio:016x}",
+            devctl = pcie_devctl_after.unwrap_or(0),
         ),
     );
     boot_log::force_uart_line(line.as_str());
@@ -15157,6 +15237,9 @@ mod driver_coverage_tests {
         assert!(usb_command_probe_proves_ring(
             "enable-slot-recovery-ok-cleanup-failed"
         ));
+        assert!(usb_command_probe_proves_ring(
+            "enable-slot-linux-captured-ok-cleanup-failed"
+        ));
         assert!(xhci_preserve_leading_port_events_for_command_proof(
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false),
             true,
@@ -17008,6 +17091,14 @@ mod tests {
             super::usb_probe_next_step(no_event_linux_event_ready),
             "command-ring-recovery"
         );
+        let no_event_linux_captured_ready = UsbProbePathwaySummary {
+            command_probe: "enable-slot-linux-captured-ok",
+            ..no_event_command_ready
+        };
+        assert_eq!(
+            super::usb_probe_next_step(no_event_linux_captured_ready),
+            "safe-port-state"
+        );
         let no_event_fresh_recovery_ready = UsbProbePathwaySummary {
             command_probe: "enable-slot-recovery-ok",
             ..no_event_command_ready
@@ -18364,6 +18455,10 @@ mod tests {
             xhci_diag_stage_label(0x0405),
             Some("usb-stale-uboot-root-port-reset-failed")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x0406),
+            Some("cmd-prompt-safe-psc-preserved")
+        );
         assert_eq!(xhci_diag_stage_label(0x03c0), Some("usb-hid-report-event"));
         assert_eq!(
             xhci_diag_stage_label(0x03c1),
@@ -18588,6 +18683,7 @@ mod tests {
         assert!(super::xhci_diag_stage_after_run(0x03ed));
         assert!(super::xhci_diag_stage_after_run(0x0400));
         assert!(super::xhci_diag_stage_after_run(0x0405));
+        assert!(super::xhci_diag_stage_after_run(0x0406));
         assert!(!super::xhci_diag_stage_after_run(0x03b3));
         assert!(!super::xhci_diag_stage_after_run(0x03bc));
         assert!(!super::xhci_diag_stage_after_run(0x03bd));
@@ -18615,6 +18711,7 @@ mod tests {
         assert!(super::xhci_diag_stage_force_log(0x03ed));
         assert!(super::xhci_diag_stage_force_log(0x0400));
         assert!(super::xhci_diag_stage_force_log(0x0405));
+        assert!(super::xhci_diag_stage_force_log(0x0406));
         assert!(!super::xhci_diag_stage_force_log(0x0248));
     }
 
@@ -18920,6 +19017,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0405),
             Some(("port", "error", "profile"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0406),
+            Some(("psc_count", "psc_mask", "event_syncs"))
         );
         assert_eq!(xhci_diag_stage_value_labels(0x02e9), None);
     }
@@ -20801,6 +20902,12 @@ mod tests {
         assert!(usb_command_probe_proves_ring("enable-slot-recovery-ok"));
         assert!(usb_command_probe_proves_ring(
             "enable-slot-recovery-ok-cleanup-failed"
+        ));
+        assert!(usb_command_probe_proves_ring(
+            "enable-slot-linux-captured-ok-cleanup-failed"
+        ));
+        assert!(usb_command_probe_proves_ring(
+            "enable-slot-linux-captured-ok"
         ));
         assert!(usb_command_probe_proves_ring(
             "enable-slot-ok-cleanup-failed"
