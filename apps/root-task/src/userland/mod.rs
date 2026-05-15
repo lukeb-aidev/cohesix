@@ -199,10 +199,10 @@ pub fn main(ctx: BootContext) -> ! {
                         Ok(stack) => {
                             let status = stack.status_report();
                             let mut line = HeaplessString::<192>::new();
-                            let state = if status.address_source == "wifi-host-eapol-required" {
-                                "deferred blocked"
-                            } else {
-                                "deferred ready"
+                            let state = match status.address_source {
+                                "wifi-host-eapol-pending" => "deferred pending",
+                                "wifi-host-eapol-required" => "deferred blocked",
+                                _ => "deferred ready",
                             };
                             let _ = write!(
                                 line,

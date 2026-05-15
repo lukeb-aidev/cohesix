@@ -292,6 +292,9 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_BOOTLOADER_HANDOFF_SEEN": "no",
         "USB_COLD_BOOT_SEEN": "no",
         "USB_STALE_UEFI_HINT_SEEN": "no",
+        "USB_EVENT_RING_ALIVE": "no",
+        "USB_PSC_DRAIN_COUNT": 0,
+        "USB_PSC_DRAIN_MASK": "0x00000000",
         "ROOT_CONSOLE_READY": "no",
         "ROOT_PROMPT_SEEN": "no",
         "SDIO_IRQ158_SEEN": "no",
@@ -816,6 +819,37 @@ def test_gate_summary_preserves_proof_summary_timeout_over_deferred_root_port() 
 
     assert gates.usb_gate == 3
     assert gates.usb_blocker == "cmd-event-ring-timeout"
+
+
+def test_gate_summary_reports_psc_events_as_event_ring_alive() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000 status=0x00000000 control=0x00002401",
+            "[local-seat] xhci.diag stage=0x030f tag=cmd-doorbell-write "
+            "doorbell=0x000000000001 target=0x0",
+            "[local-seat] xhci.diag stage=0x0308 tag=cmd-wait-other-event "
+            "param=0x0000000001000000 status_control=0x0100000000008801 "
+            "trb_type=0x0000000000000022",
+            "[local-seat] xhci.diag stage=0x0406 tag=cmd-prompt-safe-psc-preserved "
+            "psc_count=0x0000000000000005 psc_mask=0x000000000000001f "
+            "event_syncs=0x0000000000000005",
+            "[local-seat] xhci.diag stage=0x0357 "
+            "tag=cmd-event-ring-timeout-0 param=0x0000000000000000",
+            "[local-seat] usb proof_summary gate=3 "
+            "blocker=cmd-event-ring-timeout controller=ready "
+            "command=enable-slot-linux-event-unproven event=psc-only",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-event-ring-timeout"
+    assert record["USB_EVENT_RING_ALIVE"] == "yes"
+    assert record["USB_PSC_DRAIN_COUNT"] == 5
+    assert record["USB_PSC_DRAIN_MASK"] == "0x0000001f"
 
 
 def test_gate_summary_preserves_command_timeout_over_runtime_unavailable() -> None:
@@ -1837,6 +1871,11 @@ def test_gate_summary_promotes_usb_controller_not_running_from_live_state() -> N
             "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
             "waited=0x0000000001312d00 expected_ptr=0x0000000404024000 "
             "event_syncs=0x0000000000000014",
+            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout "
+            "controller=ready command=enable-slot-linux-captured-timeout "
+            "event=psc-only command_completion=missing",
+            "usb: xhci_recent[6] line=344 stage=0x030e "
+            "tag=cmd-poll-only-timeout-last-event",
         ]
     )
 
@@ -1844,6 +1883,27 @@ def test_gate_summary_promotes_usb_controller_not_running_from_live_state() -> N
 
     assert gates.usb_gate == 3
     assert gates.usb_blocker == "cmd-controller-not-running"
+
+
+def test_gate_summary_promotes_usb_controller_not_ready_from_live_state() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x0375 "
+            "tag=cmd-gate-timeout-live-state "
+            "usbcmd_usbsts=0x0000000100000810 iman_erstsz=0x0000000000000001 "
+            "dcbaap=0x0000000404003000",
+            "[local-seat] xhci.diag stage=0x030b tag=cmd-poll-only-timeout "
+            "waited=0x0000000001312d00 expected_ptr=0x0000000404024000 "
+            "event_syncs=0x0000000000000014",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-controller-not-ready"
 
 
 def test_gate_summary_promotes_usb_controller_halted_from_live_state() -> None:
@@ -1865,6 +1925,132 @@ def test_gate_summary_promotes_usb_controller_halted_from_live_state() -> None:
 
     assert gates.usb_gate == 3
     assert gates.usb_blocker == "cmd-controller-halted"
+
+
+def test_gate_summary_reports_reset_cnr_timeout_before_command_gate() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb ownership_proof proof_gate=2 target_gate=10 "
+            "cfg_live=yes cmd_live=yes mailbox=mailbox-acked",
+            "[local-seat] xhci.diag stage=0x0232 tag=reset-cnr-timeout "
+            "a=0x0000000000989680 b=0x0000000000000800 c=0x0000000000000000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 2
+    assert gates.usb_blocker == "reset-controller-not-ready"
+
+
+def test_gate_summary_reports_reset_hcrst_timeout_before_command_gate() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb ownership_proof proof_gate=2 target_gate=10 "
+            "cfg_live=yes cmd_live=yes mailbox=mailbox-acked",
+            "usb: golden_path route=trusted-high-bar-mailbox-reset "
+            "current=controller-init next=controller-ready proof_gate=1",
+            "[local-seat] xhci.diag stage=0x0231 tag=reset-hcrst-timeout "
+            "a=0x0000000000989680 b=0x0000000000000002 c=0x0000000000000000",
+            "usb: golden_path outcome=controller-init-failed command_probe=n/a "
+            "progress=no-controller proof_gate=1 diag_stage=0x0331 "
+            "diag_tag=drop-skip-uninitialized",
+            "usb: verdict=controller-init-edge focus=controller-init",
+            "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+            "proof_gate=0 target_gate=10 next=keyboard-ready "
+            "blocker=keyboard-not-ready",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 2
+    assert gates.usb_blocker == "reset-hcrst-timeout"
+
+
+def test_gate_summary_reports_pre_hcrst_halt_timeout_before_command_gate() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb ownership_proof proof_gate=2 target_gate=10 "
+            "cfg_live=yes cmd_live=yes mailbox=mailbox-acked",
+            "usb: golden_path route=trusted-high-bar-mailbox-reset "
+            "current=controller-init next=controller-ready proof_gate=1",
+            "[local-seat] xhci.diag stage=0x0222 tag=stop-revalidation-timeout "
+            "a=0x0000000005f5e100 b=0x0000000000000000 c=0x0000000005f5e100",
+            "usb: golden_path outcome=controller-init-failed command_probe=n/a "
+            "progress=no-controller proof_gate=1 diag_stage=0x0331 "
+            "diag_tag=drop-skip-uninitialized",
+            "usb: verdict=controller-init-edge focus=controller-init",
+            "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+            "proof_gate=0 target_gate=10 next=keyboard-ready "
+            "blocker=keyboard-not-ready",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 2
+    assert gates.usb_blocker == "reset-controller-not-halted"
+
+
+def test_gate_summary_reports_pre_hcrst_cnr_timeout_before_command_gate() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb ownership_proof proof_gate=2 target_gate=10 "
+            "cfg_live=yes cmd_live=yes mailbox=mailbox-acked",
+            "usb: golden_path route=trusted-high-bar-mailbox-reset "
+            "current=controller-init next=controller-ready proof_gate=1",
+            "[local-seat] xhci.diag stage=0x0214 tag=stop-revalidation-usbsts-read "
+            "a=0x0000000000000811 b=0x0000000000000001 c=0x0000000000000001",
+            "[local-seat] xhci.diag stage=0x022e tag=reset-pre-hcrst-cnr-timeout "
+            "a=0x0000000005f5e100 b=0x0000000000000811 c=0x0000000005f5e100",
+            "usb: golden_path outcome=controller-init-failed command_probe=n/a "
+            "progress=no-controller proof_gate=1 diag_stage=0x0331 "
+            "diag_tag=drop-skip-uninitialized",
+            "usb: verdict=controller-init-edge focus=controller-init",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 2
+    assert gates.usb_blocker == "reset-pre-hcrst-controller-not-ready"
+
+
+def test_gate_summary_reports_recovery_cnr_timeout_after_command_gate() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x03ca "
+            "tag=cmd-recovery-cnr-timeout "
+            "a=0x0000000000989680 b=0x0000000000000800 c=0x0000000000000000",
+            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout "
+            "controller=ready command=enable-slot-linux-captured-timeout",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "reset-controller-not-ready"
+
+
+def test_gate_summary_reports_recovery_stop_timeout_as_not_halted() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci.diag stage=0x0300 tag=cmd-submit "
+            "param=0x0000000000000000",
+            "[local-seat] xhci.diag stage=0x03c6 "
+            "tag=cmd-recovery-stop-timeout "
+            "a=0x0000000000989680 b=0x0000000000000000 c=0x0000000000989680",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 2
+    assert gates.usb_blocker == "reset-controller-not-halted"
 
 
 def test_gate_summary_prefers_latest_wifi_nettest_cause() -> None:
@@ -2560,6 +2746,10 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
         "xhci.diag stage=0x0111": "brcm-axi-setup-read",
         "reset-pre-usbcmd-source-timer-preempted": "reset-pre-usbcmd-source",
         "xhci.diag stage=0x0226": "reset-pre-usbcmd-source",
+        "halt-revalidation-timeout": "reset-controller-not-halted",
+        "stop-revalidation-timeout": "reset-controller-not-halted",
+        "reset-pre-hcrst-cnr-timeout": "reset-pre-hcrst-controller-not-ready",
+        "pre-hcrst-controller-not-ready": "reset-pre-hcrst-controller-not-ready",
         "root-port-read-timer-preempted": "root-port-read-timer-preempted",
         "root-port-sample-deferred": "root-port-sample-deferred",
         "platform-reset-portsc-toxic": "port-register-access-disabled",
@@ -3179,7 +3369,7 @@ def test_gate_summary_reports_host_eapol_required_after_fail_closed_join_submit(
             "[INFO root_task::drivers::cyw43] [cyw43] join request "
             "path=primary-bsscfg:join action=ready ssid_len=12",
             "[WARN root_task::drivers::cyw43] [cyw43] join failed "
-            "reason=host-eapol-required rx_poll=disabled dhcp=blocked tx=blocked "
+            "reason=host-eapol-required rx_poll=eapol-only dhcp=blocked tx=blocked "
             "mode=join-submit ssid_len=12 psk_len=12",
         ]
     )
@@ -3200,19 +3390,23 @@ def test_gate_summary_reports_host_eapol_required_after_proof_window() -> None:
             "path=bsscfg-wrapper unsupported status=0xffffffe9 "
             "action=continue-host-eapol-required reason=firmware-offload-unavailable",
             "[INFO root_task::drivers::cyw43] [cyw43] host-eapol proof window "
-            "armed mode=join-submit polls=24 rx_poll=eapol-only dhcp=blocked "
-            "tx=blocked ssid_len=12 psk_len=12",
+            "armed mode=join-submit polls=4608 pre_assoc_polls=512 "
+            "post_assoc_polls=4096 rx_poll=eapol-only dhcp=blocked tx=blocked "
+            "ssid_len=12 psk_len=12",
             "[WARN root_task::drivers::cyw43] [cyw43] host-eapol proof count=1 "
             "msg=m1 len=117 eapol_ver=2 type=3 body_len=99 body_ok=yes "
-            "key_desc=2 key_info=0x008a key_ver=2 replay=yes kde_len=0 "
-            "action=drop status=host-eapol-required",
+            "key_desc=2 key_info=0x008a key_ver=2 pairwise=yes ack=yes "
+            "mic=no install=no secure=no encrypted=no nonce=yes replay=yes "
+            "kde_len=0 next_action=derive-ptk-send-m2 action=drop "
+            "status=host-eapol-required",
             "[INFO root_task::drivers::cyw43] [cyw43] host-eapol proof window "
-            "result=eapol-seen mode=join-submit eapol_rx_delta=1 "
-            "eapol_rx_total=1 events=2 control=0 empty_polls=3 "
-            "action=terminal-host-eapol-required",
-            "[WARN root_task::drivers::cyw43] [cyw43] join failed "
-            "reason=host-eapol-required rx_poll=disabled dhcp=blocked tx=blocked "
-            "mode=join-submit ssid_len=12 psk_len=12 eapol_rx=1",
+            "result=eapol-seen mode=join-submit polls=92 assoc=link-up "
+            "assoc_poll=88 post_assoc_polls=4 eapol_rx_delta=1 eapol_rx_total=1 "
+            "events=2 control=0 empty_polls=89 action=continue-eapol-only-rx",
+            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol pending "
+            "mode=join-submit status=wifi-host-eapol-pending assoc=yes "
+            "rx=eapol-only data=blocked creds=12/12 eapol_rx=1 "
+            "limit=60000 action=wait-m1",
         ]
     )
 

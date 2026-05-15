@@ -6612,6 +6612,10 @@ mod tests {
         status.address_source = "dhcp-pending";
         status.dhcp_phase = "selecting";
         assert!(!super::net_status_allows_root_console(&status));
+        status.address_source = "wifi-host-eapol-pending";
+        status.dhcp_phase = "host-eapol-pending";
+        assert!(!super::net_status_allows_root_console(&status));
+        assert_eq!(super::net_status_terminal_failure_reason(&status), None);
         status.address_source = "wifi-host-eapol-required";
         status.dhcp_phase = "host-eapol-required";
         assert!(!super::net_status_allows_root_console(&status));

@@ -118,6 +118,7 @@ ffi_shim = [
 ]
 
 [dependencies]
+aes = { version = "0.8.4", default-features = false }
 cohesix-ticket = { workspace = true }
 cohesix-proto = { workspace = true }
 embedded-io = { version = "0.7.1", default-features = false }

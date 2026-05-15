@@ -134,8 +134,12 @@ USB_OUTCOME_BLOCKERS = {
     "root-port-read-begin",
     "root-port-read-timer-preempted",
     "root-port-sample-deferred",
+    "reset-hcrst-timeout",
     "reset-pre-usbcmd-source",
     "reset-pre-usbcmd-source-timer-preempted",
+    "reset-controller-not-halted",
+    "reset-pre-hcrst-controller-not-ready",
+    "reset-controller-not-ready",
     "port-register-access-disabled",
     "port-reset-timeout",
     "port-enable-timeout",
@@ -236,6 +240,9 @@ class GateSummary:
     usb_bootloader_handoff_seen: bool = False
     usb_cold_boot_seen: bool = False
     usb_stale_uefi_hint_seen: bool = False
+    usb_event_ring_alive: bool = False
+    usb_psc_drain_count: int = 0
+    usb_psc_drain_mask: int = 0
     root_console_ready: bool = False
     root_prompt_seen: bool = False
 
@@ -266,6 +273,9 @@ class GateSummary:
             "USB_STALE_UEFI_HINT_SEEN": (
                 "yes" if self.usb_stale_uefi_hint_seen else "no"
             ),
+            "USB_EVENT_RING_ALIVE": "yes" if self.usb_event_ring_alive else "no",
+            "USB_PSC_DRAIN_COUNT": self.usb_psc_drain_count,
+            "USB_PSC_DRAIN_MASK": f"0x{self.usb_psc_drain_mask:08x}",
             "ROOT_CONSOLE_READY": "yes" if self.root_console_ready else "no",
             "ROOT_PROMPT_SEEN": "yes" if self.root_prompt_seen else "no",
         }
@@ -712,6 +722,29 @@ def normalize_usb_blocker(value: str) -> str:
     lower = value.lower()
     if "cmd-controller-not-running" in lower:
         return "cmd-controller-not-running"
+    if "cmd-controller-not-ready" in lower:
+        return "cmd-controller-not-ready"
+    if "reset-hcrst-timeout" in lower or "cmd-recovery-hcrst-timeout" in lower:
+        return "reset-hcrst-timeout"
+    if (
+        "reset-controller-not-halted" in lower
+        or "halt-revalidation-timeout" in lower
+        or "cmd-recovery-stop-timeout" in lower
+        or "cmd-recovery-controller-not-halted" in lower
+    ):
+        return "reset-controller-not-halted"
+    if "stop-revalidation-timeout" in lower:
+        return "reset-controller-not-halted"
+    if (
+        "reset-pre-hcrst-controller-not-ready" in lower
+        or "pre-hcrst-controller-not-ready" in lower
+        or "reset-pre-hcrst-cnr-timeout" in lower
+    ):
+        return "reset-pre-hcrst-controller-not-ready"
+    if "reset-controller-not-ready" in lower or "reset-cnr-timeout" in lower:
+        return "reset-controller-not-ready"
+    if "cmd-recovery-cnr-timeout" in lower:
+        return "reset-controller-not-ready"
     if "cmd-controller-halted" in lower:
         return "cmd-controller-halted"
     if "usbcmd-run-preserved-reset-bit" in lower:
@@ -1235,7 +1268,9 @@ def normalize_wifi_blocker(value: str) -> str:
         return "wsec-pmk-bad-argument"
     if (
         "host-eapol-required" in lower
+        or "host-eapol-pending" in lower
         or "wifi-host-eapol-required" in lower
+        or "wifi-host-eapol-pending" in lower
         or "completion_rule=host-eapol-required" in lower
     ):
         return "host-eapol-required"
@@ -1529,6 +1564,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     command_recovery_source: str | None = None
     command_timeout_expected_ptr: int | None = None
     command_timeout_crcr_plan: int | None = None
+    reset_init_blocker: str | None = None
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
     precise_command_timeout_details = {
@@ -1539,6 +1575,10 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "cmd-fetch-timeout",
         "cmd-event-ring-timeout",
         "cmd-controller-not-running",
+        "cmd-controller-not-ready",
+        "reset-controller-not-halted",
+        "reset-pre-hcrst-controller-not-ready",
+        "reset-controller-not-ready",
         "cmd-controller-halted",
         "usbcmd-run-preserved-reset-bit",
         "usbcmd-run-posted-flush-halt",
@@ -1551,6 +1591,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     stale_command_timeout_details = precise_command_timeout_details - {"cmd-poll-pending"}
     for event in event_list:
         raw = event.raw.lower()
+        if event.message.startswith("xhci_recent"):
+            continue
         fields = event.fields
         tag = fields.get("tag", "")
         if "pi4 keyboard preseed end" in raw:
@@ -1995,9 +2037,36 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 if (usbcmd & 0x1) == 0:
                     command_timeout_detail = "cmd-controller-not-running"
                     blocker = command_timeout_detail
+                elif (usbsts & 0x800) != 0:
+                    command_timeout_detail = "cmd-controller-not-ready"
+                    blocker = command_timeout_detail
                 elif (usbsts & 0x1) != 0:
                     command_timeout_detail = "cmd-controller-halted"
                     blocker = command_timeout_detail
+        elif tag in {"reset-hcrst-timeout", "cmd-recovery-hcrst-timeout"}:
+            gate = max(gate, 2)
+            reset_init_blocker = "reset-hcrst-timeout"
+            blocker = reset_init_blocker
+        elif tag in {
+            "halt-revalidation-timeout",
+            "stop-revalidation-timeout",
+            "cmd-recovery-stop-timeout",
+        }:
+            gate = max(gate, 2)
+            reset_init_blocker = "reset-controller-not-halted"
+            blocker = reset_init_blocker
+        elif tag == "reset-pre-hcrst-cnr-timeout":
+            gate = max(gate, 2)
+            reset_init_blocker = "reset-pre-hcrst-controller-not-ready"
+            blocker = reset_init_blocker
+        elif tag == "reset-cnr-timeout":
+            gate = max(gate, 2)
+            reset_init_blocker = "reset-controller-not-ready"
+            blocker = reset_init_blocker
+        elif tag == "cmd-recovery-cnr-timeout":
+            gate = max(gate, 3)
+            command_timeout_detail = "reset-controller-not-ready"
+            blocker = command_timeout_detail
         elif tag == "cmd-timeout":
             gate = max(gate, 3)
             command_timeout_detail = "cmd-timeout"
@@ -2109,6 +2178,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     ):
                         blocker = command_timeout_detail
                     elif (
+                        normalized_value in stale_command_timeout_details
+                        and command_timeout_detail in precise_command_timeout_details
+                    ):
+                        blocker = command_timeout_detail
+                    elif (
                         key == "result"
                         and normalized_value == "cmd-poll-only-timeout"
                         and fields.get("bus") == "pcie-window"
@@ -2151,6 +2225,24 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     ):
         blocker = command_timeout_detail
     if (
+        command_timeout_detail in precise_command_timeout_details
+        and blocker in stale_command_timeout_details
+    ):
+        blocker = command_timeout_detail
+    if reset_init_blocker and blocker in {
+        "unknown",
+        "none",
+        "controller-init",
+        "controller-init-edge",
+        "controller-init-failed",
+        "keyboard-not-ready",
+        "no-controller",
+        "unavailable",
+    }:
+        blocker = reset_init_blocker
+    if reset_init_blocker:
+        gate = min(gate, 2)
+    if (
         gate == 1
         and blocker == "unknown"
         and saw_keyboard_preseed
@@ -2163,6 +2255,28 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         )
 
     return gate, blocker
+
+
+def summarize_usb_event_ring_state(events: Iterable[TraceEvent]) -> tuple[bool, int, int]:
+    """Summarize whether xHCI command waits observed live event-ring traffic."""
+
+    alive = False
+    psc_count = 0
+    psc_mask = 0
+    for event in events:
+        if event.domain != "usb":
+            continue
+        fields = event.fields
+        tag = fields.get("tag", "").lower()
+        if tag == "cmd-prompt-safe-psc-preserved":
+            alive = True
+            psc_count = max(psc_count, parse_hex_int(fields.get("psc_count")) or 0)
+            psc_mask |= parse_hex_int(fields.get("psc_mask")) or 0
+        elif tag == "cmd-wait-other-event":
+            trb_type = parse_hex_int(fields.get("trb_type"))
+            if trb_type == 0x22:
+                alive = True
+    return alive, psc_count, psc_mask
 
 
 def join_security_blocker_for_iovar(
@@ -3527,6 +3641,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
 
     event_list = list(events)
     usb_gate, usb_blocker = summarize_usb_gate(event_list)
+    usb_event_ring_alive, usb_psc_drain_count, usb_psc_drain_mask = (
+        summarize_usb_event_ring_state(event_list)
+    )
     wifi_gate, wifi_blocker = summarize_wifi_gate(event_list)
     wifi_exact, wifi_phase, wifi_blocker_line = summarize_wifi_failure_detail(
         event_list, wifi_blocker
@@ -3608,6 +3725,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_bootloader_handoff_seen=usb_bootloader_handoff_seen,
         usb_cold_boot_seen=usb_cold_boot_seen,
         usb_stale_uefi_hint_seen=usb_stale_uefi_hint_seen,
+        usb_event_ring_alive=usb_event_ring_alive,
+        usb_psc_drain_count=usb_psc_drain_count,
+        usb_psc_drain_mask=usb_psc_drain_mask,
         root_console_ready=root_console_ready,
         root_prompt_seen=root_prompt_seen,
     )

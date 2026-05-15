@@ -4724,7 +4724,16 @@ fn bootstrap<P: Platform>(
                         let port = stack.console_listen_port();
                         let status = stack.status_report();
                         let mut ok_line = heapless::String::<160>::new();
-                        if status.address_source == "wifi-host-eapol-required" {
+                        if status.address_source == "wifi-host-eapol-pending" {
+                            let _ = write!(
+                                ok_line,
+                                "[net-console] pending-link backend={} active={} detail={} dhcp={} port={port} mac={mac}",
+                                status.backend,
+                                status.active_interface,
+                                status.address_source,
+                                status.dhcp_phase,
+                            );
+                        } else if status.address_source == "wifi-host-eapol-required" {
                             let _ = write!(
                                 ok_line,
                                 "[net-console] blocked-link backend={} active={} detail={} dhcp={} port={port} mac={mac}",

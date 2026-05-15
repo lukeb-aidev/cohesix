@@ -102,6 +102,7 @@ fn audit_suppressed_for_label(label: &str) -> bool {
         "xhci-scratchpad-page"
             | "xhci-event-ring-debug-prefix"
             | "xhci-event-ring-prompt-safe"
+            | "xhci-event-ring-poll"
             | "xhci-event-ring-poll-fast"
     )
 }
@@ -426,8 +427,8 @@ mod tests {
     #[test]
     fn prompt_safe_event_ring_polling_uses_summary_breadcrumbs_not_dma_spam() {
         assert!(audit_suppressed_for_label("xhci-event-ring-prompt-safe"));
+        assert!(audit_suppressed_for_label("xhci-event-ring-poll"));
         assert!(audit_suppressed_for_label("xhci-event-ring-poll-fast"));
-        assert!(!audit_suppressed_for_label("xhci-event-ring-poll"));
         assert!(!audit_suppressed_for_label("xhci-cmd-ring-submit-full"));
     }
 

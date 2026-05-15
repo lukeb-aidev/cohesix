@@ -134,7 +134,9 @@ const VL805_PCIE_DEVCTL_COMMAND_PROOF: u16 = PCI_EXP_DEVCTL_CORR_ERR
     | PCI_EXP_DEVCTL_NON_FATAL_ERR
     | PCI_EXP_DEVCTL_FATAL_ERR
     | PCI_EXP_DEVCTL_UNSUP_REQ
+    | PCI_EXP_DEVCTL_RELAXED_ORDERING
     | PCI_EXP_DEVCTL_MAX_PAYLOAD_128B
+    | PCI_EXP_DEVCTL_NO_SNOOP
     | PCI_EXP_DEVCTL_MAX_READ_REQ_512B;
 
 const RPI4_VL805_XHCI_MMIO: usize = 0x0000_0006_0000_0000;
@@ -165,6 +167,9 @@ const PCIE_LINK_POLL_ATTEMPTS: usize = PCIE_LINK_POLL_TOTAL_MS / PCIE_LINK_POLL_
 const PCIE_POST_PERST_SETTLE_SPINS: usize =
     PCIE_POST_PERST_SETTLE_MS.saturating_mul(PCIE_SPINS_PER_MS);
 const PCIE_LINK_POLL_SPINS: usize = PCIE_LINK_POLL_INTERVAL_MS.saturating_mul(PCIE_SPINS_PER_MS);
+const VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS: usize = 20;
+const VL805_POST_PCIE_RESET_NOTIFY_SETTLE_SPINS: usize =
+    VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS.saturating_mul(PCIE_SPINS_PER_MS);
 const PCIE_EXT_CFG_SELECT_SETTLE_SPINS: usize = 1_024;
 const PCIE_EXT_CFG_SELECTOR_RETRIES: usize = 2;
 const VL805_XHCI_PORTSC_BASE_OFFSET: usize = 0x420;
@@ -194,6 +199,14 @@ impl Pi4PcieProofPhase {
         }
     }
 
+    const fn powers_vl805_usb_hcd(self) -> bool {
+        matches!(self, Self::Initial)
+    }
+
+    const fn reloads_vl805_firmware_after_perst(self) -> bool {
+        matches!(self, Self::PostMailboxReset)
+    }
+
     fn root_init_latch(self) -> &'static AtomicUsize {
         match self {
             Self::Initial => &PCIE_ROOT_INIT_ATTEMPTED,
@@ -206,6 +219,58 @@ fn finish_pi4_pcie_root_init_attempt(phase: Pi4PcieProofPhase, ready: bool) {
     if !ready {
         phase.root_init_latch().store(0, Ordering::Release);
     }
+}
+
+fn notify_vl805_reset_after_pcie_ready(
+    hal: &mut KernelHal<'_>,
+    phase: Pi4PcieProofPhase,
+    stage: &'static str,
+    reason: &'static str,
+) -> Result<(), HalError> {
+    if !phase.reloads_vl805_firmware_after_perst() {
+        return Ok(());
+    }
+
+    let mut begin = heapless::String::<256>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut begin,
+        format_args!(
+            "[local-seat] vl805 reset ownership=runtime-owned stage={stage} action=mailbox-notify reason={reason} settle_ms={}",
+            VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS
+        ),
+    );
+    boot_log::force_uart_line(begin.as_str());
+
+    let result = match pi4_wifi::notify_vl805_reset(hal) {
+        Ok(result) => result,
+        Err(err) => {
+            finish_pi4_pcie_root_init_attempt(phase, false);
+            let mut fail = heapless::String::<240>::new();
+            let _ = core::fmt::Write::write_fmt(
+                &mut fail,
+                format_args!(
+                    "[local-seat] vl805 reset ownership=runtime-unconfirmed stage={stage} action=mailbox-notify-failed err={err}"
+                ),
+            );
+            boot_log::force_uart_line(fail.as_str());
+            return Err(err);
+        }
+    };
+
+    pcie_spin_delay(VL805_POST_PCIE_RESET_NOTIFY_SETTLE_SPINS);
+    let result_label = match result {
+        pi4_wifi::Vl805ResetNotifyResult::Acked => "mailbox-notify+settle",
+        pi4_wifi::Vl805ResetNotifyResult::PostedFallback => "mailbox-posted-fallback+settle",
+    };
+    let mut done = heapless::String::<256>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut done,
+        format_args!(
+            "[local-seat] vl805 reset ownership=runtime-owned stage={stage} detail={result_label} action=mailbox-notify-complete"
+        ),
+    );
+    boot_log::force_uart_line(done.as_str());
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -434,6 +499,8 @@ fn cached_pcie_status_readback() -> u32 {
 
 const fn vl805_xhci_flush_stage_role(stage: u16, offset: usize) -> &'static str {
     match (stage, offset) {
+        (0x0118, 0x0c08) => "brcm-axiwra",
+        (0x0119, 0x0c0c) => "brcm-axirda",
         (0x03fe, _) => "runtime-erdp-ack-low",
         (0x03ff, _) => "runtime-erdp-ack-high",
         (0x03b7, _) => "ring-publish-erdp-low",
@@ -598,7 +665,19 @@ fn prove_pi4_vl805_pcie_ownership(
     hal: &mut KernelHal<'_>,
     phase: Pi4PcieProofPhase,
 ) -> Result<Pi4Vl805PcieProof, HalError> {
-    pi4_wifi::power_on_vl805_usb_hcd(hal)?;
+    if phase.powers_vl805_usb_hcd() {
+        pi4_wifi::power_on_vl805_usb_hcd(hal)?;
+    } else {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] vl805 bcm2711-pcie power stage={} action=skip reason=powered-before-vl805-reset-notify",
+                phase.label()
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+    }
 
     // seL4 device untyped retyping is monotonic. Map the BCM2711 PCIe register
     // pages in ascending physical order so root-port config, status, EXT_CFG,
@@ -893,11 +972,17 @@ fn ensure_pi4_pcie_root_ready(
         configure_pi4_pcie_dma_window(misc_ctrl, rc_bar1, rc_bar2_lo, rc_bar2_hi, rc_bar3);
         mask_and_clear_pcie_irq_sources(status_page);
         configure_pi4_pcie_outbound_window(status_page)?;
+        notify_vl805_reset_after_pcie_ready(
+            hal,
+            phase,
+            "post-mailbox-pcie-ready",
+            "pcie-ready-after-firmware-notify",
+        )?;
         let mut line = heapless::String::<208>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "[local-seat] vl805 bcm2711-pcie root-init ready stage={} status=0x{status_before:08x} action=refresh-windows source=hal",
+                "[local-seat] vl805 bcm2711-pcie root-init ready stage={} status=0x{status_before:08x} action=refresh-windows-vl805-notify source=hal",
                 phase.label()
             ),
         );
@@ -974,6 +1059,12 @@ fn ensure_pi4_pcie_root_ready(
             finish_pi4_pcie_root_init_attempt(phase, false);
             return Err(err);
         }
+        notify_vl805_reset_after_pcie_ready(
+            hal,
+            phase,
+            "post-pcie-perst",
+            "pcie-perst-after-firmware-notify",
+        )?;
     } else {
         finish_pi4_pcie_root_init_attempt(phase, false);
     }
@@ -1612,7 +1703,7 @@ fn configure_vl805_pcie_device_control(
             let _ = core::fmt::Write::write_fmt(
                 &mut line,
                 format_args!(
-                    "[local-seat] vl805 bcm2711-pcie devctl proof cap=0x{cap:02x} control=0x{control_before:04x}->0x{control_after:04x} target=0x{VL805_PCIE_DEVCTL_COMMAND_PROOF:04x} ready={} source=hal-ext-cfg policy=command-proof-ordered",
+                    "[local-seat] vl805 bcm2711-pcie devctl proof cap=0x{cap:02x} control=0x{control_before:04x}->0x{control_after:04x} target=0x{VL805_PCIE_DEVCTL_COMMAND_PROOF:04x} ready={} source=hal-ext-cfg policy=command-proof-linux-captured",
                     ready as u8,
                 ),
             );
@@ -1679,7 +1770,8 @@ const fn vl805_pcie_devctl_ready(control: u16) -> bool {
                 | PCI_EXP_DEVCTL_NON_FATAL_ERR
                 | PCI_EXP_DEVCTL_FATAL_ERR
                 | PCI_EXP_DEVCTL_UNSUP_REQ))
-        && (control & (PCI_EXP_DEVCTL_RELAXED_ORDERING | PCI_EXP_DEVCTL_NO_SNOOP)) == 0
+        && (control & (PCI_EXP_DEVCTL_RELAXED_ORDERING | PCI_EXP_DEVCTL_NO_SNOOP))
+            == (PCI_EXP_DEVCTL_RELAXED_ORDERING | PCI_EXP_DEVCTL_NO_SNOOP)
         && (control & PCI_EXP_DEVCTL_MAX_PAYLOAD_MASK) == PCI_EXP_DEVCTL_MAX_PAYLOAD_128B
         && (control & PCI_EXP_DEVCTL_MAX_READ_REQ_MASK) == PCI_EXP_DEVCTL_MAX_READ_REQ_512B
 }
@@ -1963,6 +2055,19 @@ mod tests {
             PCIE_LINK_POLL_ATTEMPTS * PCIE_LINK_POLL_INTERVAL_MS,
             PCIE_LINK_POLL_TOTAL_MS
         );
+        assert_eq!(VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS, 20);
+        assert_eq!(
+            VL805_POST_PCIE_RESET_NOTIFY_SETTLE_SPINS,
+            VL805_POST_PCIE_RESET_NOTIFY_SETTLE_MS * PCIE_SPINS_PER_MS
+        );
+    }
+
+    #[test]
+    fn post_mailbox_pcie_perst_reloads_vl805_firmware() {
+        assert!(Pi4PcieProofPhase::Initial.powers_vl805_usb_hcd());
+        assert!(!Pi4PcieProofPhase::PostMailboxReset.powers_vl805_usb_hcd());
+        assert!(!Pi4PcieProofPhase::Initial.reloads_vl805_firmware_after_perst());
+        assert!(Pi4PcieProofPhase::PostMailboxReset.reloads_vl805_firmware_after_perst());
     }
 
     #[test]
@@ -2168,15 +2273,15 @@ mod tests {
     }
 
     #[test]
-    fn vl805_pcie_devctl_command_proof_clears_dma_reordering_bits() {
+    fn vl805_pcie_devctl_command_proof_matches_linux_dma_read_attributes() {
         assert_eq!(VL805_PCIE_DEVCTL_LINUX_CAPTURE, 0x281f);
-        assert_eq!(VL805_PCIE_DEVCTL_COMMAND_PROOF, 0x200f);
-        assert_eq!(vl805_pcie_devctl_command_proof_value(0), 0x200f);
-        assert_eq!(vl805_pcie_devctl_command_proof_value(0xffff), 0x200f);
-        assert!(vl805_pcie_devctl_ready(0x200f));
-        assert!(!vl805_pcie_devctl_ready(0x281f));
+        assert_eq!(VL805_PCIE_DEVCTL_COMMAND_PROOF, 0x281f);
+        assert_eq!(vl805_pcie_devctl_command_proof_value(0), 0x281f);
+        assert_eq!(vl805_pcie_devctl_command_proof_value(0xffff), 0x281f);
+        assert!(vl805_pcie_devctl_ready(0x281f));
+        assert!(!vl805_pcie_devctl_ready(0x200f));
         assert!(!vl805_pcie_devctl_ready(0x081f));
-        assert!(!vl805_pcie_devctl_ready(0x283f));
+        assert!(!vl805_pcie_devctl_ready(0x201f));
         assert!(!vl805_pcie_devctl_ready(0x181f));
     }
 
@@ -2224,6 +2329,8 @@ mod tests {
         assert!(vl805_xhci_flush_skips_bar_drain(0x02e5, 0x0020));
         assert!(!vl805_xhci_flush_skips_bar_drain(0x031f, 0x00fc));
         assert!(!vl805_xhci_flush_skips_bar_drain(0x02e5, 0x0100));
+        assert_eq!(vl805_xhci_flush_stage_role(0x0118, 0x0c08), "brcm-axiwra");
+        assert_eq!(vl805_xhci_flush_stage_role(0x0119, 0x0c0c), "brcm-axirda");
         assert!(vl805_ext_cfg_flush_read_valid(
             VL805_PCI_DEV_ADDR,
             0x0018_0546

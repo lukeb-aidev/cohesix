@@ -3848,7 +3848,11 @@ const fn xhci_diag_stage_exact_issue_label(stage: u16) -> Option<&'static str> {
         0x0213 => Some("live-usbsts-read-before-run"),
         0x0215 => Some("live-usbcmd-read-before-run"),
         0x0222 => Some("halt-revalidation-timeout"),
+        0x03c6 => Some("cmd-recovery-controller-not-halted"),
+        0x03c9 => Some("cmd-recovery-hcrst-timeout"),
+        0x03ca => Some("cmd-recovery-controller-not-ready"),
         0x022c => Some("reset-pre-usbsts-live-read-skipped"),
+        0x022e => Some("pre-hcrst-controller-not-ready"),
         0x0238 => Some("pre-run-config-store-wedged"),
         0x023b => Some("fresh-rings-reset-required"),
         0x0248 | 0x029e => Some("pre-run-dcbaap-low-store-wedged"),
@@ -3915,7 +3919,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x031f
             | 0x0312
             | 0x0315..=0x0319
-            | 0x022c
+            | 0x022c..=0x023d
             | 0x0320..=0x0330
             | 0x0332..=0x0333
             | 0x0337..=0x0339
@@ -3924,7 +3928,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x0360..=0x036f
             | 0x0370..=0x0377
             | 0x037d..=0x037f
-            | 0x0380..=0x03be
+            | 0x0380..=0x03bf
             | 0x03c0..=0x03ef
             | 0x03f3..=0x03f6
             | 0x03f8
@@ -3971,11 +3975,12 @@ const fn xhci_diag_stage_force_log(stage: u16) -> bool {
         stage,
         0x030f
             | 0x031f
+            | 0x022d..=0x023d
             | 0x0337..=0x0339
             | 0x035f
             | 0x0368..=0x0377
             | 0x037d..=0x037f
-            | 0x03b3..=0x03be
+            | 0x03b3..=0x03bf
             | 0x03c4..=0x03ee
             | 0x03fe..=0x03ff
             | 0x0400..=0x0406
@@ -4049,6 +4054,10 @@ const fn xhci_diag_stage_value_labels(
 ) -> Option<(&'static str, &'static str, &'static str)> {
     match stage {
         0x0110 => Some(("ready", "unused", "unused")),
+        0x0111 | 0x0116 => Some(("mmio", "reg_off", "phase")),
+        0x0112 | 0x0114 => Some(("reg_off", "before", "after")),
+        0x0113 | 0x0115 => Some(("reg_off", "readback", "expected")),
+        0x0118 | 0x0119 => Some(("reg_off", "value", "flush_stage")),
         0x0117 => Some(("handoff", "runtime_mask", "publish_mask")),
         0x0200 => Some(("usbcmd", "usbsts", "mmio")),
         0x0201 => Some(("usbcmd", "masked_usbcmd", "write_needed")),
@@ -4063,6 +4072,11 @@ const fn xhci_diag_stage_value_labels(
         0x0212 => Some(("handoff", "seed_flags", "skip")),
         0x0217 | 0x0218 => Some(("handoff", "seed_flags", "skip")),
         0x022c => Some(("usbsts_off", "seed_usbsts", "handoff")),
+        0x022d => Some(("usbsts", "cnr_mask", "handoff")),
+        0x022e => Some(("waited", "usbsts", "wait_spins")),
+        0x022f => Some(("usbsts", "waited", "unused")),
+        0x023c => Some(("usbcmd_off", "handoff", "usbsts")),
+        0x023d => Some(("usbcmd", "hcrst_mask", "usbsts")),
         0x023b => Some(("handoff", "seed_flags", "reset_done")),
         0x02f0 => Some(("dcbaa", "cmd_ring", "event_ring")),
         0x02f1 => Some(("erstba", "crcr", "erdp")),
@@ -4128,10 +4142,11 @@ const fn xhci_diag_stage_value_labels(
         0x03c0..=0x03c3 => Some(("slot_ep", "code_payload", "decode_state")),
         0x03b3..=0x03bd => Some(("reg_off", "value", "target")),
         0x03be => Some(("scratchpad_array", "published", "publish_phase")),
+        0x03bf => Some(("scratchpad_array", "shared_array", "publish_phase")),
         0x03c4 => Some(("stop_usbcmd", "live_state_skipped", "policy")),
         0x03c5 | 0x03c8 => Some(("reg_off", "value", "prior")),
-        0x03c7 => Some(("settle_spins", "target", "policy")),
-        0x03cb => Some(("reset_cmd", "settle_spins", "policy")),
+        0x03c6 | 0x03c7 => Some(("waited", "usbsts", "wait_spins")),
+        0x03cb => Some(("reset_cmd", "usbsts", "policy")),
         0x03cc | 0x03cd => Some(("config_off", "slots", "policy")),
         0x03ce | 0x03cf | 0x03e5 | 0x03e6 => Some(("reg_off", "reg_value", "target")),
         0x03d0 => Some(("cmd_ring", "event_ring", "erst")),
@@ -4171,6 +4186,14 @@ const fn xhci_diag_stage_value_labels(
 fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
     match stage {
         0x0110 => Some("controller-init-complete"),
+        0x0111 => Some("brcm-axiwra-read-begin"),
+        0x0112 => Some("brcm-axiwra-compose"),
+        0x0113 => Some("brcm-axiwra-readback"),
+        0x0114 => Some("brcm-axirda-compose"),
+        0x0115 => Some("brcm-axirda-readback"),
+        0x0116 => Some("brcm-axirda-read-begin"),
+        0x0118 => Some("brcm-axiwra-flush"),
+        0x0119 => Some("brcm-axirda-flush"),
         0x0117 => Some("init-policy-summary"),
         0x0200 => Some("pre-reset-usbcmd-usbsts-read"),
         0x0201 => Some("pre-reset-usbcmd-mask-decision"),
@@ -4214,6 +4237,11 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0227 => Some("reset-post-settle-begin"),
         0x0228 => Some("reset-post-settle-done"),
         0x0229 => Some("reset-post-cnr-poll-skip"),
+        0x022d => Some("reset-pre-hcrst-cnr-observed"),
+        0x022e => Some("reset-pre-hcrst-cnr-timeout"),
+        0x022f => Some("reset-pre-hcrst-cnr-clear"),
+        0x023c => Some("reset-pre-hcrst-usbcmd-read-begin"),
+        0x023d => Some("reset-pre-hcrst-usbcmd-read"),
         0x0230 => Some("reset-write"),
         0x023a => Some("reset-write-barrier-done"),
         0x0237 => Some("reset-write-pre-store"),
@@ -4479,6 +4507,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03bc => Some("cmd-ring-publish-config-flush"),
         0x03bd => Some("cmd-ring-publish-dnctrl-flush"),
         0x03be => Some("cmd-ring-publish-scratchpad-array"),
+        0x03bf => Some("cmd-ring-publish-scratchpad-array-fill"),
         0x03ef => Some("dma-address-translate-failed"),
         0x03f3 => Some("usb-dcbaa-slot-out-of-range"),
         0x03f4 => Some("usb-dcbaa-slot-read-out-of-range"),
@@ -4505,11 +4534,11 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x03c4 => Some("cmd-recovery-blind-reset-plan"),
         0x03c5 => Some("cmd-recovery-stop-write"),
         0x03c6 => Some("cmd-recovery-stop-timeout"),
-        0x03c7 => Some("cmd-recovery-stop-blind-settle"),
+        0x03c7 => Some("cmd-recovery-stop-halted"),
         0x03c8 => Some("cmd-recovery-hcrst-write"),
         0x03c9 => Some("cmd-recovery-hcrst-timeout"),
         0x03ca => Some("cmd-recovery-cnr-timeout"),
-        0x03cb => Some("cmd-recovery-reset-blind-settle"),
+        0x03cb => Some("cmd-recovery-reset-complete"),
         0x03cc => Some("cmd-recovery-config-write"),
         0x03cd => Some("cmd-recovery-config-write-done"),
         0x03ce => Some("cmd-recovery-dcbaap-low-write"),
@@ -4989,7 +5018,7 @@ fn xhci_probe_enable_slot_fresh_recovery_after_timeout(
                     let _ = core::fmt::Write::write_fmt(
                         &mut summary,
                         format_args!(
-                            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command={result} event=missing event_generation={linux_event_generation} uboot_event_generation={event_generation} uboot_recovery_event_generation={recovery_event_generation} recovery_source=enable-slot-recovery-timeout irq27_role=timer-only pcie_irqs=179,175,180"
+                            "[local-seat] usb proof_summary gate=3 blocker=cmd-event-ring-timeout controller=ready command={result} event=psc-only command_completion=missing event_generation={linux_event_generation} uboot_event_generation={event_generation} uboot_recovery_event_generation={recovery_event_generation} recovery_source=enable-slot-recovery-timeout irq27_role=timer-only pcie_irqs=179,175,180"
                         ),
                     );
                     boot_log::force_uart_line(summary.as_str());
@@ -5367,6 +5396,9 @@ const fn xhci_controller_should_apply_brcm_axi_setup(
     mmio: usize,
     firmware_handoff: XhciFirmwareHandoff,
 ) -> bool {
+    // Pi 4 VL805 uses U-Boot's PCI xHCI path (`USB_XHCI_PCI`), not the
+    // Broadcom generic xHCI wrapper (`USB_XHCI_BRCM`). Do not write the
+    // Broadcom AXIWRA/AXIRDA vendor registers into the VIA VL805 PCI BAR.
     if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE {
         return false;
     }
@@ -5633,6 +5665,14 @@ const fn xhci_runtime_init_strategy_halt_guard_label_for_source(
     mmio: usize,
     strategy: XhciRuntimeInitStrategy,
 ) -> &'static str {
+    if mmio == RPI4_XHCI_MMIO_HIGH_CANDIDATE
+        && matches!(
+            (strategy.firmware_handoff, strategy.seed_stop_state),
+            (XhciFirmwareHandoff::PlatformResetComplete, false)
+        )
+    {
+        return "pre-hcrst-halt-read";
+    }
     if xhci_controller_skips_initial_live_operational_reads(mmio, strategy) {
         "skip-live-halt-read"
     } else {
@@ -15308,6 +15348,14 @@ mod driver_coverage_tests {
         assert!(xhci_controller_requires_posted_write_flush(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE
         ));
+        assert!(!xhci_controller_should_apply_brcm_axi_setup(
+            RPI4_XHCI_MMIO_HIGH_CANDIDATE,
+            XhciFirmwareHandoff::PlatformResetComplete,
+        ));
+        assert!(xhci_controller_should_apply_brcm_axi_setup(
+            RPI4_XHCI_MMIO_PRIMARY_CANDIDATE,
+            XhciFirmwareHandoff::None,
+        ));
         assert!(!xhci_controller_requires_posted_write_flush(
             RPI4_XHCI_MMIO_PRIMARY_CANDIDATE
         ));
@@ -15615,6 +15663,8 @@ mod tests {
     #[test]
     fn xhci_diag_history_keeps_dcbaap_and_run_edges_only() {
         assert!(super::xhci_diag_history_stage_relevant(0x0248));
+        assert!(super::xhci_diag_history_stage_relevant(0x022d));
+        assert!(super::xhci_diag_history_stage_relevant(0x023d));
         assert!(super::xhci_diag_history_stage_relevant(0x02e9));
         assert!(super::xhci_diag_history_stage_relevant(0x0316));
         assert!(super::xhci_diag_history_stage_relevant(0x0374));
@@ -17215,7 +17265,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_controller_params_disable_axi_setup_for_high_bar_none_retry() {
+    fn xhci_controller_params_skip_axi_setup_for_pi4_vl805_high_bar() {
         let params = xhci_controller_params_from_probe(
             XhciCapProbe {
                 cap_length: 0x40,
@@ -17254,6 +17304,7 @@ mod tests {
         assert!(params.runtime_seed_snapshot.is_none());
         assert!(params.skip_constructor_live_scrub);
         assert!(params.skip_initial_live_operational_reads);
+        assert!(!params.apply_brcm_axi_setup);
         assert!(xhci_controller_skips_constructor_live_scrub(
             RPI4_XHCI_MMIO_HIGH_CANDIDATE,
             strategy,
@@ -17883,6 +17934,10 @@ mod tests {
             Some("cmd-ring-publish-scratchpad-array")
         );
         assert_eq!(
+            xhci_diag_stage_label(0x03bf),
+            Some("cmd-ring-publish-scratchpad-array-fill")
+        );
+        assert_eq!(
             xhci_diag_stage_label(0x0353),
             Some("cmd-event-ring-before-0")
         );
@@ -17927,6 +17982,12 @@ mod tests {
             xhci_diag_stage_label(0x0379),
             Some("cmd-prompt-safe-return-to-shell")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x0111),
+            Some("brcm-axiwra-read-begin")
+        );
+        assert_eq!(xhci_diag_stage_label(0x0118), Some("brcm-axiwra-flush"));
+        assert_eq!(xhci_diag_stage_label(0x0119), Some("brcm-axirda-flush"));
         assert_eq!(xhci_diag_stage_label(0x0117), Some("init-policy-summary"));
         assert_eq!(
             xhci_diag_stage_label(0x0200),
@@ -18008,6 +18069,26 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_label(0x0229),
             Some("reset-post-cnr-poll-skip")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x022d),
+            Some("reset-pre-hcrst-cnr-observed")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x022e),
+            Some("reset-pre-hcrst-cnr-timeout")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x022f),
+            Some("reset-pre-hcrst-cnr-clear")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x023c),
+            Some("reset-pre-hcrst-usbcmd-read-begin")
+        );
+        assert_eq!(
+            xhci_diag_stage_label(0x023d),
+            Some("reset-pre-hcrst-usbcmd-read")
         );
         assert_eq!(xhci_diag_stage_label(0x0230), Some("reset-write"));
         assert_eq!(
@@ -18688,6 +18769,7 @@ mod tests {
         assert!(!super::xhci_diag_stage_after_run(0x03bc));
         assert!(!super::xhci_diag_stage_after_run(0x03bd));
         assert!(!super::xhci_diag_stage_after_run(0x03be));
+        assert!(!super::xhci_diag_stage_after_run(0x03bf));
         assert!(!super::xhci_diag_stage_after_run(0x0248));
         assert!(!super::xhci_diag_stage_after_run(0x0213));
     }
@@ -18695,6 +18777,8 @@ mod tests {
     #[test]
     fn xhci_diag_force_log_preserves_command_recovery_frontier() {
         assert!(super::xhci_diag_stage_force_log(0x030f));
+        assert!(super::xhci_diag_stage_force_log(0x022d));
+        assert!(super::xhci_diag_stage_force_log(0x023d));
         assert!(super::xhci_diag_stage_force_log(0x0337));
         assert!(super::xhci_diag_stage_force_log(0x0339));
         assert!(super::xhci_diag_stage_force_log(0x035f));
@@ -18704,6 +18788,7 @@ mod tests {
         assert!(super::xhci_diag_stage_force_log(0x03bc));
         assert!(super::xhci_diag_stage_force_log(0x03bd));
         assert!(super::xhci_diag_stage_force_log(0x03be));
+        assert!(super::xhci_diag_stage_force_log(0x03bf));
         assert!(super::xhci_diag_stage_force_log(0x03c4));
         assert!(super::xhci_diag_stage_force_log(0x03d0));
         assert!(super::xhci_diag_stage_force_log(0x03e4));
@@ -18783,6 +18868,10 @@ mod tests {
             Some(("ready", "unused", "unused"))
         );
         assert_eq!(
+            xhci_diag_stage_value_labels(0x0118),
+            Some(("reg_off", "value", "flush_stage"))
+        );
+        assert_eq!(
             xhci_diag_stage_value_labels(0x0117),
             Some(("handoff", "runtime_mask", "publish_mask"))
         );
@@ -18817,6 +18906,18 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0218),
             Some(("handoff", "seed_flags", "skip"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x022d),
+            Some(("usbsts", "cnr_mask", "handoff"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x023c),
+            Some(("usbcmd_off", "handoff", "usbsts"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x023d),
+            Some(("usbcmd", "hcrst_mask", "usbsts"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x02f0),
@@ -18989,6 +19090,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x03be),
             Some(("scratchpad_array", "published", "publish_phase"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x03bf),
+            Some(("scratchpad_array", "shared_array", "publish_phase"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x03c4),

@@ -5,7 +5,7 @@
 
 use crate::{
     Dma, Result, UsbError,
-    desc::{DeviceDesc, EndpointDesc, SetupPacket, desc_type},
+    desc::{DeviceDesc, EndpointDesc, SetupPacket, desc_type, ep_type as desc_ep_type},
     reg,
     ring::{PhysMem, Ring, Trb, completion, trb_type},
     xhci::XhciCtrl,
@@ -114,6 +114,114 @@ fn ep0_mps_candidates_for_speed(slot_speed: u8) -> ([u16; 3], usize) {
         }
     }
     (candidates, count)
+}
+
+#[inline]
+fn xhci_microframes_to_exponent(desc_interval: u32, min_exponent: u8, max_exponent: u8) -> u8 {
+    if desc_interval == 0 {
+        return 0;
+    }
+    let interval = (u32::BITS - 1 - desc_interval.leading_zeros()) as u8;
+    core::cmp::min(core::cmp::max(interval, min_exponent), max_exponent)
+}
+
+#[inline]
+fn xhci_exponent_interval(slot_speed: u8, interval_raw: u8) -> u8 {
+    let interval = interval_raw.clamp(1, 16).saturating_sub(1);
+    if slot_speed == reg::SPEED_FULL {
+        interval.saturating_add(3)
+    } else {
+        interval
+    }
+}
+
+#[inline]
+fn xhci_frame_interval(interval_raw: u8) -> u8 {
+    xhci_microframes_to_exponent(u32::from(interval_raw.max(1)) * 8, 3, 10)
+}
+
+fn xhci_endpoint_interval(slot_speed: u8, transfer_type: u8, interval_raw: u8) -> u8 {
+    match slot_speed {
+        reg::SPEED_HIGH => {
+            if matches!(transfer_type, desc_ep_type::CONTROL | desc_ep_type::BULK) {
+                xhci_microframes_to_exponent(u32::from(interval_raw), 0, 15)
+            } else {
+                xhci_exponent_interval(slot_speed, interval_raw)
+            }
+        }
+        reg::SPEED_SUPER | reg::SPEED_SUPER_PLUS => {
+            if matches!(
+                transfer_type,
+                desc_ep_type::INTERRUPT | desc_ep_type::ISOCHRONOUS
+            ) {
+                xhci_exponent_interval(slot_speed, interval_raw)
+            } else {
+                0
+            }
+        }
+        reg::SPEED_FULL => {
+            if transfer_type == desc_ep_type::ISOCHRONOUS {
+                xhci_exponent_interval(slot_speed, interval_raw)
+            } else if transfer_type == desc_ep_type::INTERRUPT {
+                xhci_frame_interval(interval_raw)
+            } else {
+                0
+            }
+        }
+        reg::SPEED_LOW => {
+            if matches!(
+                transfer_type,
+                desc_ep_type::INTERRUPT | desc_ep_type::ISOCHRONOUS
+            ) {
+                xhci_frame_interval(interval_raw)
+            } else {
+                0
+            }
+        }
+        _ => 0,
+    }
+}
+
+fn xhci_endpoint_max_burst(slot_speed: u8, ep: &EndpointDesc) -> u8 {
+    if slot_speed == reg::SPEED_HIGH
+        && matches!(
+            ep.transfer_type(),
+            desc_ep_type::INTERRUPT | desc_ep_type::ISOCHRONOUS
+        )
+    {
+        ep.additional_transactions()
+    } else {
+        0
+    }
+}
+
+fn xhci_endpoint_max_esit_payload(slot_speed: u8, ep: &EndpointDesc) -> u32 {
+    if matches!(
+        ep.transfer_type(),
+        desc_ep_type::CONTROL | desc_ep_type::BULK
+    ) {
+        return 0;
+    }
+    let packet_size = u32::from(ep.packet_size());
+    let transactions = if slot_speed == reg::SPEED_HIGH {
+        u32::from(ep.additional_transactions()).saturating_add(1)
+    } else {
+        1
+    };
+    packet_size.saturating_mul(transactions)
+}
+
+fn xhci_endpoint_avg_trb_length(ep: &EndpointDesc, max_esit_payload: u32) -> u16 {
+    if ep.transfer_type() == desc_ep_type::CONTROL {
+        8
+    } else if matches!(
+        ep.transfer_type(),
+        desc_ep_type::INTERRUPT | desc_ep_type::ISOCHRONOUS
+    ) {
+        max_esit_payload as u16
+    } else {
+        0
+    }
 }
 
 #[inline]
@@ -586,16 +694,18 @@ impl EndpointContext {
         max_burst: u8,
         interval: u8,
         tr_ptr: u64,
+        max_esit_payload: u32,
+        avg_trb_length: u16,
     ) -> Self {
         Self {
-            dw0: (interval as u32) << 16,
+            dw0: (((max_esit_payload >> 16) & 0xff) << 24) | ((interval as u32) << 16),
             dw1: ((3u32) << 1)
                 | ((ep_type as u32) << 3)
                 | ((max_burst as u32) << 8)
                 | ((max_packet_size as u32) << 16),
             tr_dequeue_lo: (tr_ptr as u32) | 1, // DCS = 1
             tr_dequeue_hi: (tr_ptr >> 32) as u32,
-            dw4: 8, // Average TRB Length
+            dw4: ((max_esit_payload & 0xffff) << 16) | u32::from(avg_trb_length),
             _0: [0; 3],
         }
     }
@@ -971,6 +1081,8 @@ impl<H: Dma> UsbDevice<H> {
                             0,
                             0,
                             ep0_ring.phys(host),
+                            0,
+                            8,
                         );
                 }
                 compiler_fence(Ordering::Release);
@@ -1997,21 +2109,20 @@ impl<H: Dma> UsbDevice<H> {
             _ => 4,
         };
 
-        // Calculate interval for xHCI (different from USB descriptor).
-        let interval = if self.speed >= reg::SPEED_HIGH {
-            interval_raw.saturating_sub(1)
-        } else {
-            // For FS/LS, convert ms to 125us frames.
-            let ms = interval_raw.max(1) as u32;
-            let log2_ceil = if ms.is_power_of_two() {
-                ms.trailing_zeros() as u8
-            } else {
-                (u32::BITS - ms.leading_zeros()) as u8
-            };
-            log2_ceil + 3
-        };
+        let interval = xhci_endpoint_interval(self.speed, ep_type, interval_raw);
+        let max_burst = xhci_endpoint_max_burst(self.speed, ep);
+        let max_esit_payload = xhci_endpoint_max_esit_payload(self.speed, ep);
+        let avg_trb_length = xhci_endpoint_avg_trb_length(ep, max_esit_payload);
 
-        EndpointContext::new(xhci_ep_type, max_packet_size, 0, interval, ring_phys)
+        EndpointContext::new(
+            xhci_ep_type,
+            max_packet_size,
+            max_burst,
+            interval,
+            ring_phys,
+            max_esit_payload,
+            avg_trb_length,
+        )
     }
 
     /// Configure one or more endpoints before forwarding SET_CONFIGURATION.
@@ -2565,6 +2676,41 @@ mod tests {
 
         let (unknown, unknown_count) = ep0_mps_candidates_for_speed(0xff);
         assert_eq!(&unknown[..unknown_count], &[64, 8, 512]);
+    }
+
+    #[test]
+    fn low_speed_keyboard_interrupt_context_matches_uboot_periodic_fields() {
+        let ep = EndpointDesc {
+            length: 7,
+            desc_type: desc_type::ENDPOINT,
+            endpoint_address: 0x81,
+            attributes: desc_ep_type::INTERRUPT,
+            max_packet_size: 8,
+            interval: 10,
+        };
+
+        let interval = xhci_endpoint_interval(reg::SPEED_LOW, ep.transfer_type(), ep.interval);
+        let max_burst = xhci_endpoint_max_burst(reg::SPEED_LOW, &ep);
+        let max_esit_payload = xhci_endpoint_max_esit_payload(reg::SPEED_LOW, &ep);
+        let avg_trb_length = xhci_endpoint_avg_trb_length(&ep, max_esit_payload);
+        let ctx = EndpointContext::new(
+            7,
+            ep.max_packet_size,
+            max_burst,
+            interval,
+            0x0000_0004_0405_b000,
+            max_esit_payload,
+            avg_trb_length,
+        );
+
+        assert_eq!(interval, 6);
+        assert_eq!(max_burst, 0);
+        assert_eq!(max_esit_payload, 8);
+        assert_eq!(avg_trb_length, 8);
+        assert_eq!((ctx.dw0 >> 16) & 0xff, 6);
+        assert_eq!((ctx.dw1 >> 8) & 0xff, 0);
+        assert_eq!((ctx.dw1 >> 16) & 0xffff, 8);
+        assert_eq!(ctx.dw4, 0x0008_0008);
     }
 
     #[test]

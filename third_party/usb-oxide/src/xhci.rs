@@ -2,15 +2,14 @@
 // Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
 // Copyright 2026 Lukas Bower
 use crate::{
-    reg,
-    ring::{completion, trb_type, EventRing, PhysMem, Ring, Trb},
-    Dma, Result, UsbError,
+    Dma, Result, UsbError, reg,
+    ring::{EventRing, PhysMem, Ring, Trb, completion, trb_type},
 };
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
-    sync::atomic::{compiler_fence, AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering, compiler_fence},
 };
 use spin::Mutex;
 
@@ -23,7 +22,7 @@ const RESET_WAIT_SPINS: usize = 10_000_000;
 const PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS: usize = RESET_WAIT_SPINS * 10;
 // On Pi 4 mailbox-reset handoff, repeated live operational reads after the
 // command doorbell can enter the seL4 timer interrupt path before userland can
-// recover. Recovery uses bounded U-Boot-style blind stop/reset/RUN settles
+// recover. Recovery uses bounded U-Boot-style stop/reset/CNR/RUN handshakes
 // before the doorbell, then keeps the command wait itself prompt-safe.
 const MAILBOX_RESET_POST_SETTLE_SPINS: usize = 1_000_000;
 const READY_WAIT_SPINS: usize = 10_000_000;
@@ -40,7 +39,7 @@ const COMMAND_WAIT_LIVE_SNAPSHOT_SPINS: usize = 32;
 const COMMAND_WAIT_OTHER_EVENT_LOGS: usize = 8;
 
 #[inline(always)]
-const fn prompt_safe_command_recovery_uses_bounded_blind_settles() -> bool {
+const fn prompt_safe_command_recovery_uses_bounded_reset_handshake() -> bool {
     true
 }
 
@@ -356,7 +355,7 @@ const fn command_timeout_live_snapshot_enabled() -> bool {
 
 #[inline(always)]
 const fn prompt_safe_command_timeout_live_snapshot_enabled() -> bool {
-    false
+    true
 }
 
 #[inline(always)]
@@ -386,6 +385,11 @@ const fn polling_command_proof_dnctrl_value(
 #[inline(always)]
 const fn halt_revalidation_needed(usbsts: u32) -> bool {
     (usbsts & reg::USBSTS_HCH) == 0
+}
+
+#[inline(always)]
+const fn pre_hcrst_cnr_revalidation_needed(usbsts: u32) -> bool {
+    (usbsts & reg::USBSTS_CNR) != 0
 }
 
 #[inline(always)]
@@ -1214,10 +1218,10 @@ const fn defer_scratchpad_array_publish_with_snapshot(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
 ) -> bool {
-    // U-Boot publishes DCBAAP, CRCR, ERDP, ERSTSZ, and ERSTBA before it
-    // writes DCBAA slot 0 with the scratchpad pointer array. The Pi 4
-    // platform-reset lane owns fresh Cohesix rings, so mirror that cold-start
-    // ordering instead of exposing a populated scratchpad slot before DCBAAP.
+    // U-Boot publishes DCBAAP, CRCR, ERDP, ERSTSZ, and ERSTBA before
+    // xhci_scratchpad_alloc() writes and flushes DCBAA slot 0, then fills and
+    // flushes the scratchpad pointer array. Keep Cohesix on the same visible
+    // order for resetless/runtime Pi 4 lanes.
     runtime_deferred_ring_handoff(firmware_handoff, runtime_seed_snapshot)
         || runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
 }
@@ -1451,6 +1455,13 @@ const fn reset_usbcmd_seed_before_hcrst_for_init(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
     skip_initial_live_operational_reads: bool,
 ) -> Option<u32> {
+    if platform_reset_uses_live_pre_hcrst_halt_revalidation(
+        firmware_handoff,
+        runtime_seed_snapshot,
+        skip_initial_live_operational_reads,
+    ) {
+        return None;
+    }
     if initial_live_operational_read_hazard(
         firmware_handoff,
         runtime_seed_snapshot,
@@ -1463,11 +1474,29 @@ const fn reset_usbcmd_seed_before_hcrst_for_init(
 }
 
 #[inline(always)]
+const fn platform_reset_uses_live_pre_hcrst_halt_revalidation(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+    skip_initial_live_operational_reads: bool,
+) -> bool {
+    runtime_platform_reset_fresh_rings_handoff(firmware_handoff, runtime_seed_snapshot)
+        && !runtime_snapshot_has_stop_state_seed(runtime_seed_snapshot)
+        && skip_initial_live_operational_reads
+}
+
+#[inline(always)]
 const fn skip_reset_pre_usbsts_read_for_init(
     firmware_handoff: XhciFirmwareHandoff,
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
     skip_initial_live_operational_reads: bool,
 ) -> bool {
+    if platform_reset_uses_live_pre_hcrst_halt_revalidation(
+        firmware_handoff,
+        runtime_seed_snapshot,
+        skip_initial_live_operational_reads,
+    ) {
+        return false;
+    }
     initial_live_operational_read_hazard(
         firmware_handoff,
         runtime_seed_snapshot,
@@ -1481,15 +1510,15 @@ const fn skip_reset_completion_poll_for_init(
     runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
     skip_initial_live_operational_reads: bool,
 ) -> bool {
+    if matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete) {
+        return false;
+    }
     if skip_reset_pre_usbsts_read_for_init(
         firmware_handoff,
         runtime_seed_snapshot,
         skip_initial_live_operational_reads,
     ) {
         return true;
-    }
-    if matches!(firmware_handoff, XhciFirmwareHandoff::PlatformResetComplete) {
-        return false;
     }
     false
 }
@@ -1506,6 +1535,27 @@ const fn reset_completion_blind_settle_spins(
         PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS
     } else {
         RESET_WAIT_SPINS
+    }
+}
+
+#[inline(always)]
+const fn reset_halt_revalidation_wait_spins(
+    firmware_handoff: XhciFirmwareHandoff,
+    runtime_seed_snapshot: Option<XhciRuntimeSeedSnapshot>,
+    skip_initial_live_operational_reads: bool,
+) -> usize {
+    if platform_reset_uses_live_pre_hcrst_halt_revalidation(
+        firmware_handoff,
+        runtime_seed_snapshot,
+        skip_initial_live_operational_reads,
+    ) {
+        reset_completion_blind_settle_spins(
+            firmware_handoff,
+            runtime_seed_snapshot,
+            skip_initial_live_operational_reads,
+        )
+    } else {
+        STOP_WAIT_SPINS
     }
 }
 
@@ -1794,8 +1844,9 @@ pub enum XhciFirmwareHandoff {
     /// controller state.
     PreserveControllerState = 3,
     /// Platform firmware or mailbox reset proved PCIe/VL805 ownership.
-    /// Runtime uses a blind local xHC HCRST after that boundary, then replays
-    /// CONFIG/ring ownership locally before trusting command-ring completion.
+    /// Runtime uses a local xHC HCRST plus the U-Boot `USBSTS.CNR==0`
+    /// completion gate after that boundary, then replays CONFIG/ring ownership
+    /// locally before trusting command-ring completion.
     PlatformResetComplete = 4,
 }
 
@@ -1957,6 +2008,11 @@ impl<H: Dma> ScratchpadSet<H> {
         }
 
         Ok(Self { array, buffers })
+    }
+
+    fn share_array_placeholder_for_device(&self, host: &H) -> Result<u64> {
+        self.array
+            .share_for_device(host, "xhci-scratchpad-array-placeholder")
     }
 
     fn share_for_device(&self, host: &H) -> Result<u64> {
@@ -2803,7 +2859,11 @@ impl<H: Dma> XhciCtrl<H> {
         // offsets and maps the full controller aperture through the HAL.
         let mmio = unsafe { host.map_mmio(mmio_phys, mmio_size) }.ok_or(UsbError::MapFail)?;
         emit_xhci_diag(0x0105, mmio as u64, mmio_size as u64, 0);
-        Self::apply_brcm_axi_setup(mmio, params.apply_brcm_axi_setup);
+        Self::apply_brcm_axi_setup(
+            mmio,
+            params.apply_brcm_axi_setup,
+            params.posted_write_flush_required,
+        )?;
 
         let db_offset = xhci_dboff_offset(params.db_offset);
         let rts_offset = xhci_rtsoff_offset(params.rts_offset);
@@ -2843,8 +2903,7 @@ impl<H: Dma> XhciCtrl<H> {
         let scratchpad = if max_scratchpad > 0 {
             let set = ScratchpadSet::build(&*host, max_scratchpad as usize)?;
             let scratchpad_array_phys = set.array.try_phys(&*host)?;
-            publish_dcbaa_scratchpad_array(&dcbaa, scratchpad_array_phys, false);
-            emit_xhci_diag(0x010b, scratchpad_array_phys, max_scratchpad as u64, 0);
+            emit_xhci_diag(0x010b, scratchpad_array_phys, max_scratchpad as u64, 1);
             Some(set)
         } else {
             emit_xhci_diag(0x010c, 0, 0, 0);
@@ -2900,9 +2959,9 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     #[inline(always)]
-    fn apply_brcm_axi_setup(mmio: usize, enabled: bool) {
+    fn apply_brcm_axi_setup(mmio: usize, enabled: bool, flush_required: bool) -> Result<()> {
         if !enabled {
-            return;
+            return Ok(());
         }
 
         emit_xhci_diag(0x0111, mmio as u64, BRCM_XHCI_AXIWRA as u64, 0);
@@ -2915,6 +2974,17 @@ impl<H: Dma> XhciCtrl<H> {
             axiwr_after as u64,
         );
         Self::write_reg_at::<u32>(mmio, BRCM_XHCI_AXIWRA, axiwr_after);
+        if !flush_posted_write_with_policy(
+            mmio,
+            BRCM_XHCI_AXIWRA,
+            axiwr_after,
+            0x0118,
+            flush_required,
+        ) {
+            emit_xhci_diag(0x03ee, BRCM_XHCI_AXIWRA as u64, axiwr_after as u64, 0x0118);
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
+        emit_xhci_diag(0x0118, BRCM_XHCI_AXIWRA as u64, axiwr_after as u64, 0x0118);
         let axiwr_readback = Self::read_reg_at::<u32>(mmio, BRCM_XHCI_AXIWRA);
         emit_xhci_diag(
             0x0113,
@@ -2933,6 +3003,17 @@ impl<H: Dma> XhciCtrl<H> {
             axird_after as u64,
         );
         Self::write_reg_at::<u32>(mmio, BRCM_XHCI_AXIRDA, axird_after);
+        if !flush_posted_write_with_policy(
+            mmio,
+            BRCM_XHCI_AXIRDA,
+            axird_after,
+            0x0119,
+            flush_required,
+        ) {
+            emit_xhci_diag(0x03ee, BRCM_XHCI_AXIRDA as u64, axird_after as u64, 0x0119);
+            return Err(UsbError::PostedWriteFlushFailed);
+        }
+        emit_xhci_diag(0x0119, BRCM_XHCI_AXIRDA as u64, axird_after as u64, 0x0119);
         let axird_readback = Self::read_reg_at::<u32>(mmio, BRCM_XHCI_AXIRDA);
         emit_xhci_diag(
             0x0115,
@@ -2940,6 +3021,7 @@ impl<H: Dma> XhciCtrl<H> {
             axird_readback as u64,
             axird_after as u64,
         );
+        Ok(())
     }
 
     fn init(&mut self) -> Result<()> {
@@ -3260,24 +3342,28 @@ impl<H: Dma> XhciCtrl<H> {
                 trusted_runtime_seed_snapshot,
                 self.skip_initial_live_operational_reads,
             );
-            let usbcmd_before_reset = reset_usbcmd_seed_before_hcrst_for_init(
+            let live_pre_hcrst_usbcmd_seed = platform_reset_uses_live_pre_hcrst_halt_revalidation(
                 self.firmware_handoff,
                 trusted_runtime_seed_snapshot,
                 self.skip_initial_live_operational_reads,
-            )
-            .unwrap_or_else(|| self.read_op::<u32>(reg::USBCMD));
+            );
+            let usbcmd_before_reset_seed = reset_usbcmd_seed_before_hcrst_for_init(
+                self.firmware_handoff,
+                trusted_runtime_seed_snapshot,
+                self.skip_initial_live_operational_reads,
+            );
             emit_xhci_diag(
                 0x0226,
-                usbcmd_before_reset as u64,
+                usbcmd_before_reset_seed.unwrap_or(0) as u64,
                 trusted_runtime_seed_snapshot.is_some() as u64,
-                skip_reset_completion_poll as u64,
+                (skip_reset_completion_poll as u64) | ((live_pre_hcrst_usbcmd_seed as u64) << 8),
             );
             let skip_reset_pre_usbsts_read = skip_reset_pre_usbsts_read_for_init(
                 self.firmware_handoff,
                 trusted_runtime_seed_snapshot,
                 self.skip_initial_live_operational_reads,
             );
-            let reset_pre_usbsts = if skip_reset_pre_usbsts_read {
+            let mut reset_pre_usbsts = if skip_reset_pre_usbsts_read {
                 emit_xhci_diag(
                     0x022c,
                     reg::USBSTS as u64,
@@ -3294,27 +3380,66 @@ impl<H: Dma> XhciCtrl<H> {
                 && !SKIP_STOP_DURING_INIT
                 && halt_revalidation_needed(reset_pre_usbsts)
             {
-                let stop_cmd = masked_usbcmd(usbcmd_before_reset) & !reg::USBCMD_RUN;
-                emit_xhci_diag(0x0221, stop_cmd as u64, usbcmd_before_reset as u64, 1);
+                let halt_wait_spins = reset_halt_revalidation_wait_spins(
+                    self.firmware_handoff,
+                    trusted_runtime_seed_snapshot,
+                    self.skip_initial_live_operational_reads,
+                );
+                let usbcmd_before_stop =
+                    usbcmd_before_reset_seed.unwrap_or_else(|| self.read_op::<u32>(reg::USBCMD));
+                let stop_cmd = masked_usbcmd(usbcmd_before_stop) & !reg::USBCMD_RUN;
+                emit_xhci_diag(
+                    0x0221,
+                    stop_cmd as u64,
+                    usbcmd_before_stop as u64,
+                    halt_wait_spins as u64,
+                );
                 self.write_op(reg::USBCMD, stop_cmd);
                 let mut waited = 0usize;
                 while halt_revalidation_needed(self.read_op::<u32>(reg::USBSTS)) {
                     waited = waited.saturating_add(1);
-                    if waited >= STOP_WAIT_SPINS {
+                    if waited >= halt_wait_spins {
                         emit_xhci_diag(
                             0x0222,
                             waited as u64,
                             self.read_op::<u32>(reg::USBSTS) as u64,
-                            1,
+                            halt_wait_spins as u64,
                         );
                         return Err(UsbError::Timeout);
                     }
                     spin_loop();
                 }
-                emit_xhci_diag(0x0223, self.read_op::<u32>(reg::USBSTS) as u64, 1, 0);
+                reset_pre_usbsts = self.read_op::<u32>(reg::USBSTS);
+                emit_xhci_diag(0x0223, reset_pre_usbsts as u64, 1, 0);
             } else if skip_reset_pre_usbsts_read {
                 emit_xhci_diag(0x0225, reset_pre_usbsts as u64, reg::USBSTS_HCH as u64, 1);
             }
+            if !skip_reset_pre_usbsts_read && pre_hcrst_cnr_revalidation_needed(reset_pre_usbsts) {
+                emit_xhci_diag(
+                    0x022d,
+                    reset_pre_usbsts as u64,
+                    reg::USBSTS_CNR as u64,
+                    self.firmware_handoff as u64,
+                );
+            }
+            let usbcmd_before_reset = if live_pre_hcrst_usbcmd_seed {
+                emit_xhci_diag(
+                    0x023c,
+                    reg::USBCMD as u64,
+                    self.firmware_handoff as u64,
+                    reset_pre_usbsts as u64,
+                );
+                let live_usbcmd = self.read_op::<u32>(reg::USBCMD);
+                emit_xhci_diag(
+                    0x023d,
+                    live_usbcmd as u64,
+                    reg::USBCMD_HCRST as u64,
+                    reset_pre_usbsts as u64,
+                );
+                live_usbcmd
+            } else {
+                usbcmd_before_reset_seed.unwrap_or_else(|| self.read_op::<u32>(reg::USBCMD))
+            };
             let reset_cmd = usbcmd_before_reset | reg::USBCMD_HCRST;
             let uboot_style_reset_write = runtime_handoff_needs_uboot_style_reset_write(
                 self.firmware_handoff,
@@ -3354,13 +3479,28 @@ impl<H: Dma> XhciCtrl<H> {
                 emit_xhci_diag(0x0229, reg::USBSTS_CNR as u64, reset_cmd as u64, 1);
                 emit_xhci_diag(0x0233, 0, 0, 1);
             } else {
+                let reset_wait_spins = reset_completion_blind_settle_spins(
+                    self.firmware_handoff,
+                    trusted_runtime_seed_snapshot,
+                    self.skip_initial_live_operational_reads,
+                );
                 let mut reset_state = self.read_op::<u32>(reg::USBCMD);
-                emit_xhci_diag(0x0236, reset_state as u64, reg::USBCMD_HCRST as u64, 0);
+                emit_xhci_diag(
+                    0x0236,
+                    reset_state as u64,
+                    reg::USBCMD_HCRST as u64,
+                    reset_wait_spins as u64,
+                );
                 let mut waited = 0usize;
                 while (reset_state & reg::USBCMD_HCRST) != 0 {
                     waited = waited.saturating_add(1);
-                    if waited >= RESET_WAIT_SPINS {
-                        emit_xhci_diag(0x0231, waited as u64, reset_state as u64, 0);
+                    if waited >= reset_wait_spins {
+                        emit_xhci_diag(
+                            0x0231,
+                            waited as u64,
+                            reset_state as u64,
+                            reset_wait_spins as u64,
+                        );
                         return Err(UsbError::Timeout);
                     }
                     spin_loop();
@@ -3369,12 +3509,12 @@ impl<H: Dma> XhciCtrl<H> {
                 waited = 0;
                 while (self.read_op::<u32>(reg::USBSTS) & reg::USBSTS_CNR) != 0 {
                     waited = waited.saturating_add(1);
-                    if waited >= RESET_WAIT_SPINS {
+                    if waited >= reset_wait_spins {
                         emit_xhci_diag(
                             0x0232,
                             waited as u64,
                             self.read_op::<u32>(reg::USBSTS) as u64,
-                            0,
+                            reset_wait_spins as u64,
                         );
                         return Err(UsbError::Timeout);
                     }
@@ -3455,7 +3595,11 @@ impl<H: Dma> XhciCtrl<H> {
             }
         }
         let scratchpad_array_phys = if let Some(scratchpad) = &self.scratchpad {
-            Some(scratchpad.share_for_device(&*self.host)?)
+            if defer_scratchpad_array_publish {
+                Some(scratchpad.share_array_placeholder_for_device(&*self.host)?)
+            } else {
+                Some(scratchpad.share_for_device(&*self.host)?)
+            }
         } else {
             None
         };
@@ -4254,6 +4398,10 @@ impl<H: Dma> XhciCtrl<H> {
                 let published_scratchpad_array =
                     publish_dcbaa_scratchpad_array(&self.dcbaa, scratchpad_array_phys, false);
                 let _ = self.dcbaa.share_for_device(&*self.host, "xhci-dcbaa")?;
+                if let Some(scratchpad) = &self.scratchpad {
+                    let shared_scratchpad_array = scratchpad.share_for_device(&*self.host)?;
+                    emit_xhci_diag(0x03bf, scratchpad_array_phys, shared_scratchpad_array, 2);
+                }
                 emit_xhci_diag(
                     RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE,
                     scratchpad_array_phys,
@@ -5785,7 +5933,7 @@ impl<H: Dma> XhciCtrl<H> {
     }
 
     fn reset_controller_for_prompt_safe_command_recovery(&self) -> Result<()> {
-        if !prompt_safe_command_recovery_uses_bounded_blind_settles() {
+        if !prompt_safe_command_recovery_uses_bounded_reset_handshake() {
             return Err(UsbError::NotSupported);
         }
         let recovery_run_usbcmd = command_recovery_polling_usbcmd_seed();
@@ -5804,10 +5952,29 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x03ee, usbcmd_offset as u64, stop_cmd as u64, 0x03c5);
             return Err(UsbError::PostedWriteFlushFailed);
         }
-        for _ in 0..STOP_WAIT_SPINS {
+        let usbsts_offset = self.op_base - self.mmio + reg::USBSTS;
+        let mut stop_usbsts = Self::read_reg_at::<u32>(self.mmio, usbsts_offset);
+        let mut stop_waited = 0usize;
+        while halt_revalidation_needed(stop_usbsts) {
+            stop_waited = stop_waited.saturating_add(1);
+            if stop_waited >= STOP_WAIT_SPINS {
+                emit_xhci_diag(
+                    0x03c6,
+                    stop_waited as u64,
+                    stop_usbsts as u64,
+                    STOP_WAIT_SPINS as u64,
+                );
+                return Err(UsbError::Timeout);
+            }
             spin_loop();
+            stop_usbsts = Self::read_reg_at::<u32>(self.mmio, usbsts_offset);
         }
-        emit_xhci_diag(0x03c7, STOP_WAIT_SPINS as u64, reg::USBSTS_HCH as u64, 1);
+        emit_xhci_diag(
+            0x03c7,
+            stop_waited as u64,
+            stop_usbsts as u64,
+            STOP_WAIT_SPINS as u64,
+        );
 
         let reset_cmd = stop_cmd | reg::USBCMD_HCRST;
         Self::write_reg_u32_store_diag_at(
@@ -5822,15 +5989,44 @@ impl<H: Dma> XhciCtrl<H> {
             emit_xhci_diag(0x03ee, usbcmd_offset as u64, reset_cmd as u64, 0x03c8);
             return Err(UsbError::PostedWriteFlushFailed);
         }
-        let reset_settle_spins = reset_completion_blind_settle_spins(
+        let reset_wait_spins = reset_completion_blind_settle_spins(
             self.firmware_handoff,
             self.runtime_seed_snapshot,
             self.skip_initial_live_operational_reads,
         );
-        for _ in 0..reset_settle_spins {
+        let mut reset_state = Self::read_reg_at::<u32>(self.mmio, usbcmd_offset);
+        let mut waited = 0usize;
+        while (reset_state & reg::USBCMD_HCRST) != 0 {
+            waited = waited.saturating_add(1);
+            if waited >= reset_wait_spins {
+                emit_xhci_diag(
+                    0x03c9,
+                    waited as u64,
+                    reset_state as u64,
+                    reset_wait_spins as u64,
+                );
+                return Err(UsbError::Timeout);
+            }
             spin_loop();
+            reset_state = Self::read_reg_at::<u32>(self.mmio, usbcmd_offset);
         }
-        emit_xhci_diag(0x03cb, reset_cmd as u64, reset_settle_spins as u64, 2);
+        let mut usbsts = Self::read_reg_at::<u32>(self.mmio, usbsts_offset);
+        waited = 0;
+        while (usbsts & reg::USBSTS_CNR) != 0 {
+            waited = waited.saturating_add(1);
+            if waited >= reset_wait_spins {
+                emit_xhci_diag(
+                    0x03ca,
+                    waited as u64,
+                    usbsts as u64,
+                    reset_wait_spins as u64,
+                );
+                return Err(UsbError::Timeout);
+            }
+            spin_loop();
+            usbsts = Self::read_reg_at::<u32>(self.mmio, usbsts_offset);
+        }
+        emit_xhci_diag(0x03cb, reset_cmd as u64, usbsts as u64, 3);
         Ok(())
     }
 
@@ -5844,6 +6040,21 @@ impl<H: Dma> XhciCtrl<H> {
     fn republish_fresh_command_event_rings_for_prompt_safe_recovery(&self) -> Result<()> {
         let cmd_ring = Box::new(Ring::new(&*self.host, CMD_RING_SIZE)?);
         let event_ring = Box::new(EventRing::new(&*self.host, EVENT_RING_SIZE)?);
+        let recovery_scratchpad_array_phys = if let Some(scratchpad) = &self.scratchpad {
+            let scratchpad_array_phys =
+                scratchpad.share_array_placeholder_for_device(&*self.host)?;
+            let published_scratchpad_array =
+                publish_dcbaa_scratchpad_array(&self.dcbaa, scratchpad_array_phys, true);
+            emit_xhci_diag(
+                RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE,
+                scratchpad_array_phys,
+                published_scratchpad_array,
+                3,
+            );
+            Some(scratchpad_array_phys)
+        } else {
+            None
+        };
         let dcbaa_phys = self
             .dcbaa
             .share_for_device(&*self.host, "xhci-dcbaa-recovery")?;
@@ -5965,6 +6176,23 @@ impl<H: Dma> XhciCtrl<H> {
             RING_PUBLISH_ERSTBA_FLUSH_LOW_STAGE,
             RING_PUBLISH_ERSTBA_FLUSH_HIGH_STAGE,
         )?;
+        if let Some(scratchpad_array_phys) = recovery_scratchpad_array_phys {
+            let published_scratchpad_array =
+                publish_dcbaa_scratchpad_array(&self.dcbaa, scratchpad_array_phys, false);
+            let _ = self
+                .dcbaa
+                .share_for_device(&*self.host, "xhci-dcbaa-recovery-scratchpad")?;
+            if let Some(scratchpad) = &self.scratchpad {
+                let shared_scratchpad_array = scratchpad.share_for_device(&*self.host)?;
+                emit_xhci_diag(0x03bf, scratchpad_array_phys, shared_scratchpad_array, 3);
+            }
+            emit_xhci_diag(
+                RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE,
+                scratchpad_array_phys,
+                published_scratchpad_array,
+                4,
+            );
+        }
         let recovery_dnctrl =
             polling_command_proof_dnctrl_value(self.firmware_handoff, self.runtime_seed_snapshot);
         Self::write_reg_u32_store_diag_at(
@@ -6144,9 +6372,11 @@ impl<H: Dma> XhciCtrl<H> {
         drop(cmd_ring);
         ring_write_barrier();
         emit_xhci_diag(COMMAND_PUBLISH_BARRIER_STAGE, cmd_addr, 0, 1);
+        self.emit_command_gate_plan_snapshot(0x0370, Some(cmd_addr), 0, false);
         if !self.ring_cmd_doorbell() {
             return Err(UsbError::PostedWriteFlushFailed);
         }
+        self.emit_command_gate_plan_snapshot(0x0368, Some(cmd_addr), 1, false);
         match self.wait_command_prompt_safe(Some(cmd_addr), false) {
             Ok(trb) => Ok(trb),
             Err(UsbError::Timeout) => {
@@ -6349,7 +6579,12 @@ impl<H: Dma> XhciCtrl<H> {
             LINUX_CAPTURED_FRESH_SUBMIT_MODE,
         );
         let prior_timeout_cmd = self.last_command_timeout_trb.load(Ordering::Relaxed) & !0x0f;
-        emit_xhci_diag(0x03e2, prior_timeout_cmd, 0, LINUX_CAPTURED_FRESH_RECOVERY_POLICY);
+        emit_xhci_diag(
+            0x03e2,
+            prior_timeout_cmd,
+            0,
+            LINUX_CAPTURED_FRESH_RECOVERY_POLICY,
+        );
         self.republish_fresh_command_event_rings_for_prompt_safe_recovery()?;
         self.enable_linux_command_event_generation_for_probe()?;
         let mut cmd_ring = self.cmd_ring.lock();
@@ -6924,20 +7159,31 @@ impl<H: Dma> XhciCtrl<H> {
 #[cfg(test)]
 mod tests {
     use super::{
-        blind_settle_precedes_live_stop_revalidation, claim_legacy_ownership_before_reset_for_init,
+        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, CMD_RING_SIZE,
+        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
+        COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
+        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, ConstructorPollingScrubMode,
+        EVENT_RING_SIZE, LINUX_CAPTURED_FRESH_BARRIER_POLICY, LINUX_CAPTURED_FRESH_RECOVERY_POLICY,
+        LINUX_CAPTURED_FRESH_SUBMIT_MODE, LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD,
+        LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE, PI4_CRCR_RUNNING_STATUS_BIT,
+        PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, PORT_CHANGE_BITS, READY_WAIT_PROGRESS_SPINS,
+        RESET_WAIT_SPINS, SKIP_HCRST_DURING_INIT, ScratchpadSet,
+        TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
+        XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS, XhciControllerParams, XhciCtrl,
+        XhciFirmwareHandoff, XhciRuntimeSeedSnapshot, blind_settle_precedes_live_stop_revalidation,
+        claim_legacy_ownership_before_reset_for_init,
         claim_legacy_ownership_before_reset_with_snapshot, command_diag_live_reads_allowed,
         command_doorbell_requires_hal_posted_write_drain, command_poll_only_should_sync_event_ring,
         command_port_status_event_mask, command_recovery_polling_usbcmd_seed,
         command_timeout_live_snapshot_enabled, command_timeout_live_snapshot_spins,
-        command_wait_should_sync_event_ring,
-        compose_brcm_usbaxi_attr, compose_config, compose_crcr, compose_erst_base,
-        compose_erst_size, compose_initial_erdp, compose_polling_erdp_ack, compose_run_usbcmd,
-        constructor_polling_scrub_mode, constructor_polling_scrub_mode_from_params,
-        crcr_reg_write_ops, dcbaap_reg_write_ops, defer_crcr_publish_until_after_run_with_snapshot,
-        defer_crcr_publish_with_snapshot, defer_dcbaap_publish_until_after_run_with_snapshot,
-        defer_dcbaap_publish_with_snapshot, defer_dnctrl_write_until_after_run_with_snapshot,
-        defer_erdp_publish_with_snapshot, defer_erst_publish_with_snapshot,
-        defer_event_ring_publish_until_after_run_with_snapshot,
+        command_wait_should_sync_event_ring, compose_brcm_usbaxi_attr, compose_config,
+        compose_crcr, compose_erst_base, compose_erst_size, compose_initial_erdp,
+        compose_polling_erdp_ack, compose_run_usbcmd, constructor_polling_scrub_mode,
+        constructor_polling_scrub_mode_from_params, crcr_reg_write_ops, dcbaap_reg_write_ops,
+        defer_crcr_publish_until_after_run_with_snapshot, defer_crcr_publish_with_snapshot,
+        defer_dcbaap_publish_until_after_run_with_snapshot, defer_dcbaap_publish_with_snapshot,
+        defer_dnctrl_write_until_after_run_with_snapshot, defer_erdp_publish_with_snapshot,
+        defer_erst_publish_with_snapshot, defer_event_ring_publish_until_after_run_with_snapshot,
         defer_scratchpad_array_publish_with_snapshot,
         deferred_erdp_publish_precedes_erst_with_snapshot,
         deferred_erst_publish_uses_size_first_with_snapshot, disable_interrupter_iman_value,
@@ -6946,32 +7192,34 @@ mod tests {
         halt_revalidation_needed, initial_live_operational_read_hazard,
         linux_command_probe_usbcmd_seed, masked_usbcmd, no_op_command_trb_for_probe,
         parse_controller_params, platform_reset_dcbaap_publish_blocked_with_snapshot,
+        platform_reset_uses_live_pre_hcrst_halt_revalidation,
         platform_reset_uses_uboot_crcr_seed_read_after_hcrst, polling_command_proof_dnctrl_value,
         polling_event_generation_iman_value, polling_event_generation_run_usbcmd,
         polling_iman_ack_value, polling_iman_value, port_ready_for_enumeration, port_state_neutral,
         post_start_polling_irq_quiesce_pending_bits,
         post_start_polling_irq_quiesce_skip_usbsts_clear, pre_command_event_handler_erdp,
         pre_dcbaap_iman_disable_value_with_snapshot, pre_dcbaap_polling_irq_quiesce_with_snapshot,
-        pre_halt_source_quiesce_before_live_stop_revalidation, preserve_firmware_handoff_config,
-        preserve_state_crcr_publish_seed, preserve_state_crcr_write_is_redundant,
-        preserve_state_dcbaap_publish_seed, preserve_state_dcbaap_write_is_redundant,
-        preserve_state_erdp_publish_seed, preserve_state_erdp_write_is_redundant,
-        preserve_state_erstba_publish_seed, preserve_state_erstba_write_is_redundant,
-        preserve_state_erstsz_publish_seed, preserve_state_erstsz_write_is_redundant,
+        pre_halt_source_quiesce_before_live_stop_revalidation, pre_hcrst_cnr_revalidation_needed,
+        preserve_firmware_handoff_config, preserve_state_crcr_publish_seed,
+        preserve_state_crcr_write_is_redundant, preserve_state_dcbaap_publish_seed,
+        preserve_state_dcbaap_write_is_redundant, preserve_state_erdp_publish_seed,
+        preserve_state_erdp_write_is_redundant, preserve_state_erstba_publish_seed,
+        preserve_state_erstba_write_is_redundant, preserve_state_erstsz_publish_seed,
+        preserve_state_erstsz_write_is_redundant,
         probe_live_crcr_before_staged_publish_with_snapshot,
         probe_live_dcbaap_before_staged_publish_with_snapshot,
-        prompt_safe_command_recovery_uses_bounded_blind_settles,
+        prompt_safe_command_recovery_uses_bounded_reset_handshake,
         prompt_safe_command_redoorbell_enabled, prompt_safe_command_timeout_live_snapshot_enabled,
         prompt_safe_crcr_publish_seed,
         prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue,
         publish_dcbaa_scratchpad_array, replay_staged_crcr_snapshot_before_publish_with_snapshot,
         replay_staged_dcbaap_snapshot_before_publish_with_snapshot,
-        reset_completion_blind_settle_spins, reset_usbcmd_seed_before_hcrst,
-        reset_usbcmd_seed_before_hcrst_for_init, run_seed_usbcmd, run_usbcmd_needs_live_seed_read,
-        run_usbcmd_prefers_snapshot_seed, run_usbcmd_snapshot_seed, run_wait_observable_usbsts,
-        run_wait_progress_due, runtime_bootloader_owned_pollsafe_handoff,
-        runtime_deferred_ring_handoff, runtime_handoff_needs_pre_run_settle,
-        runtime_handoff_needs_relaxed_run_write,
+        reset_completion_blind_settle_spins, reset_halt_revalidation_wait_spins,
+        reset_usbcmd_seed_before_hcrst, reset_usbcmd_seed_before_hcrst_for_init, run_seed_usbcmd,
+        run_usbcmd_needs_live_seed_read, run_usbcmd_prefers_snapshot_seed,
+        run_usbcmd_snapshot_seed, run_wait_observable_usbsts, run_wait_progress_due,
+        runtime_bootloader_owned_pollsafe_handoff, runtime_deferred_ring_handoff,
+        runtime_handoff_needs_pre_run_settle, runtime_handoff_needs_relaxed_run_write,
         runtime_handoff_needs_release_only_dcbaap_publish_with_snapshot,
         runtime_handoff_needs_release_only_run_write,
         runtime_handoff_needs_uboot_style_reset_write, runtime_handoff_needs_uboot_style_run_write,
@@ -7004,19 +7252,7 @@ mod tests {
         use_live_config_seed_reads, use_live_config_seed_reads_for_init,
         use_live_config_seed_reads_with_snapshot, use_live_post_reset_seed_reads,
         use_live_post_reset_seed_reads_for_init, use_live_post_reset_seed_reads_with_snapshot,
-        xhci_port_in_range, xhci_slot_in_range, ConstructorPollingScrubMode, ScratchpadSet,
-        XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
-        BRCM_XHCI_USBAXI_SA_UA_MASK, BRCM_XHCI_USBAXI_SA_UA_VAL, CMD_RING_SIZE,
-        COMMAND_EVENT_RING_CPU_SYNC_INTERVAL_SPINS, COMMAND_POLL_ONLY_WAIT_SPINS,
-        COMMAND_PROMPT_SAFE_REDOORBELL_POLL, COMMAND_PROMPT_SAFE_WAIT_POLLS,
-        COMMAND_PROMPT_SAFE_WAIT_SPINS_PER_POLL, COMMAND_WAIT_SPINS, EVENT_RING_SIZE,
-        LINUX_CAPTURED_FRESH_BARRIER_POLICY, LINUX_CAPTURED_FRESH_RECOVERY_POLICY,
-        LINUX_CAPTURED_FRESH_SUBMIT_MODE, LINUX_COMMAND_PROBE_DNCTRL, LINUX_COMMAND_PROBE_IMOD,
-        LINUX_COMMAND_PROBE_RUN_FLUSH_STAGE,
-        PI4_CRCR_RUNNING_STATUS_BIT, PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS, PORT_CHANGE_BITS,
-        READY_WAIT_PROGRESS_SPINS, RESET_WAIT_SPINS, SKIP_HCRST_DURING_INIT,
-        TRUSTED_HANDOFF_DCBAAP_PREWRITE_READ_PROBE, TRUSTED_HANDOFF_DCBAAP_ZERO_REWRITE_PROBE,
-        XHCI_LEGACY_DISABLE_SMI, XHCI_LEGACY_SMI_EVENTS,
+        xhci_port_in_range, xhci_slot_in_range,
     };
     use super::{
         COMMAND_EVENT_ERDP_ACK_FLUSH_STAGE, COMMAND_EVENT_ERDP_ACK_HIGH_FLUSH_STAGE,
@@ -7032,14 +7268,13 @@ mod tests {
         RING_PUBLISH_ERSTSZ_FLUSH_STAGE, RING_PUBLISH_SCRATCHPAD_ARRAY_STAGE,
     };
     use crate::{
-        reg,
-        ring::{trb_type, PhysMem},
-        Dma,
+        Dma, reg,
+        ring::{PhysMem, trb_type},
     };
     use alloc::vec;
     use core::sync::atomic::{AtomicUsize, Ordering};
     use std::{
-        alloc::{alloc_zeroed, dealloc, Layout},
+        alloc::{Layout, alloc_zeroed, dealloc},
         sync::Mutex as StdMutex,
         vec::Vec as StdVec,
     };
@@ -7171,6 +7406,43 @@ mod tests {
         unsafe {
             assert_eq!(array_ptr.add(0).read_volatile(), page0_bus);
             assert_eq!(array_ptr.add(1).read_volatile(), page1_bus);
+        }
+    }
+
+    #[test]
+    fn scratchpad_placeholder_share_preserves_zero_array_until_uboot_fill_edge() {
+        let host = AllocatingMockDma::new(0x1_0000_0000);
+        let scratchpads = ScratchpadSet::build(&host, 2).expect("scratchpad allocation succeeds");
+        let array_ptr = scratchpads.array.virt() as *const u64;
+        let array_bus = scratchpads
+            .share_array_placeholder_for_device(&host)
+            .expect("placeholder publication succeeds");
+
+        assert_eq!(
+            array_bus,
+            scratchpads
+                .array
+                .try_phys(&host)
+                .expect("array has a bus address")
+        );
+        assert_eq!(host.share_calls.load(Ordering::Relaxed), 1);
+        // SAFETY: The test owns the scratchpad array allocation and verifies
+        // the placeholder share did not publish buffer entries early.
+        unsafe {
+            assert_eq!(array_ptr.add(0).read_volatile(), 0);
+            assert_eq!(array_ptr.add(1).read_volatile(), 0);
+        }
+
+        let filled_array_bus = scratchpads
+            .share_for_device(&host)
+            .expect("final scratchpad publication succeeds");
+        assert_eq!(filled_array_bus, array_bus);
+        assert_eq!(host.share_calls.load(Ordering::Relaxed), 4);
+        // SAFETY: The test owns the scratchpad array allocation and reads the
+        // two entries published by `share_for_device`.
+        unsafe {
+            assert_ne!(array_ptr.add(0).read_volatile(), 0);
+            assert_ne!(array_ptr.add(1).read_volatile(), 0);
         }
     }
 
@@ -8528,8 +8800,8 @@ mod tests {
     }
 
     #[test]
-    fn prompt_safe_command_recovery_uses_bounded_blind_settles_before_command_wait() {
-        assert!(prompt_safe_command_recovery_uses_bounded_blind_settles());
+    fn prompt_safe_command_recovery_uses_bounded_reset_handshake_before_command_wait() {
+        assert!(prompt_safe_command_recovery_uses_bounded_reset_handshake());
         assert!(!prompt_safe_recovery_reapplies_linux_event_generation_after_enqueue());
         assert_eq!(command_recovery_polling_usbcmd_seed(), reg::USBCMD_RUN);
         assert_eq!(command_recovery_polling_usbcmd_seed() & reg::USBCMD_INTE, 0);
@@ -8721,8 +8993,8 @@ mod tests {
     }
 
     #[test]
-    fn prompt_safe_command_timeout_live_snapshot_is_deferred_for_operational_regs() {
-        assert!(!prompt_safe_command_timeout_live_snapshot_enabled());
+    fn prompt_safe_command_timeout_live_snapshot_captures_final_state_once() {
+        assert!(prompt_safe_command_timeout_live_snapshot_enabled());
     }
 
     #[test]
@@ -9025,14 +9297,31 @@ mod tests {
                 None,
                 true,
             ),
-            Some(0),
+            None,
         );
-        assert!(skip_reset_pre_usbsts_read_for_init(
+        assert!(platform_reset_uses_live_pre_hcrst_halt_revalidation(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
             true,
         ));
-        assert!(skip_reset_completion_poll_for_init(
+        assert!(!skip_reset_pre_usbsts_read_for_init(
+            XhciFirmwareHandoff::PlatformResetComplete,
+            None,
+            true,
+        ));
+        assert_eq!(
+            reset_halt_revalidation_wait_spins(
+                XhciFirmwareHandoff::PlatformResetComplete,
+                None,
+                true,
+            ),
+            PLATFORM_RESET_HCRST_BLIND_SETTLE_SPINS
+        );
+        assert!(pre_hcrst_cnr_revalidation_needed(
+            reg::USBSTS_HCH | reg::USBSTS_CNR
+        ));
+        assert!(!pre_hcrst_cnr_revalidation_needed(reg::USBSTS_HCH));
+        assert!(!skip_reset_completion_poll_for_init(
             XhciFirmwareHandoff::PlatformResetComplete,
             None,
             true,
@@ -9942,8 +10231,8 @@ mod tests {
     }
 
     #[test]
-    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped(
-    ) {
+    fn post_start_polling_irq_quiesce_preserve_state_ignores_usbsts_pending_bits_when_clear_is_skipped()
+     {
         assert_eq!(
             post_start_polling_irq_quiesce_pending_bits(reg::USBCMD_RUN, reg::USBSTS_PCD, 0, true),
             0

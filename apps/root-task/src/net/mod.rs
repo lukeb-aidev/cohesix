@@ -614,6 +614,7 @@ pub enum NetSelfTestStartResult {
     SelfTestDisabled,
     DhcpPending,
     WifiAssociating,
+    WifiHostEapolPending,
     WifiHostEapolRequired,
     WifiAssociationFailed,
     WifiLinkDown,
@@ -633,6 +634,7 @@ impl NetSelfTestStartResult {
             Self::SelfTestDisabled => Some("detail=selftest-disabled"),
             Self::DhcpPending => Some("detail=dhcp-pending"),
             Self::WifiAssociating => Some("detail=wifi-associating"),
+            Self::WifiHostEapolPending => Some("detail=wifi-host-eapol-pending"),
             Self::WifiHostEapolRequired => Some("detail=wifi-host-eapol-required"),
             Self::WifiAssociationFailed => Some("detail=wifi-association-failed"),
             Self::WifiLinkDown => Some("detail=wifi-link-down"),
@@ -658,6 +660,7 @@ impl NetSelfTestStartResult {
     pub fn from_bringup_status(status: &'static str) -> Option<Self> {
         match status.as_bytes() {
             b"wifi-associating" => Some(Self::WifiAssociating),
+            b"wifi-host-eapol-pending" => Some(Self::WifiHostEapolPending),
             b"wifi-host-eapol-required" => Some(Self::WifiHostEapolRequired),
             b"wifi-association-failed" => Some(Self::WifiAssociationFailed),
             b"wifi-link-down" => Some(Self::WifiLinkDown),

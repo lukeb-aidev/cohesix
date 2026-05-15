@@ -1214,7 +1214,10 @@ fn firmware_verify_readback_can_be_treated_as_unavailable(err: &HalError) -> boo
     is_sdhci_int_timeout(err)
         || is_sdhci_io_path_error(err)
         || is_sdio_cmd52_access_error(err)
-        || matches!(err, HalError::Unsupported("sdio-cmd53-r5-error"))
+        || matches!(
+            err,
+            HalError::Unsupported("sdhci-byte-mode-count" | "sdio-cmd53-r5-error")
+        )
 }
 
 #[inline]
@@ -28809,6 +28812,9 @@ mod tests {
         ));
         assert!(firmware_verify_readback_can_be_treated_as_unavailable(
             &HalError::Unsupported("sdio-cmd52-read")
+        ));
+        assert!(firmware_verify_readback_can_be_treated_as_unavailable(
+            &HalError::Unsupported("sdhci-byte-mode-count")
         ));
         assert!(firmware_verify_readback_can_be_treated_as_unavailable(
             &HalError::Unsupported("sdio-cmd53-r5-error")

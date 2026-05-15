@@ -119,6 +119,7 @@ const fn self_test_enabled_for_backend(backend: NetBackend) -> bool {
 
 fn dhcp_phase_for_bringup_status(status: &'static str) -> &'static str {
     match status.as_bytes() {
+        b"wifi-host-eapol-pending" => "host-eapol-pending",
         b"wifi-host-eapol-required" => "host-eapol-required",
         b"wifi-association-failed" => "failed",
         b"wifi-link-down" => "link-down",
