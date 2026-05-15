@@ -407,8 +407,9 @@ power/reset state.
   normal data TX disabled, runs an association-gated join-submit EAPOL proof
   window, enables a Linux-shaped receive-admission window (`mcast_list` for
   `01:80:c2:00:00:03`, `allmulti=0`, optional `WLC_SET_PROMISC=0`), and then
-  keeps the deferred EAPOL-only receive lane alive with low-level SDIO
-  breadcrumbs suppressed even after a terminal `host-eapol-required` verdict.
+  keeps the deferred EAPOL-only receive lane alive with bounded event-pump burst
+  polls and low-level SDIO breadcrumbs suppressed even after a terminal
+  `host-eapol-required` verdict.
   M1/M3 are expected as unicast frames to the station after association; the
   PAE group address is retained only as an initial diagnostic EAPOL-Start probe.
   The hot host-latch clear path must not spam serial with repeated successful
@@ -428,11 +429,14 @@ power/reset state.
   contains bounded M1/M3 admission, M2/M4 transmit, 802.1X drain before key
   programming, and PTK/GTK `wsec_key` install logic. GTK/group keys use the
   Broadcom primary/default-key flag, while PTK/pairwise keys keep flags zero.
-  The last proven Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-073942.log`)
-  did not receive M1 after BSSID refresh and EAPOL-Start TX, so that hardware
-  state is not a Wi-Fi connection: proof tooling reports `WIFI_GATE=7`,
-  `WIFI_BLOCKER=host-eapol-required`, and prompt-side `nettest` reports
-  `wifi-host-eapol-pending`. The next valid success trace must show
+  The last reviewed Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-091918.log`)
+  still did not receive M1 after BSSID refresh and EAPOL-Start TX, so that
+  hardware state is not a Wi-Fi connection: proof tooling reports `WIFI_GATE=7`,
+  `WIFI_BLOCKER=host-eapol-required`, and prompt-side `nettest` must report
+  `wifi-host-eapol-pending` until the deferred lane completes or times out. The
+  current runtime accelerates that boundary with bounded host-EAPOL burst polls
+  and earlier bounded AP-directed EAPOL-Start retries; it must not wait on a
+  one-poll-per-root-loop schedule. The next valid success trace must show
   `host-eapol action=data-tx-shape ... bdc_priority=6`,
   `host-eapol action=send-m2`, `host-eapol action=send-m4`,
   `host-eapol action=wait-pending-8021x-drain`,
@@ -506,9 +510,11 @@ power/reset state.
   secure completion. Device construction after this boundary must report a
   precise bring-up status such as `wifi-host-eapol-pending`; it is not proof
   that the Wi-Fi data path is online. Deferred boot joins may keep the EAPOL-only
-  receive lane running after the proof window, but the driver must suppress
-  repetitive low-level SDIO breadcrumbs and continue dropping non-EAPOL data
-  until the secure boundary is complete. Blocking join attempts and timed-out deferred
+  receive lane running after the proof window, and the event pump must accelerate
+  that state with bounded host-EAPOL burst polls while still returning to serial,
+  USB, and IPC work between bursts. The driver must suppress repetitive low-level
+  SDIO breadcrumbs and continue dropping non-EAPOL data until the secure boundary
+  is complete. Blocking join attempts and timed-out deferred
   attempts must stop normal smoltcp receive polling so the root console is not
   flooded with no-progress Function 1 `SDIO_INT_STATUS` latch reads;
   prompt-side `wifi diag`, `wifi retry`, and related diagnostics remain the
@@ -636,8 +642,13 @@ power/reset state.
   local-seat is enabled and the selected net-console interface is Wi-Fi.
   Cohesix emits `action=root-console-wait-for-wifi`, preserves the Wi-Fi
   configuration for operator diagnostics, resumes CYW43455 bring-up before the
-  prompt, and publishes the serial shell only after Wi-Fi is reachable,
-  terminally failed, or bounded by the pre-root wait timeout.
+  prompt, and publishes the serial shell after Wi-Fi is reachable, terminally
+  failed, reaches bounded `wifi-host-eapol-pending`, or hits the pre-root wait
+  timeout. `wifi-host-eapol-pending` is not a data-path success; it exists to
+  release `cohesix>` while DHCP/data stay blocked and prompt-side `wifi diag` /
+  `nettest` can report the exact WPA/EAPOL boundary. While that state is live,
+  root-task performs bounded pre-root and runtime host-EAPOL burst polls so the
+  M1/M3 receive lane progresses without relying on slow console-loop cadence.
 - Pi 4 local-seat USB is not a reason to disable Wi-Fi diagnostics. The serial
   console retains the HAL-backed Wi-Fi debug path after root-console handoff so
   `wifi diag`, `wifi load-fw`, and `wifi retry` can exercise CYW43455 without

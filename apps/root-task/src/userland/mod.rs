@@ -518,7 +518,7 @@ fn wait_for_net_console_before_root_console<
             log::info!(target: "net-console", "{}", line.as_str());
             return;
         }
-        if let Some(reason) = pump.net_console_terminal_failure_reason() {
+        if let Some(reason) = pump.net_console_pre_root_serial_release_reason() {
             let elapsed_ms = crate::hal::timebase().now_ms().saturating_sub(start_ms);
             let mut line = HeaplessString::<176>::new();
             let _ = write!(
@@ -526,7 +526,11 @@ fn wait_for_net_console_before_root_console<
                 "[net-console] root console wait ended reason={reason} action=start-serial-root-console elapsed_ms={elapsed_ms} polls={polls}",
             );
             boot_log::force_uart_line(line.as_str());
-            log::warn!(target: "net-console", "{}", line.as_str());
+            if reason == "wifi-host-eapol-pending" {
+                log::info!(target: "net-console", "{}", line.as_str());
+            } else {
+                log::warn!(target: "net-console", "{}", line.as_str());
+            }
             return;
         }
         let elapsed_ms = crate::hal::timebase().now_ms().saturating_sub(start_ms);

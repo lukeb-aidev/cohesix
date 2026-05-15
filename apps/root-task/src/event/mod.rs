@@ -206,6 +206,10 @@ const NET_DIAG_RATE_LIMIT_MS: u64 = 15_000;
 const NET_DIAG_RATE_KINDS: usize = 1;
 #[cfg(feature = "net-console")]
 const NET_DIAG_STUCK_MS: u64 = 3_000;
+#[cfg(feature = "net-console")]
+const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
+#[cfg(feature = "net-console")]
+const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 32;
 
 #[cfg(feature = "net-console")]
 fn net_status_allows_root_console(status: &NetStatusReport) -> bool {
@@ -223,6 +227,19 @@ fn net_status_terminal_failure_reason(status: &NetStatusReport) -> Option<&'stat
         }
         _ => None,
     }
+}
+
+#[cfg(feature = "net-console")]
+fn net_status_pre_root_serial_release_reason(status: &NetStatusReport) -> Option<&'static str> {
+    match status.address_source {
+        "wifi-host-eapol-pending" => Some("wifi-host-eapol-pending"),
+        _ => net_status_terminal_failure_reason(status),
+    }
+}
+
+#[cfg(feature = "net-console")]
+fn net_status_needs_host_eapol_burst(status: &NetStatusReport) -> bool {
+    status.address_source == "wifi-host-eapol-pending"
 }
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
@@ -1306,7 +1323,22 @@ where
 
         #[cfg(feature = "net-console")]
         let net_poll = if let Some(net) = self.net.as_mut() {
-            let activity = net.poll(self.now_ms);
+            let mut activity = net.poll(self.now_ms);
+            let burst_limit = if net_status_needs_host_eapol_burst(&net.status_report()) {
+                if suppress_console_input {
+                    WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS
+                } else {
+                    WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS
+                }
+            } else {
+                0
+            };
+            for _ in 0..burst_limit {
+                if !net_status_needs_host_eapol_burst(&net.status_report()) {
+                    break;
+                }
+                activity |= net.poll(self.now_ms);
+            }
             let telemetry = net.telemetry();
             let conn_id = net.active_console_conn_id();
             let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_QUEUE_DEPTH }> =
@@ -1626,6 +1658,13 @@ where
         self.net
             .as_ref()
             .and_then(|net| net_status_terminal_failure_reason(&net.status_report()))
+    }
+
+    #[cfg(feature = "net-console")]
+    pub fn net_console_pre_root_serial_release_reason(&self) -> Option<&'static str> {
+        self.net
+            .as_ref()
+            .and_then(|net| net_status_pre_root_serial_release_reason(&net.status_report()))
     }
 
     /// Returns whether the NineDoor bridge is enabled.
@@ -6620,11 +6659,19 @@ mod tests {
         status.dhcp_phase = "host-eapol-pending";
         assert!(!super::net_status_allows_root_console(&status));
         assert_eq!(super::net_status_terminal_failure_reason(&status), None);
+        assert_eq!(
+            super::net_status_pre_root_serial_release_reason(&status),
+            Some("wifi-host-eapol-pending")
+        );
         status.address_source = "wifi-host-eapol-required";
         status.dhcp_phase = "host-eapol-required";
         assert!(!super::net_status_allows_root_console(&status));
         assert_eq!(
             super::net_status_terminal_failure_reason(&status),
+            Some("wifi-host-eapol-required")
+        );
+        assert_eq!(
+            super::net_status_pre_root_serial_release_reason(&status),
             Some("wifi-host-eapol-required")
         );
         status.address_source = "wifi-association-failed";
@@ -6644,6 +6691,10 @@ mod tests {
         status.dhcp_phase = "probing";
         assert!(!super::net_status_allows_root_console(&status));
         assert_eq!(super::net_status_terminal_failure_reason(&status), None);
+        assert_eq!(
+            super::net_status_pre_root_serial_release_reason(&status),
+            None
+        );
         status.address_source = "dhcp-lease";
         status.dhcp_phase = "bound";
         assert!(super::net_status_allows_root_console(&status));
@@ -6812,6 +6863,7 @@ mod tests {
         sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>,
         start_result: NetSelfTestStartResult,
         status: NetStatusReport,
+        polls: usize,
     }
 
     #[cfg(feature = "net-console")]
@@ -6822,6 +6874,7 @@ mod tests {
                 sent: heapless::Vec::new(),
                 start_result: NetSelfTestStartResult::Unsupported,
                 status: NetStatusReport::default(),
+                polls: 0,
             }
         }
     }
@@ -6829,6 +6882,7 @@ mod tests {
     #[cfg(feature = "net-console")]
     impl NetPoller for FakeNet {
         fn poll(&mut self, _now_ms: u64) -> bool {
+            self.polls = self.polls.saturating_add(1);
             true
         }
 
@@ -7332,6 +7386,46 @@ mod tests {
         drop(pump);
         assert!(transcript.is_empty());
         assert!(net.sent.is_empty());
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn host_eapol_pending_gets_burst_polls_without_releasing_net_data() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "wifi-host-eapol-pending";
+        net.status.dhcp_phase = "host-eapol-pending";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.poll();
+        drop(pump);
+
+        assert_eq!(net.polls, WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS + 1);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn pre_root_host_eapol_pending_uses_larger_burst() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "wifi-host-eapol-pending";
+        net.status.dhcp_phase = "host-eapol-pending";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.poll_pre_root_network();
+        drop(pump);
+
+        assert_eq!(net.polls, WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS + 1);
     }
 
     #[cfg(feature = "net-console")]

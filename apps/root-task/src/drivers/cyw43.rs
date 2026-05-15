@@ -1752,7 +1752,11 @@ const fn host_eapol_deferred_poll_log_due(polls: u16) -> bool {
 #[inline]
 const fn host_eapol_start_poll_due(polls: u16) -> bool {
     polls == 1
+        || polls == 64
+        || polls == 256
         || polls == 512
+        || polls == 1_024
+        || polls == 2_048
         || polls == 4_096
         || polls == 8_192
         || polls == 16_384
@@ -6492,11 +6496,15 @@ mod tests {
         assert!(host_eapol_deferred_poll_log_due(8_192));
         assert!(!host_eapol_deferred_poll_log_due(2));
         assert!(host_eapol_start_poll_due(1));
+        assert!(host_eapol_start_poll_due(64));
+        assert!(host_eapol_start_poll_due(256));
         assert!(host_eapol_start_poll_due(512));
+        assert!(host_eapol_start_poll_due(1_024));
+        assert!(host_eapol_start_poll_due(2_048));
         assert!(host_eapol_start_poll_due(16_384));
         assert!(host_eapol_start_poll_due(24_576));
         assert!(host_eapol_start_poll_due(57_344));
-        assert!(!host_eapol_start_poll_due(64));
+        assert!(!host_eapol_start_poll_due(2));
     }
 
     #[test]
