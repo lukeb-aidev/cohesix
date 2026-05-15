@@ -44,11 +44,14 @@ const SDPCM_HWHDR_LEN: usize = 4;
 const SDPCM_CONTROL_TX_HWEXT_LEN: usize = 8;
 const SDPCM_CONTROL_TX_HEADER_LEN: usize = SDPCM_HEADER_LEN;
 const SDPCM_CONTROL_TX_EXT_HEADER_LEN: usize = SDPCM_HEADER_LEN + SDPCM_CONTROL_TX_HWEXT_LEN;
+const SDPCM_DATA_TX_HEADER_LEN: usize = SDPCM_CONTROL_TX_EXT_HEADER_LEN;
+const SDPCM_DATA_TX_SW_HEADER_OFFSET: usize = SDPCM_HWHDR_LEN + SDPCM_CONTROL_TX_HWEXT_LEN;
 const SDPCM_CONTROL_TX_BLOCK_SIZE: usize = 512;
 const SDPCM_CONTROL_TX_LAST_FRAME: u32 = 1 << 24;
 const CDC_HEADER_LEN: usize = 16;
 const BDC_HEADER_LEN: usize = 4;
-const DATA_PADDING_LEN: usize = 2;
+const SDPCM_DATA_TX_PADDING_LEN: usize = 6;
+const HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 
 const FRAME_BUF_LEN: usize = 2112;
 const CONTROL_RESPONSE_BUF_LEN: usize = 2048;
@@ -67,8 +70,11 @@ const IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED: usize = 1_000;
 const IOCTL_NO_PROGRESS_AFTER_NONMATCHING_LIMIT: usize = 128;
 const JOIN_WAIT_LOOPS: usize = 64_000;
 const DEFERRED_JOIN_FRAME_BUDGET: usize = 8;
+const HOST_EAPOL_DEFERRED_FRAME_BUDGET: usize = 64;
+const HOST_EAPOL_DEFERRED_EMPTY_BUDGET: usize = 4;
 const DEFERRED_JOIN_POLL_LIMIT: u16 = 1_200;
 const HOST_EAPOL_DEFERRED_POLL_LIMIT: u16 = 60_000;
+const HOST_EAPOL_START_MAX: u8 = 12;
 const HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS: usize = 512;
 const HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS: usize = 4_096;
 const HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS: usize =
@@ -212,6 +218,7 @@ const WSEC_KEY_RXIV_HI_OFFSET: usize = 140;
 const WSEC_KEY_RXIV_LO_OFFSET: usize = 144;
 const WSEC_KEY_EA_OFFSET: usize = 156;
 const CRYPTO_ALGO_AES_CCM: u32 = 4;
+const BRCMF_PRIMARY_KEY: u32 = 1 << 1;
 const WPA2_PSK_MIN_PASSPHRASE_LEN: usize = 8;
 const WPA2_PSK_MAX_PASSPHRASE_LEN: usize = 63;
 const WPA2_PSK_PBKDF2_ROUNDS: u16 = 4096;
@@ -1709,7 +1716,10 @@ fn deferred_join_allows_rx_polling(state: DeferredJoinState) -> bool {
 fn deferred_join_forces_eapol_only_rx(state: DeferredJoinState) -> bool {
     matches!(
         state,
-        DeferredJoinState::Failed {
+        DeferredJoinState::Pending {
+            completion_rule: JoinCompletionRule::HostEapolRequired,
+            ..
+        } | DeferredJoinState::Failed {
             reason: "host-eapol-required"
         }
     )
@@ -1741,12 +1751,17 @@ const fn host_eapol_deferred_poll_log_due(polls: u16) -> bool {
 
 #[inline]
 const fn host_eapol_start_poll_due(polls: u16) -> bool {
-    polls == 1 || polls == 512 || polls == 4_096 || polls == 8_192 || polls == 16_384
+    polls == 1
+        || polls == 512
+        || polls == 4_096
+        || polls == 8_192
+        || polls == 16_384
+        || (polls >= 24_576 && polls % 8_192 == 0)
 }
 
 #[inline]
 const fn host_eapol_start_uses_pae_group(sent: u8) -> bool {
-    sent % 2 == 0
+    sent == 0
 }
 
 fn host_eapol_start_destination(
@@ -1762,10 +1777,26 @@ fn host_eapol_start_destination(
 
 fn host_eapol_deferred_progress_error_is_transient(err: &DriverError) -> bool {
     match err {
-        DriverError::Hal(HalError::Unsupported(_)) => true,
+        DriverError::Hal(HalError::Unsupported(reason)) => host_eapol_transient_hal_error(reason),
         DriverError::Protocol("sdpcm-credit-timeout" | "ioctl-no-progress-after-frame") => true,
         _ => false,
     }
+}
+
+#[inline]
+fn host_eapol_transient_hal_error(reason: &str) -> bool {
+    matches!(
+        reason,
+        "sdio-cmd53-r5-error"
+            | "cyw43-control-plane-state-visible-no-reply"
+            | "f1-reply-read-command-error"
+            | "host-eapol-post-assoc-rx-glitch"
+            | "cyw43-control-plane-sideband-read-stall-no-buffer-ready"
+            | "cyw43-control-plane-no-reply-linux-f2-armed"
+            | "cyw43-control-plane-pure-f2-startup-link-no-reply"
+            | "cyw43-function2-reply-prefix-read"
+            | "cyw43-function2-reply-read"
+    )
 }
 
 #[inline]
@@ -2361,6 +2392,7 @@ fn write_wsec_key_payload(
     key: &[u8],
     ea: &[u8; 6],
     rsc: Option<&[u8]>,
+    primary: bool,
 ) -> Result<usize, DriverError> {
     if payload.len() < WSEC_KEY_PAYLOAD_LEN || key.len() > WSEC_KEY_DATA_LEN {
         return Err(DriverError::FrameTooLarge);
@@ -2374,7 +2406,11 @@ fn write_wsec_key_payload(
     );
     payload[WSEC_KEY_DATA_OFFSET..WSEC_KEY_DATA_OFFSET + key.len()].copy_from_slice(key);
     put_u32_le(payload, WSEC_KEY_ALGO_OFFSET, CRYPTO_ALGO_AES_CCM);
-    put_u32_le(payload, WSEC_KEY_FLAGS_OFFSET, 0);
+    put_u32_le(
+        payload,
+        WSEC_KEY_FLAGS_OFFSET,
+        if primary { BRCMF_PRIMARY_KEY } else { 0 },
+    );
     if let Some(rsc) = rsc {
         if rsc.len() >= 6 {
             put_u32_le(payload, WSEC_KEY_IV_INITIALIZED_OFFSET, 1);
@@ -3096,7 +3132,7 @@ impl Cyw43NetDevice {
         let mut promisc_ready = false;
 
         info!(
-            "[cyw43] host-eapol rx-admission action=begin mcast={} allmulti=1 promisc=0",
+            "[cyw43] host-eapol rx-admission action=begin mcast={} allmulti=0 promisc=0 path=linux-unicast-m1",
             EthernetAddress(PAE_GROUP_ADDR),
         );
 
@@ -3121,10 +3157,10 @@ impl Cyw43NetDevice {
             Err(err) => return Err(err),
         }
 
-        match self.set_iovar_u32("allmulti", 1) {
+        match self.set_iovar_u32("allmulti", 0) {
             Ok(()) => {
                 allmulti_ready = true;
-                info!("[cyw43] host-eapol rx-admission step=allmulti action=ready value=1");
+                info!("[cyw43] host-eapol rx-admission step=allmulti action=ready value=0");
             }
             Err(err) if optional_host_eapol_rx_admission_allows_failure("allmulti", &err) => {
                 warn!(
@@ -3571,7 +3607,7 @@ impl Cyw43NetDevice {
     fn maybe_send_host_eapol_start(&mut self, polls: u16, mode: &'static str) {
         if !self.associated
             || self.host_wpa.m1_seen
-            || self.host_wpa.eapol_start_sent >= 4
+            || self.host_wpa.eapol_start_sent >= HOST_EAPOL_START_MAX
             || !host_eapol_start_poll_due(polls)
         {
             return;
@@ -3637,10 +3673,14 @@ impl Cyw43NetDevice {
                     let previous = self.host_wpa.ap_mac;
                     self.host_wpa.ap_mac = bssid;
                     self.host_wpa.ap_mac_source = "get-bssid";
+                    if previous != bssid && self.host_wpa.eapol_start_sent > 0 {
+                        self.host_wpa.eapol_start_sent = 1;
+                    }
                     info!(
-                        "[cyw43] host-eapol bssid refresh action=ready reason={reason} bssid={} previous={} source=wlc-get-bssid next=alternate-pae-group-and-ap",
+                        "[cyw43] host-eapol bssid refresh action=ready reason={reason} bssid={} previous={} source=wlc-get-bssid next=prefer-ap-unicast retry_count={}",
                         EthernetAddress(bssid),
                         EthernetAddress(previous),
+                        self.host_wpa.eapol_start_sent,
                     );
                 } else {
                     warn!(
@@ -3810,14 +3850,16 @@ impl Cyw43NetDevice {
         )?;
         self.transmit(&frame[..frame_len])?;
         self.host_wpa.m4_sent = true;
+        self.wait_for_host_eapol_tx_drain("m4-before-wsec")?;
 
-        self.install_wsec_key(0, &pairwise_tk, &ap_mac, None, "ptk")?;
+        self.install_wsec_key(0, &pairwise_tk, &ap_mac, None, false, "ptk")?;
         self.host_wpa.ptk_installed = true;
         self.install_wsec_key(
             u32::from(gtk.index),
             &gtk.key[..gtk.key_len],
             &group_ea,
             Some(rsc),
+            true,
             "gtk",
         )?;
         self.host_wpa.gtk_installed = true;
@@ -3839,23 +3881,35 @@ impl Cyw43NetDevice {
         Ok("send-m4-install-ptk-gtk-complete")
     }
 
+    fn wait_for_host_eapol_tx_drain(&mut self, stage: &'static str) -> Result<(), DriverError> {
+        self.wait_for_credit(false)?;
+        info!(
+            "[cyw43] host-eapol action=wait-pending-8021x-drain stage={stage} result=credit-ready seq={}/{}",
+            self.sdpcm_seq, self.sdpcm_seq_max,
+        );
+        Ok(())
+    }
+
     fn install_wsec_key(
         &mut self,
         index: u32,
         key: &[u8],
         ea: &[u8; 6],
         rsc: Option<&[u8]>,
+        primary: bool,
         kind: &'static str,
     ) -> Result<(), DriverError> {
         let payload_len;
         {
             let payload = self.payload_mut(WSEC_KEY_PAYLOAD_LEN)?;
-            payload_len = write_wsec_key_payload(payload, index, key, ea, rsc)?;
+            payload_len = write_wsec_key_payload(payload, index, key, ea, rsc, primary)?;
         }
         self.set_iovar_from_payload("wsec_key", payload_len)?;
         info!(
-            "[cyw43] host-eapol action=install-wsec-key kind={kind} index={index} len={} algo=aes-ccm iovar=wsec_key result=ok",
+            "[cyw43] host-eapol action=install-wsec-key kind={kind} index={index} len={} algo=aes-ccm primary={} flags=0x{:08x} iovar=wsec_key result=ok",
             key.len(),
+            yes_no(primary),
+            if primary { BRCMF_PRIMARY_KEY } else { 0 },
         );
         Ok(())
     }
@@ -3910,13 +3964,24 @@ impl Cyw43NetDevice {
             return;
         };
 
+        let host_eapol_required = matches!(completion_rule, JoinCompletionRule::HostEapolRequired);
         let _wifi_breadcrumb_guard =
-            matches!(completion_rule, JoinCompletionRule::HostEapolRequired)
-                .then(crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart);
+            host_eapol_required.then(crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart);
+        let frame_budget = if host_eapol_required {
+            HOST_EAPOL_DEFERRED_FRAME_BUDGET
+        } else {
+            DEFERRED_JOIN_FRAME_BUDGET
+        };
+        let mut event_frames = 0usize;
+        let mut control_frames = 0usize;
+        let mut data_frames = 0usize;
+        let mut empty_reads = 0usize;
+        let mut transient_errors = 0usize;
 
-        for _ in 0..DEFERRED_JOIN_FRAME_BUDGET {
+        for _ in 0..frame_budget {
             match self.process_next_frame(false) {
                 Ok(RxFrameResult::Event(event)) => {
+                    event_frames = event_frames.saturating_add(1);
                     if let Some(result) =
                         join_event_result(event, secure, completion_rule, &mut completion)
                     {
@@ -3963,12 +4028,25 @@ impl Cyw43NetDevice {
                         return;
                     }
                 }
-                Ok(RxFrameResult::None) => break,
-                Ok(RxFrameResult::Control { .. }) | Ok(RxFrameResult::Data(_)) => {}
+                Ok(RxFrameResult::None) => {
+                    empty_reads = empty_reads.saturating_add(1);
+                    if !host_eapol_required || empty_reads >= HOST_EAPOL_DEFERRED_EMPTY_BUDGET {
+                        break;
+                    }
+                }
+                Ok(RxFrameResult::Control { .. }) => {
+                    control_frames = control_frames.saturating_add(1);
+                    empty_reads = 0;
+                }
+                Ok(RxFrameResult::Data(_)) => {
+                    data_frames = data_frames.saturating_add(1);
+                    empty_reads = 0;
+                }
                 Err(err)
-                    if matches!(completion_rule, JoinCompletionRule::HostEapolRequired)
+                    if host_eapol_required
                         && host_eapol_deferred_progress_error_is_transient(&err) =>
                 {
+                    transient_errors = transient_errors.saturating_add(1);
                     if polls <= 1 || host_eapol_deferred_poll_log_due(polls) {
                         warn!(
                             "[cyw43] host-eapol transient-rx-error mode=deferred polls={polls} assoc={} eapol_rx={} err={err} action=keep-waiting-m1",
@@ -3994,7 +4072,7 @@ impl Cyw43NetDevice {
         }
 
         polls = polls.saturating_add(1);
-        if matches!(completion_rule, JoinCompletionRule::HostEapolRequired) {
+        if host_eapol_required {
             self.maybe_send_host_eapol_start(polls, "deferred");
         }
         let poll_limit = deferred_join_poll_limit(completion_rule);
@@ -4007,22 +4085,29 @@ impl Cyw43NetDevice {
                 self.state.promote_cached_control_plane_exact_error(reason);
             }
             warn!(
-                "[cyw43] join failed mode=deferred reason={} auth_status=0x{:08x} polls={polls} poll_limit={poll_limit} completion_rule={} eapol_rx={} rx_poll=eapol-only",
+                "[cyw43] join failed mode=deferred reason={} auth_status=0x{:08x} polls={polls} poll_limit={poll_limit} completion_rule={} eapol_rx={} eapol_start_sent={} ap_source={} rx_poll=eapol-only",
                 reason,
                 completion.auth_status,
                 completion_rule.label(),
                 self.host_eapol_rx_packets,
+                self.host_wpa.eapol_start_sent,
+                self.host_wpa.ap_mac_source,
             );
             return;
         }
 
-        if matches!(completion_rule, JoinCompletionRule::HostEapolRequired)
-            && host_eapol_deferred_poll_log_due(polls)
-        {
+        if host_eapol_required && host_eapol_deferred_poll_log_due(polls) {
             info!(
-                "[cyw43] host-eapol poll mode=deferred polls={polls} limit={poll_limit} assoc={} eapol_rx={} action=wait-m1",
+                "[cyw43] host-eapol poll mode=deferred polls={polls} limit={poll_limit} assoc={} eapol_rx={} eapol_start_sent={} ap_source={} rx_event={} rx_control={} rx_data={} rx_empty={} rx_transient={} action=wait-m1",
                 yes_no(self.associated),
                 self.host_eapol_rx_packets,
+                self.host_wpa.eapol_start_sent,
+                self.host_wpa.ap_mac_source,
+                event_frames,
+                control_frames,
+                data_frames,
+                empty_reads,
+                transient_errors,
             );
         }
 
@@ -5068,8 +5153,8 @@ impl Cyw43NetDevice {
 
     fn transmit(&mut self, packet: &[u8]) -> Result<(), DriverError> {
         self.wait_for_credit(false)?;
-        let total_len = SDPCM_HEADER_LEN
-            .checked_add(DATA_PADDING_LEN)
+        let total_len = SDPCM_DATA_TX_HEADER_LEN
+            .checked_add(SDPCM_DATA_TX_PADDING_LEN)
             .and_then(|value| value.checked_add(BDC_HEADER_LEN))
             .and_then(|value| value.checked_add(packet.len()))
             .ok_or(DriverError::FrameTooLarge)?;
@@ -5081,34 +5166,29 @@ impl Cyw43NetDevice {
         let seq = self.sdpcm_seq;
         self.sdpcm_seq = self.sdpcm_seq.wrapping_add(1);
 
-        put_u16_le(
-            self.tx_frame.as_mut(),
-            0,
-            u16::try_from(total_len).map_err(|_| DriverError::FrameTooLarge)?,
-        );
-        put_u16_le(
-            self.tx_frame.as_mut(),
-            2,
-            !(u16::try_from(total_len).map_err(|_| DriverError::FrameTooLarge)?),
-        );
-        self.tx_frame[4] = seq;
-        self.tx_frame[5] = CHANNEL_DATA;
-        self.tx_frame[6] = 0;
-        self.tx_frame[7] = u8::try_from(SDPCM_HEADER_LEN + DATA_PADDING_LEN)
-            .map_err(|_| DriverError::FrameTooLarge)?;
-        self.tx_frame[8] = 0;
-        self.tx_frame[9] = 0;
-        self.tx_frame[10] = 0;
-        self.tx_frame[11] = 0;
-        self.tx_frame[SDPCM_HEADER_LEN..SDPCM_HEADER_LEN + DATA_PADDING_LEN].fill(0);
-        self.tx_frame[SDPCM_HEADER_LEN + DATA_PADDING_LEN] = BDC_VERSION << BDC_VERSION_SHIFT;
-        self.tx_frame[SDPCM_HEADER_LEN + DATA_PADDING_LEN + 1] = 0;
-        self.tx_frame[SDPCM_HEADER_LEN + DATA_PADDING_LEN + 2] = 0;
-        self.tx_frame[SDPCM_HEADER_LEN + DATA_PADDING_LEN + 3] = 0;
-        self.tx_frame[SDPCM_HEADER_LEN + DATA_PADDING_LEN + BDC_HEADER_LEN
-            ..SDPCM_HEADER_LEN + DATA_PADDING_LEN + BDC_HEADER_LEN + packet.len()]
+        self.tx_frame[..aligned_len].fill(0);
+        write_sdpcm_data_tx_header(self.tx_frame.as_mut(), total_len, seq)?;
+
+        let bdc_offset = SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN;
+        let bdc_priority = bdc_priority_for_packet(packet);
+        self.tx_frame[bdc_offset] = BDC_VERSION << BDC_VERSION_SHIFT;
+        self.tx_frame[bdc_offset + 1] = bdc_priority;
+        self.tx_frame[bdc_offset + 2] = 0;
+        self.tx_frame[bdc_offset + 3] = 0;
+        self.tx_frame[bdc_offset + BDC_HEADER_LEN..bdc_offset + BDC_HEADER_LEN + packet.len()]
             .copy_from_slice(packet);
-        self.tx_frame[total_len..aligned_len].fill(0);
+        if ethernet_ethertype(packet) == Some(ETH_P_EAPOL) {
+            info!(
+                "[cyw43] host-eapol action=data-tx-shape eth_len={} sdpcm_len={} aligned_len={} data_offset={} bdc_priority={} dst={} seq={} result=linux-bcdc-priority",
+                packet.len(),
+                total_len,
+                aligned_len,
+                bdc_offset,
+                bdc_priority,
+                EthernetAddress(ethernet_dst(packet).unwrap_or([0; ETHER_ADDR_LEN])),
+                seq,
+            );
+        }
         self.state
             .write_cyw43_frame(&mut self.tx_frame[..aligned_len])?;
         self.tx_packets = self.tx_packets.saturating_add(1);
@@ -5191,7 +5271,7 @@ impl Device for Cyw43NetDevice {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        if self.link_up {
+        if self.link_up && !deferred_join_forces_eapol_only_rx(self.deferred_join_state) {
             Some(TxToken { device: self })
         } else {
             None
@@ -5460,6 +5540,41 @@ fn write_sdpcm_control_tx_header(
     Ok(())
 }
 
+fn write_sdpcm_data_tx_header(
+    frame: &mut [u8],
+    packet_len: usize,
+    sdpcm_seq: u8,
+) -> Result<(), DriverError> {
+    if frame.len() < SDPCM_DATA_TX_HEADER_LEN || packet_len > frame.len() {
+        return Err(DriverError::FrameTooLarge);
+    }
+    let packet_len_u16 = u16::try_from(packet_len).map_err(|_| DriverError::FrameTooLarge)?;
+    let hwext_len = u32::try_from(
+        packet_len
+            .checked_sub(SDPCM_HWHDR_LEN)
+            .ok_or(DriverError::FrameTooLarge)?,
+    )
+    .map_err(|_| DriverError::FrameTooLarge)?;
+    let data_offset = u32::try_from(SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN)
+        .map_err(|_| DriverError::FrameTooLarge)?;
+
+    put_u16_le(frame, 0, packet_len_u16);
+    put_u16_le(frame, 2, !packet_len_u16);
+    put_u32_le(
+        frame,
+        SDPCM_HWHDR_LEN,
+        hwext_len | SDPCM_CONTROL_TX_LAST_FRAME,
+    );
+    put_u32_le(frame, SDPCM_HWHDR_LEN + 4, 0);
+    put_u32_le(
+        frame,
+        SDPCM_DATA_TX_SW_HEADER_OFFSET,
+        u32::from(sdpcm_seq) | (u32::from(CHANNEL_DATA) << 8) | (data_offset << 24),
+    );
+    put_u32_le(frame, SDPCM_DATA_TX_SW_HEADER_OFFSET + 4, 0);
+    Ok(())
+}
+
 fn bdc_payload(payload: &[u8]) -> Option<&[u8]> {
     if payload.len() < BDC_HEADER_LEN {
         return None;
@@ -5477,6 +5592,14 @@ fn ethernet_ethertype(packet: &[u8]) -> Option<u16> {
         return None;
     }
     get_u16_be(packet, 12)
+}
+
+fn bdc_priority_for_packet(packet: &[u8]) -> u8 {
+    if ethernet_ethertype(packet) == Some(ETH_P_EAPOL) {
+        HOST_EAPOL_BDC_PRIORITY
+    } else {
+        0
+    }
 }
 
 fn parse_event_payload(payload: &[u8]) -> Result<Option<Cyw43Event>, DriverError> {
@@ -5710,8 +5833,9 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        aes128_key_unwrap, align4, bdc_payload, clm_iovar_data_len, clm_setvar_payload_len,
-        control_plane_bootstrap_needs_full_replay_retry, control_plane_data_clock_target_hz,
+        aes128_key_unwrap, align4, bdc_payload, bdc_priority_for_packet, clm_iovar_data_len,
+        clm_setvar_payload_len, control_plane_bootstrap_needs_full_replay_retry,
+        control_plane_data_clock_target_hz,
         control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait,
         control_plane_retry_after_promoted_timeout_resend_uses_startup_link,
         control_plane_retry_after_promoted_timeout_target_clock_hz,
@@ -5757,14 +5881,15 @@ mod tests {
         verify_eapol_key_mic, write_eapol_key_reply_frame, write_eapol_start_frame,
         write_event_msgs_ext_payload, write_host_eapol_mcast_list_payload,
         write_legacy_set_ssid_payload, write_linux_bsscfg_join_payload,
-        write_sdpcm_control_tx_header, write_wsec_key_payload, write_wsec_legacy_hex_pmk_payload,
-        write_wsec_pmk_payload, wsec_pmk_legacy_hex_fallback_allowed, Cyw43Event,
-        DeferredJoinState, DriverError, FirmwareSupplicantPath, Ioctl, JoinCompletionRule,
-        JoinCompletionState, RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_BADARG,
-        BCME_UNSUPPORTED, BCMILCP_BCM_SUBTYPE_EVENT, BCMILCP_SUBTYPE_VENDOR_LONG, BDC_VERSION,
-        BDC_VERSION_SHIFT, BRCMF_EVENT_ADDR_OFFSET, BRCMF_EVENT_AUTH_OFFSET,
-        BRCMF_EVENT_FLAGS_OFFSET, BRCMF_EVENT_MIN_PACKET_LEN, BRCMF_EVENT_REASON_OFFSET,
-        BRCMF_EVENT_STATUS_OFFSET, BRCMF_EVENT_TYPE_OFFSET, BROADCOM_OUI, BSSCFG_PRIMARY_INDEX,
+        write_sdpcm_control_tx_header, write_sdpcm_data_tx_header, write_wsec_key_payload,
+        write_wsec_legacy_hex_pmk_payload, write_wsec_pmk_payload,
+        wsec_pmk_legacy_hex_fallback_allowed, Cyw43Event, DeferredJoinState, DriverError,
+        FirmwareSupplicantPath, Ioctl, JoinCompletionRule, JoinCompletionState, RxFrameResult,
+        RxSdpcmHeader, WsecPmkKind, BCME_BADARG, BCME_UNSUPPORTED, BCMILCP_BCM_SUBTYPE_EVENT,
+        BCMILCP_SUBTYPE_VENDOR_LONG, BDC_HEADER_LEN, BDC_VERSION, BDC_VERSION_SHIFT,
+        BRCMF_EVENT_ADDR_OFFSET, BRCMF_EVENT_AUTH_OFFSET, BRCMF_EVENT_FLAGS_OFFSET,
+        BRCMF_EVENT_MIN_PACKET_LEN, BRCMF_EVENT_REASON_OFFSET, BRCMF_EVENT_STATUS_OFFSET,
+        BRCMF_EVENT_TYPE_OFFSET, BRCMF_PRIMARY_KEY, BROADCOM_OUI, BSSCFG_PRIMARY_INDEX,
         CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA, CHANNEL_EVENT, CHANNEL_GLOM, CLM_CHUNK_SIZE,
         CRYPTO_ALGO_AES_CCM, DEFERRED_JOIN_POLL_LIMIT, EAPOL_HEADER_LEN,
         EAPOL_KEY_BODY_DATA_LEN_OFFSET, EAPOL_KEY_BODY_KEY_INFO_OFFSET, EAPOL_KEY_BODY_MIC_OFFSET,
@@ -5774,7 +5899,7 @@ mod tests {
         ETH_HEADER_LEN, ETH_P_EAPOL, ETH_P_LINK_CTL, EVENTMSGS_EXT_SET_MASK, EVENTMSGS_EXT_VER,
         EVENT_ASSOC, EVENT_ASSOC_IND, EVENT_AUTH, EVENT_DISASSOC_IND, EVENT_FLAG_LINK, EVENT_IF,
         EVENT_LINK, EVENT_MASK_LEN, EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC,
-        EVENT_REASSOC_IND, EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN,
+        EVENT_REASSOC_IND, EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN, HOST_EAPOL_BDC_PRIORITY,
         HOST_EAPOL_DEFERRED_POLL_LIMIT, HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS,
         HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS, HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS,
         HOST_EAPOL_KEY_DATA_MAX_LEN, HOST_EAPOL_MCAST_LIST_PAYLOAD_LEN,
@@ -5784,7 +5909,8 @@ mod tests {
         LINUX_BSSCFG_JOIN_PAYLOAD_LEN, LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN,
         LINUX_EXT_JOIN_SCAN_OFFSET, LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN, PAE_GROUP_ADDR,
         SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
-        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_FAIL,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_DATA_TX_HEADER_LEN, SDPCM_DATA_TX_PADDING_LEN,
+        SDPCM_DATA_TX_SW_HEADER_OFFSET, SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_FAIL,
         STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED, WPA2_PSK_CCMP_RSN_IE,
         WPA_AUTH_WPA2_PSK, WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WPA_KCK_LEN, WPA_NONCE_LEN,
         WPA_PTK_LEN, WPA_REPLAY_COUNTER_LEN, WPA_TK_LEN, WSEC_FLAG_PASSPHRASE,
@@ -6301,6 +6427,7 @@ mod tests {
         };
         assert!(deferred_join_allows_rx_polling(DeferredJoinState::Disabled));
         assert!(deferred_join_allows_rx_polling(pending));
+        assert!(deferred_join_forces_eapol_only_rx(pending));
         let host_eapol_failed = DeferredJoinState::Failed {
             reason: "host-eapol-required",
         };
@@ -6367,6 +6494,8 @@ mod tests {
         assert!(host_eapol_start_poll_due(1));
         assert!(host_eapol_start_poll_due(512));
         assert!(host_eapol_start_poll_due(16_384));
+        assert!(host_eapol_start_poll_due(24_576));
+        assert!(host_eapol_start_poll_due(57_344));
         assert!(!host_eapol_start_poll_due(64));
     }
 
@@ -6380,8 +6509,11 @@ mod tests {
                 "cyw43-control-plane-state-visible-no-reply"
             ))
         ));
-        assert!(host_eapol_deferred_progress_error_is_transient(
+        assert!(!host_eapol_deferred_progress_error_is_transient(
             &DriverError::Hal(HalError::Unsupported(""))
+        ));
+        assert!(!host_eapol_deferred_progress_error_is_transient(
+            &DriverError::Hal(HalError::Unsupported("cyw43-sdpcm-tx-header"))
         ));
         assert!(host_eapol_deferred_progress_error_is_transient(
             &DriverError::Hal(HalError::Unsupported("f1-reply-read-command-error"))
@@ -6418,19 +6550,25 @@ mod tests {
         assert_eq!(frame[ETH_HEADER_LEN], super::EAPOL_VERSION_8021X_2004);
         assert_eq!(frame[ETH_HEADER_LEN + 1], EAPOL_PACKET_TYPE_START);
         assert_eq!(super::get_u16_be(&frame, ETH_HEADER_LEN + 2), Some(0));
+        assert_eq!(
+            bdc_priority_for_packet(&frame[..len]),
+            HOST_EAPOL_BDC_PRIORITY
+        );
     }
 
     #[test]
-    fn host_eapol_start_alternates_pae_group_and_ap_bssid() {
+    fn host_eapol_start_prefers_ap_after_one_pae_group_probe() {
         let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
 
         assert!(host_eapol_start_uses_pae_group(0));
         assert!(!host_eapol_start_uses_pae_group(1));
+        assert!(!host_eapol_start_uses_pae_group(2));
         assert_eq!(
             host_eapol_start_destination(ap, 0),
             (PAE_GROUP_ADDR, "pae-group")
         );
         assert_eq!(host_eapol_start_destination(ap, 1), (ap, "ap"));
+        assert_eq!(host_eapol_start_destination(ap, 2), (ap, "ap"));
         assert_eq!(
             host_eapol_start_destination([0; ETHER_ADDR_LEN], 1),
             (PAE_GROUP_ADDR, "pae-group")
@@ -6600,7 +6738,7 @@ mod tests {
         let rsc = [1, 2, 3, 4, 5, 6];
         let mut payload = [0xffu8; WSEC_KEY_PAYLOAD_LEN];
 
-        let len = write_wsec_key_payload(&mut payload, 2, &key, &ea, Some(&rsc))
+        let len = write_wsec_key_payload(&mut payload, 2, &key, &ea, Some(&rsc), true)
             .expect("wsec_key payload");
 
         assert_eq!(len, WSEC_KEY_PAYLOAD_LEN);
@@ -6618,6 +6756,10 @@ mod tests {
             Some(CRYPTO_ALGO_AES_CCM)
         );
         assert_eq!(
+            super::get_u32_le(&payload, super::WSEC_KEY_FLAGS_OFFSET),
+            Some(BRCMF_PRIMARY_KEY)
+        );
+        assert_eq!(
             super::get_u32_le(&payload, super::WSEC_KEY_IV_INITIALIZED_OFFSET),
             Some(1)
         );
@@ -6630,6 +6772,14 @@ mod tests {
             Some(0x0605_0403)
         );
         assert_eq!(&payload[WSEC_KEY_EA_OFFSET..WSEC_KEY_EA_OFFSET + 6], &ea);
+
+        let mut pairwise_payload = [0u8; WSEC_KEY_PAYLOAD_LEN];
+        write_wsec_key_payload(&mut pairwise_payload, 0, &key, &ea, None, false)
+            .expect("pairwise wsec_key payload");
+        assert_eq!(
+            super::get_u32_le(&pairwise_payload, super::WSEC_KEY_FLAGS_OFFSET),
+            Some(0)
+        );
     }
 
     #[test]
@@ -6920,6 +7070,53 @@ mod tests {
         assert_eq!(
             control_tx_payload_offset_for_header(SDPCM_CONTROL_TX_EXT_HEADER_LEN),
             SDPCM_CONTROL_TX_EXT_HEADER_LEN + CDC_HEADER_LEN
+        );
+    }
+
+    #[test]
+    fn data_tx_header_shape_matches_pi4_linux_capture() {
+        let ethernet_len = 102;
+        let packet_len =
+            SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN + BDC_HEADER_LEN + ethernet_len;
+        let mut frame = [0u8; FRAME_BUF_LEN];
+
+        write_sdpcm_data_tx_header(&mut frame, packet_len, 0x2a).expect("data tx header writes");
+
+        assert_eq!(packet_len, 132);
+        assert_eq!(align4(packet_len), 132);
+        assert_eq!(
+            &frame[..SDPCM_DATA_TX_HEADER_LEN],
+            &[
+                0x84, 0x00, 0x7b, 0xff, 0x80, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2a, 0x02,
+                0x00, 0x1a, 0x00, 0x00, 0x00, 0x00,
+            ],
+        );
+        assert_eq!(
+            frame[SDPCM_DATA_TX_SW_HEADER_OFFSET + 1] & 0x0f,
+            CHANNEL_DATA
+        );
+        assert_eq!(
+            usize::from(frame[SDPCM_DATA_TX_SW_HEADER_OFFSET + 3]),
+            SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN,
+        );
+    }
+
+    #[test]
+    fn eapol_start_data_tx_header_keeps_linux_extended_shape() {
+        let ethernet_len = ETH_HEADER_LEN + EAPOL_HEADER_LEN;
+        let packet_len =
+            SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN + BDC_HEADER_LEN + ethernet_len;
+        let mut frame = [0u8; FRAME_BUF_LEN];
+
+        write_sdpcm_data_tx_header(&mut frame, packet_len, 0x31).expect("data tx header writes");
+
+        assert_eq!(packet_len, 48);
+        assert_eq!(
+            &frame[..SDPCM_DATA_TX_HEADER_LEN],
+            &[
+                0x30, 0x00, 0xcf, 0xff, 0x2c, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x31, 0x02,
+                0x00, 0x1a, 0x00, 0x00, 0x00, 0x00,
+            ],
         );
     }
 

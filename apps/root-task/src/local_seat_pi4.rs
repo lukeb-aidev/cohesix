@@ -8041,6 +8041,8 @@ fn retry_vl805_pci_bcm2711_after_mailbox_reset(
     proven && ready
 }
 
+const USB_KEYBOARD_REPORT_DRAIN_BUDGET: usize = 8;
+
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
     _hub_keepalive: Vec<Arc<UsbDevice<SeatDma>>>,
@@ -14216,172 +14218,179 @@ impl UsbKeyboard {
             return 0;
         }
 
-        let report = match self.hid.poll_keyboard_checked() {
-            Ok(Some(report)) => {
-                self.poll_error_logged = false;
-                if !self.first_report_logged {
-                    let mut line = heapless::String::<224>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] usb hid first report shift={} keys={:02x},{:02x},{:02x},{:02x},{:02x},{:02x}",
-                            report.shift() as u8,
-                            report.keys[0],
-                            report.keys[1],
-                            report.keys[2],
-                            report.keys[3],
-                            report.keys[4],
-                            report.keys[5]
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    self.first_report_logged = true;
-                    mark_usb_runtime_first_report();
-                }
-                if !self.first_non_empty_report_logged && report.keys.iter().any(|key| *key != 0) {
-                    let mut line = heapless::String::<256>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] usb hid first non-empty report modifiers=0x{:02x} shift={} keys={:02x},{:02x},{:02x},{:02x},{:02x},{:02x}",
-                            report.modifiers,
-                            report.shift() as u8,
-                            report.keys[0],
-                            report.keys[1],
-                            report.keys[2],
-                            report.keys[3],
-                            report.keys[4],
-                            report.keys[5]
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    self.first_non_empty_report_logged = true;
-                }
-                report
-            }
-            Ok(None) => {
-                if !self.first_no_report_logged {
-                    boot_log::force_uart_line(
-                        "[local-seat] usb hid first report pending detail=interrupt-in-no-event",
-                    );
-                    self.first_no_report_logged = true;
-                }
-                return 0;
-            }
-            Err(err) => {
-                if !self.poll_error_logged {
-                    let mut line = heapless::String::<192>::new();
-                    let _ = core::fmt::Write::write_fmt(
-                        &mut line,
-                        format_args!(
-                            "[local-seat] usb hid poll failed stage=first-report detail=interrupt-in err={err:?}"
-                        ),
-                    );
-                    boot_log::force_uart_line(line.as_str());
-                    self.poll_error_logged = true;
-                }
-                return 0;
-            }
-        };
-
-        let shift = report.shift();
-        let mut written = 0usize;
-        for key in report.keys {
-            if key == 0 || self.last_keys.contains(&key) {
-                continue;
-            }
-            let scroll_delta = keyboard_display_scroll_delta_for_key(key);
-            if scroll_delta != 0 {
-                self.pending_display_scroll_rows = self
-                    .pending_display_scroll_rows
-                    .saturating_add(scroll_delta);
-                continue;
-            }
-            if key == scancode::CAPS_LOCK {
-                self.caps_lock_on = !self.caps_lock_on;
-                let leds = if self.caps_lock_on { led::CAPS_LOCK } else { 0 };
-                if let Err(err) = self.hid.set_leds(leds) {
-                    if !self.led_error_logged {
+        for _ in 0..USB_KEYBOARD_REPORT_DRAIN_BUDGET {
+            let report = match self.hid.poll_keyboard_checked() {
+                Ok(Some(report)) => {
+                    self.poll_error_logged = false;
+                    if !self.first_report_logged {
                         let mut line = heapless::String::<224>::new();
                         let _ = core::fmt::Write::write_fmt(
                             &mut line,
                             format_args!(
-                                "[local-seat] pi4 keyboard led sync failed caps={} detail={err:?}",
-                                self.caps_lock_on as u8
+                                "[local-seat] usb hid first report shift={} keys={:02x},{:02x},{:02x},{:02x},{:02x},{:02x}",
+                                report.shift() as u8,
+                                report.keys[0],
+                                report.keys[1],
+                                report.keys[2],
+                                report.keys[3],
+                                report.keys[4],
+                                report.keys[5]
                             ),
                         );
                         boot_log::force_uart_line(line.as_str());
-                        self.led_error_logged = true;
+                        self.first_report_logged = true;
+                        mark_usb_runtime_first_report();
                     }
-                } else {
-                    self.led_error_logged = false;
+                    if !self.first_non_empty_report_logged
+                        && report.keys.iter().any(|key| *key != 0)
+                    {
+                        let mut line = heapless::String::<256>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] usb hid first non-empty report modifiers=0x{:02x} shift={} keys={:02x},{:02x},{:02x},{:02x},{:02x},{:02x}",
+                                report.modifiers,
+                                report.shift() as u8,
+                                report.keys[0],
+                                report.keys[1],
+                                report.keys[2],
+                                report.keys[3],
+                                report.keys[4],
+                                report.keys[5]
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        self.first_non_empty_report_logged = true;
+                    }
+                    report
                 }
-                continue;
-            }
-            let Some(ch) = keyboard_scancode_to_char(key, shift) else {
-                if !self.first_unmapped_key_logged {
-                    let mut line = heapless::String::<256>::new();
+                Ok(None) => {
+                    if !self.first_no_report_logged {
+                        boot_log::force_uart_line(
+                            "[local-seat] usb hid first report pending detail=interrupt-in-no-event",
+                        );
+                        self.first_no_report_logged = true;
+                    }
+                    return 0;
+                }
+                Err(err) => {
+                    if !self.poll_error_logged {
+                        let mut line = heapless::String::<192>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] usb hid poll failed stage=first-report detail=interrupt-in err={err:?}"
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        self.poll_error_logged = true;
+                    }
+                    return 0;
+                }
+            };
+
+            let shift = report.shift();
+            let mut written = 0usize;
+            for key in report.keys {
+                if !keyboard_key_should_emit(key, &self.last_keys) {
+                    continue;
+                }
+                let scroll_delta = keyboard_display_scroll_delta_for_key(key);
+                if scroll_delta != 0 {
+                    self.pending_display_scroll_rows = self
+                        .pending_display_scroll_rows
+                        .saturating_add(scroll_delta);
+                    continue;
+                }
+                if key == scancode::CAPS_LOCK {
+                    self.caps_lock_on = !self.caps_lock_on;
+                    let leds = if self.caps_lock_on { led::CAPS_LOCK } else { 0 };
+                    if let Err(err) = self.hid.set_leds(leds) {
+                        if !self.led_error_logged {
+                            let mut line = heapless::String::<224>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] pi4 keyboard led sync failed caps={} detail={err:?}",
+                                    self.caps_lock_on as u8
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                            self.led_error_logged = true;
+                        }
+                    } else {
+                        self.led_error_logged = false;
+                    }
+                    continue;
+                }
+                let Some(ch) = keyboard_scancode_to_char(key, shift) else {
+                    if !self.first_unmapped_key_logged {
+                        let mut line = heapless::String::<256>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] usb hid first unmapped usage key=0x{key:02x} shift={} caps={} keys={:02x},{:02x},{:02x},{:02x},{:02x},{:02x}",
+                                shift as u8,
+                                self.caps_lock_on as u8,
+                                report.keys[0],
+                                report.keys[1],
+                                report.keys[2],
+                                report.keys[3],
+                                report.keys[4],
+                                report.keys[5]
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        self.first_unmapped_key_logged = true;
+                    }
+                    continue;
+                };
+                if written >= out.len() {
+                    break;
+                }
+                let mut effective = ch;
+                if self.caps_lock_on && effective.is_ascii_alphabetic() {
+                    effective = if shift {
+                        effective.to_ascii_lowercase()
+                    } else {
+                        effective.to_ascii_uppercase()
+                    };
+                }
+                if !self.first_byte_logged {
+                    let mut line = heapless::String::<160>::new();
                     let _ = core::fmt::Write::write_fmt(
                         &mut line,
                         format_args!(
-                            "[local-seat] usb hid first unmapped usage key=0x{key:02x} shift={} caps={} keys={:02x},{:02x},{:02x},{:02x},{:02x},{:02x}",
-                            shift as u8,
-                            self.caps_lock_on as u8,
-                            report.keys[0],
-                            report.keys[1],
-                            report.keys[2],
-                            report.keys[3],
-                            report.keys[4],
-                            report.keys[5]
+                            "[local-seat] runtime keyboard first-byte read=1 ascii=0x{:02x} key=0x{key:02x} shift={} caps={}",
+                            effective as u8, shift as u8, self.caps_lock_on as u8,
                         ),
                     );
                     boot_log::force_uart_line(line.as_str());
-                    self.first_unmapped_key_logged = true;
+                    self.first_byte_logged = true;
+                    mark_usb_runtime_first_byte();
                 }
-                continue;
-            };
-            if written >= out.len() {
-                break;
+                if !self.first_printable_byte_logged && !effective.is_ascii_control() {
+                    let mut line = heapless::String::<176>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] runtime keyboard first-printable-byte ascii=0x{:02x} key=0x{key:02x} shift={} caps={}",
+                            effective as u8, shift as u8, self.caps_lock_on as u8,
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    self.first_printable_byte_logged = true;
+                }
+                out[written] = effective as u8;
+                written = written.saturating_add(1);
             }
-            let mut effective = ch;
-            if self.caps_lock_on && effective.is_ascii_alphabetic() {
-                effective = if shift {
-                    effective.to_ascii_lowercase()
-                } else {
-                    effective.to_ascii_uppercase()
-                };
-            }
-            if !self.first_byte_logged {
-                let mut line = heapless::String::<160>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] runtime keyboard first-byte read=1 ascii=0x{:02x} key=0x{key:02x} shift={} caps={}",
-                        effective as u8, shift as u8, self.caps_lock_on as u8,
-                    ),
-                );
-                boot_log::force_uart_line(line.as_str());
-                self.first_byte_logged = true;
-                mark_usb_runtime_first_byte();
-            }
-            if !self.first_printable_byte_logged && !effective.is_ascii_control() {
-                let mut line = heapless::String::<176>::new();
-                let _ = core::fmt::Write::write_fmt(
-                    &mut line,
-                    format_args!(
-                        "[local-seat] runtime keyboard first-printable-byte ascii=0x{:02x} key=0x{key:02x} shift={} caps={}",
-                        effective as u8, shift as u8, self.caps_lock_on as u8,
-                    ),
-                );
-                boot_log::force_uart_line(line.as_str());
-                self.first_printable_byte_logged = true;
-            }
-            out[written] = effective as u8;
-            written = written.saturating_add(1);
-        }
 
-        self.last_keys = report.keys;
-        written
+            self.last_keys = report.keys;
+            if written != 0 {
+                return written;
+            }
+        }
+        0
     }
 
     fn take_pending_display_scroll_rows(&mut self) -> i8 {
@@ -15243,6 +15252,11 @@ const fn text_viewport_height(height: usize, rows: usize) -> usize {
 }
 
 #[inline]
+fn keyboard_key_should_emit(key: u8, last_keys: &[u8; 6]) -> bool {
+    key != 0 && !last_keys.contains(&key)
+}
+
+#[inline]
 fn keyboard_scancode_to_char(key: u8, shift: bool) -> Option<char> {
     if key == scancode::KP_ENTER {
         Some('\n')
@@ -15674,9 +15688,44 @@ mod driver_coverage_tests {
         assert_eq!(keyboard_scancode_to_char(scancode::Z, false), Some('z'));
         assert_eq!(keyboard_scancode_to_char(scancode::N1, false), Some('1'));
         assert_eq!(keyboard_scancode_to_char(scancode::N1, true), Some('!'));
+        assert_eq!(keyboard_scancode_to_char(scancode::N2, true), Some('@'));
+        assert_eq!(keyboard_scancode_to_char(scancode::N0, true), Some(')'));
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::ESCAPE, false),
+            Some('\x1b')
+        );
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::BACKSPACE, false),
+            Some('\x08')
+        );
+        assert_eq!(keyboard_scancode_to_char(scancode::TAB, false), Some('\t'));
         assert_eq!(keyboard_scancode_to_char(scancode::SPACE, false), Some(' '));
         assert_eq!(keyboard_scancode_to_char(scancode::MINUS, false), Some('-'));
         assert_eq!(keyboard_scancode_to_char(scancode::MINUS, true), Some('_'));
+        assert_eq!(keyboard_scancode_to_char(scancode::EQUAL, true), Some('+'));
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::LEFT_BRACKET, true),
+            Some('{')
+        );
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::RIGHT_BRACKET, false),
+            Some(']')
+        );
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::BACKSLASH, true),
+            Some('|')
+        );
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::SEMICOLON, false),
+            Some(';')
+        );
+        assert_eq!(
+            keyboard_scancode_to_char(scancode::APOSTROPHE, true),
+            Some('"')
+        );
+        assert_eq!(keyboard_scancode_to_char(scancode::GRAVE, true), Some('~'));
+        assert_eq!(keyboard_scancode_to_char(scancode::COMMA, false), Some(','));
+        assert_eq!(keyboard_scancode_to_char(scancode::PERIOD, true), Some('>'));
         assert_eq!(
             keyboard_scancode_to_char(scancode::ENTER, false),
             Some('\n')
@@ -15685,6 +15734,23 @@ mod driver_coverage_tests {
             keyboard_scancode_to_char(scancode::KP_ENTER, false),
             Some('\n')
         );
+    }
+
+    #[test]
+    fn keyboard_report_filter_emits_new_printable_keys_after_idle_reports() {
+        let idle = [0u8; 6];
+        assert!(!keyboard_key_should_emit(0, &idle));
+        assert!(keyboard_key_should_emit(scancode::A, &idle));
+        assert!(!keyboard_key_should_emit(
+            scancode::A,
+            &[scancode::A, 0, 0, 0, 0, 0]
+        ));
+        assert!(keyboard_key_should_emit(scancode::A, &[0, 0, 0, 0, 0, 0]));
+        assert!(keyboard_key_should_emit(
+            scancode::B,
+            &[scancode::A, 0, 0, 0, 0, 0]
+        ));
+        assert_eq!(USB_KEYBOARD_REPORT_DRAIN_BUDGET, 8);
     }
 
     #[test]

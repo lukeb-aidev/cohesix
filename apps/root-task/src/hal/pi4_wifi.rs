@@ -3227,6 +3227,35 @@ const fn sdio_irq_frame_indication_should_be_cached(
 }
 
 #[inline]
+const fn sdio_irq_clear_is_host_latch_only(
+    serviced_bits: u32,
+    int_status_readable: bool,
+    card_int: bool,
+) -> bool {
+    serviced_bits == 0 && int_status_readable && card_int
+}
+
+#[inline]
+const fn sdio_irq_clear_breadcrumb_should_emit(
+    cache_frame_indication: bool,
+    serviced_bits: u32,
+    int_status_readable: bool,
+    card_int: bool,
+) -> bool {
+    !cache_frame_indication
+        || !sdio_irq_clear_is_host_latch_only(serviced_bits, int_status_readable, card_int)
+}
+
+#[inline]
+const fn sdio_irq_service_breadcrumb_should_emit(
+    serviced_bits: u32,
+    int_status_readable: bool,
+    card_int: bool,
+) -> bool {
+    !sdio_irq_clear_is_host_latch_only(serviced_bits, int_status_readable, card_int)
+}
+
+#[inline]
 const fn control_plane_reply_uses_low_touch_pure_f2_diagnostics(
     experimental_no_ht_transport: bool,
     hint_reads_unstable: bool,
@@ -3836,6 +3865,7 @@ fn log_sdio_cmd53_shape(
 #[inline]
 fn should_log_sdio_transfer_chunk(
     function: SdioFunction,
+    chunk_addr: u32,
     increment_addr: bool,
     write: bool,
     chunk_len: usize,
@@ -3847,6 +3877,9 @@ fn should_log_sdio_transfer_chunk(
                 || (!write && chunk_len == CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN));
     }
     if function != SdioFunction::Function1 {
+        return false;
+    }
+    if !write && sdio_core_irq_status_transfer_addr(chunk_addr) {
         return false;
     }
     if !increment_addr {
@@ -5659,6 +5692,18 @@ const fn linux_probe_attach_uses_live_iorx_readback() -> bool {
 #[inline]
 const fn sdio_core_transfer_function_addr(offset: u32) -> u32 {
     backplane_word_function_addr(backplane_word_aligned_addr(sdio_core_reg_addr(offset)))
+}
+
+#[inline]
+const fn sdio_core_irq_status_transfer_addr(function_addr: u32) -> bool {
+    function_addr == sdio_core_transfer_function_addr(SDIO_INT_STATUS)
+        || function_addr == sdio_core_byte_function_addr(SDIO_INT_STATUS)
+}
+
+#[inline]
+const fn backplane_window_trace_should_emit(function_addr: u32) -> bool {
+    (function_addr & BACKPLANE_32BIT_FLAG) != 0
+        && !sdio_core_irq_status_transfer_addr(function_addr)
 }
 
 #[inline]
@@ -12466,7 +12511,7 @@ impl SdioHost {
                     match self.clear_sdio_irq_source_for_firmware_channel(
                         "control-plane-reply-strict-frame-indicated-ready",
                         false,
-                        false,
+                        true,
                     ) {
                         Ok(()) => self.ack_sdio_irq_after_polled_reply_if_pending(
                             "control-plane-reply-strict-frame-indicated-ready",
@@ -12582,7 +12627,7 @@ impl SdioHost {
                     match self.clear_sdio_irq_source_for_firmware_channel(
                         "control-plane-reply-post-write-hintless-ready",
                         false,
-                        false,
+                        true,
                     ) {
                         Ok(()) => self.ack_sdio_irq_after_polled_reply_if_pending(
                             "control-plane-reply-post-write-hintless-ready",
@@ -14135,6 +14180,7 @@ impl SdioHost {
             if trace_chunks
                 && should_log_sdio_transfer_chunk(
                     function,
+                    chunk_addr,
                     increment_addr,
                     write,
                     chunk_len,
@@ -15068,13 +15114,19 @@ impl SdioHost {
                 } else {
                     "no"
                 };
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage={stage} action={action} irq={} badge=0x{badge:x} source=0x{:08x} source_readable={} card_int={} progress={progress}",
-                    binding.irq().0,
+                if sdio_irq_service_breadcrumb_should_emit(
                     self.last_sdio_irq_clear_serviced_bits,
-                    yn(self.last_sdio_irq_clear_int_status_readable),
-                    yn(self.last_sdio_irq_clear_card_int),
-                ));
+                    self.last_sdio_irq_clear_int_status_readable,
+                    self.last_sdio_irq_clear_card_int,
+                ) {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action={action} irq={} badge=0x{badge:x} source=0x{:08x} source_readable={} card_int={} progress={progress}",
+                        binding.irq().0,
+                        self.last_sdio_irq_clear_serviced_bits,
+                        yn(self.last_sdio_irq_clear_int_status_readable),
+                        yn(self.last_sdio_irq_clear_card_int),
+                    ));
+                }
             }
             IrqServiceOutcome::Idle if log_idle => {
                 let int_status = self.read32(SDHCI_INT_STATUS);
@@ -15148,12 +15200,19 @@ impl SdioHost {
         } else {
             "dongle-source-unreadable"
         };
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=sdio-irq-device-clear intstatus=0x{int_status:08x}/{} serviced=0x{serviced_bits:08x} sdhci=0x{sdhci_status:08x} card_int={} source_state={source_state}",
-            yn(int_status.is_some()),
+        if sdio_irq_clear_breadcrumb_should_emit(
+            cache_frame_indication,
+            serviced_bits,
+            int_status.is_some(),
             card_int,
-            int_status = int_status.unwrap_or(0),
-        ));
+        ) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=sdio-irq-device-clear intstatus=0x{int_status:08x}/{} serviced=0x{serviced_bits:08x} sdhci=0x{sdhci_status:08x} card_int={} source_state={source_state}",
+                yn(int_status.is_some()),
+                card_int,
+                int_status = int_status.unwrap_or(0),
+            ));
+        }
         Ok(())
     }
 
@@ -17096,7 +17155,7 @@ impl SdioHost {
         function_addr: u32,
         f: impl FnOnce(&mut Self, u32) -> Result<T, HalError>,
     ) -> Result<T, HalError> {
-        let trace_window = (function_addr & BACKPLANE_32BIT_FLAG) != 0;
+        let trace_window = backplane_window_trace_should_emit(function_addr);
         self.with_backplane_window_addr_trace(window_addr, function_addr, trace_window, f)
     }
 
@@ -24290,10 +24349,10 @@ mod tests {
         backplane_diagnostic_cmd52_function_addr, backplane_firmware_verify_cmd52_function_addr,
         backplane_small_access_addr, backplane_transfer_function_addr, backplane_window_base,
         backplane_window_register_bytes, backplane_window_reprogram_needed,
-        backplane_word_function_addr, bcm2711_gpfsel_offset, bcm2711_puppdn_offset,
-        bcm2711_sdhci_effective_base_clock_hz, clear_reset_keepalive_chunk_loops, cmd52_argument,
-        control_plane_promote_rearm_budget, control_plane_promote_rearm_mode_name,
-        control_plane_promoted_probe_stalled_after_rearm,
+        backplane_window_trace_should_emit, backplane_word_function_addr, bcm2711_gpfsel_offset,
+        bcm2711_puppdn_offset, bcm2711_sdhci_effective_base_clock_hz,
+        clear_reset_keepalive_chunk_loops, cmd52_argument, control_plane_promote_rearm_budget,
+        control_plane_promote_rearm_mode_name, control_plane_promoted_probe_stalled_after_rearm,
         control_plane_reply_int_status_has_frame_indication,
         control_plane_reply_mailbox_has_firmware_halt,
         control_plane_reply_mailbox_has_frame_indication, control_plane_reply_mailbox_requires_ack,
@@ -24372,8 +24431,8 @@ mod tests {
         sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
         sdio_byte_mode_transfer_plan, sdio_cccr_speed_ehs_value,
         sdio_cccr_speed_supports_high_speed, sdio_core_byte_function_addr,
-        sdio_core_read_retries_backplane_word_path, sdio_core_reg_addr,
-        sdio_core_transfer_function_addr, sdio_core_transfer_increment_addr,
+        sdio_core_irq_status_transfer_addr, sdio_core_read_retries_backplane_word_path,
+        sdio_core_reg_addr, sdio_core_transfer_function_addr, sdio_core_transfer_increment_addr,
         sdio_function_ready_budget_name, sdio_function_ready_extended_polls,
         sdio_function_ready_extended_polls_for, sdio_function_ready_extended_settle_loops,
         sdio_function_ready_extended_settle_loops_for,
@@ -24383,8 +24442,9 @@ mod tests {
         sdio_function_ready_timeout_can_continue_experimentally,
         sdio_function_ready_uses_control_plane_reply_probe_budget,
         sdio_function_ready_uses_force_reenable_budget,
-        sdio_function_ready_uses_short_probe_only_budget, sdio_transfer_addr, sdio_transfer_plan,
-        setup_firmware_channel_can_assume_write_committed,
+        sdio_function_ready_uses_short_probe_only_budget, sdio_irq_clear_breadcrumb_should_emit,
+        sdio_irq_clear_is_host_latch_only, sdio_irq_service_breadcrumb_should_emit,
+        sdio_transfer_addr, sdio_transfer_plan, setup_firmware_channel_can_assume_write_committed,
         setup_firmware_channel_uses_experimental_order, should_log_firmware_upload_progress,
         should_log_sdio_transfer_chunk, startup_link_reattach_target_profile,
         startup_link_resume_empty_poll_seed, strict_control_plane_post_write_terminal_exact_error,
@@ -24718,6 +24778,7 @@ mod tests {
     fn sdio_transfer_chunk_trace_gate_prefers_control_and_early_incrementing_chunks() {
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
+            sdio_core_transfer_function_addr(SDPCMD_REG_HOSTINTMASK),
             false,
             false,
             4,
@@ -24725,6 +24786,7 @@ mod tests {
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
+            sdio_core_transfer_function_addr(SDPCMD_REG_HOSTINTMASK),
             false,
             false,
             16,
@@ -24732,6 +24794,7 @@ mod tests {
         ));
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
+            BACKPLANE_32BIT_FLAG,
             true,
             false,
             64,
@@ -24739,6 +24802,7 @@ mod tests {
         ));
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
+            BACKPLANE_32BIT_FLAG,
             true,
             false,
             64,
@@ -24746,6 +24810,7 @@ mod tests {
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function1,
+            BACKPLANE_32BIT_FLAG,
             true,
             false,
             64,
@@ -24753,6 +24818,7 @@ mod tests {
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function0,
+            0,
             false,
             false,
             4,
@@ -24760,6 +24826,7 @@ mod tests {
         ));
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function2,
+            0,
             false,
             false,
             CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
@@ -24767,6 +24834,7 @@ mod tests {
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function2,
+            0,
             false,
             false,
             SDIO_FUNCTION_ENABLE_F2.block_size as usize,
@@ -24774,11 +24842,77 @@ mod tests {
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function2,
+            0,
             true,
             false,
             CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
             0
         ));
+    }
+
+    #[test]
+    fn hot_sdio_irq_status_reads_do_not_emit_repeated_chunk_or_window_noise() {
+        let int_status_addr = sdio_core_transfer_function_addr(SDIO_INT_STATUS);
+        assert!(sdio_core_irq_status_transfer_addr(int_status_addr));
+        assert!(sdio_core_irq_status_transfer_addr(
+            sdio_core_byte_function_addr(SDIO_INT_STATUS)
+        ));
+        assert!(!backplane_window_trace_should_emit(int_status_addr));
+        assert!(!should_log_sdio_transfer_chunk(
+            SdioFunction::Function1,
+            int_status_addr,
+            false,
+            false,
+            4,
+            0,
+        ));
+        assert!(!should_log_sdio_transfer_chunk(
+            SdioFunction::Function1,
+            sdio_core_byte_function_addr(SDIO_INT_STATUS),
+            false,
+            false,
+            4,
+            0,
+        ));
+        assert!(!should_log_sdio_transfer_chunk(
+            SdioFunction::Function1,
+            int_status_addr,
+            true,
+            false,
+            4,
+            0,
+        ));
+        assert!(should_log_sdio_transfer_chunk(
+            SdioFunction::Function1,
+            int_status_addr,
+            false,
+            true,
+            4,
+            0,
+        ));
+        assert!(backplane_window_trace_should_emit(
+            sdio_core_transfer_function_addr(SDPCMD_REG_TOHOSTMAILBOXDATA)
+        ));
+    }
+
+    #[test]
+    fn host_latch_only_irq_clear_is_success_noise_after_cached_reply_poll() {
+        assert!(sdio_irq_clear_is_host_latch_only(0, true, true));
+        assert!(!sdio_irq_clear_breadcrumb_should_emit(true, 0, true, true));
+        assert!(!sdio_irq_service_breadcrumb_should_emit(0, true, true));
+        assert!(sdio_irq_clear_breadcrumb_should_emit(false, 0, true, true));
+        assert!(sdio_irq_clear_breadcrumb_should_emit(
+            true,
+            I_HMB_FRAME_IND,
+            true,
+            true
+        ));
+        assert!(sdio_irq_service_breadcrumb_should_emit(
+            I_HMB_FRAME_IND,
+            true,
+            true
+        ));
+        assert!(sdio_irq_clear_breadcrumb_should_emit(true, 0, false, true));
     }
 
     #[test]
@@ -26982,6 +27116,7 @@ mod tests {
     fn function2_transfer_logging_keeps_linux_firstread_and_bulk_read_visible() {
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function2,
+            0,
             false,
             false,
             CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
@@ -26989,6 +27124,7 @@ mod tests {
         ));
         assert!(should_log_sdio_transfer_chunk(
             SdioFunction::Function2,
+            0,
             false,
             false,
             CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN,
@@ -26996,6 +27132,7 @@ mod tests {
         ));
         assert!(!should_log_sdio_transfer_chunk(
             SdioFunction::Function2,
+            0,
             false,
             true,
             CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN,
@@ -30815,6 +30952,28 @@ mod tests {
         assert_eq!(
             cyw43_sdpcm_tx_stage_name(CYW43_SDPCM_CHANNEL_CONTROL),
             "control-plane-write"
+        );
+    }
+
+    #[test]
+    fn sdpcm_tx_channel_accepts_extended_data_tx_header() {
+        let mut frame = [0u8; 64];
+        let header_len = CYW43_SDPCM_HEADER_LEN + 8;
+        let packet_len = header_len + 28;
+        let packet_len_u16 = u16::try_from(packet_len).expect("test packet length fits");
+        frame[0..2].copy_from_slice(&packet_len_u16.to_le_bytes());
+        frame[2..4].copy_from_slice((!packet_len_u16).to_le_bytes().as_slice());
+        let sw_header_offset = CYW43_SDPCM_HEADER_LEN;
+        frame[sw_header_offset + 1] = CYW43_SDPCM_CHANNEL_DATA;
+        frame[sw_header_offset + 3] = u8::try_from(header_len + 6).expect("data offset fits");
+
+        assert_eq!(
+            cyw43_sdpcm_tx_channel(&frame),
+            Some(CYW43_SDPCM_CHANNEL_DATA)
+        );
+        assert_eq!(
+            cyw43_sdpcm_tx_stage_name(CYW43_SDPCM_CHANNEL_DATA),
+            "data-plane-write"
         );
     }
 

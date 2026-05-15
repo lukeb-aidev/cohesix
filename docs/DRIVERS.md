@@ -404,23 +404,41 @@ power/reset state.
   Cohesix skips PMK programming, submits the primary join request, and exports
   `wifi-host-eapol-pending` as the live next secure boundary. Until a host
   EAPOL/key-install path completes the secure handshake, Cohesix keeps DHCP and
-  data TX disabled, runs an association-gated join-submit EAPOL proof window,
-  enables a Linux-shaped receive-admission window (`mcast_list` for
-  `01:80:c2:00:00:03`, `allmulti=1`, optional `WLC_SET_PROMISC=0`), and then
+  normal data TX disabled, runs an association-gated join-submit EAPOL proof
+  window, enables a Linux-shaped receive-admission window (`mcast_list` for
+  `01:80:c2:00:00:03`, `allmulti=0`, optional `WLC_SET_PROMISC=0`), and then
   keeps the deferred EAPOL-only receive lane alive with low-level SDIO
   breadcrumbs suppressed even after a terminal `host-eapol-required` verdict.
+  M1/M3 are expected as unicast frames to the station after association; the
+  PAE group address is retained only as an initial diagnostic EAPOL-Start probe.
+  The hot host-latch clear path must not spam serial with repeated successful
+  `SDIO_INT_STATUS` Function 1 reads or host-card-int-latch-only clears; logs
+  stay reserved for first-edge proof, dongle source bits, unreadable-source
+  failures, SDHCI transfer errors, and explicit operator diagnostics.
   HAL Function 2 writes must preserve the SDPCM channel boundary: control
   channel writes may arm a bounded ioctl-reply wait, but data/event channel
   writes such as EAPOL-Start must not arm or inherit a control-plane reply wait.
-  The current as-built host-EAPOL implementation contains bounded M1/M3
-  admission, M2/M4 transmit, and PTK/GTK `wsec_key` install logic, but the last
-  proven Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-062728.log`) did not
-  receive M1. That hardware state is not a Wi-Fi connection: proof tooling
-  reports `WIFI_GATE=7`, `WIFI_BLOCKER=host-eapol-required`, and prompt-side
-  `nettest` reports `wifi-host-eapol-pending`. The next valid success trace must
-  show `host-eapol action=send-m2`, `host-eapol action=send-m4`,
+  Data TX frames also use Linux's extended Function 2 SDPCM shape after the
+  control-plane `tx_hdrlen` transition: a 20-byte SDPCM TX header, software
+  header at byte 12, `dat_offset=0x1a`, six bytes of padding, then the BDC
+  header and Ethernet payload. The local Linux capture shows this exact shape for
+  station data TX (`84 00 7b ff 80 00 00 01 ... 2a 02 00 1a`). EAPOL data TX
+  must set the BDC priority byte to `6`, matching the Linux brcmfmac priority
+  path for 802.1X frames. The current as-built host-EAPOL implementation
+  contains bounded M1/M3 admission, M2/M4 transmit, 802.1X drain before key
+  programming, and PTK/GTK `wsec_key` install logic. GTK/group keys use the
+  Broadcom primary/default-key flag, while PTK/pairwise keys keep flags zero.
+  The last proven Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-073942.log`)
+  did not receive M1 after BSSID refresh and EAPOL-Start TX, so that hardware
+  state is not a Wi-Fi connection: proof tooling reports `WIFI_GATE=7`,
+  `WIFI_BLOCKER=host-eapol-required`, and prompt-side `nettest` reports
+  `wifi-host-eapol-pending`. The next valid success trace must show
+  `host-eapol action=data-tx-shape ... bdc_priority=6`,
+  `host-eapol action=send-m2`, `host-eapol action=send-m4`,
+  `host-eapol action=wait-pending-8021x-drain`,
   `host-eapol action=install-wsec-key kind=ptk`, `kind=gtk`, and final
-  `join complete mode=host-eapol secure=yes` before DHCP or data TX is enabled.
+  `join complete mode=host-eapol secure=yes` before DHCP or normal data TX is
+  enabled.
   Any observed 4-way frame is classified as `m1`, `m3`,
   `group-key`, malformed, or unexpected station-originated traffic, and the log
   records the exact next required host action (`derive-ptk-send-m2`,
@@ -504,9 +522,9 @@ power/reset state.
   `WLC_GET_BSSID` (`cmd=23`) and prefer the firmware-reported associated BSSID
   when it is a valid AP candidate. The seed log must include both raw event
   candidates, and the EAPOL-Start log must include the resolved destination MAC.
-  EAPOL-Start alternates the PAE group address and the resolved AP/BSSID before
-  M1 while still letting M1 overwrite the AP MAC with the authenticated frame
-  source. Cohesix
+  EAPOL-Start sends one PAE group diagnostic probe and then prefers the resolved
+  AP/BSSID for bounded retries before M1, while still letting M1 overwrite the
+  AP MAC with the authenticated frame source. Cohesix
   parses the EAPOL/EAPOL-Key envelope
   for proof (`m1`/`m3` shape, key-info bits, replay-counter presence, and
   key-data length) and may complete the bounded host handshake only after M2,
