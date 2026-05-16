@@ -60,8 +60,10 @@ host_matrix=(
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi"
+  "cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::nettest_reports_wifi_host_eapol_pending_detail"
+  "cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::netstats_emits_compact_status_line"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::"
-  "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts"
+  "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::"
   "cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance"
   "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/SMP_build\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu"
   "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/build_UBOOT\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4"
@@ -93,6 +95,7 @@ else
   fi
   python_matrix=(
     "\"${python_bin}\" -m pytest tests/test_pi4_trace_normalize.py"
+    "\"${python_bin}\" -m pytest tests/test_pi4_gate_proof.py"
     "\"${python_bin}\" -m pytest tools/cohesix-py/tests"
     "\"${python_bin}\" tools/cohesix-py/examples/lease_run.py --mock"
     "\"${python_bin}\" tools/cohesix-py/examples/peft_roundtrip.py --mock"

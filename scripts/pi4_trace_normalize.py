@@ -720,6 +720,9 @@ def normalize_usb_blocker(value: str) -> str:
     """Normalize USB blocker strings into stable gate labels."""
 
     lower = value.lower()
+    stripped = lower.strip()
+    if stripped in {"none", "ok", "online", "ready", "success"}:
+        return "none"
     if "cmd-controller-not-running" in lower:
         return "cmd-controller-not-running"
     if "cmd-controller-not-ready" in lower:
@@ -968,6 +971,15 @@ def wifi_join_complete_proven(fields: dict[str, str]) -> bool:
 
     secure = fields.get("secure")
     if secure == "yes":
+        if fields.get("completion_rule") == "host-eapol-required":
+            return (
+                fields.get("m1") == "yes"
+                and fields.get("m2") == "yes"
+                and fields.get("m3") == "yes"
+                and fields.get("m4") == "yes"
+                and fields.get("wsec_key") == "ptk+gtk"
+                and fields.get("carrier") == "yes"
+            )
         return (
             fields.get("completion_rule") == "firmware-supplicant-psk-sup"
             and fields.get("set_ssid") == "yes"
@@ -997,6 +1009,8 @@ def normalize_wifi_blocker(value: str) -> str:
 
     lower = value.lower()
     stripped = lower.strip()
+    if stripped in {"none", "ok", "online", "ready", "success"}:
+        return "none"
     if (
         "d11-prereset-fgc-cmd53-r5-rejected" in lower
         or (
@@ -1274,6 +1288,10 @@ def normalize_wifi_blocker(value: str) -> str:
         or "completion_rule=host-eapol-required" in lower
     ):
         return "host-eapol-required"
+    if stripped == "eapol-start" or (
+        "host-eapol" in lower and "action=eapol-start" in lower
+    ):
+        return "none"
     if (
         "sup_wpa" in lower
         or "firmware-supplicant" in lower
@@ -1923,6 +1941,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "runtime keyboard first-byte" in raw:
             gate = max(gate, 10)
             blocker = "none"
+        if "pi4 keyboard runtime proof" in raw:
+            proof_gate = parse_hex_int(fields.get("gate"))
+            if proof_gate is not None and proof_gate > 0:
+                gate = max(gate, proof_gate)
+            proof_result = normalize_usb_blocker(fields.get("result", "none"))
+            blocker = "none" if proof_result == "none" else proof_result
         if (
             "cfg_window=mapped" in raw
             or "cfg_window=hal-ext-cfg-proven" in raw
@@ -2399,6 +2423,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     control_plane_reply_seen_after_write = False
     control_plane_idle_poll_count = 0
     dhcp_started_seen = False
+    nettest_success_seen = False
+    netstats_status_wifi_bound_seen = False
+    netstats_wifi_secure_seen = False
+    netstats_txrx_seen = False
     linux_probe_attach_seen = False
     linux_probe_pmu_write_active = False
     armcr4_prereset_ioctrl_active = False
@@ -2430,7 +2458,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         ):
             value = fields.get(key)
             if value and value not in {"none", "n/a"}:
-                explicit_blocker = normalize_wifi_blocker(value)
+                normalized_value = normalize_wifi_blocker(value)
+                if normalized_value != "none":
+                    explicit_blocker = normalized_value
         raw_contract_blocker = normalize_wifi_blocker(raw)
         if raw_contract_blocker == "control-plane-legacy-gmode-stall":
             legacy_gmode_stall_seen = True
@@ -2451,6 +2481,41 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             explicit_blocker = raw_contract_blocker
         if raw_contract_blocker in precise_control_plane_blockers:
             explicit_blocker = raw_contract_blocker
+        if raw.startswith("netstats:"):
+            if (
+                fields.get("active") == "wifi"
+                and fields.get("addr_src") == "dhcp-lease"
+                and fields.get("dhcp") == "bound"
+            ):
+                netstats_status_wifi_bound_seen = True
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+                blocker = "none"
+            if (
+                fields.get("wifi_assoc") == "1"
+                and fields.get("wifi_link") == "1"
+                and fields.get("eapol_secure") == "1"
+                and (parse_hex_int(fields.get("eapol_rx")) or 0) > 0
+            ):
+                netstats_wifi_secure_seen = True
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+            if (
+                (parse_hex_int(fields.get("rx_pkts")) or 0) > 0
+                and (parse_hex_int(fields.get("tx_pkts")) or 0) > 0
+            ):
+                netstats_txrx_seen = True
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+            if (
+                nettest_success_seen
+                and netstats_status_wifi_bound_seen
+                and netstats_wifi_secure_seen
+                and netstats_txrx_seen
+            ):
+                gate = max(gate, 10)
+                blocker = "none"
+            continue
         if "[dhcp] start ready" in raw:
             dhcp_started_seen = True
             gate = max(gate, 8)
@@ -2869,18 +2934,20 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             tcp_ok = fields.get("tcp_ok")
             console_ok = fields.get("console_ok")
             if {tx_ok, udp_ok, tcp_ok, console_ok} <= {"true", "1"}:
-                gate = max(gate, 10)
+                nettest_success_seen = True
+                gate = max(gate, 9)
                 post_f2_progress_seen = True
-                blocker = "none"
+                blocker = "netstats-missing"
             else:
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
                 blocker = "nettest-failed"
             continue
         if raw.startswith("ok nettest"):
-            gate = max(gate, 10)
+            nettest_success_seen = True
+            gate = max(gate, 9)
             post_f2_progress_seen = True
-            blocker = "none"
+            blocker = "netstats-missing"
             continue
         if raw.startswith("err nettest"):
             if explicit_blocker in direct_sdio_blockers | {
@@ -3280,6 +3347,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             elif blocker not in precise_ht_blockers and blocker != "ht-clock-timeout":
                 blocker = explicit_blocker
 
+    if nettest_success_seen:
+        if netstats_status_wifi_bound_seen and netstats_wifi_secure_seen and netstats_txrx_seen:
+            gate = max(gate, 10)
+            blocker = "none"
+        else:
+            gate = max(gate, 9)
+            if blocker == "none":
+                blocker = "netstats-missing"
     if blocker == "function2-disabled" and gate >= 4 and not ht_available_seen:
         blocker = "ht-clock-timeout"
     if terminal_ht_timeout_seen and not ht_available_seen and not post_f2_progress_seen:

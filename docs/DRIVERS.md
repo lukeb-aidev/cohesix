@@ -381,9 +381,10 @@ power/reset state.
   must match Linux and known-good CYW43 behavior: program the supported
   WPA2-PSK/CCMP RSN IE through `wpaie`, then the primary-BSS initial WPA2
   version mask (`wpa_auth=0x00c0`), D11 auth (`auth=0`), AES security
-  (`wsec=0x0004`), optional MFP only when a captured RSN/MFP policy proves it,
-  final WPA2-PSK AKM (`wpa_auth=0x0080`), then either the Linux userspace
-  supplicant path or an explicitly supported firmware-supplicant offload path
+  (`wsec=0x0004`), the Linux RSN-capability side effects for the authored RSN
+  IE (`mfp=0`, `wme_bss_disable=1` for the current zero-capability WPA2-PSK
+  CCMP IE), final WPA2-PSK AKM (`wpa_auth=0x0080`), then either the Linux
+  userspace supplicant path or an explicitly supported firmware-supplicant offload path
   before the primary `join` iovar. `infra=1` is not part of
   the Linux connect-time station command sequence. For the primary BSS
   (`bsscfgidx=0`), Linux `brcmf_fil_bsscfg_*` collapses most station connect
@@ -425,30 +426,40 @@ power/reset state.
   path for 802.1X frames. The current as-built host-EAPOL implementation
   contains bounded M1/M3 admission, M2/M4 transmit, 802.1X drain before key
   programming, and PTK/GTK `wsec_key` install logic. GTK/group keys use the
-  Broadcom primary/default-key flag, while PTK/pairwise keys keep flags zero.
-  The last reviewed Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-145837.log`)
+  Broadcom primary/default-key flag, while PTK/pairwise keys keep flags zero and
+  still carry a zero RX RSC so Broadcom sees `iv_initialized=1`, matching the
+  Linux key-install shape.
+  The last reviewed Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-162314.log`)
   supersedes the earlier no-association trace: it proved association/link-up,
-  BSSID refresh, repeated EAPOL-Start TX with BDC priority `6`, USB Gate 10, and
-  prompt-side `netstats`, but still did not receive M1 (`eapol_rx=0`).
-  `WLC_GET_BSSID` returned the same locally administered address as the Broadcom
-  link event instead of the known-good globally administered Linux-captured BSSID
-  for this SSID, so current root-task treats local-admin AP candidates as hints.
-  It sends bounded PAE-group EAPOL-Start probes first, then may send a clearly
-  labelled `ap-local-admin-probe` unicast fallback after the PAE probes fail to
-  produce M1; that fallback is diagnostic and still does not prove AP identity.
-  This hardware state is not a Wi-Fi connection: proof tooling reports
-  `WIFI_GATE=7`, `WIFI_BLOCKER=host-eapol-required`, and prompt-side `nettest` must
-  report `wifi-host-eapol-pending` until the deferred lane completes or times
-  out. Pre-root runtime accelerates that boundary with bounded host-EAPOL burst
+  BSSID refresh, EAPOL-Start TX to both the PAE group and the firmware-reported
+  associated BSSID, USB Gate 10, and prompt-side `netstats`, but still did not
+  receive M1 (`eapol_rx=0`) and left DHCP blocked. `WLC_GET_BSSID` returned a
+  locally administered unicast address; that is a valid router shape on some
+  networks, so Cohesix must not hard-code the currently tested AP or require
+  globally administered BSSIDs. Current root-task sends the first EAPOL-Start to
+  the PAE group, then trusts a valid `WLC_GET_BSSID` result as the associated
+  BSSID even when it is locally administered. If no M1 is visible after bounded
+  AP-directed starts, Cohesix enables a temporary EAPOL-only receive rescue
+  (`allmulti=1`, `promisc=1`) while keeping DHCP and normal data blocked; after
+  secure key install it restores the Linux unicast-M1 receive policy.
+  This hardware state is not a Wi-Fi connection: the latest proof reports
+  `WIFI_GATE=7`, `WIFI_BLOCKER=host-eapol-required`, and prompt-side `nettest`
+  must report `wifi-host-eapol-pending` until M1/M3 handling and key
+  installation complete or the deferred lane times out. Pre-root runtime
+  accelerates that boundary with bounded host-EAPOL burst
   polls; after `cohesix>` is published, each event-pump turn yields back to
   serial, USB keyboard, HDMI echo, and IPC after a single Wi-Fi poll so the
   fail-closed EAPOL lane cannot delay physical-console input. The current
   runtime refreshes receive admission after association, drains runtime Function
   2 frames before clearing the SDIO interrupt source, treats runtime
-  `I_HMB_FRAME_IND` with zero `RFRAME` and runtime SDHCI `CARD_INT` / host-F1
-  interrupt latches as bounded Linux-style fixed-address Function 2 first-read
-  opportunities, and emits concise `host-eapol rx-source` plus
-  `rx-source-regs` snapshots when no M1 is visible. The host-EAPOL rule
+  `I_HMB_FRAME_IND` with zero `RFRAME`, an actual `I_HMB_HOST_INT`, or an
+  unreadable dongle interrupt source as bounded Linux-style fixed-address
+  Function 2 first-read opportunities, and clears readable-zero dongle source
+  plus SDHCI `CARD_INT` as a stale host latch instead of issuing a no-progress
+  Function 2 read. Background host-EAPOL polling suppresses Wi-Fi UART output
+  once USB first-byte proof exists; the internal log keeps rate-limited stale
+  latch evidence plus concise `host-eapol rx-source` and `rx-source-regs`
+  snapshots when no M1 is visible. The host-EAPOL rule
   must not be completed by firmware `PSK_SUP`; only M1/M2/M3/M4 plus key
   installation can release DHCP/data. The next valid success trace must show
   `host-eapol action=data-tx-shape ... bdc_priority=6`,
@@ -545,15 +556,20 @@ power/reset state.
   include the resolved destination MAC. Before the first post-association
   EAPOL-Start, Cohesix must refresh the Linux-shaped receive-admission
   programming because the join event/BSSID proof is the first point where the
-  current AP identity is known. EAPOL-Start keeps PAE-group probes until a
-  globally administered AP/BSSID is proved; after the bounded local-admin
-  fallback threshold, it may try the local-admin candidate as
-  `dst=ap-local-admin-probe` without marking secure completion or AP identity
-  proved. M1 may overwrite the AP MAC with the authenticated frame source. Cohesix
+  current AP identity is known. EAPOL-Start sends one PAE-group probe, then uses
+  a valid `WLC_GET_BSSID` result as the associated BSSID even when the router
+  advertises a locally administered address; event-derived local-admin hints
+  still require the bounded `dst=ap-local-admin-probe` fallback label. M1 may
+  overwrite the AP MAC with the authenticated frame source. Cohesix
   parses the EAPOL/EAPOL-Key envelope
-  for proof (`m1`/`m3` shape, key-info bits, replay-counter presence, and
-  key-data length) and may complete the bounded host handshake only after M2,
-  M4, and `wsec_key` PTK/GTK install succeed. Deferred join timeout and
+  for proof (`m1`/`m3` shape, key-info bits, replay-counter presence, declared
+  EAPOL length, CCMP key length, RSN IE consistency, and key-data length) and
+  may complete the bounded host handshake only after M2, M4, and `wsec_key`
+  PTK/GTK install succeed. MIC verification uses the declared EAPOL body length,
+  not any trailing SDPCM/BDC receive padding. When an AP sends M3 without a GTK
+  KDE, Cohesix sends M4 and installs PTK, keeps DHCP/data blocked, then accepts
+  the separate Group Key 1/2 frame, installs GTK, replies with Group Key 2/2,
+  reasserts AES `wsec`, and only then releases DHCP/data. Deferred join timeout and
   prompt-side `nettest` diagnostics must preserve `wifi-host-eapol-pending`
   while the deferred receive lane is still alive and `wifi-host-eapol-required`
   after the terminal proof window closes, instead of collapsing the failure into

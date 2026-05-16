@@ -115,6 +115,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p nine-door --test ui_security`
 - `cargo test -p nine-door --test session_state`
 - `pytest tests/test_pi4_trace_normalize.py`
+- `pytest tests/test_pi4_gate_proof.py`
 - `cargo test -p nine-door --test pressure_counters`
 - `cargo test -p nine-door --test schedule_create`
 - `cargo test -p nine-door --test schedule_bounds`
@@ -142,8 +143,10 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::nettest_reports_wifi_host_eapol_pending_detail`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::netstats_emits_compact_status_line`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::`
 - `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`
 - `SEL4_BUILD_DIR=$REPO/seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu`
 - `SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
@@ -160,7 +163,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - Explicit scale proof (not part of the fast stage):
   - `cargo test -p nine-door --features scale-tests --test shard_scale sharded_attach_1k_scale_gate_exports_metrics -- --nocapture`
 
-Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `USB_BLOCKER=usbcmd-run-preserved-reset-bit`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, `WIFI_BLOCKER=ht-clock-timeout`, `BOOT_HALTED=yes`, `PANIC_SEEN=yes`, `PANIC_REASON=bootinfo-snapshot-corrupted`, or `TIMER_IRQ27_SEEN=yes`.
+Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` and `scripts/pi4_gate_proof.sh` tests directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `USB_BLOCKER=usbcmd-run-preserved-reset-bit`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, `WIFI_BLOCKER=ht-clock-timeout`, `BOOT_HALTED=yes`, `PANIC_SEEN=yes`, `PANIC_REASON=bootinfo-snapshot-corrupted`, or `TIMER_IRQ27_SEEN=yes`. The Pi 4 local-seat driver coverage module is part of Stage 02 because it owns USB keyboard input proof contracts, Caps/Num/Scroll LED bitmaps, post-seal LED-sync enablement, HDMI progress refresh cadence, and Wi-Fi progress suppression while USB boot activity is active.
 
 ### 3) QEMU boot + TCP console baseline
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
@@ -539,12 +542,17 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
     - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`
     - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no` and `USB_COLD_BOOT_SEEN=yes`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
+    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with first-byte proof, and hardware acceptance captures a printable-key line such as `runtime keyboard first-printable-byte ...` before claiming the local-seat keyboard experience is complete.
+    - if the attached keyboard exposes lock LEDs, Caps Lock, Num Lock, and Scroll Lock testing either proves the preallocated EP0 OUT DMA path (`xhci-control-out-prealloc` plus `pi4 keyboard led sync ready ...`) or cleanly logs `keyboard led sync unavailable ... action=disabled` without blocking input.
+    - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at parser ingress and boot/progress messages refreshing at the documented 5-10 s cadence, with Stage 02 driver coverage guarding the cadence constants and Wi-Fi progress suppression during USB boot activity and after USB first-byte proof.
   - `netstats` must report:
     - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`
+    - `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`
+    - for Wi-Fi ready acceptance, the final post-`nettest` `netstats` capture must show `active=wifi`, `addr_src=dhcp-lease`, `dhcp=bound`, `eapol_secure=1`, and non-zero TX/RX packet counters.
     - `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`
   - `nettest` refusal detail must preserve the reason when the run cannot start:
     - `detail=dhcp-pending`
-    - `detail=wifi-associating`, `detail=wifi-host-eapol-required`, `detail=wifi-association-failed`, or `detail=wifi-link-down`
+    - `detail=wifi-associating`, `detail=wifi-host-eapol-pending`, `detail=wifi-host-eapol-required`, `detail=wifi-association-failed`, or `detail=wifi-link-down`
     - `detail=not-ready:<root-ep|ipc-buffer|cspace-window|bootstrap-commit>`
     - `detail=policy-disabled` or `detail=selftest-disabled` when the profile/runtime disables self-test
   - explicit `wifi` now supports both `static` and `dhcp` through the HAL-backed CYW43455 path; `auto` remains DHCP-only with wired fallback limited to CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack, and final 26b completion still requires Pi 4 hardware captures proving join + DHCP and that attach/join fallback behavior.

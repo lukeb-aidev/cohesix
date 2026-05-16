@@ -72,13 +72,14 @@ required_snippets = [
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::",
-    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::",
     "cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance",
     "--features release-qemu",
     "--features release-pi4",
     "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",
     "cargo test --workspace",
     "pytest tests/test_pi4_trace_normalize.py",
+    "pytest tests/test_pi4_gate_proof.py",
 ]
 for snippet in required_snippets:
     if snippet not in text:
@@ -102,13 +103,14 @@ required_stage_02_commands = [
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::",
-    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::",
     "cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance",
     "--features release-qemu",
     "--features release-pi4",
     "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",
     "cargo test --workspace",
     "pytest tests/test_pi4_trace_normalize.py",
+    "pytest tests/test_pi4_gate_proof.py",
 ]
 for command in required_stage_02_commands:
     if command not in stage_02_text:

@@ -31,10 +31,12 @@ REQUIRE_WIFI_READY=0
 DEFAULT_COMMANDS=(
     "wifi diag"
     "nettest"
+    "netstats"
     "usb status"
     "usb probe-kbd"
     "usb diag"
     "usb status"
+    "netstats"
 )
 EXTRA_COMMANDS=()
 EXPECTATIONS=()
@@ -98,10 +100,12 @@ Options:
 Default proof commands:
   wifi diag
   nettest
+  netstats
   usb status
   usb probe-kbd
   usb diag
   usb status
+  netstats
 USAGE
 }
 

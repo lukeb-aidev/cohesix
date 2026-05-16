@@ -3538,6 +3538,11 @@ fn mark_usb_runtime_first_byte() {
     USB_RUNTIME_FIRST_BYTE.store(true, Ordering::Release);
 }
 
+#[must_use]
+pub(crate) fn usb_runtime_first_byte_seen() -> bool {
+    USB_RUNTIME_FIRST_BYTE.load(Ordering::Acquire)
+}
+
 pub(crate) fn latest_usb_runtime_proof_status() -> UsbRuntimeProofStatus {
     let keyboard_ready = USB_RUNTIME_KEYBOARD_READY.load(Ordering::Acquire);
     let first_report = USB_RUNTIME_FIRST_REPORT.load(Ordering::Acquire);
@@ -15776,6 +15781,36 @@ mod driver_coverage_tests {
         assert!(wifi_progress_emit_allowed(true, false));
         assert!(!wifi_progress_emit_allowed(true, true));
         assert!(!wifi_progress_emit_allowed(false, false));
+    }
+
+    #[test]
+    fn hdmi_progress_refresh_cadence_stays_prompt_safe_and_rate_limited() {
+        let (usb_tick_ms, wifi_tick_loops, wifi_emit_interval) =
+            hdmi_progress_refresh_contract_for_test();
+
+        assert!((5_000..=10_000).contains(&usb_tick_ms));
+        assert!(wifi_tick_loops * wifi_emit_interval >= 64_000_000);
+        assert_eq!(wifi_progress_dots_for_ticks(0), 0);
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS - 1),
+            0
+        );
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS),
+            1
+        );
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS * 2),
+            2
+        );
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS * 3),
+            3
+        );
+        assert_eq!(
+            wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS * 4),
+            1
+        );
     }
 
     #[test]

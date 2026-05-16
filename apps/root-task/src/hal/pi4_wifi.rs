@@ -21,7 +21,8 @@ use super::{
 use crate::bootstrap::log as boot_log;
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
 use crate::local_seat_pi4::{
-    usb_boot_activity_active, wifi_progress_advance_loops, wifi_progress_tick,
+    usb_boot_activity_active, usb_runtime_first_byte_seen, wifi_progress_advance_loops,
+    wifi_progress_tick,
 };
 use crate::rust_alloc::vec::Vec;
 use crate::sel4::{page_get_address, DeviceFrame, PAGE_BITS};
@@ -38,6 +39,12 @@ fn wifi_progress_tick() {}
 #[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
 #[inline]
 fn usb_boot_activity_active() -> bool {
+    false
+}
+
+#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[inline]
+fn usb_runtime_first_byte_seen() -> bool {
     false
 }
 
@@ -413,8 +420,12 @@ fn wifi_breadcrumb_uart_suppressed() -> bool {
 }
 
 #[inline]
-const fn wifi_breadcrumb_uart_should_emit(suppressed: bool, usb_active: bool) -> bool {
-    !suppressed && !usb_active
+const fn wifi_breadcrumb_uart_should_emit(
+    suppressed: bool,
+    usb_active: bool,
+    usb_keyboard_online: bool,
+) -> bool {
+    !suppressed && !usb_active && !usb_keyboard_online
 }
 
 #[cfg(test)]
@@ -428,6 +439,7 @@ fn emit_breadcrumb(args: core::fmt::Arguments<'_>) {
     if !wifi_breadcrumb_uart_should_emit(
         wifi_breadcrumb_uart_suppressed(),
         usb_boot_activity_active(),
+        usb_runtime_first_byte_seen(),
     ) {
         #[cfg(feature = "kernel")]
         crate::log_buffer::append_log_line(line.as_str());
@@ -7703,7 +7715,36 @@ const fn runtime_rx_uses_linux_firstread_on_irq_source(
         Some(bits) => (bits & I_HMB_HOST_INT) != 0,
         None => false,
     };
-    !frame_indicated && frame_len == 0 && (host_int || (sdhci_status & SDHCI_INT_CARD_INT) != 0)
+    let host_card_int = (sdhci_status & SDHCI_INT_CARD_INT) != 0;
+    let unreadable_host_card_int = match int_status {
+        Some(_) => false,
+        None => host_card_int,
+    };
+    !frame_indicated && frame_len == 0 && (host_int || unreadable_host_card_int)
+}
+
+const fn runtime_rx_host_latch_without_dongle_source(
+    frame_indicated: bool,
+    int_status: Option<u32>,
+    sdhci_status: u32,
+    frame_len: usize,
+) -> bool {
+    let dongle_source_empty = match int_status {
+        Some(bits) => (bits & HOSTINTMASK) == 0,
+        None => false,
+    };
+    !frame_indicated
+        && frame_len == 0
+        && dongle_source_empty
+        && (sdhci_status & SDHCI_INT_CARD_INT) != 0
+}
+
+const fn runtime_rx_stale_host_latch_should_log(clear_count: u16) -> bool {
+    clear_count <= 4
+        || clear_count == 8
+        || clear_count == 16
+        || clear_count == 32
+        || clear_count == 64
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9233,6 +9274,7 @@ struct SdioHost {
     experimental_control_plane_linux_rxskip_pending: bool,
     cached_control_plane_irq_int_status: Option<u32>,
     runtime_frame_read_needs_irq_ack: bool,
+    runtime_rx_stale_host_latch_clears: u16,
     last_sdio_irq_clear_serviced_bits: u32,
     last_sdio_irq_clear_int_status_readable: bool,
     last_sdio_irq_clear_card_int: bool,
@@ -9378,6 +9420,7 @@ impl SdioHost {
             experimental_control_plane_linux_rxskip_pending: false,
             cached_control_plane_irq_int_status: None,
             runtime_frame_read_needs_irq_ack: false,
+            runtime_rx_stale_host_latch_clears: 0,
             last_sdio_irq_clear_serviced_bits: 0,
             last_sdio_irq_clear_int_status_readable: false,
             last_sdio_irq_clear_card_int: false,
@@ -9444,6 +9487,7 @@ impl SdioHost {
         self.experimental_control_plane_linux_rxskip_pending = false;
         self.cached_control_plane_irq_int_status = None;
         self.runtime_frame_read_needs_irq_ack = false;
+        self.runtime_rx_stale_host_latch_clears = 0;
         self.last_sdio_irq_clear_serviced_bits = 0;
         self.last_sdio_irq_clear_int_status_readable = false;
         self.last_sdio_irq_clear_card_int = false;
@@ -15319,9 +15363,11 @@ impl SdioHost {
         if signal_after != signal_before {
             self.write32(SDHCI_SIGNAL_ENABLE, signal_after);
         }
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] firmware stage={stage} action=sdhci-card-irq-signal-enable int_enable=0x{int_enable_before:08x}->0x{int_enable_after:08x} signal=0x{signal_before:08x}->0x{signal_after:08x}"
-        ));
+        if int_enable_after != int_enable_before || signal_after != signal_before {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=sdhci-card-irq-signal-enable int_enable=0x{int_enable_before:08x}->0x{int_enable_after:08x} signal=0x{signal_before:08x}->0x{signal_after:08x}"
+            ));
+        }
     }
 
     fn clear_sdio_irq_source_for_firmware_channel(
@@ -17931,6 +17977,17 @@ impl SdioHost {
                 yn((sdhci_status & SDHCI_INT_CARD_INT) != 0),
                 int_status = int_status.unwrap_or(0),
             ));
+        } else if runtime_rx_host_latch_without_dongle_source(
+            frame_indicated,
+            int_status,
+            sdhci_status,
+            0,
+        ) {
+            self.clear_runtime_rx_stale_host_latch(
+                "runtime-rx-host-latch-only",
+                int_status.unwrap_or(0),
+                sdhci_status,
+            );
         }
 
         Ok(0)
@@ -18541,6 +18598,55 @@ impl SdioHost {
                 "[pi4-wifi] firmware stage={stage} action=runtime-rx-irq-ack-failed irq={} err={err} sdhci=0x{sdhci_status:08x} result=frame-drained",
                 binding.irq().0,
             )),
+        }
+    }
+
+    fn clear_runtime_rx_stale_host_latch(
+        &mut self,
+        stage: &'static str,
+        int_status: u32,
+        sdhci_status: u32,
+    ) {
+        self.runtime_frame_read_needs_irq_ack = false;
+        self.runtime_rx_stale_host_latch_clears =
+            self.runtime_rx_stale_host_latch_clears.saturating_add(1);
+        let clear_count = self.runtime_rx_stale_host_latch_clears;
+        let should_log = runtime_rx_stale_host_latch_should_log(clear_count);
+        if should_log {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=host-card-int-latch-only-clear count={clear_count} int_status=0x{int_status:08x} sdhci=0x{sdhci_status:08x} result=clear-ack next=wait-dongle-source"
+            ));
+        }
+        if let Err(err) = self.clear_sdio_irq_source_for_firmware_channel(stage, true, true) {
+            if should_log {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=host-card-int-latch-only-clear-failed count={clear_count} err={err} result=wait"
+                ));
+            }
+            return;
+        }
+        let Some(binding) = self.sdio_irq_binding else {
+            return;
+        };
+        match binding.ack_from_hal() {
+            Ok(()) => {
+                if should_log {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=host-card-int-latch-only-ack count={clear_count} irq={} badge=0x{:x}",
+                        binding.irq().0,
+                        binding.badge(),
+                    ));
+                }
+                self.enable_sdhci_card_interrupt_signal(stage);
+            }
+            Err(err) => {
+                if should_log {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=host-card-int-latch-only-ack-failed count={clear_count} irq={} err={err}",
+                        binding.irq().0,
+                    ));
+                }
+            }
         }
     }
 
@@ -24813,7 +24919,9 @@ mod tests {
         required_ht_clock_linux_active_transition_resets_chipclk,
         required_ht_clock_linux_active_transition_resets_chipclk_for_attempt,
         required_ht_clock_linux_active_transition_resets_chipclk_for_stage,
-        runtime_rx_drains_before_irq_clear, runtime_rx_uses_linux_firstread_on_frame_indication,
+        runtime_rx_drains_before_irq_clear, runtime_rx_host_latch_without_dongle_source,
+        runtime_rx_stale_host_latch_should_log,
+        runtime_rx_uses_linux_firstread_on_frame_indication,
         runtime_rx_uses_linux_firstread_on_irq_source, sdhci_interrupt_buffer_ready_mask,
         sdhci_present_buffer_ready_mask, sdhci_status_reason, sdio_byte_mode_transfer_plan,
         sdio_cccr_speed_ehs_value, sdio_cccr_speed_supports_high_speed,
@@ -24916,10 +25024,11 @@ mod tests {
 
     #[test]
     fn wifi_breadcrumb_uart_defers_while_usb_boot_is_active() {
-        assert!(wifi_breadcrumb_uart_should_emit(false, false));
-        assert!(!wifi_breadcrumb_uart_should_emit(true, false));
-        assert!(!wifi_breadcrumb_uart_should_emit(false, true));
-        assert!(!wifi_breadcrumb_uart_should_emit(true, true));
+        assert!(wifi_breadcrumb_uart_should_emit(false, false, false));
+        assert!(!wifi_breadcrumb_uart_should_emit(true, false, false));
+        assert!(!wifi_breadcrumb_uart_should_emit(false, true, false));
+        assert!(!wifi_breadcrumb_uart_should_emit(false, false, true));
+        assert!(!wifi_breadcrumb_uart_should_emit(true, true, true));
     }
 
     #[test]
@@ -30635,6 +30744,24 @@ mod tests {
             0
         ));
         assert!(!runtime_rx_uses_linux_firstread_on_irq_source(
+            false,
+            Some(0),
+            SDHCI_INT_CARD_INT,
+            0
+        ));
+        assert!(runtime_rx_host_latch_without_dongle_source(
+            false,
+            Some(0),
+            SDHCI_INT_CARD_INT,
+            0
+        ));
+        assert!(!runtime_rx_host_latch_without_dongle_source(
+            false,
+            Some(I_HMB_FRAME_IND),
+            SDHCI_INT_CARD_INT,
+            0
+        ));
+        assert!(!runtime_rx_uses_linux_firstread_on_irq_source(
             true,
             Some(I_HMB_HOST_INT),
             SDHCI_INT_CARD_INT,
@@ -30646,6 +30773,9 @@ mod tests {
             SDHCI_INT_CARD_INT,
             64
         ));
+        assert!(runtime_rx_stale_host_latch_should_log(1));
+        assert!(runtime_rx_stale_host_latch_should_log(64));
+        assert!(!runtime_rx_stale_host_latch_should_log(65));
     }
 
     #[test]

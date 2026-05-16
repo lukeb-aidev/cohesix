@@ -33,6 +33,12 @@ JOIN_COMPLETE_SECURE = (
     "psk_sup=yes psk_status=0x00000006 carrier=yes"
 )
 
+JOIN_COMPLETE_HOST_EAPOL = (
+    "[cyw43] join complete mode=host-eapol secure=yes "
+    "completion_rule=host-eapol-required m1=yes m2=yes m3=yes m4=yes "
+    "wsec_key=ptk+gtk key_order=m4-before-wsec carrier=yes"
+)
+
 
 def test_usb_trace_line_extracts_stage_and_tokens() -> None:
     event = normalizer.parse_line(
@@ -3009,6 +3015,20 @@ def test_gate_summary_tracks_usb_keyboard_report_and_first_byte() -> None:
     assert gates.usb_blocker == "none"
 
 
+def test_gate_summary_treats_usb_keyboard_runtime_online_as_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] pi4 keyboard runtime proof result=online gate=10 "
+            "source=first-byte",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 10
+    assert gates.usb_blocker == "none"
+
+
 def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
     events = normalizer.parse_events(
         [
@@ -3437,6 +3457,24 @@ def test_gate_summary_reports_host_eapol_required_after_proof_window() -> None:
     assert gates.wifi_blocker == "host-eapol-required"
     assert gates.wifi_exact == "host-eapol-required"
     assert gates.wifi_phase == "join-security"
+
+
+def test_gate_summary_preserves_host_eapol_required_over_deferred_eapol_start() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] join failed "
+            "reason=host-eapol-required rx_poll=eapol-only dhcp=blocked tx=blocked "
+            "mode=join-submit ssid_len=12 psk_len=12",
+            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol "
+            "action=eapol-start mode=deferred polls=2048 limit=60000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "host-eapol-required"
+    assert gates.wifi_exact == "host-eapol-required"
 
 
 def test_gate_summary_preserves_host_eapol_after_ready_and_panic() -> None:
@@ -4057,12 +4095,42 @@ def test_gate_summary_tracks_wifi_dhcp_and_nettest_success() -> None:
             "[net-selftest] result tx_ok=true udp_echo_ok=true tcp_ok=true "
             "console_ok=true",
             "OK NETTEST detail=pass scope=serial-local",
+            "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+            "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
+            "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
+            "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
         ]
     )
 
     gates = normalizer.summarize_gates(events)
 
     assert gates.wifi_gate == 10
+    assert gates.wifi_blocker == "none"
+
+
+def test_gate_summary_requires_netstats_for_wifi_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+            "server=192.168.10.1 lease_s=3600",
+            "[net-selftest] result tx_ok=true udp_echo_ok=true tcp_ok=true "
+            "console_ok=true",
+            "OK NETTEST detail=pass scope=serial-local",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 9
+    assert gates.wifi_blocker == "netstats-missing"
+
+
+def test_gate_summary_accepts_host_eapol_secure_join_proof() -> None:
+    events = normalizer.parse_events([JOIN_COMPLETE_HOST_EAPOL])
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 8
     assert gates.wifi_blocker == "none"
 
 
