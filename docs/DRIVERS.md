@@ -1405,7 +1405,7 @@ bundle applies. Use the focused aliases:
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::`
   covers target-neutral local-seat parser, queue, mirror, and USB/Wi-Fi command
   policy helpers.
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::`
   covers Pi 4 local-seat USB/VL805/xHCI policy, Enable Slot plus Disable Slot
   command-ring proof, event-ring polling, PCIe DMA aliasing, and HAL
   interrupt-source ordering.
@@ -1464,7 +1464,7 @@ Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::
   - cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance
   - scripts/ci/test_plan_run.sh --list
   - scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>

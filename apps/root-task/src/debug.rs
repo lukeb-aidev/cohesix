@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Debug helpers for seL4 capability inspection and diagnostic write watching.
 // Author: Lukas Bower
@@ -48,6 +48,21 @@ struct WatchRange {
     last_location_file: Option<&'static str>,
     last_location_line: Option<u32>,
     reported: bool,
+}
+
+#[derive(Clone, Copy)]
+struct WatchReport {
+    label: &'static str,
+    context: &'static str,
+    location: &'static Location<'static>,
+    dst_ptr: usize,
+    dst_len: usize,
+    src_ptr: usize,
+    src_len: usize,
+    overlap_start: usize,
+    overlap_end: usize,
+    src_preview: [u8; SRC_PREVIEW_BYTES],
+    src_preview_len: usize,
 }
 
 /// Captures metadata about the last write observed for a watched range.
@@ -123,33 +138,25 @@ pub fn clear_watches() {
     guards.clear();
 }
 
-fn write_log_line(
-    label: &'static str,
-    context: &'static str,
-    location: &'static Location<'static>,
-    dst_ptr: usize,
-    dst_len: usize,
-    src_ptr: usize,
-    src_len: usize,
-    overlap: &Range<usize>,
-    src_prefix: &[u8],
-) {
+fn write_log_line(report: &WatchReport) {
     let mut line = HeaplessString::<MAX_WATCH_LOG>::new();
     let _ = core::fmt::write(
         &mut line,
         format_args!(
             "[write-watch] label={label} context={context} location={file}:{line} dst=[0x{dst:016x}..0x{end:016x}) src=[0x{src:016x} len=0x{src_len:08x}] overlap=[0x{ow_start:016x}..0x{ow_end:016x}) src=",
-            dst = dst_ptr,
-            end = dst_ptr.saturating_add(dst_len),
-            src = src_ptr,
-            src_len = src_len,
-            file = location.file(),
-            line = location.line(),
-            ow_start = overlap.start,
-            ow_end = overlap.end,
+            label = report.label,
+            context = report.context,
+            dst = report.dst_ptr,
+            end = report.dst_ptr.saturating_add(report.dst_len),
+            src = report.src_ptr,
+            src_len = report.src_len,
+            file = report.location.file(),
+            line = report.location.line(),
+            ow_start = report.overlap_start,
+            ow_end = report.overlap_end,
         ),
     );
-    for byte in src_prefix {
+    for byte in &report.src_preview[..report.src_preview_len] {
         if write!(line, "{byte:02x}").is_err() {
             break;
         }
@@ -221,24 +228,8 @@ fn capture_preview(
     (buf, preview_len)
 }
 
-fn log_trip_and_maybe_panic(
-    guard: &mut WatchRange,
-    context: &'static str,
-    location: &'static Location<'static>,
-) {
-    let preview_len = guard.last_src_len.min(SRC_PREVIEW_BYTES);
-    let preview = &guard.last_src_preview[..preview_len];
-    write_log_line(
-        guard.label,
-        context,
-        location,
-        guard.last_dst,
-        guard.last_dst_len,
-        guard.last_src_ptr,
-        guard.last_src_len,
-        &guard.range,
-        preview,
-    );
+fn log_trip_and_maybe_panic(report: WatchReport) {
+    write_log_line(&report);
     if TRIP_ON_OVERLAP.load(Ordering::Acquire)
         && FIRST_OVERLAP_REPORTED
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -246,8 +237,28 @@ fn log_trip_and_maybe_panic(
     {
         panic!(
             "write-watch overlap: {} (first corruption site)",
-            guard.label
+            report.label
         );
+    }
+}
+
+fn report_from_guard(
+    guard: &WatchRange,
+    context: &'static str,
+    location: &'static Location<'static>,
+) -> WatchReport {
+    WatchReport {
+        label: guard.label,
+        context,
+        location,
+        dst_ptr: guard.last_dst,
+        dst_len: guard.last_dst_len,
+        src_ptr: guard.last_src_ptr,
+        src_len: guard.last_src_len,
+        overlap_start: guard.range.start,
+        overlap_end: guard.range.end,
+        src_preview: guard.last_src_preview,
+        src_preview_len: guard.last_src_len.min(SRC_PREVIEW_BYTES),
     }
 }
 
@@ -265,29 +276,36 @@ fn maybe_report_write_internal(
     }
     let dst_range = dst_ptr as usize..dst_ptr as usize + dst_len;
     let (preview_buf, preview_len) = capture_preview(src_ptr, src_len, preview);
-    let mut guards = WATCHED.lock();
-    for guard in guards.iter_mut() {
-        if ranges_overlap(&guard.range, &dst_range) {
-            record_overlap(
-                guard,
-                context,
-                dst_ptr as usize,
-                dst_len,
-                src_ptr as usize,
-                src_len,
-                &preview_buf[..preview_len],
-                location,
-            );
-            if !guard.reported {
-                guard.reported = true;
-                log_trip_and_maybe_panic(guard, context, location);
-            } else if TRIP_ON_OVERLAP.load(Ordering::Acquire) {
-                log_trip_and_maybe_panic(guard, context, location);
+    let mut report = None;
+    let matched = {
+        let mut guards = WATCHED.lock();
+        let mut matched = false;
+        for guard in guards.iter_mut() {
+            if ranges_overlap(&guard.range, &dst_range) {
+                matched = true;
+                record_overlap(
+                    guard,
+                    context,
+                    dst_ptr as usize,
+                    dst_len,
+                    src_ptr as usize,
+                    src_len,
+                    &preview_buf[..preview_len],
+                    location,
+                );
+                if !guard.reported || TRIP_ON_OVERLAP.load(Ordering::Acquire) {
+                    guard.reported = true;
+                    report = Some(report_from_guard(guard, context, location));
+                }
+                break;
             }
-            return true;
         }
+        matched
+    };
+    if let Some(report) = report {
+        log_trip_and_maybe_panic(report);
     }
-    false
+    matched
 }
 
 /// Reports an overlapping write to any watched range.
@@ -345,50 +363,58 @@ pub fn sink_write_watched(
     let location = Location::caller();
     let dst_range = dst_ptr as usize..dst_ptr as usize + dst_len;
     let (preview_buf, preview_len) = capture_preview(src_ptr, src_len, None);
-    let mut guards = WATCHED.lock();
-    for guard in guards.iter_mut() {
-        if ranges_overlap(&guard.range, &dst_range) {
-            record_overlap(
-                guard,
-                context,
-                dst_ptr as usize,
-                dst_len,
-                src_ptr as usize,
-                src_len,
-                &preview_buf[..preview_len],
-                location,
-            );
-            guard.reported = true;
-            let overlap = &guard.range;
-            let mut line = HeaplessString::<MAX_WATCH_LOG>::new();
-            let _ = core::fmt::write(
-                &mut line,
-                format_args!(
-                    "[sink-write-watch] label={} context={context} location={file}:{line} dst=[0x{dst:016x}..0x{end:016x}) src=[0x{src:016x} len=0x{src_len:08x}] overlap=[0x{ow_start:016x}..0x{ow_end:016x}) preview=",
-                    guard.label,
-                    dst = dst_ptr as usize,
-                    end = dst_ptr as usize + dst_len,
-                    src = src_ptr as usize,
-                    src_len = src_len,
-                    file = location.file(),
-                    line = location.line(),
-                    ow_start = overlap.start,
-                    ow_end = overlap.end,
-                ),
-            );
-            for byte in &preview_buf[..preview_len] {
-                if write!(&mut line, "{byte:02x}").is_err() {
-                    break;
-                }
+    let mut report = None;
+    {
+        let mut guards = WATCHED.lock();
+        for guard in guards.iter_mut() {
+            if ranges_overlap(&guard.range, &dst_range) {
+                record_overlap(
+                    guard,
+                    context,
+                    dst_ptr as usize,
+                    dst_len,
+                    src_ptr as usize,
+                    src_len,
+                    &preview_buf[..preview_len],
+                    location,
+                );
+                guard.reported = true;
+                report = Some(report_from_guard(guard, context, location));
+                break;
             }
-            log::error!("{}", line.as_str());
-            panic!(
-                "sink-write-watch overlap: context={context} label={} location={}:{}",
-                guard.label,
-                location.file(),
-                location.line()
-            );
         }
+    }
+    if let Some(report) = report {
+        let mut line = HeaplessString::<MAX_WATCH_LOG>::new();
+        let _ = core::fmt::write(
+            &mut line,
+            format_args!(
+                "[sink-write-watch] label={} context={} location={}:{} dst=[0x{:016x}..0x{:016x}) src=[0x{:016x} len=0x{:08x}] overlap=[0x{:016x}..0x{:016x}) preview=",
+                report.label,
+                report.context,
+                report.location.file(),
+                report.location.line(),
+                report.dst_ptr,
+                report.dst_ptr.saturating_add(report.dst_len),
+                report.src_ptr,
+                report.src_len,
+                report.overlap_start,
+                report.overlap_end,
+            ),
+        );
+        for byte in &report.src_preview[..report.src_preview_len] {
+            if write!(&mut line, "{byte:02x}").is_err() {
+                break;
+            }
+        }
+        log::error!("{}", line.as_str());
+        panic!(
+            "sink-write-watch overlap: context={} label={} location={}:{}",
+            report.context,
+            report.label,
+            report.location.file(),
+            report.location.line()
+        );
     }
 }
 

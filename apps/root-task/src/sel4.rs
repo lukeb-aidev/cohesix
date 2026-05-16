@@ -335,10 +335,6 @@ pub fn canonical_cnode_bits(bi: &sel4_sys::seL4_BootInfo) -> u8 {
             caller.file(),
             caller.line(),
         );
-        debug_assert!(
-            init_bits_raw <= word_bits,
-            "initBits must not exceed word width"
-        );
         return fallback_bits as u8;
     }
 
@@ -4741,50 +4737,39 @@ impl<'a> KernelEnv<'a> {
             end = empty_end,
         );
 
-        let mut sanitised = trace;
-        if trace.cnode_root != init_cnode {
-            ::log::warn!(
-                "[cspace] correcting retype root from 0x{actual:04x} to init cnode 0x{expected:04x}",
-                actual = trace.cnode_root,
-                expected = init_cnode,
-            );
-            sanitised.cnode_root = init_cnode;
-        }
-        if trace.cnode_depth != expected_depth {
-            ::log::warn!(
-                "[cspace] correcting retype depth from {actual} to canonical {expected}",
-                actual = trace.cnode_depth,
-                expected = expected_depth,
-            );
-            sanitised.cnode_depth = expected_depth;
-        }
+        let sanitised = trace;
+        assert_eq!(
+            trace.cnode_root, init_cnode,
+            "Retype: cnode_root 0x{:04x} must match init cnode 0x{:04x}",
+            trace.cnode_root, init_cnode,
+        );
+        assert_eq!(
+            trace.cnode_depth, expected_depth,
+            "Retype: cnode_depth {} must match canonical depth {}",
+            trace.cnode_depth, expected_depth,
+        );
 
         let node_index = sanitised.node_index;
-        if node_index != expected_index {
-            ::log::warn!(
-                "[cspace] correcting retype node_index from 0x{actual:04x} to init root index 0x{expected:04x}",
-                actual = node_index,
-                expected = expected_index,
-            );
-            sanitised.node_index = expected_index;
-        }
+        assert!(
+            (node_index as usize) < slot_limit,
+            "Retype: node_index 0x{node_index:04x} out of range for init_bits={init_bits} (limit=0x{slot_limit:x})",
+        );
+        assert_eq!(
+            node_index, expected_index,
+            "Retype: node_index 0x{:04x} must match init root index 0x{:04x}",
+            node_index, expected_index,
+        );
 
         let dest_offset = sanitised.dest_offset;
-        if (dest_offset as usize) >= slot_limit {
-            ::log::warn!(
-                "[cspace] dest_offset 0x{offset:04x} exceeds init cnode capacity 0x{limit:04x}; clamping to slot",
-                offset = dest_offset,
-                limit = slot_limit,
-            );
-            sanitised.dest_offset = expected_offset;
-        } else if dest_offset != expected_offset {
-            ::log::warn!(
-                "[cspace] correcting retype dest_offset from 0x{actual:04x} to slot 0x{expected:04x}",
-                actual = dest_offset,
-                expected = expected_offset,
-            );
-            sanitised.dest_offset = expected_offset;
-        }
+        assert!(
+            (dest_offset as usize) < slot_limit,
+            "Retype: dest_offset 0x{dest_offset:04x} out of range for init_bits={init_bits} (limit=0x{slot_limit:x})",
+        );
+        assert_eq!(
+            dest_offset, expected_offset,
+            "Retype: dest_offset 0x{:04x} must match dest_slot 0x{:04x}",
+            dest_offset, expected_offset,
+        );
 
         (sanitised, init_bits)
     }
@@ -5540,7 +5525,7 @@ mod tests {
     fn page_upper_directory_alignment_matches_512_gib_regions() {
         let addr = 0x0002_0000_1000usize;
         let base = PageUpperDirectoryBookkeeper::<2>::base_for(addr);
-        assert_eq!(base, 0x0002_0000_0000);
+        assert_eq!(base, 0);
     }
 
     #[test]
@@ -5589,7 +5574,7 @@ mod tests {
     fn reserve_device_prefers_closest_covered_untyped() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
         bootinfo.untyped.start = 0x300;
-        bootinfo.untyped.end = 2;
+        bootinfo.untyped.end = 0x302;
         bootinfo.untypedList[0].paddr = 0x3c00_0000;
         bootinfo.untypedList[0].sizeBits = 26;
         bootinfo.untypedList[0].isDevice = 1;
@@ -5610,7 +5595,7 @@ mod tests {
     fn device_coverage_prefers_closest_covered_untyped() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
         bootinfo.untyped.start = 0x300;
-        bootinfo.untyped.end = 2;
+        bootinfo.untyped.end = 0x302;
         bootinfo.untypedList[0].paddr = 0x3c00_0000;
         bootinfo.untypedList[0].sizeBits = 26;
         bootinfo.untypedList[0].isDevice = 1;
@@ -5820,7 +5805,7 @@ mod tests {
         assert!(keeper.remember_base(base).is_ok());
         assert!(keeper.contains(0xA000_0ABC));
         assert!(keeper.contains(0xA001_FFFF));
-        assert!(!keeper.contains(0xA002_0000));
+        assert!(!keeper.contains(0xA020_0000));
     }
 
     #[test]

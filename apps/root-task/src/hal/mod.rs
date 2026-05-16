@@ -558,6 +558,8 @@ impl Timebase for MonotonicTimebase {
 }
 
 static DEFAULT_TIMEBASE: MonotonicTimebase = MonotonicTimebase::new();
+#[cfg(test)]
+static TIMEBASE_SET_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Returns the shared default timebase for the root task.
 pub fn default_timebase() -> &'static dyn Timebase {
@@ -572,6 +574,14 @@ pub fn timebase() -> &'static dyn Timebase {
 /// Sets the shared default timebase to an absolute value.
 pub fn set_timebase_now_ms(now_ms: u64) {
     DEFAULT_TIMEBASE.set(now_ms);
+    #[cfg(test)]
+    TIMEBASE_SET_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Returns how many times tests published the shared default timebase.
+#[cfg(test)]
+pub fn timebase_set_count() -> u64 {
+    TIMEBASE_SET_COUNT.load(Ordering::Relaxed)
 }
 
 /// Advances the shared default timebase by the provided delta.

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Outbound net-console throttle and coalescer enforcing rate limits and batching.
 // Author: Lukas Bower
@@ -593,14 +593,23 @@ mod tests {
 
     #[test]
     fn linebuf_store_reports_overlap() {
+        struct WatchReset;
+
+        impl Drop for WatchReset {
+            fn drop(&mut self) {
+                clear_watches();
+                trip_on_overlap(true);
+            }
+        }
+
         clear_watches();
         trip_on_overlap(false);
+        let _reset = WatchReset;
         let mut buf = LineBuf::new();
         let ptr = buf.buf.as_mut_ptr();
         watch_range("linebuf", ptr as *const u8, LINE_CAP);
         let payload = [b'x'; LINE_CAP + 8];
         buf.store(&payload);
-        trip_on_overlap(true);
         let hint = watch_hint_for(ptr as usize, LINE_CAP);
         assert!(
             hint.is_some(),
@@ -631,7 +640,7 @@ mod tests {
     #[test]
     fn truncates_oversized_line() {
         let mut coalescer = OutboundCoalescer::new();
-        let mut long_line = [b'a'; MAX_PAYLOAD + 10];
+        let long_line = [b'a'; MAX_PAYLOAD + 10];
         coalescer.enqueue_log(&long_line);
         let outcome = coalescer.flush(0, |_payload, _lane| Ok(()));
         assert_eq!(outcome.sent_frames, 1);
@@ -657,8 +666,9 @@ mod tests {
     fn token_bucket_blocks_logs() {
         let mut coalescer = OutboundCoalescer::new();
         coalescer.tokens = 0;
+        coalescer.last_refill_ms = 1;
         coalescer.enqueue_log(LOG_LINE);
-        let outcome = coalescer.flush(0, |_payload, _lane| Ok(()));
+        let outcome = coalescer.flush(1, |_payload, _lane| Ok(()));
         assert_eq!(outcome.sent_frames, 0);
         assert!(outcome.blocked_for_tokens);
         assert!(coalescer.has_pending());

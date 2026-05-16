@@ -20,7 +20,7 @@ use crate::sel4;
 
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_CPtr, seL4_MessageInfo, seL4_Word};
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 use spin::Mutex;
 
 /// Errors raised when transitioning the bootstrap logger state machine.
@@ -180,6 +180,19 @@ impl BootstrapLogger {
 static LOGGER: BootstrapLogger = BootstrapLogger::new();
 static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
 static LOGGER_EP: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static LOGGER_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn with_logger_state_lock<T>(f: impl FnOnce() -> T) -> T {
+    let _guard = LOGGER_STATE_TEST_LOCK.lock();
+    f()
+}
+
+#[cfg(not(test))]
+fn with_logger_state_lock<T>(f: impl FnOnce() -> T) -> T {
+    f()
+}
 static EP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static EP_ATTACHED: AtomicBool = AtomicBool::new(false);
 static BRIDGE_CREATED: AtomicBool = AtomicBool::new(false);
@@ -603,7 +616,6 @@ mod tests {
         LOG_DROPS.store(0, Ordering::Release);
         POST_COMMIT_IPC_UNLOCKED.store(true, Ordering::Release);
         sel4::set_ep(0x1234);
-        sel4::set_ep_validated(true);
         sel4::unlock_ipc_send();
 
         let result = emit_ep(b"runtime-drop-check");
@@ -618,27 +630,29 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn logger_switch_waits_until_bridge_attach() {
-        init_logger_bootstrap_only();
-        set_no_bridge_mode(false);
+        let _guard = LOGGER_STATE_TEST_LOCK.lock();
+
+        init_logger_bootstrap_only_inner();
+        set_no_bridge_mode_inner(false);
         POST_COMMIT_IPC_UNLOCKED.store(true, Ordering::Release);
         sel4::set_ep(0x1234);
         sel4::set_ep_validated(true);
         sel4::unlock_ipc_send();
 
-        notify_bridge_created();
+        notify_bridge_created_inner();
         assert!(matches!(LOGGER.transport(), LogTransport::UartOnly));
 
-        switch_logger_to_userland().expect("switch request should succeed");
+        switch_logger_to_userland_inner().expect("switch request should succeed");
         assert!(matches!(LOGGER.transport(), LogTransport::UartOnly));
 
-        notify_bridge_attached();
+        notify_bridge_attached_inner();
         assert!(matches!(LOGGER.transport(), LogTransport::UartMirroredEp));
 
-        notify_bridge_detached();
+        notify_bridge_detached_inner();
         sel4::clear_ep();
         sel4::lock_ipc_send();
         POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
-        set_no_bridge_mode(false);
+        set_no_bridge_mode_inner(false);
     }
 }
 
@@ -730,6 +744,10 @@ fn try_enter_ep_only() {
 
 /// Installs the bootstrap logger and routes output to the seL4 debug console.
 pub fn init_logger_bootstrap_only() {
+    with_logger_state_lock(init_logger_bootstrap_only_inner);
+}
+
+fn init_logger_bootstrap_only_inner() {
     if LOGGER_INSTALLED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
@@ -762,6 +780,10 @@ pub fn switch_logger_to_log_buffer() -> bool {
 
 /// Switches the logger sink to the userland channel once IPC is online.
 pub fn switch_logger_to_userland() -> Result<(), Error> {
+    with_logger_state_lock(switch_logger_to_userland_inner)
+}
+
+fn switch_logger_to_userland_inner() -> Result<(), Error> {
     if NO_BRIDGE_MODE.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -778,6 +800,10 @@ pub fn switch_logger_to_userland() -> Result<(), Error> {
 
 /// Inform the logger that the NineDoor bridge capability has been created.
 pub fn notify_bridge_created() {
+    with_logger_state_lock(notify_bridge_created_inner);
+}
+
+fn notify_bridge_created_inner() {
     if NO_BRIDGE_MODE.load(Ordering::Acquire) {
         return;
     }
@@ -787,6 +813,10 @@ pub fn notify_bridge_created() {
 
 /// Inform the logger that the NineDoor bridge has completed authentication.
 pub fn notify_bridge_attached() {
+    with_logger_state_lock(notify_bridge_attached_inner);
+}
+
+fn notify_bridge_attached_inner() {
     EP_ATTACHED.store(true, Ordering::Release);
     EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     maybe_enter_post_commit_transports();
@@ -794,6 +824,10 @@ pub fn notify_bridge_attached() {
 
 /// Inform the logger that the bridge is no longer attached.
 pub fn notify_bridge_detached() {
+    with_logger_state_lock(notify_bridge_detached_inner);
+}
+
+fn notify_bridge_detached_inner() {
     EP_ATTACHED.store(false, Ordering::Release);
     EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     if matches!(
@@ -808,6 +842,10 @@ pub fn notify_bridge_detached() {
 
 /// Allow the logger transport to switch to EP-only once userland is stable.
 pub fn allow_ep_only_transport() {
+    with_logger_state_lock(allow_ep_only_transport_inner);
+}
+
+fn allow_ep_only_transport_inner() {
     if NO_BRIDGE_MODE.load(Ordering::Acquire) {
         return;
     }
@@ -820,6 +858,10 @@ pub fn allow_ep_only_transport() {
 /// Enable IPC-backed logging once the root endpoint is validated and the boot
 /// sequence has committed.
 pub fn unlock_post_commit_ipc_logging() {
+    with_logger_state_lock(unlock_post_commit_ipc_logging_inner);
+}
+
+fn unlock_post_commit_ipc_logging_inner() {
     POST_COMMIT_IPC_UNLOCKED.store(true, Ordering::Release);
     maybe_enter_post_commit_transports();
 }
@@ -831,6 +873,10 @@ pub fn post_commit_ipc_unlocked() -> bool {
 
 /// Toggle the no-bridge mode, forcing the logger to remain on the UART transport.
 pub fn set_no_bridge_mode(enabled: bool) {
+    with_logger_state_lock(|| set_no_bridge_mode_inner(enabled));
+}
+
+fn set_no_bridge_mode_inner(enabled: bool) {
     NO_BRIDGE_MODE.store(enabled, Ordering::Release);
     if enabled {
         LOGGER.set_transport(LogTransport::UartOnly);

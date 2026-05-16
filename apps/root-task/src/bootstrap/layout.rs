@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Early linker layout diagnostics and reporting during root-task bootstrap.
 // Author: Lukas Bower
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn layout_validation_accepts_ordered_ranges() {
-        let layout = LayoutSnapshot::new(0, 1, 2, 3, 4, 5, 6, 7, 8, 8 + EXPECTED_STACK_SIZE);
+        let layout = LayoutSnapshot::new(0, 1, 2, 3, 4, 5, 8, 16, 24, 24 + EXPECTED_STACK_SIZE);
         assert_eq!(layout.validate(), Ok(()));
         assert_eq!(
             layout.validate_alignments(&[("heap", 2), ("stack", 8)]),

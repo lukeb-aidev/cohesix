@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the bootstrap/untyped_pick module for root-task.
 // Author: Lukas Bower
@@ -221,8 +221,8 @@ fn plan_for_untyped_with_reserved(
     let page_bytes = 1u128 << page_bits;
 
     let requested_page_tables: u32 = if size_bits >= page_table_bits { 1 } else { 0 };
-    let available_tables =
-        (capacity_bytes / page_table_bytes).min(requested_page_tables as u128) as u32;
+    let available_tables = (capacity_bytes.saturating_sub(used_bytes) / page_table_bytes)
+        .min(requested_page_tables as u128) as u32;
     used_bytes =
         used_bytes.saturating_add(page_table_bytes.saturating_mul(available_tables as u128));
     if available_tables < requested_page_tables {

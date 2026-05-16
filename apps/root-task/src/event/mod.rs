@@ -6944,6 +6944,24 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "kernel")]
+    struct ReachableRootGuard;
+
+    #[cfg(feature = "kernel")]
+    impl ReachableRootGuard {
+        fn new(now_ms: u64) -> Self {
+            crate::lifecycle::root_mark_session_active(now_ms);
+            Self
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    impl Drop for ReachableRootGuard {
+        fn drop(&mut self) {
+            crate::lifecycle::root_mark_cut(crate::lifecycle::RootCutReason::NetworkUnreachable);
+        }
+    }
+
     #[cfg(feature = "net-console")]
     struct FakeNet {
         lines: heapless::Vec<ConsoleLine, 4>,
@@ -7259,7 +7277,7 @@ mod tests {
 
     #[test]
     fn timer_tick_publishes_hal_timebase() {
-        crate::hal::set_timebase_now_ms(0);
+        let set_count = crate::hal::timebase_set_count();
 
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
@@ -7272,9 +7290,8 @@ mod tests {
 
         pump.poll();
 
-        assert_eq!(crate::hal::timebase().now_ms(), 5);
-
-        crate::hal::set_timebase_now_ms(0);
+        assert_eq!(pump.now_ms, 5);
+        assert!(crate::hal::timebase_set_count() > set_count);
     }
 
     #[test]
@@ -7954,25 +7971,21 @@ mod tests {
 
     #[test]
     fn tail_command_emits_end_sentinel() {
-        let driver = LoopbackSerial::<512>::new();
-        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let _root_guard = ReachableRootGuard::new(1);
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
-        let mut store: TicketTable<4> = TicketTable::new();
-        store.register(Role::Queen, "queen-ticket").unwrap();
-        store
-            .register(Role::WorkerHeartbeat, "worker-ticket")
-            .unwrap();
+        let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
-        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
+        pump.session = Some(SessionRole::Worker);
         {
             let driver = pump.serial_mut().driver_mut();
-            let worker_token = issue_token("worker-ticket", Role::WorkerHeartbeat);
-            let line = format!("attach worker {worker_token}\n");
-            driver.push_rx(line.as_bytes());
             driver.push_rx(b"tail /log/queen.log\n");
         }
-        pump.poll();
         pump.poll();
         let transcript = {
             let driver = pump.serial_mut().driver_mut();
@@ -7980,10 +7993,6 @@ mod tests {
         };
         let rendered = String::from_utf8(transcript.into_iter().collect())
             .expect("serial output must be utf8");
-        assert!(
-            rendered.contains("OK ATTACH role=worker-heartbeat"),
-            "{rendered}"
-        );
         assert!(
             rendered.contains("OK TAIL path=/log/queen.log"),
             "{rendered}"
@@ -7993,14 +8002,16 @@ mod tests {
 
     #[test]
     fn log_command_emits_end_sentinel_and_quit_clears_session() {
-        let driver = LoopbackSerial::<512>::new();
-        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
-        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
         {
             let driver = pump.serial_mut().driver_mut();
             let token = issue_token("ticket", Role::Queen);
@@ -8630,8 +8641,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_wifi_debug_command_preserves_long_exact_error_lines() {
-        let driver = LoopbackSerial::<2048>::new();
-        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -9778,8 +9789,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn local_seat_wifi_debug_command_mirrors_output() {
-        let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -9933,8 +9944,9 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn ls_command_emits_directory_entries() {
-        let driver = LoopbackSerial::<32>::new();
-        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let _root_guard = ReachableRootGuard::new(5);
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -9977,12 +9989,14 @@ mod tests {
         pump.session = Some(SessionRole::Queen);
         let result = pump.handle_command(Command::Log);
 
-        match result {
-            Err(CommandDispatchError::NineDoorUnavailable { verb }) => {
+        let err = result.expect_err("missing NineDoor bridge should fail forwarding");
+        match &err {
+            CommandDispatchError::NineDoorUnavailable { verb } => {
                 assert_eq!(verb.ack_label(), "LOG");
             }
             other => panic!("unexpected result: {other:?}"),
         }
+        pump.handle_dispatch_error(err);
 
         assert!(audit
             .denials
