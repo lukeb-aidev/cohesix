@@ -6620,26 +6620,26 @@ fn control_plane_exact_error_preserving_driver_failure(
 }
 
 #[inline]
-fn promote_cached_wifi_debug_snapshot_exact_error(exact_error: &'static str) {
+fn promote_cached_wifi_debug_snapshot_exact_error(exact_error: &'static str) -> bool {
     let hintless_firstread_no_irq = exact_error == "cyw43-control-plane-hintless-firstread-no-irq";
     if !exact_error.starts_with("cyw43-function2-reply-")
         && !hintless_firstread_no_irq
         && !control_plane_exact_error_is_direct_sdio_transport_blocker(exact_error)
         && !control_plane_exact_error_is_terminal_driver_blocker(exact_error)
     {
-        return;
+        return false;
     }
     remember_wifi_driver_failure_exact_error(exact_error);
 
     let mut last_snapshot = LAST_WIFI_DEBUG_SNAPSHOT.lock();
     let Some(snapshot) = last_snapshot.as_mut() else {
-        return;
+        return false;
     };
 
     if hintless_firstread_no_irq {
         snapshot.control_plane_exact_error = exact_error;
         snapshot.control_plane_sdhci_read_diag = "none";
-        return;
+        return true;
     }
 
     snapshot.control_plane_exact_error = exact_error;
@@ -6663,6 +6663,7 @@ fn promote_cached_wifi_debug_snapshot_exact_error(exact_error: &'static str) {
     {
         snapshot.control_plane_f2_state = "latched-linux-configured-no-iorx";
     }
+    true
 }
 
 #[inline]
@@ -7669,6 +7670,21 @@ const fn control_plane_startup_link_rearm_budget(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Cyw43HostEapolRxSource {
+    pub rframe_len: Option<u16>,
+    pub int_status: Option<u32>,
+    pub tohost_mailbox: Option<u32>,
+    pub sdhci_int_status: u32,
+    pub io_enable: Option<u8>,
+    pub io_ready: Option<u8>,
+    pub io_interrupt_enable: Option<u8>,
+    pub frame_indication: bool,
+    pub host_interrupt: bool,
+    pub card_interrupt: bool,
+    pub function2_ready: bool,
+}
+
 pub struct Pi4WifiState {
     mailbox: Mailbox,
     host: SdioHost,
@@ -8239,6 +8255,21 @@ impl Pi4WifiState {
         promote_cached_wifi_debug_snapshot_exact_error(exact_error);
     }
 
+    pub fn promote_cached_control_plane_failure(
+        &mut self,
+        stage: &'static str,
+        exact_error: &'static str,
+    ) {
+        if !promote_cached_wifi_debug_snapshot_exact_error(exact_error) {
+            return;
+        }
+        let mut last_snapshot = LAST_WIFI_DEBUG_SNAPSHOT.lock();
+        if let Some(snapshot) = last_snapshot.as_mut() {
+            snapshot.debug_snapshot_source = "cached-driver-failure";
+            snapshot.debug_snapshot_stage = stage;
+        }
+    }
+
     pub fn finish_cyw43_control_plane_reply_wait(&mut self) {
         self.host.finish_control_plane_reply_wait();
     }
@@ -8287,6 +8318,63 @@ impl Pi4WifiState {
 
     pub fn log_cyw43_control_plane_snapshot(&mut self, stage: &'static str) {
         self.host.log_control_plane_finish_snapshot(stage);
+    }
+
+    pub fn cyw43_host_eapol_rx_source(&mut self) -> Cyw43HostEapolRxSource {
+        let io_enable = self
+            .host
+            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
+            .ok();
+        let io_ready = self
+            .host
+            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
+            .ok();
+        let io_interrupt_enable = self
+            .host
+            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
+            .ok();
+        let rframe_lo = self
+            .host
+            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
+            .ok();
+        let rframe_hi = self
+            .host
+            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
+            .ok();
+        let rframe_len = match (rframe_lo, rframe_hi) {
+            (Some(lo), Some(hi)) => Some(u16::from(lo) | (u16::from(hi) << 8)),
+            _ => None,
+        };
+        let int_status = self
+            .host
+            .read_sdio_core_u32_with_f1_fallback(
+                "host-eapol-rx-source",
+                "int-status",
+                SDIO_INT_STATUS,
+            )
+            .ok();
+        let tohost_mailbox = self
+            .host
+            .read_sdio_core_u32_with_f1_fallback(
+                "host-eapol-rx-source",
+                "tohost-mailbox",
+                SDPCMD_REG_TOHOSTMAILBOXDATA,
+            )
+            .ok();
+        let sdhci_int_status = self.host.read32(SDHCI_INT_STATUS);
+        Cyw43HostEapolRxSource {
+            rframe_len,
+            int_status,
+            tohost_mailbox,
+            sdhci_int_status,
+            io_enable,
+            io_ready,
+            io_interrupt_enable,
+            frame_indication: int_status.is_some_and(|value| (value & I_HMB_FRAME_IND) != 0),
+            host_interrupt: int_status.is_some_and(|value| (value & I_HMB_HOST_INT) != 0),
+            card_interrupt: (sdhci_int_status & SDHCI_INT_CARD_INT) != 0,
+            function2_ready: cccr_function2_ready(io_ready),
+        }
     }
 
     fn debug_snapshot(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {

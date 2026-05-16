@@ -227,16 +227,6 @@ fn decode_keyboard_report_payload_boot_compatible(
 
     let try_offset = |offset: usize| decode_boot_keyboard_report_at(buf, offset);
 
-    // Report-ID-prefixed boot reports can otherwise look like shifted boot
-    // reports when byte 0 is also a valid modifier bitmap.
-    if preferred_offset == 0 && buf.len() >= BOOT_KEYBOARD_REPORT_LEN + 1 && buf[0] != 0 {
-        if let Some(report) = try_offset(1) {
-            if report.keys.iter().any(|key| *key != 0) {
-                return Some(report);
-            }
-        }
-    }
-
     if let Some(report) = try_offset(preferred_offset) {
         return Some(report);
     }
@@ -1460,12 +1450,21 @@ mod tests {
     }
 
     #[test]
-    fn decode_keyboard_report_payload_boot_compatible_prefers_report_id_when_ambiguous() {
+    fn decode_keyboard_report_payload_boot_compatible_uses_forced_report_id_when_ambiguous() {
         let report_id = [0x02u8, 0x00, 0x00, scancode::B, 0, 0, 0, 0, 0];
-        let report = decode_keyboard_report_payload_boot_compatible(&report_id, 0).expect("decode");
+        let report = decode_keyboard_report_payload_boot_compatible(&report_id, 1).expect("decode");
         assert_eq!(report.modifiers, 0);
         assert_eq!(report.keys[0], scancode::B);
         assert!(!report.shift());
+    }
+
+    #[test]
+    fn decode_keyboard_report_payload_boot_compatible_keeps_shift_for_later_boot_key_slot() {
+        let boot = [modifier::LEFT_SHIFT, 0, 0, scancode::B, 0, 0, 0, 0, 0];
+        let report = decode_keyboard_report_payload_boot_compatible(&boot, 0).expect("decode");
+        assert_eq!(report.modifiers, modifier::LEFT_SHIFT);
+        assert_eq!(report.keys, [0, scancode::B, 0, 0, 0, 0]);
+        assert!(report.shift());
     }
 
     #[test]

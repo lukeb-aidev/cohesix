@@ -79,6 +79,7 @@ const HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS: usize = 512;
 const HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS: usize = 4_096;
 const HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS: usize =
     HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS + HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS;
+const HOST_EAPOL_WAIT_M1_STAGE: &str = "join-security-host-eapol-wait-m1";
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
 const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
@@ -1779,6 +1780,18 @@ fn host_eapol_start_destination(
     }
 }
 
+fn host_eapol_post_assoc_rx_admission_due(
+    deferred_join_state: DeferredJoinState,
+    associated: bool,
+    m1_seen: bool,
+    refreshed_after_assoc: bool,
+) -> bool {
+    deferred_join_requires_host_eapol(deferred_join_state)
+        && associated
+        && !m1_seen
+        && !refreshed_after_assoc
+}
+
 fn host_eapol_deferred_progress_error_is_transient(err: &DriverError) -> bool {
     match err {
         DriverError::Hal(HalError::Unsupported(reason)) => host_eapol_transient_hal_error(reason),
@@ -1859,6 +1872,7 @@ struct HostWpaState {
     m4_sent: bool,
     eapol_start_sent: u8,
     ap_mac_source: &'static str,
+    rx_admission_refreshed_after_assoc: bool,
 }
 
 impl HostWpaState {
@@ -1879,6 +1893,7 @@ impl HostWpaState {
             m4_sent: false,
             eapol_start_sent: 0,
             ap_mac_source: "none",
+            rx_admission_refreshed_after_assoc: false,
         }
     }
 
@@ -3196,6 +3211,75 @@ impl Cyw43NetDevice {
         Ok(())
     }
 
+    fn promote_host_eapol_wait_stage(&mut self) {
+        self.state
+            .promote_cached_control_plane_failure(HOST_EAPOL_WAIT_M1_STAGE, "host-eapol-required");
+    }
+
+    fn ensure_host_eapol_post_assoc_rx_admission(
+        &mut self,
+        mode: &'static str,
+        polls: u16,
+    ) -> bool {
+        if !host_eapol_post_assoc_rx_admission_due(
+            self.deferred_join_state,
+            self.associated,
+            self.host_wpa.m1_seen,
+            self.host_wpa.rx_admission_refreshed_after_assoc,
+        ) {
+            return true;
+        }
+
+        self.promote_host_eapol_wait_stage();
+        match self.configure_host_eapol_receive_admission() {
+            Ok(()) => {
+                self.host_wpa.rx_admission_refreshed_after_assoc = true;
+                info!(
+                    "[cyw43] host-eapol rx-admission action=post-assoc-refresh mode={mode} polls={polls} assoc=yes ap_mac={} ap_source={} result=ready next=eapol-start",
+                    EthernetAddress(self.host_wpa.ap_mac),
+                    self.host_wpa.ap_mac_source,
+                );
+                true
+            }
+            Err(err) => {
+                warn!(
+                    "[cyw43] host-eapol rx-admission action=post-assoc-refresh mode={mode} polls={polls} assoc=yes ap_mac={} ap_source={} result=error err={err} next=keep-waiting-m1",
+                    EthernetAddress(self.host_wpa.ap_mac),
+                    self.host_wpa.ap_mac_source,
+                );
+                false
+            }
+        }
+    }
+
+    fn log_host_eapol_rx_source(&mut self, mode: &'static str, polls: u16) {
+        let source = self.state.cyw43_host_eapol_rx_source();
+        info!(
+            "[cyw43] host-eapol rx-source mode={mode} polls={polls} assoc={} eapol_rx={} start_sent={} ap_source={} rframe=0x{:04x}/{} int_status=0x{:08x}/{} frame_ind={} host_int={} tohost=0x{:08x}/{} sdhci=0x{:08x} card_int={} ioex=0x{:02x}/{} iordy=0x{:02x}/{} ien=0x{:02x}/{} f2_ready={} action=wait-m1",
+            yes_no(self.associated),
+            self.host_eapol_rx_packets,
+            self.host_wpa.eapol_start_sent,
+            self.host_wpa.ap_mac_source,
+            source.rframe_len.unwrap_or(0),
+            yes_no(source.rframe_len.is_some()),
+            source.int_status.unwrap_or(0),
+            yes_no(source.int_status.is_some()),
+            yes_no(source.frame_indication),
+            yes_no(source.host_interrupt),
+            source.tohost_mailbox.unwrap_or(0),
+            yes_no(source.tohost_mailbox.is_some()),
+            source.sdhci_int_status,
+            yes_no(source.card_interrupt),
+            source.io_enable.unwrap_or(0),
+            yes_no(source.io_enable.is_some()),
+            source.io_ready.unwrap_or(0),
+            yes_no(source.io_ready.is_some()),
+            source.io_interrupt_enable.unwrap_or(0),
+            yes_no(source.io_interrupt_enable.is_some()),
+            yes_no(source.function2_ready),
+        );
+    }
+
     fn join(
         &mut self,
         credentials: WifiCredentials,
@@ -3325,8 +3409,7 @@ impl Cyw43NetDevice {
             secure: true,
             completion_rule: JoinCompletionRule::HostEapolRequired,
         };
-        self.state
-            .promote_cached_control_plane_exact_error("host-eapol-required");
+        self.promote_host_eapol_wait_stage();
         info!(
             "[cyw43] host-eapol proof window armed mode={mode} polls={} pre_assoc_polls={} post_assoc_polls={} rx_poll=eapol-only dhcp=blocked tx=blocked ssid_len={ssid_len} psk_len={psk_len}",
             HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS,
@@ -3436,12 +3519,14 @@ impl Cyw43NetDevice {
                 self.host_eapol_rx_packets,
             ),
         }
+        if eapol_delta == 0 {
+            self.log_host_eapol_rx_source(mode, total_polls as u16);
+        }
     }
 
     fn defer_host_eapol_required(&mut self, mode: &'static str, ssid_len: usize, psk_len: usize) {
         self.link_up = false;
-        self.state
-            .promote_cached_control_plane_exact_error("host-eapol-required");
+        self.promote_host_eapol_wait_stage();
         info!(
             "[cyw43] host-eapol pending mode={mode} status=wifi-host-eapol-pending assoc={} rx=eapol-only data=blocked creds={ssid_len}/{psk_len} eapol_rx={} limit={} action=wait-m1",
             yes_no(self.associated),
@@ -3456,8 +3541,7 @@ impl Cyw43NetDevice {
         self.deferred_join_state = DeferredJoinState::Failed {
             reason: "host-eapol-required",
         };
-        self.state
-            .promote_cached_control_plane_exact_error("host-eapol-required");
+        self.promote_host_eapol_wait_stage();
         warn!(
                 "[cyw43] join failed reason=host-eapol-required rx_poll=eapol-only dhcp=blocked tx=blocked mode={mode} ssid_len={ssid_len} psk_len={psk_len} eapol_rx={}",
                 self.host_eapol_rx_packets,
@@ -3617,6 +3701,9 @@ impl Cyw43NetDevice {
             return;
         }
         self.refresh_host_eapol_bssid("eapol-start");
+        if !self.ensure_host_eapol_post_assoc_rx_admission(mode, polls) || self.host_wpa.m1_seen {
+            return;
+        }
         let (dst, dst_label) =
             host_eapol_start_destination(self.host_wpa.ap_mac, self.host_wpa.eapol_start_sent);
         let sta = self.mac.0;
@@ -3679,6 +3766,7 @@ impl Cyw43NetDevice {
                     self.host_wpa.ap_mac_source = "get-bssid";
                     if previous != bssid && self.host_wpa.eapol_start_sent > 0 {
                         self.host_wpa.eapol_start_sent = 1;
+                        self.host_wpa.rx_admission_refreshed_after_assoc = false;
                     }
                     info!(
                         "[cyw43] host-eapol bssid refresh action=ready reason={reason} bssid={} previous={} source=wlc-get-bssid next=prefer-ap-unicast retry_count={}",
@@ -3952,7 +4040,7 @@ impl Cyw43NetDevice {
         }
         let reason = join_completion_timeout_reason(completion_rule);
         if matches!(completion_rule, JoinCompletionRule::HostEapolRequired) {
-            self.state.promote_cached_control_plane_exact_error(reason);
+            self.promote_host_eapol_wait_stage();
         }
         Err(DriverError::Protocol(reason))
     }
@@ -4086,7 +4174,7 @@ impl Cyw43NetDevice {
             let reason = join_completion_timeout_reason(completion_rule);
             self.deferred_join_state = DeferredJoinState::Failed { reason };
             if matches!(completion_rule, JoinCompletionRule::HostEapolRequired) {
-                self.state.promote_cached_control_plane_exact_error(reason);
+                self.promote_host_eapol_wait_stage();
             }
             warn!(
                 "[cyw43] join failed mode=deferred reason={} auth_status=0x{:08x} polls={polls} poll_limit={poll_limit} completion_rule={} eapol_rx={} eapol_start_sent={} ap_source={} rx_poll=eapol-only",
@@ -4101,6 +4189,9 @@ impl Cyw43NetDevice {
         }
 
         if host_eapol_required && host_eapol_deferred_poll_log_due(polls) {
+            if self.host_eapol_rx_packets == 0 {
+                self.log_host_eapol_rx_source("deferred", polls);
+            }
             info!(
                 "[cyw43] host-eapol poll mode=deferred polls={polls} limit={poll_limit} assoc={} eapol_rx={} eapol_start_sent={} ap_source={} rx_event={} rx_control={} rx_data={} rx_empty={} rx_transient={} action=wait-m1",
                 yes_no(self.associated),
@@ -5020,8 +5111,7 @@ impl Cyw43NetDevice {
             let action = match self.handle_host_eapol_frame(&host_packet[..packet_len], proof) {
                 Ok(action) => action,
                 Err(err) => {
-                    self.state
-                        .promote_cached_control_plane_exact_error("host-eapol-required");
+                    self.promote_host_eapol_wait_stage();
                     warn!(
                         "[cyw43] host-eapol action=drop status=host-eapol-required err={err} count={} msg={} next_action={}",
                         self.host_eapol_rx_packets,
@@ -5102,8 +5192,12 @@ impl Cyw43NetDevice {
         let Some(label) = host_eapol_association_event_label(event) else {
             return;
         };
+        let previous = self.host_wpa.ap_mac;
         self.host_wpa.ap_mac = ap_mac;
         self.host_wpa.ap_mac_source = source;
+        if previous != ap_mac {
+            self.host_wpa.rx_admission_refreshed_after_assoc = false;
+        }
         info!(
             "[cyw43] host-eapol ap-mac seed source={source} event={label} mac={} event_addr={} event_src={} action=query-bssid-before-eapol-start",
             EthernetAddress(ap_mac),
@@ -5857,8 +5951,8 @@ mod tests {
         host_eapol_association_event_label, host_eapol_deferred_poll_log_due,
         host_eapol_deferred_progress_error_is_transient, host_eapol_event_ap_mac_candidate,
         host_eapol_frame_proof, host_eapol_key_body, host_eapol_packet_dst_allowed,
-        host_eapol_proof_after_window_action, host_eapol_start_destination,
-        host_eapol_start_poll_due, host_eapol_start_uses_pae_group,
+        host_eapol_post_assoc_rx_admission_due, host_eapol_proof_after_window_action,
+        host_eapol_start_destination, host_eapol_start_poll_due, host_eapol_start_uses_pae_group,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
         ioctl_no_progress_after_nonmatching_frames, ioctl_wait_loops, iovar_get_payload_len,
         is_transport_retryable, join_completion_timeout_reason, join_event_result,
@@ -6581,6 +6675,35 @@ mod tests {
             host_eapol_start_destination([0; ETHER_ADDR_LEN], 1),
             (PAE_GROUP_ADDR, "pae-group")
         );
+    }
+
+    #[test]
+    fn host_eapol_refreshes_rx_admission_once_after_association() {
+        let pending = DeferredJoinState::Pending {
+            completion: JoinCompletionState::default(),
+            polls: 0,
+            secure: true,
+            completion_rule: JoinCompletionRule::HostEapolRequired,
+        };
+
+        assert!(host_eapol_post_assoc_rx_admission_due(
+            pending, true, false, false
+        ));
+        assert!(!host_eapol_post_assoc_rx_admission_due(
+            pending, false, false, false
+        ));
+        assert!(!host_eapol_post_assoc_rx_admission_due(
+            pending, true, true, false
+        ));
+        assert!(!host_eapol_post_assoc_rx_admission_due(
+            pending, true, false, true
+        ));
+        assert!(!host_eapol_post_assoc_rx_admission_due(
+            DeferredJoinState::Disabled,
+            true,
+            false,
+            false
+        ));
     }
 
     #[test]

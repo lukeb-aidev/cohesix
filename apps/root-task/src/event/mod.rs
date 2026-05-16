@@ -7490,6 +7490,36 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn nettest_reports_wifi_host_eapol_pending_detail() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.start_result = NetSelfTestStartResult::WifiHostEapolPending;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"nettest\n");
+
+        pump.poll();
+        pump.poll();
+
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR NETTEST reason=policy detail=wifi-host-eapol-pending"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn nettest_reports_not_ready_reason() {
         let driver = LoopbackSerial::<128>::new();
         let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);

@@ -406,9 +406,10 @@ power/reset state.
   EAPOL/key-install path completes the secure handshake, Cohesix keeps DHCP and
   normal data TX disabled, runs an association-gated join-submit EAPOL proof
   window, enables a Linux-shaped receive-admission window (`mcast_list` for
-  `01:80:c2:00:00:03`, `allmulti=0`, optional `WLC_SET_PROMISC=0`), and then
-  keeps the deferred EAPOL-only receive lane alive with bounded event-pump burst
-  polls and low-level SDIO breadcrumbs suppressed even after a terminal
+  `01:80:c2:00:00:03`, `allmulti=0`, optional `WLC_SET_PROMISC=0`), refreshes
+  that receive-admission programming once after association/BSSID proof, and
+  then keeps the deferred EAPOL-only receive lane alive with bounded event-pump
+  burst polls and low-level SDIO breadcrumbs suppressed even after a terminal
   `host-eapol-required` verdict.
   M1/M3 are expected as unicast frames to the station after association; the
   PAE group address is retained only as an initial diagnostic EAPOL-Start probe.
@@ -429,14 +430,16 @@ power/reset state.
   contains bounded M1/M3 admission, M2/M4 transmit, 802.1X drain before key
   programming, and PTK/GTK `wsec_key` install logic. GTK/group keys use the
   Broadcom primary/default-key flag, while PTK/pairwise keys keep flags zero.
-  The last reviewed Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-091918.log`)
-  still did not receive M1 after BSSID refresh and EAPOL-Start TX, so that
-  hardware state is not a Wi-Fi connection: proof tooling reports `WIFI_GATE=7`,
-  `WIFI_BLOCKER=host-eapol-required`, and prompt-side `nettest` must report
-  `wifi-host-eapol-pending` until the deferred lane completes or times out. The
-  current runtime accelerates that boundary with bounded host-EAPOL burst polls
-  and earlier bounded AP-directed EAPOL-Start retries; it must not wait on a
-  one-poll-per-root-loop schedule. The next valid success trace must show
+  The last reviewed Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-094954.log`)
+  still did not receive M1 after association/link-up, BSSID refresh, and
+  AP-directed EAPOL-Start TX, so that hardware state is not a Wi-Fi connection:
+  proof tooling reports `WIFI_GATE=7`, `WIFI_BLOCKER=host-eapol-required`, and
+  prompt-side `nettest` must report `wifi-host-eapol-pending` until the deferred
+  lane completes or times out. The current runtime accelerates that boundary
+  with bounded host-EAPOL burst polls, refreshes receive admission after
+  association, and emits a concise `host-eapol rx-source` snapshot when no M1 is
+  visible; it must not wait on a one-poll-per-root-loop schedule. The next valid
+  success trace must show
   `host-eapol action=data-tx-shape ... bdc_priority=6`,
   `host-eapol action=send-m2`, `host-eapol action=send-m4`,
   `host-eapol action=wait-pending-8021x-drain`,
@@ -528,9 +531,12 @@ power/reset state.
   `WLC_GET_BSSID` (`cmd=23`) and prefer the firmware-reported associated BSSID
   when it is a valid AP candidate. The seed log must include both raw event
   candidates, and the EAPOL-Start log must include the resolved destination MAC.
-  EAPOL-Start sends one PAE group diagnostic probe and then prefers the resolved
-  AP/BSSID for bounded retries before M1, while still letting M1 overwrite the
-  AP MAC with the authenticated frame source. Cohesix
+  Before the first post-association EAPOL-Start, Cohesix must refresh the
+  Linux-shaped receive-admission programming because the join event/BSSID proof
+  is the first point where the current AP identity is known. EAPOL-Start sends
+  one PAE group diagnostic probe and then prefers the resolved AP/BSSID for
+  bounded retries before M1, while still letting M1 overwrite the AP MAC with
+  the authenticated frame source. Cohesix
   parses the EAPOL/EAPOL-Key envelope
   for proof (`m1`/`m3` shape, key-info bits, replay-counter presence, and
   key-data length) and may complete the bounded host handshake only after M2,
@@ -930,11 +936,14 @@ active path is Cohesix-owned cold start:
   byte entered the root-console path. It is not full keyboard closure unless a
   printable key is also proven. Printable-key closure is separately evidenced
   by the first non-empty HID report and first printable-byte diagnostic, while
-  the first unmapped HID usage is logged once if decode rejects a key. The
-  current Pi 4 hardware frontier has proven Enter (`key=0x28`,
-  `ascii=0x0a`) through Gate 10 but has not yet proven a printable letter byte.
-  Treat `USB_BLOCKER=none` in that state as "xHCI/HID first-byte path works",
-  not as proof that all boot-keyboard usages are usable.
+  the first unmapped HID usage is logged once if decode rejects a key.
+  `/Users/lukasbower/pi4-serial-20260516-094954.log` proves Gate 10 with a
+  printable byte (`ascii=0x6c`, `key=0x0f`) and prompt-side USB commands. The
+  HID decode contract remains a U-Boot-compatible Boot Keyboard contract: report
+  ID layouts are accepted only when the keyboard profile explicitly selects that
+  offset, because byte `0` of an unknown report can be either a report ID or a
+  real modifier bitmap. Post-Gate-8 runtime paths must not allocate fresh DMA for
+  optional keyboard LED updates after local-seat seals the xHCI DMA pool.
 - Root-port reset before Address Device follows the U-Boot retry envelope:
   retry reset/enable timeouts up to five attempts with a short first settle and
   longer subsequent settles, but do not synthesize a device when live root-port

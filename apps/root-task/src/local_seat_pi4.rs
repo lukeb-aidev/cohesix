@@ -8042,6 +8042,7 @@ fn retry_vl805_pci_bcm2711_after_mailbox_reset(
 }
 
 const USB_KEYBOARD_REPORT_DRAIN_BUDGET: usize = 8;
+const USB_KEYBOARD_POST_SEAL_LED_SYNC_ENABLED: bool = false;
 
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
@@ -14304,22 +14305,35 @@ impl UsbKeyboard {
                 }
                 if key == scancode::CAPS_LOCK {
                     self.caps_lock_on = !self.caps_lock_on;
-                    let leds = if self.caps_lock_on { led::CAPS_LOCK } else { 0 };
-                    if let Err(err) = self.hid.set_leds(leds) {
-                        if !self.led_error_logged {
-                            let mut line = heapless::String::<224>::new();
-                            let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
-                                    "[local-seat] pi4 keyboard led sync failed caps={} detail={err:?}",
-                                    self.caps_lock_on as u8
-                                ),
-                            );
-                            boot_log::force_uart_line(line.as_str());
-                            self.led_error_logged = true;
+                    if USB_KEYBOARD_POST_SEAL_LED_SYNC_ENABLED {
+                        let leds = if self.caps_lock_on { led::CAPS_LOCK } else { 0 };
+                        if let Err(err) = self.hid.set_leds(leds) {
+                            if !self.led_error_logged {
+                                let mut line = heapless::String::<224>::new();
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut line,
+                                    format_args!(
+                                        "[local-seat] pi4 keyboard led sync failed caps={} detail={err:?}",
+                                        self.caps_lock_on as u8
+                                    ),
+                                );
+                                boot_log::force_uart_line(line.as_str());
+                                self.led_error_logged = true;
+                            }
+                        } else {
+                            self.led_error_logged = false;
                         }
-                    } else {
-                        self.led_error_logged = false;
+                    } else if !self.led_error_logged {
+                        let mut line = heapless::String::<192>::new();
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut line,
+                            format_args!(
+                                "[local-seat] pi4 keyboard led sync skipped caps={} reason=runtime-dma-sealed",
+                                self.caps_lock_on as u8
+                            ),
+                        );
+                        boot_log::force_uart_line(line.as_str());
+                        self.led_error_logged = true;
                     }
                     continue;
                 }
@@ -15751,6 +15765,7 @@ mod driver_coverage_tests {
             &[scancode::A, 0, 0, 0, 0, 0]
         ));
         assert_eq!(USB_KEYBOARD_REPORT_DRAIN_BUDGET, 8);
+        assert!(!USB_KEYBOARD_POST_SEAL_LED_SYNC_ENABLED);
     }
 
     #[test]

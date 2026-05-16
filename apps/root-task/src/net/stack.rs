@@ -127,6 +127,10 @@ fn dhcp_phase_for_bringup_status(status: &'static str) -> &'static str {
     }
 }
 
+fn timebase_stall_warning_suppressed(bringup_status: Option<&'static str>) -> bool {
+    matches!(bringup_status, Some("wifi-host-eapol-pending"))
+}
+
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNetStatic;
 #[cfg(not(feature = "net-backend-virtio"))]
@@ -2778,7 +2782,10 @@ impl<D: NetDevice> NetStack<D> {
                     "[net-console] timebase regression detected: prev_now_ms={} now_ms={}",
                     previous, now_ms
                 );
-            } else if now_ms == previous && !self.time_stall_warned {
+            } else if now_ms == previous
+                && !self.time_stall_warned
+                && !timebase_stall_warning_suppressed(self.device.bringup_status_label())
+            {
                 warn!(
                     "[net-console] timebase stalled: now_ms={} (no forward progress)",
                     now_ms
@@ -5887,6 +5894,17 @@ mod tests {
 
         let explicit = render_host_selftest_target(Some("example.com:5555"), TCP_SMOKE_PORT, ip);
         assert_eq!(explicit.as_str(), "example.com:5555");
+    }
+
+    #[test]
+    fn host_eapol_pending_suppresses_timebase_stall_warning() {
+        assert!(timebase_stall_warning_suppressed(Some(
+            "wifi-host-eapol-pending"
+        )));
+        assert!(!timebase_stall_warning_suppressed(Some(
+            "wifi-host-eapol-required"
+        )));
+        assert!(!timebase_stall_warning_suppressed(None));
     }
 
     #[test]
