@@ -6547,6 +6547,7 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Required file headers may be narrowed, reformatted, or reduced only by updating `AGENTS.md`, `CONTRIBUTING.md`, and `docs/CODING_GUIDELINES.md` in the same change.
 - Milestone 26c inventories tracked Markdown only via `git ls-files '*.md' | sort`; ignored or untracked build outputs, caches, local virtualenvs, nested dependency trees, and local evidence directories are excluded unless committed as canonical sources.
 - Large `root-task`, HAL, driver, and host-tool monoliths are explicit 26c refactor targets, but they are not first-wave edit targets. They may be decomposed only after characterization tests, parity matrices, dependency-tree evidence, and rollback-sized ownership plans exist for the touched surface.
+- Driver-enabling HAL abstractions are allowed in 26c only as narrow, behavior-preserving extractions from current Pi 4 behavior. `SdioHostHal`-style seams may sit underneath the current CYW43 path, and USB platform/DMA seams may sit underneath the current local-seat/VL805 path, but 26c must not add support for new Wi-Fi chipsets, new USB controllers, new USB classes, or a generic future-driver framework.
 - Milestone 26c must not collapse host-side `std` capability into the seL4 build. VM-side Cohesix remains `no_std`; any "convergence" under 26c is limited to contracts, fixtures, generated artifacts, and explicitly `no_std`-safe semantic helpers.
 - Runtime-boundary-sensitive surfaces include `apps/root-task/src/ninedoor.rs`, `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, `apps/root-task/src/net/**`, `apps/root-task/src/hal/**`, `apps/root-task/src/local_seat_pi4.rs`, and `apps/nine-door/src/host/*`. 26c may structurally refactor these files only behind existing public contracts, with no adapter collapse, no host capability leakage, no new HAL bypass, and no external grammar drift.
 - Any new shared semantic helper must be `no_std` by construction, must have host and VM tests where it represents overlapping behavior, and must not import host transport, filesystem, process, network, or provider crates into VM closure profiles.
@@ -6569,9 +6570,10 @@ Refactor and humanize the authored Cohesix code and documentation surfaces witho
 5. adding characterization, CI, and staged-run gates before touching cleanup-sensitive host, VM, HAL, or adapter code,
 6. recording the intentional host-`std` / VM-`no_std` runtime boundary and proving parity for overlapping NineDoor semantics across the actual operator-visible path without implying runtime merger,
 7. decomposing high-value Cohesix-owned monoliths and duplicate validation paths only after their current behavior is pinned,
-8. replacing template-heavy comments and test naming with invariant-focused prose,
-9. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
-10. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
+8. extracting narrow HAL abstraction seams for existing SDIO/CYW43 and USB/VL805 behavior so later driver work starts from explicit authority boundaries instead of raw seL4 mechanics,
+9. replacing template-heavy comments and test naming with invariant-focused prose,
+10. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
+11. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
 
 ### Markdown review scope (tracked `*.md` only)
 Milestone 26c must inventory every tracked Markdown file returned by:
@@ -6657,10 +6659,16 @@ For each inventory entry, 26c must record one of:
   - Extend CI/test-plan execution so cleanup work in these areas is exercised automatically before merge, including root-task integration tests, host-tool characterization tests, a VM-target `no_std` boundary check, and parity evidence capture for overlapping host/VM semantics.
   - Fail the gate on protocol drift, fixture drift, undocumented output changes, missing risk-ratchet review, or missing before/after evidence for a refactored surface.
 
+- **HAL abstraction preparation for future drivers**
+  - Extract a narrow SDIO host seam only from the current CYW43 transport contract: host reset, clock, bus width, CMD52, CMD53, IRQ source handling, and bounded diagnostics may move under the seam, while firmware, association, host-EAPOL, and CYW43-specific control-plane policy remain in the CYW43 driver path.
+  - Extract a narrow USB platform/DMA seam only from the current local-seat/VL805 path: xHCI DMA allocation, device-visible bus-address publication, cache synchronization, MMIO window ownership, and posted-write drain policy may move under the seam, while keyboard HID behavior, root-console policy, and Pi 4 boot transcript semantics remain unchanged.
+  - Treat both seams as preparation for future milestones, not as new driver support. They must compile and test against the current QEMU/Pi 4 feature bundles, preserve existing serial/proof-tool output, and be consumable by 26d only where the seL4 15 compatibility refresh requires a lower-level adaptation.
+  - Defer any new Wi-Fi hardware, new USB controller, new USB class, or broad generic driver framework to a later milestone with its own hardware evidence ladder.
+
 - **Comprehensive structural refactor waves**
   - Refactor repetitive validation and processing code in host-side crates (`coh`, `cohsh`, `host-ticket-agent`, `gpu-bridge-host`, and Python support tooling where applicable) only after characterization tests exist.
   - Decompose `root-task` event, console, NineDoor, log buffer, selected `/proc`, and network-policy code into smaller invariant-bearing modules without changing operator-visible grammar, namespace layout, scheduling behavior, or manifest-derived defaults.
-  - Split HAL-facing Pi 4 network and local-seat paths into explicit policy parsing, device-state, link-state, firmware/handoff, and evidence-emission units while keeping all device access behind HAL and preserving current boot transcripts.
+  - Split HAL-facing Pi 4 network and local-seat paths into explicit policy parsing, device-state, link-state, firmware/handoff, SDIO-host, USB-platform/DMA, and evidence-emission units while keeping all device access behind HAL and preserving current boot transcripts.
   - Extract shared semantic helpers only when they remove real duplication and remain `no_std`-safe; host adapters may wrap those helpers but must not become VM dependencies.
   - Focus on readability wins that reduce duplication, tighten typed errors, make invariants explicit, or shrink review surface; defer behavior changes, feature additions, and monolithic rewrites that cannot be proven by existing contracts.
 
@@ -6999,11 +7007,11 @@ Deliverables:
   - Smaller root-task runtime modules with preserved operator-visible behavior and explicit boundary evidence.
 
 Title/ID: m26c-hal-network-and-local-seat-decomposition
-Goal: Refactor Pi 4 HAL-facing network, Wi-Fi, and local-seat code into clearer bounded units without changing boot policy, transcripts, or device authority.
+Goal: Refactor Pi 4 HAL-facing network, Wi-Fi, and local-seat code into clearer bounded units and narrow SDIO/USB platform seams without changing boot policy, transcripts, or device authority.
 Inputs: apps/root-task/src/hal/**, apps/root-task/src/net/**, apps/root-task/src/drivers/**, apps/root-task/src/local_seat_pi4.rs, apps/root-task/src/generated/**, configs/root_task_pi4_uboot_aarch64.toml, docs/HARDWARE_BRINGUP.md, docs/NETWORK_CONFIG.md, docs/BOOT_REFERENCE.md, docs/TEST_PLAN.md
 Changes:
   - apps/root-task/src/net/** — separate policy parsing, DHCP state, static IPv4 validation, active/standby interface selection, and evidence formatting while preserving manifest and DTB override semantics.
-  - apps/root-task/src/hal/** + apps/root-task/src/drivers/** — keep all device access behind HAL traits, split device-state and firmware/handoff bookkeeping from transcript emission, and remove duplicated bounds checks where characterization tests exist.
+  - apps/root-task/src/hal/** + apps/root-task/src/drivers/** — keep all device access behind HAL traits, split device-state and firmware/handoff bookkeeping from transcript emission, extract current-behavior-only SDIO host and USB platform/DMA seams after characterization tests exist, and remove duplicated bounds checks under the same evidence gate.
   - apps/root-task/src/local_seat_pi4.rs — isolate local-seat input/display policy from boot evidence and network policy handoff code without changing first-boot operator behavior.
   - docs/HARDWARE_BRINGUP.md + docs/NETWORK_CONFIG.md + docs/BOOT_REFERENCE.md + docs/TEST_PLAN.md — update as-built explanations and evidence commands for any clearer module boundaries.
 Commands:
@@ -7014,10 +7022,11 @@ Commands:
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26c-pi4
 Checks:
   - HAL access remains centralized behind HAL traits; no direct MMIO, physical address, or firmware-service shortcuts are introduced outside HAL.
+  - New SDIO/USB seams are extraction-only, have before/after characterization evidence, and do not add new hardware support or generic future-driver behavior.
   - Boot transcripts, `netstats`, `netstatus`, DHCP/static policy evidence, Wi-Fi fallback semantics, and no-NIC compatibility remain unchanged unless a separately approved breaking-change path is followed.
   - Pi 4 staged evidence proves the refactor did not regress local-seat, network-policy, or U-Boot handoff behavior.
 Deliverables:
-  - Clearer Pi 4 HAL/network/local-seat modules with preserved hardware bring-up semantics.
+  - Clearer Pi 4 HAL/network/local-seat modules with preserved hardware bring-up semantics and explicit SDIO/USB platform seams ready for later milestone evaluation.
 
 Title/ID: m26c-full-test-plan-qemu-and-pi4
 Goal: Make full staged Test Plan PASS on both QEMU and Pi 4 the explicit closure gate for 26c.

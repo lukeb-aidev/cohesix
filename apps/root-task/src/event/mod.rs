@@ -6540,7 +6540,7 @@ mod tests {
         WIFI_BOUNDED_PHASE_RECORD_CAPACITY, WIFI_HT_PHASE_RECORD_CAPACITY,
     };
     #[cfg(feature = "net-console")]
-    use crate::net::{NetSelfTestStartResult, NetStatusReport, NetTelemetry};
+    use crate::net::{NetCounters, NetSelfTestStartResult, NetStatusReport, NetTelemetry};
     #[cfg(feature = "kernel")]
     use crate::ninedoor::NineDoorBridge;
     use crate::serial::test_support::LoopbackSerial;
@@ -6950,6 +6950,7 @@ mod tests {
         sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>,
         start_result: NetSelfTestStartResult,
         status: NetStatusReport,
+        counters: NetCounters,
         polls: usize,
     }
 
@@ -6961,6 +6962,7 @@ mod tests {
                 sent: heapless::Vec::new(),
                 start_result: NetSelfTestStartResult::Unsupported,
                 status: NetStatusReport::default(),
+                counters: NetCounters::default(),
                 polls: 0,
             }
         }
@@ -6979,6 +6981,10 @@ mod tests {
                 tx_drops: 0,
                 last_poll_ms: 0,
             }
+        }
+
+        fn stats(&self) -> NetCounters {
+            self.counters
         }
 
         fn drain_console_lines(&mut self, _now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
@@ -7705,6 +7711,70 @@ mod tests {
             rendered.contains(
                 "netstats: wifi_assoc=0 wifi_link=0 eapol_rx=0 eapol_start=0 eapol_secure=0"
             ),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn netstats_emits_wifi_dhcp_bound_secure_counters() {
+        let driver = LoopbackSerial::<1024>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.mode = "dhcp";
+        net.status.interface_policy = "wifi";
+        net.status.active_interface = "wifi";
+        net.status.standby_interface = "wired";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.status.ip.push_str("192.168.50.23").unwrap();
+        net.status.gateway.push_str("192.168.50.1").unwrap();
+        net.counters.rx_packets = 4;
+        net.counters.tx_packets = 5;
+        net.counters.udp_rx = 1;
+        net.counters.udp_tx = 2;
+        net.counters.tcp_accepts = 1;
+        net.counters.wifi_assoc = 1;
+        net.counters.wifi_link_up = 1;
+        net.counters.wifi_host_eapol_rx = 2;
+        net.counters.wifi_host_eapol_start = 1;
+        net.counters.wifi_host_eapol_secure = 1;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"netstats\n");
+
+        pump.poll();
+
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "netstatus: ip=192.168.50.23 gateway=192.168.50.1 src=dhcp-lease dhcp=bound"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: mode=dhcp policy=wifi active=wifi standby=wired addr_src=dhcp-lease ip=192.168.50.23 gateway=192.168.50.1 dhcp=bound"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("netstats: udp_rx=1 udp_tx=2 tcp_accepts=1"),
             "{rendered}"
         );
     }

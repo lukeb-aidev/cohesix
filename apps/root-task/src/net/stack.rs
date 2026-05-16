@@ -94,6 +94,8 @@ const CONSOLE_SELFTEST_RECOVERY_DEADLINE_MS: u64 = 3_000;
 const CONSOLE_SELFTEST_RETRY_MS: u64 = 250;
 const DISCONNECT_GRACE_MS: u64 = 250;
 const DISCONNECT_GRACE_POLLS: u8 = 64;
+const BOOTINFO_NET_LOGGER_PREFIX_BUDGET: usize = 48;
+const BOOTINFO_NET_LOGGER_FRAME_LIMIT: usize = 192;
 #[cfg(feature = "net-outbound-probe")]
 const TCP_PROBE_PORT: u16 = TCP_SMOKE_PORT;
 #[cfg(feature = "net-outbound-probe")]
@@ -844,15 +846,6 @@ fn log_bootinfo_mark<DE>(
     attempt: &NetInitAttempt,
 ) -> Result<(), NetStackError<DE>> {
     if let Some(state) = BootInfoState::get() {
-        let region = state.snapshot_region();
-        let (pre, post) = state.canary_values();
-        info!(
-            "[bootinfo:net] attempt_id=0x{:016x} mark={mark} region=[0x{start:016x}..0x{end:016x}) len=0x{len:08x} pre=0x{pre:016x} post=0x{post:016x}",
-            attempt.id,
-            start = region.start,
-            end = region.end,
-            len = region.end.saturating_sub(region.start),
-        );
         if let Err(err) = state.verify("net.init", mark) {
             match err {
                 BootInfoCanaryError::Canary { .. }
@@ -866,9 +859,26 @@ fn log_bootinfo_mark<DE>(
                 }
             }
         }
+        debug_assert!(bootinfo_net_mark_ok_log_fits_uart_frame(mark));
+        info!(
+            "[bootinfo:net] attempt_id=0x{:016x} mark={mark} status=ok",
+            attempt.id,
+        );
     }
 
     Ok(())
+}
+
+fn bootinfo_net_mark_ok_log_fits_uart_frame(mark: &str) -> bool {
+    let message_len = "[bootinfo:net] attempt_id=0x".len()
+        + 16
+        + " mark=".len()
+        + mark.len()
+        + " status=ok".len();
+    message_len
+        .saturating_add(BOOTINFO_NET_LOGGER_PREFIX_BUDGET)
+        .saturating_add(2)
+        <= BOOTINFO_NET_LOGGER_FRAME_LIMIT
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1621,12 +1631,11 @@ fn check_bootinfo_wrap(mark: &'static str) -> Result<(), DefaultNetConsoleError>
         return Ok(());
     };
 
-    let (pre, post) = state.canary_values();
-    info!("[bootinfo:net-wrap] mark={mark} pre=0x{pre:016x} post=0x{post:016x}");
     if let Err(err) = state.verify("net.init.wrap", mark) {
         error!("[bootinfo:net-wrap] mark={mark} err={err:?}");
         return Err(NetConsoleError::Init(NetStackError::BootInfoCanary(mark)));
     }
+    info!("[bootinfo:net-wrap] mark={mark} status=ok");
     Ok(())
 }
 
@@ -5861,6 +5870,8 @@ mod tests {
 
     use super::*;
 
+    static NET_STACK_STORAGE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     fn reset_socket_and_tcp_rx_state() {
         SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
         SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
@@ -5875,6 +5886,7 @@ mod tests {
 
     #[test]
     fn reservation_releases_on_error() {
+        let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
         reset_socket_and_tcp_rx_state();
 
         TCP_RX_STORAGE_IN_USE.store(true, Ordering::Release);
@@ -5918,6 +5930,21 @@ mod tests {
     }
 
     #[test]
+    fn bootinfo_net_mark_ok_logs_stay_short_and_canary_free() {
+        for mark in [
+            "net.init.begin",
+            "net.init.device",
+            "net.init.interface",
+            "net.init.socketset",
+            "net.init.post",
+        ] {
+            assert!(bootinfo_net_mark_ok_log_fits_uart_frame(mark));
+            assert!(!mark.contains("pre=0x"));
+            assert!(!mark.contains("post=0x"));
+        }
+    }
+
+    #[test]
     fn cyw43_auto_fallback_only_allows_absent_device() {
         assert!(cyw43_auto_fallback_allowed(&NetStackError::Driver(
             Cyw43DriverError::NoDevice
@@ -5948,6 +5975,7 @@ mod tests {
 
     #[test]
     fn reservation_sets_metadata_and_owner() {
+        let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
         reset_socket_and_tcp_rx_state();
 
         let attempt = NetInitAttempt::new("test.acquisition");
@@ -5968,6 +5996,7 @@ mod tests {
 
     #[test]
     fn poisoned_flag_is_reported() {
+        let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
         reset_socket_and_tcp_rx_state();
 
         SOCKET_STORAGE_IN_USE.store(true, Ordering::Release);
@@ -5986,6 +6015,7 @@ mod tests {
 
     #[test]
     fn busy_socket_reports_owner_and_tag() {
+        let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
         reset_socket_and_tcp_rx_state();
 
         SOCKET_STORAGE_OWNER.store(0xdead_beef, Ordering::Release);

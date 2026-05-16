@@ -86,6 +86,7 @@ const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
 const RX_GLOM_SUBFRAME_CAP: usize = 8;
 const RX_GLOM_QUEUE_CAP: usize = 4;
+const RX_GLOM_WARNING_LOG_LIMIT: u8 = 4;
 const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
 const POST_UP_EVENT_DRAIN_BUDGET: usize = 8;
 
@@ -212,6 +213,8 @@ const DEFAULT_SCAN_CHANNEL_TIME_MS: u32 = 40;
 const DEFAULT_SCAN_UNASSOC_TIME_MS: u32 = 40;
 const BCME_UNSUPPORTED: u32 = 0xffff_ffe9;
 const BCME_BADARG: u32 = 0xffff_fffe;
+const BRCMF_ARP_OL_DISABLED: u32 = 0;
+const BRCMF_OFFLOAD_DISABLED: u32 = 0;
 const BSSCFG_PRIMARY_INDEX: u32 = 0;
 const WSEC_PMK_LEN: usize = 32;
 const WSEC_PMK_KEY_CAPACITY: usize = 128;
@@ -490,6 +493,28 @@ fn optional_host_eapol_rx_admission_allows_failure(name: &str, err: &DriverError
                 status: BCME_UNSUPPORTED | BCME_BADARG
             },
         ) if *cmd == Ioctl::SetPromisc as u32
+    )
+}
+
+fn optional_linux_connect_policy_allows_failure(name: &str, err: &DriverError) -> bool {
+    matches!(
+        (name, err),
+        (
+            "arp_ol" | "arpoe" | "ndoe",
+            DriverError::IoctlFailed {
+                cmd,
+                status: BCME_UNSUPPORTED | BCME_BADARG
+            },
+        ) if *cmd == Ioctl::SetVar as u32
+    ) || matches!(
+        (name, err),
+        (
+            "mpc",
+            DriverError::IoctlFailed {
+                cmd,
+                status: BCME_UNSUPPORTED | BCME_BADARG
+            },
+        ) if *cmd == Ioctl::SetVar as u32
     )
 }
 
@@ -1921,6 +1946,29 @@ fn deferred_join_bringup_status_label(
     }
 }
 
+#[inline]
+fn cyw43_bringup_status_label(
+    host_eapol_secure: bool,
+    state: DeferredJoinState,
+    link_up: bool,
+) -> Option<&'static str> {
+    if host_eapol_secure {
+        None
+    } else {
+        deferred_join_bringup_status_label(state, link_up)
+    }
+}
+
+#[inline]
+fn cyw43_data_tx_allowed(link_up: bool, host_eapol_secure: bool, state: DeferredJoinState) -> bool {
+    link_up && (host_eapol_secure || !deferred_join_forces_eapol_only_rx(state))
+}
+
+#[inline]
+fn cyw43_data_rx_allowed(host_eapol_secure: bool, state: DeferredJoinState) -> bool {
+    host_eapol_secure || !deferred_join_forces_eapol_only_rx(state)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WsecPmkKind {
     Pbkdf2Passphrase,
@@ -2020,6 +2068,15 @@ impl HostWpaState {
     fn ap_mac_known(self) -> bool {
         host_eapol_mac_known(self.ap_mac)
     }
+
+    fn can_handle_post_secure_eapol(self) -> bool {
+        self.pmk_valid && self.m2_sent && self.ptk_installed
+    }
+}
+
+#[inline]
+fn host_eapol_should_handle_frame(state: DeferredJoinState, host_wpa: HostWpaState) -> bool {
+    deferred_join_requires_host_eapol(state) || host_wpa.can_handle_post_secure_eapol()
 }
 
 fn host_eapol_mac_known(mac: [u8; ETHER_ADDR_LEN]) -> bool {
@@ -2737,6 +2794,7 @@ pub struct Cyw43NetDevice {
     control_response: Box<[u8; CONTROL_RESPONSE_BUF_LEN]>,
     glom_subframe_lens: HeaplessVec<u16, RX_GLOM_SUBFRAME_CAP>,
     glom_rx_ready: Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_GLOM_QUEUE_CAP>,
+    glom_warning_logs: u8,
 }
 
 pub struct RxToken {
@@ -2906,6 +2964,7 @@ impl Cyw43NetDevice {
             control_response: Box::new([0; CONTROL_RESPONSE_BUF_LEN]),
             glom_subframe_lens: HeaplessVec::new(),
             glom_rx_ready: Deque::new(),
+            glom_warning_logs: 0,
         };
 
         info!("[cyw43] step: init_control_plane");
@@ -2995,6 +3054,7 @@ impl Cyw43NetDevice {
         self.control_response.fill(0);
         self.glom_subframe_lens.clear();
         self.glom_rx_ready.clear();
+        self.glom_warning_logs = 0;
     }
 
     fn replay_control_plane_bootstrap(
@@ -3211,6 +3271,7 @@ impl Cyw43NetDevice {
         control_step!("event-mask", self.enable_join_event_messages());
         control_step!("up", self.ioctl_raw(IoctlType::Set, Ioctl::Up, 0, &[]));
         control_step!("post-up-event-drain", self.drain_post_up_events());
+        control_step!("event-mask-post-up", self.enable_join_event_messages());
         if linux_station_path_sets_legacy_gmode() {
             control_step!("gmode", self.ioctl_set_u32(Ioctl::SetGmode, 0, 1));
         } else {
@@ -3566,12 +3627,9 @@ impl Cyw43NetDevice {
     }
 
     fn restore_host_eapol_rx_admission_after_secure(&mut self) {
-        if !self.host_wpa.rx_admission_rescue_after_assoc {
-            return;
-        }
-
         match self.configure_host_eapol_receive_admission(HostEapolRxAdmissionMode::LinuxUnicastM1) {
             Ok(()) => {
+                self.host_wpa.rx_admission_refreshed_after_assoc = true;
                 self.host_wpa.rx_admission_rescue_after_assoc = false;
                 info!(
                     "[cyw43] host-eapol rx-admission action=restore-after-secure result=ready allmulti=0 promisc=0 data=allowed-after-keys"
@@ -3624,6 +3682,46 @@ impl Cyw43NetDevice {
         );
     }
 
+    fn apply_linux_connect_power_policy(&mut self) -> Result<(), DriverError> {
+        match self.set_iovar_u32("mpc", 0) {
+            Ok(()) => info!(
+                "[cyw43] join: connect-policy step=mpc action=ready value=0 source=linux-brcmfmac-connect"
+            ),
+            Err(err) if optional_linux_connect_policy_allows_failure("mpc", &err) => warn!(
+                "[cyw43] join: connect-policy step=mpc action=skip optional=yes value=0 err={err}"
+            ),
+            Err(err) => return Err(err),
+        }
+
+        self.disable_linux_connect_arp_nd_offload();
+        Ok(())
+    }
+
+    fn disable_linux_connect_arp_nd_offload(&mut self) {
+        let arp_mode = BRCMF_ARP_OL_DISABLED;
+        let offload_enable = BRCMF_OFFLOAD_DISABLED;
+        self.set_linux_connect_offload_iovar("arp_ol", arp_mode);
+        self.set_linux_connect_offload_iovar("arpoe", offload_enable);
+        self.set_linux_connect_offload_iovar("ndoe", offload_enable);
+        info!(
+            "[cyw43] join: connect-policy step=arp-nd-offload action=ready enable=no arp_ol=0x{arp_mode:08x} source=linux-brcmfmac-connect",
+        );
+    }
+
+    fn set_linux_connect_offload_iovar(&mut self, name: &'static str, value: u32) {
+        match self.set_iovar_u32(name, value) {
+            Ok(()) => info!(
+                "[cyw43] join: connect-policy step={name} action=ready value=0x{value:08x}"
+            ),
+            Err(err) if optional_linux_connect_policy_allows_failure(name, &err) => warn!(
+                "[cyw43] join: connect-policy step={name} action=skip optional=yes value=0x{value:08x} err={err}"
+            ),
+            Err(err) => warn!(
+                "[cyw43] join: connect-policy step={name} action=error optional=yes value=0x{value:08x} err={err}"
+            ),
+        }
+    }
+
     fn join(
         &mut self,
         credentials: WifiCredentials,
@@ -3635,6 +3733,7 @@ impl Cyw43NetDevice {
         self.link_up = false;
         self.associated = false;
         self.deferred_join_state = DeferredJoinState::Disabled;
+        self.apply_linux_connect_power_policy()?;
         if !secure {
             self.set_primary_bsscfg_u32("auth", AUTH_OPEN)?;
             self.set_primary_bsscfg_u32("wsec", 0)?;
@@ -5564,16 +5663,25 @@ impl Cyw43NetDevice {
                 let total_len = glom_descriptor_total_len(&lengths);
                 let subframes = lengths.len();
                 self.glom_subframe_lens = lengths;
-                info!(
+                trace!(
                     "[cyw43] rx glom descriptor action=queued subframes={} total_len={} len={}",
-                    subframes, total_len, header.packet_len,
+                    subframes,
+                    total_len,
+                    header.packet_len,
                 );
             }
             Err(err) => {
-                warn!(
-                    "[cyw43] rx glom descriptor action=drop len={} err={err}",
-                    header.packet_len,
-                );
+                if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                    warn!(
+                        "[cyw43] rx glom descriptor action=drop len={} err={err}",
+                        header.packet_len,
+                    );
+                } else {
+                    trace!(
+                        "[cyw43] rx glom descriptor action=drop len={} err={err}",
+                        header.packet_len,
+                    );
+                }
             }
         }
         Ok(RxFrameResult::None)
@@ -5585,10 +5693,17 @@ impl Cyw43NetDevice {
         allow_data: bool,
     ) -> Result<RxFrameResult, DriverError> {
         if self.glom_subframe_lens.is_empty() {
-            warn!(
-                "[cyw43] rx glom superframe action=drop reason=descriptor-missing len={}",
-                header.packet_len,
-            );
+            if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                warn!(
+                    "[cyw43] rx glom superframe action=drop reason=descriptor-missing len={}",
+                    header.packet_len,
+                );
+            } else {
+                trace!(
+                    "[cyw43] rx glom superframe action=drop reason=descriptor-missing len={}",
+                    header.packet_len,
+                );
+            }
             return Ok(RxFrameResult::None);
         }
 
@@ -5604,52 +5719,97 @@ impl Cyw43NetDevice {
 
         for (index, descriptor_len) in lengths.iter().copied().enumerate() {
             let descriptor_len = usize::from(descriptor_len);
-            let subframe_len = if index == 0 {
-                descriptor_len
-                    .checked_sub(header.payload_start)
-                    .ok_or(DriverError::Protocol("cyw43-rxglom-bad-first-subframe-len"))?
-            } else {
-                descriptor_len
+            let Some(subframe_len) =
+                glom_descriptor_subframe_len(index, descriptor_len, header.payload_start)
+            else {
+                dropped_count = dropped_count.saturating_add(1);
+                if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                    warn!(
+                        "[cyw43] rx glom superframe action=drop-tail reason=bad-first-subframe-len index={} descriptor_len={} payload_start={}",
+                        index, descriptor_len, header.payload_start,
+                    );
+                } else {
+                    trace!(
+                        "[cyw43] rx glom superframe action=drop-tail reason=bad-first-subframe-len index={} descriptor_len={} payload_start={}",
+                        index, descriptor_len, header.payload_start,
+                    );
+                }
+                break;
             };
             if subframe_len < SDPCM_HEADER_LEN {
-                warn!(
-                    "[cyw43] rx glom superframe action=fail reason=bad-subframe-len index={} descriptor_len={} payload_start={}",
-                    index, descriptor_len, header.payload_start,
-                );
-                return Err(DriverError::Protocol("cyw43-rxglom-bad-subframe-len"));
+                dropped_count = dropped_count.saturating_add(1);
+                if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                    warn!(
+                        "[cyw43] rx glom superframe action=drop-tail reason=bad-subframe-len index={} descriptor_len={} payload_start={}",
+                        index, descriptor_len, header.payload_start,
+                    );
+                } else {
+                    trace!(
+                        "[cyw43] rx glom superframe action=drop-tail reason=bad-subframe-len index={} descriptor_len={} payload_start={}",
+                        index, descriptor_len, header.payload_start,
+                    );
+                }
+                break;
             }
-            let end = cursor
-                .checked_add(subframe_len)
-                .ok_or(DriverError::FrameTooLarge)?;
-            if end > header.packet_len {
-                warn!(
-                    "[cyw43] rx glom superframe action=fail reason=truncated index={} subframe_len={} cursor={} packet_len={}",
-                    index,
-                    subframe_len,
-                    cursor,
-                    header.packet_len,
-                );
-                return Err(DriverError::Protocol("cyw43-rxglom-truncated-superframe"));
+            let (end, truncated) = match glom_subframe_end(cursor, subframe_len, header.packet_len)
+            {
+                Ok(extent) => extent,
+                Err(err) => {
+                    dropped_count = dropped_count.saturating_add(1);
+                    if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                        warn!(
+                            "[cyw43] rx glom superframe action=drop-tail reason=truncated index={} subframe_len={} cursor={} packet_len={} err={err}",
+                            index,
+                            subframe_len,
+                            cursor,
+                            header.packet_len,
+                        );
+                    } else {
+                        trace!(
+                            "[cyw43] rx glom superframe action=drop-tail reason=truncated index={} subframe_len={} cursor={} packet_len={} err={err}",
+                            index,
+                            subframe_len,
+                            cursor,
+                            header.packet_len,
+                        );
+                    }
+                    break;
+                }
+            };
+            if truncated {
+                if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                    warn!(
+                        "[cyw43] rx glom superframe action=deaggregate-partial reason=descriptor-overshoot index={} requested_len={} cursor={} packet_len={}",
+                        index,
+                        subframe_len,
+                        cursor,
+                        header.packet_len,
+                    );
+                } else {
+                    trace!(
+                        "[cyw43] rx glom superframe action=deaggregate-partial reason=descriptor-overshoot index={} requested_len={} cursor={} packet_len={}",
+                        index,
+                        subframe_len,
+                        cursor,
+                        header.packet_len,
+                    );
+                }
             }
 
-            match self.decode_glom_subframe(
-                &self.rx_frame[cursor..end],
-                subframe_len,
-                allow_data,
-            )? {
-                GlomSubframeResult::None => {}
-                GlomSubframeResult::Event(event) => {
+            match self.decode_glom_subframe(&self.rx_frame[cursor..end], end - cursor, allow_data) {
+                Ok(GlomSubframeResult::None) => {}
+                Ok(GlomSubframeResult::Event(event)) => {
                     self.apply_event(event);
                     event_count = event_count.saturating_add(1);
                     if first_result.is_none() {
                         first_result = Some(RxFrameResult::Event(event));
                     }
                 }
-                GlomSubframeResult::Eapol(packet) => {
+                Ok(GlomSubframeResult::Eapol(packet)) => {
                     self.process_host_eapol_packet(packet.as_slice())?;
                     eapol_count = eapol_count.saturating_add(1);
                 }
-                GlomSubframeResult::Data(frame) => {
+                Ok(GlomSubframeResult::Data(frame)) => {
                     data_count = data_count.saturating_add(1);
                     if first_result.is_none() {
                         first_result = Some(RxFrameResult::Data(frame));
@@ -5659,11 +5819,30 @@ impl Cyw43NetDevice {
                         dropped_count = dropped_count.saturating_add(1);
                     }
                 }
+                Err(err) => {
+                    dropped_count = dropped_count.saturating_add(1);
+                    if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                        warn!(
+                            "[cyw43] rx glom subframe action=drop reason=decode-error index={} len={} err={err}",
+                            index,
+                            end - cursor,
+                        );
+                    } else {
+                        trace!(
+                            "[cyw43] rx glom subframe action=drop reason=decode-error index={} len={} err={err}",
+                            index,
+                            end - cursor,
+                        );
+                    }
+                }
             }
             cursor = end;
+            if truncated {
+                break;
+            }
         }
 
-        info!(
+        trace!(
             "[cyw43] rx glom superframe action=deaggregate subframes={} data={} events={} eapol={} queued={} dropped={} len={}",
             lengths.len(),
             data_count,
@@ -5703,7 +5882,7 @@ impl Cyw43NetDevice {
                     return Ok(GlomSubframeResult::Event(event));
                 }
                 if ethernet_ethertype(packet) == Some(ETH_P_EAPOL)
-                    && deferred_join_requires_host_eapol(self.deferred_join_state)
+                    && self.host_eapol_should_handle_frame()
                 {
                     return copy_packet_to_heapless(packet).map(GlomSubframeResult::Eapol);
                 }
@@ -5792,8 +5971,17 @@ impl Cyw43NetDevice {
         let mut host_packet = [0u8; MAX_FRAME_LEN];
         host_packet[..packet_len].copy_from_slice(packet);
         let proof = host_eapol_frame_proof(&host_packet[..packet_len]);
+        let secure_before = self.host_eapol_secure_complete();
         let action = match self.handle_host_eapol_frame(&host_packet[..packet_len], proof) {
             Ok(action) => action,
+            Err(err) if secure_before => {
+                warn!(
+                    "[cyw43] host-eapol action=drop status=host-eapol-secure err={err} count={} msg={} next_action=ignore-post-secure-frame",
+                    self.host_eapol_rx_packets,
+                    proof.message,
+                );
+                "drop-post-secure"
+            }
             Err(err) => {
                 self.promote_host_eapol_wait_stage();
                 warn!(
@@ -5865,8 +6053,7 @@ impl Cyw43NetDevice {
             );
             return Ok(RxFrameResult::Event(event));
         }
-        if ethernet_ethertype(packet) == Some(ETH_P_EAPOL)
-            && deferred_join_requires_host_eapol(self.deferred_join_state)
+        if ethernet_ethertype(packet) == Some(ETH_P_EAPOL) && self.host_eapol_should_handle_frame()
         {
             let packet = copy_packet_to_heapless(packet)?;
             self.process_host_eapol_packet(packet.as_slice())?;
@@ -5883,6 +6070,10 @@ impl Cyw43NetDevice {
             .extend_from_slice(packet)
             .map_err(|_| DriverError::FrameTooLarge)?;
         Ok(RxFrameResult::Data(frame))
+    }
+
+    fn host_eapol_should_handle_frame(&self) -> bool {
+        host_eapol_should_handle_frame(self.deferred_join_state, self.host_wpa)
     }
 
     fn apply_event(&mut self, event: Cyw43Event) {
@@ -5952,7 +6143,8 @@ impl Cyw43NetDevice {
                 return None;
             }
         }
-        let allow_data = !deferred_join_forces_eapol_only_rx(self.deferred_join_state);
+        let allow_data =
+            cyw43_data_rx_allowed(self.host_eapol_secure_complete(), self.deferred_join_state);
         let _wifi_breadcrumb_guard =
             (!allow_data).then(crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart);
         let _wifi_log_uart_guard =
@@ -6098,7 +6290,11 @@ impl Device for Cyw43NetDevice {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        if self.link_up && !deferred_join_forces_eapol_only_rx(self.deferred_join_state) {
+        if cyw43_data_tx_allowed(
+            self.link_up,
+            self.host_eapol_secure_complete(),
+            self.deferred_join_state,
+        ) {
             Some(TxToken { device: self })
         } else {
             None
@@ -6156,10 +6352,11 @@ impl NetDevice for Cyw43NetDevice {
     }
 
     fn bringup_status_label(&self) -> Option<&'static str> {
-        if self.host_eapol_secure_complete() {
-            return None;
-        }
-        deferred_join_bringup_status_label(self.deferred_join_state, self.link_up)
+        cyw43_bringup_status_label(
+            self.host_eapol_secure_complete(),
+            self.deferred_join_state,
+            self.link_up,
+        )
     }
 
     fn debug_snapshot(&mut self) {
@@ -6300,6 +6497,47 @@ fn glom_descriptor_total_len(lengths: &HeaplessVec<u16, RX_GLOM_SUBFRAME_CAP>) -
     lengths
         .iter()
         .fold(0usize, |total, len| total.saturating_add(usize::from(*len)))
+}
+
+fn glom_descriptor_subframe_len(
+    index: usize,
+    descriptor_len: usize,
+    payload_start: usize,
+) -> Option<usize> {
+    if index == 0 {
+        descriptor_len.checked_sub(payload_start)
+    } else {
+        Some(descriptor_len)
+    }
+}
+
+fn glom_subframe_end(
+    cursor: usize,
+    subframe_len: usize,
+    packet_len: usize,
+) -> Result<(usize, bool), DriverError> {
+    let end = cursor
+        .checked_add(subframe_len)
+        .ok_or(DriverError::FrameTooLarge)?;
+    if end <= packet_len {
+        return Ok((end, false));
+    }
+    let remaining = packet_len
+        .checked_sub(cursor)
+        .ok_or(DriverError::Protocol("cyw43-rxglom-cursor-past-packet"))?;
+    if remaining >= SDPCM_HEADER_LEN {
+        Ok((packet_len, true))
+    } else {
+        Err(DriverError::Protocol("cyw43-rxglom-truncated-tail"))
+    }
+}
+
+fn glom_warning_budget_allows(logs: &mut u8) -> bool {
+    if *logs >= RX_GLOM_WARNING_LOG_LIMIT {
+        return false;
+    }
+    *logs = logs.saturating_add(1);
+    true
 }
 
 fn copy_packet_to_heapless(packet: &[u8]) -> Result<HeaplessVec<u8, MAX_FRAME_LEN>, DriverError> {
@@ -6736,26 +6974,28 @@ mod tests {
         control_plane_retry_after_reply_wait_uses_promoted_link,
         control_plane_retry_after_startup_link_reply_failure_target_clock_hz,
         control_response_copy_len, control_response_matches, control_tx_payload_offset_for_header,
-        copy_packet_to_heapless, deferred_join_allows_rx_polling,
-        deferred_join_bringup_status_label, deferred_join_forces_eapol_only_rx,
-        deferred_join_poll_limit, deferred_join_requires_host_eapol, derive_host_snonce,
-        derive_wpa2_pairwise_ptk, derive_wpa2_psk_pmk, eapol_key_data_contains_compatible_rsn_ie,
-        eapol_key_data_contains_ie, eapol_replay_counter_increases, event_association_state_update,
-        event_link_state_update, event_msgs_ext_payload_len, find_gtk_kde,
-        firmware_mac_address_from_response, firmware_supplicant_disable_allows_failure,
+        copy_packet_to_heapless, cyw43_bringup_status_label, cyw43_data_rx_allowed,
+        cyw43_data_tx_allowed, deferred_join_allows_rx_polling, deferred_join_bringup_status_label,
+        deferred_join_forces_eapol_only_rx, deferred_join_poll_limit,
+        deferred_join_requires_host_eapol, derive_host_snonce, derive_wpa2_pairwise_ptk,
+        derive_wpa2_psk_pmk, eapol_key_data_contains_compatible_rsn_ie, eapol_key_data_contains_ie,
+        eapol_replay_counter_increases, event_association_state_update, event_link_state_update,
+        event_msgs_ext_payload_len, find_gtk_kde, firmware_mac_address_from_response,
+        firmware_supplicant_disable_allows_failure,
         first_control_plane_retry_after_promoted_timeout,
-        first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
+        first_control_plane_retry_after_startup_link_reply_failure, glom_descriptor_subframe_len,
+        glom_subframe_end, glom_warning_budget_allows, has_sdpcm_credit,
         host_eapol_association_event_label, host_eapol_deferred_poll_log_due,
         host_eapol_deferred_progress_error_is_transient, host_eapol_event_ap_mac_candidate,
         host_eapol_frame_proof, host_eapol_key_body, host_eapol_local_admin_unicast_fallback_due,
         host_eapol_m3_key_len_allowed, host_eapol_packet_dst_allowed,
         host_eapol_post_assoc_event_label, host_eapol_post_assoc_rx_admission_due,
         host_eapol_proof_after_window_action, host_eapol_rx_admission_rescue_due,
-        host_eapol_start_destination, host_eapol_start_poll_due, host_eapol_start_uses_pae_group,
-        initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
-        ioctl_no_progress_after_nonmatching_frames, ioctl_wait_loops, iovar_get_payload_len,
-        is_transport_retryable, join_completion_link_up, join_completion_timeout_reason,
-        join_event_result, join_iovar_fallback_allows_set_ssid,
+        host_eapol_should_handle_frame, host_eapol_start_destination, host_eapol_start_poll_due,
+        host_eapol_start_uses_pae_group, initial_control_plane_bootstrap_policy_label,
+        initial_control_plane_data_clock_target_hz, ioctl_no_progress_after_nonmatching_frames,
+        ioctl_wait_loops, iovar_get_payload_len, is_transport_retryable, join_completion_link_up,
+        join_completion_timeout_reason, join_event_result, join_iovar_fallback_allows_set_ssid,
         join_security_iovar_failure_exact_error, join_security_iovar_name,
         join_security_wpa_auth_failure_exact_error, join_security_wpa_auth_stage,
         linux_attach_control_plane_probe_order, linux_first_control_plane_iovar_order,
@@ -6769,7 +7009,8 @@ mod tests {
         linux_station_path_sets_power_mode_before_join,
         linux_userspace_supplicant_path_uses_host_eapol, linux_wpa2_join_sets_mfp_without_rsn_ie,
         linux_wpa2_join_sets_rsn_capability_policy, optional_control_plane_iovar_allows_failure,
-        optional_host_eapol_rx_admission_allows_failure, optional_txbf_allows_failure,
+        optional_host_eapol_rx_admission_allows_failure,
+        optional_linux_connect_policy_allows_failure, optional_txbf_allows_failure,
         parse_broadcom_event, parse_event_payload, parse_glom_descriptor_lengths,
         parse_rx_sdpcm_header, preserve_cyw43_init_failure_exact_error,
         promoted_cyw43_init_failure_exact_error, psk_is_hex_pmk, put_u16_le,
@@ -6784,7 +7025,7 @@ mod tests {
         write_sdpcm_control_tx_header, write_sdpcm_data_tx_header, write_wsec_key_payload,
         write_wsec_legacy_hex_pmk_payload, write_wsec_pmk_payload,
         wsec_pmk_legacy_hex_fallback_allowed, Cyw43Event, DeferredJoinState, DriverError,
-        FirmwareSupplicantPath, HostEapolRxAdmissionMode, Ioctl, JoinCompletionRule,
+        FirmwareSupplicantPath, HostEapolRxAdmissionMode, HostWpaState, Ioctl, JoinCompletionRule,
         JoinCompletionState, RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_BADARG,
         BCME_UNSUPPORTED, BCMILCP_BCM_SUBTYPE_EVENT, BCMILCP_SUBTYPE_VENDOR_LONG, BDC_HEADER_LEN,
         BDC_VERSION, BDC_VERSION_SHIFT, BRCMF_EVENT_ADDR_OFFSET, BRCMF_EVENT_AUTH_OFFSET,
@@ -6809,15 +7050,15 @@ mod tests {
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED, LINUX_BSSCFG_JOIN_PAYLOAD_LEN,
         LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN, LINUX_EXT_JOIN_SCAN_OFFSET,
-        LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN, PAE_GROUP_ADDR, SDIO_DATA_CLOCK_HZ,
-        SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN, SDPCM_CONTROL_TX_HEADER_LEN,
-        SDPCM_DATA_TX_HEADER_LEN, SDPCM_DATA_TX_PADDING_LEN, SDPCM_DATA_TX_SW_HEADER_OFFSET,
-        SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_FAIL, STATUS_NO_NETWORKS, STATUS_SUCCESS,
-        STATUS_UNSOLICITED, WME_BSS_DISABLE_RSN_DEFAULT, WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK,
-        WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WPA_KCK_LEN, WPA_NONCE_LEN, WPA_PTK_LEN,
-        WPA_REPLAY_COUNTER_LEN, WPA_TK_LEN, WSEC_FLAG_PASSPHRASE, WSEC_KEY_ALGO_OFFSET,
-        WSEC_KEY_DATA_OFFSET, WSEC_KEY_EA_OFFSET, WSEC_KEY_LEN_OFFSET, WSEC_KEY_PAYLOAD_LEN,
-        WSEC_LEGACY_HEX_PMK_LEN, WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
+        LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN, PAE_GROUP_ADDR, RX_GLOM_WARNING_LOG_LIMIT,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_DATA_TX_HEADER_LEN, SDPCM_DATA_TX_PADDING_LEN,
+        SDPCM_DATA_TX_SW_HEADER_OFFSET, SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_FAIL,
+        STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED, WME_BSS_DISABLE_RSN_DEFAULT,
+        WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK, WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WPA_KCK_LEN,
+        WPA_NONCE_LEN, WPA_PTK_LEN, WPA_REPLAY_COUNTER_LEN, WPA_TK_LEN, WSEC_FLAG_PASSPHRASE,
+        WSEC_KEY_ALGO_OFFSET, WSEC_KEY_DATA_OFFSET, WSEC_KEY_EA_OFFSET, WSEC_KEY_LEN_OFFSET,
+        WSEC_KEY_PAYLOAD_LEN, WSEC_LEGACY_HEX_PMK_LEN, WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
     };
     use crate::hal::HalError;
 
@@ -7399,6 +7640,49 @@ mod tests {
             DeferredJoinState::Failed {
                 reason: "join-timeout",
             }
+        ));
+    }
+
+    #[test]
+    fn host_eapol_secure_completion_releases_dhcp_and_data_gates() {
+        let pending = DeferredJoinState::Pending {
+            completion: JoinCompletionState::default(),
+            polls: 0,
+            secure: true,
+            completion_rule: JoinCompletionRule::HostEapolRequired,
+        };
+        let mut host_wpa = HostWpaState::empty();
+        host_wpa.pmk_valid = true;
+        host_wpa.m1_seen = true;
+        host_wpa.m2_sent = true;
+        host_wpa.m4_sent = true;
+        host_wpa.ptk_installed = true;
+        host_wpa.gtk_installed = true;
+
+        assert_eq!(
+            cyw43_bringup_status_label(false, pending, false),
+            Some("wifi-host-eapol-pending")
+        );
+        assert_eq!(cyw43_bringup_status_label(true, pending, true), None);
+        assert!(!cyw43_data_rx_allowed(false, pending));
+        assert!(!cyw43_data_tx_allowed(true, false, pending));
+        assert!(cyw43_data_rx_allowed(true, pending));
+        assert!(cyw43_data_tx_allowed(true, true, pending));
+        assert!(cyw43_data_rx_allowed(false, DeferredJoinState::Disabled));
+        assert!(cyw43_data_tx_allowed(
+            true,
+            false,
+            DeferredJoinState::Disabled
+        ));
+        assert!(!cyw43_data_tx_allowed(
+            false,
+            true,
+            DeferredJoinState::Disabled
+        ));
+        assert!(host_wpa.can_handle_post_secure_eapol());
+        assert!(host_eapol_should_handle_frame(
+            DeferredJoinState::Disabled,
+            host_wpa
         ));
     }
 
@@ -8381,6 +8665,67 @@ mod tests {
         let copied = copy_packet_to_heapless(&packet).expect("packet fits");
 
         assert_eq!(copied.as_slice(), &packet);
+    }
+
+    #[test]
+    fn rx_glom_warning_budget_is_bounded_for_uart_safety() {
+        let mut logs = 0;
+        for _ in 0..RX_GLOM_WARNING_LOG_LIMIT {
+            assert!(glom_warning_budget_allows(&mut logs));
+        }
+        assert!(!glom_warning_budget_allows(&mut logs));
+        assert!(!glom_warning_budget_allows(&mut logs));
+        assert_eq!(logs, RX_GLOM_WARNING_LOG_LIMIT);
+    }
+
+    #[test]
+    fn rx_glom_extent_tolerates_linux_descriptor_overshoot() {
+        assert_eq!(glom_descriptor_subframe_len(0, 24, 12), Some(12));
+        assert_eq!(glom_descriptor_subframe_len(0, 8, 12), None);
+        assert_eq!(glom_descriptor_subframe_len(1, 64, 12), Some(64));
+
+        assert!(matches!(glom_subframe_end(16, 32, 80), Ok((48, false))));
+        assert!(matches!(glom_subframe_end(16, 128, 80), Ok((80, true))));
+        assert!(matches!(
+            glom_subframe_end(76, 128, 80),
+            Err(DriverError::Protocol("cyw43-rxglom-truncated-tail"))
+        ));
+    }
+
+    #[test]
+    fn linux_connect_policy_treats_offload_iovars_as_best_effort() {
+        let unsupported = DriverError::IoctlFailed {
+            cmd: Ioctl::SetVar as u32,
+            status: BCME_UNSUPPORTED,
+        };
+        let badarg = DriverError::IoctlFailed {
+            cmd: Ioctl::SetVar as u32,
+            status: BCME_BADARG,
+        };
+        let timeout = DriverError::Protocol("ioctl-timeout");
+
+        assert!(optional_linux_connect_policy_allows_failure(
+            "mpc",
+            &unsupported
+        ));
+        assert!(optional_linux_connect_policy_allows_failure(
+            "arp_ol", &badarg
+        ));
+        assert!(optional_linux_connect_policy_allows_failure(
+            "arpoe",
+            &unsupported
+        ));
+        assert!(optional_linux_connect_policy_allows_failure(
+            "ndoe",
+            &unsupported
+        ));
+        assert!(!optional_linux_connect_policy_allows_failure(
+            "wpaie",
+            &unsupported
+        ));
+        assert!(!optional_linux_connect_policy_allows_failure(
+            "mpc", &timeout
+        ));
     }
 
     #[test]

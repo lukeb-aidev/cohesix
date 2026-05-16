@@ -334,8 +334,10 @@ power/reset state.
   control plane into a host-`CARD_INT`/no-dongle-source stall. RX-glom handling
   belongs at the post-attach receive path: the driver keeps a bounded descriptor
   list, deaggregates valid SDPCM glom superframes into data/event/EAPOL
-  subframes, and reports malformed or oversized glom evidence without changing
-  the preinit transport order.
+  subframes without normal-path UART output, tolerates Linux-observed descriptor
+  overshoot when the remaining superframe tail still contains a complete SDPCM
+  subframe, and reports malformed or oversized glom evidence through a capped
+  diagnostic budget without changing the preinit transport order.
 - The first Linux-order control writes use the plain 12-byte SDPCM header. The
   8-byte SDPCM hardware-extension header is enabled only after `bus:rxglom`
   succeeds, matching `brcmfmac`'s `tx_hdrlen` transition. Sending
@@ -403,13 +405,20 @@ power/reset state.
   primary join request, and exports
   `wifi-host-eapol-pending` as the live next secure boundary. Until a host
   EAPOL/key-install path completes the secure handshake, Cohesix keeps DHCP and
-  normal data TX disabled, runs an association-gated join-submit EAPOL proof
-  window, enables a Linux-shaped receive-admission window (`mcast_list` for
+  normal data TX disabled. Before the join request, Cohesix also applies the
+  Linux connect-time station policy that disables minimum-power-consumption
+  mode (`mpc=0`) and best-effort disables ARP/ND firmware offload
+  (`arp_ol=0`, `arpoe=0`, `ndoe=0`), then runs an association-gated
+  join-submit EAPOL proof window, enables a Linux-shaped receive-admission
+  window (`mcast_list` for
   `01:80:c2:00:00:03`, `allmulti=0`, optional `WLC_SET_PROMISC=0`), refreshes
   that receive-admission programming once after association/BSSID proof, and
   then keeps the deferred EAPOL-only receive lane alive with bounded event-pump
   burst polls and low-level SDIO breadcrumbs suppressed even after a terminal
   `host-eapol-required` verdict.
+  The Linux join event mask is programmed before `WLC_UP` and replayed after the
+  post-up event drain so later firmware state transitions cannot silently drop
+  association, link, PSK, or MIC events.
   Runtime RX must treat readable `SDIO_INT_STATUS=0` plus SDHCI `CARD_INT` as a
   stale host latch and clear/ack it before any Function 2 first-read; only
   non-zero or unreadable interrupt-source evidence may trigger the Linux-shaped
@@ -447,7 +456,11 @@ power/reset state.
   BSSID even when it is locally administered. If no M1 is visible after bounded
   AP-directed starts, Cohesix enables a temporary EAPOL-only receive rescue
   (`allmulti=1`, `promisc=1`) while keeping DHCP and normal data blocked; after
-  secure key install it restores the Linux unicast-M1 receive policy.
+  secure key install it restores the Linux unicast-M1 receive policy
+  idempotently before releasing DHCP/data, even if the rescue path was not used.
+  Post-secure EAPOL frames stay routed to the host WPA handler for bounded
+  rekey/group-key processing; malformed post-secure frames are dropped without
+  re-entering the data-blocking pending state.
   This hardware state is not a Wi-Fi connection: the latest proof reports
   `WIFI_GATE=7`, `WIFI_BLOCKER=host-eapol-required`, and prompt-side `nettest`
   must report `wifi-host-eapol-pending` until M1/M3 handling and key
@@ -467,7 +480,10 @@ power/reset state.
   latch evidence plus concise `host-eapol rx-source` and `rx-source-regs`
   snapshots when no M1 is visible. The host-EAPOL rule
   must not be completed by firmware `PSK_SUP`; only M1/M2/M3/M4 plus key
-  installation can release DHCP/data. The next valid success trace must show
+  installation can release DHCP/data. The DHCP/readiness label and the RX/TX data
+  gates use the same secure-completion predicate so a completed handshake cannot
+  expose DHCP while the driver still blocks normal frames. The next valid success
+  trace must show
   `host-eapol action=data-tx-shape ... bdc_priority=6`,
   `host-eapol action=send-m2`, `host-eapol action=send-m4`,
   `host-eapol action=wait-pending-8021x-drain`,
@@ -719,9 +735,12 @@ power/reset state.
   remain fatal so gates 7 and 8 cannot be hidden by the wired backend.
 - Post-attach SDPCM glom RX is bounded: descriptor lists are capped, superframe
   subframes are deaggregated into the normal data/event/EAPOL path, and malformed
-  or oversized glom evidence remains explicit instead of silent. Do not prevent
-  that evidence by changing Linux's preinit `bus:rxglom=1` transport order before
-  `mpc`.
+  or oversized glom evidence remains explicit but UART-capped instead of silent or
+  flood-prone. Descriptor overshoot is a soft mismatch when the remaining tail is
+  still a complete SDPCM subframe, matching the Linux capture that delivered
+  valid subframes despite a descriptor mismatch. Do not prevent that evidence by
+  changing Linux's preinit
+  `bus:rxglom=1` transport order before `mpc`.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
