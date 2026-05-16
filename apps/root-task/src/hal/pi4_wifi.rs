@@ -30363,6 +30363,13 @@ mod tests {
             HMB_DATA_DEVREADY | HMB_DATA_FWREADY,
             true,
         ));
+        let fwready_version_only =
+            HMB_DATA_FWREADY | (SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT);
+        assert_eq!(fwready_version_only, 0x0004_0008);
+        assert!(!control_plane_reply_mailbox_has_frame_indication(
+            fwready_version_only,
+            true,
+        ));
         assert!(control_plane_reply_mailbox_requires_ack(
             HMB_DATA_NAKHANDLED
         ));
@@ -30370,6 +30377,9 @@ mod tests {
         assert!(control_plane_reply_mailbox_requires_ack(HMB_DATA_FWHALT));
         assert!(!control_plane_reply_mailbox_requires_ack(
             HMB_DATA_DEVREADY | HMB_DATA_FWREADY
+        ));
+        assert!(!control_plane_reply_mailbox_requires_ack(
+            fwready_version_only
         ));
         assert!(control_plane_reply_mailbox_has_firmware_halt(
             HMB_DATA_FWHALT

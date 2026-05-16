@@ -853,8 +853,17 @@ impl FirmwareSupplicantPath {
     }
 }
 
-const fn linux_userspace_supplicant_path_uses_host_eapol() -> bool {
+const fn linux_wpa2_join_probes_firmware_supplicant_before_host_eapol() -> bool {
     true
+}
+
+fn wsec_pmk_error_allows_host_eapol_fallback(err: &DriverError) -> bool {
+    matches!(
+        err,
+        DriverError::IoctlFailed { cmd, status }
+            if *cmd == Ioctl::SetWsecPmk as u32
+                && matches!(*status, BCME_BADARG | BCME_UNSUPPORTED)
+    )
 }
 
 #[inline]
@@ -1841,6 +1850,11 @@ const fn host_eapol_start_poll_due(polls: u16) -> bool {
 }
 
 #[inline]
+const fn host_eapol_start_due(polls: u16, sent: u8) -> bool {
+    sent == 0 || host_eapol_start_poll_due(polls)
+}
+
+#[inline]
 const fn host_eapol_start_uses_pae_group(sent: u8) -> bool {
     sent == 0
 }
@@ -1859,9 +1873,7 @@ fn host_eapol_start_destination(
     if host_eapol_start_uses_pae_group(sent) || !host_eapol_mac_known(ap_mac) {
         return (PAE_GROUP_ADDR, "pae-group");
     }
-    if ap_source == "get-bssid-local-admin" {
-        (ap_mac, "ap-local-admin")
-    } else if host_eapol_ap_source_is_unproved_local_admin(ap_source)
+    if host_eapol_ap_source_is_unproved_local_admin(ap_source)
         && !host_eapol_local_admin_unicast_fallback_due(ap_source, sent)
     {
         (PAE_GROUP_ADDR, "pae-group")
@@ -1873,7 +1885,10 @@ fn host_eapol_start_destination(
 }
 
 fn host_eapol_ap_source_is_unproved_local_admin(source: &str) -> bool {
-    matches!(source, "event-addr-local-admin" | "ether-src-local-admin")
+    matches!(
+        source,
+        "event-addr-local-admin" | "ether-src-local-admin" | "get-bssid-local-admin"
+    )
 }
 
 fn host_eapol_post_assoc_rx_admission_due(
@@ -3755,15 +3770,18 @@ impl Cyw43NetDevice {
                 self.apply_linux_wpa2_rsn_capability_policy()?;
             }
             self.set_join_security_wpa_auth(WPA_AUTH_WPA2_PSK)?;
-            let firmware_supplicant_path = if linux_userspace_supplicant_path_uses_host_eapol() {
-                info!(
-                    "[cyw43] join: firmware-supplicant path=host-supplicant action=skip reason=linux-userspace-eapol completion_rule=host-eapol-required"
-                );
-                FirmwareSupplicantPath::HostSupplicant
-            } else {
-                self.enable_wpa2_firmware_supplicant()?
-            };
-            let completion_rule = firmware_supplicant_path.completion_rule();
+            let mut firmware_supplicant_path =
+                if linux_wpa2_join_probes_firmware_supplicant_before_host_eapol() {
+                    info!(
+                        "[cyw43] join: firmware-supplicant action=probe reason=linux-brcmfmac-psk-offload-gate fallback=host-eapol"
+                    );
+                    self.enable_wpa2_firmware_supplicant()?
+                } else {
+                    info!(
+                        "[cyw43] join: firmware-supplicant path=host-supplicant action=skip reason=linux-userspace-eapol completion_rule=host-eapol-required"
+                    );
+                    FirmwareSupplicantPath::HostSupplicant
+                };
             let (pmk_kind, pmk_action) = if matches!(
                 firmware_supplicant_path,
                 FirmwareSupplicantPath::HostSupplicant | FirmwareSupplicantPath::Unsupported
@@ -3775,11 +3793,31 @@ impl Cyw43NetDevice {
                 self.prepare_host_wpa_psk(ssid.as_bytes(), psk.as_bytes())?;
                 (WsecPmkKind::HostEapolDeferred, "skip-host-eapol")
             } else {
-                (
-                    self.set_wsec_pmk(ssid.as_bytes(), psk.as_bytes())?,
-                    "set-wsec-pmk",
-                )
+                match self.set_wsec_pmk(ssid.as_bytes(), psk.as_bytes()) {
+                    Ok(pmk_kind) => (pmk_kind, "set-wsec-pmk"),
+                    Err(err) if wsec_pmk_error_allows_host_eapol_fallback(&err) => {
+                        warn!(
+                            "[cyw43] join: pmk action=fallback-host-eapol reason=firmware-pmk-rejected fwsup_path={} err={err} completion_rule=host-eapol-required",
+                            firmware_supplicant_path.label(),
+                        );
+                        self.disable_wpa2_firmware_supplicant_host_path(
+                            "pmk-rejected-host-eapol",
+                            matches!(
+                                firmware_supplicant_path,
+                                FirmwareSupplicantPath::BsscfgWrapper
+                            ),
+                        );
+                        firmware_supplicant_path = FirmwareSupplicantPath::Unsupported;
+                        self.prepare_host_wpa_psk(ssid.as_bytes(), psk.as_bytes())?;
+                        (
+                            WsecPmkKind::HostEapolDeferred,
+                            "fallback-host-eapol-after-pmk-reject",
+                        )
+                    }
+                    Err(err) => return Err(err),
+                }
             };
+            let completion_rule = firmware_supplicant_path.completion_rule();
             info!(
                 "[cyw43] join: auth=wpa2-psk ssid_len={} psk_len={} pmk_kind={} pmk_action={} control=linux-primary-bsscfg fwsup_path={} completion_rule={} order=wpaie-wpa_auth-initial-auth-wsec-rsn-cap-policy-wpa_auth-final-{}-{} rsn_ie_len={} initial_wpa_auth=0x{WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED:04x} final_wpa_auth=0x{WPA_AUTH_WPA2_PSK:04x}",
                 ssid.len(),
@@ -4201,7 +4239,7 @@ impl Cyw43NetDevice {
         if !self.associated
             || self.host_wpa.m1_seen
             || self.host_wpa.eapol_start_sent >= HOST_EAPOL_START_MAX
-            || !host_eapol_start_poll_due(polls)
+            || !host_eapol_start_due(polls, self.host_wpa.eapol_start_sent)
         {
             return;
         }
@@ -6991,11 +7029,12 @@ mod tests {
         host_eapol_m3_key_len_allowed, host_eapol_packet_dst_allowed,
         host_eapol_post_assoc_event_label, host_eapol_post_assoc_rx_admission_due,
         host_eapol_proof_after_window_action, host_eapol_rx_admission_rescue_due,
-        host_eapol_should_handle_frame, host_eapol_start_destination, host_eapol_start_poll_due,
-        host_eapol_start_uses_pae_group, initial_control_plane_bootstrap_policy_label,
-        initial_control_plane_data_clock_target_hz, ioctl_no_progress_after_nonmatching_frames,
-        ioctl_wait_loops, iovar_get_payload_len, is_transport_retryable, join_completion_link_up,
-        join_completion_timeout_reason, join_event_result, join_iovar_fallback_allows_set_ssid,
+        host_eapol_should_handle_frame, host_eapol_start_destination, host_eapol_start_due,
+        host_eapol_start_poll_due, host_eapol_start_uses_pae_group,
+        initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
+        ioctl_no_progress_after_nonmatching_frames, ioctl_wait_loops, iovar_get_payload_len,
+        is_transport_retryable, join_completion_link_up, join_completion_timeout_reason,
+        join_event_result, join_iovar_fallback_allows_set_ssid,
         join_security_iovar_failure_exact_error, join_security_iovar_name,
         join_security_wpa_auth_failure_exact_error, join_security_wpa_auth_stage,
         linux_attach_control_plane_probe_order, linux_first_control_plane_iovar_order,
@@ -7007,8 +7046,9 @@ mod tests {
         linux_station_path_sets_antdiv_before_join, linux_station_path_sets_country,
         linux_station_path_sets_legacy_band, linux_station_path_sets_legacy_gmode,
         linux_station_path_sets_power_mode_before_join,
-        linux_userspace_supplicant_path_uses_host_eapol, linux_wpa2_join_sets_mfp_without_rsn_ie,
-        linux_wpa2_join_sets_rsn_capability_policy, optional_control_plane_iovar_allows_failure,
+        linux_wpa2_join_probes_firmware_supplicant_before_host_eapol,
+        linux_wpa2_join_sets_mfp_without_rsn_ie, linux_wpa2_join_sets_rsn_capability_policy,
+        optional_control_plane_iovar_allows_failure,
         optional_host_eapol_rx_admission_allows_failure,
         optional_linux_connect_policy_allows_failure, optional_txbf_allows_failure,
         parse_broadcom_event, parse_event_payload, parse_glom_descriptor_lengths,
@@ -7024,11 +7064,12 @@ mod tests {
         write_legacy_set_ssid_payload, write_linux_bsscfg_join_payload,
         write_sdpcm_control_tx_header, write_sdpcm_data_tx_header, write_wsec_key_payload,
         write_wsec_legacy_hex_pmk_payload, write_wsec_pmk_payload,
-        wsec_pmk_legacy_hex_fallback_allowed, Cyw43Event, DeferredJoinState, DriverError,
-        FirmwareSupplicantPath, HostEapolRxAdmissionMode, HostWpaState, Ioctl, JoinCompletionRule,
-        JoinCompletionState, RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_BADARG,
-        BCME_UNSUPPORTED, BCMILCP_BCM_SUBTYPE_EVENT, BCMILCP_SUBTYPE_VENDOR_LONG, BDC_HEADER_LEN,
-        BDC_VERSION, BDC_VERSION_SHIFT, BRCMF_EVENT_ADDR_OFFSET, BRCMF_EVENT_AUTH_OFFSET,
+        wsec_pmk_error_allows_host_eapol_fallback, wsec_pmk_legacy_hex_fallback_allowed,
+        Cyw43Event, DeferredJoinState, DriverError, FirmwareSupplicantPath,
+        HostEapolRxAdmissionMode, HostWpaState, Ioctl, JoinCompletionRule, JoinCompletionState,
+        RxFrameResult, RxSdpcmHeader, WsecPmkKind, BCME_BADARG, BCME_UNSUPPORTED,
+        BCMILCP_BCM_SUBTYPE_EVENT, BCMILCP_SUBTYPE_VENDOR_LONG, BDC_HEADER_LEN, BDC_VERSION,
+        BDC_VERSION_SHIFT, BRCMF_EVENT_ADDR_OFFSET, BRCMF_EVENT_AUTH_OFFSET,
         BRCMF_EVENT_FLAGS_OFFSET, BRCMF_EVENT_MIN_PACKET_LEN, BRCMF_EVENT_REASON_OFFSET,
         BRCMF_EVENT_STATUS_OFFSET, BRCMF_EVENT_TYPE_OFFSET, BRCMF_PRIMARY_KEY, BROADCOM_OUI,
         BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA, CHANNEL_EVENT,
@@ -7576,7 +7617,7 @@ mod tests {
             FirmwareSupplicantPath::HostSupplicant.completion_rule(),
             JoinCompletionRule::HostEapolRequired
         );
-        assert!(linux_userspace_supplicant_path_uses_host_eapol());
+        assert!(linux_wpa2_join_probes_firmware_supplicant_before_host_eapol());
         assert_eq!(
             join_completion_timeout_reason(JoinCompletionRule::HostEapolRequired),
             "host-eapol-required"
@@ -7745,6 +7786,9 @@ mod tests {
         assert!(host_eapol_start_poll_due(24_576));
         assert!(host_eapol_start_poll_due(57_344));
         assert!(!host_eapol_start_poll_due(2));
+        assert!(host_eapol_start_due(697, 0));
+        assert!(!host_eapol_start_due(697, 1));
+        assert!(host_eapol_start_due(1_024, 1));
     }
 
     #[test]
@@ -7824,19 +7868,19 @@ mod tests {
         );
         assert_eq!(
             host_eapol_start_destination(local_admin_ap, "get-bssid-local-admin", 1),
-            (local_admin_ap, "ap-local-admin")
+            (PAE_GROUP_ADDR, "pae-group")
         );
         assert!(!host_eapol_local_admin_unicast_fallback_due(
             "get-bssid-local-admin",
             3
         ));
-        assert!(!host_eapol_local_admin_unicast_fallback_due(
+        assert!(host_eapol_local_admin_unicast_fallback_due(
             "get-bssid-local-admin",
             4
         ));
         assert_eq!(
             host_eapol_start_destination(local_admin_ap, "get-bssid-local-admin", 4),
-            (local_admin_ap, "ap-local-admin")
+            (local_admin_ap, "ap-local-admin-probe")
         );
         assert_eq!(
             host_eapol_start_destination(local_admin_ap, "event-addr-local-admin", 8),
@@ -9328,6 +9372,31 @@ mod tests {
                 cmd: Ioctl::SetVar as u32,
                 status: BCME_UNSUPPORTED,
             }
+        ));
+    }
+
+    #[test]
+    fn firmware_pmk_rejection_falls_back_only_for_firmware_status() {
+        assert!(wsec_pmk_error_allows_host_eapol_fallback(
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetWsecPmk as u32,
+                status: BCME_BADARG,
+            }
+        ));
+        assert!(wsec_pmk_error_allows_host_eapol_fallback(
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetWsecPmk as u32,
+                status: BCME_UNSUPPORTED,
+            }
+        ));
+        assert!(!wsec_pmk_error_allows_host_eapol_fallback(
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_BADARG,
+            }
+        ));
+        assert!(!wsec_pmk_error_allows_host_eapol_fallback(
+            &DriverError::Hal(HalError::Unsupported("sdio-cmd53-r5-error"))
         ));
     }
 

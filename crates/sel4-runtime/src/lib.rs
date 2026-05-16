@@ -19,23 +19,10 @@ struct TlsBaseCell;
 #[used]
 static mut __tls_base: TlsBaseCell = TlsBaseCell;
 
-// Sized to accommodate the bootstrap stack frame in the root-task without
-// spilling into unmapped memory during early bring-up. Keep this in sync with
-// `__stack_size` in `apps/root-task/sel4.ld` to avoid future stack overruns.
-const STACK_BYTES: usize = 128 * 1024;
-
-#[allow(dead_code)]
-#[repr(align(16))]
-struct BootStack([u8; STACK_BYTES]);
-
-// seL4 linker scripts previously mapped `.bss.uninit` near `USER_TOP`, which
-// inflated the PT_LOAD span when the root-task stack lived in that section.
-// Keep the bootstrap stack inside the main data segment so it stays adjacent
-// to the remainder of the image and avoids spanning the kernel window.
-#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__data")]
-#[cfg_attr(not(target_vendor = "apple"), link_section = ".data")]
-#[used]
-static mut BOOT_STACK: BootStack = BootStack([0; STACK_BYTES]);
+#[cfg(all(target_arch = "aarch64", target_os = "none"))]
+extern "C" {
+    static __stack_top: u8;
+}
 
 struct BootInfoCell {
     ptr: UnsafeCell<*mut seL4_BootInfo>,
@@ -86,14 +73,12 @@ core::arch::global_asm!(
     .globl _start
     .p2align 2
 _start:
-    adrp x1, {stack}
-    add x1, x1, :lo12:{stack}
-    add x1, x1, #{bytes}
+    adrp x1, {stack_top}
+    add x1, x1, :lo12:{stack_top}
     mov sp, x1
     b {entry}
     ",
-    stack = sym BOOT_STACK,
-    bytes = const STACK_BYTES,
+    stack_top = sym __stack_top,
     entry = sym __sel4_start_rust,
 );
 

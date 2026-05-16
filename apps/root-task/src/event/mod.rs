@@ -115,7 +115,9 @@ use crate::hal::{
     SdioBusWidth, WifiControlPlaneTrace, WifiDebugOps, WifiDebugSnapshot,
     WifiFirmwareContractTrace, WifiPowerState, WifiResetState, WifiSdhciContractTrace,
 };
-use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
+use crate::local_seat::{
+    LocalSeatRuntime, DISPLAY_OUTPUT_FLUSH_BYTES_PER_TURN, KEYBOARD_POLL_CHUNK_BYTES,
+};
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
@@ -250,6 +252,14 @@ fn net_status_pre_root_serial_release_reason(status: &NetStatusReport) -> Option
 #[cfg(feature = "net-console")]
 fn net_status_needs_host_eapol_burst(status: &NetStatusReport) -> bool {
     status.address_source == "wifi-host-eapol-pending"
+}
+
+#[cfg(feature = "net-console")]
+fn net_status_should_yield_to_physical_input(status: &NetStatusReport) -> bool {
+    matches!(
+        status.address_source,
+        "wifi-host-eapol-pending" | "wifi-host-eapol-required"
+    )
 }
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
@@ -1308,14 +1318,16 @@ where
 
     /// Execute a single cooperative polling cycle.
     pub fn poll(&mut self) {
-        self.serial.poll_io();
-        self.consume_serial();
-        self.consume_local_seat();
+        let serial_rx_activity = self.serial.poll_io();
+        let serial_input = self.consume_serial();
+        let local_input = self.consume_local_seat();
+        self.flush_local_seat_display_output();
         self.serial.flush_tx();
-        self.poll_runtime(false);
+        self.poll_runtime(false, serial_rx_activity || serial_input || local_input);
         self.serial.poll_io();
         self.consume_serial();
         self.consume_local_seat();
+        self.flush_local_seat_display_output();
         self.serial.flush_tx();
     }
 
@@ -1323,12 +1335,14 @@ where
     /// Execute the pre-root network/timer portion of the pump without accepting
     /// console input.
     pub fn poll_pre_root_network(&mut self) {
-        self.poll_runtime(true);
+        self.poll_runtime(true, false);
     }
 
-    fn poll_runtime(&mut self, suppress_console_input: bool) {
+    fn poll_runtime(&mut self, suppress_console_input: bool, physical_input_active: bool) {
         #[cfg(not(feature = "net-console"))]
         let _ = suppress_console_input;
+        #[cfg(not(feature = "net-console"))]
+        let _ = physical_input_active;
 
         #[cfg(feature = "kernel")]
         let timebase_now_ms = crate::hal::timebase().now_ms();
@@ -1353,8 +1367,24 @@ where
 
         #[cfg(feature = "net-console")]
         let net_poll = if let Some(net) = self.net.as_mut() {
-            let mut activity = net.poll(self.now_ms);
-            let burst_limit = if net_status_needs_host_eapol_burst(&net.status_report()) {
+            let should_yield_before =
+                net_status_should_yield_to_physical_input(&net.status_report());
+            let host_eapol_pending_before = net_status_needs_host_eapol_burst(&net.status_report());
+            let yield_for_physical_input =
+                physical_input_active && !suppress_console_input && should_yield_before;
+            let mut activity = false;
+            // Host-EAPOL pending/required has no DHCP/data progress yet; once
+            // the root console is available, yield those SDIO polls to active
+            // keyboards.
+            if !yield_for_physical_input {
+                activity = net.poll(self.now_ms);
+            }
+            let host_eapol_pending = if yield_for_physical_input {
+                host_eapol_pending_before
+            } else {
+                net_status_needs_host_eapol_burst(&net.status_report())
+            };
+            let burst_limit = if host_eapol_pending && !yield_for_physical_input {
                 if suppress_console_input {
                     WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS
                 } else {
@@ -1757,14 +1787,34 @@ where
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mirror_line(line);
         }
-        self.serial.write_line_blocking(line);
+        if self.last_input_source == ConsoleInputSource::LocalSeat {
+            self.serial.flush_tx();
+            self.serial.enqueue_tx_best_effort(line.as_bytes());
+            self.serial.enqueue_tx_best_effort(b"\r\n");
+            self.serial.flush_tx();
+        } else {
+            self.serial.write_line_blocking(line);
+        }
     }
 
     fn emit_prompt(&mut self) {
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mirror_line(CONSOLE_PROMPT);
         }
-        self.serial.write_bytes_blocking(CONSOLE_PROMPT.as_bytes());
+        if self.last_input_source == ConsoleInputSource::LocalSeat {
+            self.serial.flush_tx();
+            self.serial
+                .enqueue_tx_best_effort(CONSOLE_PROMPT.as_bytes());
+            self.serial.flush_tx();
+        } else {
+            self.serial.write_bytes_blocking(CONSOLE_PROMPT.as_bytes());
+        }
+    }
+
+    fn flush_local_seat_display_output(&mut self) {
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.flush_display_output(DISPLAY_OUTPUT_FLUSH_BYTES_PER_TURN);
+        }
     }
 
     fn emit_help(&mut self) {
@@ -2623,6 +2673,16 @@ where
             let _ = write!(line, " {action_detail}");
         }
         self.emit_console_line(line.as_str());
+        if let Some(local_seat) = self.local_seat.as_ref() {
+            let queue_line = format_message(format_args!(
+                "usb: local-seat queues keyboard_drop={} hdmi_echo_pending={} hdmi_line_pending={} hdmi_drop={}",
+                local_seat.dropped_keyboard_bytes(),
+                local_seat.pending_display_echo_bytes(),
+                local_seat.pending_display_line_bytes(),
+                local_seat.dropped_display_output_bytes(),
+            ));
+            self.emit_console_line(queue_line.as_str());
+        }
         #[cfg(all(target_arch = "aarch64", target_os = "none"))]
         {
             let ownership = self
@@ -4442,8 +4502,10 @@ where
         self.local_line.clear();
     }
 
-    fn consume_serial(&mut self) {
+    fn consume_serial(&mut self) -> bool {
+        let mut consumed = false;
         while let Some(line) = self.serial.next_line() {
+            consumed = true;
             self.last_input_source = ConsoleInputSource::Serial;
             if !self.local_line.is_empty() {
                 self.local_line.clear();
@@ -4452,18 +4514,20 @@ where
             }
             self.process_console_line(&line);
         }
+        consumed
     }
 
-    fn consume_local_seat(&mut self) {
+    fn consume_local_seat(&mut self) -> bool {
         let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
         let mut empty_polls = 0usize;
+        let mut consumed = false;
         for _ in 0..LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN {
             if let Some(runtime) = self.local_seat.as_mut() {
                 runtime.poll_backend_keyboard();
             }
             let read = match self.local_seat.as_mut() {
                 Some(runtime) => runtime.drain_keyboard_bytes(&mut chunk),
-                None => return,
+                None => return consumed,
             };
             if read == 0 {
                 empty_polls = empty_polls.saturating_add(1);
@@ -4473,6 +4537,7 @@ where
                 continue;
             }
             empty_polls = 0;
+            consumed = true;
             self.last_input_source = ConsoleInputSource::LocalSeat;
             if let Some(runtime) = self.local_seat.as_mut() {
                 runtime.echo_input_bytes(&chunk[..read]);
@@ -4509,6 +4574,7 @@ where
                 }
             }
         }
+        consumed
     }
 
     fn process_console_line(&mut self, line: &HeaplessString<LINE>) {
@@ -7538,8 +7604,107 @@ mod tests {
         let echoed = pump.serial_mut().driver_mut().drain_tx();
         drop(pump);
 
-        assert_eq!(net.polls, 1);
+        assert_eq!(net.polls, 0);
         assert_eq!(echoed.as_slice(), b"n");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn host_eapol_pending_does_not_delay_local_seat_echo() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "wifi-host-eapol-pending";
+        net.status.dhcp_phase = "host-eapol-pending";
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.enqueue_keyboard_bytes(b"hel");
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_local_seat(&mut local_seat);
+        pump.poll();
+
+        assert_eq!(
+            pump.local_seat
+                .as_ref()
+                .expect("local-seat should be attached")
+                .input_echo_preview(),
+            "hel"
+        );
+        drop(pump);
+        assert_eq!(net.polls, 0);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn host_eapol_required_does_not_delay_local_seat_echo() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "wifi-host-eapol-required";
+        net.status.dhcp_phase = "host-eapol-required";
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.enqueue_keyboard_bytes(b"hel");
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_local_seat(&mut local_seat);
+        pump.poll();
+
+        assert_eq!(
+            pump.local_seat
+                .as_ref()
+                .expect("local-seat should be attached")
+                .input_echo_preview(),
+            "hel"
+        );
+        drop(pump);
+        assert_eq!(net.polls, 0);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn physical_input_does_not_pause_ready_network_poll() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.enqueue_keyboard_bytes(b"hel");
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_local_seat(&mut local_seat);
+        pump.poll();
+        drop(pump);
+
+        assert_eq!(net.polls, 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -7915,6 +8080,40 @@ mod tests {
         assert!(rendered.contains("PONG"), "{rendered}");
         assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
         assert!(rendered.contains("cohesix> "), "{rendered}");
+    }
+
+    #[test]
+    fn local_seat_output_does_not_block_follow_on_keyboard_input_on_slow_serial() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 32, 16, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        local_seat.enqueue_keyboard_bytes(b"help\nx");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.poll();
+
+        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+        assert_eq!(pump.local_line.as_str(), "x");
+        assert_eq!(
+            pump.local_seat
+                .as_ref()
+                .expect("local-seat should be attached")
+                .input_echo_preview(),
+            "x"
+        );
+        assert!(pump.serial_telemetry().tx_backpressure > 0);
     }
 
     #[test]

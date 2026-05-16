@@ -400,12 +400,15 @@ power/reset state.
   firmware-supplicant path. Milestone 26b authorizes bounded WPA2-PSK join
   sequencing, but no data path may be released on `SET_SSID` alone, so `sup_wpa`
   failure must not authorize or weaken the secure Cohesix join rule. The normal
-  M26b image selects the Linux userspace-supplicant model directly: it skips
-  firmware `sup_wpa` offload probes, derives the host PMK locally, submits the
-  primary join request, and exports
-  `wifi-host-eapol-pending` as the live next secure boundary. Until a host
-  EAPOL/key-install path completes the secure handshake, Cohesix keeps DHCP and
-  normal data TX disabled. Before the join request, Cohesix also applies the
+  M26b image now probes the Linux firmware-supplicant/PSK-offload gate first,
+  because known-good `brcmfmac` does that whenever cfg80211 supplies a PSK. If
+  `sup_wpa`, the BSSCFG wrapper, or `WLC_SET_WSEC_PMK` is explicitly rejected by
+  firmware, Cohesix disables the firmware-supplicant path, derives the host PMK
+  locally, submits the primary join request, and exports
+  `wifi-host-eapol-pending` as the live next secure boundary. Until either the
+  firmware `PSK_SUP` completion rule or the host EAPOL/key-install path
+  completes the secure handshake, Cohesix keeps DHCP and normal data TX
+  disabled. Before the join request, Cohesix also applies the
   Linux connect-time station policy that disables minimum-power-consumption
   mode (`mpc=0`) and best-effort disables ARP/ND firmware offload
   (`arp_ol=0`, `arpoe=0`, `ndoe=0`), then runs an association-gated
@@ -480,7 +483,9 @@ power/reset state.
   latch evidence plus concise `host-eapol rx-source` and `rx-source-regs`
   snapshots when no M1 is visible. The host-EAPOL rule
   must not be completed by firmware `PSK_SUP`; only M1/M2/M3/M4 plus key
-  installation can release DHCP/data. The DHCP/readiness label and the RX/TX data
+  installation can release DHCP/data after firmware offload was rejected. When
+  firmware offload is accepted, `PSK_SUP` plus carrier confirmation is the secure
+  completion rule. The DHCP/readiness label and the RX/TX data
   gates use the same secure-completion predicate so a completed handshake cannot
   expose DHCP while the driver still blocks normal frames. The next valid success
   trace must show
@@ -712,11 +717,11 @@ power/reset state.
   runtime polling yields after one Wi-Fi poll per event turn. Serial input is
   drained and flushed before runtime polling, local-seat USB keyboard input is
   drained before and after runtime polling, the event pump settles across
-  bounded idle HID polls, and HDMI echoes accepted USB keyboard bytes at the
-  same parser-ingress boundary used by the serial root console. HID polling
-  drains a burst of interrupt-IN reports in one pass so press/release/next-key
-  sequences are requeued before the next event-loop turn, while HDMI progress
-  banners are rate-limited to a 5-10 s visible cadence.
+  bounded idle HID polls, and HDMI echoes accepted USB keyboard bytes through a
+  high-priority parser-ingress queue rendered under a per-turn framebuffer
+  budget. HID polling drains a burst of interrupt-IN reports in one pass so
+  press/release/next-key sequences are requeued before the next event-loop turn,
+  while HDMI progress banners are rate-limited to a 5-10 s visible cadence.
 - Pi 4 local-seat USB is not a reason to disable Wi-Fi diagnostics. The serial
   console retains the HAL-backed Wi-Fi debug path after root-console handoff so
   `wifi diag`, `wifi load-fw`, and `wifi retry` can exercise CYW43455 without
@@ -1321,8 +1326,10 @@ Required Cohesix shape:
   UART alias. The event pump clears an unfinished UART line when USB keyboard
   bytes arrive and clears an unfinished local-seat line before processing a UART
   command, so serial and USB input cannot concatenate stale partial commands.
-  Accepted local-seat command output is mirrored through the same UART/HDMI
-  physical-console path for proof-log parity.
+  Accepted local-seat command output is mirrored to HDMI through a lower-priority
+  progressive render queue and to UART through a best-effort TX mirror so slow
+  serial output cannot starve xHCI polling or typed HDMI echo. `usb status`
+  reports local-seat keyboard-drop and deferred HDMI queue/drop counters.
 - Operator proof uses a single 10-gate USB ladder: 1 controller candidate, 2 live
   PCIe/VL805 ownership, 3 controller-ready, 4 command-ring completion, 5
   root-port connection, 6 device address, 7 descriptors/configuration, 8 HID

@@ -201,6 +201,23 @@ where
         }
     }
 
+    /// Attempt to stage TX bytes without flushing or retrying on saturation.
+    ///
+    /// This is for secondary mirrors where the caller must keep the event loop
+    /// moving even if the serial peer is slow. It records one backpressure event
+    /// and returns as soon as the queue is full.
+    pub fn enqueue_tx_best_effort(&mut self, data: &[u8]) -> usize {
+        let mut accepted = 0usize;
+        for &byte in data {
+            if self.tx.enqueue(byte).is_err() {
+                self.telemetry.tx_overflow();
+                break;
+            }
+            accepted = accepted.saturating_add(1);
+        }
+        accepted
+    }
+
     /// Flush currently staged TX bytes without polling RX.
     pub fn flush_tx(&mut self) {
         self.flush_tx_locked();
@@ -229,12 +246,16 @@ where
     }
 
     /// Attempt to move data between the driver and staging buffers.
-    pub fn poll_io(&mut self) {
+    ///
+    /// Returns true when RX bytes were staged for this polling cycle.
+    pub fn poll_io(&mut self) -> bool {
+        let mut rx_activity = false;
         // Drain RX side first so newly available bytes can be processed in the
         // same cycle.
         loop {
             match self.driver.read_byte() {
                 Ok(byte) => {
+                    rx_activity = true;
                     if self.rx.enqueue(byte).is_err() {
                         self.telemetry.rx_overflow();
                     }
@@ -248,6 +269,7 @@ where
         }
 
         self.flush_tx_locked();
+        rx_activity
     }
 
     fn flush_tx_locked(&mut self) {
@@ -503,6 +525,21 @@ mod tests {
         port.poll_io();
         let telemetry = port.telemetry();
         assert!(telemetry.tx_backpressure > 0);
+    }
+
+    #[test]
+    fn best_effort_tx_stops_at_first_queue_saturation() {
+        let driver = LoopbackSerial::<8>::new();
+        let mut port: SerialPort<_, 4, 2, 16> = SerialPort::new(driver);
+
+        let accepted = port.enqueue_tx_best_effort(b"abcd");
+
+        assert!(accepted < 4);
+        assert_eq!(port.telemetry().tx_backpressure, 1);
+        port.poll_io();
+        let emitted = port.driver_mut().drain_tx();
+        assert_eq!(emitted.len(), accepted);
+        assert_eq!(emitted.as_slice(), &b"abcd"[..accepted]);
     }
 
     #[test]
