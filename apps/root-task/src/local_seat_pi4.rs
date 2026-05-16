@@ -218,11 +218,20 @@ const HID_REPORT_DESC_WAIT_SPINS: usize = HUB_CLASS_CONTROL_WAIT_SPINS_FAST;
 const WAIT_MS_SPINS_PER_MS: usize = 50_000;
 const WAIT_MS_MIN_SPINS: usize = 10_000;
 const WAIT_MS_MAX_SPINS: usize = 25_000_000;
-const USB_PROGRESS_TICK_MS: usize = 1_000;
+const USB_PROGRESS_TICK_MS: usize = 5_000;
 const USB_PROGRESS_MAX_DOTS: usize = 64;
 const WIFI_PROGRESS_LOOP_TICK_LOOPS: usize = 1_000_000;
 const WIFI_PROGRESS_EMIT_INTERVAL_TICKS: usize = 64;
 const WIFI_PROGRESS_MAX_DOTS: usize = 3;
+
+#[cfg(test)]
+pub(crate) const fn hdmi_progress_refresh_contract_for_test() -> (usize, usize, usize) {
+    (
+        USB_PROGRESS_TICK_MS,
+        WIFI_PROGRESS_LOOP_TICK_LOOPS,
+        WIFI_PROGRESS_EMIT_INTERVAL_TICKS,
+    )
+}
 const fn pi4_gic_spi_irq(spi: u32) -> u32 {
     spi + 32
 }
@@ -8044,8 +8053,25 @@ fn retry_vl805_pci_bcm2711_after_mailbox_reset(
     proven && ready
 }
 
-const USB_KEYBOARD_REPORT_DRAIN_BUDGET: usize = 8;
-const USB_KEYBOARD_POST_SEAL_LED_SYNC_ENABLED: bool = false;
+const USB_KEYBOARD_REPORT_DRAIN_BUDGET: usize = 16;
+const USB_KEYBOARD_POST_SEAL_LED_SYNC_ENABLED: bool = true;
+
+#[inline]
+const fn keyboard_led_bitmap(caps_lock: bool, num_lock: bool, scroll_lock: bool) -> u8 {
+    (if num_lock { led::NUM_LOCK } else { 0 })
+        | (if caps_lock { led::CAPS_LOCK } else { 0 })
+        | (if scroll_lock { led::SCROLL_LOCK } else { 0 })
+}
+
+#[inline]
+const fn keyboard_lock_led_for_key(key: u8) -> Option<u8> {
+    match key {
+        scancode::CAPS_LOCK => Some(led::CAPS_LOCK),
+        scancode::NUM_LOCK => Some(led::NUM_LOCK),
+        scancode::SCROLL_LOCK => Some(led::SCROLL_LOCK),
+        _ => None,
+    }
+}
 
 struct UsbKeyboard {
     hid: HidDevice<SeatDma>,
@@ -8053,8 +8079,12 @@ struct UsbKeyboard {
     _xhci_irq_guard: Option<XhciIrqGuard>,
     last_keys: [u8; 6],
     caps_lock_on: bool,
+    num_lock_on: bool,
+    scroll_lock_on: bool,
     poll_error_logged: bool,
     led_error_logged: bool,
+    led_sync_disabled: bool,
+    led_sync_ready_logged: bool,
     first_report_logged: bool,
     first_no_report_logged: bool,
     first_non_empty_report_logged: bool,
@@ -10840,8 +10870,12 @@ impl UsbKeyboard {
                                     _xhci_irq_guard: xhci_irq_guard,
                                     last_keys: [0; 6],
                                     caps_lock_on: false,
+                                    num_lock_on: false,
+                                    scroll_lock_on: false,
                                     poll_error_logged: false,
                                     led_error_logged: false,
+                                    led_sync_disabled: false,
+                                    led_sync_ready_logged: false,
                                     first_report_logged: false,
                                     first_no_report_logged: false,
                                     first_non_empty_report_logged: false,
@@ -14217,11 +14251,89 @@ impl UsbKeyboard {
         }
     }
 
+    fn toggle_lock_led_for_key(&mut self, key: u8) -> bool {
+        match keyboard_lock_led_for_key(key) {
+            Some(led_bit) if led_bit == led::CAPS_LOCK => {
+                self.caps_lock_on = !self.caps_lock_on;
+            }
+            Some(led_bit) if led_bit == led::NUM_LOCK => {
+                self.num_lock_on = !self.num_lock_on;
+            }
+            Some(led_bit) if led_bit == led::SCROLL_LOCK => {
+                self.scroll_lock_on = !self.scroll_lock_on;
+            }
+            _ => return false,
+        }
+        self.sync_keyboard_leds();
+        true
+    }
+
+    fn sync_keyboard_leds(&mut self) {
+        let leds = keyboard_led_bitmap(self.caps_lock_on, self.num_lock_on, self.scroll_lock_on);
+        if !USB_KEYBOARD_POST_SEAL_LED_SYNC_ENABLED {
+            if !self.led_error_logged {
+                let mut line = heapless::String::<224>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] pi4 keyboard led sync skipped leds=0x{leds:02x} caps={} num={} scroll={} reason=runtime-dma-sealed",
+                        self.caps_lock_on as u8,
+                        self.num_lock_on as u8,
+                        self.scroll_lock_on as u8
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                self.led_error_logged = true;
+            }
+            return;
+        }
+        if self.led_sync_disabled {
+            return;
+        }
+        match self.hid.set_leds(leds) {
+            Ok(()) => {
+                self.led_error_logged = false;
+                if !self.led_sync_ready_logged {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] pi4 keyboard led sync ready leds=0x{leds:02x} caps={} num={} scroll={}",
+                            self.caps_lock_on as u8,
+                            self.num_lock_on as u8,
+                            self.scroll_lock_on as u8
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    self.led_sync_ready_logged = true;
+                }
+            }
+            Err(err) => {
+                if !self.led_error_logged {
+                    let mut line = heapless::String::<288>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] pi4 keyboard led sync unavailable leds=0x{leds:02x} caps={} num={} scroll={} detail={err:?} action=disabled",
+                            self.caps_lock_on as u8,
+                            self.num_lock_on as u8,
+                            self.scroll_lock_on as u8
+                        ),
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                    self.led_error_logged = true;
+                }
+                self.led_sync_disabled = true;
+            }
+        }
+    }
+
     fn poll_bytes(&mut self, out: &mut [u8]) -> usize {
         if out.is_empty() {
             return 0;
         }
 
+        let mut written = 0usize;
         for _ in 0..USB_KEYBOARD_REPORT_DRAIN_BUDGET {
             let report = match self.hid.poll_keyboard_checked() {
                 Ok(Some(report)) => {
@@ -14275,7 +14387,7 @@ impl UsbKeyboard {
                         );
                         self.first_no_report_logged = true;
                     }
-                    return 0;
+                    break;
                 }
                 Err(err) => {
                     if !self.poll_error_logged {
@@ -14289,13 +14401,15 @@ impl UsbKeyboard {
                         boot_log::force_uart_line(line.as_str());
                         self.poll_error_logged = true;
                     }
-                    return 0;
+                    break;
                 }
             };
 
             let shift = report.shift();
-            let mut written = 0usize;
             for key in report.keys {
+                if written >= out.len() {
+                    break;
+                }
                 if !keyboard_key_should_emit(key, &self.last_keys) {
                     continue;
                 }
@@ -14306,38 +14420,7 @@ impl UsbKeyboard {
                         .saturating_add(scroll_delta);
                     continue;
                 }
-                if key == scancode::CAPS_LOCK {
-                    self.caps_lock_on = !self.caps_lock_on;
-                    if USB_KEYBOARD_POST_SEAL_LED_SYNC_ENABLED {
-                        let leds = if self.caps_lock_on { led::CAPS_LOCK } else { 0 };
-                        if let Err(err) = self.hid.set_leds(leds) {
-                            if !self.led_error_logged {
-                                let mut line = heapless::String::<224>::new();
-                                let _ = core::fmt::Write::write_fmt(
-                                    &mut line,
-                                    format_args!(
-                                        "[local-seat] pi4 keyboard led sync failed caps={} detail={err:?}",
-                                        self.caps_lock_on as u8
-                                    ),
-                                );
-                                boot_log::force_uart_line(line.as_str());
-                                self.led_error_logged = true;
-                            }
-                        } else {
-                            self.led_error_logged = false;
-                        }
-                    } else if !self.led_error_logged {
-                        let mut line = heapless::String::<192>::new();
-                        let _ = core::fmt::Write::write_fmt(
-                            &mut line,
-                            format_args!(
-                                "[local-seat] pi4 keyboard led sync skipped caps={} reason=runtime-dma-sealed",
-                                self.caps_lock_on as u8
-                            ),
-                        );
-                        boot_log::force_uart_line(line.as_str());
-                        self.led_error_logged = true;
-                    }
+                if self.toggle_lock_led_for_key(key) {
                     continue;
                 }
                 let Some(ch) = keyboard_scancode_to_char(key, shift) else {
@@ -14362,9 +14445,6 @@ impl UsbKeyboard {
                     }
                     continue;
                 };
-                if written >= out.len() {
-                    break;
-                }
                 let mut effective = ch;
                 if self.caps_lock_on && effective.is_ascii_alphabetic() {
                     effective = if shift {
@@ -14403,11 +14483,11 @@ impl UsbKeyboard {
             }
 
             self.last_keys = report.keys;
-            if written != 0 {
-                return written;
+            if written >= out.len() {
+                break;
             }
         }
-        0
+        written
     }
 
     fn take_pending_display_scroll_rows(&mut self) -> i8 {
@@ -15767,8 +15847,36 @@ mod driver_coverage_tests {
             scancode::B,
             &[scancode::A, 0, 0, 0, 0, 0]
         ));
-        assert_eq!(USB_KEYBOARD_REPORT_DRAIN_BUDGET, 8);
-        assert!(!USB_KEYBOARD_POST_SEAL_LED_SYNC_ENABLED);
+        assert_eq!(USB_KEYBOARD_REPORT_DRAIN_BUDGET, 16);
+        assert!(
+            USB_KEYBOARD_REPORT_DRAIN_BUDGET * 6 <= crate::local_seat::KEYBOARD_POLL_CHUNK_BYTES
+        );
+        assert!(USB_KEYBOARD_POST_SEAL_LED_SYNC_ENABLED);
+    }
+
+    #[test]
+    fn keyboard_lock_led_bitmap_tracks_caps_num_and_scroll_independently() {
+        assert_eq!(
+            keyboard_lock_led_for_key(scancode::CAPS_LOCK),
+            Some(led::CAPS_LOCK)
+        );
+        assert_eq!(
+            keyboard_lock_led_for_key(scancode::NUM_LOCK),
+            Some(led::NUM_LOCK)
+        );
+        assert_eq!(
+            keyboard_lock_led_for_key(scancode::SCROLL_LOCK),
+            Some(led::SCROLL_LOCK)
+        );
+        assert_eq!(keyboard_lock_led_for_key(scancode::A), None);
+        assert_eq!(keyboard_led_bitmap(false, false, false), 0);
+        assert_eq!(keyboard_led_bitmap(true, false, false), led::CAPS_LOCK);
+        assert_eq!(keyboard_led_bitmap(false, true, false), led::NUM_LOCK);
+        assert_eq!(keyboard_led_bitmap(false, false, true), led::SCROLL_LOCK);
+        assert_eq!(
+            keyboard_led_bitmap(true, true, true),
+            led::CAPS_LOCK | led::NUM_LOCK | led::SCROLL_LOCK
+        );
     }
 
     #[test]
@@ -21397,7 +21505,9 @@ mod tests {
     }
 
     #[test]
-    fn wifi_progress_ticks_emit_only_on_slow_boundaries() {
+    fn hdmi_progress_refresh_cadence_stays_prompt_safe_and_rate_limited() {
+        assert!((5_000..=10_000).contains(&USB_PROGRESS_TICK_MS));
+        assert!(WIFI_PROGRESS_LOOP_TICK_LOOPS * WIFI_PROGRESS_EMIT_INTERVAL_TICKS >= 64_000_000);
         assert_eq!(wifi_progress_dots_for_ticks(0), 0);
         assert_eq!(
             wifi_progress_dots_for_ticks(WIFI_PROGRESS_EMIT_INTERVAL_TICKS - 1),

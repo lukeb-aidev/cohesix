@@ -291,7 +291,8 @@ impl LocalSeatRuntime {
         }
     }
 
-    fn echo_input_bytes(&mut self, bytes: &[u8]) {
+    /// Echo keyboard bytes at the point they enter the canonical console parser.
+    pub(crate) fn echo_input_bytes(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             update_input_echo_preview(
                 &mut self.input_echo_preview,
@@ -334,11 +335,17 @@ impl LocalSeatRuntime {
                         );
                         boot_log::force_uart_line(line.as_str());
                     }
-                    self.echo_input_bytes(&chunk[..read]);
                     let _ = self.enqueue_keyboard_bytes(&chunk[..read]);
                 }
             }
         }
+    }
+
+    /// Return the current local input echo preview for diagnostics and tests.
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn input_echo_preview(&self) -> &str {
+        self.input_echo_preview.as_str()
     }
 
     /// Returns whether a physical backend is attached to this runtime.

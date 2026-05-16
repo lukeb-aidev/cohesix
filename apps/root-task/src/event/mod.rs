@@ -209,7 +209,17 @@ const NET_DIAG_STUCK_MS: u64 = 3_000;
 #[cfg(feature = "net-console")]
 const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 #[cfg(feature = "net-console")]
-const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 32;
+const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 0;
+const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 16;
+const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 4;
+
+#[cfg(test)]
+const fn local_seat_input_drain_contract_for_test() -> (usize, usize) {
+    (
+        LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN,
+        LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD,
+    )
+}
 
 #[cfg(feature = "net-console")]
 fn net_status_allows_root_console(status: &NetStatusReport) -> bool {
@@ -1301,7 +1311,12 @@ where
         self.serial.poll_io();
         self.consume_serial();
         self.consume_local_seat();
+        self.serial.flush_tx();
         self.poll_runtime(false);
+        self.serial.poll_io();
+        self.consume_serial();
+        self.consume_local_seat();
+        self.serial.flush_tx();
     }
 
     #[cfg(feature = "net-console")]
@@ -2812,6 +2827,14 @@ where
                 runtime.blocker,
             ));
             self.emit_console_line(runtime_line.as_str());
+            let runtime_contract = format_message(format_args!(
+                "usb: runtime_contract current={} expected={} blocker={} proof_gate={} target_gate=10",
+                Self::usb_runtime_step_label(runtime.proof_gate),
+                runtime.next_step,
+                runtime.blocker,
+                runtime.proof_gate,
+            ));
+            self.emit_console_line(runtime_contract.as_str());
         }
     }
 
@@ -2836,6 +2859,19 @@ where
             }
             if let Some(exact_issue) = status.exact_issue {
                 let _ = write!(line, " exact={exact_issue}");
+            }
+            if let Some((a_label, b_label, c_label)) = status.value_labels {
+                let _ = write!(
+                    line,
+                    " {a_label}=0x{:016x} {b_label}=0x{:016x} {c_label}=0x{:016x}",
+                    status.a, status.b, status.c
+                );
+            } else {
+                let _ = write!(
+                    line,
+                    " a=0x{:016x} b=0x{:016x} c=0x{:016x}",
+                    status.a, status.b, status.c
+                );
             }
             self.emit_console_line(line.as_str());
         }
@@ -3084,6 +3120,18 @@ where
             "no-connected-port"
         } else {
             "none"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_step_label(proof_gate: u8) -> &'static str {
+        match proof_gate {
+            0..=2 => "ownership-reset",
+            3..=4 => "command-event-ring",
+            5..=7 => "enumeration",
+            8 => "keyboard-ready",
+            9 => "hid-first-report",
+            _ => "keyboard-online",
         }
     }
 
@@ -4408,7 +4456,8 @@ where
 
     fn consume_local_seat(&mut self) {
         let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
-        loop {
+        let mut empty_polls = 0usize;
+        for _ in 0..LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN {
             if let Some(runtime) = self.local_seat.as_mut() {
                 runtime.poll_backend_keyboard();
             }
@@ -4417,9 +4466,17 @@ where
                 None => return,
             };
             if read == 0 {
-                break;
+                empty_polls = empty_polls.saturating_add(1);
+                if empty_polls >= LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD {
+                    break;
+                }
+                continue;
             }
+            empty_polls = 0;
             self.last_input_source = ConsoleInputSource::LocalSeat;
+            if let Some(runtime) = self.local_seat.as_mut() {
+                runtime.echo_input_bytes(&chunk[..read]);
+            }
             if self.serial.clear_partial_line() {
                 self.audit
                     .info("console: cleared serial input before local-seat");
@@ -4769,6 +4826,14 @@ where
                             status.gateway,
                             status.dhcp_phase
                         ));
+                        let line_wifi = format_message(format_args!(
+                            "netstats: wifi_assoc={} wifi_link={} eapol_rx={} eapol_start={} eapol_secure={}",
+                            stats.wifi_assoc,
+                            stats.wifi_link_up,
+                            stats.wifi_host_eapol_rx,
+                            stats.wifi_host_eapol_start,
+                            stats.wifi_host_eapol_secure,
+                        ));
                         let line_six = format_message(format_args!(
                             "netstatus: ip={} gateway={} src={} dhcp={}",
                             status.ip, status.gateway, status.address_source, status.dhcp_phase
@@ -4787,6 +4852,7 @@ where
                         self.emit_console_line(line_three.as_str());
                         self.emit_console_line(line_four.as_str());
                         self.emit_console_line(line_five.as_str());
+                        self.emit_console_line(line_wifi.as_str());
                         self.emit_console_line(line_six.as_str());
                         self.emit_console_line(status_line.as_str());
                         self.metrics.accepted_commands += 1;
@@ -7411,7 +7477,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn host_eapol_pending_gets_burst_polls_without_releasing_net_data() {
+    fn host_eapol_pending_yields_after_single_runtime_poll() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -7426,7 +7492,31 @@ mod tests {
         pump.poll();
         drop(pump);
 
-        assert_eq!(net.polls, WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS + 1);
+        assert_eq!(WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS, 0);
+        assert_eq!(net.polls, 1);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn host_eapol_pending_does_not_delay_serial_echo() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "wifi-host-eapol-pending";
+        net.status.dhcp_phase = "host-eapol-pending";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().driver_mut().push_rx(b"n");
+        pump.poll();
+        let echoed = pump.serial_mut().driver_mut().drain_tx();
+        drop(pump);
+
+        assert_eq!(net.polls, 1);
+        assert_eq!(echoed.as_slice(), b"n");
     }
 
     #[cfg(feature = "net-console")]
@@ -7572,7 +7662,7 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn netstats_emits_compact_status_line() {
-        let driver = LoopbackSerial::<512>::new();
+        let driver = LoopbackSerial::<1024>::new();
         let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
@@ -7608,6 +7698,12 @@ mod tests {
         assert!(
             rendered.contains(
                 "netstats: mode=dhcp policy=wired active=wired standby=none addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: wifi_assoc=0 wifi_link=0 eapol_rx=0 eapol_start=0 eapol_secure=0"
             ),
             "{rendered}"
         );
@@ -7926,6 +8022,129 @@ mod tests {
         let mirrored = local_seat.mirrored_lines_snapshot();
         assert!(mirrored.iter().any(|line| line.contains("PONG")));
         assert!(mirrored.iter().any(|line| line.contains("cohesix>")));
+    }
+
+    #[test]
+    fn local_seat_keyboard_ingress_echoes_typed_bytes_before_completion() {
+        let driver = LoopbackSerial::<64>::new();
+        let serial = SerialPort::<_, 64, 64, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.enqueue_keyboard_bytes(b"hel");
+
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.poll();
+
+        assert_eq!(
+            pump.local_seat
+                .as_ref()
+                .expect("local-seat should be attached")
+                .input_echo_preview(),
+            "hel"
+        );
+
+        pump.local_seat
+            .as_mut()
+            .expect("local-seat should be attached")
+            .enqueue_keyboard_bytes(b"\x08lp\n");
+        pump.session = Some(SessionRole::Queen);
+        pump.poll();
+
+        assert!(pump
+            .local_seat
+            .as_ref()
+            .expect("local-seat should be attached")
+            .input_echo_preview()
+            .is_empty());
+        let mirrored = pump
+            .local_seat
+            .as_ref()
+            .expect("local-seat should be attached")
+            .mirrored_lines_snapshot();
+        assert!(
+            mirrored.iter().any(|line| line.contains("HELP")),
+            "{mirrored:?}"
+        );
+    }
+
+    #[test]
+    fn local_seat_keyboard_ingress_backspace_edits_before_enter() {
+        let driver = LoopbackSerial::<64>::new();
+        let serial = SerialPort::<_, 64, 64, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.enqueue_keyboard_bytes(b"helx\x08p\n");
+
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.session = Some(SessionRole::Queen);
+        pump.poll();
+
+        assert!(pump.local_line.is_empty());
+        let mirrored = pump
+            .local_seat
+            .as_ref()
+            .expect("local-seat should be attached")
+            .mirrored_lines_snapshot();
+        assert!(
+            mirrored.iter().any(|line| line.contains("HELP")),
+            "{mirrored:?}"
+        );
+    }
+
+    #[test]
+    fn local_seat_input_drain_contract_tolerates_idle_hid_reports() {
+        let (poll_passes, empty_polls) = local_seat_input_drain_contract_for_test();
+        assert!(poll_passes >= 8);
+        assert!(poll_passes <= 32);
+        assert!(empty_polls >= 2);
+        assert!(empty_polls <= poll_passes);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn pi4_hdmi_progress_refresh_contract_is_rate_limited() {
+        let (usb_tick_ms, wifi_loop_tick_loops, wifi_emit_interval_ticks) =
+            crate::local_seat_pi4::hdmi_progress_refresh_contract_for_test();
+
+        assert!((5_000..=10_000).contains(&usb_tick_ms));
+        assert!(wifi_loop_tick_loops * wifi_emit_interval_ticks >= 64_000_000);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_runtime_step_labels_keep_gate9_distinct_from_online() {
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_step_label(8),
+            "keyboard-ready"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_step_label(9),
+            "hid-first-report"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_step_label(10),
+            "keyboard-online"
+        );
     }
 
     #[cfg(feature = "kernel")]

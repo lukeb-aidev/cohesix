@@ -75,8 +75,9 @@ const HOST_EAPOL_DEFERRED_EMPTY_BUDGET: usize = 4;
 const DEFERRED_JOIN_POLL_LIMIT: u16 = 1_200;
 const HOST_EAPOL_DEFERRED_POLL_LIMIT: u16 = 60_000;
 const HOST_EAPOL_START_MAX: u8 = 12;
-const HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS: usize = 512;
-const HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS: usize = 4_096;
+const HOST_EAPOL_LOCAL_ADMIN_UNICAST_AFTER: u8 = 4;
+const HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS: usize = 8_192;
+const HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS: usize = 8_192;
 const HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS: usize =
     HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS + HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS;
 const HOST_EAPOL_WAIT_M1_STAGE: &str = "join-security-host-eapol-wait-m1";
@@ -768,6 +769,7 @@ impl JoinCompletionRule {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FirmwareSupplicantPath {
+    HostSupplicant,
     PrimaryPlain,
     BsscfgWrapper,
     Unsupported,
@@ -776,6 +778,7 @@ enum FirmwareSupplicantPath {
 impl FirmwareSupplicantPath {
     const fn label(self) -> &'static str {
         match self {
+            Self::HostSupplicant => "host-supplicant",
             Self::PrimaryPlain => "primary-plain",
             Self::BsscfgWrapper => "bsscfg-wrapper",
             Self::Unsupported => "unsupported",
@@ -784,6 +787,7 @@ impl FirmwareSupplicantPath {
 
     const fn order_label(self) -> &'static str {
         match self {
+            Self::HostSupplicant => "linux-host-eapol",
             Self::PrimaryPlain => "sup_wpa",
             Self::BsscfgWrapper => "sup_wpa-or-bsscfg_sup_wpa",
             Self::Unsupported => "sup_wpa-or-bsscfg_sup_wpa-host-eapol",
@@ -795,9 +799,13 @@ impl FirmwareSupplicantPath {
             Self::PrimaryPlain | Self::BsscfgWrapper => {
                 JoinCompletionRule::FirmwareSupplicantPskSup
             }
-            Self::Unsupported => JoinCompletionRule::HostEapolRequired,
+            Self::HostSupplicant | Self::Unsupported => JoinCompletionRule::HostEapolRequired,
         }
     }
+}
+
+const fn linux_userspace_supplicant_path_uses_host_eapol() -> bool {
+    true
 }
 
 #[inline]
@@ -808,6 +816,22 @@ const fn event_has_link_flag(event: Cyw43Event) -> bool {
 fn host_eapol_association_event_label(event: Cyw43Event) -> Option<&'static str> {
     match event.event_type {
         EVENT_SET_SSID if event.status == STATUS_SUCCESS => Some("set-ssid"),
+        EVENT_ASSOC | EVENT_REASSOC if event.status == STATUS_SUCCESS => Some("assoc"),
+        EVENT_LINK if event.status == STATUS_SUCCESS && event_has_link_flag(event) => {
+            Some("link-up")
+        }
+        _ => None,
+    }
+}
+
+fn host_eapol_post_assoc_event_label(
+    event: Cyw43Event,
+    associated_after_event: bool,
+) -> Option<&'static str> {
+    if !associated_after_event {
+        return None;
+    }
+    match event.event_type {
         EVENT_ASSOC | EVENT_REASSOC if event.status == STATUS_SUCCESS => Some("assoc"),
         EVENT_LINK if event.status == STATUS_SUCCESS && event_has_link_flag(event) => {
             Some("link-up")
@@ -878,9 +902,8 @@ const fn join_completion_link_up(
 ) -> bool {
     let security_complete = match completion_rule {
         JoinCompletionRule::SetSsid => true,
-        JoinCompletionRule::FirmwareSupplicantPskSup | JoinCompletionRule::HostEapolRequired => {
-            state.psk_completed
-        }
+        JoinCompletionRule::FirmwareSupplicantPskSup => state.psk_completed,
+        JoinCompletionRule::HostEapolRequired => false,
     };
     state.set_ssid_completed
         && security_complete
@@ -959,6 +982,11 @@ fn join_event_result(
                 status: event.status,
                 auth_status: state.auth_status,
             }))
+        }
+        EVENT_PSK_SUP
+            if secure && matches!(completion_rule, JoinCompletionRule::HostEapolRequired) =>
+        {
+            None
         }
         EVENT_PSK_SUP if secure && event.status == STATUS_UNSOLICITED => {
             state.psk_completed = true;
@@ -1752,7 +1780,7 @@ const fn host_eapol_proof_after_window_action(terminal_after_window: bool) -> &'
 
 #[inline]
 const fn host_eapol_deferred_poll_log_due(polls: u16) -> bool {
-    polls == 1 || polls == 64 || polls == 512 || polls == 4_096 || polls % 8_192 == 0
+    polls == 1 || polls % 8_192 == 0
 }
 
 #[inline]
@@ -1774,15 +1802,36 @@ const fn host_eapol_start_uses_pae_group(sent: u8) -> bool {
     sent == 0
 }
 
+#[inline]
+fn host_eapol_local_admin_unicast_fallback_due(ap_source: &str, sent: u8) -> bool {
+    host_eapol_ap_source_is_unproved_local_admin(ap_source)
+        && sent >= HOST_EAPOL_LOCAL_ADMIN_UNICAST_AFTER
+}
+
 fn host_eapol_start_destination(
     ap_mac: [u8; ETHER_ADDR_LEN],
+    ap_source: &'static str,
     sent: u8,
 ) -> ([u8; ETHER_ADDR_LEN], &'static str) {
     if host_eapol_start_uses_pae_group(sent) || !host_eapol_mac_known(ap_mac) {
+        return (PAE_GROUP_ADDR, "pae-group");
+    }
+    if host_eapol_ap_source_is_unproved_local_admin(ap_source)
+        && !host_eapol_local_admin_unicast_fallback_due(ap_source, sent)
+    {
         (PAE_GROUP_ADDR, "pae-group")
+    } else if host_eapol_ap_source_is_unproved_local_admin(ap_source) {
+        (ap_mac, "ap-local-admin-probe")
     } else {
         (ap_mac, "ap")
     }
+}
+
+fn host_eapol_ap_source_is_unproved_local_admin(source: &str) -> bool {
+    matches!(
+        source,
+        "event-addr-local-admin" | "ether-src-local-admin" | "get-bssid-local-admin"
+    )
 }
 
 fn host_eapol_post_assoc_rx_admission_due(
@@ -3260,7 +3309,7 @@ impl Cyw43NetDevice {
     fn log_host_eapol_rx_source(&mut self, mode: &'static str, polls: u16) {
         let source = self.state.cyw43_host_eapol_rx_source();
         info!(
-            "[cyw43] host-eapol rx-source mode={mode} polls={polls} assoc={} eapol_rx={} start_sent={} ap_source={} rframe=0x{:04x}/{} int_status=0x{:08x}/{} frame_ind={} host_int={} tohost=0x{:08x}/{} sdhci=0x{:08x} card_int={} ioex=0x{:02x}/{} iordy=0x{:02x}/{} ien=0x{:02x}/{} f2_ready={} action=wait-m1",
+            "[cyw43] host-eapol rx-source mode={mode} polls={polls} assoc={} eapol_rx={} start_sent={} ap_source={} rframe=0x{:04x}/{} int_status=0x{:08x}/{} frame_ind={} host_int={} sdhci=0x{:08x} card_int={} f2_ready={} action=wait-m1",
             yes_no(self.associated),
             self.host_eapol_rx_packets,
             self.host_wpa.eapol_start_sent,
@@ -3271,17 +3320,30 @@ impl Cyw43NetDevice {
             yes_no(source.int_status.is_some()),
             yes_no(source.frame_indication),
             yes_no(source.host_interrupt),
-            source.tohost_mailbox.unwrap_or(0),
-            yes_no(source.tohost_mailbox.is_some()),
             source.sdhci_int_status,
             yes_no(source.card_interrupt),
+            yes_no(source.function2_ready),
+        );
+        info!(
+            "[cyw43] host-eapol rx-source-regs mode={mode} polls={polls} tohost=0x{:08x}/{} hostintmask=0x{:08x}/{} functionintmask=0x{:08x}/{} watermark=0x{:02x}/{} devctl=0x{:02x}/{} mesbusy=0x{:02x}/{} ioex=0x{:02x}/{} iordy=0x{:02x}/{} ien=0x{:02x}/{}",
+            source.tohost_mailbox.unwrap_or(0),
+            yes_no(source.tohost_mailbox.is_some()),
+            source.hostintmask.unwrap_or(0),
+            yes_no(source.hostintmask.is_some()),
+            source.function_int_mask.unwrap_or(0),
+            yes_no(source.function_int_mask.is_some()),
+            source.watermark.unwrap_or(0),
+            yes_no(source.watermark.is_some()),
+            source.devctl.unwrap_or(0),
+            yes_no(source.devctl.is_some()),
+            source.mesbusy.unwrap_or(0),
+            yes_no(source.mesbusy.is_some()),
             source.io_enable.unwrap_or(0),
             yes_no(source.io_enable.is_some()),
             source.io_ready.unwrap_or(0),
             yes_no(source.io_ready.is_some()),
             source.io_interrupt_enable.unwrap_or(0),
             yes_no(source.io_interrupt_enable.is_some()),
-            yes_no(source.function2_ready),
         );
     }
 
@@ -3314,14 +3376,22 @@ impl Cyw43NetDevice {
                 self.set_optional_iovar_u32("mfp", MFP_CAPABLE)?;
             }
             self.set_join_security_wpa_auth(WPA_AUTH_WPA2_PSK)?;
-            let firmware_supplicant_path = self.enable_wpa2_firmware_supplicant()?;
+            let firmware_supplicant_path = if linux_userspace_supplicant_path_uses_host_eapol() {
+                info!(
+                    "[cyw43] join: firmware-supplicant path=host-supplicant action=skip reason=linux-userspace-eapol completion_rule=host-eapol-required"
+                );
+                FirmwareSupplicantPath::HostSupplicant
+            } else {
+                self.enable_wpa2_firmware_supplicant()?
+            };
             let completion_rule = firmware_supplicant_path.completion_rule();
             let (pmk_kind, pmk_action) = if matches!(
                 firmware_supplicant_path,
-                FirmwareSupplicantPath::Unsupported
+                FirmwareSupplicantPath::HostSupplicant | FirmwareSupplicantPath::Unsupported
             ) {
                 info!(
-                    "[cyw43] join: pmk action=skip reason=firmware-supplicant-unsupported completion_rule=host-eapol-required"
+                    "[cyw43] join: pmk action=skip reason={} completion_rule=host-eapol-required",
+                    firmware_supplicant_path.label(),
                 );
                 self.prepare_host_wpa_psk(ssid.as_bytes(), psk.as_bytes())?;
                 (WsecPmkKind::HostEapolDeferred, "skip-host-eapol")
@@ -3443,7 +3513,9 @@ impl Cyw43NetDevice {
                 Ok(RxFrameResult::Event(event)) => {
                     event_frames = event_frames.saturating_add(1);
                     if association_event == "none" {
-                        if let Some(label) = host_eapol_association_event_label(event) {
+                        if let Some(label) =
+                            host_eapol_post_assoc_event_label(event, self.associated)
+                        {
                             association_event = label;
                             association_poll = total_polls;
                         }
@@ -3483,7 +3555,7 @@ impl Cyw43NetDevice {
             if self.host_eapol_rx_packets != start_eapol && self.host_eapol_secure_complete() {
                 break;
             }
-            if association_event == "none" {
+            if !self.associated {
                 if total_polls >= HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS {
                     break;
                 }
@@ -3743,8 +3815,11 @@ impl Cyw43NetDevice {
         if !self.ensure_host_eapol_post_assoc_rx_admission(mode, polls) || self.host_wpa.m1_seen {
             return;
         }
-        let (dst, dst_label) =
-            host_eapol_start_destination(self.host_wpa.ap_mac, self.host_wpa.eapol_start_sent);
+        let (dst, dst_label) = host_eapol_start_destination(
+            self.host_wpa.ap_mac,
+            self.host_wpa.ap_mac_source,
+            self.host_wpa.eapol_start_sent,
+        );
         let sta = self.mac.0;
         let mut frame = [0u8; ETH_HEADER_LEN + EAPOL_HEADER_LEN];
         let frame_len = match write_eapol_start_frame(&mut frame, &dst, &sta) {
@@ -3800,15 +3875,26 @@ impl Cyw43NetDevice {
                 if host_eapol_ap_mac_candidate(bssid, self.mac.0)
                     && !mac_is_station_local_alias(bssid, self.mac.0)
                 {
+                    let bssid_source = if mac_is_locally_administered(bssid) {
+                        "get-bssid-local-admin"
+                    } else {
+                        "get-bssid"
+                    };
+                    let next_action = if host_eapol_ap_source_is_unproved_local_admin(bssid_source)
+                    {
+                        "pae-group-then-local-admin-unicast-probe"
+                    } else {
+                        "prefer-ap-unicast"
+                    };
                     let previous = self.host_wpa.ap_mac;
                     self.host_wpa.ap_mac = bssid;
-                    self.host_wpa.ap_mac_source = "get-bssid";
+                    self.host_wpa.ap_mac_source = bssid_source;
                     if previous != bssid && self.host_wpa.eapol_start_sent > 0 {
                         self.host_wpa.eapol_start_sent = 1;
                         self.host_wpa.rx_admission_refreshed_after_assoc = false;
                     }
                     info!(
-                        "[cyw43] host-eapol bssid refresh action=ready reason={reason} bssid={} previous={} source=wlc-get-bssid next=prefer-ap-unicast retry_count={}",
+                        "[cyw43] host-eapol bssid refresh action=ready reason={reason} bssid={} previous={} source={bssid_source} next={next_action} retry_count={}",
                         EthernetAddress(bssid),
                         EthernetAddress(previous),
                         self.host_wpa.eapol_start_sent,
@@ -5502,6 +5588,15 @@ impl NetDevice for Cyw43NetDevice {
             tx_dup_used_ignored: 0,
             tx_invalid_used_state: 0,
             tx_alloc_blocked_inflight: 0,
+            wifi_assoc: if self.associated { 1 } else { 0 },
+            wifi_link_up: if self.link_up { 1 } else { 0 },
+            wifi_host_eapol_rx: u64::from(self.host_eapol_rx_packets),
+            wifi_host_eapol_start: u64::from(self.host_wpa.eapol_start_sent),
+            wifi_host_eapol_secure: if self.host_eapol_secure_complete() {
+                1
+            } else {
+                0
+            },
         }
     }
 
@@ -5990,23 +6085,26 @@ mod tests {
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
         host_eapol_association_event_label, host_eapol_deferred_poll_log_due,
         host_eapol_deferred_progress_error_is_transient, host_eapol_event_ap_mac_candidate,
-        host_eapol_frame_proof, host_eapol_key_body, host_eapol_packet_dst_allowed,
+        host_eapol_frame_proof, host_eapol_key_body, host_eapol_local_admin_unicast_fallback_due,
+        host_eapol_packet_dst_allowed, host_eapol_post_assoc_event_label,
         host_eapol_post_assoc_rx_admission_due, host_eapol_proof_after_window_action,
         host_eapol_start_destination, host_eapol_start_poll_due, host_eapol_start_uses_pae_group,
         initial_control_plane_bootstrap_policy_label, initial_control_plane_data_clock_target_hz,
         ioctl_no_progress_after_nonmatching_frames, ioctl_wait_loops, iovar_get_payload_len,
-        is_transport_retryable, join_completion_timeout_reason, join_event_result,
-        join_iovar_fallback_allows_set_ssid, join_security_iovar_failure_exact_error,
-        join_security_iovar_name, join_security_wpa_auth_failure_exact_error,
-        join_security_wpa_auth_stage, linux_attach_control_plane_probe_order,
-        linux_first_control_plane_iovar_order, linux_join_event_mask,
-        linux_optional_iovar_allows_unsupported, linux_station_path_enables_apsta,
+        is_transport_retryable, join_completion_link_up, join_completion_timeout_reason,
+        join_event_result, join_iovar_fallback_allows_set_ssid,
+        join_security_iovar_failure_exact_error, join_security_iovar_name,
+        join_security_wpa_auth_failure_exact_error, join_security_wpa_auth_stage,
+        linux_attach_control_plane_probe_order, linux_first_control_plane_iovar_order,
+        linux_join_event_mask, linux_optional_iovar_allows_unsupported,
+        linux_station_path_enables_apsta,
         linux_station_path_keeps_rxglom_configured_before_preinit,
         linux_station_path_keeps_txglom_configured_before_preinit,
         linux_station_path_sets_ampdu_limits_before_join,
         linux_station_path_sets_antdiv_before_join, linux_station_path_sets_country,
         linux_station_path_sets_legacy_band, linux_station_path_sets_legacy_gmode,
-        linux_station_path_sets_power_mode_before_join, linux_wpa2_join_sets_mfp_without_rsn_ie,
+        linux_station_path_sets_power_mode_before_join,
+        linux_userspace_supplicant_path_uses_host_eapol, linux_wpa2_join_sets_mfp_without_rsn_ie,
         optional_control_plane_iovar_allows_failure,
         optional_host_eapol_rx_admission_allows_failure, optional_txbf_allows_failure,
         parse_broadcom_event, parse_event_payload, parse_rx_sdpcm_header,
@@ -6507,6 +6605,56 @@ mod tests {
     }
 
     #[test]
+    fn secure_join_host_eapol_rule_ignores_firmware_psk_sup_completion() {
+        let mut completion = JoinCompletionState::default();
+        let set_ssid_success = Cyw43Event {
+            event_type: EVENT_SET_SSID,
+            status: STATUS_SUCCESS,
+            ..Cyw43Event::default()
+        };
+        let link_up = Cyw43Event {
+            flags: EVENT_FLAG_LINK,
+            event_type: EVENT_LINK,
+            status: STATUS_SUCCESS,
+            ..Cyw43Event::default()
+        };
+        let psk_keyed = Cyw43Event {
+            event_type: EVENT_PSK_SUP,
+            status: STATUS_UNSOLICITED,
+            ..Cyw43Event::default()
+        };
+
+        assert!(join_event_result(
+            set_ssid_success,
+            true,
+            JoinCompletionRule::HostEapolRequired,
+            &mut completion,
+        )
+        .is_none());
+        assert!(join_event_result(
+            link_up,
+            true,
+            JoinCompletionRule::HostEapolRequired,
+            &mut completion,
+        )
+        .is_none());
+        assert!(join_event_result(
+            psk_keyed,
+            true,
+            JoinCompletionRule::HostEapolRequired,
+            &mut completion,
+        )
+        .is_none());
+        assert!(completion.set_ssid_completed);
+        assert!(completion.carrier_confirmed);
+        assert!(!completion.psk_completed);
+        assert!(!join_completion_link_up(
+            JoinCompletionRule::HostEapolRequired,
+            completion,
+        ));
+    }
+
+    #[test]
     fn secure_join_completion_rule_requires_psk_sup() {
         assert_eq!(
             JoinCompletionRule::FirmwareSupplicantPskSup.label(),
@@ -6517,6 +6665,11 @@ mod tests {
             FirmwareSupplicantPath::Unsupported.completion_rule(),
             JoinCompletionRule::HostEapolRequired
         );
+        assert_eq!(
+            FirmwareSupplicantPath::HostSupplicant.completion_rule(),
+            JoinCompletionRule::HostEapolRequired
+        );
+        assert!(linux_userspace_supplicant_path_uses_host_eapol());
         assert_eq!(
             join_completion_timeout_reason(JoinCompletionRule::HostEapolRequired),
             "host-eapol-required"
@@ -6585,8 +6738,8 @@ mod tests {
 
     #[test]
     fn host_eapol_terminal_state_still_allows_explicit_eapol_proof() {
-        assert!(HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS <= 512);
-        assert!(HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS <= 4_096);
+        assert_eq!(HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS, 8_192);
+        assert_eq!(HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS, 8_192);
         assert_eq!(
             HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS,
             HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS + HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS
@@ -6628,6 +6781,9 @@ mod tests {
         assert!(HOST_EAPOL_DEFERRED_POLL_LIMIT > DEFERRED_JOIN_POLL_LIMIT);
         assert!(host_eapol_deferred_poll_log_due(1));
         assert!(host_eapol_deferred_poll_log_due(8_192));
+        assert!(!host_eapol_deferred_poll_log_due(64));
+        assert!(!host_eapol_deferred_poll_log_due(512));
+        assert!(!host_eapol_deferred_poll_log_due(4_096));
         assert!(!host_eapol_deferred_poll_log_due(2));
         assert!(host_eapol_start_poll_due(1));
         assert!(host_eapol_start_poll_due(64));
@@ -6701,19 +6857,40 @@ mod tests {
     #[test]
     fn host_eapol_start_prefers_ap_after_one_pae_group_probe() {
         let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let local_admin_ap = [0xde, 0xe4, 0x08, 0xde, 0x46, 0xf0];
 
         assert!(host_eapol_start_uses_pae_group(0));
         assert!(!host_eapol_start_uses_pae_group(1));
         assert!(!host_eapol_start_uses_pae_group(2));
         assert_eq!(
-            host_eapol_start_destination(ap, 0),
+            host_eapol_start_destination(ap, "get-bssid", 0),
             (PAE_GROUP_ADDR, "pae-group")
         );
-        assert_eq!(host_eapol_start_destination(ap, 1), (ap, "ap"));
-        assert_eq!(host_eapol_start_destination(ap, 2), (ap, "ap"));
+        assert_eq!(host_eapol_start_destination(ap, "get-bssid", 1), (ap, "ap"));
+        assert_eq!(host_eapol_start_destination(ap, "get-bssid", 2), (ap, "ap"));
         assert_eq!(
-            host_eapol_start_destination([0; ETHER_ADDR_LEN], 1),
+            host_eapol_start_destination([0; ETHER_ADDR_LEN], "get-bssid", 1),
             (PAE_GROUP_ADDR, "pae-group")
+        );
+        assert_eq!(
+            host_eapol_start_destination(local_admin_ap, "get-bssid-local-admin", 1),
+            (PAE_GROUP_ADDR, "pae-group")
+        );
+        assert!(!host_eapol_local_admin_unicast_fallback_due(
+            "get-bssid-local-admin",
+            3
+        ));
+        assert!(host_eapol_local_admin_unicast_fallback_due(
+            "get-bssid-local-admin",
+            4
+        ));
+        assert_eq!(
+            host_eapol_start_destination(local_admin_ap, "get-bssid-local-admin", 4),
+            (local_admin_ap, "ap-local-admin-probe")
+        );
+        assert_eq!(
+            host_eapol_start_destination(local_admin_ap, "event-addr-local-admin", 8),
+            (local_admin_ap, "ap-local-admin-probe")
         );
     }
 
@@ -6955,27 +7132,33 @@ mod tests {
 
     #[test]
     fn host_eapol_proof_waits_for_association_events() {
+        let set_ssid = Cyw43Event {
+            flags: 0,
+            event_type: EVENT_SET_SSID,
+            status: STATUS_SUCCESS,
+            reason: 0,
+            auth_type: 0,
+            ..Cyw43Event::default()
+        };
+        let link_up = Cyw43Event {
+            flags: EVENT_FLAG_LINK,
+            event_type: EVENT_LINK,
+            status: STATUS_SUCCESS,
+            reason: 0,
+            auth_type: 0,
+            ..Cyw43Event::default()
+        };
+
+        assert_eq!(host_eapol_association_event_label(link_up), Some("link-up"));
         assert_eq!(
-            host_eapol_association_event_label(Cyw43Event {
-                flags: EVENT_FLAG_LINK,
-                event_type: EVENT_LINK,
-                status: STATUS_SUCCESS,
-                reason: 0,
-                auth_type: 0,
-                ..Cyw43Event::default()
-            }),
-            Some("link-up")
-        );
-        assert_eq!(
-            host_eapol_association_event_label(Cyw43Event {
-                flags: 0,
-                event_type: EVENT_SET_SSID,
-                status: STATUS_SUCCESS,
-                reason: 0,
-                auth_type: 0,
-                ..Cyw43Event::default()
-            }),
+            host_eapol_association_event_label(set_ssid),
             Some("set-ssid")
+        );
+        assert_eq!(host_eapol_post_assoc_event_label(set_ssid, false), None);
+        assert_eq!(host_eapol_post_assoc_event_label(set_ssid, true), None);
+        assert_eq!(
+            host_eapol_post_assoc_event_label(link_up, true),
+            Some("link-up")
         );
         assert_eq!(
             host_eapol_association_event_label(Cyw43Event {
@@ -7727,6 +7910,14 @@ mod tests {
         assert_eq!(
             FirmwareSupplicantPath::BsscfgWrapper.order_label(),
             "sup_wpa-or-bsscfg_sup_wpa"
+        );
+        assert_eq!(
+            FirmwareSupplicantPath::HostSupplicant.label(),
+            "host-supplicant"
+        );
+        assert_eq!(
+            FirmwareSupplicantPath::HostSupplicant.order_label(),
+            "linux-host-eapol"
         );
     }
 

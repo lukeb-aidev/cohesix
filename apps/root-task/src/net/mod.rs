@@ -547,6 +547,16 @@ pub struct NetDeviceCounters {
     pub tx_invalid_used_state: u64,
     /// TX allocations blocked while descriptors remain in-flight.
     pub tx_alloc_blocked_inflight: u64,
+    /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.
+    pub wifi_assoc: u64,
+    /// Wi-Fi link state, encoded as 0 or 1 for compact diagnostics.
+    pub wifi_link_up: u64,
+    /// Host-EAPOL frames received by the Wi-Fi driver.
+    pub wifi_host_eapol_rx: u64,
+    /// EAPOL-Start frames sent by the Wi-Fi driver.
+    pub wifi_host_eapol_start: u64,
+    /// Host-EAPOL secure completion state, encoded as 0 or 1.
+    pub wifi_host_eapol_secure: u64,
 }
 
 /// Monotonic counters collected from the NIC driver and smoltcp sockets.
@@ -590,6 +600,16 @@ pub struct NetCounters {
     pub tx_zero_len_attempt: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
+    /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.
+    pub wifi_assoc: u64,
+    /// Wi-Fi link state, encoded as 0 or 1 for compact diagnostics.
+    pub wifi_link_up: u64,
+    /// Host-EAPOL frames received by the Wi-Fi driver.
+    pub wifi_host_eapol_rx: u64,
+    /// EAPOL-Start frames sent by the Wi-Fi driver.
+    pub wifi_host_eapol_start: u64,
+    /// Host-EAPOL secure completion state, encoded as 0 or 1.
+    pub wifi_host_eapol_secure: u64,
 }
 
 /// Outcome of the latest network self-test pass.

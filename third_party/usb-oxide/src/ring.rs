@@ -7,7 +7,7 @@ use crate::{Dma, Result, UsbError};
 
 use core::{
     marker::PhantomData,
-    sync::atomic::{compiler_fence, Ordering},
+    sync::atomic::{Ordering, compiler_fence},
 };
 
 const XHCI_RING_ALIGNMENT: usize = 64;
@@ -757,10 +757,10 @@ impl<H: Dma> EventRing<H> {
 
 #[cfg(test)]
 mod tests {
-    use super::{trb_type, PhysMem, Ring, Trb, XHCI_RING_ALIGNMENT};
+    use super::{PhysMem, Ring, Trb, XHCI_RING_ALIGNMENT, trb_type};
     use crate::{Dma, DmaShareError};
     use core::sync::atomic::{AtomicUsize, Ordering};
-    use std::alloc::{alloc_zeroed, dealloc, Layout};
+    use std::alloc::{Layout, alloc_zeroed, dealloc};
     use std::sync::Mutex;
     use std::vec::Vec;
 

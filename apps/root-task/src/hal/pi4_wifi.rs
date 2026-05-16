@@ -7670,11 +7670,52 @@ const fn control_plane_startup_link_rearm_budget(
     }
 }
 
+const fn runtime_rx_drains_before_irq_clear(
+    strict_reply_pending: bool,
+    rearm_pending: bool,
+    startup_link_stabilized: bool,
+    promoted_probe_pending: bool,
+    linux_rxskip_pending: bool,
+    speculative_frame_pending: bool,
+) -> bool {
+    !strict_reply_pending
+        && !rearm_pending
+        && !startup_link_stabilized
+        && !promoted_probe_pending
+        && !linux_rxskip_pending
+        && !speculative_frame_pending
+}
+
+const fn runtime_rx_uses_linux_firstread_on_frame_indication(
+    frame_indicated: bool,
+    frame_len: usize,
+) -> bool {
+    frame_indicated && frame_len == 0
+}
+
+const fn runtime_rx_uses_linux_firstread_on_irq_source(
+    frame_indicated: bool,
+    int_status: Option<u32>,
+    sdhci_status: u32,
+    frame_len: usize,
+) -> bool {
+    let host_int = match int_status {
+        Some(bits) => (bits & I_HMB_HOST_INT) != 0,
+        None => false,
+    };
+    !frame_indicated && frame_len == 0 && (host_int || (sdhci_status & SDHCI_INT_CARD_INT) != 0)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cyw43HostEapolRxSource {
     pub rframe_len: Option<u16>,
     pub int_status: Option<u32>,
     pub tohost_mailbox: Option<u32>,
+    pub hostintmask: Option<u32>,
+    pub function_int_mask: Option<u32>,
+    pub watermark: Option<u8>,
+    pub devctl: Option<u8>,
+    pub mesbusy: Option<u8>,
     pub sdhci_int_status: u32,
     pub io_enable: Option<u8>,
     pub io_ready: Option<u8>,
@@ -8361,11 +8402,44 @@ impl Pi4WifiState {
                 SDPCMD_REG_TOHOSTMAILBOXDATA,
             )
             .ok();
+        let hostintmask = self
+            .host
+            .read_sdio_core_u32_with_f1_fallback(
+                "host-eapol-rx-source",
+                "hostintmask",
+                SDPCMD_REG_HOSTINTMASK,
+            )
+            .ok();
+        let function_int_mask = self
+            .host
+            .read_sdio_core_u32_with_f1_fallback(
+                "host-eapol-rx-source",
+                "functionintmask",
+                SDPCMD_REG_FUNCTIONINTMASK,
+            )
+            .ok();
+        let watermark = self
+            .host
+            .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
+            .ok();
+        let devctl = self
+            .host
+            .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
+            .ok();
+        let mesbusy = self
+            .host
+            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
+            .ok();
         let sdhci_int_status = self.host.read32(SDHCI_INT_STATUS);
         Cyw43HostEapolRxSource {
             rframe_len,
             int_status,
             tohost_mailbox,
+            hostintmask,
+            function_int_mask,
+            watermark,
+            devctl,
+            mesbusy,
             sdhci_int_status,
             io_enable,
             io_ready,
@@ -9158,6 +9232,7 @@ struct SdioHost {
     experimental_control_plane_promoted_probe_pending: bool,
     experimental_control_plane_linux_rxskip_pending: bool,
     cached_control_plane_irq_int_status: Option<u32>,
+    runtime_frame_read_needs_irq_ack: bool,
     last_sdio_irq_clear_serviced_bits: u32,
     last_sdio_irq_clear_int_status_readable: bool,
     last_sdio_irq_clear_card_int: bool,
@@ -9302,6 +9377,7 @@ impl SdioHost {
             experimental_control_plane_promoted_probe_pending: false,
             experimental_control_plane_linux_rxskip_pending: false,
             cached_control_plane_irq_int_status: None,
+            runtime_frame_read_needs_irq_ack: false,
             last_sdio_irq_clear_serviced_bits: 0,
             last_sdio_irq_clear_int_status_readable: false,
             last_sdio_irq_clear_card_int: false,
@@ -9367,6 +9443,7 @@ impl SdioHost {
         self.experimental_control_plane_promoted_probe_pending = false;
         self.experimental_control_plane_linux_rxskip_pending = false;
         self.cached_control_plane_irq_int_status = None;
+        self.runtime_frame_read_needs_irq_ack = false;
         self.last_sdio_irq_clear_serviced_bits = 0;
         self.last_sdio_irq_clear_int_status_readable = false;
         self.last_sdio_irq_clear_card_int = false;
@@ -17766,7 +17843,189 @@ impl SdioHost {
         }
     }
 
+    fn runtime_rx_should_preserve_irq_until_frame_drain(&self) -> bool {
+        runtime_rx_drains_before_irq_clear(
+            self.strict_control_plane_reply_pending,
+            control_plane_reply_rearm_pending(self.experimental_control_plane_reply_rearm_mode),
+            self.experimental_control_plane_startup_link_stabilized,
+            self.experimental_control_plane_promoted_probe_pending,
+            self.experimental_control_plane_linux_rxskip_pending,
+            self.experimental_control_plane_speculative_frame_len != 0,
+        )
+    }
+
+    fn next_runtime_frame_len(&mut self) -> Result<usize, HalError> {
+        self.runtime_frame_read_needs_irq_ack = false;
+        let frame_len = self.read_frame_len_registers()?;
+        if frame_len != 0 {
+            self.runtime_frame_read_needs_irq_ack = true;
+            self.clear_control_plane_sideband_unreadable_recovery_cycles();
+            self.clear_control_plane_speculative_reply_frame();
+            return Ok(frame_len);
+        }
+
+        let int_status = match self.read_sdio_core_u32_with_f1_fallback(
+            "runtime-rx-preserve-before-clear",
+            "int-status",
+            SDIO_INT_STATUS,
+        ) {
+            Ok(value) => Some(value),
+            Err(err) if control_plane_reply_speculative_read_can_continue(&err) => None,
+            Err(err) => return Err(err),
+        };
+        let sdhci_status = self.read32(SDHCI_INT_STATUS);
+        let frame_indicated = int_status.is_some_and(|value| (value & I_HMB_FRAME_IND) != 0);
+        if frame_indicated {
+            for poll in 1..=4u8 {
+                for _ in 0..SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE {
+                    spin_loop();
+                }
+                wifi_progress_advance_loops(SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE);
+                let retry_len = self.read_frame_len_registers()?;
+                if retry_len != 0 {
+                    self.runtime_frame_read_needs_irq_ack = true;
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=runtime-rx action=frame-indication-rframe-ready poll={poll} frame_len={retry_len} int_status=0x{int_status:08x} sdhci=0x{sdhci_status:08x} clear=after-drain",
+                        int_status = int_status.unwrap_or(0),
+                    ));
+                    return Ok(retry_len);
+                }
+            }
+            if runtime_rx_uses_linux_firstread_on_frame_indication(frame_indicated, 0) {
+                let recovered_len = self.try_capture_runtime_rx_firstread(
+                    "frame-indication",
+                    "runtime-rx-frame-indicated-read",
+                    "runtime-rx-frame-indicated-ready",
+                    int_status.unwrap_or(0),
+                    true,
+                    sdhci_status,
+                )?;
+                if recovered_len != 0 {
+                    return Ok(recovered_len);
+                }
+            }
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=runtime-rx action=frame-indication-without-rframe int_status=0x{int_status:08x} sdhci=0x{sdhci_status:08x} clear=defer-before-drain reason=preserve-eapol-rx-latch",
+                int_status = int_status.unwrap_or(0),
+            ));
+        } else if runtime_rx_uses_linux_firstread_on_irq_source(
+            frame_indicated,
+            int_status,
+            sdhci_status,
+            0,
+        ) {
+            let recovered_len = self.try_capture_runtime_rx_firstread(
+                "irq-latched",
+                "runtime-rx-irq-latched-read",
+                "runtime-rx-irq-latched-ready",
+                int_status.unwrap_or(0),
+                int_status.is_some(),
+                sdhci_status,
+            )?;
+            if recovered_len != 0 {
+                return Ok(recovered_len);
+            }
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=runtime-rx action=no-frame-source-after-firstread rframe=0x0000 int_status=0x{int_status:08x}/{} sdhci=0x{sdhci_status:08x} card_int={} clear=defer-before-drain reason=preserve-eapol-rx-latch",
+                yn(int_status.is_some()),
+                yn((sdhci_status & SDHCI_INT_CARD_INT) != 0),
+                int_status = int_status.unwrap_or(0),
+            ));
+        }
+
+        Ok(0)
+    }
+
+    fn try_capture_runtime_rx_firstread(
+        &mut self,
+        trigger: &'static str,
+        read_stage: &'static str,
+        ack_stage: &'static str,
+        int_status: u32,
+        int_status_readable: bool,
+        sdhci_status: u32,
+    ) -> Result<usize, HalError> {
+        for firstread_attempt in 1..=CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT {
+            let mut frame = [0u8; CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY];
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage=runtime-rx action={trigger}-firstread attempt={} int_status=0x{int_status:08x}/{} sdhci=0x{sdhci_status:08x} clear=defer-until-drain",
+                firstread_attempt,
+                yn(int_status_readable),
+            ));
+            match self.read_function2_reply_with_linux_recovery(read_stage, &mut frame) {
+                Ok(()) => {
+                    let Some(frame_len) = control_plane_reply_speculative_frame_len(&frame) else {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage=runtime-rx action={trigger}-firstread-invalid attempt={} packet=0x{:02x}{:02x} len_inv=0x{:02x}{:02x} seq=0x{:02x} channel=0x{:02x} int_status=0x{int_status:08x}/{} sdhci=0x{sdhci_status:08x}",
+                            firstread_attempt,
+                            frame[1],
+                            frame[0],
+                            frame[3],
+                            frame[2],
+                            frame[4],
+                            frame[5],
+                            yn(int_status_readable),
+                        ));
+                        self.log_transport_shadow(read_stage);
+                        return Ok(0);
+                    };
+                    if control_plane_reply_header_only_status_frame(&frame, frame_len) {
+                        emit_breadcrumb(format_args!(
+                            "[pi4-wifi] firmware stage=runtime-rx action={trigger}-firstread-header-only attempt={} limit={} frame_len={} int_status=0x{int_status:08x}/{} sdhci=0x{sdhci_status:08x} next={}",
+                            firstread_attempt,
+                            CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT,
+                            frame_len,
+                            yn(int_status_readable),
+                            if firstread_attempt < CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT {
+                                "drain-next"
+                            } else {
+                                "preserve-latch"
+                            },
+                        ));
+                        if firstread_attempt < CYW43_CONTROL_PLANE_HEADER_ONLY_DRAIN_LIMIT {
+                            continue;
+                        }
+                        return Ok(0);
+                    }
+                    self.commit_control_plane_speculative_frame(&frame, frame_len);
+                    self.runtime_frame_read_needs_irq_ack = false;
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=runtime-rx action={trigger}-firstread-ready attempt={} frame_len={} int_status=0x{int_status:08x}/{} sdhci=0x{sdhci_status:08x} clear=after-drain",
+                        firstread_attempt,
+                        frame_len,
+                        yn(int_status_readable),
+                    ));
+                    self.ack_runtime_rx_irq_after_frame_drain(ack_stage);
+                    self.log_transport_shadow(ack_stage);
+                    return Ok(frame_len);
+                }
+                Err(err) if control_plane_reply_speculative_read_can_continue(&err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=runtime-rx action={trigger}-firstread-empty attempt={} int_status=0x{int_status:08x}/{} sdhci=0x{sdhci_status:08x} err={err} clear=defer-before-drain",
+                        firstread_attempt,
+                        yn(int_status_readable),
+                    ));
+                    self.log_transport_shadow(read_stage);
+                    return Ok(0);
+                }
+                Err(err) => {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage=runtime-rx action={trigger}-firstread-error attempt={} int_status=0x{int_status:08x}/{} sdhci=0x{sdhci_status:08x} err={err}",
+                        firstread_attempt,
+                        yn(int_status_readable),
+                    ));
+                    self.log_transport_shadow(read_stage);
+                    return Err(err);
+                }
+            }
+        }
+        Ok(0)
+    }
+
     fn next_frame_len(&mut self) -> Result<usize, HalError> {
+        if self.runtime_rx_should_preserve_irq_until_frame_drain() {
+            return self.next_runtime_frame_len();
+        }
         let _ = self.service_sdio_irq_once_for_firmware_channel_with_idle_log(
             "control-plane-reply",
             true,
@@ -18256,6 +18515,35 @@ impl SdioHost {
         Ok(())
     }
 
+    fn ack_runtime_rx_irq_after_frame_drain(&mut self, stage: &'static str) {
+        self.runtime_frame_read_needs_irq_ack = false;
+        if let Err(err) = self.clear_sdio_irq_source_for_firmware_channel(stage, true, false) {
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=runtime-rx-irq-clear-failed err={err} result=frame-drained"
+            ));
+            return;
+        }
+        let Some(binding) = self.sdio_irq_binding else {
+            return;
+        };
+        let sdhci_status = self.read32(SDHCI_INT_STATUS);
+        match binding.ack_from_hal() {
+            Ok(()) => {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=runtime-rx-irq-ack irq={} trigger={:?} badge=0x{:x} sdhci=0x{sdhci_status:08x} clear=after-drain",
+                    binding.irq().0,
+                    binding.trigger(),
+                    binding.badge(),
+                ));
+                self.enable_sdhci_card_interrupt_signal(stage);
+            }
+            Err(err) => emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=runtime-rx-irq-ack-failed irq={} err={err} sdhci=0x{sdhci_status:08x} result=frame-drained",
+                binding.irq().0,
+            )),
+        }
+    }
+
     fn write_frame_with_linux_request_shape(
         &mut self,
         frame: &mut [u8],
@@ -18475,7 +18763,16 @@ impl SdioHost {
         if frame_len > out.len() {
             return Err(HalError::Unsupported("cyw43-frame-oversize"));
         }
-        self.read_frame_with_linux_request_shape(frame_len, out)?;
+        let ack_runtime_rx_after_drain = self.runtime_frame_read_needs_irq_ack;
+        if let Err(err) = self.read_frame_with_linux_request_shape(frame_len, out) {
+            if ack_runtime_rx_after_drain {
+                self.runtime_frame_read_needs_irq_ack = false;
+            }
+            return Err(err);
+        }
+        if ack_runtime_rx_after_drain {
+            self.ack_runtime_rx_irq_after_frame_drain("runtime-rx-drained");
+        }
         Ok(frame_len)
     }
 
@@ -24516,11 +24813,13 @@ mod tests {
         required_ht_clock_linux_active_transition_resets_chipclk,
         required_ht_clock_linux_active_transition_resets_chipclk_for_attempt,
         required_ht_clock_linux_active_transition_resets_chipclk_for_stage,
-        sdhci_interrupt_buffer_ready_mask, sdhci_present_buffer_ready_mask, sdhci_status_reason,
-        sdio_byte_mode_transfer_plan, sdio_cccr_speed_ehs_value,
-        sdio_cccr_speed_supports_high_speed, sdio_core_byte_function_addr,
-        sdio_core_irq_status_transfer_addr, sdio_core_read_retries_backplane_word_path,
-        sdio_core_reg_addr, sdio_core_transfer_function_addr, sdio_core_transfer_increment_addr,
+        runtime_rx_drains_before_irq_clear, runtime_rx_uses_linux_firstread_on_frame_indication,
+        runtime_rx_uses_linux_firstread_on_irq_source, sdhci_interrupt_buffer_ready_mask,
+        sdhci_present_buffer_ready_mask, sdhci_status_reason, sdio_byte_mode_transfer_plan,
+        sdio_cccr_speed_ehs_value, sdio_cccr_speed_supports_high_speed,
+        sdio_core_byte_function_addr, sdio_core_irq_status_transfer_addr,
+        sdio_core_read_retries_backplane_word_path, sdio_core_reg_addr,
+        sdio_core_transfer_function_addr, sdio_core_transfer_increment_addr,
         sdio_function_ready_budget_name, sdio_function_ready_extended_polls,
         sdio_function_ready_extended_polls_for, sdio_function_ready_extended_settle_loops,
         sdio_function_ready_extended_settle_loops_for,
@@ -30287,6 +30586,66 @@ mod tests {
         assert_eq!(firmware_channel_watermark(false), CY_43455_F2_WATERMARK);
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(true));
         assert!(!firmware_channel_prearms_function2_cccr_interrupts(false));
+    }
+
+    #[test]
+    fn runtime_rx_preserves_irq_latch_until_frame_drain() {
+        assert!(runtime_rx_drains_before_irq_clear(
+            false, false, false, false, false, false,
+        ));
+        assert!(!runtime_rx_drains_before_irq_clear(
+            true, false, false, false, false, false,
+        ));
+        assert!(!runtime_rx_drains_before_irq_clear(
+            false, true, false, false, false, false,
+        ));
+        assert!(!runtime_rx_drains_before_irq_clear(
+            false, false, true, false, false, false,
+        ));
+        assert!(!runtime_rx_drains_before_irq_clear(
+            false, false, false, true, false, false,
+        ));
+        assert!(!runtime_rx_drains_before_irq_clear(
+            false, false, false, false, true, false,
+        ));
+        assert!(!runtime_rx_drains_before_irq_clear(
+            false, false, false, false, false, true,
+        ));
+    }
+
+    #[test]
+    fn runtime_rx_uses_linux_firstread_when_frame_indication_has_no_rframe() {
+        assert!(runtime_rx_uses_linux_firstread_on_frame_indication(true, 0));
+        assert!(!runtime_rx_uses_linux_firstread_on_frame_indication(
+            true, 64
+        ));
+        assert!(!runtime_rx_uses_linux_firstread_on_frame_indication(
+            false, 0
+        ));
+        assert!(runtime_rx_uses_linux_firstread_on_irq_source(
+            false,
+            Some(I_HMB_HOST_INT),
+            0,
+            0
+        ));
+        assert!(runtime_rx_uses_linux_firstread_on_irq_source(
+            false,
+            None,
+            SDHCI_INT_CARD_INT,
+            0
+        ));
+        assert!(!runtime_rx_uses_linux_firstread_on_irq_source(
+            true,
+            Some(I_HMB_HOST_INT),
+            SDHCI_INT_CARD_INT,
+            0
+        ));
+        assert!(!runtime_rx_uses_linux_firstread_on_irq_source(
+            false,
+            Some(I_HMB_HOST_INT),
+            SDHCI_INT_CARD_INT,
+            64
+        ));
     }
 
     #[test]

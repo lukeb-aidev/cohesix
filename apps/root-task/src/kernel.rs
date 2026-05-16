@@ -7109,11 +7109,93 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn pi4_local_usb_boot_keeps_wired_immediate_with_stale_wifi_credentials() {
+        let mut hardware = crate::generated::hardware_config();
+        hardware.local_seat.enabled = true;
+        hardware.no_nic = false;
+        let mut config = crate::net::ConsoleNetConfig::default();
+        config.backend = crate::net::NetBackend::BcmGenet;
+        config.policy.interface = crate::net::NetInterfacePolicy::Wired;
+        config.wifi_credentials =
+            Some(crate::net::WifiCredentials::new("cohesix", "passphrase").unwrap());
+
+        assert_eq!(
+            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            None
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn pi4_local_usb_boot_wifi_defer_detail_is_machine_parseable() {
         assert_eq!(
             super::pi4_local_usb_boot_wifi_defer_detail("pi4-local-seat-explicit-wifi").as_str(),
             "wifi-net-console-pending-before-root-console:pi4-local-seat-explicit-wifi"
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn resolve_pi4_boot_net_policy_applies_wired_dhcp_override() {
+        let dtb = build_test_pi4_net_policy_dtb(&[
+            (super::COHESIX_DTB_NET_MODE_PROP, b"dhcp\0"),
+            (super::COHESIX_DTB_NET_INTERFACE_PROP, b"wired\0"),
+        ]);
+        let mut hardware = crate::generated::hardware_config();
+        hardware.network.enabled = true;
+        hardware.network.backend = crate::generated::NetworkBackendKind::BcmGenetV5;
+        hardware.network.mode = crate::generated::NetworkMode::Static;
+        hardware.network.interface = crate::generated::NetworkInterfacePolicy::Wifi;
+
+        let resolution =
+            super::resolve_pi4_boot_net_policy(dtb.as_slice(), test_extra_range(&dtb), hardware);
+
+        assert_eq!(resolution.source, super::Pi4BootNetPolicySource::DtbApplied);
+        assert!(!resolution.wifi_credentials_present);
+        assert_eq!(resolution.policy.mode, Some(crate::net::NetMode::Dhcp));
+        assert_eq!(
+            resolution.policy.interface,
+            Some(crate::net::NetInterfacePolicy::Wired)
+        );
+        assert_eq!(resolution.policy.static_address, None);
+        assert_eq!(resolution.policy.wifi_credentials, None);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn resolve_pi4_boot_net_policy_applies_wired_static_override() {
+        let dtb = build_test_pi4_net_policy_dtb(&[
+            (super::COHESIX_DTB_NET_MODE_PROP, b"static\0"),
+            (super::COHESIX_DTB_NET_INTERFACE_PROP, b"wired\0"),
+            (super::COHESIX_DTB_STATIC_IP_PROP, b"192.168.10.42\0"),
+            (super::COHESIX_DTB_STATIC_PREFIX_PROP, b"24\0"),
+            (super::COHESIX_DTB_STATIC_GATEWAY_PROP, b"192.168.10.1\0"),
+        ]);
+        let mut hardware = crate::generated::hardware_config();
+        hardware.network.enabled = true;
+        hardware.network.backend = crate::generated::NetworkBackendKind::BcmGenetV5;
+        hardware.network.mode = crate::generated::NetworkMode::Dhcp;
+        hardware.network.interface = crate::generated::NetworkInterfacePolicy::Wifi;
+
+        let resolution =
+            super::resolve_pi4_boot_net_policy(dtb.as_slice(), test_extra_range(&dtb), hardware);
+
+        assert_eq!(resolution.source, super::Pi4BootNetPolicySource::DtbApplied);
+        assert!(!resolution.wifi_credentials_present);
+        assert_eq!(resolution.policy.mode, Some(crate::net::NetMode::Static));
+        assert_eq!(
+            resolution.policy.interface,
+            Some(crate::net::NetInterfacePolicy::Wired)
+        );
+        assert_eq!(
+            resolution.policy.static_address,
+            Some(crate::net::NetAddressConfig {
+                ip: [192, 168, 10, 42],
+                prefix_len: 24,
+                gateway: Some([192, 168, 10, 1]),
+            })
+        );
+        assert_eq!(resolution.policy.wifi_credentials, None);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

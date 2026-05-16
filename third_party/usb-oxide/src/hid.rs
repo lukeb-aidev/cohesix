@@ -24,12 +24,24 @@ use crate::{
 };
 
 use alloc::sync::Arc;
-use core::{hint::spin_loop, ptr};
+use core::{
+    hint::spin_loop,
+    ptr,
+    sync::atomic::{Ordering, compiler_fence},
+};
 
 const BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD: u8 = 4;
 const UBOOT_BOOT_KEYBOARD_IDLE_DURATION: u8 = 10;
 const BOOT_KEYBOARD_REPORT_LEN: usize = core::mem::size_of::<KeyboardReport>();
 const FLEXIBLE_KEYBOARD_REPORT_MIN_LEN: usize = 4;
+const HID_LED_CONTROL_WAIT_SPINS: usize = 2_000_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyboardCompletionAction {
+    ReturnReport,
+    ContinuePolling,
+    Error,
+}
 
 #[inline]
 const fn has_report_payload(
@@ -42,6 +54,22 @@ const fn has_report_payload(
         return false;
     }
     request_len.saturating_sub(remaining_len as usize) >= report_len
+}
+
+#[inline]
+const fn keyboard_completion_action(
+    completion_code: u8,
+    payload_complete: bool,
+    report_decoded: bool,
+) -> KeyboardCompletionAction {
+    if payload_complete && report_decoded {
+        KeyboardCompletionAction::ReturnReport
+    } else if completion_code == completion::SUCCESS || completion_code == completion::SHORT_PACKET
+    {
+        KeyboardCompletionAction::ContinuePolling
+    } else {
+        KeyboardCompletionAction::Error
+    }
 }
 
 #[inline]
@@ -891,6 +919,7 @@ pub struct HidDevice<H: Dma> {
     keyboard_decode_mode: KeyboardDecodeMode,
     keyboard_report_offset: u8,
     report_buf: PhysMem<H>,
+    led_report_buf: PhysMem<H>,
 }
 
 impl<H: Dma> HidDevice<H> {
@@ -920,6 +949,13 @@ impl<H: Dma> HidDevice<H> {
         // Allocate report buffer (64-byte alignment for DMA)
         let host = device.ctrl().host();
         let report_buf = PhysMem::alloc(host, ep_in.max_packet_size as usize, 64)?;
+        let led_report_buf = match PhysMem::alloc(host, 1, 64) {
+            Ok(buf) => buf,
+            Err(err) => {
+                report_buf.free(host);
+                return Err(err);
+            }
+        };
 
         let hid = Self {
             device,
@@ -940,6 +976,7 @@ impl<H: Dma> HidDevice<H> {
             },
             keyboard_report_offset: 0,
             report_buf,
+            led_report_buf,
         };
 
         // Set boot protocol for boot devices
@@ -980,9 +1017,22 @@ impl<H: Dma> HidDevice<H> {
             return Err(UsbError::NotSupported);
         }
 
+        let leds = leds & (led::NUM_LOCK | led::CAPS_LOCK | led::SCROLL_LOCK);
+        // SAFETY: `led_report_buf` is a dedicated one-byte DMA buffer owned by
+        // this HID device, allocated before any Pi 4 local-seat DMA seal.
+        unsafe {
+            self.led_report_buf.as_ptr::<u8>().write_volatile(leds);
+        }
+        compiler_fence(Ordering::Release);
+
         let setup = SetupPacket::hid_set_report(self.interface, report_type::OUTPUT, 0, 1);
-        let mut buf = [leds];
-        self.device.control_transfer(&setup, Some(&mut buf))?;
+        self.device.control_transfer_out_physmem_with_wait_spins(
+            &setup,
+            &self.led_report_buf,
+            0,
+            1,
+            HID_LED_CONTROL_WAIT_SPINS,
+        )?;
         Ok(())
     }
 
@@ -1174,6 +1224,10 @@ impl<H: Dma> HidDevice<H> {
                     }
                 }
                 if let Some(report) = report {
+                    debug_assert_eq!(
+                        keyboard_completion_action(code, true, true),
+                        KeyboardCompletionAction::ReturnReport
+                    );
                     self.keyboard_decode_failures = 0;
                     self.queue_read()?;
                     return Ok(Some(report));
@@ -1187,18 +1241,26 @@ impl<H: Dma> HidDevice<H> {
                         | (self.keyboard_decode_mode as u64),
                 );
                 self.queue_read()?;
-                return Ok(None);
-            }
-            if code == completion::SUCCESS || code == completion::SHORT_PACKET {
-                // Ignore zero/partial payload completions and keep polling.
-                self.device.ctrl().emit_diag(
-                    0x03c2,
-                    ((self.device.slot_id() as u64) << 32) | u64::from(evt.endpoint_id()),
-                    ((code as u64) << 32) | payload_len as u64,
-                    self.ep_max_packet as u64,
+                debug_assert_eq!(
+                    keyboard_completion_action(code, true, false),
+                    KeyboardCompletionAction::ContinuePolling
                 );
-                self.queue_read()?;
-                return Ok(None);
+                continue;
+            }
+            match keyboard_completion_action(code, false, false) {
+                KeyboardCompletionAction::ContinuePolling => {
+                    // Ignore zero/partial payload completions and keep polling.
+                    self.device.ctrl().emit_diag(
+                        0x03c2,
+                        ((self.device.slot_id() as u64) << 32) | u64::from(evt.endpoint_id()),
+                        ((code as u64) << 32) | payload_len as u64,
+                        self.ep_max_packet as u64,
+                    );
+                    self.queue_read()?;
+                    continue;
+                }
+                KeyboardCompletionAction::ReturnReport => unreachable!(),
+                KeyboardCompletionAction::Error => {}
             }
             let _ = self.queue_read();
             self.device.ctrl().emit_diag(
@@ -1262,6 +1324,7 @@ impl<H: Dma> HidDevice<H> {
                 return Some(report);
             }
             if code == completion::SUCCESS || code == completion::SHORT_PACKET {
+                // Ignore zero/partial payload completions and keep polling.
                 let _ = self.queue_read();
                 return None;
             }
@@ -1346,8 +1409,8 @@ impl<H: Dma> HidDevice<H> {
 impl<H: Dma> Drop for HidDevice<H> {
     fn drop(&mut self) {
         let host = self.device.ctrl().host();
-        // Note: report_buf will be freed when PhysMem is dropped
-        // but we need to explicitly free it since PhysMem doesn't auto-free
+        // Note: PhysMem does not auto-free, so HID-owned DMA buffers are
+        // returned explicitly during device teardown.
         // SAFETY: `report_buf` was allocated from this DMA host with the same
         // size/alignment and is freed exactly once during `HidDevice` drop.
         unsafe {
@@ -1355,6 +1418,11 @@ impl<H: Dma> Drop for HidDevice<H> {
                 self.report_buf.virt(),
                 self.report_buf.size(),
                 self.report_buf.align(),
+            );
+            host.free(
+                self.led_report_buf.virt(),
+                self.led_report_buf.size(),
+                self.led_report_buf.align(),
             );
         }
     }
@@ -1427,14 +1495,14 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardDecodeMode, KeyboardDecodeTransition, KeyboardProtocolMode,
-        UBOOT_BOOT_KEYBOARD_IDLE_DURATION, decode_keyboard_report_payload,
+        KeyboardCompletionAction, KeyboardDecodeMode, KeyboardDecodeTransition,
+        KeyboardProtocolMode, UBOOT_BOOT_KEYBOARD_IDLE_DURATION, decode_keyboard_report_payload,
         decode_keyboard_report_payload_boot_compatible,
         decode_keyboard_report_payload_flexible_key_report, forced_keyboard_profile,
-        has_report_payload, keyboard_decode_transition, keyboard_endpoint_id_matches,
-        keyboard_payload_has_nonzero_outside_boot_window, keyboard_payload_prefix,
-        keyboard_report_payload_min_len, keyboard_usage_code_valid, modifier, scancode,
-        scancode_to_ascii,
+        has_report_payload, keyboard_completion_action, keyboard_decode_transition,
+        keyboard_endpoint_id_matches, keyboard_payload_has_nonzero_outside_boot_window,
+        keyboard_payload_prefix, keyboard_report_payload_min_len, keyboard_usage_code_valid,
+        led, modifier, scancode, scancode_to_ascii, HID_LED_CONTROL_WAIT_SPINS,
     };
     use crate::ring::completion;
 
@@ -1460,11 +1528,43 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_completion_action_keeps_polling_after_idle_or_undecoded_events() {
+        assert_eq!(
+            keyboard_completion_action(completion::SUCCESS, true, true),
+            KeyboardCompletionAction::ReturnReport
+        );
+        assert_eq!(
+            keyboard_completion_action(completion::SUCCESS, true, false),
+            KeyboardCompletionAction::ContinuePolling
+        );
+        assert_eq!(
+            keyboard_completion_action(completion::SHORT_PACKET, false, false),
+            KeyboardCompletionAction::ContinuePolling
+        );
+        assert_eq!(
+            keyboard_completion_action(completion::USB_TRANSACTION_ERROR, true, false),
+            KeyboardCompletionAction::Error
+        );
+    }
+
+    #[test]
     fn keyboard_endpoint_match_accepts_only_interrupt_in_dci() {
         assert!(keyboard_endpoint_id_matches(1, 3));
         assert!(!keyboard_endpoint_id_matches(1, 2));
         assert!(!keyboard_endpoint_id_matches(1, 1));
         assert!(!keyboard_endpoint_id_matches(1, 4));
+    }
+
+    #[test]
+    fn keyboard_led_bits_match_boot_output_report_layout() {
+        assert_eq!(led::NUM_LOCK, 0x01);
+        assert_eq!(led::CAPS_LOCK, 0x02);
+        assert_eq!(led::SCROLL_LOCK, 0x04);
+        assert_eq!(
+            led::NUM_LOCK | led::CAPS_LOCK | led::SCROLL_LOCK,
+            0x07
+        );
+        assert!(HID_LED_CONTROL_WAIT_SPINS < 20_000_000);
     }
 
     #[test]

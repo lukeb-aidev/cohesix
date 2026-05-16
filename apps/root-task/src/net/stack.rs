@@ -3126,6 +3126,11 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.tx_double_submit = device_counters.tx_double_submit;
         self.counters.tx_zero_len_attempt = device_counters.tx_zero_len_attempt;
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
+        self.counters.wifi_assoc = device_counters.wifi_assoc;
+        self.counters.wifi_link_up = device_counters.wifi_link_up;
+        self.counters.wifi_host_eapol_rx = device_counters.wifi_host_eapol_rx;
+        self.counters.wifi_host_eapol_start = device_counters.wifi_host_eapol_start;
+        self.counters.wifi_host_eapol_secure = device_counters.wifi_host_eapol_secure;
     }
 
     fn current_counters(&self) -> NetCounters {
@@ -3150,6 +3155,11 @@ impl<D: NetDevice> NetStack<D> {
             tx_double_submit: device_counters.tx_double_submit,
             tx_zero_len_attempt: device_counters.tx_zero_len_attempt,
             dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
+            wifi_assoc: device_counters.wifi_assoc,
+            wifi_link_up: device_counters.wifi_link_up,
+            wifi_host_eapol_rx: device_counters.wifi_host_eapol_rx,
+            wifi_host_eapol_start: device_counters.wifi_host_eapol_start,
+            wifi_host_eapol_secure: device_counters.wifi_host_eapol_secure,
         }
     }
 

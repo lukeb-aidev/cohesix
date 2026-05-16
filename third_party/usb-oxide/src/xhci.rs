@@ -2029,7 +2029,9 @@ impl PendingTransferEvents {
 
 #[inline]
 fn endpoint_id_is_allowed(endpoint_id: u8, endpoint_ids: &[u8]) -> bool {
-    endpoint_ids.iter().any(|candidate| *candidate == endpoint_id)
+    endpoint_ids
+        .iter()
+        .any(|candidate| *candidate == endpoint_id)
 }
 
 #[inline]
