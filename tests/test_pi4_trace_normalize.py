@@ -671,6 +671,25 @@ def test_gate_summary_tracks_wifi_sdio_irq158_separately_from_timer_irq27() -> N
     assert gates.to_record()["SDIO_IRQ158_BOUND"] == "yes"
 
 
+def test_gate_summary_derives_sdio_irq158_bound_from_hal_init_when_irq_breadcrumbs_suppressed() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] hal init: clock=41666666Hz bus_width=4 ioex=0x06 "
+            "iordy=0x06 irq_bound=true",
+            "[local-seat] pi4 keyboard runtime proof result=online gate=10 "
+            "source=first-byte",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.sdio_irq158_seen
+    assert gates.sdio_irq158_bound
+    assert gates.sdio_irq158_line == 1
+    assert gates.to_record()["SDIO_IRQ158_SEEN"] == "yes"
+    assert gates.to_record()["SDIO_IRQ158_BOUND"] == "yes"
+
+
 def test_gate_summary_does_not_mark_fail_closed_sdio_irq158_bound() -> None:
     events = normalizer.parse_events(
         [
@@ -3615,6 +3634,67 @@ def test_gate_summary_tracks_host_card_int_without_dongle_source() -> None:
     assert gates.wifi_exact == "cyw43-control-plane-host-card-int-no-dongle-source"
 
 
+def test_gate_summary_preserves_host_card_int_no_dongle_source_over_later_diag_snapshot_after_keyboard_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "[pi4-wifi] hal init: clock=41666666Hz bus_width=4 ioex=0x06 "
+            "iordy=0x06 irq_bound=true",
+            "[local-seat] pi4 keyboard runtime proof result=online gate=10 "
+            "source=first-byte",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "preinit step=mpc action=begin",
+            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "name=mpc err=unsupported operation: "
+            "cyw43-control-plane-host-card-int-no-dongle-source",
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "preinit step=mpc action=fail err=unsupported operation: "
+            "cyw43-control-plane-host-card-int-no-dongle-source",
+            "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
+            "exact=cyw43-control-plane-partial-hint-visibility "
+            "sdhci=none f2_state=linux-configured",
+            "cohesix> ERR NETTEST reason=policy detail=net-disabled "
+            "cause=unsupported operation: "
+            "cyw43-control-plane-host-card-int-no-dongle-source",
+            "cohesix> ERR NETSTATS reason=policy detail=net-disabled "
+            "cause=unsupported operation: "
+            "cyw43-control-plane-host-card-int-no-dongle-source",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 10
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-host-card-int-no-dongle-source"
+    assert gates.wifi_exact == "cyw43-control-plane-host-card-int-no-dongle-source"
+    assert gates.wifi_phase == "mpc"
+
+
+def test_gate_summary_treats_pre_mpc_bus_rxglom_disable_as_progress_not_rxglom_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=bus-rxglom-disable-bounded-rx action=begin",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane reply "
+            "cmd=0x00000107 id=10 status=0x00000000 response_len=15 "
+            "copied=15 sdpcm_seq=10 sdpcm_credit=30",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=bus-rxglom-disable-bounded-rx action=ready",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "preinit step=mpc action=begin",
+            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "preinit step=mpc action=fail err=unsupported operation: "
+            "cyw43-control-plane-host-card-int-no-dongle-source",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-host-card-int-no-dongle-source"
+    assert gates.wifi_blocker != "cyw43-rxglom-unsupported"
+
+
 def test_gate_summary_tracks_wifi_preinit_substep_failure() -> None:
     events = normalizer.parse_events(
         [
@@ -3988,6 +4068,45 @@ def test_gate_summary_reports_wsec_first_join_security_loop() -> None:
     assert gates.wifi_blocker == "join-security-wsec-first-loop"
     assert gates.wifi_exact == "cyw43-join-security-wsec-first-loop"
     assert gates.wifi_phase == "join"
+    assert gates.wifi_blocker_line > 0
+
+
+def test_gate_summary_reports_runtime_rx_host_latch_spam_before_eapol() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=up action=ready",
+            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "step=join action=begin",
+            "[INFO root_task::drivers::cyw43] [cyw43] join pending "
+            "mode=deferred polls=0 ssid_len=12 psk_len=12 secure=yes "
+            "completion_rule=host-eapol-required",
+            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol "
+            "poll mode=deferred polls=1 limit=60000 assoc=yes eapol_rx=0 "
+            "eapol_start_sent=7 action=wait-m1",
+            *[
+                "[pi4-wifi] firmware stage=runtime-rx "
+                "action=irq-latched-firstread-invalid attempt=1 packet=0x0000 "
+                "len_inv=0x0000 seq=0x00 channel=0x00 "
+                "int_status=0x00000000/y sdhci=0x00000100"
+                for _ in range(8)
+            ],
+            *[
+                "[pi4-wifi] firmware stage=runtime-rx "
+                "action=no-frame-source-after-firstread rframe=0x0000 "
+                "int_status=0x00000000/y sdhci=0x00000100 card_int=y "
+                "clear=defer-before-drain reason=preserve-eapol-rx-latch"
+                for _ in range(8)
+            ],
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "runtime-rx-host-latch-spam"
+    assert gates.wifi_exact == "cyw43-runtime-rx-host-latch-spam"
+    assert gates.wifi_phase == "runtime-rx"
     assert gates.wifi_blocker_line > 0
 
 

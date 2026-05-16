@@ -8400,6 +8400,8 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut wifi = FakeWifiDebug::new();
+        wifi.snapshot.debug_snapshot_stage = "console-diag-before";
+        wifi.snapshot.control_plane_exact_error = "";
         wifi.expect_breadcrumb_suppression = true;
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
             .with_wifi_debug(&mut wifi)

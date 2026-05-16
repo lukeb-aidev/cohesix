@@ -1288,6 +1288,17 @@ def normalize_wifi_blocker(value: str) -> str:
         or "completion_rule=host-eapol-required" in lower
     ):
         return "host-eapol-required"
+    if (
+        "stage=runtime-rx" in lower
+        and (
+            "action=no-frame-source-after-firstread" in lower
+            or "action=irq-latched-firstread-invalid" in lower
+            or "action=irq-latched-firstread-empty" in lower
+        )
+        and "int_status=0x00000000" in lower
+        and ("card_int=y" in lower or "sdhci=0x00000100" in lower)
+    ):
+        return "runtime-rx-host-latch-spam"
     if stripped == "eapol-start" or (
         "host-eapol" in lower and "action=eapol-start" in lower
     ):
@@ -2383,6 +2394,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-interrupts-deferred",
         "join-programming-host-latch-loop",
         "primary-bsscfg-wrapper-join-security-loop",
+        "runtime-rx-host-latch-spam",
         "control-plane-legacy-gmode-stall",
         "control-plane-no-frame-indication-after-write",
         "control-plane-partial-hint-visibility",
@@ -2440,6 +2452,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     join_security_wpa_auth_ready_count = 0
     join_programming_host_latch_only_count = 0
     join_programming_f1_status_count = 0
+    runtime_rx_host_latch_spam_count = 0
     legacy_gmode_stall_seen = False
     for event in wifi_events:
         raw = event.raw.lower()
@@ -2481,6 +2494,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             explicit_blocker = raw_contract_blocker
         if raw_contract_blocker in precise_control_plane_blockers:
             explicit_blocker = raw_contract_blocker
+        if raw_contract_blocker == "runtime-rx-host-latch-spam":
+            runtime_rx_host_latch_spam_count += 1
         if raw.startswith("netstats:"):
             if (
                 fields.get("active") == "wifi"
@@ -2545,6 +2560,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if (
             blocker
             in {
+                "control-plane-host-card-int-no-dongle-source",
+                "control-plane-host-card-int-source-unreadable",
                 "firmware-supplicant-unsupported",
                 "host-eapol-required",
                 "wsec-pmk-bad-argument",
@@ -2559,6 +2576,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-bdc-event",
             "control-plane-cur-etheraddr-len",
             "control-plane-hintless-firstread-no-irq",
+            "control-plane-host-card-int-no-dongle-source",
+            "control-plane-host-card-int-source-unreadable",
             "control-plane-interrupt-programming-drift",
             "control-plane-interrupts-deferred",
             "control-plane-legacy-gmode-stall",
@@ -2571,6 +2590,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "firmware-supplicant-unsupported",
             "host-eapol-required",
             "ioctl-timeout",
+            "runtime-rx-host-latch-spam",
             "wsec-pmk-bad-argument",
         } and explicit_blocker in {None, "cyw43", "nettest-policy-disabled"}:
             explicit_blocker = raw_contract_blocker
@@ -2961,6 +2981,15 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             ):
                 blocker = blocker
             elif (
+                blocker == "control-plane-partial-hint-visibility"
+                and explicit_blocker
+                in {
+                    "control-plane-host-card-int-no-dongle-source",
+                    "control-plane-host-card-int-source-unreadable",
+                }
+            ):
+                blocker = explicit_blocker
+            elif (
                 blocker in precise_control_plane_blockers
                 and explicit_blocker in precise_control_plane_blockers
             ):
@@ -3219,6 +3248,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-bdc-event",
             "control-plane-cur-etheraddr-len",
             "control-plane-hintless-firstread-no-irq",
+            "control-plane-host-card-int-no-dongle-source",
+            "control-plane-host-card-int-source-unreadable",
             "control-plane-interrupt-programming-drift",
             "control-plane-interrupts-deferred",
             "control-plane-no-reply",
@@ -3230,6 +3261,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "firmware-supplicant-unsupported",
             "host-eapol-required",
             "ioctl-timeout",
+            "runtime-rx-host-latch-spam",
             "wsec-pmk-bad-argument",
         }:
             if blocker in precise_ht_blockers and not ht_available_seen:
@@ -3241,13 +3273,25 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 in {
                     "control-plane-bdc-event",
                     "control-plane-cur-etheraddr-len",
+                    "control-plane-host-card-int-no-dongle-source",
+                    "control-plane-host-card-int-source-unreadable",
                     "firmware-supplicant-unsupported",
                     "host-eapol-required",
+                    "runtime-rx-host-latch-spam",
                     "wsec-pmk-bad-argument",
                 }
                 and explicit_blocker in precise_control_plane_blockers
             )
-            if explicit_blocker == "wsec-pmk-bad-argument":
+            if (
+                blocker == "control-plane-partial-hint-visibility"
+                and explicit_blocker
+                in {
+                    "control-plane-host-card-int-no-dongle-source",
+                    "control-plane-host-card-int-source-unreadable",
+                }
+            ):
+                blocker = explicit_blocker
+            elif explicit_blocker == "wsec-pmk-bad-argument":
                 blocker = explicit_blocker
             elif preserve_precise_control:
                 blocker = blocker
@@ -3281,6 +3325,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "control-plane-bdc-event",
                 "control-plane-cur-etheraddr-len",
                 "control-plane-hintless-firstread-no-irq",
+                "control-plane-host-card-int-no-dongle-source",
+                "control-plane-host-card-int-source-unreadable",
                 "control-plane-interrupt-programming-drift",
                 "control-plane-interrupts-deferred",
                 "control-plane-no-reply",
@@ -3335,6 +3381,15 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = "firmware-verify-readback"
         elif explicit_blocker:
             if (
+                blocker == "control-plane-partial-hint-visibility"
+                and explicit_blocker
+                in {
+                    "control-plane-host-card-int-no-dongle-source",
+                    "control-plane-host-card-int-source-unreadable",
+                }
+            ):
+                blocker = explicit_blocker
+            elif (
                 blocker in precise_control_plane_blockers
                 and explicit_blocker in precise_control_plane_blockers | {"control-plane"}
             ):
@@ -3386,6 +3441,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         gate = max(gate, 7)
         post_f2_progress_seen = True
         blocker = join_programming_blocker or "join-programming-host-latch-loop"
+    if runtime_rx_host_latch_spam_count >= 8 and blocker in {
+        "control-plane",
+        "control-plane-no-frame-indication-after-write",
+        "host-eapol-required",
+        "ioctl-timeout",
+        "join-pending",
+        "none",
+    }:
+        gate = max(gate, 7)
+        post_f2_progress_seen = True
+        blocker = "runtime-rx-host-latch-spam"
     if legacy_gmode_stall_seen and blocker in {
         "control-plane",
         "control-plane-partial-hint-visibility",
@@ -3417,6 +3483,8 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
         return "cyw43-control-plane-legacy-gmode-stall", phase
     if normalize_wifi_blocker(event.raw) == "join-programming-host-latch-loop":
         return "cyw43-join-programming-host-latch-loop", "join"
+    if normalize_wifi_blocker(event.raw) == "runtime-rx-host-latch-spam":
+        return "cyw43-runtime-rx-host-latch-spam", "runtime-rx"
     join_security_exact = JOIN_SECURITY_EXACT_BY_BLOCKER.get(
         normalize_wifi_blocker(event.raw)
     )
@@ -3529,6 +3597,8 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
         return 0
     if "post-write-no-irq-terminal" in raw:
         return 0
+    if candidate == "runtime-rx-host-latch-spam":
+        return 1
     if "[cyw43] control-plane" in raw and "action=fail" in raw:
         return 1
     if "[cyw43] iovar" in raw and "failed" in raw:
@@ -3616,6 +3686,12 @@ def summarize_wifi_failure_detail(
             and "iovar set failed name=bsscfg:" in raw
         ):
             candidate = "primary-bsscfg-wrapper-join-security-loop"
+        if wifi_blocker == "runtime-rx-host-latch-spam" and (
+            "action=no-frame-source-after-firstread" in raw
+            or "action=irq-latched-firstread-invalid" in raw
+            or "action=irq-latched-firstread-empty" in raw
+        ):
+            candidate = "runtime-rx-host-latch-spam"
         if join_begin_seen and "[cyw43] iovar set begin" in raw:
             iovar_name = fields.get("name")
             if iovar_name in {
@@ -3675,6 +3751,11 @@ def summarize_wifi_failure_detail(
             candidate_priority = wifi_failure_detail_priority(event, wifi_blocker, candidate)
             if blocker_matched and candidate_priority > blocker_priority:
                 continue
+            if blocker_matched and candidate_priority == blocker_priority and wifi_blocker in {
+                "control-plane-host-card-int-no-dongle-source",
+                "control-plane-host-card-int-source-unreadable",
+            }:
+                continue
             if blocker_matched and wifi_blocker in {
                 "control-plane-cur-etheraddr-len",
                 "wsec-pmk-bad-argument",
@@ -3685,6 +3766,8 @@ def summarize_wifi_failure_detail(
             exact = event_exact
             if candidate == "join-programming-host-latch-loop":
                 exact = "cyw43-join-programming-host-latch-loop"
+            if candidate == "runtime-rx-host-latch-spam":
+                exact = "cyw43-runtime-rx-host-latch-spam"
             if candidate in JOIN_SECURITY_EXACT_BY_BLOCKER:
                 exact = JOIN_SECURITY_EXACT_BY_BLOCKER[candidate]
             if candidate == "primary-bsscfg-wrapper-join-security-loop":
@@ -3701,6 +3784,9 @@ def summarize_wifi_failure_detail(
                     "join-programming-host-latch-loop",
                     "primary-bsscfg-wrapper-join-security-loop",
                 }
+                else
+                "runtime-rx"
+                if candidate == "runtime-rx-host-latch-spam"
                 else
                 socram_core_ctrl_stage
                 or fields.get("stage")
@@ -3749,16 +3835,30 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         event
         for event in event_list
         if event.domain == "wifi"
-        and event.fields.get("irq") == "158"
         and (
-            "sdio irq bind" in event.raw.lower()
-            or "sdio irq contract" in event.raw.lower()
+            (
+                event.fields.get("irq") == "158"
+                and (
+                    "sdio irq bind" in event.raw.lower()
+                    or "sdio irq contract" in event.raw.lower()
+                )
+            )
+            or (
+                "[pi4-wifi] hal init" in event.raw.lower()
+                and event.fields.get("irq_bound") == "true"
+            )
         )
     ]
     sdio_irq158_seen = bool(sdio_irq158_events)
     sdio_irq158_bound = any(
-        "sdio irq contract" in event.raw.lower()
-        and event.fields.get("bound") == "1"
+        (
+            "sdio irq contract" in event.raw.lower()
+            and event.fields.get("bound") == "1"
+        )
+        or (
+            "[pi4-wifi] hal init" in event.raw.lower()
+            and event.fields.get("irq_bound") == "true"
+        )
         for event in sdio_irq158_events
     )
     sdio_irq158_line = sdio_irq158_events[0].line if sdio_irq158_events else 0

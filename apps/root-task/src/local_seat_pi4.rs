@@ -3543,6 +3543,11 @@ pub(crate) fn usb_runtime_first_byte_seen() -> bool {
     USB_RUNTIME_FIRST_BYTE.load(Ordering::Acquire)
 }
 
+#[must_use]
+pub(crate) fn usb_runtime_keyboard_ready_seen() -> bool {
+    USB_RUNTIME_KEYBOARD_READY.load(Ordering::Acquire)
+}
+
 pub(crate) fn latest_usb_runtime_proof_status() -> UsbRuntimeProofStatus {
     let keyboard_ready = USB_RUNTIME_KEYBOARD_READY.load(Ordering::Acquire);
     let first_report = USB_RUNTIME_FIRST_REPORT.load(Ordering::Acquire);
@@ -17233,12 +17238,14 @@ mod tests {
         assert_eq!(empty.proof_gate, 0);
         assert_eq!(empty.next_step, "keyboard-ready");
         assert_eq!(empty.blocker, "keyboard-not-ready");
+        assert!(!super::usb_runtime_keyboard_ready_seen());
 
         super::mark_usb_runtime_keyboard_ready();
         let ready = super::latest_usb_runtime_proof_status();
         assert_eq!(ready.proof_gate, 8);
         assert_eq!(ready.next_step, "hid-first-report");
         assert_eq!(ready.blocker, "hid-first-report");
+        assert!(super::usb_runtime_keyboard_ready_seen());
 
         super::mark_usb_runtime_first_report();
         let report = super::latest_usb_runtime_proof_status();

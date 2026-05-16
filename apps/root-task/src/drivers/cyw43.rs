@@ -12,7 +12,7 @@ use core::ops::Range;
 
 use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
 use aes::Aes128;
-use heapless::Vec as HeaplessVec;
+use heapless::{Deque, Vec as HeaplessVec};
 use log::{debug, info, trace, warn};
 use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
@@ -84,6 +84,8 @@ const HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS: usize =
 const HOST_EAPOL_WAIT_M1_STAGE: &str = "join-security-host-eapol-wait-m1";
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
+const RX_GLOM_SUBFRAME_CAP: usize = 8;
+const RX_GLOM_QUEUE_CAP: usize = 4;
 const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
 const POST_UP_EVENT_DRAIN_BUDGET: usize = 8;
 
@@ -345,6 +347,14 @@ enum RxFrameResult {
     Data(HeaplessVec<u8, MAX_FRAME_LEN>),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum GlomSubframeResult {
+    None,
+    Event(Cyw43Event),
+    Eapol(HeaplessVec<u8, MAX_FRAME_LEN>),
+    Data(HeaplessVec<u8, MAX_FRAME_LEN>),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RxSdpcmHeader {
     packet_len: usize,
@@ -436,7 +446,7 @@ const fn linux_station_path_keeps_txglom_configured_before_preinit() -> bool {
 
 #[inline]
 const fn linux_station_path_keeps_rxglom_configured_before_preinit() -> bool {
-    false
+    true
 }
 
 #[inline]
@@ -2725,6 +2735,8 @@ pub struct Cyw43NetDevice {
     rx_frame: Box<[u8; FRAME_BUF_LEN]>,
     tx_frame: Box<[u8; FRAME_BUF_LEN]>,
     control_response: Box<[u8; CONTROL_RESPONSE_BUF_LEN]>,
+    glom_subframe_lens: HeaplessVec<u16, RX_GLOM_SUBFRAME_CAP>,
+    glom_rx_ready: Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_GLOM_QUEUE_CAP>,
 }
 
 pub struct RxToken {
@@ -2892,6 +2904,8 @@ impl Cyw43NetDevice {
             rx_frame: Box::new([0; FRAME_BUF_LEN]),
             tx_frame: Box::new([0; FRAME_BUF_LEN]),
             control_response: Box::new([0; CONTROL_RESPONSE_BUF_LEN]),
+            glom_subframe_lens: HeaplessVec::new(),
+            glom_rx_ready: Deque::new(),
         };
 
         info!("[cyw43] step: init_control_plane");
@@ -2979,6 +2993,8 @@ impl Cyw43NetDevice {
         self.rx_frame.fill(0);
         self.tx_frame.fill(0);
         self.control_response.fill(0);
+        self.glom_subframe_lens.clear();
+        self.glom_rx_ready.clear();
     }
 
     fn replay_control_plane_bootstrap(
@@ -5521,19 +5537,182 @@ impl Cyw43NetDevice {
                 header.packet_len,
                 allow_data,
             ),
-            CHANNEL_GLOM => {
-                warn!(
-                    "[cyw43] rx glom frame unsupported len={} descriptor={} action=drop reason=rxglom-disabled-bounded-rx",
-                    header.packet_len,
-                    sdpcm_glom_descriptor(self.rx_frame.as_ref()),
+            CHANNEL_GLOM => self.process_glom_frame(header, allow_data),
+            _ => Ok(RxFrameResult::None),
+        }
+    }
+
+    fn process_glom_frame(
+        &mut self,
+        header: RxSdpcmHeader,
+        allow_data: bool,
+    ) -> Result<RxFrameResult, DriverError> {
+        if sdpcm_glom_descriptor(self.rx_frame.as_ref()) {
+            return self.process_glom_descriptor(header);
+        }
+        self.process_glom_superframe(header, allow_data)
+    }
+
+    fn process_glom_descriptor(
+        &mut self,
+        header: RxSdpcmHeader,
+    ) -> Result<RxFrameResult, DriverError> {
+        let payload = &self.rx_frame[header.payload_start..header.packet_len];
+        self.glom_subframe_lens.clear();
+        match parse_glom_descriptor_lengths(payload) {
+            Ok(lengths) => {
+                let total_len = glom_descriptor_total_len(&lengths);
+                let subframes = lengths.len();
+                self.glom_subframe_lens = lengths;
+                info!(
+                    "[cyw43] rx glom descriptor action=queued subframes={} total_len={} len={}",
+                    subframes, total_len, header.packet_len,
                 );
-                if deferred_join_requires_host_eapol(self.deferred_join_state) {
-                    Ok(RxFrameResult::None)
-                } else {
-                    Err(DriverError::Protocol("cyw43-rxglom-unsupported"))
+            }
+            Err(err) => {
+                warn!(
+                    "[cyw43] rx glom descriptor action=drop len={} err={err}",
+                    header.packet_len,
+                );
+            }
+        }
+        Ok(RxFrameResult::None)
+    }
+
+    fn process_glom_superframe(
+        &mut self,
+        header: RxSdpcmHeader,
+        allow_data: bool,
+    ) -> Result<RxFrameResult, DriverError> {
+        if self.glom_subframe_lens.is_empty() {
+            warn!(
+                "[cyw43] rx glom superframe action=drop reason=descriptor-missing len={}",
+                header.packet_len,
+            );
+            return Ok(RxFrameResult::None);
+        }
+
+        let lengths = self.glom_subframe_lens.clone();
+        self.glom_subframe_lens.clear();
+        let mut cursor = header.payload_start;
+        let mut first_result = None;
+        let mut data_count = 0usize;
+        let mut event_count = 0usize;
+        let mut eapol_count = 0usize;
+        let mut queued_count = 0usize;
+        let mut dropped_count = 0usize;
+
+        for (index, descriptor_len) in lengths.iter().copied().enumerate() {
+            let descriptor_len = usize::from(descriptor_len);
+            let subframe_len = if index == 0 {
+                descriptor_len
+                    .checked_sub(header.payload_start)
+                    .ok_or(DriverError::Protocol("cyw43-rxglom-bad-first-subframe-len"))?
+            } else {
+                descriptor_len
+            };
+            if subframe_len < SDPCM_HEADER_LEN {
+                warn!(
+                    "[cyw43] rx glom superframe action=fail reason=bad-subframe-len index={} descriptor_len={} payload_start={}",
+                    index, descriptor_len, header.payload_start,
+                );
+                return Err(DriverError::Protocol("cyw43-rxglom-bad-subframe-len"));
+            }
+            let end = cursor
+                .checked_add(subframe_len)
+                .ok_or(DriverError::FrameTooLarge)?;
+            if end > header.packet_len {
+                warn!(
+                    "[cyw43] rx glom superframe action=fail reason=truncated index={} subframe_len={} cursor={} packet_len={}",
+                    index,
+                    subframe_len,
+                    cursor,
+                    header.packet_len,
+                );
+                return Err(DriverError::Protocol("cyw43-rxglom-truncated-superframe"));
+            }
+
+            match self.decode_glom_subframe(
+                &self.rx_frame[cursor..end],
+                subframe_len,
+                allow_data,
+            )? {
+                GlomSubframeResult::None => {}
+                GlomSubframeResult::Event(event) => {
+                    self.apply_event(event);
+                    event_count = event_count.saturating_add(1);
+                    if first_result.is_none() {
+                        first_result = Some(RxFrameResult::Event(event));
+                    }
+                }
+                GlomSubframeResult::Eapol(packet) => {
+                    self.process_host_eapol_packet(packet.as_slice())?;
+                    eapol_count = eapol_count.saturating_add(1);
+                }
+                GlomSubframeResult::Data(frame) => {
+                    data_count = data_count.saturating_add(1);
+                    if first_result.is_none() {
+                        first_result = Some(RxFrameResult::Data(frame));
+                    } else if self.glom_rx_ready.push_back(frame).is_ok() {
+                        queued_count = queued_count.saturating_add(1);
+                    } else {
+                        dropped_count = dropped_count.saturating_add(1);
+                    }
                 }
             }
-            _ => Ok(RxFrameResult::None),
+            cursor = end;
+        }
+
+        info!(
+            "[cyw43] rx glom superframe action=deaggregate subframes={} data={} events={} eapol={} queued={} dropped={} len={}",
+            lengths.len(),
+            data_count,
+            event_count,
+            eapol_count,
+            queued_count,
+            dropped_count,
+            header.packet_len,
+        );
+        Ok(first_result.unwrap_or(RxFrameResult::None))
+    }
+
+    fn decode_glom_subframe(
+        &self,
+        subframe: &[u8],
+        frame_len: usize,
+        allow_data: bool,
+    ) -> Result<GlomSubframeResult, DriverError> {
+        let header = parse_rx_sdpcm_header(subframe, frame_len)?;
+        match header.channel {
+            CHANNEL_EVENT => {
+                let payload = &subframe[header.payload_start..header.packet_len];
+                Ok(parse_event_payload(payload)?
+                    .map(GlomSubframeResult::Event)
+                    .unwrap_or(GlomSubframeResult::None))
+            }
+            CHANNEL_DATA => {
+                let payload = &subframe[header.payload_start..header.packet_len];
+                let Some(packet) = bdc_payload(payload) else {
+                    trace!(
+                        "[cyw43] rx glom subframe ignored reason=bdc-header-unavailable len={}",
+                        payload.len()
+                    );
+                    return Ok(GlomSubframeResult::None);
+                };
+                if let Some(event) = parse_broadcom_event(packet)? {
+                    return Ok(GlomSubframeResult::Event(event));
+                }
+                if ethernet_ethertype(packet) == Some(ETH_P_EAPOL)
+                    && deferred_join_requires_host_eapol(self.deferred_join_state)
+                {
+                    return copy_packet_to_heapless(packet).map(GlomSubframeResult::Eapol);
+                }
+                if !allow_data {
+                    return Ok(GlomSubframeResult::None);
+                }
+                copy_packet_to_heapless(packet).map(GlomSubframeResult::Data)
+            }
+            _ => Ok(GlomSubframeResult::None),
         }
     }
 
@@ -5604,6 +5783,60 @@ impl Cyw43NetDevice {
         Ok(RxFrameResult::Event(event))
     }
 
+    fn process_host_eapol_packet(&mut self, packet: &[u8]) -> Result<(), DriverError> {
+        self.host_eapol_rx_packets = self.host_eapol_rx_packets.saturating_add(1);
+        let packet_len = packet.len();
+        if packet_len > MAX_FRAME_LEN {
+            return Err(DriverError::FrameTooLarge);
+        }
+        let mut host_packet = [0u8; MAX_FRAME_LEN];
+        host_packet[..packet_len].copy_from_slice(packet);
+        let proof = host_eapol_frame_proof(&host_packet[..packet_len]);
+        let action = match self.handle_host_eapol_frame(&host_packet[..packet_len], proof) {
+            Ok(action) => action,
+            Err(err) => {
+                self.promote_host_eapol_wait_stage();
+                warn!(
+                    "[cyw43] host-eapol action=drop status=host-eapol-required err={err} count={} msg={} next_action={}",
+                    self.host_eapol_rx_packets,
+                    proof.message,
+                    proof.next_action,
+                );
+                "drop"
+            }
+        };
+        info!(
+            "[cyw43] host-eapol proof count={} msg={} len={} eapol_ver={} type={} body_len={} body_ok={} key_desc={} key_info=0x{:04x} key_ver={} pairwise={} ack={} mic={} install={} secure={} encrypted={} nonce={} replay={} kde_len={} next_action={} action={} status={}",
+            self.host_eapol_rx_packets,
+            proof.message,
+            packet_len,
+            proof.eapol_version,
+            proof.packet_type,
+            proof.body_len,
+            yes_no(proof.body_len_valid),
+            proof.descriptor_type,
+            proof.key_info,
+            proof.key_version,
+            yes_no(proof.pairwise),
+            yes_no(proof.ack),
+            yes_no(proof.mic),
+            yes_no(proof.install),
+            yes_no(proof.secure),
+            yes_no(proof.encrypted_key_data),
+            yes_no(proof.nonce_present),
+            yes_no(proof.replay_counter_nonzero),
+            proof.key_data_len,
+            proof.next_action,
+            action,
+            if self.host_eapol_secure_complete() {
+                "host-eapol-complete"
+            } else {
+                "host-eapol-pending"
+            },
+        );
+        Ok(())
+    }
+
     fn process_data_or_event_frame(
         &mut self,
         payload_start: usize,
@@ -5635,56 +5868,8 @@ impl Cyw43NetDevice {
         if ethernet_ethertype(packet) == Some(ETH_P_EAPOL)
             && deferred_join_requires_host_eapol(self.deferred_join_state)
         {
-            self.host_eapol_rx_packets = self.host_eapol_rx_packets.saturating_add(1);
-            let packet_len = packet.len();
-            if packet_len > MAX_FRAME_LEN {
-                return Err(DriverError::FrameTooLarge);
-            }
-            let mut host_packet = [0u8; MAX_FRAME_LEN];
-            host_packet[..packet_len].copy_from_slice(packet);
-            let proof = host_eapol_frame_proof(&host_packet[..packet_len]);
-            let action = match self.handle_host_eapol_frame(&host_packet[..packet_len], proof) {
-                Ok(action) => action,
-                Err(err) => {
-                    self.promote_host_eapol_wait_stage();
-                    warn!(
-                        "[cyw43] host-eapol action=drop status=host-eapol-required err={err} count={} msg={} next_action={}",
-                        self.host_eapol_rx_packets,
-                        proof.message,
-                        proof.next_action,
-                    );
-                    "drop"
-                }
-            };
-            info!(
-                "[cyw43] host-eapol proof count={} msg={} len={} eapol_ver={} type={} body_len={} body_ok={} key_desc={} key_info=0x{:04x} key_ver={} pairwise={} ack={} mic={} install={} secure={} encrypted={} nonce={} replay={} kde_len={} next_action={} action={} status={}",
-                self.host_eapol_rx_packets,
-                proof.message,
-                packet_len,
-                proof.eapol_version,
-                proof.packet_type,
-                proof.body_len,
-                yes_no(proof.body_len_valid),
-                proof.descriptor_type,
-                proof.key_info,
-                proof.key_version,
-                yes_no(proof.pairwise),
-                yes_no(proof.ack),
-                yes_no(proof.mic),
-                yes_no(proof.install),
-                yes_no(proof.secure),
-                yes_no(proof.encrypted_key_data),
-                yes_no(proof.nonce_present),
-                yes_no(proof.replay_counter_nonzero),
-                proof.key_data_len,
-                proof.next_action,
-                action,
-                if self.host_eapol_secure_complete() {
-                    "host-eapol-complete"
-                } else {
-                    "host-eapol-pending"
-                },
-            );
+            let packet = copy_packet_to_heapless(packet)?;
+            self.process_host_eapol_packet(packet.as_slice())?;
             return Ok(RxFrameResult::None);
         }
         if !allow_data {
@@ -5754,6 +5939,11 @@ impl Cyw43NetDevice {
     fn poll_rx(&mut self) -> Option<HeaplessVec<u8, MAX_FRAME_LEN>> {
         if !deferred_join_allows_rx_polling(self.deferred_join_state) {
             return None;
+        }
+
+        if let Some(frame) = self.glom_rx_ready.pop_front() {
+            self.rx_packets = self.rx_packets.saturating_add(1);
+            return Some(frame);
         }
 
         if matches!(self.deferred_join_state, DeferredJoinState::Pending { .. }) {
@@ -6067,6 +6257,60 @@ fn parse_rx_sdpcm_header(frame: &[u8], frame_len: usize) -> Result<RxSdpcmHeader
 #[inline]
 fn sdpcm_glom_descriptor(frame: &[u8]) -> bool {
     frame.get(5).is_some_and(|value| (value & 0x80) != 0)
+}
+
+fn parse_glom_descriptor_lengths(
+    payload: &[u8],
+) -> Result<HeaplessVec<u16, RX_GLOM_SUBFRAME_CAP>, DriverError> {
+    if payload.is_empty() || payload.len() % 2 != 0 {
+        return Err(DriverError::Protocol("cyw43-rxglom-bad-descriptor"));
+    }
+
+    let mut lengths = HeaplessVec::<u16, RX_GLOM_SUBFRAME_CAP>::new();
+    let mut total_len = 0usize;
+    for (index, raw_len) in payload.chunks_exact(2).enumerate() {
+        let subframe_len = u16::from(raw_len[0]) | (u16::from(raw_len[1]) << 8);
+        if !sdpcm_glom_subframe_len_valid(subframe_len, index) {
+            return Err(DriverError::Protocol("cyw43-rxglom-bad-subframe-len"));
+        }
+        total_len = total_len
+            .checked_add(usize::from(subframe_len))
+            .ok_or(DriverError::FrameTooLarge)?;
+        if total_len > FRAME_BUF_LEN {
+            return Err(DriverError::Protocol("cyw43-rxglom-superframe-oversize"));
+        }
+        lengths
+            .push(subframe_len)
+            .map_err(|_| DriverError::Protocol("cyw43-rxglom-descriptor-overflow"))?;
+    }
+    Ok(lengths)
+}
+
+#[inline]
+const fn sdpcm_glom_subframe_len_valid(subframe_len: u16, index: usize) -> bool {
+    let min_len = if index == 0 {
+        SDPCM_HEADER_LEN * 2
+    } else {
+        SDPCM_HEADER_LEN
+    };
+    subframe_len as usize >= min_len
+}
+
+fn glom_descriptor_total_len(lengths: &HeaplessVec<u16, RX_GLOM_SUBFRAME_CAP>) -> usize {
+    lengths
+        .iter()
+        .fold(0usize, |total, len| total.saturating_add(usize::from(*len)))
+}
+
+fn copy_packet_to_heapless(packet: &[u8]) -> Result<HeaplessVec<u8, MAX_FRAME_LEN>, DriverError> {
+    if packet.len() > MAX_FRAME_LEN {
+        return Err(DriverError::FrameTooLarge);
+    }
+    let mut frame = HeaplessVec::new();
+    frame
+        .extend_from_slice(packet)
+        .map_err(|_| DriverError::FrameTooLarge)?;
+    Ok(frame)
 }
 
 fn control_response_copy_len(
@@ -6492,13 +6736,13 @@ mod tests {
         control_plane_retry_after_reply_wait_uses_promoted_link,
         control_plane_retry_after_startup_link_reply_failure_target_clock_hz,
         control_response_copy_len, control_response_matches, control_tx_payload_offset_for_header,
-        deferred_join_allows_rx_polling, deferred_join_bringup_status_label,
-        deferred_join_forces_eapol_only_rx, deferred_join_poll_limit,
-        deferred_join_requires_host_eapol, derive_host_snonce, derive_wpa2_pairwise_ptk,
-        derive_wpa2_psk_pmk, eapol_key_data_contains_compatible_rsn_ie, eapol_key_data_contains_ie,
-        eapol_replay_counter_increases, event_association_state_update, event_link_state_update,
-        event_msgs_ext_payload_len, find_gtk_kde, firmware_mac_address_from_response,
-        firmware_supplicant_disable_allows_failure,
+        copy_packet_to_heapless, deferred_join_allows_rx_polling,
+        deferred_join_bringup_status_label, deferred_join_forces_eapol_only_rx,
+        deferred_join_poll_limit, deferred_join_requires_host_eapol, derive_host_snonce,
+        derive_wpa2_pairwise_ptk, derive_wpa2_psk_pmk, eapol_key_data_contains_compatible_rsn_ie,
+        eapol_key_data_contains_ie, eapol_replay_counter_increases, event_association_state_update,
+        event_link_state_update, event_msgs_ext_payload_len, find_gtk_kde,
+        firmware_mac_address_from_response, firmware_supplicant_disable_allows_failure,
         first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
         host_eapol_association_event_label, host_eapol_deferred_poll_log_due,
@@ -6526,11 +6770,12 @@ mod tests {
         linux_userspace_supplicant_path_uses_host_eapol, linux_wpa2_join_sets_mfp_without_rsn_ie,
         linux_wpa2_join_sets_rsn_capability_policy, optional_control_plane_iovar_allows_failure,
         optional_host_eapol_rx_admission_allows_failure, optional_txbf_allows_failure,
-        parse_broadcom_event, parse_event_payload, parse_rx_sdpcm_header,
-        preserve_cyw43_init_failure_exact_error, promoted_cyw43_init_failure_exact_error,
-        psk_is_hex_pmk, put_u16_le, rsn_ie_is_wpa2_psk_ccmp_compatible,
-        sdpcm_control_tx_request_len, sdpcm_glom_descriptor, sdpcm_header_only_status_frame,
-        set_event_mask_bit, speculative_credit_window_after_promoted_timeout_retry,
+        parse_broadcom_event, parse_event_payload, parse_glom_descriptor_lengths,
+        parse_rx_sdpcm_header, preserve_cyw43_init_failure_exact_error,
+        promoted_cyw43_init_failure_exact_error, psk_is_hex_pmk, put_u16_le,
+        rsn_ie_is_wpa2_psk_ccmp_compatible, sdpcm_control_tx_request_len, sdpcm_glom_descriptor,
+        sdpcm_glom_subframe_len_valid, sdpcm_header_only_status_frame, set_event_mask_bit,
+        speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
         startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
         verify_eapol_key_mic, write_eapol_key_reply_frame, write_eapol_start_frame,
@@ -8104,6 +8349,41 @@ mod tests {
     }
 
     #[test]
+    fn rx_glom_descriptor_lengths_are_bounded_for_deaggregation() {
+        let lengths =
+            parse_glom_descriptor_lengths(&[32, 0, 76, 0]).expect("valid glom descriptor");
+
+        assert_eq!(lengths.as_slice(), &[32, 76]);
+        assert!(sdpcm_glom_subframe_len_valid(24, 0));
+        assert!(!sdpcm_glom_subframe_len_valid(12, 0));
+        assert!(sdpcm_glom_subframe_len_valid(12, 1));
+        assert!(matches!(
+            parse_glom_descriptor_lengths(&[32, 0, 76]),
+            Err(DriverError::Protocol("cyw43-rxglom-bad-descriptor"))
+        ));
+    }
+
+    #[test]
+    fn rx_glom_descriptor_rejects_unbounded_superframes() {
+        let too_many = [
+            32u8, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0,
+        ];
+
+        assert!(matches!(
+            parse_glom_descriptor_lengths(&too_many),
+            Err(DriverError::Protocol("cyw43-rxglom-descriptor-overflow"))
+        ));
+    }
+
+    #[test]
+    fn rx_glom_packet_copy_preserves_ethernet_payload_bounds() {
+        let packet = [0xa5u8; 64];
+        let copied = copy_packet_to_heapless(&packet).expect("packet fits");
+
+        assert_eq!(copied.as_slice(), &packet);
+    }
+
+    #[test]
     fn rx_sdpcm_header_rejects_hal_length_past_buffer() {
         let mut frame = [0u8; 16];
         put_u16_le(&mut frame, 0, 16);
@@ -8229,9 +8509,9 @@ mod tests {
     }
 
     #[test]
-    fn linux_sdio_preinit_rxglom_is_disabled_when_driver_lacks_glom_rx() {
+    fn linux_sdio_preinit_rxglom_is_kept_through_mpc() {
         assert!(linux_station_path_keeps_txglom_configured_before_preinit());
-        assert!(!linux_station_path_keeps_rxglom_configured_before_preinit());
+        assert!(linux_station_path_keeps_rxglom_configured_before_preinit());
     }
 
     #[test]

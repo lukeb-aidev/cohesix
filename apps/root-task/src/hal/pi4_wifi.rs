@@ -21,8 +21,8 @@ use super::{
 use crate::bootstrap::log as boot_log;
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
 use crate::local_seat_pi4::{
-    usb_boot_activity_active, usb_runtime_first_byte_seen, wifi_progress_advance_loops,
-    wifi_progress_tick,
+    usb_boot_activity_active, usb_runtime_first_byte_seen, usb_runtime_keyboard_ready_seen,
+    wifi_progress_advance_loops, wifi_progress_tick,
 };
 use crate::rust_alloc::vec::Vec;
 use crate::sel4::{page_get_address, DeviceFrame, PAGE_BITS};
@@ -45,6 +45,12 @@ fn usb_boot_activity_active() -> bool {
 #[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
 #[inline]
 fn usb_runtime_first_byte_seen() -> bool {
+    false
+}
+
+#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[inline]
+fn usb_runtime_keyboard_ready_seen() -> bool {
     false
 }
 
@@ -423,9 +429,10 @@ fn wifi_breadcrumb_uart_suppressed() -> bool {
 const fn wifi_breadcrumb_uart_should_emit(
     suppressed: bool,
     usb_active: bool,
+    usb_keyboard_ready: bool,
     usb_keyboard_online: bool,
 ) -> bool {
-    !suppressed && !usb_active && !usb_keyboard_online
+    !suppressed && !usb_active && !usb_keyboard_ready && !usb_keyboard_online
 }
 
 #[cfg(test)]
@@ -439,6 +446,7 @@ fn emit_breadcrumb(args: core::fmt::Arguments<'_>) {
     if !wifi_breadcrumb_uart_should_emit(
         wifi_breadcrumb_uart_suppressed(),
         usb_boot_activity_active(),
+        usb_runtime_keyboard_ready_seen(),
         usb_runtime_first_byte_seen(),
     ) {
         #[cfg(feature = "kernel")]
@@ -7711,8 +7719,8 @@ const fn runtime_rx_uses_linux_firstread_on_irq_source(
     sdhci_status: u32,
     frame_len: usize,
 ) -> bool {
-    let host_int = match int_status {
-        Some(bits) => (bits & I_HMB_HOST_INT) != 0,
+    let readable_nonempty_source = match int_status {
+        Some(bits) => bits != 0,
         None => false,
     };
     let host_card_int = (sdhci_status & SDHCI_INT_CARD_INT) != 0;
@@ -7720,7 +7728,7 @@ const fn runtime_rx_uses_linux_firstread_on_irq_source(
         Some(_) => false,
         None => host_card_int,
     };
-    !frame_indicated && frame_len == 0 && (host_int || unreadable_host_card_int)
+    !frame_indicated && frame_len == 0 && (readable_nonempty_source || unreadable_host_card_int)
 }
 
 const fn runtime_rx_host_latch_without_dongle_source(
@@ -7730,7 +7738,7 @@ const fn runtime_rx_host_latch_without_dongle_source(
     frame_len: usize,
 ) -> bool {
     let dongle_source_empty = match int_status {
-        Some(bits) => (bits & HOSTINTMASK) == 0,
+        Some(bits) => bits == 0,
         None => false,
     };
     !frame_indicated
@@ -7745,6 +7753,14 @@ const fn runtime_rx_stale_host_latch_should_log(clear_count: u16) -> bool {
         || clear_count == 16
         || clear_count == 32
         || clear_count == 64
+}
+
+const fn runtime_rx_invalid_firstread_should_clear_latch(
+    int_status_readable: bool,
+    int_status: u32,
+    sdhci_status: u32,
+) -> bool {
+    int_status_readable && int_status == 0 && (sdhci_status & SDHCI_INT_CARD_INT) != 0
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17954,6 +17970,17 @@ impl SdioHost {
                 "[pi4-wifi] firmware stage=runtime-rx action=frame-indication-without-rframe int_status=0x{int_status:08x} sdhci=0x{sdhci_status:08x} clear=defer-before-drain reason=preserve-eapol-rx-latch",
                 int_status = int_status.unwrap_or(0),
             ));
+        } else if runtime_rx_host_latch_without_dongle_source(
+            frame_indicated,
+            int_status,
+            sdhci_status,
+            0,
+        ) {
+            self.clear_runtime_rx_stale_host_latch(
+                "runtime-rx-host-latch-only",
+                int_status.unwrap_or(0),
+                sdhci_status,
+            );
         } else if runtime_rx_uses_linux_firstread_on_irq_source(
             frame_indicated,
             int_status,
@@ -17971,23 +17998,24 @@ impl SdioHost {
             if recovered_len != 0 {
                 return Ok(recovered_len);
             }
+            if runtime_rx_invalid_firstread_should_clear_latch(
+                int_status.is_some(),
+                int_status.unwrap_or(0),
+                sdhci_status,
+            ) {
+                self.clear_runtime_rx_stale_host_latch(
+                    "runtime-rx-irq-latched-empty",
+                    int_status.unwrap_or(0),
+                    sdhci_status,
+                );
+                return Ok(0);
+            }
             emit_breadcrumb(format_args!(
                 "[pi4-wifi] firmware stage=runtime-rx action=no-frame-source-after-firstread rframe=0x0000 int_status=0x{int_status:08x}/{} sdhci=0x{sdhci_status:08x} card_int={} clear=defer-before-drain reason=preserve-eapol-rx-latch",
                 yn(int_status.is_some()),
                 yn((sdhci_status & SDHCI_INT_CARD_INT) != 0),
                 int_status = int_status.unwrap_or(0),
             ));
-        } else if runtime_rx_host_latch_without_dongle_source(
-            frame_indicated,
-            int_status,
-            sdhci_status,
-            0,
-        ) {
-            self.clear_runtime_rx_stale_host_latch(
-                "runtime-rx-host-latch-only",
-                int_status.unwrap_or(0),
-                sdhci_status,
-            );
         }
 
         Ok(0)
@@ -24920,7 +24948,7 @@ mod tests {
         required_ht_clock_linux_active_transition_resets_chipclk_for_attempt,
         required_ht_clock_linux_active_transition_resets_chipclk_for_stage,
         runtime_rx_drains_before_irq_clear, runtime_rx_host_latch_without_dongle_source,
-        runtime_rx_stale_host_latch_should_log,
+        runtime_rx_invalid_firstread_should_clear_latch, runtime_rx_stale_host_latch_should_log,
         runtime_rx_uses_linux_firstread_on_frame_indication,
         runtime_rx_uses_linux_firstread_on_irq_source, sdhci_interrupt_buffer_ready_mask,
         sdhci_present_buffer_ready_mask, sdhci_status_reason, sdio_byte_mode_transfer_plan,
@@ -25024,11 +25052,12 @@ mod tests {
 
     #[test]
     fn wifi_breadcrumb_uart_defers_while_usb_boot_is_active() {
-        assert!(wifi_breadcrumb_uart_should_emit(false, false, false));
-        assert!(!wifi_breadcrumb_uart_should_emit(true, false, false));
-        assert!(!wifi_breadcrumb_uart_should_emit(false, true, false));
-        assert!(!wifi_breadcrumb_uart_should_emit(false, false, true));
-        assert!(!wifi_breadcrumb_uart_should_emit(true, true, true));
+        assert!(wifi_breadcrumb_uart_should_emit(false, false, false, false));
+        assert!(!wifi_breadcrumb_uart_should_emit(true, false, false, false));
+        assert!(!wifi_breadcrumb_uart_should_emit(false, true, false, false));
+        assert!(!wifi_breadcrumb_uart_should_emit(false, false, true, false));
+        assert!(!wifi_breadcrumb_uart_should_emit(false, false, false, true));
+        assert!(!wifi_breadcrumb_uart_should_emit(true, true, true, true));
     }
 
     #[test]
@@ -30739,6 +30768,12 @@ mod tests {
         ));
         assert!(runtime_rx_uses_linux_firstread_on_irq_source(
             false,
+            Some(0x0080_0000),
+            SDHCI_INT_CARD_INT,
+            0
+        ));
+        assert!(runtime_rx_uses_linux_firstread_on_irq_source(
+            false,
             None,
             SDHCI_INT_CARD_INT,
             0
@@ -30760,6 +30795,22 @@ mod tests {
             Some(I_HMB_FRAME_IND),
             SDHCI_INT_CARD_INT,
             0
+        ));
+        assert!(!runtime_rx_host_latch_without_dongle_source(
+            false,
+            Some(0x0080_0000),
+            SDHCI_INT_CARD_INT,
+            0
+        ));
+        assert!(runtime_rx_invalid_firstread_should_clear_latch(
+            true,
+            0,
+            SDHCI_INT_CARD_INT
+        ));
+        assert!(!runtime_rx_invalid_firstread_should_clear_latch(
+            true,
+            0x0080_0000,
+            SDHCI_INT_CARD_INT
         ));
         assert!(!runtime_rx_uses_linux_firstread_on_irq_source(
             true,

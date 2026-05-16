@@ -331,9 +331,11 @@ power/reset state.
   path through firmware `ver`, `clmver`, and `mpc`. Disabling `bus:rxglom` as a
   local safety shortcut before `mpc` is not Linux-equivalent and the
   2026-05-13 Cohesix boot trace showed it can move an otherwise working
-  control plane into a host-`CARD_INT`/no-dongle-source stall. RX-glom data
-  limits belong at the post-attach receive path, not in the preinit transport
-  order.
+  control plane into a host-`CARD_INT`/no-dongle-source stall. RX-glom handling
+  belongs at the post-attach receive path: the driver keeps a bounded descriptor
+  list, deaggregates valid SDPCM glom superframes into data/event/EAPOL
+  subframes, and reports malformed or oversized glom evidence without changing
+  the preinit transport order.
 - The first Linux-order control writes use the plain 12-byte SDPCM header. The
   8-byte SDPCM hardware-extension header is enabled only after `bus:rxglom`
   succeeds, matching `brcmfmac`'s `tx_hdrlen` transition. Sending
@@ -408,6 +410,10 @@ power/reset state.
   then keeps the deferred EAPOL-only receive lane alive with bounded event-pump
   burst polls and low-level SDIO breadcrumbs suppressed even after a terminal
   `host-eapol-required` verdict.
+  Runtime RX must treat readable `SDIO_INT_STATUS=0` plus SDHCI `CARD_INT` as a
+  stale host latch and clear/ack it before any Function 2 first-read; only
+  non-zero or unreadable interrupt-source evidence may trigger the Linux-shaped
+  first-read recovery path.
   M1/M3 are expected as unicast frames to the station after association; the
   PAE group address is retained only as an initial diagnostic EAPOL-Start probe.
   The hot host-latch clear path must not spam serial with repeated successful
@@ -674,7 +680,9 @@ power/reset state.
   USB owns the bounded pre-net keyboard/xHCI activity window. While USB is
   inside that window, Wi-Fi progress updates and raw `[pi4-wifi]` breadcrumbs
   must not compete for HDMI/UART output; Wi-Fi records them to the internal log
-  buffer and resumes visible progress only after the USB activity window clears.
+  buffer. After the USB keyboard transport reaches the runtime `keyboard-ready`
+  proof, Wi-Fi still keeps raw HAL breadcrumbs off UART so log volume cannot
+  prevent the first user byte from reaching the root shell.
 - Wi-Fi net-console bring-up must precede the serial root console on Pi 4 when
   local-seat is enabled and the selected net-console interface is Wi-Fi.
   Cohesix emits `action=root-console-wait-for-wifi`, preserves the Wi-Fi
@@ -709,10 +717,11 @@ power/reset state.
   truly absent or Wi-Fi credentials are missing. CYW43 protocol, HAL transport,
   firmware, join, and post-Function-2 errors are Wi-Fi gate evidence and must
   remain fatal so gates 7 and 8 cannot be hidden by the wired backend.
-- Until a bounded deaggregator exists, any received SDPCM glom channel frame
-  after attach is terminal gate-8 evidence (`cyw43-rxglom-unsupported`) rather
-  than silent dropped data. Do not prevent that evidence by changing Linux's
-  preinit `bus:rxglom=1` transport order before `mpc`.
+- Post-attach SDPCM glom RX is bounded: descriptor lists are capped, superframe
+  subframes are deaggregated into the normal data/event/EAPOL path, and malformed
+  or oversized glom evidence remains explicit instead of silent. Do not prevent
+  that evidence by changing Linux's preinit `bus:rxglom=1` transport order before
+  `mpc`.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
