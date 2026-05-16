@@ -3965,7 +3965,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x03fc..=0x03fd
             | 0x03fe..=0x03ff
             | 0x0400..=0x0406
-            | 0x0410..=0x0415
+            | 0x0410..=0x0416
     )
 }
 
@@ -3996,7 +3996,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x03fc..=0x03fd
             | 0x03fe..=0x03ff
             | 0x0400..=0x0406
-            | 0x0410..=0x0415
+            | 0x0410..=0x0416
     )
 }
 
@@ -4016,6 +4016,7 @@ const fn xhci_diag_stage_force_log(stage: u16) -> bool {
             | 0x03fe..=0x03ff
             | 0x0400..=0x0406
             | 0x0410..=0x0414
+            | 0x0416
     )
 }
 
@@ -4228,6 +4229,7 @@ const fn xhci_diag_stage_value_labels(
             Some(("param", "status_control", "source_depth"))
         }
         0x0415 => Some(("slot_dci", "ring_len", "status_control")),
+        0x0416 => Some(("slot_ep", "code_payload", "raw_head")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4585,6 +4587,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0413 => Some("event-transfer-replayed-raw"),
         0x0414 => Some("event-transfer-preserved-during-filtered-poll"),
         0x0415 => Some("usb-transfer-trb-queued"),
+        0x0416 => Some("usb-hid-report-flexible-key-fallback"),
         0x03c0 => Some("usb-hid-report-event"),
         0x03c1 => Some("usb-hid-report-decode-fail"),
         0x03c2 => Some("usb-hid-report-empty"),
@@ -15854,6 +15857,22 @@ mod driver_coverage_tests {
 
         XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT.store(0, Ordering::Release);
     }
+
+    #[test]
+    fn driver_coverage_hid_fallback_diag_is_not_hidden_as_mmio_failure() {
+        assert_eq!(
+            xhci_diag_stage_label(0x0416),
+            Some("usb-hid-report-flexible-key-fallback")
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0416),
+            Some(("slot_ep", "code_payload", "raw_head"))
+        );
+        assert!(xhci_diag_history_stage_relevant(0x0416));
+        assert!(xhci_diag_stage_after_run(0x0416));
+        assert!(xhci_diag_stage_force_log(0x0416));
+        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0416));
+    }
 }
 
 #[cfg(all(test, target_os = "none"))]
@@ -18831,6 +18850,10 @@ mod tests {
             xhci_diag_stage_label(0x0406),
             Some("cmd-prompt-safe-psc-preserved")
         );
+        assert_eq!(
+            xhci_diag_stage_label(0x0416),
+            Some("usb-hid-report-flexible-key-fallback")
+        );
         assert_eq!(xhci_diag_stage_label(0x03c0), Some("usb-hid-report-event"));
         assert_eq!(
             xhci_diag_stage_label(0x03c1),
@@ -19310,6 +19333,10 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x03c1),
             Some(("slot_ep", "code_payload", "decode_state"))
+        );
+        assert_eq!(
+            xhci_diag_stage_value_labels(0x0416),
+            Some(("slot_ep", "code_payload", "raw_head"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),

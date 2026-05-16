@@ -473,6 +473,11 @@ fn optional_host_eapol_rx_admission_allows_failure(name: &str, err: &DriverError
 }
 
 #[inline]
+fn firmware_supplicant_disable_allows_failure(err: &DriverError) -> bool {
+    ioctl_failed_status(err) == Some(BCME_UNSUPPORTED)
+}
+
+#[inline]
 const fn firmware_supplicant_wrapper_fallback_allowed() -> bool {
     true
 }
@@ -3617,6 +3622,7 @@ impl Cyw43NetDevice {
                 warn!(
                     "[cyw43] join: firmware-supplicant path=primary-plain unsupported status=0x{BCME_UNSUPPORTED:08x} action=continue-host-eapol-required reason=firmware-offload-unavailable"
                 );
+                self.disable_wpa2_firmware_supplicant_host_path("primary-plain-unsupported", false);
                 Ok(FirmwareSupplicantPath::Unsupported)
             }
             Err(err) => Err(err),
@@ -3643,9 +3649,42 @@ impl Cyw43NetDevice {
                 warn!(
                     "[cyw43] join: firmware-supplicant path=bsscfg-wrapper unsupported status=0x{BCME_UNSUPPORTED:08x} action=continue-host-eapol-required reason=firmware-offload-unavailable"
                 );
+                self.disable_wpa2_firmware_supplicant_host_path("bsscfg-wrapper-unsupported", true);
                 Ok(FirmwareSupplicantPath::Unsupported)
             }
             Err(err) => Err(err),
+        }
+    }
+
+    fn disable_wpa2_firmware_supplicant_host_path(
+        &mut self,
+        reason: &'static str,
+        include_bsscfg_wrapper: bool,
+    ) {
+        match self.set_iovar_u32("sup_wpa", 0) {
+            Ok(()) => info!(
+                "[cyw43] join: firmware-supplicant action=disable-host-path path=primary-plain reason={reason} result=ready value=0"
+            ),
+            Err(err) if firmware_supplicant_disable_allows_failure(&err) => warn!(
+                "[cyw43] join: firmware-supplicant action=disable-host-path path=primary-plain reason={reason} result=unsupported optional=yes value=0 err={err}"
+            ),
+            Err(err) => warn!(
+                "[cyw43] join: firmware-supplicant action=disable-host-path path=primary-plain reason={reason} result=error value=0 err={err}"
+            ),
+        }
+
+        if include_bsscfg_wrapper {
+            match self.set_iovar_u32x2("bsscfg:sup_wpa", BSSCFG_PRIMARY_INDEX, 0) {
+                Ok(()) => info!(
+                    "[cyw43] join: firmware-supplicant action=disable-host-path path=bsscfg-wrapper reason={reason} result=ready bsscfgidx={BSSCFG_PRIMARY_INDEX} value=0"
+                ),
+                Err(err) if firmware_supplicant_disable_allows_failure(&err) => warn!(
+                    "[cyw43] join: firmware-supplicant action=disable-host-path path=bsscfg-wrapper reason={reason} result=unsupported optional=yes bsscfgidx={BSSCFG_PRIMARY_INDEX} value=0 err={err}"
+                ),
+                Err(err) => warn!(
+                    "[cyw43] join: firmware-supplicant action=disable-host-path path=bsscfg-wrapper reason={reason} result=error bsscfgidx={BSSCFG_PRIMARY_INDEX} value=0 err={err}"
+                ),
+            }
         }
     }
 
@@ -5946,7 +5985,8 @@ mod tests {
         deferred_join_requires_host_eapol, derive_host_snonce, derive_wpa2_pairwise_ptk,
         derive_wpa2_psk_pmk, eapol_replay_counter_increases, event_association_state_update,
         event_link_state_update, event_msgs_ext_payload_len, find_gtk_kde,
-        firmware_mac_address_from_response, first_control_plane_retry_after_promoted_timeout,
+        firmware_mac_address_from_response, firmware_supplicant_disable_allows_failure,
+        first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, has_sdpcm_credit,
         host_eapol_association_event_label, host_eapol_deferred_poll_log_due,
         host_eapol_deferred_progress_error_is_transient, host_eapol_event_ap_mac_candidate,
@@ -7891,6 +7931,25 @@ mod tests {
                 cmd: Ioctl::SetVar as u32,
                 status: BCME_UNSUPPORTED,
             }
+        ));
+    }
+
+    #[test]
+    fn firmware_supplicant_disable_keeps_only_unsupported_nonfatal() {
+        assert!(firmware_supplicant_disable_allows_failure(
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_UNSUPPORTED,
+            }
+        ));
+        assert!(!firmware_supplicant_disable_allows_failure(
+            &DriverError::IoctlFailed {
+                cmd: Ioctl::SetVar as u32,
+                status: BCME_BADARG,
+            }
+        ));
+        assert!(!firmware_supplicant_disable_allows_failure(
+            &DriverError::Hal(HalError::Unsupported("sdio-cmd53-r5-error"))
         ));
     }
 

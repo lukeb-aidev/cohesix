@@ -38,7 +38,7 @@ Use the root console for low-level validation (bootinfo, capability layout, unty
 ## Root Console (PL011 / QEMU Serial)
 ### Access and purpose
 - Brought up once PL011 initialises; exposed on QEMU `-serial mon:stdio`.
-- On `pi4-uboot-aarch64` (legacy alias `uefi-aarch64`), local-seat keyboard input is routed into the same parser and HDMI mirrors the same output lines with bounded truncation and bounded in-place scroll when framebuffer setup succeeds. HDMI mailbox/framebuffer failure degrades only the mirror; USB diagnostics and keyboard probing remain available. Kernel debug-syscall text remains serial/UART only.
+- On `pi4-uboot-aarch64` (legacy alias `uefi-aarch64`), local-seat keyboard input is routed into the same parser and HDMI mirrors the same output lines with bounded truncation and bounded in-place scroll when framebuffer setup succeeds. Local-seat input remains a distinct physical-console source rather than being collapsed into UART input; switching between UART and USB keyboard clears any unfinished line on the other source, while accepted local-seat command output is still mirrored to both HDMI and the serial transcript. HDMI mailbox/framebuffer failure degrades only the mirror; USB diagnostics and keyboard probing remain available. Kernel debug-syscall text remains serial/UART only.
 - Prompt: `cohesix>` from the in-kernel console loop.【F:apps/root-task/src/console/mod.rs†L216-L305】
 - Intended for local debug/bring-up: verify seL4 bootinfo, CSpace layout, untyped enumeration, and that the root task is alive.
 

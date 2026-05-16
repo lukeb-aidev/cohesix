@@ -401,11 +401,13 @@ power/reset state.
   supplicant offload; it must not reintroduce wrapper-shaped `wsec` or join
   programming. `WLC_SET_WSEC_PMK` is a firmware-supplicant-offload command in
   the Pi 4 station path; if both firmware-supplicant shapes are unsupported,
-  Cohesix skips PMK programming, submits the primary join request, and exports
+  Cohesix explicitly leaves firmware supplicant offload disabled, skips PMK
+  programming, submits the primary join request, and exports
   `wifi-host-eapol-pending` as the live next secure boundary. Until a host
   EAPOL/key-install path completes the secure handshake, Cohesix keeps DHCP and
   normal data TX disabled, runs an association-gated join-submit EAPOL proof
-  window, enables a Linux-shaped receive-admission window (`mcast_list` for
+  window, logs the host-path `sup_wpa=0`/wrapper-disable result without treating
+  unsupported disable as fatal, enables a Linux-shaped receive-admission window (`mcast_list` for
   `01:80:c2:00:00:03`, `allmulti=0`, optional `WLC_SET_PROMISC=0`), refreshes
   that receive-admission programming once after association/BSSID proof, and
   then keeps the deferred EAPOL-only receive lane alive with bounded event-pump
@@ -430,7 +432,7 @@ power/reset state.
   contains bounded M1/M3 admission, M2/M4 transmit, 802.1X drain before key
   programming, and PTK/GTK `wsec_key` install logic. GTK/group keys use the
   Broadcom primary/default-key flag, while PTK/pairwise keys keep flags zero.
-  The last reviewed Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-094954.log`)
+  The last reviewed Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-102142.log`)
   still did not receive M1 after association/link-up, BSSID refresh, and
   AP-directed EAPOL-Start TX, so that hardware state is not a Wi-Fi connection:
   proof tooling reports `WIFI_GATE=7`, `WIFI_BLOCKER=host-eapol-required`, and
@@ -1239,6 +1241,18 @@ Required Cohesix shape:
 - Root-port reads known to be toxic must stay behind explicit HAL gates.
 - USB keyboard feeds only the existing root-console parser after decoding USB
   HID Usage Page `0x07` keyboard usages to bounded ASCII/control bytes.
+- HID keyboard polling first accepts strict boot-protocol reports, then uses a
+  bounded compatibility fallback for report-protocol keyboards that expose
+  compact or bitmap reports. A key-empty boot-looking payload with additional
+  non-zero report bytes emits `0x0416 tag=usb-hid-report-flexible-key-fallback`
+  before decoding via the flexible path, so Gate 9 failures stay attributable to
+  report decoding instead of being misread as HAL/DMA/MMIO or SDIO contention.
+- USB keyboard input is a distinct local-seat physical-console source, not a
+  UART alias. The event pump clears an unfinished UART line when USB keyboard
+  bytes arrive and clears an unfinished local-seat line before processing a UART
+  command, so serial and USB input cannot concatenate stale partial commands.
+  Accepted local-seat command output is mirrored through the same UART/HDMI
+  physical-console path for proof-log parity.
 - Operator proof uses a single 10-gate USB ladder: 1 controller candidate, 2 live
   PCIe/VL805 ownership, 3 controller-ready, 4 command-ring completion, 5
   root-port connection, 6 device address, 7 descriptors/configuration, 8 HID

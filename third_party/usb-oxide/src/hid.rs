@@ -14,13 +14,13 @@
 //! - LED control for keyboards
 
 use crate::{
+    Dma, Result, UsbError,
     desc::{
-        class, desc_type, ep_type, hid_protocol, hid_subclass, EndpointDesc, InterfaceDesc,
-        SetupPacket,
+        EndpointDesc, InterfaceDesc, SetupPacket, class, desc_type, ep_type, hid_protocol,
+        hid_subclass,
     },
     dev::UsbDevice,
-    ring::{completion, PhysMem},
-    Dma, Result, UsbError,
+    ring::{PhysMem, completion},
 };
 
 use alloc::sync::Arc;
@@ -29,6 +29,7 @@ use core::{hint::spin_loop, ptr};
 const BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD: u8 = 4;
 const UBOOT_BOOT_KEYBOARD_IDLE_DURATION: u8 = 10;
 const BOOT_KEYBOARD_REPORT_LEN: usize = core::mem::size_of::<KeyboardReport>();
+const FLEXIBLE_KEYBOARD_REPORT_MIN_LEN: usize = 4;
 
 #[inline]
 const fn has_report_payload(
@@ -58,6 +59,33 @@ const fn keyboard_keys_valid(keys: &[u8; 6]) -> bool {
         index += 1;
     }
     true
+}
+
+#[inline]
+fn keyboard_report_has_key(report: &KeyboardReport) -> bool {
+    report.keys.iter().any(|key| *key != 0)
+}
+
+#[inline]
+fn keyboard_payload_prefix(payload: &[u8]) -> u64 {
+    let mut value = 0u64;
+    let mut index = 0usize;
+    while index < payload.len() && index < core::mem::size_of::<u64>() {
+        value |= u64::from(payload[index]) << (index * 8);
+        index += 1;
+    }
+    value
+}
+
+#[inline]
+fn keyboard_payload_has_nonzero_outside_boot_window(buf: &[u8], preferred_offset: usize) -> bool {
+    let window_start = preferred_offset.min(buf.len());
+    let window_end = window_start
+        .saturating_add(BOOT_KEYBOARD_REPORT_LEN)
+        .min(buf.len());
+    buf.iter()
+        .enumerate()
+        .any(|(index, byte)| *byte != 0 && (index < window_start || index >= window_end))
 }
 
 #[inline]
@@ -165,11 +193,7 @@ fn decode_bitmap_keyboard_bits(
         }
     }
 
-    if count == 0 {
-        None
-    } else {
-        Some(report)
-    }
+    if count == 0 { None } else { Some(report) }
 }
 
 #[inline]
@@ -243,15 +267,53 @@ fn decode_keyboard_report_payload_boot_compatible(
 }
 
 #[inline]
+fn decode_keyboard_report_payload_flexible_key_report(
+    buf: &[u8],
+    preferred_offset: usize,
+) -> Option<KeyboardReport> {
+    if buf.len() < FLEXIBLE_KEYBOARD_REPORT_MIN_LEN {
+        return None;
+    }
+
+    let try_offset = |offset: usize| {
+        let decoders: [fn(&[u8], usize) -> Option<KeyboardReport>; 3] = [
+            decode_boot_keyboard_report_at,
+            decode_compact_keyboard_report_at,
+            decode_bitmap_keyboard_report_at,
+        ];
+        for decoder in decoders {
+            if let Some(report) = decoder(buf, offset) {
+                if keyboard_report_has_key(&report) {
+                    return Some(report);
+                }
+            }
+        }
+        None
+    };
+
+    if let Some(report) = try_offset(preferred_offset) {
+        return Some(report);
+    }
+
+    for offset in 0..buf.len() {
+        if offset == preferred_offset {
+            continue;
+        }
+        if let Some(report) = try_offset(offset) {
+            return Some(report);
+        }
+    }
+    None
+}
+
+#[inline]
 const fn keyboard_report_payload_min_len(
     decode_mode: KeyboardDecodeMode,
-    preferred_offset: u8,
+    _preferred_offset: u8,
 ) -> usize {
     match decode_mode {
-        KeyboardDecodeMode::BootCompatible => {
-            BOOT_KEYBOARD_REPORT_LEN.saturating_add(preferred_offset as usize)
-        }
-        KeyboardDecodeMode::Flexible => 4,
+        KeyboardDecodeMode::BootCompatible => FLEXIBLE_KEYBOARD_REPORT_MIN_LEN,
+        KeyboardDecodeMode::Flexible => FLEXIBLE_KEYBOARD_REPORT_MIN_LEN,
     }
 }
 
@@ -1063,6 +1125,33 @@ impl<H: Dma> HidDevice<H> {
                         usize::from(self.keyboard_report_offset),
                     ),
                 };
+                if let Some(decoded) = report {
+                    if self.keyboard_decode_mode == KeyboardDecodeMode::BootCompatible
+                        && !keyboard_report_has_key(&decoded)
+                        && keyboard_payload_has_nonzero_outside_boot_window(
+                            payload,
+                            usize::from(self.keyboard_report_offset),
+                        )
+                    {
+                        if let Some(flexible_report) =
+                            decode_keyboard_report_payload_flexible_key_report(
+                                payload,
+                                usize::from(self.keyboard_report_offset),
+                            )
+                        {
+                            self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
+                            self.keyboard_decode_failures = 0;
+                            self.device.ctrl().emit_diag(
+                                0x0416,
+                                ((self.device.slot_id() as u64) << 32)
+                                    | u64::from(evt.endpoint_id()),
+                                ((code as u64) << 32) | payload_len as u64,
+                                keyboard_payload_prefix(payload),
+                            );
+                            report = Some(flexible_report);
+                        }
+                    }
+                }
                 if report.is_none()
                     && self.keyboard_decode_mode == KeyboardDecodeMode::BootCompatible
                 {
@@ -1281,11 +1370,7 @@ pub fn scancode_to_ascii(scancode: u8, shift: bool) -> Option<char> {
 
     if (scancode as usize) < table.len() {
         let c = table[scancode as usize];
-        if c != 0 {
-            Some(c as char)
-        } else {
-            None
-        }
+        if c != 0 { Some(c as char) } else { None }
     } else {
         None
     }
@@ -1342,11 +1427,14 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_keyboard_report_payload, decode_keyboard_report_payload_boot_compatible,
-        forced_keyboard_profile, has_report_payload, keyboard_decode_transition,
-        keyboard_endpoint_id_matches, keyboard_report_payload_min_len, keyboard_usage_code_valid,
-        modifier, scancode, scancode_to_ascii, KeyboardDecodeMode, KeyboardDecodeTransition,
-        KeyboardProtocolMode, UBOOT_BOOT_KEYBOARD_IDLE_DURATION,
+        KeyboardDecodeMode, KeyboardDecodeTransition, KeyboardProtocolMode,
+        UBOOT_BOOT_KEYBOARD_IDLE_DURATION, decode_keyboard_report_payload,
+        decode_keyboard_report_payload_boot_compatible,
+        decode_keyboard_report_payload_flexible_key_report, forced_keyboard_profile,
+        has_report_payload, keyboard_decode_transition, keyboard_endpoint_id_matches,
+        keyboard_payload_has_nonzero_outside_boot_window, keyboard_payload_prefix,
+        keyboard_report_payload_min_len, keyboard_usage_code_valid, modifier, scancode,
+        scancode_to_ascii,
     };
     use crate::ring::completion;
 
@@ -1491,14 +1579,50 @@ mod tests {
     }
 
     #[test]
+    fn flexible_key_report_decoder_recovers_short_compact_payload() {
+        let compact = [0x00u8, scancode::A, 0, 0, 0, 0, 0];
+        assert!(decode_keyboard_report_payload_boot_compatible(&compact, 0).is_none());
+
+        let report =
+            decode_keyboard_report_payload_flexible_key_report(&compact, 0).expect("decode");
+        assert_eq!(report.modifiers, 0);
+        assert_eq!(report.keys[0], scancode::A);
+    }
+
+    #[test]
+    fn flexible_key_report_decoder_recovers_key_after_empty_boot_prefix() {
+        let bitmap_after_boot_prefix = [0x00u8, 0, 0, 0, 0, 0, 0, 0, 0x10, 0];
+        let strict = decode_keyboard_report_payload_boot_compatible(&bitmap_after_boot_prefix, 0)
+            .expect("strict boot decode");
+        assert_eq!(strict.keys, [0; 6]);
+        assert!(keyboard_payload_has_nonzero_outside_boot_window(
+            &bitmap_after_boot_prefix,
+            0
+        ));
+
+        let report =
+            decode_keyboard_report_payload_flexible_key_report(&bitmap_after_boot_prefix, 0)
+                .expect("flexible key decode");
+        assert!(report.keys.iter().any(|key| *key != 0));
+    }
+
+    #[test]
+    fn hid_report_prefix_packs_first_eight_bytes_for_diagnostics() {
+        assert_eq!(
+            keyboard_payload_prefix(&[1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            0x0807_0605_0403_0201
+        );
+    }
+
+    #[test]
     fn keyboard_report_payload_min_len_matches_boot_and_fallback_modes() {
         assert_eq!(
             keyboard_report_payload_min_len(KeyboardDecodeMode::BootCompatible, 0),
-            8
+            4
         );
         assert_eq!(
             keyboard_report_payload_min_len(KeyboardDecodeMode::BootCompatible, 1),
-            9
+            4
         );
         assert_eq!(
             keyboard_report_payload_min_len(KeyboardDecodeMode::Flexible, 1),

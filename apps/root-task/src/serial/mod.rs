@@ -353,6 +353,15 @@ where
         None
     }
 
+    /// Drop a partial line that has not reached the command parser yet.
+    ///
+    /// Returns true when a partial line was present.
+    pub fn clear_partial_line(&mut self) -> bool {
+        let had_partial = !self.line.is_empty();
+        self.line.clear();
+        had_partial
+    }
+
     fn emit_newline(&mut self) {
         if self.echo {
             self.enqueue_tx(b"\r\n");

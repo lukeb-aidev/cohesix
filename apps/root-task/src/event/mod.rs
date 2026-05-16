@@ -1015,7 +1015,22 @@ impl RateLimitKey for NetDiagRateKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConsoleInputSource {
     Serial,
+    LocalSeat,
     Net,
+}
+
+impl ConsoleInputSource {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Serial => "serial",
+            Self::LocalSeat => "local-seat",
+            Self::Net => "net",
+        }
+    }
+
+    const fn is_physical_console(self) -> bool {
+        matches!(self, Self::Serial | Self::LocalSeat)
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -1696,10 +1711,7 @@ where
         if !self.try_emit_console_line(line) {
             #[cfg(feature = "cohesix-dev")]
             {
-                let source = match self.last_input_source {
-                    ConsoleInputSource::Serial => "serial",
-                    ConsoleInputSource::Net => "net",
-                };
+                let source = self.last_input_source.label();
                 let message = format_message(format_args!(
                     "audit console.emit.failed source={} line={}",
                     source, line
@@ -1710,7 +1722,7 @@ where
     }
 
     fn try_emit_console_line(&mut self, line: &str) -> bool {
-        if self.last_input_source == ConsoleInputSource::Serial {
+        if self.last_input_source.is_physical_console() {
             self.emit_serial_line(line);
             return true;
         }
@@ -4385,6 +4397,11 @@ where
     fn consume_serial(&mut self) {
         while let Some(line) = self.serial.next_line() {
             self.last_input_source = ConsoleInputSource::Serial;
+            if !self.local_line.is_empty() {
+                self.local_line.clear();
+                self.audit
+                    .info("console: cleared local-seat input before serial");
+            }
             self.process_console_line(&line);
         }
     }
@@ -4402,7 +4419,11 @@ where
             if read == 0 {
                 break;
             }
-            self.last_input_source = ConsoleInputSource::Serial;
+            self.last_input_source = ConsoleInputSource::LocalSeat;
+            if self.serial.clear_partial_line() {
+                self.audit
+                    .info("console: cleared serial input before local-seat");
+            }
             for &byte in &chunk[..read] {
                 match byte {
                     b'\r' => {}
@@ -4437,14 +4458,14 @@ where
         self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
         #[cfg(feature = "kernel")]
         if self.maybe_handle_usb_debug_line(line.as_str()) {
-            if self.last_input_source == ConsoleInputSource::Serial {
+            if self.last_input_source.is_physical_console() {
                 self.emit_prompt();
             }
             return;
         }
         #[cfg(feature = "kernel")]
         if self.maybe_handle_wifi_debug_line(line.as_str()) {
-            if self.last_input_source == ConsoleInputSource::Serial {
+            if self.last_input_source.is_physical_console() {
                 self.emit_prompt();
             }
             return;
@@ -4452,7 +4473,7 @@ where
         if let Err(err) = self.feed_parser(line) {
             self.handle_console_error(err);
         }
-        if self.last_input_source == ConsoleInputSource::Serial {
+        if self.last_input_source.is_physical_console() {
             self.emit_prompt();
         }
     }
@@ -7677,6 +7698,92 @@ mod tests {
         let transcript: Vec<u8> = tx.into_iter().collect();
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(rendered.contains("Commands:"), "{rendered}");
+    }
+
+    #[test]
+    fn local_seat_keyboard_input_uses_distinct_physical_source() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        local_seat.enqueue_keyboard_bytes(b"ping\n");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.poll();
+        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+
+        let tx = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered =
+            String::from_utf8(tx.into_iter().collect()).expect("serial output must be utf8");
+        assert!(rendered.contains("PONG"), "{rendered}");
+        assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
+        assert!(rendered.contains("cohesix> "), "{rendered}");
+    }
+
+    #[test]
+    fn physical_console_source_switches_clear_partial_input() {
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.local_seat
+            .as_mut()
+            .expect("local-seat should be attached")
+            .enqueue_keyboard_bytes(b"pi");
+        pump.poll();
+        assert_eq!(pump.local_line.as_str(), "pi");
+
+        pump.serial_mut().driver_mut().push_rx(b"help\n");
+        pump.poll();
+        assert!(pump.local_line.is_empty());
+        assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
+
+        pump.serial_mut().driver_mut().push_rx(b"he");
+        pump.poll();
+        pump.local_seat
+            .as_mut()
+            .expect("local-seat should be attached")
+            .enqueue_keyboard_bytes(b"ping\n");
+        pump.poll();
+        assert!(!pump.serial.clear_partial_line());
+        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+
+        drop(pump);
+        assert!(audit
+            .entries
+            .iter()
+            .any(|entry| entry.as_str() == "console: cleared local-seat input before serial"));
+        assert!(audit
+            .entries
+            .iter()
+            .any(|entry| entry.as_str() == "console: cleared serial input before local-seat"));
     }
 
     #[test]

@@ -43,6 +43,9 @@ members = [
     "tools/security-nist",
     "tests",
 ]
+exclude = [
+    "third_party/usb-oxide",
+]
 resolver = "2"
 
 [profile.release]
