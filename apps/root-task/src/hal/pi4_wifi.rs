@@ -7755,6 +7755,14 @@ const fn runtime_rx_stale_host_latch_should_log(clear_count: u16) -> bool {
         || clear_count == 64
 }
 
+const fn runtime_rx_oversize_recovery_should_log(recovery_count: u16) -> bool {
+    recovery_count <= 4
+        || recovery_count == 8
+        || recovery_count == 16
+        || recovery_count == 32
+        || recovery_count == 64
+}
+
 const fn runtime_rx_invalid_firstread_should_clear_latch(
     int_status_readable: bool,
     int_status: u32,
@@ -9291,6 +9299,7 @@ struct SdioHost {
     cached_control_plane_irq_int_status: Option<u32>,
     runtime_frame_read_needs_irq_ack: bool,
     runtime_rx_stale_host_latch_clears: u16,
+    runtime_rx_oversize_recovers: u16,
     last_sdio_irq_clear_serviced_bits: u32,
     last_sdio_irq_clear_int_status_readable: bool,
     last_sdio_irq_clear_card_int: bool,
@@ -9437,6 +9446,7 @@ impl SdioHost {
             cached_control_plane_irq_int_status: None,
             runtime_frame_read_needs_irq_ack: false,
             runtime_rx_stale_host_latch_clears: 0,
+            runtime_rx_oversize_recovers: 0,
             last_sdio_irq_clear_serviced_bits: 0,
             last_sdio_irq_clear_int_status_readable: false,
             last_sdio_irq_clear_card_int: false,
@@ -9504,6 +9514,7 @@ impl SdioHost {
         self.cached_control_plane_irq_int_status = None;
         self.runtime_frame_read_needs_irq_ack = false;
         self.runtime_rx_stale_host_latch_clears = 0;
+        self.runtime_rx_oversize_recovers = 0;
         self.last_sdio_irq_clear_serviced_bits = 0;
         self.last_sdio_irq_clear_int_status_readable = false;
         self.last_sdio_irq_clear_card_int = false;
@@ -18678,6 +18689,84 @@ impl SdioHost {
         }
     }
 
+    fn recover_runtime_rx_oversize_frame(
+        &mut self,
+        stage: &'static str,
+        frame_len: usize,
+        capacity: usize,
+    ) {
+        self.runtime_frame_read_needs_irq_ack = false;
+        self.runtime_rx_oversize_recovers = self.runtime_rx_oversize_recovers.saturating_add(1);
+        let recovery_count = self.runtime_rx_oversize_recovers;
+        let should_log = runtime_rx_oversize_recovery_should_log(recovery_count);
+        if should_log {
+            let int_status = self
+                .read_sdio_core_u32_with_f1_fallback(stage, "int-status", SDIO_INT_STATUS)
+                .unwrap_or(0);
+            let sdhci_status = self.read32(SDHCI_INT_STATUS);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] firmware stage={stage} action=runtime-rx-oversize-recover count={recovery_count} frame_len={frame_len} cap={capacity} int_status=0x{int_status:08x} sdhci=0x{sdhci_status:08x} policy=drop-clear"
+            ));
+        }
+
+        let _ = self.io_direct_write(
+            SdioFunction::Function0,
+            SDIO_CCCR_ABORT,
+            SdioFunction::Function2.number(),
+        );
+        let _ = self.io_direct_write(SdioFunction::Function1, SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM);
+
+        let mut final_count = u16::MAX;
+        for _ in 0..=3usize {
+            let lo = self
+                .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
+                .unwrap_or(0xFF);
+            let hi = self
+                .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
+                .unwrap_or(0xFF);
+            final_count = u16::from(lo) | (u16::from(hi) << 8);
+            if final_count == 0 {
+                break;
+            }
+            for _ in 0..SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE {
+                spin_loop();
+            }
+            wifi_progress_advance_loops(SDIO_FUNCTION_READY_SETTLE_LOOPS_FUNCTION2_REPLY_PROBE);
+        }
+
+        if let Err(err) = self.clear_sdio_irq_source_for_firmware_channel(stage, true, true) {
+            if should_log {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] firmware stage={stage} action=runtime-rx-oversize-clear-failed count={recovery_count} err={err} final_count=0x{final_count:04x}"
+                ));
+            }
+            return;
+        }
+        let Some(binding) = self.sdio_irq_binding else {
+            return;
+        };
+        match binding.ack_from_hal() {
+            Ok(()) => {
+                if should_log {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=runtime-rx-oversize-ack count={recovery_count} irq={} badge=0x{:x} final_count=0x{final_count:04x}",
+                        binding.irq().0,
+                        binding.badge(),
+                    ));
+                }
+                self.enable_sdhci_card_interrupt_signal(stage);
+            }
+            Err(err) => {
+                if should_log {
+                    emit_breadcrumb(format_args!(
+                        "[pi4-wifi] firmware stage={stage} action=runtime-rx-oversize-ack-failed count={recovery_count} irq={} err={err} final_count=0x{final_count:04x}",
+                        binding.irq().0,
+                    ));
+                }
+            }
+        }
+    }
+
     fn write_frame_with_linux_request_shape(
         &mut self,
         frame: &mut [u8],
@@ -18895,6 +18984,10 @@ impl SdioHost {
             return Ok(0);
         }
         if frame_len > out.len() {
+            if self.runtime_frame_read_needs_irq_ack {
+                self.recover_runtime_rx_oversize_frame("runtime-rx-oversize", frame_len, out.len());
+                return Ok(0);
+            }
             return Err(HalError::Unsupported("cyw43-frame-oversize"));
         }
         let ack_runtime_rx_after_drain = self.runtime_frame_read_needs_irq_ack;
@@ -24948,7 +25041,8 @@ mod tests {
         required_ht_clock_linux_active_transition_resets_chipclk_for_attempt,
         required_ht_clock_linux_active_transition_resets_chipclk_for_stage,
         runtime_rx_drains_before_irq_clear, runtime_rx_host_latch_without_dongle_source,
-        runtime_rx_invalid_firstread_should_clear_latch, runtime_rx_stale_host_latch_should_log,
+        runtime_rx_invalid_firstread_should_clear_latch, runtime_rx_oversize_recovery_should_log,
+        runtime_rx_stale_host_latch_should_log,
         runtime_rx_uses_linux_firstread_on_frame_indication,
         runtime_rx_uses_linux_firstread_on_irq_source, sdhci_interrupt_buffer_ready_mask,
         sdhci_present_buffer_ready_mask, sdhci_status_reason, sdio_byte_mode_transfer_plan,
@@ -30837,6 +30931,9 @@ mod tests {
         assert!(runtime_rx_stale_host_latch_should_log(1));
         assert!(runtime_rx_stale_host_latch_should_log(64));
         assert!(!runtime_rx_stale_host_latch_should_log(65));
+        assert!(runtime_rx_oversize_recovery_should_log(1));
+        assert!(runtime_rx_oversize_recovery_should_log(64));
+        assert!(!runtime_rx_oversize_recovery_should_log(65));
     }
 
     #[test]

@@ -114,10 +114,34 @@ const NET_INIT_TAG: &str = "net-console:init";
 static STORAGE_ADDRESS_LOGGED: AtomicBool = AtomicBool::new(false);
 static NET_WATCH_LOGGED: AtomicBool = AtomicBool::new(false);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelfTestLogSeverity {
+    Warn,
+    Debug,
+    Trace,
+}
+
 const fn self_test_enabled_for_backend(backend: NetBackend) -> bool {
     cfg!(feature = "net-selftest")
         || backend.uses_dev_virt_defaults()
         || matches!(backend, NetBackend::BcmGenet)
+}
+
+const fn udp_beacon_send_failure_log_severity(
+    buffer_full: bool,
+    log_count: u32,
+) -> SelfTestLogSeverity {
+    if buffer_full {
+        if log_count <= 1 {
+            SelfTestLogSeverity::Debug
+        } else {
+            SelfTestLogSeverity::Trace
+        }
+    } else if log_count <= 1 {
+        SelfTestLogSeverity::Warn
+    } else {
+        SelfTestLogSeverity::Debug
+    }
 }
 
 fn dhcp_phase_for_bringup_status(status: &'static str) -> &'static str {
@@ -3577,6 +3601,7 @@ impl<D: NetDevice> NetStack<D> {
                         sent = sent.saturating_add(1);
                     }
                     Err(err) => {
+                        let buffer_full = matches!(err, UdpSendError::BufferFull);
                         let log_count = match err {
                             UdpSendError::BufferFull => {
                                 self.self_test.udp_beacon_blocked_logs =
@@ -3589,16 +3614,20 @@ impl<D: NetDevice> NetStack<D> {
                                 self.self_test.udp_beacon_error_logs
                             }
                         };
-                        if log_count == 1 {
-                            warn!(
+                        match udp_beacon_send_failure_log_severity(buffer_full, log_count) {
+                            SelfTestLogSeverity::Warn => warn!(
                                 "[net-selftest] udp-beacon send failed seq={} err={:?}",
                                 self.self_test.beacon_seq, err
-                            );
-                        } else {
-                            debug!(
+                            ),
+                            SelfTestLogSeverity::Debug => debug!(
                                 "[net-selftest] udp-beacon send failed seq={} err={:?}",
                                 self.self_test.beacon_seq, err
-                            );
+                            ),
+                            SelfTestLogSeverity::Trace => trace!(
+                                "[net-selftest] udp-beacon send failed seq={} err={:?}",
+                                self.self_test.beacon_seq,
+                                err
+                            ),
                         }
                         break;
                     }
@@ -6269,6 +6298,26 @@ mod tests {
             Some(
                 "[net-selftest] hint: peer-assisted echo/smoke checks incomplete, but local TX/RX and authenticated link proof are present",
             )
+        );
+    }
+
+    #[test]
+    fn self_test_udp_beacon_bufferfull_does_not_warn() {
+        assert_eq!(
+            udp_beacon_send_failure_log_severity(true, 1),
+            SelfTestLogSeverity::Debug
+        );
+        assert_eq!(
+            udp_beacon_send_failure_log_severity(true, 2),
+            SelfTestLogSeverity::Trace
+        );
+        assert_eq!(
+            udp_beacon_send_failure_log_severity(false, 1),
+            SelfTestLogSeverity::Warn
+        );
+        assert_eq!(
+            udp_beacon_send_failure_log_severity(false, 2),
+            SelfTestLogSeverity::Debug
         );
     }
 

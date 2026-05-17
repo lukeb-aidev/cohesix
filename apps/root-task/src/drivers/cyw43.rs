@@ -89,6 +89,7 @@ const RX_PUMP_LIMIT: usize = 8;
 const RX_GLOM_SUBFRAME_CAP: usize = 8;
 const RX_GLOM_QUEUE_CAP: usize = 4;
 const RX_GLOM_WARNING_LOG_LIMIT: u8 = 4;
+const RX_OVERSIZE_WARNING_LOG_LIMIT: u8 = 4;
 const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
 const POST_UP_EVENT_DRAIN_BUDGET: usize = 8;
 
@@ -451,6 +452,11 @@ const fn linux_station_path_keeps_txglom_configured_before_preinit() -> bool {
 
 #[inline]
 const fn linux_station_path_keeps_rxglom_configured_before_preinit() -> bool {
+    true
+}
+
+#[inline]
+const fn cohesix_runtime_disables_rxglom_until_large_superframes_supported() -> bool {
     true
 }
 
@@ -2870,6 +2876,7 @@ pub struct Cyw43NetDevice {
     glom_subframe_lens: HeaplessVec<u16, RX_GLOM_SUBFRAME_CAP>,
     glom_rx_ready: Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_GLOM_QUEUE_CAP>,
     glom_warning_logs: u8,
+    rx_oversize_warning_logs: u8,
 }
 
 pub struct RxToken {
@@ -3041,6 +3048,7 @@ impl Cyw43NetDevice {
             glom_subframe_lens: HeaplessVec::new(),
             glom_rx_ready: Deque::new(),
             glom_warning_logs: 0,
+            rx_oversize_warning_logs: 0,
         };
 
         info!("[cyw43] step: init_control_plane");
@@ -3132,6 +3140,7 @@ impl Cyw43NetDevice {
         self.glom_subframe_lens.clear();
         self.glom_rx_ready.clear();
         self.glom_warning_logs = 0;
+        self.rx_oversize_warning_logs = 0;
     }
 
     fn replay_control_plane_bootstrap(
@@ -3319,6 +3328,15 @@ impl Cyw43NetDevice {
             "linux-preinit-defaults",
             self.apply_linux_preinit_defaults()
         );
+        if cohesix_runtime_disables_rxglom_until_large_superframes_supported() {
+            control_step!(
+                "bus-rxglom-disable-runtime-compat",
+                self.set_iovar_u32("bus:rxglom", 0)
+            );
+            info!(
+                "[cyw43] control-plane step=bus-rxglom-disable-runtime-compat action=compat reason=large-rxglom-superframes-not-yet-supported"
+            );
+        }
         if linux_station_path_sets_antdiv_before_join() {
             control_step!(
                 "antenna-diversity",
@@ -6342,7 +6360,11 @@ impl Cyw43NetDevice {
                     | RxFrameResult::Data(_),
                 ) => {}
                 Err(err) => {
-                    warn!("[cyw43] rx error: {err}");
+                    if rx_error_warning_budget_allows(&mut self.rx_oversize_warning_logs, &err) {
+                        warn!("[cyw43] rx error: {err}");
+                    } else {
+                        trace!("[cyw43] rx error: {err}");
+                    }
                     return None;
                 }
             }
@@ -6718,6 +6740,22 @@ fn glom_subframe_end(
 
 fn glom_warning_budget_allows(logs: &mut u8) -> bool {
     if *logs >= RX_GLOM_WARNING_LOG_LIMIT {
+        return false;
+    }
+    *logs = logs.saturating_add(1);
+    true
+}
+
+fn rx_error_warning_budget_allows(logs: &mut u8, err: &DriverError) -> bool {
+    if !matches!(
+        err,
+        DriverError::Hal(HalError::Unsupported("cyw43-frame-oversize"))
+            | DriverError::Protocol("cyw43-rxglom-superframe-oversize")
+            | DriverError::FrameTooLarge
+    ) {
+        return true;
+    }
+    if *logs >= RX_OVERSIZE_WARNING_LOG_LIMIT {
         return false;
     }
     *logs = logs.saturating_add(1);
@@ -7201,8 +7239,9 @@ mod tests {
         parse_broadcom_event, parse_event_payload, parse_glom_descriptor_lengths,
         parse_rx_sdpcm_header, preserve_cyw43_init_failure_exact_error,
         promoted_cyw43_init_failure_exact_error, psk_is_hex_pmk, put_u16_le,
-        rsn_ie_is_wpa2_psk_ccmp_compatible, sdpcm_control_tx_request_len, sdpcm_glom_descriptor,
-        sdpcm_glom_subframe_len_valid, sdpcm_header_only_status_frame, set_event_mask_bit,
+        rsn_ie_is_wpa2_psk_ccmp_compatible, rx_error_warning_budget_allows,
+        sdpcm_control_tx_request_len, sdpcm_glom_descriptor, sdpcm_glom_subframe_len_valid,
+        sdpcm_header_only_status_frame, set_event_mask_bit,
         speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
         startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
@@ -7240,11 +7279,11 @@ mod tests {
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
         LINUX_BSSCFG_JOIN_PAYLOAD_LEN, LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN,
         LINUX_EXT_JOIN_SCAN_OFFSET, LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN, PAE_GROUP_ADDR,
-        RX_GLOM_WARNING_LOG_LIMIT, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ,
-        SDPCM_CONTROL_TX_EXT_HEADER_LEN, SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_DATA_TX_HEADER_LEN,
-        SDPCM_DATA_TX_PADDING_LEN, SDPCM_DATA_TX_SW_HEADER_OFFSET, SDPCM_HEADER_LEN, STATUS_ABORT,
-        STATUS_FAIL, STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED,
-        WME_BSS_DISABLE_RSN_DEFAULT, WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK,
+        RX_GLOM_WARNING_LOG_LIMIT, RX_OVERSIZE_WARNING_LOG_LIMIT, SDIO_DATA_CLOCK_HZ,
+        SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN, SDPCM_CONTROL_TX_HEADER_LEN,
+        SDPCM_DATA_TX_HEADER_LEN, SDPCM_DATA_TX_PADDING_LEN, SDPCM_DATA_TX_SW_HEADER_OFFSET,
+        SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_FAIL, STATUS_NO_NETWORKS, STATUS_SUCCESS,
+        STATUS_UNSOLICITED, WME_BSS_DISABLE_RSN_DEFAULT, WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK,
         WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WPA_KCK_LEN, WPA_NONCE_LEN, WPA_PTK_LEN,
         WPA_REPLAY_COUNTER_LEN, WPA_TK_LEN, WSEC_FLAG_PASSPHRASE, WSEC_KEY_ALGO_OFFSET,
         WSEC_KEY_DATA_OFFSET, WSEC_KEY_EA_OFFSET, WSEC_KEY_LEN_OFFSET, WSEC_KEY_PAYLOAD_LEN,
@@ -9059,6 +9098,22 @@ mod tests {
         assert!(!glom_warning_budget_allows(&mut logs));
         assert!(!glom_warning_budget_allows(&mut logs));
         assert_eq!(logs, RX_GLOM_WARNING_LOG_LIMIT);
+    }
+
+    #[test]
+    fn rx_oversize_warning_budget_is_bounded_for_uart_safety() {
+        let mut logs = 0;
+        let err = DriverError::Hal(HalError::Unsupported("cyw43-frame-oversize"));
+        for _ in 0..RX_OVERSIZE_WARNING_LOG_LIMIT {
+            assert!(rx_error_warning_budget_allows(&mut logs, &err));
+        }
+        assert!(!rx_error_warning_budget_allows(&mut logs, &err));
+        assert!(!rx_error_warning_budget_allows(&mut logs, &err));
+        assert_eq!(logs, RX_OVERSIZE_WARNING_LOG_LIMIT);
+
+        let non_oversize = DriverError::Protocol("other-rx-error");
+        assert!(rx_error_warning_budget_allows(&mut logs, &non_oversize));
+        assert_eq!(logs, RX_OVERSIZE_WARNING_LOG_LIMIT);
     }
 
     #[test]

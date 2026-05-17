@@ -331,13 +331,13 @@ power/reset state.
   path through firmware `ver`, `clmver`, and `mpc`. Disabling `bus:rxglom` as a
   local safety shortcut before `mpc` is not Linux-equivalent and the
   2026-05-13 Cohesix boot trace showed it can move an otherwise working
-  control plane into a host-`CARD_INT`/no-dongle-source stall. RX-glom handling
-  belongs at the post-attach receive path: the driver keeps a bounded descriptor
-  list, deaggregates valid SDPCM glom superframes into data/event/EAPOL
-  subframes without normal-path UART output, tolerates Linux-observed descriptor
-  overshoot when the remaining superframe tail still contains a complete SDPCM
-  subframe, and reports malformed or oversized glom evidence through a capped
-  diagnostic budget without changing the preinit transport order.
+  control plane into a host-`CARD_INT`/no-dongle-source stall. After `mpc`
+  succeeds, the Pi 4 compatibility profile disables runtime `bus:rxglom` until
+  the post-attach RX path supports Linux-sized aggregated superframes. That
+  preserves the working Linux-shaped control-plane order while preventing a
+  single oversized data glom from pinning Function 2 and flooding UART output.
+  Malformed or oversized RX-glom evidence must remain explicit, UART-capped,
+  and recoverable by clearing the Function 2 frame condition.
 - The first Linux-order control writes use the plain 12-byte SDPCM header. The
   8-byte SDPCM hardware-extension header is enabled only after `bus:rxglom`
   succeeds, matching `brcmfmac`'s `tx_hdrlen` transition. Sending
@@ -774,14 +774,13 @@ power/reset state.
   peer-assisted `nettest` echo/smoke probes are reported separately from
   driver-level TX/RX/DHCP/remote-`cohsh` proof, so a missing router-side echo
   listener is not a Wi-Fi blocker and cannot spam the console.
-- Post-attach SDPCM glom RX is bounded: descriptor lists are capped, superframe
-  subframes are deaggregated into the normal data/event/EAPOL path, and malformed
-  or oversized glom evidence remains explicit but UART-capped instead of silent or
+- Post-attach SDPCM glom RX is bounded: descriptor lists are capped, normal-sized
+  subframes are deaggregated into the data/event/EAPOL path, and malformed or
+  oversized glom evidence remains explicit but UART-capped instead of silent or
   flood-prone. Descriptor overshoot is a soft mismatch when the remaining tail is
-  still a complete SDPCM subframe, matching the Linux capture that delivered
-  valid subframes despite a descriptor mismatch. Do not prevent that evidence by
-  changing Linux's preinit
-  `bus:rxglom=1` transport order before `mpc`.
+  still a complete SDPCM subframe. Runtime `bus:rxglom` stays disabled on Pi 4
+  until larger Linux-style superframes are supported end-to-end; this does not
+  change Linux's preinit `bus:rxglom=1` order before `mpc`.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
