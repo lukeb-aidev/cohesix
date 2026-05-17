@@ -417,6 +417,23 @@ static XHCI_ROOT_PORT_STATUS_WORDS: [AtomicU32; XHCI_MAX_PROBE_PORTS] =
 static USB_RUNTIME_KEYBOARD_READY: AtomicBool = AtomicBool::new(false);
 static USB_RUNTIME_FIRST_REPORT: AtomicBool = AtomicBool::new(false);
 static USB_RUNTIME_FIRST_BYTE: AtomicBool = AtomicBool::new(false);
+static USB_KBD_POLL_CALLS: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_REPORTS: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_NO_REPORT: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_ERRORS: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_NON_EMPTY_REPORTS: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_EMITTED_BYTES: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_DUPLICATE_KEYS: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_ZERO_KEYS: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_LOCK_KEYS: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_SCROLL_KEYS: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_UNMAPPED_KEYS: AtomicU32 = AtomicU32::new(0);
+static USB_KBD_LAST_MODIFIERS: AtomicU8 = AtomicU8::new(0);
+static USB_KBD_LAST_KEY0: AtomicU8 = AtomicU8::new(0);
+static USB_KBD_LAST_KEY1: AtomicU8 = AtomicU8::new(0);
+static USB_KBD_LAST_KEY2: AtomicU8 = AtomicU8::new(0);
+static USB_KBD_LAST_EMITTED_KEY: AtomicU8 = AtomicU8::new(0);
+static USB_KBD_LAST_EMITTED_ASCII: AtomicU8 = AtomicU8::new(0);
 static VL805_CFG_PROOF_READY: AtomicBool = AtomicBool::new(false);
 const VL805_CFG_COMMAND_SHADOW_VALID: u32 = 1 << 31;
 static VL805_CFG_COMMAND_SHADOW: AtomicU32 = AtomicU32::new(0);
@@ -793,6 +810,27 @@ pub(crate) struct UsbRuntimeProofStatus {
     pub proof_gate: u8,
     pub next_step: &'static str,
     pub blocker: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UsbKeyboardPollStatus {
+    pub poll_calls: u32,
+    pub reports: u32,
+    pub no_report: u32,
+    pub errors: u32,
+    pub non_empty_reports: u32,
+    pub emitted_bytes: u32,
+    pub duplicate_keys: u32,
+    pub zero_keys: u32,
+    pub lock_keys: u32,
+    pub scroll_keys: u32,
+    pub unmapped_keys: u32,
+    pub last_modifiers: u8,
+    pub last_key0: u8,
+    pub last_key1: u8,
+    pub last_key2: u8,
+    pub last_emitted_key: u8,
+    pub last_emitted_ascii: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3568,6 +3606,29 @@ pub(crate) fn latest_usb_runtime_proof_status() -> UsbRuntimeProofStatus {
         proof_gate,
         next_step,
         blocker,
+    }
+}
+
+#[must_use]
+pub(crate) fn latest_usb_keyboard_poll_status() -> UsbKeyboardPollStatus {
+    UsbKeyboardPollStatus {
+        poll_calls: USB_KBD_POLL_CALLS.load(Ordering::Acquire),
+        reports: USB_KBD_REPORTS.load(Ordering::Acquire),
+        no_report: USB_KBD_NO_REPORT.load(Ordering::Acquire),
+        errors: USB_KBD_ERRORS.load(Ordering::Acquire),
+        non_empty_reports: USB_KBD_NON_EMPTY_REPORTS.load(Ordering::Acquire),
+        emitted_bytes: USB_KBD_EMITTED_BYTES.load(Ordering::Acquire),
+        duplicate_keys: USB_KBD_DUPLICATE_KEYS.load(Ordering::Acquire),
+        zero_keys: USB_KBD_ZERO_KEYS.load(Ordering::Acquire),
+        lock_keys: USB_KBD_LOCK_KEYS.load(Ordering::Acquire),
+        scroll_keys: USB_KBD_SCROLL_KEYS.load(Ordering::Acquire),
+        unmapped_keys: USB_KBD_UNMAPPED_KEYS.load(Ordering::Acquire),
+        last_modifiers: USB_KBD_LAST_MODIFIERS.load(Ordering::Acquire),
+        last_key0: USB_KBD_LAST_KEY0.load(Ordering::Acquire),
+        last_key1: USB_KBD_LAST_KEY1.load(Ordering::Acquire),
+        last_key2: USB_KBD_LAST_KEY2.load(Ordering::Acquire),
+        last_emitted_key: USB_KBD_LAST_EMITTED_KEY.load(Ordering::Acquire),
+        last_emitted_ascii: USB_KBD_LAST_EMITTED_ASCII.load(Ordering::Acquire),
     }
 }
 
@@ -6912,6 +6973,7 @@ fn ensure_runtime_vl805_mailbox_reset(hal: &mut KernelHal<'_>) -> Result<(), Pi4
         "[local-seat] vl805 reset ownership=runtime-owned stage=runtime action=mailbox-notify",
     );
     clear_vl805_live_cfg_proof("mailbox-reset-boundary");
+    pi4_pcie::invalidate_pi4_pcie_runtime_proofs("mailbox-reset-boundary");
     match pi4_wifi::notify_vl805_reset(hal).map_err(map_pi4_wifi_mailbox_reset_error) {
         Ok(result) => {
             wait_ms(runtime_vl805_mailbox_reset_success_settle_ms(result));
@@ -14343,10 +14405,19 @@ impl UsbKeyboard {
             return 0;
         }
 
+        USB_KBD_POLL_CALLS.fetch_add(1, Ordering::Relaxed);
         let mut written = 0usize;
         for _ in 0..USB_KEYBOARD_REPORT_DRAIN_BUDGET {
             let report = match self.hid.poll_keyboard_checked() {
                 Ok(Some(report)) => {
+                    USB_KBD_REPORTS.fetch_add(1, Ordering::Relaxed);
+                    USB_KBD_LAST_MODIFIERS.store(report.modifiers, Ordering::Release);
+                    USB_KBD_LAST_KEY0.store(report.keys[0], Ordering::Release);
+                    USB_KBD_LAST_KEY1.store(report.keys[1], Ordering::Release);
+                    USB_KBD_LAST_KEY2.store(report.keys[2], Ordering::Release);
+                    if report.keys.iter().any(|key| *key != 0) {
+                        USB_KBD_NON_EMPTY_REPORTS.fetch_add(1, Ordering::Relaxed);
+                    }
                     self.poll_error_logged = false;
                     if !self.first_report_logged {
                         let mut line = heapless::String::<224>::new();
@@ -14391,6 +14462,7 @@ impl UsbKeyboard {
                     report
                 }
                 Ok(None) => {
+                    USB_KBD_NO_REPORT.fetch_add(1, Ordering::Relaxed);
                     if !self.first_no_report_logged {
                         boot_log::force_uart_line(
                             "[local-seat] usb hid first report pending detail=interrupt-in-no-event",
@@ -14400,6 +14472,7 @@ impl UsbKeyboard {
                     break;
                 }
                 Err(err) => {
+                    USB_KBD_ERRORS.fetch_add(1, Ordering::Relaxed);
                     if !self.poll_error_logged {
                         let mut line = heapless::String::<192>::new();
                         let _ = core::fmt::Write::write_fmt(
@@ -14420,20 +14493,28 @@ impl UsbKeyboard {
                 if written >= out.len() {
                     break;
                 }
-                if !keyboard_key_should_emit(key, &self.last_keys) {
+                if key == 0 {
+                    USB_KBD_ZERO_KEYS.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                if self.last_keys.contains(&key) {
+                    USB_KBD_DUPLICATE_KEYS.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
                 let scroll_delta = keyboard_display_scroll_delta_for_key(key);
                 if scroll_delta != 0 {
+                    USB_KBD_SCROLL_KEYS.fetch_add(1, Ordering::Relaxed);
                     self.pending_display_scroll_rows = self
                         .pending_display_scroll_rows
                         .saturating_add(scroll_delta);
                     continue;
                 }
                 if self.toggle_lock_led_for_key(key) {
+                    USB_KBD_LOCK_KEYS.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
                 let Some(ch) = keyboard_scancode_to_char(key, shift) else {
+                    USB_KBD_UNMAPPED_KEYS.fetch_add(1, Ordering::Relaxed);
                     if !self.first_unmapped_key_logged {
                         let mut line = heapless::String::<256>::new();
                         let _ = core::fmt::Write::write_fmt(
@@ -14488,6 +14569,9 @@ impl UsbKeyboard {
                     boot_log::force_uart_line(line.as_str());
                     self.first_printable_byte_logged = true;
                 }
+                USB_KBD_EMITTED_BYTES.fetch_add(1, Ordering::Relaxed);
+                USB_KBD_LAST_EMITTED_KEY.store(key, Ordering::Release);
+                USB_KBD_LAST_EMITTED_ASCII.store(effective as u8, Ordering::Release);
                 out[written] = effective as u8;
                 written = written.saturating_add(1);
             }

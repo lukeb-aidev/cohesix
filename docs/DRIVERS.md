@@ -419,15 +419,20 @@ power/reset state.
   then keeps the deferred EAPOL-only receive lane alive with bounded event-pump
   burst polls and low-level SDIO breadcrumbs suppressed even after a terminal
   `host-eapol-required` verdict.
-  The Linux join event mask is programmed before `WLC_UP` and replayed after the
-  post-up event drain so later firmware state transitions cannot silently drop
-  association, link, PSK, or MIC events.
+  The Linux join event mask is programmed before `WLC_UP`; Cohesix then sends
+  Linux's managed-station mode gate (`WLC_SET_INFRA`, `cmd=20`, value `1`)
+  before the post-up event drain and event-mask replay so later firmware state
+  transitions cannot silently drop association, link, PSK, or MIC events.
   Runtime RX must treat readable `SDIO_INT_STATUS=0` plus SDHCI `CARD_INT` as a
   stale host latch and clear/ack it before any Function 2 first-read; only
   non-zero or unreadable interrupt-source evidence may trigger the Linux-shaped
   first-read recovery path.
   M1/M3 are expected as unicast frames to the station after association; the
-  PAE group address is retained only as an initial diagnostic EAPOL-Start probe.
+  host-EAPOL path first waits passively for M1, matching WPA-PSK host
+  supplicant behavior where EAPOL-Start is not the handshake trigger. If the
+  passive window expires, diagnostic EAPOL-Start stays on the 802.1X PAE group
+  address while the current firmware-reported associated BSSID is kept only as
+  an AP hint for later M1/M3 validation and EAPOL-Key replies.
   The hot host-latch clear path must not spam serial with repeated successful
   `SDIO_INT_STATUS` Function 1 reads or host-card-int-latch-only clears; logs
   stay reserved for first-edge proof, dongle source bits, unreadable-source
@@ -447,19 +452,23 @@ power/reset state.
   Broadcom primary/default-key flag, while PTK/pairwise keys keep flags zero and
   still carry a zero RX RSC so Broadcom sees `iv_initialized=1`, matching the
   Linux key-install shape.
-  The last reviewed Pi 4 boot (`/Users/lukasbower/pi4-serial-20260516-162314.log`)
-  supersedes the earlier no-association trace: it proved association/link-up,
-  BSSID refresh, EAPOL-Start TX to both the PAE group and the firmware-reported
-  associated BSSID, USB Gate 10, and prompt-side `netstats`, but still did not
-  receive M1 (`eapol_rx=0`) and left DHCP blocked. `WLC_GET_BSSID` returned a
-  locally administered unicast address; that is a valid router shape on some
-  networks, so Cohesix must not hard-code the currently tested AP or require
-  globally administered BSSIDs. Current root-task sends the first EAPOL-Start to
-  the PAE group, then trusts a valid `WLC_GET_BSSID` result as the associated
-  BSSID even when it is locally administered. If no M1 is visible after bounded
-  AP-directed starts, Cohesix enables a temporary EAPOL-only receive rescue
-  (`allmulti=1`, `promisc=1`) while keeping DHCP and normal data blocked; after
-  secure key install it restores the Linux unicast-M1 receive policy
+  The last reviewed Pi 4 boot (`/Users/lukasbower/pi4-serial-20260517-173550.log`)
+  supersedes the earlier no-association traces: it proved association/link-up,
+  EAPOL-only receive rescue, PAE-group diagnostic EAPOL-Start, USB prompt
+  availability, and a live root prompt, but still did not receive M1
+  (`eapol_rx=0`) and left DHCP blocked. The latest proof keeps the same secure
+  frontier with `WIFI_GATE=7` and `wifi-host-eapol-pending`. `WLC_GET_BSSID`
+  and the association events returned locally administered/P2P-looking unicast
+  addresses; those are logged as unproved hints, not accepted AP identity, so
+  Cohesix must wait for an AP-originated M1 or a verified global BSSID before
+  storing `host_wpa.ap_mac`. Current root-task first waits for the AP-originated
+  M1, refreshes the
+  Linux unicast-M1 receive admission after association, then enables a temporary
+  EAPOL-only receive rescue (`allmulti=1`, `promisc=1`) during the same bounded
+  post-association proof window before sending delayed diagnostic EAPOL-Start
+  frames to the PAE group address. DHCP and normal data remain blocked
+  throughout the rescue; after secure key install Cohesix restores the Linux
+  unicast-M1 receive policy
   idempotently before releasing DHCP/data, even if the rescue path was not used.
   Post-secure EAPOL frames stay routed to the host WPA handler for bounded
   rekey/group-key processing; malformed post-secure frames are dropped without
@@ -494,14 +503,20 @@ power/reset state.
   `host-eapol action=wait-pending-8021x-drain`,
   `host-eapol action=install-wsec-key kind=ptk`, `kind=gtk`, and final
   `join complete mode=host-eapol secure=yes` before DHCP or normal data TX is
-  enabled.
+  enabled. The EAPOL drain path must first look for a new SDPCM credit covering
+  the submitted M4/group-M2 sequence; if the firmware produces no fresh status
+  before the bounded wait expires, the driver may proceed only when the
+  already-advertised credit window explicitly covered the submitted sequence and
+  must log `fresh_status=no`.
   Any observed 4-way frame is classified as `m1`, `m3`,
   `group-key`, malformed, or unexpected station-originated traffic, and the log
   records the exact next required host action (`derive-ptk-send-m2`,
   `verify-mic-send-m4-install-keys`, or key inspection). On M3, Cohesix must
   keep hostap ordering: validate the AP nonce and replay counter, verify the
   MIC, send M4, then install PTK and GTK through `wsec_key` before allowing
-  DHCP/data. It must not fall back to `SET_SSID`-only completion or a lower-level
+  DHCP/data. Repeated M3 and post-secure group-key messages must advance from
+  the last accepted replay counter instead of reusing the M1 anchor. It must not
+  fall back to `SET_SSID`-only completion or a lower-level
   transport hint. Explicit
   diagnostic commands may still probe the HAL-owned SDIO/control path. The
   2026-05-14 22:11 trace proves the corrected
@@ -566,7 +581,8 @@ power/reset state.
   that state with bounded host-EAPOL burst polls while still returning to serial,
   USB, and IPC work between bursts. The driver must suppress repetitive low-level
   SDIO breadcrumbs and continue dropping non-EAPOL data until the secure boundary
-  is complete. Blocking join attempts and timed-out deferred
+  is complete; queued glommed data also remains held until the same secure
+  predicate is true. Blocking join attempts and timed-out deferred
   attempts must stop normal smoltcp receive polling so the root console is not
   flooded with no-progress Function 1 `SDIO_INT_STATUS` latch reads;
   prompt-side `wifi diag`, `wifi retry`, and related diagnostics remain the
@@ -574,19 +590,22 @@ power/reset state.
   proof window, Cohesix records `SET_SSID` as join-acceptance evidence only; the
   post-association EAPOL proof budget starts only after an association/reassociation
   or link-up event leaves the driver in the associated state, so the M1 window is
-  not spent before EAPOL-Start is legal. Successful association/link events may
-  seed the AP/BSSID from the Broadcom event address or Ethernet source when the
-  address is a valid unicast AP candidate, but that seed is only a hint: before
-  host EAPOL-Start, Cohesix must issue `WLC_GET_BSSID` (`cmd=23`) and prefer the
-  firmware-reported associated BSSID when it is a valid AP candidate. The seed
-  log must include both raw event candidates, and the EAPOL-Start log must
-  include the resolved destination MAC. Before the first post-association
+  not spent before diagnostic EAPOL-Start is legal. Successful association/link
+  events may seed the AP/BSSID from the Broadcom event address or Ethernet
+  source only when the address is a verified globally administered unicast AP
+  candidate. Locally administered event addresses and station/P2P aliases are
+  logged as unproved hints and must not populate `host_wpa.ap_mac`. Before host
+  EAPOL-Start, Cohesix must issue `WLC_GET_BSSID` (`cmd=23`) and store the
+  firmware-reported associated BSSID only when it passes the same verified AP
+  proof. The seed/skip log must include both raw event candidates, and the
+  EAPOL-Start log must include the actual destination MAC. Before the first
+  post-association
   EAPOL-Start, Cohesix must refresh the Linux-shaped receive-admission
   programming because the join event/BSSID proof is the first point where the
-  current AP identity is known. EAPOL-Start sends one PAE-group probe, then uses
-  a valid `WLC_GET_BSSID` result as the associated BSSID even when the router
-  advertises a locally administered address; event-derived local-admin hints
-  still require the bounded `dst=ap-local-admin-probe` fallback label. M1 may
+  current AP identity is known. Because WPA-PSK host supplicants wait for AP M1,
+  EAPOL-Start is delayed until the passive proof window expires and is logged as
+  a diagnostic probe, not as the expected M1 trigger. The diagnostic Start frame
+  uses the PAE group destination while AP identity remains unproved; M1 may
   overwrite the AP MAC with the authenticated frame source. Cohesix
   parses the EAPOL/EAPOL-Key envelope
   for proof (`m1`/`m3` shape, key-info bits, replay-counter presence, declared
@@ -714,21 +733,32 @@ power/reset state.
   release `cohesix>` while DHCP/data stay blocked and prompt-side `wifi diag` /
   `nettest` can report the exact WPA/EAPOL boundary. While that state is live,
   root-task performs bounded pre-root host-EAPOL burst polls, then post-root
-  runtime polling yields after one Wi-Fi poll per event turn. Serial input is
-  drained and flushed before runtime polling, local-seat USB keyboard input is
-  drained before and after runtime polling, the event pump settles across
-  bounded idle HID polls, and HDMI echoes accepted USB keyboard bytes through a
-  high-priority parser-ingress queue rendered under a per-turn framebuffer
-  budget. HID polling drains a burst of interrupt-IN reports in one pass so
-  press/release/next-key sequences are requeued before the next event-loop turn,
-  while HDMI progress banners are rate-limited to a 5-10 s visible cadence.
+  runtime polling yields after one Wi-Fi poll per event turn. Serial RX is
+  sampled, but local-seat USB keyboard input is drained before serial command
+  dispatch; if keyboard bytes were consumed in a turn, runtime work and serial
+  command dispatch wait for the next turn. When local-seat is active, serial
+  input dispatch is capped to one complete command line per pump turn, and
+  serial-origin output is staged in small cooperative chunks instead of holding
+  the UART in a blocking write across a whole line. The event pump settles
+  across bounded idle HID polls, and HDMI echoes accepted USB keyboard bytes
+  immediately at parser ingress. HID polling drains a burst of interrupt-IN
+  reports in one pass and keeps 32 keyboard interrupt-IN reads armed on the
+  poll-only Pi 4 path, so press/release/next-key sequences can complete while
+  console output, HDMI echo, or bounded Wi-Fi diagnostics are in progress.
+  `usb status` exposes low-volume keyboard capture counters for HID
+  reports/filtering, local-seat queue accept/drain/echo, event-loop
+  keyboard-priority turns, and output-side keyboard service polls so missed
+  keystrokes can be attributed without adding UART spam. HDMI progress banners
+  are rate-limited to a 5-10 s visible cadence.
 - Pi 4 local-seat USB is not a reason to disable Wi-Fi diagnostics. The serial
   console retains the HAL-backed Wi-Fi debug path after root-console handoff so
   `wifi diag`, `wifi load-fw`, and `wifi retry` can exercise CYW43455 without
   preventing boot from reaching the shell. Once a terminal boot/control-plane
-  failure is preserved, `wifi diag` is passive: it emits the before/after state
-  from cached evidence and skips the long live HT re-probe. Operators can still
-  run the explicit `wifi probe-ht` command when they want the stateful HT probe.
+  failure is preserved, `wifi diag` is passive and compact: it emits the
+  readiness/network summary, reports an unchanged after-state when it skips the
+  long live HT re-probe, and leaves the full transport snapshot to
+  `wifi dump-state`. Operators can still run the explicit `wifi probe-ht`
+  command when they want the stateful HT probe.
 - Wi-Fi association completion is event-pump driven for both explicit `wifi`
   and `auto` interface policies. The driver issues the join command before the
   serial prompt on Pi 4 local-seat Wi-Fi boots, and the pre-root event-pump wait
@@ -1015,6 +1045,10 @@ active path is Cohesix-owned cold start:
   offset, because byte `0` of an unknown report can be either a report ID or a
   real modifier bitmap. Post-Gate-8 runtime paths must not allocate fresh DMA for
   optional keyboard LED updates after local-seat seals the xHCI DMA pool.
+  Poll-only Pi 4 keyboard input must keep a deep interrupt-IN read queue armed and
+  match transfer events back to the submitted transfer TRB before decoding that
+  DMA buffer; a single read requeued only after the next event-loop turn can miss
+  fast press/release transitions during console-output stalls.
   `usb-oxide` therefore preallocates a dedicated one-byte HID output-report DMA
   buffer during keyboard attach and uses it for Caps Lock, Num Lock, and Scroll
   Lock `SET_REPORT(Output)` updates after the seal. LED sync is optional: if a
@@ -1324,12 +1358,14 @@ Required Cohesix shape:
   report decoding instead of being misread as HAL/DMA/MMIO or SDIO contention.
 - USB keyboard input is a distinct local-seat physical-console source, not a
   UART alias. The event pump clears an unfinished UART line when USB keyboard
-  bytes arrive and clears an unfinished local-seat line before processing a UART
-  command, so serial and USB input cannot concatenate stale partial commands.
-  Accepted local-seat command output is mirrored to HDMI through a lower-priority
-  progressive render queue and to UART through a best-effort TX mirror so slow
-  serial output cannot starve xHCI polling or typed HDMI echo. `usb status`
-  reports local-seat keyboard-drop and deferred HDMI queue/drop counters.
+  bytes arrive and defers concurrent UART command dispatch until the next
+  no-keyboard-input turn. A later UART command still clears an unfinished
+  local-seat line before dispatch, so serial and USB input cannot concatenate
+  stale partial commands.
+  Accepted local-seat command output is mirrored directly to HDMI and to UART
+  through a best-effort TX mirror so slow serial output cannot starve xHCI
+  polling or typed HDMI echo. `usb status` reports local-seat keyboard-drop
+  counters without deferred HDMI queue/drop counters.
 - Operator proof uses a single 10-gate USB ladder: 1 controller candidate, 2 live
   PCIe/VL805 ownership, 3 controller-ready, 4 command-ring completion, 5
   root-port connection, 6 device address, 7 descriptors/configuration, 8 HID
@@ -1410,8 +1446,8 @@ bundle applies. Use the focused aliases:
   covers SDIO, CYW43455 firmware/HT/Function 2 gates, mailbox, and R5 error
   contracts.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::`
-  covers target-neutral local-seat parser, queue, mirror, and USB/Wi-Fi command
-  policy helpers.
+  covers target-neutral local-seat parser, keyboard queue, mirror, and USB/Wi-Fi
+  command policy helpers.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::`
   covers Pi 4 local-seat USB/VL805/xHCI policy, Enable Slot plus Disable Slot
   command-ring proof, event-ring polling, PCIe DMA aliasing, and HAL

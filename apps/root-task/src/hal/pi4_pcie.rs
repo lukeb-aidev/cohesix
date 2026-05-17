@@ -366,6 +366,17 @@ pub fn pi4_pcie_irq_sources_masked_proven() -> bool {
     PCIE_IRQ_SOURCES_MASKED_PROVEN.load(Ordering::Acquire) != 0
 }
 
+pub fn invalidate_pi4_pcie_runtime_proofs(reason: &'static str) {
+    PCIE_LINK_AND_RC_READY_PROVEN.store(0, Ordering::Release);
+    PCIE_IRQ_SOURCES_MASKED_PROVEN.store(0, Ordering::Release);
+    let mut line = heapless::String::<160>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!("[local-seat] vl805 pcie proof invalidated reason={reason}"),
+    );
+    boot_log::force_uart_line(line.as_str());
+}
+
 #[must_use]
 pub const fn vl805_post_mailbox_ext_cfg_retry_needed(
     mmio: usize,
@@ -374,6 +385,10 @@ pub const fn vl805_post_mailbox_ext_cfg_retry_needed(
     runtime_touch_enabled: bool,
 ) -> bool {
     runtime_touch_enabled && mmio == high_bar_mmio && !fresh_runtime_ready
+}
+
+const fn pcie_root_ready_fast_path_allowed(phase: Pi4PcieProofPhase, status: u32) -> bool {
+    matches!(phase, Pi4PcieProofPhase::Initial) && pcie_status_link_up_and_rc(status)
 }
 
 #[inline]
@@ -1003,7 +1018,8 @@ fn ensure_pi4_pcie_root_ready(
     let rc_bar2_lo = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_LO)?;
     let rc_bar2_hi = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR2_CONFIG_HI)?;
     let rc_bar3 = same_page_reg_virt(status_page, BCM2711_PCIE_MISC_RC_BAR3_CONFIG_LO)?;
-    if remember_pi4_pcie_link_and_rc_ready(status_before) {
+    if pcie_root_ready_fast_path_allowed(phase, status_before) {
+        remember_pi4_pcie_link_and_rc_ready(status_before);
         mmio_clear_set_bits_u32_flush(
             misc_ctrl,
             PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_MASK,
@@ -2110,6 +2126,22 @@ mod tests {
         assert!(!Pi4PcieProofPhase::PostMailboxReset.powers_vl805_usb_hcd());
         assert!(!Pi4PcieProofPhase::Initial.reloads_vl805_firmware_after_perst());
         assert!(Pi4PcieProofPhase::PostMailboxReset.reloads_vl805_firmware_after_perst());
+    }
+
+    #[test]
+    fn post_mailbox_root_init_does_not_reuse_pre_reset_ready_status() {
+        let ready = BCM2711_PCIE_STATUS_PORT
+            | BCM2711_PCIE_STATUS_DL_ACTIVE
+            | BCM2711_PCIE_STATUS_PHY_LINK_UP;
+
+        assert!(pcie_root_ready_fast_path_allowed(
+            Pi4PcieProofPhase::Initial,
+            ready
+        ));
+        assert!(!pcie_root_ready_fast_path_allowed(
+            Pi4PcieProofPhase::PostMailboxReset,
+            ready
+        ));
     }
 
     #[test]

@@ -129,6 +129,22 @@ fn dhcp_phase_for_bringup_status(status: &'static str) -> &'static str {
     }
 }
 
+fn console_listener_defer_reason_for(
+    mode: NetMode,
+    ip: Ipv4Address,
+    bringup_status: Option<&'static str>,
+) -> Option<&'static str> {
+    if let Some(status) = bringup_status {
+        return Some(status);
+    }
+    match mode {
+        NetMode::Off => Some("policy-off"),
+        NetMode::Static if ip == Ipv4Address::UNSPECIFIED => Some("ip-unconfigured"),
+        NetMode::Dhcp if ip == Ipv4Address::UNSPECIFIED => Some("dhcp-pending"),
+        NetMode::Static | NetMode::Dhcp => None,
+    }
+}
+
 fn timebase_stall_warning_suppressed(bringup_status: Option<&'static str>) -> bool {
     matches!(bringup_status, Some("wifi-host-eapol-pending"))
 }
@@ -1052,6 +1068,7 @@ pub struct NetStack<D: NetDevice> {
     disconnect_requested_at_ms: Option<u64>,
     disconnect_requested_polls: u8,
     listener_announced: bool,
+    listener_defer_reason: Option<&'static str>,
     active_client_id: Option<u64>,
     client_counter: u64,
     auth_state: AuthState,
@@ -1855,6 +1872,10 @@ impl<D: NetDevice> NetStack<D> {
         rx_capacity == TCP_RX_BUFFER && tx_capacity == TCP_TX_BUFFER
     }
 
+    fn console_listener_defer_reason(&self) -> Option<&'static str> {
+        console_listener_defer_reason_for(self.mode, self.ip, self.device.bringup_status_label())
+    }
+
     fn rebuild_console_socket(
         &mut self,
         now_ms: u64,
@@ -1877,21 +1898,32 @@ impl<D: NetDevice> NetStack<D> {
         self.peer_endpoint = None;
         self.listener_announced = false;
         self.reset_session_state_with(None);
+        let defer_reason = self.console_listener_defer_reason();
         let _ = self.sockets.remove(self.tcp_handle);
         let rx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_RX_STORAGE[..]) };
         let tx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_TX_STORAGE[..]) };
         let mut tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
-        if let Err(err) = tcp_socket.listen(IpListenEndpoint::from(self.listen_port)) {
-            warn!(
-                "[net-console] console socket relisten failed port={} err={err:?}",
-                self.listen_port
-            );
-        } else {
-            NET_DIAG.record_listener_bound();
-            info!(
-                "[net-console] console socket rebuilt at now_ms={} port={}",
-                now_ms, self.listen_port
-            );
+        match defer_reason {
+            Some(reason) => {
+                info!(
+                    "[net-console] console socket rebuilt; listener deferred reason={} iface_ip={} now_ms={}",
+                    reason, self.ip, now_ms
+                );
+            }
+            None => {
+                if let Err(err) = tcp_socket.listen(IpListenEndpoint::from(self.listen_port)) {
+                    warn!(
+                        "[net-console] console socket relisten failed port={} err={err:?}",
+                        self.listen_port
+                    );
+                } else {
+                    NET_DIAG.record_listener_bound();
+                    info!(
+                        "[net-console] console socket rebuilt at now_ms={} port={}",
+                        now_ms, self.listen_port
+                    );
+                }
+            }
         }
         self.tcp_handle = self.sockets.add(tcp_socket);
         true
@@ -2557,6 +2589,7 @@ impl<D: NetDevice> NetStack<D> {
             disconnect_requested_at_ms: None,
             disconnect_requested_polls: 0,
             listener_announced: false,
+            listener_defer_reason: None,
             active_client_id: None,
             client_counter: 0,
             auth_state: AuthState::Start,
@@ -2855,16 +2888,16 @@ impl<D: NetDevice> NetStack<D> {
         }
         let mut activity = false;
         activity |= poll_result != PollResult::None;
+        let dhcp_start_activity = self.start_dhcp_if_ready(now_ms);
+        activity |= dhcp_start_activity;
+        let dhcp_activity = self.service_dhcp(now_ms);
+        activity |= dhcp_activity;
         let tcp_activity = if self.stage_policy.allow_tcp {
             self.process_tcp(now_ms)
         } else {
             false
         };
         activity |= tcp_activity;
-        let dhcp_start_activity = self.start_dhcp_if_ready(now_ms);
-        activity |= dhcp_start_activity;
-        let dhcp_activity = self.service_dhcp(now_ms);
-        activity |= dhcp_activity;
 
         // Run a second poll pass when TCP work was observed so any queued
         // responses (including AUTH acknowledgements) are flushed to the wire
@@ -3085,7 +3118,11 @@ impl<D: NetDevice> NetStack<D> {
                 true
             }
             DhcpEvent::Failed(reason) => {
-                warn!("[dhcp] failed reason={}", reason.as_str());
+                warn!(
+                    "[dhcp] failed reason={} action=restart-armed",
+                    reason.as_str()
+                );
+                self.dhcp_started = false;
                 true
             }
         }
@@ -3153,6 +3190,7 @@ impl<D: NetDevice> NetStack<D> {
             udp_rx: self.counters.udp_rx,
             udp_tx: self.counters.udp_tx,
             tcp_accepts: self.counters.tcp_accepts,
+            tcp_auth_sessions: self.counters.tcp_auth_sessions,
             tcp_rx_bytes: self.counters.tcp_rx_bytes,
             tcp_tx_bytes: self.counters.tcp_tx_bytes,
             tcp_smoke_outbound: self.counters.tcp_smoke_outbound,
@@ -3975,6 +4013,35 @@ impl<D: NetDevice> NetStack<D> {
         if !self.validate_console_socket(now_ms) {
             return true;
         }
+        if let Some(reason) = self.console_listener_defer_reason() {
+            if self.listener_defer_reason != Some(reason) {
+                info!(
+                    "[net-console] listener deferred reason={} iface={} mode={} ip={} now_ms={}",
+                    reason,
+                    self.device.interface_label(),
+                    self.mode.as_str(),
+                    self.ip,
+                    now_ms
+                );
+                self.listener_defer_reason = Some(reason);
+            }
+            self.listener_announced = false;
+            let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+            if !self.session_active && socket.is_open() {
+                socket.abort();
+            }
+            return false;
+        }
+        if let Some(reason) = self.listener_defer_reason.take() {
+            info!(
+                "[net-console] listener gate open previous_defer={} iface={} mode={} ip={} now_ms={}",
+                reason,
+                self.device.interface_label(),
+                self.mode.as_str(),
+                self.ip,
+                now_ms
+            );
+        }
 
         let (snapshot, tcp_state) = {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
@@ -4014,6 +4081,7 @@ impl<D: NetDevice> NetStack<D> {
                         self.listen_port, self.ip
                     );
                     self.listener_announced = true;
+                    self.listener_defer_reason = None;
                 }
                 if self.session_active {
                     self.outbound.reset();
@@ -4214,7 +4282,6 @@ impl<D: NetDevice> NetStack<D> {
                     );
                 }
                 self.session_active = true;
-                NET_DIAG.record_accept_success();
                 self.counters.tcp_accepts = self.counters.tcp_accepts.saturating_add(1);
             }
 
@@ -4343,9 +4410,15 @@ impl<D: NetDevice> NetStack<D> {
                                         preview
                                     );
                                     info!(
-                                        "[cohsh-net][auth] auth OK, session established (conn_id={})",
-                                        conn_id
-                                    );
+	                                        "[cohsh-net][auth] auth OK, session established (conn_id={})",
+	                                        conn_id
+	                                    );
+                                    NET_DIAG.record_accept_success();
+                                    self.counters.tcp_auth_sessions =
+                                        self.counters.tcp_auth_sessions.saturating_add(1);
+                                    let _ = self
+                                        .events
+                                        .push(NetConsoleEvent::Authenticated { conn_id });
                                     let _ = Self::flush_outbound(
                                         &mut self.server,
                                         &mut self.outbound,
@@ -4821,7 +4894,17 @@ impl<D: NetDevice> NetStack<D> {
                         self.active_client_id,
                         AuthState::Start,
                     );
-                    Self::force_relisten(socket, listen_port);
+                    if console_listener_defer_reason_for(
+                        self.mode,
+                        self.ip,
+                        self.device.bringup_status_label(),
+                    )
+                    .is_none()
+                    {
+                        Self::force_relisten(socket, listen_port);
+                    } else {
+                        self.listener_announced = false;
+                    }
                     reset_session = true;
                     reset_tcp_state = Some(socket.state());
                 }
@@ -5927,6 +6010,34 @@ mod tests {
             "wifi-host-eapol-required"
         )));
         assert!(!timebase_stall_warning_suppressed(None));
+    }
+
+    #[test]
+    fn console_listener_gate_waits_for_dhcp_lease() {
+        assert_eq!(
+            console_listener_defer_reason_for(NetMode::Dhcp, Ipv4Address::UNSPECIFIED, None),
+            Some("dhcp-pending")
+        );
+        assert_eq!(
+            console_listener_defer_reason_for(
+                NetMode::Dhcp,
+                Ipv4Address::new(192, 168, 50, 23),
+                None
+            ),
+            None
+        );
+        assert_eq!(
+            console_listener_defer_reason_for(
+                NetMode::Dhcp,
+                Ipv4Address::new(192, 168, 50, 23),
+                Some("wifi-host-eapol-pending")
+            ),
+            Some("wifi-host-eapol-pending")
+        );
+        assert_eq!(
+            console_listener_defer_reason_for(NetMode::Static, Ipv4Address::UNSPECIFIED, None),
+            Some("ip-unconfigured")
+        );
     }
 
     #[test]

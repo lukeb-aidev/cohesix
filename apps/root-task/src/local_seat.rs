@@ -32,19 +32,6 @@ pub const KEYBOARD_QUEUE_MAX_BYTES: usize = 4_096;
 /// Maximum keyboard bytes drained from the runtime in one event-pump cycle.
 pub const KEYBOARD_POLL_CHUNK_BYTES: usize = 128;
 
-/// Maximum high-priority HDMI echo bytes retained while framebuffer work is
-/// budgeted by the event pump.
-pub const DISPLAY_ECHO_QUEUE_MAX_BYTES: usize = 4_096;
-
-/// Maximum lower-priority mirrored output bytes retained for progressive HDMI
-/// rendering.
-pub const DISPLAY_LINE_QUEUE_MAX_BYTES: usize = 8_192;
-
-/// Maximum HDMI bytes rendered during one event-pump cycle.
-pub const DISPLAY_OUTPUT_FLUSH_BYTES_PER_TURN: usize = 96;
-
-const DISPLAY_OUTPUT_FLUSH_CHUNK_BYTES: usize = 64;
-
 /// Return whether a USB ownership status line may report replayed COMMAND as
 /// fresh runtime authority.
 pub(crate) fn usb_runtime_command_replay_ready(
@@ -79,6 +66,25 @@ pub struct LocalSeatStatus {
     pub buffer_lines: u16,
 }
 
+/// Keyboard ingress counters for isolating local-seat stalls without hot logs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LocalSeatKeyboardTrace {
+    /// Bytes currently waiting in the local-seat queue.
+    pub queued_bytes: usize,
+    /// Event-pump attempts to poll the platform keyboard backend.
+    pub backend_poll_calls: u64,
+    /// Bytes returned by the platform keyboard backend.
+    pub backend_read_bytes: u64,
+    /// Bytes accepted into the bounded local-seat queue.
+    pub accepted_bytes: u64,
+    /// Bytes drained from the queue into the console parser path.
+    pub drained_bytes: u64,
+    /// Bytes echoed to HDMI after entering the parser path.
+    pub echoed_bytes: u64,
+    /// Bytes dropped because the queue was full.
+    pub dropped_bytes: u64,
+}
+
 /// Runtime state for local-seat keyboard ingress and mirrored line egress.
 ///
 /// This state is bounded by manifest values (`line_bytes`, `buffer_lines`) and
@@ -88,13 +94,15 @@ pub struct LocalSeatStatus {
 pub struct LocalSeatRuntime {
     status: LocalSeatStatus,
     keyboard_queue: VecDeque<u8>,
-    display_echo_queue: VecDeque<u8>,
-    display_line_queue: VecDeque<u8>,
     input_echo_preview: String,
     mirrored_lines: VecDeque<String>,
     dropped_keyboard_bytes: u64,
-    dropped_display_output_bytes: u64,
     dropped_mirrored_lines: u64,
+    backend_keyboard_poll_calls: u64,
+    backend_keyboard_read_bytes: u64,
+    accepted_keyboard_bytes: u64,
+    drained_keyboard_bytes: u64,
+    echoed_keyboard_bytes: u64,
     backend_keyboard_polling_enabled: bool,
     backend_keyboard_poll_deferred_logged: bool,
     #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -172,13 +180,15 @@ impl LocalSeatRuntime {
         Self {
             status,
             keyboard_queue: VecDeque::new(),
-            display_echo_queue: VecDeque::with_capacity(DISPLAY_ECHO_QUEUE_MAX_BYTES),
-            display_line_queue: VecDeque::with_capacity(DISPLAY_LINE_QUEUE_MAX_BYTES),
             input_echo_preview: String::new(),
             mirrored_lines: VecDeque::new(),
             dropped_keyboard_bytes: 0,
-            dropped_display_output_bytes: 0,
             dropped_mirrored_lines: 0,
+            backend_keyboard_poll_calls: 0,
+            backend_keyboard_read_bytes: 0,
+            accepted_keyboard_bytes: 0,
+            drained_keyboard_bytes: 0,
+            echoed_keyboard_bytes: 0,
             // Keep boot fail-open: the root shell must stay reachable even if
             // a platform keyboard backend can still wedge during first probe.
             backend_keyboard_polling_enabled: false,
@@ -207,6 +217,7 @@ impl LocalSeatRuntime {
             self.keyboard_queue.push_back(byte);
             accepted = accepted.saturating_add(1);
         }
+        self.accepted_keyboard_bytes = self.accepted_keyboard_bytes.saturating_add(accepted as u64);
         accepted
     }
 
@@ -222,6 +233,7 @@ impl LocalSeatRuntime {
                 None => break,
             }
         }
+        self.drained_keyboard_bytes = self.drained_keyboard_bytes.saturating_add(written as u64);
         written
     }
 
@@ -239,8 +251,10 @@ impl LocalSeatRuntime {
         }
         self.mirrored_lines.push_back(mirrored);
 
-        self.enqueue_display_line_bytes(truncated.as_bytes());
-        self.enqueue_display_line_bytes(b"\n");
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        if let Some(backend) = self.backend.as_mut() {
+            backend.write_line(truncated);
+        }
     }
 
     /// Snapshot mirrored lines for diagnostics/tests.
@@ -255,24 +269,6 @@ impl LocalSeatRuntime {
         self.dropped_keyboard_bytes
     }
 
-    /// Count of HDMI output bytes dropped due to deferred render saturation.
-    #[must_use]
-    pub const fn dropped_display_output_bytes(&self) -> u64 {
-        self.dropped_display_output_bytes
-    }
-
-    /// Count of pending high-priority input echo bytes awaiting HDMI render.
-    #[must_use]
-    pub fn pending_display_echo_bytes(&self) -> usize {
-        self.display_echo_queue.len()
-    }
-
-    /// Count of pending lower-priority line output bytes awaiting HDMI render.
-    #[must_use]
-    pub fn pending_display_line_bytes(&self) -> usize {
-        self.display_line_queue.len()
-    }
-
     /// Count of mirrored lines dropped due to ring saturation.
     #[must_use]
     pub const fn dropped_mirrored_lines(&self) -> u64 {
@@ -283,6 +279,20 @@ impl LocalSeatRuntime {
     #[must_use]
     pub const fn backend_keyboard_polling_enabled(&self) -> bool {
         self.backend_keyboard_polling_enabled
+    }
+
+    /// Return keyboard ingress counters for `usb status` diagnostics.
+    #[must_use]
+    pub fn keyboard_trace(&self) -> LocalSeatKeyboardTrace {
+        LocalSeatKeyboardTrace {
+            queued_bytes: self.keyboard_queue.len(),
+            backend_poll_calls: self.backend_keyboard_poll_calls,
+            backend_read_bytes: self.backend_keyboard_read_bytes,
+            accepted_bytes: self.accepted_keyboard_bytes,
+            drained_bytes: self.drained_keyboard_bytes,
+            echoed_bytes: self.echoed_keyboard_bytes,
+            dropped_bytes: self.dropped_keyboard_bytes,
+        }
     }
 
     /// Enable backend keyboard polling after boot has reached a safe manual
@@ -328,6 +338,9 @@ impl LocalSeatRuntime {
 
     /// Echo keyboard bytes at the point they enter the canonical console parser.
     pub(crate) fn echo_input_bytes(&mut self, bytes: &[u8]) {
+        self.echoed_keyboard_bytes = self
+            .echoed_keyboard_bytes
+            .saturating_add(bytes.len() as u64);
         for &byte in bytes {
             update_input_echo_preview(
                 &mut self.input_echo_preview,
@@ -336,85 +349,15 @@ impl LocalSeatRuntime {
             );
         }
 
-        self.enqueue_display_echo_bytes(bytes);
-    }
-
-    /// Render a bounded amount of deferred HDMI output.
-    ///
-    /// Keyboard echo is drained before line output so fresh typing remains
-    /// responsive even if command output has filled the lower-priority queue.
-    pub(crate) fn flush_display_output(&mut self, byte_budget: usize) -> usize {
-        let mut remaining = byte_budget;
-        let mut flushed = 0usize;
-        flushed = flushed.saturating_add(self.flush_display_queue(true, remaining));
-        remaining = remaining.saturating_sub(flushed);
-        if remaining > 0 {
-            flushed = flushed.saturating_add(self.flush_display_queue(false, remaining));
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        if let Some(backend) = self.backend.as_mut() {
+            backend.write_bytes(bytes);
         }
-        flushed
-    }
-
-    fn enqueue_display_echo_bytes(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            while self.display_echo_queue.len() >= DISPLAY_ECHO_QUEUE_MAX_BYTES {
-                if self.display_echo_queue.pop_front().is_none() {
-                    break;
-                }
-                self.dropped_display_output_bytes =
-                    self.dropped_display_output_bytes.saturating_add(1);
-            }
-            self.display_echo_queue.push_back(byte);
-        }
-    }
-
-    fn enqueue_display_line_bytes(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            while self.display_line_queue.len() >= DISPLAY_LINE_QUEUE_MAX_BYTES {
-                if self.display_line_queue.pop_front().is_none() {
-                    break;
-                }
-                self.dropped_display_output_bytes =
-                    self.dropped_display_output_bytes.saturating_add(1);
-            }
-            self.display_line_queue.push_back(byte);
-        }
-    }
-
-    fn flush_display_queue(&mut self, echo: bool, byte_budget: usize) -> usize {
-        let mut flushed = 0usize;
-        while flushed < byte_budget {
-            let mut chunk: heapless::Vec<u8, DISPLAY_OUTPUT_FLUSH_CHUNK_BYTES> =
-                heapless::Vec::new();
-            while flushed.saturating_add(chunk.len()) < byte_budget
-                && chunk.len() < DISPLAY_OUTPUT_FLUSH_CHUNK_BYTES
-            {
-                let next = if echo {
-                    self.display_echo_queue.pop_front()
-                } else {
-                    self.display_line_queue.pop_front()
-                };
-                let Some(byte) = next else {
-                    break;
-                };
-                if chunk.push(byte).is_err() {
-                    break;
-                }
-            }
-            if chunk.is_empty() {
-                break;
-            }
-            flushed = flushed.saturating_add(chunk.len());
-
-            #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
-            if let Some(backend) = self.backend.as_mut() {
-                backend.write_bytes(&chunk);
-            }
-        }
-        flushed
     }
 
     /// Poll the platform local-seat input backend and enqueue discovered bytes.
     pub fn poll_backend_keyboard(&mut self) {
+        self.backend_keyboard_poll_calls = self.backend_keyboard_poll_calls.saturating_add(1);
         #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
         {
             if !LOCAL_SEAT_POLL_LOGGED.swap(true, Ordering::AcqRel) {
@@ -433,6 +376,8 @@ impl LocalSeatRuntime {
                 }
                 let read = backend.poll_keyboard_bytes(&mut chunk);
                 if read > 0 {
+                    self.backend_keyboard_read_bytes =
+                        self.backend_keyboard_read_bytes.saturating_add(read as u64);
                     if !LOCAL_SEAT_DATA_LOGGED.swap(true, Ordering::AcqRel) {
                         let mut line = heapless::String::<128>::new();
                         let _ = core::fmt::Write::write_fmt(
@@ -856,6 +801,31 @@ mod tests {
     }
 
     #[test]
+    fn runtime_keyboard_trace_records_ingress_boundaries() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        runtime.poll_backend_keyboard();
+        assert_eq!(runtime.enqueue_keyboard_bytes(b"abc"), 3);
+        let mut drained = [0u8; 2];
+        assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 2);
+        runtime.echo_input_bytes(&drained);
+
+        let trace = runtime.keyboard_trace();
+        assert_eq!(trace.queued_bytes, 1);
+        assert_eq!(trace.backend_poll_calls, 1);
+        assert_eq!(trace.backend_read_bytes, 0);
+        assert_eq!(trace.accepted_bytes, 3);
+        assert_eq!(trace.drained_bytes, 2);
+        assert_eq!(trace.echoed_bytes, 2);
+        assert_eq!(trace.dropped_bytes, 0);
+    }
+
+    #[test]
     fn runtime_mirrors_lines_with_manifest_bounds() {
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
@@ -873,42 +843,6 @@ mod tests {
         assert_eq!(lines[0], "abcde");
         assert_eq!(lines[1], "xyz");
         assert_eq!(runtime.dropped_mirrored_lines(), 1);
-    }
-
-    #[test]
-    fn display_output_flush_prioritizes_keyboard_echo_over_lines() {
-        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
-            keyboard_device: "usb-kbd0",
-            display_device: "hdmi0",
-            line_bytes: 16,
-            buffer_lines: 2,
-        });
-
-        runtime.mirror_line("status output");
-        runtime.echo_input_bytes(b"abc");
-
-        assert_eq!(runtime.pending_display_echo_bytes(), 3);
-        assert!(runtime.pending_display_line_bytes() > 0);
-        assert_eq!(runtime.flush_display_output(2), 2);
-        assert_eq!(runtime.pending_display_echo_bytes(), 1);
-        assert!(runtime.pending_display_line_bytes() > 0);
-    }
-
-    #[test]
-    fn display_output_flush_uses_line_queue_after_echo_is_drained() {
-        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
-            keyboard_device: "usb-kbd0",
-            display_device: "hdmi0",
-            line_bytes: 16,
-            buffer_lines: 2,
-        });
-
-        runtime.mirror_line("status output");
-        runtime.echo_input_bytes(b"a");
-
-        assert_eq!(runtime.flush_display_output(4), 4);
-        assert_eq!(runtime.pending_display_echo_bytes(), 0);
-        assert!(runtime.pending_display_line_bytes() < "status output\n".len());
     }
 
     #[test]

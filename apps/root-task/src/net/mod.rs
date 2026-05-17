@@ -578,6 +578,8 @@ pub struct NetCounters {
     pub udp_tx: u64,
     /// TCP accepts observed.
     pub tcp_accepts: u64,
+    /// Authenticated TCP console sessions observed.
+    pub tcp_auth_sessions: u64,
     /// TCP RX bytes consumed.
     pub tcp_rx_bytes: u64,
     /// TCP TX bytes submitted.
@@ -962,12 +964,17 @@ pub trait NetPoller {
 /// Connection lifecycle notifications surfaced by TCP console transports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetConsoleEvent {
-    /// A TCP console client has successfully connected.
+    /// A TCP console client reached TCP Established and is waiting for auth.
     Connected {
         /// Unique connection identifier assigned by the stack.
         conn_id: u64,
         /// Peer address (if known).
         peer: Option<heapless::String<32>>,
+    },
+    /// A TCP console client completed Cohesix authentication.
+    Authenticated {
+        /// Unique connection identifier assigned by the stack.
+        conn_id: u64,
     },
     /// A TCP console client disconnected or was closed by the server.
     Disconnected {

@@ -115,9 +115,7 @@ use crate::hal::{
     SdioBusWidth, WifiControlPlaneTrace, WifiDebugOps, WifiDebugSnapshot,
     WifiFirmwareContractTrace, WifiPowerState, WifiResetState, WifiSdhciContractTrace,
 };
-use crate::local_seat::{
-    LocalSeatRuntime, DISPLAY_OUTPUT_FLUSH_BYTES_PER_TURN, KEYBOARD_POLL_CHUNK_BYTES,
-};
+use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
@@ -214,12 +212,25 @@ const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 0;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 16;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 4;
+const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 2;
+const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
+const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalSeatConsumePhase {
+    PreRuntime,
+    PriorityFollowup,
+    PostRuntime,
+}
 
 #[cfg(test)]
-const fn local_seat_input_drain_contract_for_test() -> (usize, usize) {
+const fn local_seat_input_drain_contract_for_test() -> (usize, usize, usize, usize, usize) {
     (
         LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN,
         LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD,
+        LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES,
+        LOCAL_SEAT_SERIAL_LINES_PER_TURN,
+        LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES,
     )
 }
 
@@ -923,6 +934,16 @@ pub struct PumpMetrics {
     pub ui_denies: u64,
     /// Timer ticks processed.
     pub timer_ticks: u64,
+    /// Poll turns where local-seat keyboard input was consumed before runtime work.
+    pub local_seat_keyboard_priority_turns: u64,
+    /// Poll turns where runtime work was skipped because keyboard input was ready.
+    pub local_seat_runtime_skipped_turns: u64,
+    /// Poll turns where the serial dispatch slot yielded to local-seat input.
+    pub local_seat_serial_dispatch_yielded_turns: u64,
+    /// Poll turns where keyboard input arrived immediately after runtime work.
+    pub local_seat_post_runtime_hits: u64,
+    /// Backend keyboard polls issued while console output was being emitted.
+    pub local_seat_output_keyboard_polls: u64,
     #[cfg(feature = "kernel")]
     /// Bootstrap IPC messages processed.
     pub bootstrap_messages: u64,
@@ -1319,15 +1340,28 @@ where
     /// Execute a single cooperative polling cycle.
     pub fn poll(&mut self) {
         let serial_rx_activity = self.serial.poll_io();
+        let poll_ready_runtime = self.ready_network_poll_allowed_with_physical_input();
+        let local_input =
+            self.consume_local_seat(LocalSeatConsumePhase::PreRuntime, !poll_ready_runtime);
+        if local_input {
+            self.serial.flush_tx();
+            self.serial.poll_io();
+            self.consume_local_seat(LocalSeatConsumePhase::PriorityFollowup, false);
+            self.serial.flush_tx();
+            if poll_ready_runtime {
+                self.poll_runtime(false, true);
+            }
+            return;
+        }
         let serial_input = self.consume_serial();
-        let local_input = self.consume_local_seat();
-        self.flush_local_seat_display_output();
         self.serial.flush_tx();
         self.poll_runtime(false, serial_rx_activity || serial_input || local_input);
         self.serial.poll_io();
-        self.consume_serial();
-        self.consume_local_seat();
-        self.flush_local_seat_display_output();
+        let post_runtime_local_input =
+            self.consume_local_seat(LocalSeatConsumePhase::PostRuntime, false);
+        if !local_input && !post_runtime_local_input && !serial_input {
+            self.consume_serial();
+        }
         self.serial.flush_tx();
     }
 
@@ -1336,6 +1370,18 @@ where
     /// console input.
     pub fn poll_pre_root_network(&mut self) {
         self.poll_runtime(true, false);
+    }
+
+    #[cfg(feature = "net-console")]
+    fn ready_network_poll_allowed_with_physical_input(&self) -> bool {
+        self.net
+            .as_ref()
+            .is_some_and(|net| !net_status_should_yield_to_physical_input(&net.status_report()))
+    }
+
+    #[cfg(not(feature = "net-console"))]
+    fn ready_network_poll_allowed_with_physical_input(&self) -> bool {
+        false
     }
 
     fn poll_runtime(&mut self, suppress_console_input: bool, physical_input_active: bool) {
@@ -1766,14 +1812,28 @@ where
         }
     }
 
+    fn service_local_seat_keyboard_during_output(&mut self) {
+        if let Some(runtime) = self.local_seat.as_mut() {
+            for _ in 0..LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES {
+                runtime.poll_backend_keyboard();
+                self.metrics.local_seat_output_keyboard_polls = self
+                    .metrics
+                    .local_seat_output_keyboard_polls
+                    .saturating_add(1);
+            }
+        }
+    }
+
     fn try_emit_console_line(&mut self, line: &str) -> bool {
         if self.last_input_source.is_physical_console() {
             self.emit_serial_line(line);
             return true;
         }
+        self.service_local_seat_keyboard_during_output();
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mirror_line(line);
         }
+        self.service_local_seat_keyboard_during_output();
         #[cfg(feature = "net-console")]
         if self.last_input_source == ConsoleInputSource::Net {
             if let Some(net) = self.net.as_mut() {
@@ -1784,36 +1844,49 @@ where
     }
 
     fn emit_serial_line(&mut self, line: &str) {
+        self.service_local_seat_keyboard_during_output();
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mirror_line(line);
         }
+        self.service_local_seat_keyboard_during_output();
         if self.last_input_source == ConsoleInputSource::LocalSeat {
             self.serial.flush_tx();
             self.serial.enqueue_tx_best_effort(line.as_bytes());
             self.serial.enqueue_tx_best_effort(b"\r\n");
             self.serial.flush_tx();
+        } else if self.local_seat.is_some() {
+            self.emit_serial_bytes_cooperative(line.as_bytes());
+            self.emit_serial_bytes_cooperative(b"\r\n");
         } else {
             self.serial.write_line_blocking(line);
         }
+        self.service_local_seat_keyboard_during_output();
     }
 
     fn emit_prompt(&mut self) {
+        self.service_local_seat_keyboard_during_output();
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mirror_line(CONSOLE_PROMPT);
         }
+        self.service_local_seat_keyboard_during_output();
         if self.last_input_source == ConsoleInputSource::LocalSeat {
             self.serial.flush_tx();
             self.serial
                 .enqueue_tx_best_effort(CONSOLE_PROMPT.as_bytes());
             self.serial.flush_tx();
+        } else if self.local_seat.is_some() {
+            self.emit_serial_bytes_cooperative(CONSOLE_PROMPT.as_bytes());
         } else {
             self.serial.write_bytes_blocking(CONSOLE_PROMPT.as_bytes());
         }
+        self.service_local_seat_keyboard_during_output();
     }
 
-    fn flush_local_seat_display_output(&mut self) {
-        if let Some(runtime) = self.local_seat.as_mut() {
-            runtime.flush_display_output(DISPLAY_OUTPUT_FLUSH_BYTES_PER_TURN);
+    fn emit_serial_bytes_cooperative(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES) {
+            self.serial.enqueue_tx(chunk);
+            self.serial.flush_tx();
+            self.service_local_seat_keyboard_during_output();
         }
     }
 
@@ -2282,7 +2355,7 @@ where
             );
             self.emit_console_line("  wifi probe-ht   - Probe HT clock readiness without reboot");
             self.emit_console_line(
-                "  wifi diag       - Dump state; probe HT only before preserved control-plane failure",
+                "  wifi diag       - Show compact state; probe HT only before preserved control-plane failure",
             );
             self.emit_console_line(
                 "  wifi load-fw    - Retry firmware load from current transport",
@@ -2335,7 +2408,7 @@ where
                         None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
                     }?;
                     self.emit_console_line("wifi: diag stage=before-ht-probe");
-                    self.emit_wifi_snapshot_with_traces(&before);
+                    self.emit_wifi_diag_summary(&before);
 
                     if let Some(reason) = Self::wifi_diag_ht_probe_skip_reason(&before) {
                         let detail = format_message(format_args!(
@@ -2343,8 +2416,9 @@ where
                             before.control_plane_exact_error,
                         ));
                         self.emit_console_line(detail.as_str());
-                        self.emit_console_line("wifi: diag stage=after-ht-probe");
-                        self.emit_wifi_snapshot_with_traces(&before);
+                        self.emit_console_line(
+                            "wifi: diag stage=after-ht-probe skipped=yes snapshot=unchanged",
+                        );
                         return Ok(None);
                     }
 
@@ -2363,7 +2437,7 @@ where
                         None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
                     }?;
                     self.emit_console_line("wifi: diag stage=after-ht-probe");
-                    self.emit_wifi_snapshot_with_traces(&after);
+                    self.emit_wifi_diag_summary(&after);
                     Ok(None)
                 })()
             }
@@ -2674,15 +2748,34 @@ where
         }
         self.emit_console_line(line.as_str());
         if let Some(local_seat) = self.local_seat.as_ref() {
-            let queue_line = format_message(format_args!(
-                "usb: local-seat queues keyboard_drop={} hdmi_echo_pending={} hdmi_line_pending={} hdmi_drop={}",
-                local_seat.dropped_keyboard_bytes(),
-                local_seat.pending_display_echo_bytes(),
-                local_seat.pending_display_line_bytes(),
-                local_seat.dropped_display_output_bytes(),
+            let keyboard_drop = local_seat.dropped_keyboard_bytes();
+            let trace = local_seat.keyboard_trace();
+            let drop_line = format_message(format_args!(
+                "usb: local-seat drops keyboard_drop={}",
+                keyboard_drop,
             ));
-            self.emit_console_line(queue_line.as_str());
+            self.emit_console_line(drop_line.as_str());
+            let trace_line = format_message(format_args!(
+                "usb: local-seat input queued={} backend_polls={} backend_bytes={} accepted={} drained={} echoed={} dropped={}",
+                trace.queued_bytes,
+                trace.backend_poll_calls,
+                trace.backend_read_bytes,
+                trace.accepted_bytes,
+                trace.drained_bytes,
+                trace.echoed_bytes,
+                trace.dropped_bytes,
+            ));
+            self.emit_console_line(trace_line.as_str());
         }
+        let pump_line = format_message(format_args!(
+            "usb: event_loop keyboard_priority={} runtime_skipped={} serial_dispatch_yielded={} post_runtime_keyboard={} output_keyboard_polls={}",
+            self.metrics.local_seat_keyboard_priority_turns,
+            self.metrics.local_seat_runtime_skipped_turns,
+            self.metrics.local_seat_serial_dispatch_yielded_turns,
+            self.metrics.local_seat_post_runtime_hits,
+            self.metrics.local_seat_output_keyboard_polls,
+        ));
+        self.emit_console_line(pump_line.as_str());
         #[cfg(all(target_arch = "aarch64", target_os = "none"))]
         {
             let ownership = self
@@ -2895,6 +2988,32 @@ where
                 runtime.proof_gate,
             ));
             self.emit_console_line(runtime_contract.as_str());
+            let keyboard = crate::local_seat_pi4::latest_usb_keyboard_poll_status();
+            let keyboard_line = format_message(format_args!(
+                "usb: keyboard_trace polls={} reports={} no_report={} errors={} nonempty={} emitted={} dup={} zero={} lock={} scroll={} unmapped={}",
+                keyboard.poll_calls,
+                keyboard.reports,
+                keyboard.no_report,
+                keyboard.errors,
+                keyboard.non_empty_reports,
+                keyboard.emitted_bytes,
+                keyboard.duplicate_keys,
+                keyboard.zero_keys,
+                keyboard.lock_keys,
+                keyboard.scroll_keys,
+                keyboard.unmapped_keys,
+            ));
+            self.emit_console_line(keyboard_line.as_str());
+            let keyboard_last_line = format_message(format_args!(
+                "usb: keyboard_trace_last modifiers=0x{:02x} keys=0x{:02x},0x{:02x},0x{:02x} emitted_key=0x{:02x} emitted_ascii=0x{:02x}",
+                keyboard.last_modifiers,
+                keyboard.last_key0,
+                keyboard.last_key1,
+                keyboard.last_key2,
+                keyboard.last_emitted_key,
+                keyboard.last_emitted_ascii,
+            ));
+            self.emit_console_line(keyboard_last_line.as_str());
         }
     }
 
@@ -3093,7 +3212,12 @@ where
         }
     }
 
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        any(target_os = "none", test)
+    ))]
     fn usb_route_capture_verdict(
         route: &crate::local_seat_pi4::UsbProbeRouteStatus,
     ) -> Option<(&'static str, &'static str)> {
@@ -3104,7 +3228,11 @@ where
         } else if route.outcome == "controller-init-failed" {
             Some(("controller-init-edge", "controller-init"))
         } else if route.command_probe == "enable-slot-ok" {
-            Some(("command-ring-ready", "safe-port-state"))
+            if route.next_step == "none" {
+                Some(("keyboard-route-ready", "none"))
+            } else {
+                Some(("command-ring-ready", "safe-port-state"))
+            }
         } else if route.command_probe == "no-op-ok" {
             Some((
                 "command-ring-ready-no-port-event",
@@ -3133,7 +3261,12 @@ where
         }
     }
 
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        any(target_os = "none", test)
+    ))]
     fn usb_contract_expected_step(
         route: &crate::local_seat_pi4::UsbProbeRouteStatus,
     ) -> &'static str {
@@ -3144,7 +3277,12 @@ where
         }
     }
 
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        any(target_os = "none", test)
+    ))]
     fn usb_contract_touch_policy(
         route: &crate::local_seat_pi4::UsbProbeRouteStatus,
     ) -> &'static str {
@@ -3158,12 +3296,19 @@ where
         }
     }
 
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        any(target_os = "none", test)
+    ))]
     fn usb_contract_blocker(route: &crate::local_seat_pi4::UsbProbeRouteStatus) -> &'static str {
         if route.controller_gate != "none" {
             route.controller_gate
         } else if route.command_probe == "enable-slot-ok" {
-            if route.proof_gate >= 8 && route.next_step != "none" {
+            if route.next_step == "none" {
+                "none"
+            } else if route.proof_gate >= 8 {
                 route.next_step
             } else {
                 "safe-port-state"
@@ -3245,6 +3390,22 @@ where
         if let Some(trace) = control_plane_trace {
             self.emit_wifi_control_plane_trace(&trace);
         }
+        self.emit_wifi_readiness_summary(snapshot, firmware_trace, control_plane_trace);
+        #[cfg(feature = "net-console")]
+        self.emit_wifi_network_status();
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_diag_summary(&mut self, snapshot: &WifiDebugSnapshot) {
+        let (firmware_trace, control_plane_trace) =
+            if let Some(wifi_debug) = self.wifi_debug.as_mut() {
+                (
+                    wifi_debug.firmware_contract_trace(),
+                    wifi_debug.control_plane_trace(),
+                )
+            } else {
+                (None, None)
+            };
         self.emit_wifi_readiness_summary(snapshot, firmware_trace, control_plane_trace);
         #[cfg(feature = "net-console")]
         self.emit_wifi_network_status();
@@ -4504,8 +4665,18 @@ where
 
     fn consume_serial(&mut self) -> bool {
         let mut consumed = false;
-        while let Some(line) = self.serial.next_line() {
+        let line_budget = if self.local_seat.is_some() {
+            LOCAL_SEAT_SERIAL_LINES_PER_TURN
+        } else {
+            usize::MAX
+        };
+        let mut lines = 0usize;
+        while lines < line_budget {
+            let Some(line) = self.serial.next_line() else {
+                break;
+            };
             consumed = true;
+            lines = lines.saturating_add(1);
             self.last_input_source = ConsoleInputSource::Serial;
             if !self.local_line.is_empty() {
                 self.local_line.clear();
@@ -4517,7 +4688,41 @@ where
         consumed
     }
 
-    fn consume_local_seat(&mut self) -> bool {
+    fn record_local_seat_input_for_phase(
+        &mut self,
+        phase: LocalSeatConsumePhase,
+        skip_runtime: bool,
+    ) {
+        match phase {
+            LocalSeatConsumePhase::PreRuntime => {
+                self.metrics.local_seat_keyboard_priority_turns = self
+                    .metrics
+                    .local_seat_keyboard_priority_turns
+                    .saturating_add(1);
+                if skip_runtime {
+                    self.metrics.local_seat_runtime_skipped_turns = self
+                        .metrics
+                        .local_seat_runtime_skipped_turns
+                        .saturating_add(1);
+                }
+                self.metrics.local_seat_serial_dispatch_yielded_turns = self
+                    .metrics
+                    .local_seat_serial_dispatch_yielded_turns
+                    .saturating_add(1);
+            }
+            LocalSeatConsumePhase::PriorityFollowup => {}
+            LocalSeatConsumePhase::PostRuntime => {
+                self.metrics.local_seat_post_runtime_hits =
+                    self.metrics.local_seat_post_runtime_hits.saturating_add(1);
+                self.metrics.local_seat_serial_dispatch_yielded_turns = self
+                    .metrics
+                    .local_seat_serial_dispatch_yielded_turns
+                    .saturating_add(1);
+            }
+        }
+    }
+
+    fn consume_local_seat(&mut self, phase: LocalSeatConsumePhase, skip_runtime: bool) -> bool {
         let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
         let mut empty_polls = 0usize;
         let mut consumed = false;
@@ -4535,6 +4740,9 @@ where
                     break;
                 }
                 continue;
+            }
+            if !consumed {
+                self.record_local_seat_input_for_phase(phase, skip_runtime);
             }
             empty_polls = 0;
             consumed = true;
@@ -4641,7 +4849,7 @@ where
                     Some(remote) => {
                         log::info!(
                             target: "net-console",
-                            "[net-console] conn {}: established from {}",
+                            "[net-console] conn {}: tcp-established auth=pending from {}",
                             conn_id,
                             remote
                         );
@@ -4649,11 +4857,18 @@ where
                     None => {
                         log::info!(
                             target: "net-console",
-                            "[net-console] conn {}: established",
+                            "[net-console] conn {}: tcp-established auth=pending",
                             conn_id
                         );
                     }
                 },
+                NetConsoleEvent::Authenticated { conn_id } => {
+                    log::info!(
+                        target: "net-console",
+                        "[net-console] conn {}: authenticated",
+                        conn_id
+                    );
+                }
                 NetConsoleEvent::Disconnected {
                     conn_id,
                     reason,
@@ -4861,10 +5076,11 @@ where
                             stats.smoltcp_polls
                         ));
                         let line_two = format_message(format_args!(
-                            "netstats: udp_rx={} udp_tx={} tcp_accepts={} tcp_rx_bytes={} tcp_tx_bytes={}",
+                            "netstats: udp_rx={} udp_tx={} tcp_accepts={} tcp_auth={} tcp_rx_bytes={} tcp_tx_bytes={}",
                             stats.udp_rx,
                             stats.udp_tx,
                             stats.tcp_accepts,
+                            stats.tcp_auth_sessions,
                             stats.tcp_rx_bytes,
                             stats.tcp_tx_bytes
                         ));
@@ -7610,6 +7826,29 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn host_eapol_required_does_not_delay_serial_echo() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "wifi-host-eapol-required";
+        net.status.dhcp_phase = "host-eapol-required";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().driver_mut().push_rx(b"n");
+        pump.poll();
+        let echoed = pump.serial_mut().driver_mut().drain_tx();
+        drop(pump);
+
+        assert_eq!(net.polls, 0);
+        assert_eq!(echoed.as_slice(), b"n");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn host_eapol_pending_does_not_delay_local_seat_echo() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
@@ -7642,6 +7881,39 @@ mod tests {
         );
         drop(pump);
         assert_eq!(net.polls, 0);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn local_seat_input_keeps_ready_network_poll_for_keyboard_turn() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.enqueue_keyboard_bytes(b"x");
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_local_seat(&mut local_seat);
+        pump.poll();
+        let metrics = pump.metrics();
+        drop(pump);
+
+        assert_eq!(net.polls, 1);
+        assert_eq!(metrics.local_seat_keyboard_priority_turns, 1);
+        assert_eq!(metrics.local_seat_runtime_skipped_turns, 0);
+        assert_eq!(metrics.local_seat_serial_dispatch_yielded_turns, 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -7920,6 +8192,7 @@ mod tests {
         net.counters.udp_rx = 1;
         net.counters.udp_tx = 2;
         net.counters.tcp_accepts = 1;
+        net.counters.tcp_auth_sessions = 1;
         net.counters.wifi_assoc = 1;
         net.counters.wifi_link_up = 1;
         net.counters.wifi_host_eapol_rx = 2;
@@ -7956,7 +8229,7 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("netstats: udp_rx=1 udp_tx=2 tcp_accepts=1"),
+            rendered.contains("netstats: udp_rx=1 udp_tx=2 tcp_accepts=1 tcp_auth=1"),
             "{rendered}"
         );
     }
@@ -8080,6 +8353,156 @@ mod tests {
         assert!(rendered.contains("PONG"), "{rendered}");
         assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
         assert!(rendered.contains("cohesix> "), "{rendered}");
+    }
+
+    #[test]
+    fn local_seat_keyboard_input_preempts_concurrent_serial_line() {
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        local_seat.enqueue_keyboard_bytes(b"pi");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.serial_mut().driver_mut().push_rx(b"help\n");
+
+        pump.poll();
+
+        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+        assert_eq!(pump.local_line.as_str(), "pi");
+        let metrics = pump.metrics();
+        assert_eq!(metrics.local_seat_keyboard_priority_turns, 1);
+        assert_eq!(metrics.local_seat_runtime_skipped_turns, 1);
+        assert_eq!(metrics.local_seat_serial_dispatch_yielded_turns, 1);
+        let first_turn_tx = pump.serial_mut().driver_mut().drain_tx();
+        let first_turn_rendered = String::from_utf8(first_turn_tx.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            !first_turn_rendered.contains("Commands:"),
+            "{first_turn_rendered}"
+        );
+
+        pump.poll();
+
+        assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
+        assert!(pump.local_line.is_empty());
+        drop(pump);
+        assert!(audit
+            .entries
+            .iter()
+            .any(|entry| entry.as_str() == "console: cleared local-seat input before serial"));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn local_seat_usb_status_reports_current_priority_turn() {
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        local_seat.enqueue_keyboard_bytes(b"usb status\n");
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
+
+        pump.poll();
+
+        let tx = pump.serial_mut().driver_mut().drain_tx();
+        let rendered =
+            String::from_utf8(tx.into_iter().collect()).expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "usb: event_loop keyboard_priority=1 runtime_skipped=1 serial_dispatch_yielded=1"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK USB detail=subcommand=status"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn serial_console_flood_yields_between_lines_when_local_seat_is_active() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.serial_mut().driver_mut().push_rx(b"ping\nhelp\n");
+
+        pump.poll();
+        let first_turn = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(first_turn.contains("PONG"), "{first_turn}");
+        assert!(!first_turn.contains("Commands:"), "{first_turn}");
+
+        pump.local_seat
+            .as_mut()
+            .expect("local-seat should be attached")
+            .enqueue_keyboard_bytes(b"x");
+        pump.poll();
+        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+        assert_eq!(pump.local_line.as_str(), "x");
+        let second_turn = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(!second_turn.contains("Commands:"), "{second_turn}");
+
+        pump.poll();
+        assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
+        assert!(pump.local_line.is_empty());
+        let third_turn = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(third_turn.contains("Commands:"), "{third_turn}");
     }
 
     #[test]
@@ -8393,11 +8816,17 @@ mod tests {
 
     #[test]
     fn local_seat_input_drain_contract_tolerates_idle_hid_reports() {
-        let (poll_passes, empty_polls) = local_seat_input_drain_contract_for_test();
+        let (poll_passes, empty_polls, output_polls, serial_lines, serial_chunk_bytes) =
+            local_seat_input_drain_contract_for_test();
         assert!(poll_passes >= 8);
         assert!(poll_passes <= 32);
         assert!(empty_polls >= 2);
         assert!(empty_polls <= poll_passes);
+        assert!(output_polls >= 1);
+        assert!(output_polls <= empty_polls);
+        assert_eq!(serial_lines, 1);
+        assert!(serial_chunk_bytes >= 16);
+        assert!(serial_chunk_bytes <= crate::serial::DEFAULT_TX_CAPACITY / 2);
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -8716,19 +9145,19 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: firmware_proof source=cached upload=uploaded"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: ht_summary state=ht-timeout-cached"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains("wifi: cccr_cached ioex=0x06 iordy=0x02"),
+            rendered.contains("wifi: ht_state chipclk=0x50"),
             "{rendered}"
         );
         assert!(
             rendered.contains("wifi: f2_gate policy=post-ht-proof gate=blocked-latched-not-ready"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("wifi: firmware_proof source=cached upload=uploaded"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("wifi: cccr_cached ioex=0x06 iordy=0x02"),
             "{rendered}"
         );
         assert!(
@@ -8783,6 +9212,10 @@ mod tests {
             rendered.contains(
                 "wifi: diag ht_probe skipped reason=preserved-control-plane-failure exact_error=cyw43-control-plane-partial-hint-visibility"
             ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: diag stage=after-ht-probe skipped=yes snapshot=unchanged"),
             "{rendered}"
         );
         assert!(
@@ -8878,8 +9311,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_usb_debug_command_enables_local_seat_polling() {
-        let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -8926,8 +9359,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_usb_debug_probe_command_returns_without_arming_background_polling() {
-        let driver = LoopbackSerial::<256>::new();
-        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -9982,6 +10415,69 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::usb_capture_verdict(true, true, Some("usbcmd-run-store-wedged"),),
             ("run-transition-edge", "usbcmd-run")
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb", target_arch = "aarch64"))]
+    #[test]
+    fn usb_route_contract_does_not_report_completed_route_as_blocked() {
+        let mut route = crate::local_seat_pi4::UsbProbeRouteStatus {
+            route: "trusted-high-bar-mailbox-reset",
+            pathway_idx: 1,
+            strategy_idx: 1,
+            strategy_count: 1,
+            policy: "platform-reset-complete",
+            origin: "mailbox-reset-complete",
+            handoff: "platform-reset-complete",
+            seed: "none",
+            halt_guard: "skip-live-halt-read",
+            current_step: "keyboard-ready",
+            next_step: "none",
+            proof_gate: 8,
+            progress: "keyboard-ready",
+            outcome: "keyboard-ready",
+            prefer_high: false,
+            pcie_dma_window: true,
+            poll_only: true,
+            port: Some(1),
+            connected_mask: 0x0001,
+            event_candidate_mask: 0,
+            command_probe: "enable-slot-ok",
+            detect_passes: 1,
+            slow_recheck: false,
+            irq27_bound: false,
+            bridge_irq_bound: true,
+            intx_irq_bound: true,
+            msi_irq_bound: false,
+            controller_gate: "none",
+            diag_fresh: true,
+            diag_stage: None,
+            diag_tag: None,
+            diag_exact: None,
+            diag_a: 0,
+            diag_b: 0,
+            diag_c: 0,
+            diag_value_labels: None,
+        };
+
+        assert_eq!(KernelConsoleTestPump::usb_contract_blocker(&route), "none");
+        assert_eq!(
+            KernelConsoleTestPump::usb_route_capture_verdict(&route),
+            Some(("keyboard-route-ready", "none"))
+        );
+
+        route.next_step = "safe-port-state";
+        route.proof_gate = 4;
+        route.current_step = "command-ring";
+        route.progress = "controller-ready";
+
+        assert_eq!(
+            KernelConsoleTestPump::usb_contract_blocker(&route),
+            "safe-port-state"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_route_capture_verdict(&route),
+            Some(("command-ring-ready", "safe-port-state"))
         );
     }
 

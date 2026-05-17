@@ -2492,7 +2492,7 @@ impl<H: Dma> UsbDevice<H> {
         is_in: bool,
         buf: &PhysMem<H>,
         len: usize,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         let (dci, ring_idx, trb_control) = xhci_transfer_queue_plan(ep_num, is_in)?;
 
         let mut ep_rings = self.ep_rings.lock();
@@ -2511,13 +2511,13 @@ impl<H: Dma> UsbDevice<H> {
             ((ring_idx as u64) << 32) | len as u64,
             ((trb.status as u64) << 32) | trb.control as u64,
         );
-        ring.enqueue_and_sync(host, trb, "xhci-transfer-ring-submit")?;
+        let trb_addr = ring.enqueue_and_sync(host, trb, "xhci-transfer-ring-submit")?;
         drop(ep_rings);
 
         // Ring doorbell
         self.ctrl.ring_doorbell(self.slot_id, dci as u8)?;
 
-        Ok(())
+        Ok(trb_addr)
     }
 
     /// Returns the xHCI slot ID assigned to this device.

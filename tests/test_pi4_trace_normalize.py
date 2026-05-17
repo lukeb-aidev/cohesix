@@ -3478,6 +3478,28 @@ def test_gate_summary_reports_host_eapol_required_after_proof_window() -> None:
     assert gates.wifi_phase == "join-security"
 
 
+def test_gate_summary_preserves_live_host_eapol_pending_label() -> None:
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol proof window "
+            "result=not-yet-seen mode=join-submit polls=16384 assoc=link-up "
+            "eapol_rx_delta=0 eapol_rx_total=0 action=defer-eapol-only-rx",
+            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol pending "
+            "mode=join-submit status=wifi-host-eapol-pending assoc=yes "
+            "rx=eapol-only data=blocked creds=12/12 eapol_rx=0 "
+            "limit=60000 action=wait-m1",
+            "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=0 eapol_start=0 eapol_secure=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "wifi-host-eapol-pending"
+    assert gates.wifi_exact == "wifi-host-eapol-pending"
+    assert gates.wifi_phase == "join-security"
+
+
 def test_gate_summary_preserves_host_eapol_required_over_deferred_eapol_start() -> None:
     events = normalizer.parse_events(
         [

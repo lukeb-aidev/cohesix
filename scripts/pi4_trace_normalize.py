@@ -1280,11 +1280,11 @@ def normalize_wifi_blocker(value: str) -> str:
         or "ioctl 0x10c" in lower
     ) and ("status=0xfffffffe" in lower or "badarg" in lower or "bad-argument" in lower):
         return "wsec-pmk-bad-argument"
+    if "wifi-host-eapol-pending" in lower or "host-eapol-pending" in lower:
+        return "wifi-host-eapol-pending"
     if (
         "host-eapol-required" in lower
-        or "host-eapol-pending" in lower
         or "wifi-host-eapol-required" in lower
-        or "wifi-host-eapol-pending" in lower
         or "completion_rule=host-eapol-required" in lower
     ):
         return "host-eapol-required"
@@ -1516,6 +1516,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-protocol-error-cur-etheraddr-len",
         "wsec-pmk-bad-argument",
         "firmware-supplicant-unsupported",
+        "wifi-host-eapol-pending",
         "host-eapol-required",
         "cyw43-function2-interrupt-unbound",
     ):
@@ -2400,6 +2401,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-partial-hint-visibility",
         "control-plane-reply-idle-loop",
         "firmware-supplicant-unsupported",
+        "wifi-host-eapol-pending",
         "host-eapol-required",
         "wsec-pmk-bad-argument",
     }
@@ -2563,6 +2565,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "control-plane-host-card-int-no-dongle-source",
                 "control-plane-host-card-int-source-unreadable",
                 "firmware-supplicant-unsupported",
+                "wifi-host-eapol-pending",
                 "host-eapol-required",
                 "wsec-pmk-bad-argument",
             }
@@ -2588,6 +2591,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
             "firmware-supplicant-unsupported",
+            "wifi-host-eapol-pending",
             "host-eapol-required",
             "ioctl-timeout",
             "runtime-rx-host-latch-spam",
@@ -2613,6 +2617,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 join_security_pending_iovar = None
         if explicit_blocker in {
             "firmware-supplicant-unsupported",
+            "wifi-host-eapol-pending",
             "host-eapol-required",
             "join-security-wpaie-loop",
             "join-security-wpa-auth-initial-loop",
@@ -2827,6 +2832,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             post_f2_progress_seen = True
             if blocker not in {
                 "firmware-supplicant-unsupported",
+                "wifi-host-eapol-pending",
                 "host-eapol-required",
                 "wsec-pmk-bad-argument",
             }:
@@ -2843,6 +2849,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     "control-plane-bdc-event",
                     "control-plane-cur-etheraddr-len",
                     "firmware-supplicant-unsupported",
+                    "wifi-host-eapol-pending",
                     "host-eapol-required",
                     "wsec-pmk-bad-argument",
                 }
@@ -3259,6 +3266,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
             "firmware-supplicant-unsupported",
+            "wifi-host-eapol-pending",
             "host-eapol-required",
             "ioctl-timeout",
             "runtime-rx-host-latch-spam",
@@ -3276,6 +3284,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     "control-plane-host-card-int-no-dongle-source",
                     "control-plane-host-card-int-source-unreadable",
                     "firmware-supplicant-unsupported",
+                    "wifi-host-eapol-pending",
                     "host-eapol-required",
                     "runtime-rx-host-latch-spam",
                     "wsec-pmk-bad-argument",
@@ -3339,6 +3348,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "firmware-channel-f2",
                 "firmware-ready-timeout",
                 "firmware-supplicant-unsupported",
+                "wifi-host-eapol-pending",
                 "host-eapol-required",
                 "ioctl-timeout",
                 "mailbox-ready-timeout",
@@ -3444,6 +3454,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     if runtime_rx_host_latch_spam_count >= 8 and blocker in {
         "control-plane",
         "control-plane-no-frame-indication-after-write",
+        "wifi-host-eapol-pending",
         "host-eapol-required",
         "ioctl-timeout",
         "join-pending",
@@ -3559,6 +3570,16 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or "join-security"
         )
         return "firmware-supplicant-unsupported", phase
+    if normalize_wifi_blocker(event.raw) == "wifi-host-eapol-pending":
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "join-security"
+        )
+        return "wifi-host-eapol-pending", phase
     if normalize_wifi_blocker(event.raw) == "host-eapol-required":
         phase = (
             event.fields.get("stage")

@@ -23,18 +23,27 @@ use crate::{
     ring::{PhysMem, completion},
 };
 
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use core::{
     hint::spin_loop,
     ptr,
     sync::atomic::{Ordering, compiler_fence},
 };
+use spin::Mutex;
 
 const BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD: u8 = 4;
 const UBOOT_BOOT_KEYBOARD_IDLE_DURATION: u8 = 10;
 const BOOT_KEYBOARD_REPORT_LEN: usize = core::mem::size_of::<KeyboardReport>();
 const FLEXIBLE_KEYBOARD_REPORT_MIN_LEN: usize = 4;
 const HID_LED_CONTROL_WAIT_SPINS: usize = 2_000_000;
+const HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH: usize = 32;
+const HID_DEFAULT_INTERRUPT_READ_QUEUE_DEPTH: usize = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct QueuedInterruptRead {
+    trb_addr: u64,
+    buffer_index: usize,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KeyboardCompletionAction {
@@ -904,6 +913,14 @@ pub enum HidType {
     Other,
 }
 
+#[inline]
+const fn interrupt_read_queue_depth(hid_type: HidType) -> usize {
+    match hid_type {
+        HidType::Keyboard => HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH,
+        HidType::Mouse | HidType::Other => HID_DEFAULT_INTERRUPT_READ_QUEUE_DEPTH,
+    }
+}
+
 /// HID Device wrapper.
 ///
 /// Provides high-level interface for reading input from HID keyboards
@@ -918,7 +935,8 @@ pub struct HidDevice<H: Dma> {
     keyboard_protocol_mode: KeyboardProtocolMode,
     keyboard_decode_mode: KeyboardDecodeMode,
     keyboard_report_offset: u8,
-    report_buf: PhysMem<H>,
+    report_bufs: Vec<PhysMem<H>>,
+    queued_reads: Mutex<Vec<QueuedInterruptRead>>,
     led_report_buf: PhysMem<H>,
 }
 
@@ -946,16 +964,33 @@ impl<H: Dma> HidDevice<H> {
         // Configure the interrupt endpoint
         device.configure_endpoint(ep_in)?;
 
-        // Allocate report buffer (64-byte alignment for DMA)
+        // Allocate report buffers (64-byte alignment for DMA). Pi 4 keyboard
+        // polling runs without xHCI interrupts, so keep a deep queue of
+        // interrupt-IN reads armed to cover bounded console-output stalls.
         let host = device.ctrl().host();
-        let report_buf = PhysMem::alloc(host, ep_in.max_packet_size as usize, 64)?;
+        let read_queue_depth = interrupt_read_queue_depth(hid_type);
+        let mut report_bufs = Vec::with_capacity(read_queue_depth);
+        for _ in 0..read_queue_depth {
+            match PhysMem::alloc(host, ep_in.max_packet_size as usize, 64) {
+                Ok(buf) => report_bufs.push(buf),
+                Err(err) => {
+                    while let Some(buf) = report_bufs.pop() {
+                        buf.free(host);
+                    }
+                    return Err(err);
+                }
+            }
+        }
         let led_report_buf = match PhysMem::alloc(host, 1, 64) {
             Ok(buf) => buf,
             Err(err) => {
-                report_buf.free(host);
+                while let Some(buf) = report_bufs.pop() {
+                    buf.free(host);
+                }
                 return Err(err);
             }
         };
+        let queued_reads = Mutex::new(Vec::with_capacity(read_queue_depth));
 
         let hid = Self {
             device,
@@ -975,7 +1010,8 @@ impl<H: Dma> HidDevice<H> {
                 KeyboardDecodeMode::Flexible
             },
             keyboard_report_offset: 0,
-            report_buf,
+            report_bufs,
+            queued_reads,
             led_report_buf,
         };
 
@@ -1054,12 +1090,48 @@ impl<H: Dma> HidDevice<H> {
 
     /// Queue a read from the interrupt endpoint
     pub fn queue_read(&self) -> Result<()> {
-        self.device.queue_transfer(
-            self.ep_in,
-            true,
-            &self.report_buf,
-            self.ep_max_packet as usize,
-        )
+        self.queue_reads_to_depth(1).map(|_| ())
+    }
+
+    fn queue_reads_to_depth(&self, target_depth: usize) -> Result<usize> {
+        let target_depth = target_depth.min(self.report_bufs.len());
+        let mut queued_reads = self.queued_reads.lock();
+        let mut queued = 0usize;
+        while queued_reads.len() < target_depth {
+            let Some(buffer_index) = self.next_free_report_buffer_index(&queued_reads) else {
+                break;
+            };
+            let trb_addr = self.device.queue_transfer(
+                self.ep_in,
+                true,
+                &self.report_bufs[buffer_index],
+                self.ep_max_packet as usize,
+            )? & !0x0f;
+            queued_reads.push(QueuedInterruptRead {
+                trb_addr,
+                buffer_index,
+            });
+            queued = queued.saturating_add(1);
+        }
+        Ok(queued)
+    }
+
+    fn next_free_report_buffer_index(&self, queued_reads: &[QueuedInterruptRead]) -> Option<usize> {
+        (0..self.report_bufs.len())
+            .find(|index| !queued_reads.iter().any(|queued| queued.buffer_index == *index))
+    }
+
+    fn complete_interrupt_read(&self, trb_addr: u64) -> Option<usize> {
+        let trb_addr = trb_addr & !0x0f;
+        let mut queued_reads = self.queued_reads.lock();
+        let index = queued_reads
+            .iter()
+            .position(|queued| queued.trb_addr == trb_addr)?;
+        Some(queued_reads.remove(index).buffer_index)
+    }
+
+    fn arm_keyboard_reads(&self) -> Result<usize> {
+        self.queue_reads_to_depth(interrupt_read_queue_depth(self.hid_type))
     }
 
     #[inline]
@@ -1114,6 +1186,7 @@ impl<H: Dma> HidDevice<H> {
         if self.hid_type != HidType::Keyboard {
             return Ok(None);
         }
+        self.arm_keyboard_reads()?;
 
         // Drain a bounded number of events so unrelated hub chatter does not
         // indefinitely starve keyboard transfer completions.
@@ -1129,6 +1202,17 @@ impl<H: Dma> HidDevice<H> {
             };
 
             let code = evt.completion_code();
+            let Some(buffer_index) = self.complete_interrupt_read(evt.param) else {
+                self.device.ctrl().emit_diag(
+                    0x0417,
+                    ((self.device.slot_id() as u64) << 32) | u64::from(evt.endpoint_id()),
+                    evt.param,
+                    self.queued_reads.lock().len() as u64,
+                );
+                self.arm_keyboard_reads()?;
+                continue;
+            };
+            let report_buf = &self.report_bufs[buffer_index];
             let payload_len =
                 (self.ep_max_packet as usize).saturating_sub(evt.transfer_length() as usize);
             self.device.ctrl().emit_diag(
@@ -1149,7 +1233,7 @@ impl<H: Dma> HidDevice<H> {
                 evt.transfer_length(),
                 report_min_len,
             ) {
-                self.report_buf.sync_for_cpu_range(
+                report_buf.sync_for_cpu_range(
                     self.device.ctrl().host(),
                     0,
                     payload_len.min(self.ep_max_packet as usize),
@@ -1159,7 +1243,7 @@ impl<H: Dma> HidDevice<H> {
                 // transfer, and payload_len is clamped to the allocated endpoint packet size.
                 let payload = unsafe {
                     core::slice::from_raw_parts(
-                        self.report_buf.as_ptr::<u8>(),
+                        report_buf.as_ptr::<u8>(),
                         payload_len.min(self.ep_max_packet as usize),
                     )
                 };
@@ -1229,7 +1313,7 @@ impl<H: Dma> HidDevice<H> {
                         KeyboardCompletionAction::ReturnReport
                     );
                     self.keyboard_decode_failures = 0;
-                    self.queue_read()?;
+                    self.arm_keyboard_reads()?;
                     return Ok(Some(report));
                 }
                 self.device.ctrl().emit_diag(
@@ -1240,7 +1324,7 @@ impl<H: Dma> HidDevice<H> {
                         | ((self.keyboard_protocol_mode as u64) << 16)
                         | (self.keyboard_decode_mode as u64),
                 );
-                self.queue_read()?;
+                self.arm_keyboard_reads()?;
                 debug_assert_eq!(
                     keyboard_completion_action(code, true, false),
                     KeyboardCompletionAction::ContinuePolling
@@ -1256,13 +1340,13 @@ impl<H: Dma> HidDevice<H> {
                         ((code as u64) << 32) | payload_len as u64,
                         self.ep_max_packet as u64,
                     );
-                    self.queue_read()?;
+                    self.arm_keyboard_reads()?;
                     continue;
                 }
                 KeyboardCompletionAction::ReturnReport => unreachable!(),
                 KeyboardCompletionAction::Error => {}
             }
-            let _ = self.queue_read();
+            let _ = self.arm_keyboard_reads();
             self.device.ctrl().emit_diag(
                 0x03c3,
                 ((self.device.slot_id() as u64) << 32) | u64::from(evt.endpoint_id()),
@@ -1280,8 +1364,11 @@ impl<H: Dma> HidDevice<H> {
     }
 
     /// Poll for mouse report (non-blocking)
-    pub fn poll_mouse(&self) -> Option<MouseReport> {
+    pub fn poll_mouse(&mut self) -> Option<MouseReport> {
         if self.hid_type != HidType::Mouse {
+            return None;
+        }
+        if self.queue_reads_to_depth(1).is_err() {
             return None;
         }
 
@@ -1296,6 +1383,11 @@ impl<H: Dma> HidDevice<H> {
                 return None;
             };
             let code = evt.completion_code();
+            let Some(buffer_index) = self.complete_interrupt_read(evt.param) else {
+                let _ = self.queue_reads_to_depth(1);
+                continue;
+            };
+            let report_buf = &self.report_bufs[buffer_index];
             if has_report_payload(
                 code,
                 self.ep_max_packet as usize,
@@ -1304,8 +1396,7 @@ impl<H: Dma> HidDevice<H> {
             ) {
                 let payload_len =
                     (self.ep_max_packet as usize).saturating_sub(evt.transfer_length() as usize);
-                if self
-                    .report_buf
+                if report_buf
                     .sync_for_cpu_range(
                         self.device.ctrl().host(),
                         0,
@@ -1314,21 +1405,21 @@ impl<H: Dma> HidDevice<H> {
                     )
                     .is_err()
                 {
-                    let _ = self.queue_read();
+                    let _ = self.queue_reads_to_depth(1);
                     return None;
                 }
                 // SAFETY: `has_report_payload` proved the completed transfer
                 // contains a full boot-protocol mouse report in `report_buf`.
-                let report = unsafe { *(self.report_buf.as_ptr::<MouseReport>()) };
-                let _ = self.queue_read();
+                let report = unsafe { *(report_buf.as_ptr::<MouseReport>()) };
+                let _ = self.queue_reads_to_depth(1);
                 return Some(report);
             }
             if code == completion::SUCCESS || code == completion::SHORT_PACKET {
                 // Ignore zero/partial payload completions and keep polling.
-                let _ = self.queue_read();
+                let _ = self.queue_reads_to_depth(1);
                 return None;
             }
-            let _ = self.queue_read();
+            let _ = self.queue_reads_to_depth(1);
             return None;
         }
         None
@@ -1351,7 +1442,7 @@ impl<H: Dma> HidDevice<H> {
     }
 
     /// Blocking read for mouse
-    pub fn read_mouse(&self) -> Result<MouseReport> {
+    pub fn read_mouse(&mut self) -> Result<MouseReport> {
         if self.hid_type != HidType::Mouse {
             return Err(UsbError::NotSupported);
         }
@@ -1411,14 +1502,12 @@ impl<H: Dma> Drop for HidDevice<H> {
         let host = self.device.ctrl().host();
         // Note: PhysMem does not auto-free, so HID-owned DMA buffers are
         // returned explicitly during device teardown.
-        // SAFETY: `report_buf` was allocated from this DMA host with the same
-        // size/alignment and is freed exactly once during `HidDevice` drop.
+        while let Some(buf) = self.report_bufs.pop() {
+            buf.free(host);
+        }
+        // SAFETY: `led_report_buf` was allocated from this DMA host with the
+        // same size/alignment and is freed exactly once during `HidDevice` drop.
         unsafe {
-            host.free(
-                self.report_buf.virt(),
-                self.report_buf.size(),
-                self.report_buf.align(),
-            );
             host.free(
                 self.led_report_buf.virt(),
                 self.led_report_buf.size(),
@@ -1502,7 +1591,8 @@ mod tests {
         has_report_payload, keyboard_completion_action, keyboard_decode_transition,
         keyboard_endpoint_id_matches, keyboard_payload_has_nonzero_outside_boot_window,
         keyboard_payload_prefix, keyboard_report_payload_min_len, keyboard_usage_code_valid,
-        led, modifier, scancode, scancode_to_ascii, HID_LED_CONTROL_WAIT_SPINS,
+        led, modifier, scancode, scancode_to_ascii, HidType, HID_LED_CONTROL_WAIT_SPINS,
+        HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH, interrupt_read_queue_depth,
     };
     use crate::ring::completion;
 
@@ -1753,6 +1843,21 @@ mod tests {
     #[test]
     fn boot_keyboard_idle_duration_matches_uboot_polling_config() {
         assert_eq!(UBOOT_BOOT_KEYBOARD_IDLE_DURATION, 10);
+    }
+
+    #[test]
+    fn keyboard_interrupt_reads_stay_armed_across_prompt_output_stalls() {
+        assert_eq!(
+            interrupt_read_queue_depth(HidType::Keyboard),
+            HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH
+        );
+        // Low-speed boot keyboards can only report state at the endpoint
+        // interval. Cohesix polls from seL4 userland, so keep enough interrupt
+        // reads armed to cover brief HDMI/serial/WiFi stalls without losing
+        // press/release edges before local-seat can drain them.
+        assert!(HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH >= 32);
+        assert_eq!(interrupt_read_queue_depth(HidType::Mouse), 1);
+        assert_eq!(interrupt_read_queue_depth(HidType::Other), 1);
     }
 
     #[test]
