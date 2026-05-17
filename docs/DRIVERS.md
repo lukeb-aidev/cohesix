@@ -800,9 +800,10 @@ active path is Cohesix-owned cold start:
 - HAL powers the USB HCD domain through the VideoCore mailbox module `3`.
 - HAL masks/clears PCIe host interrupt sources for the poll-only lane.
 - HAL validates link/root-complex state and always refreshes the BCM2711 DMA and
-  outbound MMIO windows before EXT_CFG proof; if the link/root state is not
-  already ready, it runs one bounded BCM2711 root-complex reset/window init and
-  drains posted writes with same-block readbacks.
+  outbound MMIO windows before EXT_CFG proof. Raw `PCIE_STATUS` link/root bits
+  are advisory only: they do not prove live ownership and must not skip the
+  bounded BCM2711 root-complex reset/window init for the current reset phase.
+  The live VL805 tuple and COMMAND/BAR proof are the ownership gate.
 - HAL maps the BCM2711 root-port config page before higher PCIe pages and
   programs the Linux/U-Boot bridge aperture before endpoint ownership:
   primary/secondary/subordinate buses `00/01/01`, memory window

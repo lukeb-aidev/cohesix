@@ -387,8 +387,13 @@ pub const fn vl805_post_mailbox_ext_cfg_retry_needed(
     runtime_touch_enabled && mmio == high_bar_mmio && !fresh_runtime_ready
 }
 
-const fn pcie_root_ready_fast_path_allowed(phase: Pi4PcieProofPhase, status: u32) -> bool {
-    matches!(phase, Pi4PcieProofPhase::Initial) && pcie_status_link_up_and_rc(status)
+const fn pcie_root_ready_fast_path_allowed(_phase: Pi4PcieProofPhase, _status: u32) -> bool {
+    // Raw BCM2711 status bits are only advisory before Cohesix has refreshed the
+    // root window and proved the exact VL805 config tuple. Recent Pi 4 boots
+    // exposed status values with PORT/DL/PHY bits set while EXT_CFG still read
+    // root-port garbage, so status alone must never skip the controlled root
+    // init path.
+    false
 }
 
 #[inline]
@@ -2129,12 +2134,12 @@ mod tests {
     }
 
     #[test]
-    fn post_mailbox_root_init_does_not_reuse_pre_reset_ready_status() {
+    fn root_init_never_trusts_status_bits_without_live_config_proof() {
         let ready = BCM2711_PCIE_STATUS_PORT
             | BCM2711_PCIE_STATUS_DL_ACTIVE
             | BCM2711_PCIE_STATUS_PHY_LINK_UP;
 
-        assert!(pcie_root_ready_fast_path_allowed(
+        assert!(!pcie_root_ready_fast_path_allowed(
             Pi4PcieProofPhase::Initial,
             ready
         ));
