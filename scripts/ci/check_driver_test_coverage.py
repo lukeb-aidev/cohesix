@@ -9,8 +9,13 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised by macOS system Python.
+    tomllib = None
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -36,8 +41,53 @@ def require_feature(
         errors.append(f"apps/root-task/Cargo.toml: feature `{name}` missing {missing}")
 
 
+def load_root_task_cargo() -> dict[str, object]:
+    """Load the root-task manifest on Python versions before `tomllib` exists."""
+
+    text = read_text("apps/root-task/Cargo.toml")
+    if tomllib is not None:
+        return tomllib.loads(text)
+    return parse_root_task_manifest_subset(text)
+
+
+def parse_root_task_manifest_subset(text: str) -> dict[str, object]:
+    """Parse the manifest subset needed by this guard without external deps."""
+
+    features: dict[str, list[str]] = {}
+    dependencies: dict[str, dict[str, bool]] = {}
+    lines = text.splitlines()
+    index = 0
+    section = ""
+    while index < len(lines):
+        raw = lines[index]
+        stripped = raw.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped.strip("[]")
+            index += 1
+            continue
+        if section == "features":
+            match = re.match(r"^([A-Za-z0-9_-]+)\s*=\s*(.*)$", stripped)
+            if match:
+                name, value = match.groups()
+                payload = value
+                while "[" in payload and "]" not in payload and index + 1 < len(lines):
+                    index += 1
+                    payload += "\n" + lines[index]
+                features[name] = re.findall(r'"([^"]+)"', payload)
+        elif section == "dependencies":
+            match = re.match(r"^([A-Za-z0-9_-]+)\s*=\s*(.*)$", stripped)
+            if match:
+                name, value = match.groups()
+                if value.strip().startswith("{"):
+                    dependencies[name] = {
+                        "optional": "optional = true" in value,
+                    }
+        index += 1
+    return {"features": features, "dependencies": dependencies}
+
+
 def check_feature_bundles(errors: list[str]) -> None:
-    cargo = tomllib.loads(read_text("apps/root-task/Cargo.toml"))
+    cargo = load_root_task_cargo()
     features = cargo["features"]
     require_feature(
         errors,

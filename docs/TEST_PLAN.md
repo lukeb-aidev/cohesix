@@ -533,6 +533,7 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
   - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
   - Existing QEMU hostfwd defaults (`127.0.0.1:{31337,31338,31339}`) and ACK/ERR/END fixtures must remain unchanged.
 - Pi 4 runtime evidence gate:
+  - When `cohsh` reaches the Pi over Wi-Fi/TCP, keep the raw serial log and the `cohsh` transcript together in the Pi 4 evidence directory. TCP `cohsh` output is not mirrored back into the UART log, so the normalizer may be run over a combined serial-plus-`cohsh` evidence file for the final `netstats`/`netstatus` assertions while retaining the raw serial log as the boot source of truth.
   - Capture boot evidence showing:
     - `manifest.hw.network.mode=<static|dhcp>`
     - `manifest.hw.network.interface=<wired|wifi|auto>`

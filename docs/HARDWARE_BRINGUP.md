@@ -220,7 +220,8 @@ Capture only these operator-facing lines from that session:
 - `nettest` targets the active wired address only.
 6. Current limitation:
 - explicit `policy=wifi` now supports both `dhcp` and `static` when credentials are present.
-- `auto` remains DHCP-only and still tries Wi-Fi first when credentials are present. Its wired fallback is limited to CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack; Milestone 26b is not complete until on-device Pi 4 serial logs prove join + DHCP and that attach/join fallback behavior.
+- `auto` remains DHCP-only and still tries Wi-Fi first when credentials are present. Its wired fallback is limited to CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack.
+- Milestone 26b completion evidence is recorded in `docs/audit/M26B_COMPLETION_EVIDENCE.md`: `/Users/lukasbower/pi4-serial-20260517-204318.log` plus `out/test-plan/m26b-pi4-evidence-20260517T111457Z/pi4-combined-serial-cohsh.log` prove USB Gate 10, Wi-Fi Gate 10, no USB/Wi-Fi blockers, no boot halt, no timer IRQ27, DHCP-bound Wi-Fi at `192.168.86.154`, `netstats` with `active=wifi`, `addr_src=dhcp-lease`, `dhcp=bound`, `eapol_secure=1`, and non-zero RX/TX counters after `nettest`.
 
 ## macOS U-Boot debug harness (fast iteration)
 - Purpose: validate U-Boot scripts/env/network setup behavior quickly before hardware retest.

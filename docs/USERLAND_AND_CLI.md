@@ -582,7 +582,7 @@ QEMU runs with `-serial mon:stdio` and a user-net device that forwards TCP/UDP p
   authenticated `cohsh` sessions.
 - `netstats` emits a Wi-Fi/EAPOL line: `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`.
 - `netstats` also emits a compact status line for wrapped serial consoles: `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`.
-- Only one control-plane interface is active at a time. The current as-built runtime supports `wired` over GENETv5, `wifi` over CYW43455, and `auto` with deterministic Wi-Fi-first fallback to wired when CYW43455 attach/join setup fails before DHCP ownership transfers to the active Wi-Fi stack; final Milestone 26b completion still requires Pi 4 hardware evidence for join + DHCP.
+- Only one control-plane interface is active at a time. The current as-built runtime supports `wired` over GENETv5, `wifi` over CYW43455, and `auto` with deterministic Wi-Fi-first fallback to wired when CYW43455 attach/join setup fails before DHCP ownership transfers to the active Wi-Fi stack; Milestone 26b completion evidence is recorded in `docs/audit/M26B_COMPLETION_EVIDENCE.md`.
 - On QEMU hostfwd/tunnel flows, capture self-test traffic on `lo0`.
 - On Pi 4 direct-link flows, capture on the host's physical interface (for example `en8`), not `lo0`; `nettest` logs the peer-side `nc` commands that must be run from the host to exercise the UDP echo and TCP smoke sockets.
 

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Shared help text for Cohesix console and cohsh CLI.
 // Author: Lukas Bower
@@ -26,6 +26,8 @@ pub const COHSH_CONSOLE_HELP_LINES: &[&str] = &[
     "  log                          - Tail /log/queen.log",
     "  ping                         - Report attachment status for health checks",
     "  test [--mode <quick|full|smp>] [--json] [--timeout <s>] [--no-mutate] - Run self-tests",
+    "  nettest                      - Run network self-test",
+    "  netstats                     - Show network counters",
     "  ls <path>                    - Enumerate directory entries",
     "  cat <path>                   - Read file contents",
     "  echo <text> > <path>         - Append to a file (adds newline)",

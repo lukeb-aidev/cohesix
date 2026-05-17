@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Implement the TCP transport backend for the Cohesix shell console.
 // Author: Lukas Bower
@@ -39,6 +39,8 @@ const DEFAULT_MAX_RETRIES: usize = 3;
 const DEFAULT_AUTH_TOKEN: &str = "";
 /// Maximum number of acknowledgement lines retained between drains.
 const MAX_PENDING_ACK: usize = 32;
+const CONSOLE_COMMAND_TRAILING_READ_TIMEOUT: Duration = Duration::from_millis(100);
+const CONSOLE_COMMAND_TRAILING_DRAIN_DEADLINE: Duration = Duration::from_millis(600);
 const FRAME_ERROR_VERB: &str = "FRAME";
 const CONSOLE_LOCK_ENV: &str = "COHSH_CONSOLE_LOCK";
 const CONSOLE_LOCK_DISABLE_VALUES: &[&str] = &["0", "false", "off", "no"];
@@ -1363,6 +1365,105 @@ impl TcpTransport {
         }
     }
 
+    fn run_console_command(&mut self, command: &str, expected_ack: &str) -> Result<Vec<String>> {
+        let mut attempts = 0usize;
+        loop {
+            self.send_line_attached(command)?;
+            let deadline = self.stream_deadline();
+            let mut lines = Vec::new();
+            loop {
+                match self.next_protocol_line_with_deadline(deadline, false) {
+                    Ok(Some(response)) => {
+                        if let Some(ack) = parse_ack(&response) {
+                            let ack_matches = ack.verb.eq_ignore_ascii_case(expected_ack);
+                            if is_frame_error(&ack) {
+                                let _ = self.record_ack(&response);
+                                return Err(anyhow!("console frame rejected: {response}"));
+                            }
+                            if ack_matches {
+                                let _ = self.record_ack(&response);
+                                if matches!(ack.status, AckStatus::Err) {
+                                    return Err(anyhow!("{command} failed: {response}"));
+                                }
+                                self.drain_console_command_trailing_lines(&mut lines)?;
+                                return Ok(lines);
+                            }
+                            let _ = self.record_ack(&response);
+                            continue;
+                        }
+                        lines.push(response);
+                    }
+                    Ok(None) => {
+                        attempts += 1;
+                        if attempts > self.max_retries {
+                            return Err(anyhow!(
+                                "connection dropped repeatedly while running {command}"
+                            ));
+                        }
+                        self.recover_session()?;
+                        break;
+                    }
+                    Err(err) => {
+                        return Err(err)
+                            .with_context(|| format!("timeout waiting for {command} response"));
+                    }
+                }
+            }
+        }
+    }
+
+    fn drain_console_command_trailing_lines(&mut self, lines: &mut Vec<String>) -> Result<()> {
+        self.configure_read_timeout(CONSOLE_COMMAND_TRAILING_READ_TIMEOUT)?;
+        let deadline = Instant::now()
+            .checked_add(CONSOLE_COMMAND_TRAILING_DRAIN_DEADLINE)
+            .unwrap_or_else(Instant::now);
+        let mut result = Ok(());
+        loop {
+            match self.next_protocol_line_with_deadline(deadline, false) {
+                Ok(Some(response)) => {
+                    if let Some(ack) = parse_ack(&response) {
+                        let _ = self.record_ack(&response);
+                        if is_frame_error(&ack) {
+                            result = Err(anyhow!("console frame rejected: {response}"));
+                            break;
+                        }
+                    } else {
+                        lines.push(response);
+                    }
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    if err
+                        .to_string()
+                        .contains("timeout waiting for console response")
+                    {
+                        break;
+                    }
+                    result = Err(err.context("failed while draining console command output"));
+                    break;
+                }
+            }
+        }
+        let restore_result = self.configure_read_timeout(self.timeout);
+        result?;
+        restore_result
+    }
+
+    fn configure_read_timeout(&mut self, timeout: Duration) -> Result<()> {
+        if let Some(stream) = self.stream.as_ref() {
+            stream
+                .set_read_timeout(Some(timeout))
+                .context("failed to configure TCP stream read timeout")?;
+        }
+        if let Some(reader) = self.reader.as_ref() {
+            reader
+                .get_ref()
+                .set_read_timeout(Some(timeout))
+                .context("failed to configure TCP reader timeout")?;
+        }
+        Ok(())
+    }
+
     fn record_ack(&mut self, line: &str) -> bool {
         let Some(ack) = parse_ack(line) else {
             return false;
@@ -1630,6 +1731,15 @@ impl Transport for TcpTransport {
         }
     }
 
+    fn console_command(
+        &mut self,
+        _session: &Session,
+        command: &str,
+        expected_ack: &str,
+    ) -> Result<Vec<String>> {
+        self.run_console_command(command, expected_ack)
+    }
+
     fn write_batch(
         &mut self,
         _session: &Session,
@@ -1799,6 +1909,16 @@ impl Transport for SharedTcpTransport {
         inner.write(session, path, payload)
     }
 
+    fn console_command(
+        &mut self,
+        session: &Session,
+        command: &str,
+        expected_ack: &str,
+    ) -> Result<Vec<String>> {
+        let mut inner = self.lock();
+        inner.console_command(session, command, expected_ack)
+    }
+
     fn write_batch(
         &mut self,
         session: &Session,
@@ -1873,6 +1993,16 @@ impl Transport for PooledTcpTransport {
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {
         let mut inner = self.lock();
         inner.write(session, path, payload)
+    }
+
+    fn console_command(
+        &mut self,
+        session: &Session,
+        command: &str,
+        expected_ack: &str,
+    ) -> Result<Vec<String>> {
+        let mut inner = self.lock();
+        inner.console_command(session, command, expected_ack)
     }
 
     fn write_batch(

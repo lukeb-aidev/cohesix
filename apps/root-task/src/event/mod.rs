@@ -8591,6 +8591,7 @@ mod tests {
             .any(|entry| entry.as_str() == "console: cleared serial input before local-seat"));
     }
 
+    #[cfg(feature = "kernel")]
     #[test]
     fn tail_command_emits_end_sentinel() {
         let _root_guard = ReachableRootGuard::new(1);
@@ -8622,6 +8623,7 @@ mod tests {
         assert!(rendered.contains("END\r\n"), "{rendered}");
     }
 
+    #[cfg(feature = "kernel")]
     #[test]
     fn log_command_emits_end_sentinel_and_quit_clears_session() {
         let driver = LoopbackSerial::<2048>::new();

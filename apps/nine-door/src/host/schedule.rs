@@ -709,6 +709,90 @@ fn ensure_len(label: &str, len: usize, max_len: usize) -> Result<(), NineDoorErr
     Ok(())
 }
 
+fn validate_simple_token(value: &str, max_len: usize, label: &str) -> Result<(), NineDoorError> {
+    if value.is_empty() {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("{label} must not be empty"),
+        ));
+    }
+    if value.len() > max_len {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("{label} exceeds max length {}", max_len),
+        ));
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("{label} must be alphanumeric, '-' or '_'"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_extended_token(value: &str, max_len: usize, label: &str) -> Result<(), NineDoorError> {
+    if value.is_empty() {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("{label} must not be empty"),
+        ));
+    }
+    if value.len() > max_len {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("{label} exceeds max length {}", max_len),
+        ));
+    }
+    if value == "." || value == ".." {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("{label} must not be '.' or '..'"),
+        ));
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' || ch == ':')
+    {
+        return Err(NineDoorError::protocol(
+            ErrorCode::Invalid,
+            format!("{label} must be alphanumeric, '-', '_', '.', or ':'"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_schedule_id(id: &str) -> Result<(), NineDoorError> {
+    validate_simple_token(id, MAX_SCHEDULE_ID_LEN, "schedule id")
+}
+
+fn validate_schedule_role(role: &str) -> Result<(), NineDoorError> {
+    validate_simple_token(role, MAX_SCHEDULE_ROLE_LEN, "schedule role")
+}
+
+fn validate_lease_id(id: &str) -> Result<(), NineDoorError> {
+    validate_simple_token(id, MAX_LEASE_ID_LEN, "lease id")
+}
+
+fn validate_lease_subject(subject: &str) -> Result<(), NineDoorError> {
+    validate_simple_token(subject, MAX_LEASE_SUBJECT_LEN, "lease subject")
+}
+
+fn validate_lease_resource(resource: &str) -> Result<(), NineDoorError> {
+    validate_extended_token(resource, MAX_LEASE_RESOURCE_LEN, "lease resource")
+}
+
+fn validate_lease_reason(reason: &str) -> Result<(), NineDoorError> {
+    validate_extended_token(reason, MAX_LEASE_REASON_LEN, "lease reason")
+}
+
+fn validate_export_id(id: &str) -> Result<(), NineDoorError> {
+    validate_simple_token(id, MAX_EXPORT_ID_LEN, "export id")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -807,88 +891,4 @@ mod tests {
             }
         ));
     }
-}
-
-fn validate_simple_token(value: &str, max_len: usize, label: &str) -> Result<(), NineDoorError> {
-    if value.is_empty() {
-        return Err(NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} must not be empty"),
-        ));
-    }
-    if value.len() > max_len {
-        return Err(NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} exceeds max length {}", max_len),
-        ));
-    }
-    if !value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
-        return Err(NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} must be alphanumeric, '-' or '_'"),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_extended_token(value: &str, max_len: usize, label: &str) -> Result<(), NineDoorError> {
-    if value.is_empty() {
-        return Err(NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} must not be empty"),
-        ));
-    }
-    if value.len() > max_len {
-        return Err(NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} exceeds max length {}", max_len),
-        ));
-    }
-    if value == "." || value == ".." {
-        return Err(NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} must not be '.' or '..'"),
-        ));
-    }
-    if !value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' || ch == ':')
-    {
-        return Err(NineDoorError::protocol(
-            ErrorCode::Invalid,
-            format!("{label} must be alphanumeric, '-', '_', '.', or ':'"),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_schedule_id(id: &str) -> Result<(), NineDoorError> {
-    validate_simple_token(id, MAX_SCHEDULE_ID_LEN, "schedule id")
-}
-
-fn validate_schedule_role(role: &str) -> Result<(), NineDoorError> {
-    validate_simple_token(role, MAX_SCHEDULE_ROLE_LEN, "schedule role")
-}
-
-fn validate_lease_id(id: &str) -> Result<(), NineDoorError> {
-    validate_simple_token(id, MAX_LEASE_ID_LEN, "lease id")
-}
-
-fn validate_lease_subject(subject: &str) -> Result<(), NineDoorError> {
-    validate_simple_token(subject, MAX_LEASE_SUBJECT_LEN, "lease subject")
-}
-
-fn validate_lease_resource(resource: &str) -> Result<(), NineDoorError> {
-    validate_extended_token(resource, MAX_LEASE_RESOURCE_LEN, "lease resource")
-}
-
-fn validate_lease_reason(reason: &str) -> Result<(), NineDoorError> {
-    validate_extended_token(reason, MAX_LEASE_REASON_LEN, "lease reason")
-}
-
-fn validate_export_id(id: &str) -> Result<(), NineDoorError> {
-    validate_simple_token(id, MAX_EXPORT_ID_LEN, "export id")
 }

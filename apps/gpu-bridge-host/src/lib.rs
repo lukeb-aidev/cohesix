@@ -11,6 +11,8 @@
 //! `/gpu` mount. When built with the `nvml` feature the bridge performs real
 //! discovery through `nvml-wrapper`.
 
+#[cfg(feature = "cuda")]
+use anyhow::Context;
 use anyhow::{anyhow, ensure, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohsh_core::MAX_ECHO_LEN;

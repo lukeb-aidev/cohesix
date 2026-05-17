@@ -3667,6 +3667,9 @@ def summarize_wifi_failure_detail(
 ) -> tuple[str, str, int]:
     """Find the best source line for the current Wi-Fi gate blocker."""
 
+    if wifi_blocker == "none":
+        return "none", "none", 0
+
     socram_core_ctrl_stage: str | None = None
     armcr4_prereset_ioctrl_active = False
     exact = "none"

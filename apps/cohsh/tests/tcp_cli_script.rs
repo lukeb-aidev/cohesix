@@ -1,14 +1,15 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate TCP CLI script execution with framed console protocol.
 // Author: Lukas Bower
 #![cfg(feature = "tcp")]
 
+use std::fs;
 use std::io::{BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -91,6 +92,84 @@ fn tcp_script_executes_against_basic_server() {
         .stdout(predicate::str::contains("queen boot"))
         .stdout(predicate::str::contains("heart line"))
         .stdout(predicate::str::contains("closing session"));
+}
+
+#[test]
+fn tcp_script_forwards_netstats_and_nettest() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+    let port = listener.local_addr().expect("listener addr").port();
+    thread::spawn(move || {
+        if let Some(stream) = listener.incoming().next() {
+            let mut stream = stream.expect("accept stream");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            while let Some(line) = read_frame(&mut reader) {
+                let trimmed = line.trim();
+                if trimmed == format!("AUTH {TEST_AUTH_TOKEN}") {
+                    write_frame(&mut stream, "OK AUTH");
+                } else if trimmed.starts_with("ATTACH") {
+                    write_frame(&mut stream, "OK ATTACH role=queen");
+                } else if trimmed.eq_ignore_ascii_case("netstats") {
+                    write_frame(&mut stream, "OK NETSTATS");
+                    thread::sleep(Duration::from_millis(20));
+                    write_frame(
+                        &mut stream,
+                        "netstats: mode=dhcp policy=wifi active=wifi standby=none addr_src=dhcp-lease ip=192.168.86.154 gateway=192.168.86.1 dhcp=bound",
+                    );
+                    write_frame(
+                        &mut stream,
+                        "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=0 eapol_secure=1",
+                    );
+                    write_frame(
+                        &mut stream,
+                        "netstatus: ip=192.168.86.154 gateway=192.168.86.1 src=dhcp-lease dhcp=bound",
+                    );
+                } else if trimmed.eq_ignore_ascii_case("nettest") {
+                    write_frame(
+                        &mut stream,
+                        "ERR NETTEST reason=policy detail=wifi-host-eapol-pending",
+                    );
+                } else if trimmed.eq_ignore_ascii_case("quit") {
+                    write_frame(&mut stream, "OK QUIT");
+                    break;
+                } else if trimmed == "PING" {
+                    write_frame(&mut stream, "PONG");
+                    write_frame(&mut stream, "OK PING reply=pong");
+                }
+            }
+        }
+    });
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let script_path = std::env::temp_dir().join(format!("cohsh-nettest-{unique}.coh"));
+    fs::write(
+        &script_path,
+        "attach queen\nnetstats\nEXPECT OK\nnettest\nEXPECT ERR\nEXPECT SUBSTR wifi-host-eapol-pending\nquit\n",
+    )
+    .expect("write script");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
+    let assert = cmd
+        .arg("--transport")
+        .arg("tcp")
+        .arg("--script")
+        .arg(&script_path)
+        .env("COHSH_TCP_PORT", port.to_string())
+        .env("COHSH_AUTH_TOKEN", TEST_AUTH_TOKEN)
+        .timeout(Duration::from_secs(10))
+        .assert();
+
+    let _ = fs::remove_file(&script_path);
+    assert
+        .success()
+        .stdout(predicate::str::contains("netstatus: ip=192.168.86.154"))
+        .stdout(predicate::str::contains(
+            "[console] ERR NETTEST reason=policy detail=wifi-host-eapol-pending",
+        ))
+        .stdout(predicate::str::contains("unknown command 'netstats'").not())
+        .stdout(predicate::str::contains("unknown command 'nettest'").not());
 }
 
 #[test]

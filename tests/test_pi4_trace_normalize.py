@@ -4283,6 +4283,28 @@ def test_gate_summary_treats_peer_assisted_nettest_as_ready_for_netstats() -> No
     assert gates.wifi_blocker == "netstats-missing"
 
 
+def test_gate_summary_clears_exact_after_peer_assisted_netstats_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+            "server=192.168.10.1 lease_s=3600",
+            "[net-selftest] result tx_ok=true udp_echo_ok=false tcp_ok=false "
+            "console_ok=true peer_assisted_ok=true",
+            "OK NETTEST detail=started",
+            "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+            "netstats: mode=dhcp policy=wifi active=wifi standby=none "
+            "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
+            "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 10
+    assert gates.wifi_blocker == "none"
+    assert gates.wifi_exact == "none"
+
+
 def test_gate_summary_does_not_downgrade_remote_cohsh_after_peer_echo_missing() -> None:
     events = normalizer.parse_events(
         [

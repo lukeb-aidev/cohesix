@@ -103,8 +103,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Complete |
 | [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | In Progress |
 | [26a](#26a) | Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) | Complete |
-| [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | In Progress |
-| [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Blocked on 26b |
+| [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | Complete |
+| [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Not Started |
 | [26d](#26d) | seL4 15 Baseline Refresh + Reference Manual Realignment | Pending |
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
@@ -6226,6 +6226,8 @@ Deliverables:
 ## Milestone 26b — Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) <a id="26b"></a>
 [Milestones](#Milestones)
 
+**Status:** Complete — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi, and QEMU compatibility guardrails are in tree. Closure evidence is recorded in `docs/audit/M26B_COMPLETION_EVIDENCE.md`: the QEMU staged Test Plan state dir is `out/test-plan/m26b-qemu-20260517T111933Z`, and the Pi 4 hardware evidence pairs `/Users/lukasbower/pi4-serial-20260517-204318.log` with `out/test-plan/m26b-pi4-evidence-20260517T111457Z/pi4-combined-serial-cohsh.log`, proving `USB_GATE=10`, `USB_BLOCKER=none`, `WIFI_GATE=10`, `WIFI_BLOCKER=none`, `WIFI_EXACT=none`, Wi-Fi DHCP lease `192.168.86.154`, `active=wifi`, `addr_src=dhcp-lease`, `dhcp=bound`, and `eapol_secure=1`.
+
 **Why now (operator continuity):**  
 Milestone 26a brings up deterministic static IPv4 on Pi 4 wired NIC. Milestone 26b introduces a minimal DHCP path so operators can boot and diagnose in less-controlled edge environments without hand-editing static addresses, while preserving `no_std`, bounded behavior, and existing console/9P semantics.
 
@@ -6534,7 +6536,7 @@ Deliverables:
 **Why now (reviewer trust):**
 Milestones 25-26b establish technical capability, transport breadth, and Pi 4 bring-up evidence, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
-**Current planning status:** 26c is blocked until Milestone 26b is marked complete with checked-in Pi 4 DHCP/Wi-Fi hardware evidence and QEMU compatibility evidence. While 26b remains `In Progress`, 26c tasks may be prepared as design/audit work only; they must not be treated as milestone closure or as proof that the as-built system already satisfies the 26b contract.
+**Current planning status:** Not Started. Milestone 26b is complete with Pi 4 DHCP/Wi-Fi hardware evidence and QEMU compatibility evidence, so 26c is no longer blocked by 26b; no 26c cleanup, refactor, target-qualified runner implementation, or closure evidence has started yet.
 
 **Non-negotiable constraints:**
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, console grammar, Secure9P, or release-behavior changes are permitted under a "refactor" or "humanizing" label.
@@ -6556,10 +6558,10 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Tracked vendored/reference Markdown under `third_party/**/*.md` and tracked in-repo seL4/reference Markdown under `seL4/**/*.md` are inventory-only unless provenance, licensing, or linkage is wrong. If a nested external checkout exists, 26c inventories only the files tracked by the main Cohesix repository.
 - Multi-agent execution is mandatory for 26c scope: evidence generation, CI/test-plan plumbing, parity auditing, and cleanup work must have disjoint ownership so boundary-sensitive edits are not mixed with prose-only cleanup.
 - Milestone closure is blocked until the full target-qualified Test Plan succeeds on QEMU and Pi 4 with no `INCOMPLETE` markers, and Stage 05 verifies that required target artifacts exist in the active state dir before writing `stage_05.done`.
-- Milestone closure is also blocked until the 26c as-built blocker ledger is empty or every remaining item is explicitly deferred to a named later milestone with a non-overlapping dependency boundary. The initial blocker set includes: 26b Pi 4 DHCP/Wi-Fi evidence, Pi 4 network IR/docs validation drift, target-qualified Test Plan runner implementation, Secure9P NUL and `..` path rejection, removal or reclassification of any non-console in-VM TCP listener, HAL ownership for driver MMIO/physical-address access, generated-snippet embedding drift in canonical docs, fixture/default secret handling in release/operator paths, placeholder auth defaults in host tools/docs, and the mismatch between worker documentation and current root-task worker task spawning.
+- Milestone closure is also blocked until the 26c as-built blocker ledger is empty or every remaining item is explicitly deferred to a named later milestone with a non-overlapping dependency boundary. The initial blocker set includes: Pi 4 network IR/docs validation drift, target-qualified Test Plan runner implementation, Secure9P NUL and `..` path rejection, removal or reclassification of any non-console in-VM TCP listener, HAL ownership for driver MMIO/physical-address access, generated-snippet embedding drift in canonical docs, fixture/default secret handling in release/operator paths, placeholder auth defaults in host tools/docs, and the mismatch between worker documentation and current root-task worker task spawning.
 
 ### Prerequisite
-- Milestone **26b** completed (Pi 4 DHCP baseline + QEMU compatibility guardrails), including checked-in Pi 4 join/DHCP evidence and regenerated profile-specific manifest evidence. If 26b is still marked `In Progress`, 26c remains blocked.
+- Milestone **26b** completed (Pi 4 DHCP baseline + QEMU compatibility guardrails), including checked-in Pi 4 join/DHCP evidence and regenerated profile-specific manifest evidence. This prerequisite is now satisfied, but 26c has not started.
 
 ### Goal
 Refactor and humanize the authored Cohesix code and documentation surfaces without protocol or behavioral regression by:

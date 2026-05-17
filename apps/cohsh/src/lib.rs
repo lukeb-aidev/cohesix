@@ -558,6 +558,19 @@ pub trait Transport {
     /// Append bytes to an append-only file within the NineDoor namespace.
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()>;
 
+    /// Run a root-console command over transports that expose console verbs.
+    fn console_command(
+        &mut self,
+        _session: &Session,
+        _command: &str,
+        _expected_ack: &str,
+    ) -> Result<Vec<String>> {
+        Err(anyhow!(
+            "transport '{}' does not support root console commands",
+            self.kind()
+        ))
+    }
+
     /// Append multiple payloads to the same file in sequence.
     fn write_batch(
         &mut self,
@@ -634,6 +647,15 @@ where
 
     fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {
         (**self).write(session, path, payload)
+    }
+
+    fn console_command(
+        &mut self,
+        session: &Session,
+        command: &str,
+        expected_ack: &str,
+    ) -> Result<Vec<String>> {
+        (**self).console_command(session, command, expected_ack)
     }
 
     fn write_batch(
@@ -2849,6 +2871,30 @@ impl<T: Transport, W: Write> Shell<T, W> {
         }
     }
 
+    fn run_console_command(&mut self, command: &str, expected_ack: &str) -> Result<()> {
+        let session = self
+            .session
+            .as_ref()
+            .context("attach to a session before running console commands")?;
+        let result = self
+            .transport
+            .console_command(session, command, expected_ack);
+        let drain_result = self.drain_ack_lines();
+        match result {
+            Ok(lines) => {
+                drain_result?;
+                for line in lines {
+                    self.write_line(&line)?;
+                }
+                Ok(())
+            }
+            Err(err) => {
+                let _ = drain_result;
+                Err(err)
+            }
+        }
+    }
+
     fn read_lifecycle_state(&mut self, session: &Session) -> Result<LifecycleState> {
         let lines = self.transport.read(session, PROC_LIFECYCLE_STATE_PATH)?;
         let _ = self.transport.drain_acknowledgements();
@@ -3333,6 +3379,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(console_lines[8])?;
                 self.write_line(console_lines[9])?;
                 self.write_line(console_lines[10])?;
+                self.write_line(console_lines[11])?;
+                self.write_line(console_lines[12])?;
                 self.write_line("  bind <src> <dst>             - Bind namespace path")?;
                 self.write_line("  mount <service> <path>       - Mount service namespace")?;
                 self.write_line(
@@ -3341,7 +3389,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(
                     "  telemetry push <src> --device <id> - Push bounded telemetry segment",
                 )?;
-                self.write_line(console_lines[11])?;
+                self.write_line(console_lines[13])?;
                 Ok(CommandStatus::Continue)
             }
             "tail" => {
@@ -3455,6 +3503,20 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 {
                     Err(anyhow!("tcp-diag is available only in TCP-enabled builds"))
                 }
+            }
+            "nettest" => {
+                if parts.next().is_some() {
+                    return Err(anyhow!("nettest does not take any arguments"));
+                }
+                self.run_console_command("nettest", "NETTEST")?;
+                Ok(CommandStatus::Continue)
+            }
+            "netstats" => {
+                if parts.next().is_some() {
+                    return Err(anyhow!("netstats does not take any arguments"));
+                }
+                self.run_console_command("netstats", "NETSTATS")?;
+                Ok(CommandStatus::Continue)
             }
             "echo" => {
                 let payload_start = line[4..].trim_start();
@@ -4675,6 +4737,31 @@ mod tests {
         fn write(&mut self, _session: &Session, _path: &str, _payload: &[u8]) -> Result<()> {
             Ok(())
         }
+
+        fn console_command(
+            &mut self,
+            _session: &Session,
+            command: &str,
+            expected_ack: &str,
+        ) -> Result<Vec<String>> {
+            Ok(vec![format!(
+                "stub console command={command} ack={expected_ack}"
+            )])
+        }
+    }
+
+    #[test]
+    fn network_console_verbs_forward_to_transport() {
+        let mut output = Vec::new();
+        {
+            let mut shell = Shell::new(RestoreTestTransport::default(), &mut output);
+            shell.attach(Role::Queen, None).unwrap();
+            shell.execute("netstats").expect("netstats should forward");
+            shell.execute("nettest").expect("nettest should forward");
+        }
+        let rendered = String::from_utf8(output).expect("utf8 output");
+        assert!(rendered.contains("stub console command=netstats ack=NETSTATS"));
+        assert!(rendered.contains("stub console command=nettest ack=NETTEST"));
     }
 
     #[test]
