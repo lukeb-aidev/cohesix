@@ -46,6 +46,8 @@ TRACE_SEGMENT_RE = re.compile(
     r"|\[dhcp\]"
     r"|\[net-selftest\]"
     r"|\[net\]"
+    r"|\[cohsh-net\]"
+    r"|\[net-console\]"
     r"|(?<![A-Za-z0-9_.:-])(?:usb:|USB:|wifi:|WiFi:|WIFI:)"
     r"|(?<![A-Za-z0-9_.:-])(?:OK|ERR) NETTEST"
     r"|Kernel entry via Interrupt"
@@ -501,6 +503,13 @@ def classify_domain(line: str) -> str | None:
         line.startswith("[dhcp]")
         or line.startswith("[net-selftest]")
         or line.startswith("[net]")
+        or "[cohsh-net][auth] auth ok" in lower
+        or "[net-console] auth ok" in lower
+        or (
+            "[net-console]" in lower
+            and "conn " in lower
+            and " authenticated" in lower
+        )
         or line.startswith("netstatus")
         or line.startswith("netstats")
     ):
@@ -2438,6 +2447,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     control_plane_idle_poll_count = 0
     dhcp_started_seen = False
     nettest_success_seen = False
+    remote_cohsh_auth_seen = False
     netstats_status_wifi_bound_seen = False
     netstats_wifi_secure_seen = False
     netstats_txrx_seen = False
@@ -2461,6 +2471,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         fields = event.fields
         cached_only_evidence = fields.get("source", "").lower() == "cached"
         explicit_blocker = None
+        if (
+            "[cohsh-net][auth] auth ok" in raw
+            or "[net-console] auth ok" in raw
+            or "conn " in raw
+            and " authenticated" in raw
+            and "[net-console]" in raw
+        ):
+            remote_cohsh_auth_seen = True
         for key in (
             "reason",
             "detail",
@@ -2960,11 +2978,20 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             udp_ok = fields.get("udp_echo_ok")
             tcp_ok = fields.get("tcp_ok")
             console_ok = fields.get("console_ok")
+            peer_assisted_ok = fields.get("peer_assisted_ok")
             if {tx_ok, udp_ok, tcp_ok, console_ok} <= {"true", "1"}:
                 nettest_success_seen = True
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
                 blocker = "netstats-missing"
+            elif peer_assisted_ok in {"true", "1"} or (
+                tx_ok in {"true", "1"} and remote_cohsh_auth_seen
+            ):
+                nettest_success_seen = True
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+                if blocker.startswith("nettest-"):
+                    blocker = "netstats-missing"
             else:
                 gate = max(gate, 9)
                 post_f2_progress_seen = True

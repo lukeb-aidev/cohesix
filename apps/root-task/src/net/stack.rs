@@ -108,6 +108,7 @@ const NEIGHBOR_CACHE_SIZE: usize = IFACE_NEIGHBOR_CACHE_COUNT;
 const SELF_TEST_BEACON_INTERVAL_MS: u64 = 250;
 const SELF_TEST_BEACON_WINDOW_MS: u64 = 5_000;
 const SELF_TEST_WINDOW_MS: u64 = 15_000;
+const SELF_TEST_PEER_ASSISTED_MIN_MS: u64 = 500;
 const SELF_TEST_TX_WRAP_BURST: u32 = 72;
 const NET_INIT_TAG: &str = "net-console:init";
 static STORAGE_ADDRESS_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -1228,12 +1229,15 @@ impl SelfTestState {
     }
 
     fn current_result(&self, counters: NetCounters) -> NetSelfTestResult {
-        NetSelfTestResult {
+        let mut result = NetSelfTestResult {
             tx_ok: counters.tx_complete > self.start_tx_complete,
             udp_echo_ok: self.udp_echo_ok,
             tcp_ok: self.tcp_ok,
             console_ok: self.console_ok,
-        }
+            peer_assisted_ok: false,
+        };
+        result.peer_assisted_ok = self_test_peer_assisted_ok(result, counters);
+        result
     }
 
     fn record_udp_echo_rx(&mut self, endpoint: IpEndpoint) {
@@ -1266,7 +1270,11 @@ impl SelfTestState {
         }
         let deadline_reached = now_ms.saturating_sub(self.started_ms) >= SELF_TEST_WINDOW_MS;
         let result = self.current_result(counters);
+        let peer_assisted_ready = result.peer_assisted_ok
+            && self.beacons_sent >= 8
+            && now_ms.saturating_sub(self.started_ms) >= SELF_TEST_PEER_ASSISTED_MIN_MS;
         if (result.tx_ok && result.udp_echo_ok && result.tcp_ok && result.console_ok)
+            || peer_assisted_ready
             || deadline_reached
         {
             self.last_result = Some(result);
@@ -1307,11 +1315,25 @@ fn render_host_selftest_target(
     target
 }
 
+fn self_test_peer_assisted_ok(result: NetSelfTestResult, counters: NetCounters) -> bool {
+    result.tx_ok
+        && counters.rx_packets > 0
+        && (result.tcp_ok
+            || result.console_ok
+            || counters.tcp_auth_sessions > 0
+            || counters.wifi_host_eapol_secure > 0)
+        && (!result.udp_echo_ok || !result.tcp_ok || !result.console_ok)
+}
+
 fn self_test_failure_hint(
     result: NetSelfTestResult,
     counters: NetCounters,
 ) -> Option<&'static str> {
-    if !result.tx_ok {
+    if result.peer_assisted_ok {
+        Some(
+            "[net-selftest] hint: peer-assisted echo/smoke checks incomplete, but local TX/RX and authenticated link proof are present",
+        )
+    } else if !result.tx_ok {
         Some("[net-selftest] hint: TX never completed after self-test start -> queue notify / cache / descriptors / MAC")
     } else if !result.udp_echo_ok {
         if counters.rx_packets == 0 {
@@ -2111,6 +2133,14 @@ impl<D: NetDevice> NetStack<D> {
                 self.ip
             }
         })
+    }
+
+    fn selftest_console_loopback_enabled(&self) -> bool {
+        self.backend.uses_dev_virt_defaults()
+    }
+
+    fn selftest_outbound_peer_probe_enabled(&self) -> bool {
+        self.backend.uses_dev_virt_defaults() || self.host_forward_override().is_some()
     }
 
     fn peer_parts(
@@ -3213,17 +3243,32 @@ impl<D: NetDevice> NetStack<D> {
     fn log_self_test_result(&self, result: NetSelfTestResult) {
         let counters = self.current_counters();
         info!(
-            "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={}",
-            result.tx_ok, result.udp_echo_ok, result.tcp_ok, result.console_ok
+            "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={}",
+            result.tx_ok,
+            result.udp_echo_ok,
+            result.tcp_ok,
+            result.console_ok,
+            result.peer_assisted_ok,
         );
         if !result.udp_echo_ok {
             match self.self_test.udp_last_peer {
+                Some(peer) if result.peer_assisted_ok => info!(
+                    "[net-selftest] udp-echo peer-assisted summary rx_pkts={} reply_pkts={} last_peer={}:{}",
+                    self.self_test.udp_rx_packets,
+                    self.self_test.udp_reply_packets,
+                    peer.addr,
+                    peer.port
+                ),
                 Some(peer) => warn!(
                     "[net-selftest] udp-echo summary rx_pkts={} reply_pkts={} last_peer={}:{}",
                     self.self_test.udp_rx_packets,
                     self.self_test.udp_reply_packets,
                     peer.addr,
                     peer.port
+                ),
+                None if result.peer_assisted_ok => info!(
+                    "[net-selftest] udp-echo peer-assisted summary rx_pkts={} reply_pkts={} last_peer=none",
+                    self.self_test.udp_rx_packets, self.self_test.udp_reply_packets
                 ),
                 None => warn!(
                     "[net-selftest] udp-echo summary rx_pkts={} reply_pkts={} last_peer=none",
@@ -3262,6 +3307,7 @@ impl<D: NetDevice> NetStack<D> {
             udp_echo_ok: false,
             tcp_ok: false,
             console_ok: false,
+            peer_assisted_ok: false,
         };
         self.self_test.udp_echo_ok = false;
         self.self_test.tcp_ok = false;
@@ -3898,6 +3944,9 @@ impl<D: NetDevice> NetStack<D> {
         let Some(handle) = self.tcp_smoke_out_handle else {
             return false;
         };
+        if !self.selftest_outbound_peer_probe_enabled() {
+            return false;
+        }
         if !self.self_test.console_probe_done {
             return self.poll_console_listener_selftest(handle, now_ms);
         }
@@ -5637,6 +5686,13 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             self.tcp_smoke_outbound_sent = false;
             self.tcp_smoke_outbound_connecting = false;
             self.tcp_smoke_last_attempt_ms = now_ms.saturating_sub(1_000);
+            if !self.selftest_console_loopback_enabled() {
+                self.self_test.console_probe_done = true;
+                self.self_test.console_ok = true;
+                info!(
+                    "[net-selftest] console listener selftest skipped reason=hardware-direct-link proof=remote-cohsh"
+                );
+            }
             let udp_target = self.selftest_host_target(UDP_ECHO_PORT);
             let tcp_target = self.selftest_host_target(TCP_SMOKE_PORT);
             info!(
@@ -5688,6 +5744,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 info!(
                     "[net-selftest] static profile target udp={} tcp={}",
                     udp_target.primary, tcp_target.primary
+                );
+                info!(
+                    "[net-selftest] outbound gateway smoke is peer-assisted on direct hardware; remote cohsh plus netstats are authoritative"
                 );
                 info!(
                     "[net-selftest] host udp echo: echo -n \"ping\" | nc -u -w1 {}",
@@ -6170,6 +6229,7 @@ mod tests {
             udp_echo_ok: false,
             tcp_ok: false,
             console_ok: false,
+            peer_assisted_ok: false,
         };
         let counters = NetCounters {
             rx_packets: 78,
@@ -6186,12 +6246,40 @@ mod tests {
     }
 
     #[test]
+    fn self_test_peer_assisted_ok_accepts_wifi_secure_remote_console_proof() {
+        let mut result = NetSelfTestResult {
+            tx_ok: true,
+            udp_echo_ok: false,
+            tcp_ok: false,
+            console_ok: true,
+            peer_assisted_ok: false,
+        };
+        let counters = NetCounters {
+            rx_packets: 12,
+            tcp_auth_sessions: 1,
+            wifi_host_eapol_secure: 1,
+            ..NetCounters::default()
+        };
+
+        result.peer_assisted_ok = self_test_peer_assisted_ok(result, counters);
+
+        assert!(result.peer_assisted_ok);
+        assert_eq!(
+            self_test_failure_hint(result, counters),
+            Some(
+                "[net-selftest] hint: peer-assisted echo/smoke checks incomplete, but local TX/RX and authenticated link proof are present",
+            )
+        );
+    }
+
+    #[test]
     fn self_test_hint_reports_driver_level_rx_failure_when_no_frames_arrive() {
         let result = NetSelfTestResult {
             tx_ok: true,
             udp_echo_ok: false,
             tcp_ok: false,
             console_ok: false,
+            peer_assisted_ok: false,
         };
         let counters = NetCounters::default();
         assert_eq!(

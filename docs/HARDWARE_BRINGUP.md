@@ -437,7 +437,8 @@ Capture only these operator-facing lines from that session:
 - Current M26b USB cold-boot correction: prompt-safe high-BAR probing never treats a halted stop-state snapshot as sufficient to enter a poll-safe lane. The only active high-BAR attempt remains `origin=live-runtime-default` followed by mailbox reset, live HAL EXT_CFG proof, and `platform-reset-complete` cold start.
 - Boot must fail before ticket registration if:
 - attestation is required/enabled and policy cannot be satisfied.
-- `hw.local_seat.required=true` and local-seat initialization cannot be satisfied.
+- `hw.local_seat.required=true` and local-seat display initialization or the
+  bounded pre-net keyboard probe cannot be satisfied.
 - If `hw.local_seat.required=false`, runtime must degrade to serial-only diagnostics with explicit `[local-seat] degraded ...` boot lines.
 
 ## Bootloader/HAL ownership boundary

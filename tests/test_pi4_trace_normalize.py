@@ -4266,6 +4266,41 @@ def test_gate_summary_requires_netstats_for_wifi_ready() -> None:
     assert gates.wifi_blocker == "netstats-missing"
 
 
+def test_gate_summary_treats_peer_assisted_nettest_as_ready_for_netstats() -> None:
+    events = normalizer.parse_events(
+        [
+            "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+            "server=192.168.10.1 lease_s=3600",
+            "[net-selftest] result tx_ok=true udp_echo_ok=false tcp_ok=false "
+            "console_ok=true peer_assisted_ok=true",
+            "OK NETTEST detail=started",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 9
+    assert gates.wifi_blocker == "netstats-missing"
+
+
+def test_gate_summary_does_not_downgrade_remote_cohsh_after_peer_echo_missing() -> None:
+    events = normalizer.parse_events(
+        [
+            "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+            "server=192.168.10.1 lease_s=3600",
+            "[cohsh-net][auth] auth OK, session established (conn_id=1)",
+            "[net-selftest] result tx_ok=true udp_echo_ok=false tcp_ok=false "
+            "console_ok=false",
+            "OK NETTEST detail=started",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 9
+    assert gates.wifi_blocker == "netstats-missing"
+
+
 def test_gate_summary_accepts_host_eapol_secure_join_proof() -> None:
     events = normalizer.parse_events([JOIN_COMPLETE_HOST_EAPOL])
 

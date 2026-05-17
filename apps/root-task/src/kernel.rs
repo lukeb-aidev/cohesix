@@ -2620,6 +2620,7 @@ fn init_local_seat_runtime<P: Platform>(
         && xhci_handoff_safe
         && xhci_stop_state_snapshot.is_some();
     let local_seat_hints = local_seat::LocalSeatPlatformHints {
+        required: local_seat_required,
         xhci_mmio_hint,
         xhci_pci_cmd,
         xhci_handoff_ready,
@@ -4472,14 +4473,29 @@ fn bootstrap<P: Platform>(
         runtime.preseed_backend_keyboard_mmio();
         boot_log::force_uart_line("[local-seat] runtime preseed hook end");
         boot_log::force_uart_line("[local-seat] cold-boot keyboard probe begin stage=pre-net");
-        runtime.probe_backend_keyboard_once();
+        let probe_result = runtime.probe_backend_keyboard_once();
         let mut probe_line = heapless::String::<128>::new();
         let _ = write!(
             probe_line,
-            "[local-seat] cold-boot keyboard probe end stage=pre-net polling_enabled={}",
+            "[local-seat] cold-boot keyboard probe end stage=pre-net result={} polling_enabled={}",
+            probe_result.as_str(),
             runtime.backend_keyboard_polling_enabled() as u8
         );
         boot_log::force_uart_line(probe_line.as_str());
+        if hardware.local_seat.required && !probe_result.attached() {
+            let mut line = heapless::String::<192>::new();
+            let _ = write!(
+                line,
+                "[local-seat] abort required=true reason=keyboard-probe-failed detail={}",
+                probe_result.as_str()
+            );
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
+            return Err(BootError::Fatal(format!(
+                "local-seat required keyboard probe failed: {}",
+                probe_result.as_str()
+            )));
+        }
     }
 
     if uart_mmio.is_none() {

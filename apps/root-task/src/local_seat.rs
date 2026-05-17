@@ -66,6 +66,35 @@ pub struct LocalSeatStatus {
     pub buffer_lines: u16,
 }
 
+/// Result of one bounded physical keyboard probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalSeatKeyboardProbeResult {
+    /// A backend keyboard was attached during the probe.
+    Attached,
+    /// A platform backend exists, but no keyboard became usable.
+    KeyboardUnavailable,
+    /// No platform backend is attached.
+    BackendUnavailable,
+}
+
+impl LocalSeatKeyboardProbeResult {
+    /// Returns whether the physical keyboard path is usable.
+    #[must_use]
+    pub const fn attached(self) -> bool {
+        matches!(self, Self::Attached)
+    }
+
+    /// Stable diagnostic token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Attached => "attached",
+            Self::KeyboardUnavailable => "keyboard-unavailable",
+            Self::BackendUnavailable => "backend-unavailable",
+        }
+    }
+}
+
 /// Keyboard ingress counters for isolating local-seat stalls without hot logs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LocalSeatKeyboardTrace {
@@ -155,6 +184,8 @@ pub struct LocalSeatXhciStopStateSnapshot {
 /// Optional platform-specific hints for local-seat backend attachment.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LocalSeatPlatformHints {
+    /// Whether local-seat keyboard/display proof is a boot requirement.
+    pub required: bool,
     /// Optional MMIO base for Pi4 xHCI.
     pub xhci_mmio_hint: Option<usize>,
     /// Legacy diagnostic PCI command hint from older Pi4 boot scripts.
@@ -315,12 +346,14 @@ impl LocalSeatRuntime {
     /// Run one bounded backend keyboard probe pass without permanently arming
     /// background polling unless the caller had already enabled it or the
     /// keyboard comes online during the probe.
-    pub fn probe_backend_keyboard_once(&mut self) {
+    pub fn probe_backend_keyboard_once(&mut self) -> LocalSeatKeyboardProbeResult {
         #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
         {
+            let mut result = LocalSeatKeyboardProbeResult::BackendUnavailable;
             let was_enabled = self.backend_keyboard_polling_enabled;
             if let Some(backend) = self.backend.as_mut() {
                 backend.arm_prompt_safe_probe();
+                result = LocalSeatKeyboardProbeResult::KeyboardUnavailable;
             }
             self.backend_keyboard_polling_enabled = true;
             self.poll_backend_keyboard();
@@ -333,6 +366,18 @@ impl LocalSeatRuntime {
             if !keep_polling {
                 self.backend_keyboard_poll_deferred_logged = false;
             }
+            if self
+                .backend
+                .as_ref()
+                .is_some_and(Pi4LocalSeat::keyboard_attached)
+            {
+                result = LocalSeatKeyboardProbeResult::Attached;
+            }
+            return result;
+        }
+        #[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+        {
+            LocalSeatKeyboardProbeResult::BackendUnavailable
         }
     }
 
@@ -470,6 +515,7 @@ pub fn attach_platform_backend(
     hints: LocalSeatPlatformHints,
 ) -> Result<(), LocalSeatBackendError> {
     let backend_hints = Pi4LocalSeatHints {
+        required: hints.required,
         xhci_mmio_hint: hints.xhci_mmio_hint,
         xhci_pci_cmd: hints.xhci_pci_cmd,
         xhci_handoff_ready: hints.xhci_handoff_ready,
@@ -762,6 +808,17 @@ mod tests {
         assert_eq!(
             state,
             LocalSeatInit::Degraded(LocalSeatDegradedReason::BackendUnavailable)
+        );
+    }
+
+    #[test]
+    fn keyboard_probe_result_labels_required_policy_boundary() {
+        assert!(LocalSeatKeyboardProbeResult::Attached.attached());
+        assert!(!LocalSeatKeyboardProbeResult::KeyboardUnavailable.attached());
+        assert!(!LocalSeatKeyboardProbeResult::BackendUnavailable.attached());
+        assert_eq!(
+            LocalSeatKeyboardProbeResult::KeyboardUnavailable.as_str(),
+            "keyboard-unavailable"
         );
     }
 

@@ -667,6 +667,8 @@ pub struct Pi4FramebufferHint {
 /// Optional platform hints for Pi4 local-seat attachment.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Pi4LocalSeatHints {
+    /// Whether the local-seat backend must provide both display and keyboard.
+    pub required: bool,
     /// Optional MMIO base for Pi4 xHCI.
     pub xhci_mmio_hint: Option<usize>,
     /// Legacy diagnostic PCI command hint from older boot scripts.
@@ -1923,6 +1925,13 @@ const fn display_init_failure_allows_headless(err: Pi4SeatError) -> bool {
     )
 }
 
+const fn display_init_failure_allows_headless_for_policy(
+    required: bool,
+    err: Pi4SeatError,
+) -> bool {
+    !required && display_init_failure_allows_headless(err)
+}
+
 impl Pi4LocalSeat {
     /// Initialize the Pi4 local-seat backend.
     pub fn new(hal: &mut KernelHal<'_>, hints: Pi4LocalSeatHints) -> Result<Self, Pi4SeatError> {
@@ -2027,7 +2036,7 @@ impl Pi4LocalSeat {
                 boot_log::force_uart_line("[local-seat] pi4 hdmi banner emitted");
                 Some(display)
             }
-            Err(err) if display_init_failure_allows_headless(err) => {
+            Err(err) if display_init_failure_allows_headless_for_policy(hints.required, err) => {
                 let mut line = heapless::String::<160>::new();
                 let _ = core::fmt::Write::write_fmt(
                     &mut line,
@@ -16247,6 +16256,14 @@ mod tests {
         ));
         assert!(!display_init_failure_allows_headless(
             Pi4SeatError::XhciInit
+        ));
+        assert!(display_init_failure_allows_headless_for_policy(
+            false,
+            Pi4SeatError::FramebufferUnavailable
+        ));
+        assert!(!display_init_failure_allows_headless_for_policy(
+            true,
+            Pi4SeatError::FramebufferUnavailable
         ));
     }
 

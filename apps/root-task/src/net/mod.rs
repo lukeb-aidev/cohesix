@@ -625,6 +625,9 @@ pub struct NetSelfTestResult {
     pub tcp_ok: bool,
     /// Whether the TCP console listener responded and recovered.
     pub console_ok: bool,
+    /// Whether local driver/DHCP/console proof succeeded while optional peer
+    /// echo/smoke helpers were not present.
+    pub peer_assisted_ok: bool,
 }
 
 /// Outcome when attempting to start a network self-test run.

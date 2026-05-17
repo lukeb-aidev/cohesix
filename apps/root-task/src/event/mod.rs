@@ -5030,7 +5030,7 @@ where
                             NetSelfTestStartResult::Started => {
                                 self.metrics.accepted_commands += 1;
                                 self.emit_console_line("[net-selftest] triggered");
-                                self.emit_ack_ok(verb_label, None);
+                                self.emit_ack_ok(verb_label, Some("detail=started"));
                             }
                             result => {
                                 self.metrics.denied_commands += 1;

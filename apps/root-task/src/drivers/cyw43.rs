@@ -78,6 +78,7 @@ const HOST_EAPOL_START_MAX: u8 = 12;
 const HOST_EAPOL_START_DIAGNOSTIC_AFTER_POLLS: u16 = 8_192;
 const HOST_EAPOL_RX_RESCUE_AFTER_STARTS: u8 = 2;
 const HOST_EAPOL_RX_RESCUE_AFTER_POST_ASSOC_POLLS: u16 = 4_096;
+const HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS: u16 = 1_024;
 const HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS: usize = 8_192;
 const HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS: usize = 16_384;
 const HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS: usize =
@@ -575,6 +576,17 @@ const fn ioctl_failed_status(err: &DriverError) -> Option<u32> {
 #[inline]
 fn optional_txbf_allows_failure(err: &DriverError) -> bool {
     ioctl_failed_status(err) == Some(BCME_UNSUPPORTED)
+}
+
+fn iovar_set_expected_optional_failure(name: &str, err: &DriverError) -> bool {
+    match name {
+        "txbf" => optional_txbf_allows_failure(err),
+        "sup_wpa" | "bsscfg:sup_wpa" => ioctl_failed_status(err) == Some(BCME_UNSUPPORTED),
+        _ => {
+            optional_control_plane_iovar_allows_failure(name, err)
+                || optional_linux_connect_policy_allows_failure(name, err)
+        }
+    }
 }
 
 fn write_wsec_pmk_payload(
@@ -1938,11 +1950,13 @@ fn host_eapol_post_assoc_rx_admission_due(
     associated: bool,
     m1_seen: bool,
     refreshed_after_assoc: bool,
+    post_assoc_polls: u16,
 ) -> bool {
     deferred_join_requires_host_eapol(deferred_join_state)
         && associated
         && !m1_seen
         && !refreshed_after_assoc
+        && post_assoc_polls >= HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS
 }
 
 fn host_eapol_rx_admission_rescue_due(
@@ -3465,7 +3479,7 @@ impl Cyw43NetDevice {
         info!("[cyw43] control-plane preinit step=txbf action=begin optional=yes");
         match self.set_iovar_u32("txbf", 1) {
             Ok(()) => info!("[cyw43] control-plane preinit step=txbf action=ready optional=yes"),
-            Err(err) if optional_txbf_allows_failure(&err) => warn!(
+            Err(err) if optional_txbf_allows_failure(&err) => info!(
                 "[cyw43] control-plane preinit step=txbf action=skip optional=yes reason=unsupported err={err}"
             ),
             Err(err) => {
@@ -3638,6 +3652,7 @@ impl Cyw43NetDevice {
             self.associated,
             self.host_wpa.m1_seen,
             self.host_wpa.rx_admission_refreshed_after_assoc,
+            polls,
         ) {
             return true;
         }
@@ -3901,13 +3916,14 @@ impl Cyw43NetDevice {
             if matches!(completion_rule, JoinCompletionRule::HostEapolRequired) {
                 self.arm_host_eapol_proof_window("join-submit", ssid.len(), psk.len());
                 self.service_host_eapol_proof_window("join-submit", wait_for_completion);
+                if self.host_eapol_secure_complete() {
+                    self.deferred_join_state = DeferredJoinState::Disabled;
+                    info!(
+                        "[cyw43] join complete mode=join-submit completion_rule=host-eapol-required result=host-eapol-complete action=allow-dhcp"
+                    );
+                    return Ok(());
+                }
                 if wait_for_completion {
-                    if self.host_eapol_secure_complete() {
-                        info!(
-                            "[cyw43] join complete mode=join-submit completion_rule=host-eapol-required result=host-eapol-complete action=allow-dhcp"
-                        );
-                        return Ok(());
-                    }
                     self.mark_host_eapol_required("join-submit", ssid.len(), psk.len());
                     Err(DriverError::Protocol("host-eapol-required"))
                 } else {
@@ -4030,7 +4046,7 @@ impl Cyw43NetDevice {
                     break;
                 }
             }
-            if self.host_eapol_rx_packets != start_eapol && self.host_eapol_secure_complete() {
+            if self.host_eapol_secure_complete() {
                 break;
             }
             if !self.associated {
@@ -4041,6 +4057,9 @@ impl Cyw43NetDevice {
                 post_assoc_polls = post_assoc_polls.saturating_add(1);
                 if post_assoc_polls <= u16::MAX as usize {
                     let post_assoc_poll = post_assoc_polls as u16;
+                    if self.host_eapol_secure_complete() {
+                        break;
+                    }
                     if !self.ensure_host_eapol_post_assoc_rx_admission(mode, post_assoc_poll)
                         || !self.ensure_host_eapol_rx_admission_rescue(mode, post_assoc_poll)
                     {
@@ -4174,16 +4193,15 @@ impl Cyw43NetDevice {
                 if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED)
                     && firmware_supplicant_wrapper_fallback_allowed() =>
             {
-                warn!(
+                info!(
                     "[cyw43] join: firmware-supplicant path=primary-plain unsupported status=0x{BCME_UNSUPPORTED:08x} action=try-bsscfg-wrapper reason=known-good-cyw43-fwsup-shape"
                 );
                 self.enable_wpa2_firmware_supplicant_bsscfg_wrapper()
             }
             Err(err) if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED) => {
-                warn!(
+                info!(
                     "[cyw43] join: firmware-supplicant path=primary-plain unsupported status=0x{BCME_UNSUPPORTED:08x} action=continue-host-eapol-required reason=firmware-offload-unavailable"
                 );
-                self.disable_wpa2_firmware_supplicant_host_path("primary-plain-unsupported", false);
                 Ok(FirmwareSupplicantPath::Unsupported)
             }
             Err(err) => Err(err),
@@ -4207,10 +4225,9 @@ impl Cyw43NetDevice {
                 Ok(FirmwareSupplicantPath::BsscfgWrapper)
             }
             Err(err) if ioctl_failed_status(&err) == Some(BCME_UNSUPPORTED) => {
-                warn!(
+                info!(
                     "[cyw43] join: firmware-supplicant path=bsscfg-wrapper unsupported status=0x{BCME_UNSUPPORTED:08x} action=continue-host-eapol-required reason=firmware-offload-unavailable"
                 );
-                self.disable_wpa2_firmware_supplicant_host_path("bsscfg-wrapper-unsupported", true);
                 Ok(FirmwareSupplicantPath::Unsupported)
             }
             Err(err) => Err(err),
@@ -4226,7 +4243,7 @@ impl Cyw43NetDevice {
             Ok(()) => info!(
                 "[cyw43] join: firmware-supplicant action=disable-host-path path=primary-plain reason={reason} result=ready value=0"
             ),
-            Err(err) if firmware_supplicant_disable_allows_failure(&err) => warn!(
+            Err(err) if firmware_supplicant_disable_allows_failure(&err) => info!(
                 "[cyw43] join: firmware-supplicant action=disable-host-path path=primary-plain reason={reason} result=unsupported optional=yes value=0 err={err}"
             ),
             Err(err) => warn!(
@@ -4239,7 +4256,7 @@ impl Cyw43NetDevice {
                 Ok(()) => info!(
                     "[cyw43] join: firmware-supplicant action=disable-host-path path=bsscfg-wrapper reason={reason} result=ready bsscfgidx={BSSCFG_PRIMARY_INDEX} value=0"
                 ),
-                Err(err) if firmware_supplicant_disable_allows_failure(&err) => warn!(
+                Err(err) if firmware_supplicant_disable_allows_failure(&err) => info!(
                     "[cyw43] join: firmware-supplicant action=disable-host-path path=bsscfg-wrapper reason={reason} result=unsupported optional=yes bsscfgidx={BSSCFG_PRIMARY_INDEX} value=0 err={err}"
                 ),
                 Err(err) => warn!(
@@ -5142,6 +5159,9 @@ impl Cyw43NetDevice {
                 if let Some(exact_error) = join_security_iovar_failure_exact_error(name, &err) {
                     warn!("[cyw43] iovar set failed name={name} err={err} exact={exact_error}");
                     Err(DriverError::Hal(HalError::Unsupported(exact_error)))
+                } else if iovar_set_expected_optional_failure(name, &err) {
+                    info!("[cyw43] optional iovar set skipped name={name} err={err}");
+                    Err(err)
                 } else {
                     warn!("[cyw43] iovar set failed name={name} err={err}");
                     Err(err)
@@ -7213,9 +7233,9 @@ mod tests {
         HOST_EAPOL_DEFERRED_POLL_LIMIT, HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS,
         HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS, HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS,
         HOST_EAPOL_KEY_DATA_MAX_LEN, HOST_EAPOL_MCAST_LIST_PAYLOAD_LEN,
-        HOST_EAPOL_RX_RESCUE_AFTER_POST_ASSOC_POLLS, HOST_EAPOL_RX_RESCUE_AFTER_STARTS,
-        HOST_EAPOL_START_DIAGNOSTIC_AFTER_POLLS, HOST_EAPOL_START_MAX,
-        IOCTL_NO_PROGRESS_AFTER_NONMATCHING_LIMIT, IOCTL_WAIT_LOOPS,
+        HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS, HOST_EAPOL_RX_RESCUE_AFTER_POST_ASSOC_POLLS,
+        HOST_EAPOL_RX_RESCUE_AFTER_STARTS, HOST_EAPOL_START_DIAGNOSTIC_AFTER_POLLS,
+        HOST_EAPOL_START_MAX, IOCTL_NO_PROGRESS_AFTER_NONMATCHING_LIMIT, IOCTL_WAIT_LOOPS,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_FINAL_BOUNDED, IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE,
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
         LINUX_BSSCFG_JOIN_PAYLOAD_LEN, LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN,
@@ -7996,6 +8016,10 @@ mod tests {
         assert_eq!(HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS, 8_192);
         assert_eq!(HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS, 16_384);
         assert!(
+            HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS
+                < HOST_EAPOL_RX_RESCUE_AFTER_POST_ASSOC_POLLS
+        );
+        assert!(
             (HOST_EAPOL_RX_RESCUE_AFTER_POST_ASSOC_POLLS as usize)
                 < (HOST_EAPOL_START_DIAGNOSTIC_AFTER_POLLS as usize)
         );
@@ -8168,7 +8192,7 @@ mod tests {
     }
 
     #[test]
-    fn host_eapol_refreshes_rx_admission_once_after_association() {
+    fn host_eapol_refreshes_rx_admission_after_bounded_post_assoc_wait() {
         let pending = DeferredJoinState::Pending {
             completion: JoinCompletionState::default(),
             polls: 0,
@@ -8176,23 +8200,43 @@ mod tests {
             completion_rule: JoinCompletionRule::HostEapolRequired,
         };
 
+        assert!(!host_eapol_post_assoc_rx_admission_due(
+            pending, true, false, false, 1
+        ));
         assert!(host_eapol_post_assoc_rx_admission_due(
-            pending, true, false, false
+            pending,
+            true,
+            false,
+            false,
+            HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS
         ));
         assert!(!host_eapol_post_assoc_rx_admission_due(
-            pending, false, false, false
+            pending,
+            false,
+            false,
+            false,
+            HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS
         ));
         assert!(!host_eapol_post_assoc_rx_admission_due(
-            pending, true, true, false
+            pending,
+            true,
+            true,
+            false,
+            HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS
         ));
         assert!(!host_eapol_post_assoc_rx_admission_due(
-            pending, true, false, true
+            pending,
+            true,
+            false,
+            true,
+            HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS
         ));
         assert!(!host_eapol_post_assoc_rx_admission_due(
             DeferredJoinState::Disabled,
             true,
             false,
-            false
+            false,
+            HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS
         ));
     }
 

@@ -768,6 +768,12 @@ power/reset state.
   truly absent or Wi-Fi credentials are missing. CYW43 protocol, HAL transport,
   firmware, join, and post-Function-2 errors are Wi-Fi gate evidence and must
   remain fatal so gates 7 and 8 cannot be hidden by the wired backend.
+- Once host-EAPOL secure completion is proven during the join-submit proof
+  window, the CYW43 path releases DHCP immediately and must not emit stale
+  `wifi-host-eapol-pending` / `data=blocked` diagnostics. Optional
+  peer-assisted `nettest` echo/smoke probes are reported separately from
+  driver-level TX/RX/DHCP/remote-`cohsh` proof, so a missing router-side echo
+  listener is not a Wi-Fi blocker and cannot spam the console.
 - Post-attach SDPCM glom RX is bounded: descriptor lists are capped, superframe
   subframes are deaggregated into the normal data/event/EAPOL path, and malformed
   or oversized glom evidence remains explicit but UART-capped instead of silent or
@@ -957,7 +963,11 @@ active path is Cohesix-owned cold start:
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local
   seat is enabled, explicit Wi-Fi net-console bring-up, and Auto policy with
   Wi-Fi credentials, proceed only after that pre-net USB probe has completed;
-  the root console then waits in the event pump until Wi-Fi association and
+  if `hw.local_seat.required=true`, a failed display init or pre-net keyboard
+  probe is fatal before ticket publication. When `required=false`, the same
+  failures degrade to serial-only diagnostics with explicit `[local-seat]`
+  boot lines and no repeated xHCI probing.
+  The root console then waits in the event pump until Wi-Fi association and
   addressing are reachable. USB and Wi-Fi may only be interleaved at explicit
   boot/event-pump phase boundaries where the root task is not holding
   overlapping HAL ownership.
