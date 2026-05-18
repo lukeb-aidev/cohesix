@@ -14,20 +14,20 @@ use crate::debug::maybe_report_str_write;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
 pub const MAX_PAYLOAD: usize = 1200;
-const MAX_FRAMES_PER_POLL: usize = 16;
-const MAX_BYTES_PER_POLL: usize = 16 * 1024;
-const LOG_Q_CAP: usize = 192;
-const CTRL_Q_CAP: usize = 48;
+const MAX_FRAMES_PER_POLL: usize = 2;
+const MAX_BYTES_PER_POLL: usize = 1_600;
+const LOG_Q_CAP: usize = 64;
+const CTRL_Q_CAP: usize = 16;
 const LINE_CAP: usize = DEFAULT_LINE_CAPACITY;
 const TOTAL_QUEUE_CAP: usize = LOG_Q_CAP + CTRL_Q_CAP;
-// Pi 4 2 GiB boards have enough RAM to absorb physical-WiFi jitter without
-// dropping REST/log bursts. Keep the coalescer bounded but no longer sized for
-// the older tiny net-storage window.
-const OUTBOUND_RING_CAP: usize = 48 * 1024;
-const OUTBOUND_SIZE_BUDGET: usize = 64 * 1024;
+// The boot logs show the net-storage window is ~0x2d39 bytes (~11.6 KiB); a
+// 4 KiB outbound ring plus compact metadata keeps this coalescer well below
+// that ceiling and the budget guard prevents regressions back into that arena.
+const OUTBOUND_RING_CAP: usize = 4096;
+const OUTBOUND_SIZE_BUDGET: usize = 8 * 1024;
 const TRUNCATION_SUFFIX: &[u8] = b"...";
-const RATE_BPS: u32 = 512_000;
-const BURST: u32 = 32_000;
+const RATE_BPS: u32 = 32_000;
+const BURST: u32 = 4_000;
 type SlotIdx = u8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -638,13 +638,6 @@ mod tests {
     }
 
     #[test]
-    fn flush_budget_matches_network_service_slice() {
-        let network = crate::hal::runtime_service_budget(crate::hal::HardwareServiceClass::Network);
-        assert_eq!(MAX_FRAMES_PER_POLL, network.max_ops);
-        assert_eq!(MAX_BYTES_PER_POLL, network.max_bytes);
-    }
-
-    #[test]
     fn truncates_oversized_line() {
         let mut coalescer = OutboundCoalescer::new();
         let long_line = [b'a'; MAX_PAYLOAD + 10];
@@ -716,7 +709,7 @@ mod tests {
     fn drops_when_ring_full() {
         let mut coalescer = OutboundCoalescer::new();
         let line = [b'x'; LINE_CAP];
-        for _ in 0..=LOG_Q_CAP {
+        for _ in 0..LOG_Q_CAP {
             coalescer.enqueue_log(&line);
         }
         let stats = coalescer.stats();

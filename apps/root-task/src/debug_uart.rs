@@ -26,16 +26,15 @@ pub fn debug_uart_str(s: &str) {
     }
 }
 
-/// Emit a single debug line without bypassing the post-prompt log buffer.
+/// Emit a single line to the debug UART, bypassing the log buffer.
 pub fn debug_uart_line(line: &str) {
     #[cfg(feature = "kernel")]
     {
-        if crate::log_buffer::log_channel_active() {
-            crate::log_buffer::append_log_line(line);
-            return;
-        }
         crate::bootstrap::log::with_raw_uart_lock(|| {
             crate::sel4::debug_put_line_unlocked(line.as_bytes());
+            if line.starts_with("audit ") {
+                crate::sel4::debug_put_bytes_unlocked(b"cohesix> ");
+            }
         });
     }
 

@@ -10,7 +10,7 @@
 ## At a glance
 - `cohsh` is the authoritative CLI for control-plane actions and `/proc` observability.
 - The root console (`cohesix>`) is for boot-time diagnostics only.
-- TCP console is a single authority surface; run one direct owner at a time. For multiplexed use, run `hive-gateway` as the operator-facing owner and use REST clients.
+- TCP console is single-client; one of `cohsh`, `coh`, `swarmui`, or `hive-gateway` at a time.
 - Policy gates may require approvals in `/actions/queue` before writes to `/queen/ctl`.
 - `/gpu` and `/host` appear only after the host bridges publish.
 
@@ -30,7 +30,7 @@ Use the root console for low-level validation (bootinfo, capability layout, unty
 - `docs/OPERATOR_WALKTHROUGH.md` — lifecycle flow and recovery.
 
 ## Operator rules of engagement
-- The TCP console is a single authority surface. Do not run independent direct clients (`cohsh`, `swarmui`, `coh`, `gpu-bridge-host`, or `host-sidecar-bridge`) against the same VM concurrently. For fanout, run `hive-gateway` as the operator-facing owner and use REST; the gateway may use a bounded internal TCP session pool, but external tools still avoid direct console competition.
+- The TCP console is single-client; do not run `cohsh`, `swarmui`, `hive-gateway`, `coh`, `gpu-bridge-host`, or `host-sidecar-bridge` concurrently.
 - Policy gating (when `/policy/rules` exists) requires approvals in `/actions/queue` for writes to `/queen/ctl`.
 - `--mock` uses an in-process backend and does not talk to the VM; do not mix mock and live flags in one session.
 - `/gpu/*` appears only after `gpu-bridge-host --publish` runs; `/host/*` appears only after `host-sidecar-bridge` runs.

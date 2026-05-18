@@ -16,8 +16,6 @@ evidence ladder:
 6. Add DMA only after cache, address, and ownership rules are explicit.
 7. Bind the device into Cohesix semantics only after the hardware contract is
    stable.
-8. Promote into a HAL reactor/event service only after polled ownership, DMA,
-   cache, interrupt-source clearing, and queue/backpressure counters are stable.
 
 Do not start at the full driver. Do not debug protocol behavior until the
 seL4 resource path, MMIO mapping, IRQ line, DMA range, and reset/power state
@@ -330,17 +328,14 @@ power/reset state.
   Linux-shaped 64-byte first-read transactions rather than a large CLM
   transfer. After that attach proof, Cohesix keeps the
   `bus:txglom`/`bus:rxglom` state established by the Linux-style SDIO preinit
-  path through firmware `ver`, `clmver`, `mpc`, event-mask programming, and
-  `WLC_UP`. Disabling `bus:rxglom` as a
+  path through firmware `ver`, `clmver`, and `mpc`. Disabling `bus:rxglom` as a
   local safety shortcut before `mpc` is not Linux-equivalent and the
   2026-05-13 Cohesix boot trace showed it can move an otherwise working
-  control plane into a host-`CARD_INT`/no-dongle-source stall. The 2026-05-18
-  Cohesix trace showed the same failure when a local `bus:rxglom=0` write was
-  inserted between `mpc` and `event_msgs_ext`, so Cohesix must not change
-  rxglom state during control-plane startup. The post-attach RX path handles
-  normal glom subframes and treats oversized glom evidence as bounded,
-  recoverable RX work rather than preventing control-plane startup with an
-  extra iovar.
+  control plane into a host-`CARD_INT`/no-dongle-source stall. After `mpc`
+  succeeds, the Pi 4 compatibility profile disables runtime `bus:rxglom` until
+  the post-attach RX path supports Linux-sized aggregated superframes. That
+  preserves the working Linux-shaped control-plane order while preventing a
+  single oversized data glom from pinning Function 2 and flooding UART output.
   Malformed or oversized RX-glom evidence must remain explicit, UART-capped,
   and recoverable by clearing the Function 2 frame condition.
 - The first Linux-order control writes use the plain 12-byte SDPCM header. The
@@ -690,17 +685,15 @@ power/reset state.
   same Function 2 host-transfer shape Linux uses. Do not block that read on
   stale `RFRAME` sideband hints or on a `FUNCTIONINTMASK` readback of zero when
   `CCCR.IENx` is armed and `I_HMB_FRAME_IND` is visible.
-- Control-plane receive buffers must fit the Pi 4 runtime `BRCMF_FIRSTREAD`
-  cadence for large replies and RX aggregation: the initial 64-byte
-  fixed-address Function 2 read followed by a bounded 4096-byte bulk window.
-  Smaller 2048-byte buffers are not enough to hold padded SDPCM replies plus
-  useful glom superframes under benchmark traffic and can misclassify real
-  progress as partial hint visibility.
+- Control-plane receive buffers must fit the captured Linux `BRCMF_FIRSTREAD`
+  cadence for large replies: the initial 64-byte fixed-address Function 2 read
+  followed by a 2048-byte bulk read. Smaller 2048-byte buffers are not enough to
+  hold the padded SDPCM control frame and will misclassify real reply progress
+  as partial hint visibility.
 - The same `BRCMF_FIRSTREAD` cadence applies when `RFRAME` already exposes a
   nonzero reply length. Cohesix must not collapse a 2064-byte control reply into
   one padded 2560-byte Function 2 request; it reads 64 bytes first, then the
-  padded remainder within the 4096-byte bulk window, and logs both successful
-  CMD53 shapes.
+  2048-byte padded remainder, and logs both successful CMD53 shapes.
 - If the first control-plane write succeeds but neither `RFRAME` nor
   `I_HMB_FRAME_IND` becomes visible, the HAL must not spin indefinitely on the
   SDIO-core `int_status` word. It performs a sparse, bounded Linux-shaped
@@ -739,24 +732,17 @@ power/reset state.
   timeout. `wifi-host-eapol-pending` is not a data-path success; it exists to
   release `cohesix>` while DHCP/data stay blocked and prompt-side `wifi diag` /
   `nettest` can report the exact WPA/EAPOL boundary. While that state is live,
-  root-task performs bounded pre-root host-EAPOL burst polls and services the
-  local-seat keyboard backend between those network polls without dispatching
-  local-seat commands before root-console handoff; post-root runtime polling
-  yields after one Wi-Fi poll per event turn. Serial RX is sampled, but
-  local-seat USB keyboard input is drained before serial command dispatch; if
-  keyboard bytes were consumed before runtime, runtime work and serial command
-  dispatch wait for the next turn. If USB bytes arrive during a ready network
-  poll, the event pump drains them before network-console command dispatch, IPC,
-  or stream flushing continue. When local-seat is active, serial input dispatch
-  is capped to one complete command line per pump turn, serial-origin output is
-  staged as bounded nonblocking TX records, the cooperative serial poll drains
-  at most 128 RX bytes and 1024 TX bytes per turn, and network-console ingress
-  drains into the pending parser queue only when there is reserve for a full
-  inbound console queue. Network-console dispatch remains capped to one complete
-  line per pump turn. The event pump settles across bounded idle HID polls, and
-  HDMI echoes accepted USB keyboard bytes immediately at parser ingress. HID
-  polling drains a burst of interrupt-IN
-  reports in one pass and keeps 128 keyboard interrupt-IN reads armed on the
+  root-task performs bounded pre-root host-EAPOL burst polls, then post-root
+  runtime polling yields after one Wi-Fi poll per event turn. Serial RX is
+  sampled, but local-seat USB keyboard input is drained before serial command
+  dispatch; if keyboard bytes were consumed in a turn, runtime work and serial
+  command dispatch wait for the next turn. When local-seat is active, serial
+  input dispatch is capped to one complete command line per pump turn, and
+  serial-origin output is staged in small cooperative chunks instead of holding
+  the UART in a blocking write across a whole line. The event pump settles
+  across bounded idle HID polls, and HDMI echoes accepted USB keyboard bytes
+  immediately at parser ingress. HID polling drains a burst of interrupt-IN
+  reports in one pass and keeps 32 keyboard interrupt-IN reads armed on the
   poll-only Pi 4 path, so press/release/next-key sequences can complete while
   console output, HDMI echo, or bounded Wi-Fi diagnostics are in progress.
   `usb status` exposes low-volume keyboard capture counters for HID
@@ -792,31 +778,9 @@ power/reset state.
   subframes are deaggregated into the data/event/EAPOL path, and malformed or
   oversized glom evidence remains explicit but UART-capped instead of silent or
   flood-prone. Descriptor overshoot is a soft mismatch when the remaining tail is
-  still a complete SDPCM subframe. Pi 4 control-plane startup keeps Linux's
-  `bus:rxglom=1` state through event-mask and `WLC_UP`; runtime RX recovery is
-  responsible for dropping or clearing oversized aggregated frames without
-  changing the startup iovar order. The steady-state RX path drains a bounded
-  post-data burst into the same ready queue used for glom subframes, so a busy
-  firmware queue does not require one root-event-loop turn per Wi-Fi frame. The
-  Pi 4 SDHCI PIO path also drains one ready host block window before rechecking
-  `PRESENT_STATE`, avoiding per-word MMIO polling during 512-byte Function 2
-  data windows while retaining block-boundary backpressure. Once the authenticated
-  interface is ready and local-seat input is idle, the network service slice may
-  perform 16 bounded polls and flush up to 16 KiB of outbound console/REST
-  payloads per cooperative turn. GENET RX completion and CYW43 SDPCM/glom RX
-  delivery spend the same per-turn network budget before returning to the root
-  event pump, so a burst from one network device cannot monopolize USB keyboard,
-  serial, or console-output service. GENET TX admission and CYW43 steady-state
-  data TX admission also spend bounded network-class service operations before
-  a frame is handed to hardware; `netstats` exposes `budget_blocked` and, for
-  CYW43 SDPCM flow control, `credit_blocked` so benchmark stalls are visible
-  without UART flooding. Queued data observed before host-EAPOL secure
-  completion is dropped instead of replayed after the data admission boundary.
-- Repeated CYW43 runtime RX errors have a generic UART warning budget in
-  addition to the tighter oversize/glom budget. The first few occurrences stay
-  visible for diagnosis; repeats fall to trace-level output so malformed traffic
-  or a future parser mismatch cannot starve USB keyboard echo, HDMI refresh, or
-  foreground `netstats` output.
+  still a complete SDPCM subframe. Runtime `bus:rxglom` stays disabled on Pi 4
+  until larger Linux-style superframes are supported end-to-end; this does not
+  change Linux's preinit `bus:rxglom=1` order before `mpc`.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
@@ -1234,42 +1198,6 @@ Examples:
 - SDIO Wi-Fi: enumerate card, prove CCCR/FBR values, prove Function 1 register
   windowing, and stop before Function 2 traffic until firmware gate evidence is
   valid.
-
-### 8. HAL Reactor Promotion
-
-Promotion from polled bring-up into high-throughput service is a separate proof
-step. The driver must already have stable HAL-owned DMA, cache maintenance,
-device-clear ordering, and bounded queue diagnostics before it can claim a
-reactor/event-service contract. GENET, CYW43/SDIO, USB, and future block IO must
-use independent service budgets so one busy subsystem cannot monopolize the root
-event loop or hide backpressure from diagnostics.
-
-For GENET this means batched RX/TX completion and replenish work with explicit
-ring-pressure/drop/reclaim counters. RX and TX frame buffers should stay
-DMA-pinned for device lifetime when the HAL cache contract permits it; per-frame
-work is limited to CPU/device cache synchronization and descriptor ownership
-updates, with final unpin during teardown. The as-built GENET RX path only
-drains the hardware ring when the ready queue is empty and then admits frames
-through the shared 16-op/16-KiB network slice; RX reclaim/cache-sync failures
-drop and rearm the affected descriptor rather than pinning the consumer on the
-same failed slot. GENET steady-state TX admission is bounded by the same
-network-class budget and reports `tx_budget_blocked` through `netstats` when the
-cooperative slice is exhausted. For CYW43/SDIO it means keeping long
-association/control-plane retries separate from steady-state SDPCM/RX/TX
-service, draining bounded post-data RX bursts into the ready queue, aligning
-outbound flush capacity with the 16-op/16-KiB network budget, and using
-block-sized SDHCI PIO bursts instead of per-word `PRESENT_STATE` polling before
-returning to the cooperative event loop. The as-built CYW43 RX path applies that
-same network slice to direct SDPCM frames, queued glom subframes, post-data
-prefetch, and deferred host-EAPOL join service. CYW43 steady-state TX requires
-immediate SDPCM credit and an available TX service slice before handing data to
-hardware; missing credit and budget exhaustion are separate counters. For USB it
-means preserving the existing proof gates while moving
-runtime keyboard progress toward event-ring readiness only after the xHCI
-interrupt path is separately proven. For future block IO it means HAL-owned
-request/completion queues that use the shared HAL hardware-service budget and
-therefore cannot receive a larger cooperative slice than network service;
-Milestone 26b does not introduce a filesystem or storage protocol.
 - xHCI: prove live PCI config/BAR/COMMAND and a no-touch ownership verdict
   before any ring or RUN writes.
 
@@ -1375,10 +1303,6 @@ Required Cohesix shape:
 - TX/RX descriptors are fixed-size; RX buffers are preallocated.
 - TX completion and RX producer/consumer movement have breadcrumbs for stalls.
 - DMA address policy is explicit (`physical` vs VC/bus alias) and logged.
-- Packet-rate GENET DMA handoffs (`bcmgenet-rx-rearm`,
-  `bcmgenet-rx-complete`, `bcmgenet-tx-submit`) still perform the required
-  HAL cache maintenance but suppress successful per-packet UART DMA audit
-  lines; failures and driver breadcrumbs remain visible.
 - No DHCP logic is inside the GENET driver; DHCP belongs above `NetDevice`.
 
 Do not proceed to smoltcp until link and one bounded RX/TX smoke path are
@@ -1519,9 +1443,7 @@ bundle applies. Use the focused aliases:
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart`
   covers QEMU and Pi 4 UART physical address constants.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet`
-  covers GENET descriptor, ring, PHY/link-readiness, teardown, and DMA address
-  invariants. It is deterministic contract coverage; physical RX/TX smoke
-  remains a Pi 4 hardware acceptance item.
+  covers GENET descriptor, ring, link, and DMA address invariants.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43`
   covers CYW43 protocol state, Linux-shaped join payloads, first-reply
   recovery, and bounded SDPCM/CDC behavior.

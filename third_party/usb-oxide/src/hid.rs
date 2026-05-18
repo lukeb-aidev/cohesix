@@ -36,9 +36,7 @@ const UBOOT_BOOT_KEYBOARD_IDLE_DURATION: u8 = 10;
 const BOOT_KEYBOARD_REPORT_LEN: usize = core::mem::size_of::<KeyboardReport>();
 const FLEXIBLE_KEYBOARD_REPORT_MIN_LEN: usize = 4;
 const HID_LED_CONTROL_WAIT_SPINS: usize = 2_000_000;
-const HID_CONTROL_GET_REPORT_WAIT_SPINS: usize = 64_000;
-const HID_CONTROL_GET_REPORT_COOLDOWN_POLLS: u8 = 7;
-const HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH: usize = 128;
+const HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH: usize = 32;
 const HID_DEFAULT_INTERRUPT_READ_QUEUE_DEPTH: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -939,10 +937,7 @@ pub struct HidDevice<H: Dma> {
     keyboard_report_offset: u8,
     report_bufs: Vec<PhysMem<H>>,
     queued_reads: Mutex<Vec<QueuedInterruptRead>>,
-    control_report_buf: PhysMem<H>,
     led_report_buf: PhysMem<H>,
-    keyboard_control_poll_disabled: bool,
-    keyboard_control_poll_cooldown: u8,
 }
 
 impl<H: Dma> HidDevice<H> {
@@ -995,16 +990,6 @@ impl<H: Dma> HidDevice<H> {
                 return Err(err);
             }
         };
-        let control_report_buf = match PhysMem::alloc(host, ep_in.max_packet_size as usize, 64) {
-            Ok(buf) => buf,
-            Err(err) => {
-                while let Some(buf) = report_bufs.pop() {
-                    buf.free(host);
-                }
-                led_report_buf.free(host);
-                return Err(err);
-            }
-        };
         let queued_reads = Mutex::new(Vec::with_capacity(read_queue_depth));
 
         let hid = Self {
@@ -1027,10 +1012,7 @@ impl<H: Dma> HidDevice<H> {
             keyboard_report_offset: 0,
             report_bufs,
             queued_reads,
-            control_report_buf,
             led_report_buf,
-            keyboard_control_poll_disabled: false,
-            keyboard_control_poll_cooldown: 0,
         };
 
         // Set boot protocol for boot devices
@@ -1199,127 +1181,6 @@ impl<H: Dma> HidDevice<H> {
         }
     }
 
-    fn decode_keyboard_payload_current(&mut self, payload: &[u8]) -> Option<KeyboardReport> {
-        let mut report = match self.keyboard_decode_mode {
-            KeyboardDecodeMode::BootCompatible => decode_keyboard_report_payload_boot_compatible(
-                payload,
-                usize::from(self.keyboard_report_offset),
-            ),
-            KeyboardDecodeMode::Flexible => {
-                decode_keyboard_report_payload(payload, usize::from(self.keyboard_report_offset))
-            }
-        };
-        if let Some(decoded) = report {
-            if self.keyboard_decode_mode == KeyboardDecodeMode::BootCompatible
-                && !keyboard_report_has_key(&decoded)
-                && keyboard_payload_has_nonzero_outside_boot_window(
-                    payload,
-                    usize::from(self.keyboard_report_offset),
-                )
-                && let Some(flexible_report) = decode_keyboard_report_payload_flexible_key_report(
-                    payload,
-                    usize::from(self.keyboard_report_offset),
-                )
-            {
-                self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
-                self.keyboard_decode_failures = 0;
-                report = Some(flexible_report);
-            }
-        }
-        if report.is_none() && self.keyboard_decode_mode == KeyboardDecodeMode::BootCompatible {
-            self.keyboard_decode_failures = self.keyboard_decode_failures.saturating_add(1);
-            if self.keyboard_decode_failures >= BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD
-                && self.advance_keyboard_decode_profile()
-            {
-                report = match self.keyboard_decode_mode {
-                    KeyboardDecodeMode::BootCompatible => {
-                        decode_keyboard_report_payload_boot_compatible(
-                            payload,
-                            usize::from(self.keyboard_report_offset),
-                        )
-                    }
-                    KeyboardDecodeMode::Flexible => {
-                        decode_keyboard_report_payload(payload, usize::from(self.keyboard_report_offset))
-                    }
-                };
-            }
-        }
-        if report.is_some() {
-            self.keyboard_decode_failures = 0;
-        }
-        report
-    }
-
-    fn poll_keyboard_control_report(&mut self) -> Result<Option<KeyboardReport>> {
-        if self.keyboard_control_poll_disabled {
-            return Ok(None);
-        }
-        if self.keyboard_control_poll_cooldown != 0 {
-            self.keyboard_control_poll_cooldown =
-                self.keyboard_control_poll_cooldown.saturating_sub(1);
-            return Ok(None);
-        }
-        self.keyboard_control_poll_cooldown = HID_CONTROL_GET_REPORT_COOLDOWN_POLLS;
-        let request_len = (self.ep_max_packet as usize).min(self.control_report_buf.size());
-        let report_min_len =
-            keyboard_report_payload_min_len(self.keyboard_decode_mode, self.keyboard_report_offset);
-        if request_len < report_min_len {
-            self.keyboard_control_poll_disabled = true;
-            return Ok(None);
-        }
-        // SAFETY: `control_report_buf` is a HID-owned DMA buffer and the full
-        // bounded request region is valid for byte writes before device ownership.
-        unsafe {
-            core::ptr::write_bytes(self.control_report_buf.as_ptr::<u8>(), 0, request_len);
-        }
-        let setup =
-            SetupPacket::hid_get_report(self.interface, report_type::INPUT, 0, request_len as u16);
-        let transferred = match self.device.control_transfer_in_physmem_with_wait_spins(
-            &setup,
-            &self.control_report_buf,
-            0,
-            request_len,
-            HID_CONTROL_GET_REPORT_WAIT_SPINS,
-        ) {
-            Ok(transferred) => transferred,
-            Err(err) => {
-                self.keyboard_control_poll_disabled = true;
-                self.device.ctrl().emit_diag(
-                    0x0419,
-                    ((self.device.slot_id() as u64) << 32) | u64::from(self.expected_in_endpoint_id()),
-                    request_len as u64,
-                    match err {
-                        UsbError::Stall => 1,
-                        UsbError::Timeout => 2,
-                        _ => 3,
-                    },
-                );
-                return Ok(None);
-            }
-        };
-        if transferred < report_min_len {
-            return Ok(None);
-        }
-        // SAFETY: the control transfer synchronized the completed prefix for CPU
-        // access, and `transferred` is capped to the preallocated DMA buffer.
-        let payload = unsafe {
-            core::slice::from_raw_parts(
-                self.control_report_buf.as_ptr::<u8>(),
-                transferred.min(request_len),
-            )
-        };
-        if let Some(report) = self.decode_keyboard_payload_current(payload) {
-            self.device.ctrl().emit_diag(
-                0x0418,
-                ((self.device.slot_id() as u64) << 32) | u64::from(self.expected_in_endpoint_id()),
-                transferred as u64,
-                keyboard_payload_prefix(payload),
-            );
-            return Ok(Some(report));
-        }
-        Ok(None)
-    }
-
     /// Poll for keyboard report (non-blocking) with transfer re-queue errors surfaced.
     pub fn poll_keyboard_checked(&mut self) -> Result<Option<KeyboardReport>> {
         if self.hid_type != HidType::Keyboard {
@@ -1337,7 +1198,7 @@ impl<H: Dma> HidDevice<H> {
                 .ctrl()
                 .poll_transfer_event_for_slot_endpoint_ids(self.device.slot_id(), &endpoint_ids)
             else {
-                return self.poll_keyboard_control_report();
+                return Ok(None);
             };
 
             let code = evt.completion_code();
@@ -1386,23 +1247,72 @@ impl<H: Dma> HidDevice<H> {
                         payload_len.min(self.ep_max_packet as usize),
                     )
                 };
-                let decode_mode_before = self.keyboard_decode_mode;
-                let report = self.decode_keyboard_payload_current(payload);
-                if decode_mode_before != self.keyboard_decode_mode
-                    && self.keyboard_decode_mode == KeyboardDecodeMode::Flexible
+                let mut report = match self.keyboard_decode_mode {
+                    KeyboardDecodeMode::BootCompatible => {
+                        decode_keyboard_report_payload_boot_compatible(
+                            payload,
+                            usize::from(self.keyboard_report_offset),
+                        )
+                    }
+                    KeyboardDecodeMode::Flexible => decode_keyboard_report_payload(
+                        payload,
+                        usize::from(self.keyboard_report_offset),
+                    ),
+                };
+                if let Some(decoded) = report {
+                    if self.keyboard_decode_mode == KeyboardDecodeMode::BootCompatible
+                        && !keyboard_report_has_key(&decoded)
+                        && keyboard_payload_has_nonzero_outside_boot_window(
+                            payload,
+                            usize::from(self.keyboard_report_offset),
+                        )
+                    {
+                        if let Some(flexible_report) =
+                            decode_keyboard_report_payload_flexible_key_report(
+                                payload,
+                                usize::from(self.keyboard_report_offset),
+                            )
+                        {
+                            self.keyboard_decode_mode = KeyboardDecodeMode::Flexible;
+                            self.keyboard_decode_failures = 0;
+                            self.device.ctrl().emit_diag(
+                                0x0416,
+                                ((self.device.slot_id() as u64) << 32)
+                                    | u64::from(evt.endpoint_id()),
+                                ((code as u64) << 32) | payload_len as u64,
+                                keyboard_payload_prefix(payload),
+                            );
+                            report = Some(flexible_report);
+                        }
+                    }
+                }
+                if report.is_none()
+                    && self.keyboard_decode_mode == KeyboardDecodeMode::BootCompatible
                 {
-                    self.device.ctrl().emit_diag(
-                        0x0416,
-                        ((self.device.slot_id() as u64) << 32) | u64::from(evt.endpoint_id()),
-                        ((code as u64) << 32) | payload_len as u64,
-                        keyboard_payload_prefix(payload),
-                    );
+                    self.keyboard_decode_failures = self.keyboard_decode_failures.saturating_add(1);
+                    if self.keyboard_decode_failures >= BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD {
+                        if self.advance_keyboard_decode_profile() {
+                            report = match self.keyboard_decode_mode {
+                                KeyboardDecodeMode::BootCompatible => {
+                                    decode_keyboard_report_payload_boot_compatible(
+                                        payload,
+                                        usize::from(self.keyboard_report_offset),
+                                    )
+                                }
+                                KeyboardDecodeMode::Flexible => decode_keyboard_report_payload(
+                                    payload,
+                                    usize::from(self.keyboard_report_offset),
+                                ),
+                            };
+                        }
+                    }
                 }
                 if let Some(report) = report {
                     debug_assert_eq!(
                         keyboard_completion_action(code, true, true),
                         KeyboardCompletionAction::ReturnReport
                     );
+                    self.keyboard_decode_failures = 0;
                     self.arm_keyboard_reads()?;
                     return Ok(Some(report));
                 }
@@ -1594,15 +1504,6 @@ impl<H: Dma> Drop for HidDevice<H> {
         // returned explicitly during device teardown.
         while let Some(buf) = self.report_bufs.pop() {
             buf.free(host);
-        }
-        // SAFETY: `control_report_buf` was allocated from this DMA host with the
-        // same size/alignment and is freed exactly once during `HidDevice` drop.
-        unsafe {
-            host.free(
-                self.control_report_buf.virt(),
-                self.control_report_buf.size(),
-                self.control_report_buf.align(),
-            );
         }
         // SAFETY: `led_report_buf` was allocated from this DMA host with the
         // same size/alignment and is freed exactly once during `HidDevice` drop.
@@ -1951,10 +1852,10 @@ mod tests {
             HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH
         );
         // Low-speed boot keyboards can only report state at the endpoint
-        // interval. Cohesix polls from seL4 userland, so keep about a second of
-        // interrupt reads armed to cover HDMI/serial/WiFi runtime stalls without
-        // losing press/release edges before local-seat can drain them.
-        assert!(HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH >= 128);
+        // interval. Cohesix polls from seL4 userland, so keep enough interrupt
+        // reads armed to cover brief HDMI/serial/WiFi stalls without losing
+        // press/release edges before local-seat can drain them.
+        assert!(HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH >= 32);
         assert_eq!(interrupt_read_queue_depth(HidType::Mouse), 1);
         assert_eq!(interrupt_read_queue_depth(HidType::Other), 1);
     }

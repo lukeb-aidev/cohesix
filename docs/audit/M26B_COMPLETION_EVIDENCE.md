@@ -1,25 +1,15 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Record Milestone 26b baseline evidence and later reopened Pi 4 performance scope. -->
+<!-- Purpose: Record Milestone 26b completion evidence for Pi 4 DHCP/Wi-Fi and QEMU compatibility. -->
 <!-- Author: Lukas Bower -->
 
 # Milestone 26b Completion Evidence
 
-This file preserves the May 17, 2026 Milestone 26b baseline evidence for Pi 4
-DHCP/Wi-Fi and QEMU compatibility. It no longer closes the reopened Milestone
-26a/26b concurrency and performance scope recorded in `docs/BUILD_PLAN.md`.
-
-Fresh closure for the reopened scope requires Pi 4 evidence that USB local-seat,
-serial, GENET, and Wi-Fi remain independently responsive under shared event-loop
-load, plus `rest_perf_harness.py` artifacts for QEMU, Pi 4 GENET, and Pi 4 Wi-Fi
-as described in `docs/BENCHMARKS.md`.
+Milestone 26b is complete. Milestone 26c has not started.
 
 ## Scope
 
-This evidence closes the original Milestone 26b Pi 4 DHCP/Wi-Fi baseline and
-QEMU compatibility guardrail. It does not start the Milestone 26c
-target-qualified runner, audit refactor, or cleanup work, and it must not be
-used as proof that the reopened Milestone 26a/26b performance goals have passed.
+This evidence closes the Milestone 26b Pi 4 DHCP/Wi-Fi baseline and QEMU compatibility guardrail. It does not start the Milestone 26c target-qualified runner, audit refactor, or cleanup work.
 
 ## QEMU Evidence
 
@@ -109,10 +99,6 @@ USB_COLD_BOOT_SEEN=yes
 
 ## Acceptance
 
-- Milestone 26a original static-IPv4 baseline: Complete on the recorded May 17
-  evidence, superseded by reopened GENET performance/concurrency proof.
-- Milestone 26b original DHCP/Wi-Fi baseline: Complete on the recorded May 17
-  evidence, superseded by reopened Wi-Fi/USB performance/concurrency proof.
-- Reopened Milestone 26a/26b performance scope: Pending fresh Pi 4 GENET,
-  Pi 4 Wi-Fi, QEMU benchmark, and concurrent USB/serial/network evidence.
+- Milestone 26a: Complete.
+- Milestone 26b: Complete.
 - Milestone 26c: Not Started.

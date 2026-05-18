@@ -1,48 +1,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Document Cohesix benchmark evidence, limits, and Pi 4 benchmark proof requirements. -->
+<!-- Purpose: Document Cohesix hive-gateway worker-capacity benchmark evidence and limits for 0.9.0-beta readiness. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarks
-
-## Milestone 26a/26b Pi 4 Benchmark Status (Reopened Scope)
-
-The Milestone 26a/26b performance and concurrency scope is reopened for Pi 4
-GENET, CYW43455 Wi-Fi, USB local-seat, and serial coexistence. The committed
-`docs/bench/` evidence below is still valid for the Milestone 25 QEMU/gateway
-capacity questions it records, but it is not fresh Pi 4 benchmark parity proof.
-
-Current Pi 4 acceptance requires separate artifacts for:
-
-1. QEMU raw-TCP plus `hive-gateway` baseline.
-2. Pi 4 wired GENET through the authenticated TCP console.
-3. Pi 4 Wi-Fi through the authenticated TCP console after M1/M3, DHCP, and
-   `netstats` prove the same boot is actually on Wi-Fi.
-
-For Pi 4 hardware runs, keep the harness strict and bind the result to the live
-board evidence directory:
-
-```sh
-python3 scripts/rest_perf_harness.py simulate \
-  --no-qemu \
-  --tcp-host <PI4_GENET_OR_WIFI_IP> \
-  --tcp-port 31337 \
-  --auth-token <console-auth-token> \
-  --request-auth-token <rest-request-auth-token> \
-  --gateway-pool-control-sessions 2 \
-  --gateway-pool-telemetry-sessions 8 \
-  --duration-mins 1 \
-  --workers-min 1 \
-  --workers-max 1 \
-  --intensity-min 1 \
-  --intensity-max 1 \
-  --error-budget-rate 0.01 \
-  --no-retries
-```
-
-Use `--qemu-run <script>` instead of `--no-qemu` only for the QEMU baseline.
-Do not promote code-only checks, old QEMU/gateway summaries, or a post-flash
-boot log without matching `rest_perf_harness.py` output into Pi 4 performance
-closure.
 
 ## 0.9.0-beta Benchmark Verdict (As-Built)
 - **Worker-capacity benchmark:** PASS for the `1500` hard cap in real VM/TCP/gateway mode (Milestone 25b evidence under `docs/bench/`).

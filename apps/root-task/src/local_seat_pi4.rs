@@ -396,7 +396,6 @@ static XHCI_MMIO_PIN_REUSE_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DMA_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static XHCI_DIAG_LINE_COUNT: AtomicU32 = AtomicU32::new(0);
 static XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
-static XHCI_HID_CONTROL_REPORT_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
 static XHCI_DIAG_LAST_STAGE: AtomicU32 = AtomicU32::new(0);
 static XHCI_DIAG_LAST_A: AtomicUsize = AtomicUsize::new(0);
 static XHCI_DIAG_LAST_B: AtomicUsize = AtomicUsize::new(0);
@@ -3549,7 +3548,6 @@ fn xhci_diag_hook(stage: u16, a: u64, b: u64, c: u64) {
 fn reset_latest_xhci_diag_snapshot() {
     XHCI_DIAG_LINE_COUNT.store(0, Ordering::Release);
     XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT.store(0, Ordering::Release);
-    XHCI_HID_CONTROL_REPORT_LOG_COUNT.store(0, Ordering::Release);
     XHCI_DIAG_LAST_STAGE.store(0, Ordering::Release);
     XHCI_DIAG_LAST_A.store(0, Ordering::Release);
     XHCI_DIAG_LAST_B.store(0, Ordering::Release);
@@ -4056,7 +4054,7 @@ const fn xhci_diag_history_stage_relevant(stage: u16) -> bool {
             | 0x03fc..=0x03fd
             | 0x03fe..=0x03ff
             | 0x0400..=0x0406
-            | 0x0410..=0x0419
+            | 0x0410..=0x0416
     )
 }
 
@@ -4087,7 +4085,7 @@ const fn xhci_diag_stage_after_run(stage: u16) -> bool {
             | 0x03fc..=0x03fd
             | 0x03fe..=0x03ff
             | 0x0400..=0x0406
-            | 0x0410..=0x0419
+            | 0x0410..=0x0416
     )
 }
 
@@ -4108,31 +4106,21 @@ const fn xhci_diag_stage_force_log(stage: u16) -> bool {
             | 0x0400..=0x0406
             | 0x0410..=0x0414
             | 0x0416
-            | 0x0419
     )
 }
 
 #[inline]
 fn xhci_diag_stage_hot_loop_suppressed(stage: u16) -> bool {
-    let count = match stage {
-        0x0415 => XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1),
-        0x0418 => XHCI_HID_CONTROL_REPORT_LOG_COUNT
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1),
-        _ => return false,
-    };
+    if stage != 0x0415 {
+        return false;
+    }
+    let count = XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
     if count == 5 {
-        match stage {
-            0x0415 => boot_log::force_uart_line(
-                "[local-seat] xhci.diag stage=0x0415 tag=usb-transfer-trb-queued suppressed reason=hot-poll-loop",
-            ),
-            0x0418 => boot_log::force_uart_line(
-                "[local-seat] xhci.diag stage=0x0418 tag=usb-hid-control-report suppressed reason=hot-poll-loop",
-            ),
-            _ => {}
-        }
+        boot_log::force_uart_line(
+            "[local-seat] xhci.diag stage=0x0415 tag=usb-transfer-trb-queued suppressed reason=hot-poll-loop",
+        );
     }
     count > 4
 }
@@ -4331,8 +4319,6 @@ const fn xhci_diag_stage_value_labels(
         }
         0x0415 => Some(("slot_dci", "ring_len", "status_control")),
         0x0416 => Some(("slot_ep", "code_payload", "raw_head")),
-        0x0418 => Some(("slot_ep", "transferred", "raw_head")),
-        0x0419 => Some(("slot_ep", "request_len", "error")),
         0x0340..=0x034b => Some(("reg", "value", "dcbaa")),
         0x034c => Some(("handoff", "seed_flags", "blocked")),
         _ => None,
@@ -4691,8 +4677,6 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
         0x0414 => Some("event-transfer-preserved-during-filtered-poll"),
         0x0415 => Some("usb-transfer-trb-queued"),
         0x0416 => Some("usb-hid-report-flexible-key-fallback"),
-        0x0418 => Some("usb-hid-control-report"),
-        0x0419 => Some("usb-hid-control-report-disabled"),
         0x03c0 => Some("usb-hid-report-event"),
         0x03c1 => Some("usb-hid-report-decode-fail"),
         0x03c2 => Some("usb-hid-report-empty"),
@@ -16104,22 +16088,15 @@ mod driver_coverage_tests {
     #[test]
     fn driver_coverage_xhci_transfer_trb_queued_diag_is_hot_loop_bounded() {
         XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT.store(0, Ordering::Release);
-        XHCI_HID_CONTROL_REPORT_LOG_COUNT.store(0, Ordering::Release);
 
         assert!(!xhci_diag_stage_hot_loop_suppressed(0x0415));
         assert!(!xhci_diag_stage_hot_loop_suppressed(0x0415));
         assert!(!xhci_diag_stage_hot_loop_suppressed(0x0415));
         assert!(!xhci_diag_stage_hot_loop_suppressed(0x0415));
         assert!(xhci_diag_stage_hot_loop_suppressed(0x0415));
-        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0418));
-        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0418));
-        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0418));
-        assert!(!xhci_diag_stage_hot_loop_suppressed(0x0418));
-        assert!(xhci_diag_stage_hot_loop_suppressed(0x0418));
         assert!(!xhci_diag_stage_hot_loop_suppressed(0x0414));
 
         XHCI_TRANSFER_TRB_QUEUED_LOG_COUNT.store(0, Ordering::Release);
-        XHCI_HID_CONTROL_REPORT_LOG_COUNT.store(0, Ordering::Release);
     }
 
     #[test]
@@ -16129,34 +16106,12 @@ mod driver_coverage_tests {
             Some("usb-hid-report-flexible-key-fallback")
         );
         assert_eq!(
-            xhci_diag_stage_label(0x0418),
-            Some("usb-hid-control-report")
-        );
-        assert_eq!(
-            xhci_diag_stage_label(0x0419),
-            Some("usb-hid-control-report-disabled")
-        );
-        assert_eq!(
             xhci_diag_stage_value_labels(0x0416),
             Some(("slot_ep", "code_payload", "raw_head"))
         );
-        assert_eq!(
-            xhci_diag_stage_value_labels(0x0418),
-            Some(("slot_ep", "transferred", "raw_head"))
-        );
-        assert_eq!(
-            xhci_diag_stage_value_labels(0x0419),
-            Some(("slot_ep", "request_len", "error"))
-        );
         assert!(xhci_diag_history_stage_relevant(0x0416));
-        assert!(xhci_diag_history_stage_relevant(0x0418));
-        assert!(xhci_diag_history_stage_relevant(0x0419));
         assert!(xhci_diag_stage_after_run(0x0416));
-        assert!(xhci_diag_stage_after_run(0x0418));
-        assert!(xhci_diag_stage_after_run(0x0419));
         assert!(xhci_diag_stage_force_log(0x0416));
-        assert!(!xhci_diag_stage_force_log(0x0418));
-        assert!(xhci_diag_stage_force_log(0x0419));
         assert!(!xhci_diag_stage_hot_loop_suppressed(0x0416));
     }
 }
@@ -19150,14 +19105,6 @@ mod tests {
             xhci_diag_stage_label(0x0416),
             Some("usb-hid-report-flexible-key-fallback")
         );
-        assert_eq!(
-            xhci_diag_stage_label(0x0418),
-            Some("usb-hid-control-report")
-        );
-        assert_eq!(
-            xhci_diag_stage_label(0x0419),
-            Some("usb-hid-control-report-disabled")
-        );
         assert_eq!(xhci_diag_stage_label(0x03c0), Some("usb-hid-report-event"));
         assert_eq!(
             xhci_diag_stage_label(0x03c1),
@@ -19416,8 +19363,6 @@ mod tests {
         assert!(super::xhci_diag_stage_force_log(0x0405));
         assert!(super::xhci_diag_stage_force_log(0x0406));
         assert!(!super::xhci_diag_stage_force_log(0x0415));
-        assert!(!super::xhci_diag_stage_force_log(0x0418));
-        assert!(super::xhci_diag_stage_force_log(0x0419));
         assert!(!super::xhci_diag_stage_force_log(0x0248));
     }
 
@@ -19643,14 +19588,6 @@ mod tests {
         assert_eq!(
             xhci_diag_stage_value_labels(0x0416),
             Some(("slot_ep", "code_payload", "raw_head"))
-        );
-        assert_eq!(
-            xhci_diag_stage_value_labels(0x0418),
-            Some(("slot_ep", "transferred", "raw_head"))
-        );
-        assert_eq!(
-            xhci_diag_stage_value_labels(0x0419),
-            Some(("slot_ep", "request_len", "error"))
         );
         assert_eq!(
             xhci_diag_stage_value_labels(0x0332),

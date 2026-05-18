@@ -338,7 +338,6 @@ pub struct TcpTransport {
     auth_state: AuthState,
     inject_short_write: Option<usize>,
     console_lock: Option<ConsoleLock>,
-    console_lock_enabled: bool,
 }
 
 impl TcpTransport {
@@ -380,7 +379,6 @@ impl TcpTransport {
             auth_state: AuthState::Start,
             inject_short_write: None,
             console_lock: None,
-            console_lock_enabled: console_lock_enabled(),
         }
     }
 
@@ -433,13 +431,6 @@ impl TcpTransport {
     #[must_use]
     pub fn with_tcp_debug(mut self, enabled: bool) -> Self {
         self.tcp_debug = enabled || tcp_debug_enabled();
-        self
-    }
-
-    /// Enable or disable the host-side console lock for this transport.
-    #[must_use]
-    pub fn with_console_lock_enabled(mut self, enabled: bool) -> Self {
-        self.console_lock_enabled = enabled;
         self
     }
 
@@ -790,9 +781,6 @@ impl TcpTransport {
     }
 
     fn ensure_console_lock(&mut self) -> Result<()> {
-        if !self.console_lock_enabled {
-            return Ok(());
-        }
         if self.console_lock.is_some() {
             return Ok(());
         }

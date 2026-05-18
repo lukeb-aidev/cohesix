@@ -33,24 +33,16 @@ This section is a mandatory execution contract for all contributors and agents w
 - If execution behavior changes, update this document and the corresponding scripts in the same change.
 - `scripts/ci/check_test_plan.sh` must pass before continuing.
 
-5. Respect the current target boundary.
-- As built, `scripts/ci/test_plan_run.sh` does not accept `--target`.
-- A staged Test Plan PASS currently means the source-tree QEMU/host matrix passed through Stage 05.
-- Pi 4 hardware acceptance remains a separate Milestone 26b evidence workflow described in Section 6e.
-- Target-qualified `--target qemu|pi4` staged PASS semantics are Milestone 26c work, not part of the current runner.
-
 ## Definition of "Test Plan PASS" (Normative)
 A run is **PASS** if and only if:
 - It is executed via the staged runner with a shared state dir: `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`.
 - Stages **01-05** complete successfully and create `stage_01.done` ... `stage_05.done` in the shared state dir.
 - No stage wrote an INCOMPLETE marker (presence of any `stage_*.incomplete` or any files under `out/test-plan/<run-id>/incomplete/` means **FAIL**).
 - Stage 05 runs `scripts/ci/due_diligence_gate.sh` and it is green.
-- Stage 04 requires both a gateway URL and a request auth token exported before the runner reaches that stage. The stage does not launch `hive-gateway`; it validates the gateway already attached to the QEMU TCP console.
 
 Notes:
 - Running individual stages (for example `--stage 2`) is for iteration only; it is not a "PASS" run.
 - "NA" checks must still be logged, but they do not cause failure; INCOMPLETE always fails.
-- Do not pass `--target qemu` or `--target pi4` to the current runner. Those options belong to the Milestone 26c target-qualified runner task.
 
 ## Purpose
 Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.
@@ -72,7 +64,6 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 ## Preflight and guardrails
 - `scripts/ci/test_plan_run.sh --list` (verify scripted stage inventory before execution)
 - `scripts/ci/check_test_plan.sh`
-- If the repo-local virtualenv exists, prefer `TP_PYTHON_BIN=$REPO/.venv/bin/python3` for Python-backed stages. Otherwise Stage 02 auto-creates `${TEST_PLAN_STATE_DIR}/.venv` when `pytest` is missing from `python3`.
 - If IR or manifest changes: `cargo run -p coh-rtc` then `scripts/check-generated.sh`.
 - Ensure `SEL4_BUILD_DIR` points at the SMP kernel build (`$REPO/seL4/SMP_build` by default); override to `$REPO/seL4/build` when validating single-core baselines.
 - Default QEMU SMP topology is four single-threaded cores; set `COHESIX_QEMU_SMP=1` for single-core baselines or `COHESIX_QEMU_SMP_TOPO` for explicit topologies.
@@ -122,11 +113,10 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p host-sidecar-bridge`
 - `cargo test -p host-ticket-agent`
 - `cargo test -p nine-door --test ui_security`
-	- `cargo test -p nine-door --test session_state`
-	- `pytest tests/test_pi4_trace_normalize.py`
-	- `pytest tests/test_pi4_gate_proof.py`
-	- `pytest tests/test_rest_perf_harness.py`
-	- `cargo test -p nine-door --test pressure_counters`
+- `cargo test -p nine-door --test session_state`
+- `pytest tests/test_pi4_trace_normalize.py`
+- `pytest tests/test_pi4_gate_proof.py`
+- `cargo test -p nine-door --test pressure_counters`
 - `cargo test -p nine-door --test schedule_create`
 - `cargo test -p nine-door --test schedule_bounds`
 - `cargo test -p nine-door --test lease_bounds`
@@ -201,11 +191,9 @@ Start QEMU (source tree or bundle), then verify:
 Run while QEMU is up:
 - Repeat `tcp-diag` 5–10 times and record results (example: `... | tee logs/tcp-diag.log`).
 - Run `pool bench path=/log/queen.log ops=500 batch=8 payload_bytes=64` and record throughput/latency (example: `... | tee logs/pool-bench.log`).
-- For 26a/26b performance gates, run `scripts/rest_perf_harness.py` through `hive-gateway` with configured request auth and bounded control/telemetry pools. The gateway is the operator-facing console owner; benchmark clients use REST or the harness gateway mode rather than competing direct TCP owners.
 - Reasonable acceptance:
   - `tcp-diag` has zero failures.
   - `pool bench` shows non-zero throughput and stable latency.
-  - Gateway-backed performance runs report distinct failures for TCP auth rejection, gateway queueing, policy denial, backend timeout, and error-budget exhaustion.
   - Any performance regression claim must be backed by committed baseline artifacts under `docs/bench/` (and indexed in `docs/BENCHMARKS.md` when applicable); do not compare against unpublished local runs.
 - Capture logs:
   - cohsh: `logs/cohsh-session.log`
@@ -334,7 +322,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
     - `journalctl -u hive-gateway -n 200 --no-pager | rg -n "reconnect|connected|disconnected"`
     - Re-run: `curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .`
   - `sudo systemctl stop hive-gateway`
-- Multiplexer regression (REST gateway, QEMU running; `hive-gateway` is the operator-facing console owner and any internal pool remains bounded by gateway configuration):
+- Multiplexer regression (REST gateway, QEMU running; `hive-gateway` is the sole console client):
   - REST API smoke (manifest + namespace + log tail):
     - `curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/' | jq .`
@@ -440,8 +428,8 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - Snapshot coverage runs against the current browser matrix: `webkit-desktop` (baseline shell), `webkit-narrow` (responsive shell and scheduler), and `chromium-tablet` (interaction parity without snapshot gating).
 
 ### 6) Regression pack (full-stack, recommended before release)
-- `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires a gateway URL plus `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` or equivalent auth-token env var)
-- `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> HIVE_GATEWAY_REQUEST_AUTH_TOKEN=<token> scripts/cohsh/REST_regression_batch.sh`
+- `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires `COHESIX_GATEWAY_URL` or equivalent gateway env var)
+- `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
 - Stage 04 runs two REST batches:
   - A concurrent "core" batch (boot/proc/pool coverage): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/session_pool.coh`.
   - A strict "parity" batch (control-plane smoke): `scripts/cohsh/rest_control_plane_smoke.coh`.
@@ -451,7 +439,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
   - Scripted Stage 04 writes REST batch logs under the stage state dir (for example `out/test-plan/<run-id>/rest-regression-logs/`).
   - Manual runs of `scripts/cohsh/REST_regression_batch.sh` default to `out/regression-logs/<batch>/<script>.run*.log` unless `COHSH_LOG_ROOT` is set.
 - Verify logs show no unexpected errors or disconnects.
-- Stage 03 QEMU/TCP regression batch remains mandatory in the staged PASS contract. Stage 04 REST coverage is an additional multiplexer/parity gate, not a replacement for direct TCP console regression coverage.
+- From Milestone 25 onward, use the REST batch above; the TCP/QEMU batch remains a local bring-up tool only.
 
 ### 6a) SMP parity (Milestone 25+)
 - Boot QEMU with a single core: `COHESIX_QEMU_SMP=1 scripts/cohesix-build-run.sh --transport tcp`
@@ -466,8 +454,6 @@ Run this matrix with `hive-gateway` attached and **no retry paths**. These runs 
 - `python3 scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01`
 - `python3 scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01`
 - `python3 scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01`
-
-The reliability matrix intentionally leaves `/log/queen.log` tail traffic out of the hot mix so benchmark results are not dominated by UART/log churn. Use `--include-log-tail --log-tail-bytes <bytes>` only when measuring log-tail behavior itself.
 
 Pass criteria:
 - Every run exits `0`.
@@ -532,12 +518,6 @@ Run this matrix in addition to the staged runner when Milestone 26 files change.
 ### 6e) Pi 4 DHCP + U-Boot policy compatibility (Milestone 26b as-built)
 Run this matrix in addition to the staged runner when Milestone 26b files change.
 
-	Current runner boundary:
-	- This section is not driven by `scripts/ci/test_plan_run.sh` yet.
-	- Milestone 26b completion evidence is recorded in `docs/audit/M26B_COMPLETION_EVIDENCE.md`.
-	- The target-qualified Pi 4 runner contract is Milestone 26c, not part of the current runner.
-	- The Stage 02 host-fast runner executes `tests/test_rest_perf_harness.py` so harness argument, auth, summary, and failure-mode contracts are covered before physical Pi 4 runs.
-
 - Compiler + docs gate:
   - `cargo test -p coh-rtc`
   - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
@@ -552,7 +532,7 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
 - QEMU compatibility gate:
   - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
   - Existing QEMU hostfwd defaults (`127.0.0.1:{31337,31338,31339}`) and ACK/ERR/END fixtures must remain unchanged.
-	- Pi 4 runtime evidence gate:
+- Pi 4 runtime evidence gate:
   - When `cohsh` reaches the Pi over Wi-Fi/TCP, keep the raw serial log and the `cohsh` transcript together in the Pi 4 evidence directory. TCP `cohsh` output is not mirrored back into the UART log, so the normalizer may be run over a combined serial-plus-`cohsh` evidence file for the final `netstats`/`netstatus` assertions while retaining the raw serial log as the boot source of truth.
   - Capture boot evidence showing:
     - `manifest.hw.network.mode=<static|dhcp>`
@@ -568,23 +548,15 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
     - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at parser ingress and boot/progress messages refreshing at the documented 5-10 s cadence, with Stage 02 driver coverage guarding the cadence constants and Wi-Fi progress suppression during USB boot activity and after USB first-byte proof.
   - `netstats` must report:
     - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`
-	    - `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`
-	    - `tx_backpressure ... budget_blocked=<count> credit_blocked=<count>`; non-zero values during performance runs are benchmark findings and must be correlated with harness latency/error output.
-	    - for Wi-Fi ready acceptance, the final post-`nettest` `netstats` capture must show `active=wifi`, `addr_src=dhcp-lease`, `dhcp=bound`, `eapol_secure=1`, and non-zero TX/RX packet counters.
+    - `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`
+    - for Wi-Fi ready acceptance, the final post-`nettest` `netstats` capture must show `active=wifi`, `addr_src=dhcp-lease`, `dhcp=bound`, `eapol_secure=1`, and non-zero TX/RX packet counters.
     - `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`
   - `nettest` refusal detail must preserve the reason when the run cannot start:
     - `detail=dhcp-pending`
     - `detail=wifi-associating`, `detail=wifi-host-eapol-pending`, `detail=wifi-host-eapol-required`, `detail=wifi-association-failed`, or `detail=wifi-link-down`
     - `detail=not-ready:<root-ep|ipc-buffer|cspace-window|bootstrap-commit>`
     - `detail=policy-disabled` or `detail=selftest-disabled` when the profile/runtime disables self-test
-	  - explicit `wifi` now supports both `static` and `dhcp` through the HAL-backed CYW43455 path; `auto` remains DHCP-only with wired fallback limited to CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack, and final 26b completion still requires Pi 4 hardware captures proving join + DHCP and that attach/join fallback behavior.
-	- Reopened Milestone 26a/26b performance and concurrency evidence gate:
-	  - Store fresh benchmark artifacts under `docs/bench/` and index the result in `docs/BENCHMARKS.md`; unpublished local runs do not close the gate.
-	  - Capture a QEMU raw-TCP plus `hive-gateway` baseline and separate Pi 4 GENET and Pi 4 Wi-Fi runs with `scripts/rest_perf_harness.py simulate --no-retries`, configured console auth, configured REST request auth, bounded gateway control/telemetry pools, and the same worker/intensity envelope used for the best committed comparison.
-	  - Bind each Pi 4 benchmark directory to the same boot evidence: raw serial log, `cohsh` transcript, `netstats`, `nettest`, and gateway/harness summary output.
-	  - GENET evidence must show the wired interface active with stable packet counters and no ring-stall, descriptor-reclaim, or TX-backpressure flood while USB local-seat and serial input still respond.
-	  - Wi-Fi evidence must show M1/M3/EAPOL secure completion, DHCP bound, `active=wifi`, non-zero RX/TX packet counters, and no post-prompt log flood while USB local-seat and serial input still respond.
-	  - Concurrency evidence must include USB keyboard printable-byte proof during or adjacent to network load, serial prompt command response, and network-console command response from the same boot.
+  - explicit `wifi` now supports both `static` and `dhcp` through the HAL-backed CYW43455 path; `auto` remains DHCP-only with wired fallback limited to CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack, and final 26b completion still requires Pi 4 hardware captures proving join + DHCP and that attach/join fallback behavior.
 
 ### 7) Release bundle validation (macOS + Ubuntu)
 Run Sections 3–5 using the extracted bundle in a clean temp directory (not the repo checkout).

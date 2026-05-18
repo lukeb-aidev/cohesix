@@ -11,7 +11,7 @@ use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -39,7 +39,7 @@ use cohsh::{
     PROC_SCHEDULE_QUEUE_BYTES, PROC_SCHEDULE_QUEUE_ENABLED, PROC_SCHEDULE_SUMMARY_BYTES,
     PROC_SCHEDULE_SUMMARY_ENABLED, SECURE9P_MSIZE, SECURE9P_WALK_DEPTH,
 };
-use cohsh::{NineDoorTransport, TcpTransport};
+use cohsh::{NineDoorTransport, PooledTcpTransport, TcpTransport};
 use cohsh_core::{
     parse_role, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN,
     MAX_TICKET_LEN,
@@ -63,12 +63,12 @@ const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const DEFAULT_PROC_CACHE_TTL_MS: u64 = 500;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
-const DEFAULT_CONTROL_POOL_WAIT_LIMIT_MS: u64 = 5_000;
-const DEFAULT_TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 5_000;
-const MAX_BROKER_POOL_WAIT_LIMIT_MS: u64 = 120_000;
+const CONTROL_POOL_WAIT_LIMIT_MS: u64 = 5_000;
+const TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 5_000;
 const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
 const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
+const BROKER_CONTROL_BURST: usize = 6;
 const BROKER_IDLE_WAIT_MS: u64 = 20;
 const CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
 const CONTROL_WRITE_RETRY_SLEEP_MS: u64 = 15;
@@ -140,12 +140,6 @@ struct Cli {
     /// Override pooled telemetry session capacity for this gateway process.
     #[arg(long)]
     pool_telemetry_sessions: Option<u16>,
-    /// Control broker response timeout in milliseconds.
-    #[arg(long)]
-    broker_control_timeout_ms: Option<u64>,
-    /// Telemetry/read broker response timeout in milliseconds.
-    #[arg(long)]
-    broker_telemetry_timeout_ms: Option<u64>,
     /// Use the in-process mock NineDoor backend.
     #[arg(long, default_value_t = false)]
     mock: bool,
@@ -166,8 +160,6 @@ struct GatewayInner {
     bounds: BoundsResponse,
     policy: CohshPolicy,
     broker: Arc<BrokerMetrics>,
-    broker_control_timeout_ms: u64,
-    broker_telemetry_timeout_ms: u64,
     proc_cache: Mutex<ProcReadCache>,
 }
 
@@ -335,8 +327,6 @@ impl BrokerMetrics {
 struct ProcReadCache {
     entries: HashMap<String, ProcReadCacheEntry>,
     order: VecDeque<String>,
-    inflight: HashMap<String, Arc<Mutex<()>>>,
-    generation: u64,
 }
 
 #[derive(Clone)]
@@ -476,8 +466,6 @@ async fn main() -> Result<()> {
             bounds,
             policy,
             broker: broker_metrics,
-            broker_control_timeout_ms: config.broker_control_timeout_ms,
-            broker_telemetry_timeout_ms: config.broker_telemetry_timeout_ms,
             proc_cache: Mutex::new(ProcReadCache::default()),
         }),
     };
@@ -531,8 +519,6 @@ struct GatewayConfig {
     ticket: Option<String>,
     pool_control_sessions: Option<u16>,
     pool_telemetry_sessions: Option<u16>,
-    broker_control_timeout_ms: u64,
-    broker_telemetry_timeout_ms: u64,
     mock: bool,
     allow_non_loopback_bind: bool,
 }
@@ -583,22 +569,6 @@ impl GatewayConfig {
             cli.pool_telemetry_sessions,
             "HIVE_GATEWAY_POOL_TELEMETRY_SESSIONS",
         );
-        let broker_control_timeout_ms = normalize_broker_timeout_ms(
-            env_override_opt_u64(
-                cli.broker_control_timeout_ms,
-                "HIVE_GATEWAY_BROKER_CONTROL_TIMEOUT_MS",
-            )?,
-            DEFAULT_CONTROL_POOL_WAIT_LIMIT_MS,
-            "broker-control-timeout-ms",
-        )?;
-        let broker_telemetry_timeout_ms = normalize_broker_timeout_ms(
-            env_override_opt_u64(
-                cli.broker_telemetry_timeout_ms,
-                "HIVE_GATEWAY_BROKER_TELEMETRY_TIMEOUT_MS",
-            )?,
-            DEFAULT_TELEMETRY_POOL_WAIT_LIMIT_MS,
-            "broker-telemetry-timeout-ms",
-        )?;
         let allow_non_loopback_bind =
             cli.allow_non_loopback_bind || env_flag("HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND");
         let auth_token = normalize_required_secret("tcp auth token", auth_token, mock)?;
@@ -614,8 +584,6 @@ impl GatewayConfig {
             ticket,
             pool_control_sessions,
             pool_telemetry_sessions,
-            broker_control_timeout_ms,
-            broker_telemetry_timeout_ms,
             mock,
             allow_non_loopback_bind,
         })
@@ -662,34 +630,6 @@ fn env_override_opt_u16(value: Option<u16>, key: &str) -> Option<u16> {
         return None;
     };
     env_value.trim().parse::<u16>().ok().filter(|v| *v > 0)
-}
-
-fn env_override_opt_u64(value: Option<u64>, key: &str) -> Result<Option<u64>> {
-    if value.is_some() {
-        return Ok(value);
-    }
-    let Ok(env_value) = env::var(key) else {
-        return Ok(None);
-    };
-    let trimmed = env_value.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    let parsed = trimmed
-        .parse::<u64>()
-        .with_context(|| format!("{key} must be an unsigned millisecond timeout"))?;
-    Ok(Some(parsed))
-}
-
-fn normalize_broker_timeout_ms(value: Option<u64>, default_value: u64, label: &str) -> Result<u64> {
-    match value {
-        Some(0) => Err(anyhow::anyhow!("{label} must be greater than 0")),
-        Some(timeout_ms) if timeout_ms > MAX_BROKER_POOL_WAIT_LIMIT_MS => Err(anyhow::anyhow!(
-            "{label} must be <= {MAX_BROKER_POOL_WAIT_LIMIT_MS}"
-        )),
-        Some(timeout_ms) => Ok(timeout_ms),
-        None => Ok(default_value),
-    }
 }
 
 fn seed_relay_metrics_from_env(metrics: &BrokerMetrics) {
@@ -801,19 +741,13 @@ fn build_session_pool(config: &GatewayConfig, policy: CohshPolicy) -> Result<Sha
             factory,
         ));
     }
-    let tcp_host = config.tcp_host.clone();
-    let tcp_port = config.tcp_port;
-    let auth_token = config.auth_token.clone();
-    let retry = policy.retry;
-    let heartbeat_ms = policy.heartbeat.interval_ms;
+    let tcp = TcpTransport::new(&config.tcp_host, config.tcp_port)
+        .with_auth_token(&config.auth_token)
+        .with_retry_policy(policy.retry)
+        .with_heartbeat_interval(Duration::from_millis(policy.heartbeat.interval_ms));
+    let inner = Arc::new(Mutex::new(tcp));
     let factory: Arc<dyn TransportFactory> = Arc::new(move || {
-        Ok(Box::new(
-            TcpTransport::new(tcp_host.clone(), tcp_port)
-                .with_auth_token(auth_token.clone())
-                .with_retry_policy(retry)
-                .with_heartbeat_interval(Duration::from_millis(heartbeat_ms))
-                .with_console_lock_enabled(false),
-        ) as Box<dyn cohsh::Transport + Send>)
+        Ok(Box::new(PooledTcpTransport::new(inner.clone())) as Box<dyn cohsh::Transport + Send>)
     });
     Ok(SessionPool::new(
         policy.pool.control_sessions,
@@ -895,79 +829,72 @@ fn build_gateway_broker(
 ) -> GatewayBrokerClient {
     let (control_tx, control_rx) = mpsc::sync_channel(BROKER_CONTROL_QUEUE_CAPACITY);
     let (telemetry_tx, telemetry_rx) = mpsc::sync_channel(BROKER_TELEMETRY_QUEUE_CAPACITY);
-    let (_, telemetry_capacity) = pool.capacities();
-    spawn_broker_workers(
-        PoolKind::Control,
-        1,
-        pool.clone(),
-        metrics.clone(),
-        shutdown.clone(),
-        control_rx,
-    );
-    spawn_broker_workers(
-        PoolKind::Telemetry,
-        usize::from(telemetry_capacity.max(1)),
-        pool,
-        metrics,
-        shutdown,
-        telemetry_rx,
-    );
+    thread::spawn(move || {
+        run_broker_dispatcher(pool, metrics, shutdown, control_rx, telemetry_rx);
+    });
     GatewayBrokerClient {
         control_tx,
         telemetry_tx,
     }
 }
 
-fn spawn_broker_workers(
-    kind: PoolKind,
-    workers: usize,
+fn run_broker_dispatcher(
     pool: SharedPool,
     metrics: Arc<BrokerMetrics>,
     shutdown: Arc<AtomicBool>,
-    rx: Receiver<BrokerCommand>,
-) {
-    let rx = Arc::new(Mutex::new(rx));
-    for _ in 0..workers.max(1) {
-        let worker_pool = pool.clone();
-        let worker_metrics = metrics.clone();
-        let worker_shutdown = shutdown.clone();
-        let worker_rx = rx.clone();
-        thread::spawn(move || {
-            run_broker_worker(
-                kind,
-                worker_pool,
-                worker_metrics,
-                worker_shutdown,
-                worker_rx,
-            );
-        });
-    }
-}
-
-fn run_broker_worker(
-    kind: PoolKind,
-    pool: SharedPool,
-    metrics: Arc<BrokerMetrics>,
-    shutdown: Arc<AtomicBool>,
-    rx: Arc<Mutex<Receiver<BrokerCommand>>>,
+    control_rx: Receiver<BrokerCommand>,
+    telemetry_rx: Receiver<BrokerCommand>,
 ) {
     loop {
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
-        let command = {
-            let receiver = rx.lock().expect("broker receiver lock poisoned");
-            receiver.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS))
-        };
-        match command {
+
+        let mut dispatched = false;
+        for _ in 0..BROKER_CONTROL_BURST {
+            match control_rx.try_recv() {
+                Ok(command) => {
+                    dispatched = true;
+                    dispatch_broker_command(&pool, &metrics, command);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+
+        match telemetry_rx.try_recv() {
             Ok(command) => {
-                debug_assert_eq!(command.kind, kind);
+                dispatched = true;
                 dispatch_broker_command(&pool, &metrics, command);
             }
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => break,
+            Err(TryRecvError::Empty) => {
+                if dispatched {
+                    metrics.telemetry_yields.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Err(TryRecvError::Disconnected) => {}
+        }
+
+        if dispatched {
+            continue;
+        }
+
+        match control_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
+            Ok(command) => {
+                dispatch_broker_command(&pool, &metrics, command);
+                continue;
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {}
+        }
+
+        match telemetry_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
+            Ok(command) => dispatch_broker_command(&pool, &metrics, command),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {}
         }
     }
+    pool.shutdown();
 }
 
 fn dispatch_broker_command(pool: &SharedPool, metrics: &BrokerMetrics, command: BrokerCommand) {
@@ -1097,8 +1024,8 @@ async fn shutdown_signal(state: AppState) {
 impl AppState {
     fn submit_broker(&self, kind: PoolKind, request: BrokerRequest) -> Result<BrokerResponse> {
         let timeout_ms = match kind {
-            PoolKind::Control => self.inner.broker_control_timeout_ms,
-            PoolKind::Telemetry => self.inner.broker_telemetry_timeout_ms,
+            PoolKind::Control => CONTROL_POOL_WAIT_LIMIT_MS,
+            PoolKind::Telemetry => TELEMETRY_POOL_WAIT_LIMIT_MS,
         };
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let tx = match kind {
@@ -1226,17 +1153,13 @@ impl AppState {
     fn list(&self, path: &str) -> Result<Vec<String>> {
         self.ensure_connected()?;
         if is_cacheable_list_path(path) {
-            return self.cached_read(path, || {
-                match self.submit_broker(
-                    PoolKind::Telemetry,
-                    BrokerRequest::List {
-                        path: path.to_owned(),
-                    },
-                )? {
-                    BrokerResponse::Lines(lines) => Ok(lines),
-                    BrokerResponse::Unit => Ok(Vec::new()),
-                }
-            });
+            if let Some(lines) = self.read_cache_get(path) {
+                return Ok(lines);
+            }
+            self.inner
+                .broker
+                .proc_cache_misses
+                .fetch_add(1, Ordering::Relaxed);
         }
         let lines = match self.submit_broker(
             PoolKind::Telemetry,
@@ -1247,23 +1170,22 @@ impl AppState {
             BrokerResponse::Lines(lines) => lines,
             BrokerResponse::Unit => Vec::new(),
         };
+        if is_cacheable_list_path(path) {
+            self.read_cache_insert(path, lines.clone());
+        }
         Ok(lines)
     }
 
     fn read(&self, path: &str) -> Result<Vec<String>> {
         self.ensure_connected()?;
         if is_cacheable_read_path(path) {
-            return self.cached_read(path, || {
-                match self.submit_broker(
-                    PoolKind::Telemetry,
-                    BrokerRequest::Read {
-                        path: path.to_owned(),
-                    },
-                )? {
-                    BrokerResponse::Lines(lines) => Ok(lines),
-                    BrokerResponse::Unit => Ok(Vec::new()),
-                }
-            });
+            if let Some(lines) = self.read_cache_get(path) {
+                return Ok(lines);
+            }
+            self.inner
+                .broker
+                .proc_cache_misses
+                .fetch_add(1, Ordering::Relaxed);
         }
         let lines = match self.submit_broker(
             PoolKind::Telemetry,
@@ -1274,6 +1196,9 @@ impl AppState {
             BrokerResponse::Lines(lines) => lines,
             BrokerResponse::Unit => Vec::new(),
         };
+        if is_cacheable_read_path(path) {
+            self.read_cache_insert(path, lines.clone());
+        }
         Ok(lines)
     }
 
@@ -1375,31 +1300,6 @@ impl AppState {
         self.inner.request_auth_token.as_str()
     }
 
-    fn cached_read<F>(&self, path: &str, fetch: F) -> Result<Vec<String>>
-    where
-        F: FnOnce() -> Result<Vec<String>>,
-    {
-        if let Some(lines) = self.read_cache_get(path) {
-            return Ok(lines);
-        }
-        let generation = self.read_cache_generation();
-        let gate = self.read_cache_gate(path);
-        let _guard = gate.lock().expect("cache gate lock poisoned");
-        if let Some(lines) = self.read_cache_get(path) {
-            return Ok(lines);
-        }
-        self.inner
-            .broker
-            .proc_cache_misses
-            .fetch_add(1, Ordering::Relaxed);
-        let result = fetch();
-        if let Ok(lines) = &result {
-            self.read_cache_insert_if_current(path, lines.clone(), generation);
-        }
-        self.read_cache_finish_gate(path, &gate);
-        result
-    }
-
     fn read_cache_get(&self, path: &str) -> Option<Vec<String>> {
         let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
         let entry = cache.entries.get(path).cloned()?;
@@ -1415,36 +1315,8 @@ impl AppState {
         Some(entry.lines)
     }
 
-    fn read_cache_generation(&self) -> u64 {
-        let cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
-        cache.generation
-    }
-
-    fn read_cache_gate(&self, path: &str) -> Arc<Mutex<()>> {
+    fn read_cache_insert(&self, path: &str, lines: Vec<String>) {
         let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
-        cache
-            .inflight
-            .entry(path.to_owned())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    }
-
-    fn read_cache_finish_gate(&self, path: &str, gate: &Arc<Mutex<()>>) {
-        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
-        if cache
-            .inflight
-            .get(path)
-            .is_some_and(|candidate| Arc::ptr_eq(candidate, gate))
-        {
-            cache.inflight.remove(path);
-        }
-    }
-
-    fn read_cache_insert_if_current(&self, path: &str, lines: Vec<String>, generation: u64) {
-        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
-        if cache.generation != generation {
-            return;
-        }
         if !cache.entries.contains_key(path)
             && cache.entries.len() >= DEFAULT_PROC_CACHE_MAX_ENTRIES
         {
@@ -1469,7 +1341,6 @@ impl AppState {
 
     fn read_cache_invalidate_for_write(&self, write_path: &str) {
         let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
-        cache.generation = cache.generation.wrapping_add(1);
         let Some(namespaces) = cache_invalidation_namespaces(write_path) else {
             cache.entries.clear();
             cache.order.clear();
@@ -2167,8 +2038,6 @@ mod tests {
             ticket: None,
             pool_control_sessions: Some(3),
             pool_telemetry_sessions: Some(12),
-            broker_control_timeout_ms: DEFAULT_CONTROL_POOL_WAIT_LIMIT_MS,
-            broker_telemetry_timeout_ms: DEFAULT_TELEMETRY_POOL_WAIT_LIMIT_MS,
             mock: true,
             allow_non_loopback_bind: false,
         };
@@ -2189,27 +2058,5 @@ mod tests {
             unchanged.pool.telemetry_sessions,
             CohshPolicy::from_generated().pool.telemetry_sessions
         );
-    }
-
-    #[test]
-    fn broker_timeout_normalization_rejects_zero_and_preserves_defaults() {
-        assert_eq!(
-            normalize_broker_timeout_ms(None, 5_000, "test-timeout").expect("default"),
-            5_000
-        );
-        assert_eq!(
-            normalize_broker_timeout_ms(Some(30_000), 5_000, "test-timeout").expect("override"),
-            30_000
-        );
-        let err = normalize_broker_timeout_ms(Some(0), 5_000, "test-timeout")
-            .expect_err("zero timeout rejected");
-        assert!(err.to_string().contains("test-timeout"));
-        let err = normalize_broker_timeout_ms(
-            Some(MAX_BROKER_POOL_WAIT_LIMIT_MS + 1),
-            5_000,
-            "test-timeout",
-        )
-        .expect_err("oversized timeout rejected");
-        assert!(err.to_string().contains("must be <="));
     }
 }

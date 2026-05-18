@@ -19,12 +19,9 @@ The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 
   prevent uncontrolled allocations. The serial façade uses `heapless::spsc::Queue` staging buffers sized at 256 bytes for RX and
   TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic allocation.
 - The virtio-console driver mirrors device descriptor rings with bounded `heapless::spsc::Queue` structures (mirroring the RX/TX
-  staging buffers) so host tests can exercise the driver without MMIO. Pending TCP console command lines are staged in a
-  `heapless::Deque` (depth 32), while remote response traffic uses bounded priority/non-priority queues sized for Pi 4 Wi-Fi
-  bursts (128 priority lines and 512 non-priority lines) before the event pump forwards them into the parser or TCP socket.
-- Pi 4 network backends use the board memory budget while staying bounded: CYW43455 Wi-Fi keeps RX glom descriptors/backlog at
-  64 entries with a 64-frame RX pump budget, and GENETv5 uses the hardware 256-descriptor RX/TX rings plus a 128-frame software
-  RX ready queue. Both paths share the enlarged smoltcp console windows (16 KiB RX, 64 KiB TX).
+  staging buffers) so host tests can exercise the driver without MMIO. Pending TCP console lines are staged in a
+  `heapless::Deque` (depth 8) before the event pump forwards them into the parser, providing a deterministic envelope for
+  remote operator traffic.
 - Networking telemetry (`link_up`, `tx_drops`, `last_poll_ms`) is captured in a copyable struct so audit sinks can log
   descriptor pressure without touching heap allocations. This telemetry is emitted whenever the event pump observes network
   activity.

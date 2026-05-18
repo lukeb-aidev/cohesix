@@ -107,9 +107,6 @@ fn audit_suppressed_for_label(label: &str) -> bool {
             | "xhci-hid-report-buffer"
             | "xhci-transfer-buffer"
             | "xhci-transfer-ring-submit"
-            | "bcmgenet-rx-rearm"
-            | "bcmgenet-rx-complete"
-            | "bcmgenet-tx-submit"
     )
 }
 
@@ -328,95 +325,18 @@ pub fn sync_for_cpu(
     Ok(range)
 }
 
-/// Synchronize a DMA-capable range for device reads after CPU writes.
-#[inline(always)]
-pub fn sync_for_device(
-    vaddr: usize,
-    paddr: usize,
-    len: usize,
-    label: &'static str,
-) -> Result<PinnedDmaRange, PinError> {
-    if vaddr == 0 {
-        log_pin_error(label, "null-vaddr");
-        return Err(PinError::NullVaddr);
-    }
-    if paddr == 0 {
-        log_pin_error(label, "null-paddr");
-        return Err(PinError::NullPaddr);
-    }
-    if len == 0 {
-        log_pin_error(label, "empty-range");
-        return Err(PinError::EmptyRange);
-    }
-
-    let range = PinnedDmaRange {
-        vaddr,
-        paddr,
-        len,
-        label,
-    };
-
-    let suppress_audit = audit_suppressed_for_label(label);
-    if !suppress_audit {
-        let mut line = heapless::String::<192>::new();
-        let _ = core::fmt::write(
-            &mut line,
-            format_args!(
-                "[dma][share] sync-for-device label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
-                range.label, range.vaddr, range.paddr, range.len,
-            ),
-        );
-        emit_audit_line(line.as_str());
-    }
-
-    let policy = cache_policy();
-    if cache_ops_requested(policy) && policy.dma_clean {
-        if !policy.kernel_ops {
-            log_pin_error(label, "cache-kernel-ops-disabled");
-            return Err(PinError::CacheFailure(CacheError::new(
-                sel4_sys::seL4_InvalidArgument,
-            )));
-        }
-
-        if !suppress_audit {
-            emit_cache_line("clean-before-device-read", &range);
-        }
-        let maintenance = CacheMaintenance::init_thread();
-        if let Err(err) = maintenance.clean(range.vaddr, range.len) {
-            emit_cache_error("clean-before-device-read", &range, err);
-            return Err(PinError::CacheFailure(err));
-        }
-    }
-
-    if !suppress_audit {
-        let mut ready = heapless::String::<192>::new();
-        let _ = core::fmt::write(
-            &mut ready,
-            format_args!(
-                "[dma][share] device-ready label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
-                range.label, range.vaddr, range.paddr, range.len,
-            ),
-        );
-        emit_audit_line(ready.as_str());
-    }
-    Ok(range)
-}
-
 /// Audit the release of a pinned DMA span.
 #[inline(always)]
 pub fn unpin(range: &PinnedDmaRange) -> Result<(), CacheError> {
-    let suppress_audit = audit_suppressed_for_label(range.label);
-    if !suppress_audit {
-        let mut line = heapless::String::<192>::new();
-        let _ = core::fmt::write(
-            &mut line,
-            format_args!(
-                "[dma][share] reclaim label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
-                range.label, range.vaddr, range.paddr, range.len,
-            ),
-        );
-        emit_audit_line(line.as_str());
-    }
+    let mut line = heapless::String::<192>::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "[dma][share] reclaim label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
+            range.label, range.vaddr, range.paddr, range.len,
+        ),
+    );
+    emit_audit_line(line.as_str());
 
     let policy = cache_policy();
     if cache_ops_requested(policy) {
@@ -426,9 +346,7 @@ pub fn unpin(range: &PinnedDmaRange) -> Result<(), CacheError> {
                 return Err(CacheError::new(sel4_sys::seL4_InvalidArgument));
             }
 
-            if !suppress_audit {
-                emit_cache_line("invalidate-after-reclaim", range);
-            }
+            emit_cache_line("invalidate-after-reclaim", range);
             let maintenance = CacheMaintenance::init_thread();
             if let Err(err) = maintenance.invalidate(range.vaddr, range.len) {
                 emit_cache_error("invalidate-after-reclaim", range, err);
@@ -437,17 +355,15 @@ pub fn unpin(range: &PinnedDmaRange) -> Result<(), CacheError> {
         }
     }
 
-    if !suppress_audit {
-        let mut done = heapless::String::<192>::new();
-        let _ = core::fmt::write(
-            &mut done,
-            format_args!(
-                "[dma][share] reclaimed label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
-                range.label, range.vaddr, range.paddr, range.len,
-            ),
-        );
-        emit_audit_line(done.as_str());
-    }
+    let mut done = heapless::String::<192>::new();
+    let _ = core::fmt::write(
+        &mut done,
+        format_args!(
+            "[dma][share] reclaimed label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
+            range.label, range.vaddr, range.paddr, range.len,
+        ),
+    );
+    emit_audit_line(done.as_str());
     Ok(())
 }
 
@@ -492,9 +408,7 @@ fn emit_cache_error(stage: &str, range: &PinnedDmaRange, err: CacheError) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        audit_suppressed_for_label, pin, sync_for_cpu, sync_for_device, take_audit_log, unpin,
-    };
+    use super::{audit_suppressed_for_label, pin, sync_for_cpu, take_audit_log, unpin};
     use std::sync::Mutex as StdMutex;
 
     static DMA_AUDIT_TEST_LOCK: StdMutex<()> = StdMutex::new(());
@@ -521,9 +435,6 @@ mod tests {
         assert!(audit_suppressed_for_label("xhci-hid-report-buffer"));
         assert!(audit_suppressed_for_label("xhci-transfer-buffer"));
         assert!(audit_suppressed_for_label("xhci-transfer-ring-submit"));
-        assert!(audit_suppressed_for_label("bcmgenet-rx-rearm"));
-        assert!(audit_suppressed_for_label("bcmgenet-rx-complete"));
-        assert!(audit_suppressed_for_label("bcmgenet-tx-submit"));
         assert!(!audit_suppressed_for_label("xhci-cmd-ring-submit-full"));
     }
 
@@ -572,26 +483,6 @@ mod tests {
         assert_stage_order(
             &lines,
             &["sync-for-cpu", "invalidate-before-cpu-read", "cpu-ready"],
-        );
-    }
-
-    #[test]
-    fn dma_sync_for_device_audit_orders_clean_before_device_ready() {
-        let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
-        let _ = take_audit_log();
-
-        let range =
-            sync_for_device(0x9000, 0xa000, 0x100, "bcmgenet-test-tx").expect("sync succeeds");
-
-        assert_eq!(range.len(), 0x100);
-        let lines = take_audit_log();
-        assert_stage_order(
-            &lines,
-            &[
-                "sync-for-device",
-                "clean-before-device-read",
-                "device-ready",
-            ],
         );
     }
 

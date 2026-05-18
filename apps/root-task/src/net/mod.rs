@@ -62,13 +62,8 @@ pub const AUTH_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
     10 * 60 * 1000
 };
 
-/// Number of inbound console command lines retained between pump cycles.
-pub const CONSOLE_QUEUE_DEPTH: usize = 32;
-/// Number of non-priority outbound console response lines retained while the
-/// transport drains. Sized to hold a full `/log/queen.log` snapshot on Pi 4 WiFi.
-pub const CONSOLE_OUTBOUND_QUEUE_DEPTH: usize = 512;
-/// Number of priority outbound console lines retained for ACK/ERR/END traffic.
-pub const CONSOLE_PRIORITY_QUEUE_DEPTH: usize = 128;
+/// Number of console lines retained between pump cycles.
+pub const CONSOLE_QUEUE_DEPTH: usize = 8;
 
 pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(_reason: &str) -> bool {
     // The bounded startup-link / sideband recovery ladder already retries
@@ -552,10 +547,6 @@ pub struct NetDeviceCounters {
     pub tx_invalid_used_state: u64,
     /// TX allocations blocked while descriptors remain in-flight.
     pub tx_alloc_blocked_inflight: u64,
-    /// TX attempts blocked by the per-service-turn hardware budget.
-    pub tx_budget_blocked: u64,
-    /// TX attempts blocked by missing immediate device credit.
-    pub tx_credit_blocked: u64,
     /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.
     pub wifi_assoc: u64,
     /// Wi-Fi link state, encoded as 0 or 1 for compact diagnostics.
@@ -611,18 +602,6 @@ pub struct NetCounters {
     pub tx_zero_len_attempt: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
-    /// TX publishes rejected due to duplicate or busy slot state.
-    pub tx_dup_publish_blocked: u64,
-    /// TX used entries ignored due to duplicate completions.
-    pub tx_dup_used_ignored: u64,
-    /// TX used entries referencing unexpected heads or generations.
-    pub tx_invalid_used_state: u64,
-    /// TX allocations blocked while descriptors remain in-flight.
-    pub tx_alloc_blocked_inflight: u64,
-    /// TX attempts blocked by the per-service-turn hardware budget.
-    pub tx_budget_blocked: u64,
-    /// TX attempts blocked by missing immediate device credit.
-    pub tx_credit_blocked: u64,
     /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.
     pub wifi_assoc: u64,
     /// Wi-Fi link state, encoded as 0 or 1 for compact diagnostics.
@@ -821,9 +800,6 @@ pub trait NetDevice: Device {
     fn bringup_status_label(&self) -> Option<&'static str> {
         None
     }
-
-    /// Reset per-service-turn runtime budgets before smoltcp polls the device.
-    fn begin_service_turn(&mut self) {}
 
     /// Optional debug snapshot hook surfaced to stack callers.
     fn debug_snapshot(&mut self);

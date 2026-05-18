@@ -1,4 +1,4 @@
-// Copyright © 2026 Lukas Bower
+// Copyright © 2025 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: TCP console session management shared between kernel and host stacks, including buffering and drop policy.
 // Author: Lukas Bower
@@ -7,14 +7,11 @@
 
 use core::{fmt::Write, ops::Range};
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use portable_atomic::{AtomicBool, Ordering};
 use secure9p_codec::MAX_MSIZE;
 
-use super::{
-    ConsoleLine, AUTH_TIMEOUT_MS, CONSOLE_OUTBOUND_QUEUE_DEPTH, CONSOLE_PRIORITY_QUEUE_DEPTH,
-    CONSOLE_QUEUE_DEPTH,
-};
+use super::{ConsoleLine, AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
 use crate::console::proto::{render_ack, AckStatus, LineFormatError};
 use crate::observe::{IngestMetrics, IngestSnapshot};
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -75,8 +72,8 @@ pub struct TcpConsoleServer {
     frame_payload_len: Option<usize>,
     drop_remaining: usize,
     inbound: Deque<ConsoleLine, CONSOLE_QUEUE_DEPTH>,
-    priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_PRIORITY_QUEUE_DEPTH>,
-    outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_OUTBOUND_QUEUE_DEPTH>,
+    priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, { CONSOLE_QUEUE_DEPTH * 4 }>,
+    outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     // Retains the oldest and newest console lines while no authenticated client is
     // attached to avoid saturating the live outbound queue with boot-time bursts.
     preauth_first: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, PREAUTH_FIRST_CAPACITY>,
@@ -128,27 +125,27 @@ impl TcpConsoleServer {
             return;
         }
         let line_ptr = self.line_buffer.as_bytes().as_ptr() as usize;
-        debug!(
+        info!(
             target: "net-console",
             "[net-console] addr marker={marker} label=line-buffer ptr=0x{line_ptr:016x} len=0x{len:04x}",
             len = DEFAULT_LINE_CAPACITY,
         );
         if let Some(ptr) = Self::snapshot_console_queue_ptr(&mut self.inbound) {
-            debug!(
+            info!(
                 target: "net-console",
                 "[net-console] addr marker={marker} label=inbound-queue ptr=0x{ptr:016x} len=0x{len:04x}",
                 len = DEFAULT_LINE_CAPACITY,
             );
         }
         if let Some(ptr) = Self::snapshot_string_queue_ptr(&mut self.priority_outbound) {
-            debug!(
+            info!(
                 target: "net-console",
                 "[net-console] addr marker={marker} label=priority-outbound ptr=0x{ptr:016x} len=0x{len:04x}",
                 len = DEFAULT_LINE_CAPACITY,
             );
         }
         if let Some(ptr) = Self::snapshot_string_queue_ptr(&mut self.outbound) {
-            debug!(
+            info!(
                 target: "net-console",
                 "[net-console] addr marker={marker} label=outbound ptr=0x{ptr:016x} len=0x{len:04x}",
                 len = DEFAULT_LINE_CAPACITY,
@@ -163,15 +160,16 @@ impl TcpConsoleServer {
 
     fn set_state(&mut self, next: SessionState) {
         if self.state != next {
-            debug!("[cohsh-net][auth] state: {:?} -> {:?}", self.state, next);
+            info!("[cohsh-net][auth] state: {:?} -> {:?}", self.state, next);
             self.state = next;
         }
     }
 
     fn log_expected_auth(&self, expected_len: usize) {
         debug!(
-            "[cohsh-net][auth] expected prefix=\"{}\" version=1 token=redacted total_len={} bytes",
+            "[cohsh-net][auth] expected prefix=\"{}\" version=1 token_len={} total_len={} bytes",
             AUTH_PREFIX.trim_end(),
+            self.auth_token.len(),
             expected_len
         );
     }
@@ -236,20 +234,22 @@ impl TcpConsoleServer {
         self.conn_id = conn_id;
         let expected_len = self.expected_frame_len();
         self.log_expected_auth(expected_len);
-        debug!(
+        info!(
             "[net-console] handshake: expecting client hello len={} magic=\"{}\" version=1",
             expected_len,
             AUTH_PREFIX.trim_end()
         );
         #[cfg(feature = "net-trace-31337")]
-        log::info!(
-            "[cohsh-net] conn id={} auth: waiting for client hello magic=\"{}\" token=redacted",
+        info!(
+            "[cohsh-net] conn id={} auth: waiting for client hello (expected_len={} magic=\"{}\" token_len={})",
             self.conn_label(),
-            AUTH_PREFIX.trim_end()
+            expected_len,
+            AUTH_PREFIX.trim_end(),
+            self.auth_token.len()
         );
         self.auth_deadline_ms = Some(now_ms.saturating_add(AUTH_TIMEOUT_MS));
-        debug!("[net-console] auth begin (challenge staged)");
-        debug!("[net-console] auth: waiting for handshake payload");
+        info!("[net-console] auth begin (challenge staged)");
+        info!("[net-console] auth: waiting for handshake payload");
     }
 
     /// Tear down any per-connection state.
@@ -324,7 +324,7 @@ impl TcpConsoleServer {
                         }
                     };
                     #[cfg(feature = "net-trace-31337")]
-                    log::info!(
+                    info!(
                         "[cohsh-net] conn id={} auth: received len={}",
                         self.conn_label(),
                         line.len(),
@@ -431,13 +431,13 @@ impl TcpConsoleServer {
     fn process_auth(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
         // Expected client hello: ASCII "AUTH " prefix and token payload.
         let raw_bytes = line.as_bytes();
-        log::debug!(
+        log::info!(
             "[cohsh-net][auth] parsing auth frame (len={})",
             raw_bytes.len()
         );
         let expected_len = self.expected_frame_len();
         let observed_len = raw_bytes.len();
-        debug!("[cohsh-net] auth: hello received (len={})", observed_len);
+        info!("[cohsh-net] auth: hello received (len={})", observed_len);
         #[cfg(feature = "net-trace-31337")]
         log::info!(
             "[cohsh-net] conn id={} auth: parsing frame observed_len={}",
@@ -446,8 +446,10 @@ impl TcpConsoleServer {
         );
         if observed_len != expected_len {
             warn!(
-                "[cohsh-net][auth] conn id={} invalid frame length redacted=yes",
-                self.conn_label()
+                "[cohsh-net][auth] conn id={} invalid frame length: expected={}, got={}",
+                self.conn_label(),
+                expected_len,
+                observed_len
             );
             self.log_reject(REASON_INVALID_LENGTH);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_INVALID_LENGTH));
@@ -459,8 +461,9 @@ impl TcpConsoleServer {
 
         let Some(stripped) = line.strip_prefix(AUTH_PREFIX) else {
             warn!(
-                "[cohsh-net][auth] conn id={} reject: missing AUTH prefix redacted=yes",
-                self.conn_label()
+                "[cohsh-net][auth] conn id={} reject: missing AUTH prefix raw_len={}",
+                self.conn_label(),
+                raw_bytes.len(),
             );
             self.log_reject(REASON_EXPECTED_TOKEN);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_EXPECTED_TOKEN));
@@ -473,8 +476,9 @@ impl TcpConsoleServer {
         let token = stripped.trim();
         if token.is_empty() {
             warn!(
-                "[cohsh-net][auth] conn id={} reject: empty token redacted=yes",
-                self.conn_label()
+                "[cohsh-net][auth] conn id={} reject: empty token raw_len={}",
+                self.conn_label(),
+                raw_bytes.len(),
             );
             self.log_reject(REASON_EXPECTED_TOKEN);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_EXPECTED_TOKEN));
@@ -495,19 +499,23 @@ impl TcpConsoleServer {
             );
         }
 
-        debug!(
-            "[cohsh-net] parsed handshake: conn_id={} token=redacted",
-            self.conn_label()
+        info!(
+            "[cohsh-net] parsed handshake: conn_id={} token_len={}",
+            self.conn_label(),
+            token.len()
         );
-        debug!(
-            "[net-console] handshake: got auth token state={:?} token=redacted",
+        info!(
+            "[net-console] handshake: got auth token len={} state={:?}",
+            token.len(),
             self.state
         );
 
         if token != self.auth_token {
             warn!(
-                "[cohsh-net][auth] reject: conn id={} invalid token redacted=yes",
-                self.conn_label()
+                "[cohsh-net][auth] reject: conn id={} invalid token (got_len={}, expected_len={})",
+                self.conn_label(),
+                token.len(),
+                self.auth_token.len()
             );
             self.log_reject(REASON_INVALID_TOKEN);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some(DETAIL_REASON_INVALID_TOKEN));
@@ -522,12 +530,13 @@ impl TcpConsoleServer {
         let _ = self.enqueue_auth_ack(AckStatus::Ok, None);
         let preauth_stats = self.flush_preauth_buffer();
         self.enqueue_preauth_summary(preauth_stats, "auth-flush");
-        debug!(
-            "[cohsh-net][auth] accepted client: conn_id={} version={:?} token=redacted",
+        info!(
+            "[cohsh-net][auth] accepted client: conn_id={} version={:?} token_len={}",
             self.conn_label(),
-            1u8
+            1u8,
+            token.len()
         );
-        debug!("[net-console] auth ok");
+        info!("[net-console] auth ok");
         SessionEvent::Authenticated
     }
 
@@ -677,7 +686,7 @@ impl TcpConsoleServer {
             }
         };
         result.map(|len| {
-            debug!(
+            info!(
                 "[cohsh-net] send: auth response len={} status={:?}",
                 len, status
             );
@@ -785,7 +794,7 @@ impl TcpConsoleServer {
         {
             let _ = summary.push_str("[net-console] pre-auth summary");
         }
-        debug!(
+        info!(
             "[cohsh-net] pre-auth summary: reason={} flushed={} dropped={}",
             reason, stats.flushed, stats.dropped
         );
@@ -850,16 +859,17 @@ impl TcpConsoleServer {
     }
 
     fn evict_oldest_non_priority(&mut self) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+        let mut scratch: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH> =
+            HeaplessVec::new();
         let mut dropped: Option<HeaplessString<DEFAULT_LINE_CAPACITY>> = None;
-        let original_len = self.outbound.len();
-        for _ in 0..original_len {
-            let Some(line) = self.outbound.pop_front() else {
-                break;
-            };
+        while let Some(line) = self.outbound.pop_front() {
             if dropped.is_none() && !Self::is_priority_line(line.as_str()) {
                 dropped = Some(line);
                 continue;
             }
+            let _ = scratch.push(line);
+        }
+        for line in scratch {
             let _ = self.outbound.push_back(line);
         }
         dropped
@@ -942,18 +952,6 @@ mod tests {
     }
 
     #[test]
-    fn auth_logging_templates_do_not_expose_secret_material() {
-        let stack_src = include_str!("stack.rs");
-        let console_src = include_str!("console_srv.rs");
-
-        assert!(!stack_src.contains(&format!("{} {}", "frame", "hex")));
-        assert!(!stack_src.contains(&format!("{} {}", "recv", "line on TCP session")));
-        assert!(!console_src.contains(&format!("{}{}", "token", "_len")));
-        assert!(!console_src.contains(&format!("{}{}", "expected", "_len={}")));
-        assert!(!console_src.contains(&format!("{}{}", "got", "_len={}")));
-    }
-
-    #[test]
     fn oversized_frame_after_auth_emits_err_frame() {
         let mut server = TcpConsoleServer::new(TOKEN, 10_000);
         server.begin_session(0, Some(4));
@@ -1028,30 +1026,6 @@ mod tests {
 
         assert!(server.enqueue_outbound("   \t").is_ok());
         assert!(!server.has_outbound());
-    }
-
-    #[test]
-    fn live_outbound_queue_holds_full_log_snapshot_window() {
-        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
-        server.begin_session(0, Some(9));
-        let payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
-        assert_eq!(
-            server.ingest(payload.as_slice(), 1),
-            SessionEvent::Authenticated
-        );
-        let _ = server.pop_outbound();
-
-        for idx in 0..CONSOLE_OUTBOUND_QUEUE_DEPTH {
-            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-            write!(&mut line, "log line {idx}").unwrap();
-            assert!(server.enqueue_outbound(line.as_str()).is_ok());
-        }
-
-        let mut drained = 0usize;
-        while server.pop_outbound().is_some() {
-            drained = drained.saturating_add(1);
-        }
-        assert_eq!(drained, CONSOLE_OUTBOUND_QUEUE_DEPTH);
     }
 
     #[test]

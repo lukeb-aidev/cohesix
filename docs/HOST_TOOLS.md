@@ -25,17 +25,15 @@ export HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token
 `coh`, `cohsh`, and `hive-gateway` reject the insecure placeholder token `changeme` in non-mock mode.
 
 **Console exclusivity**
-The TCP console remains a single authority surface. Do not attach independent direct clients (`cohsh`, `swarmui`, `coh`, `gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`, `cas-tool`, or a Python `TcpBackend`) to the same VM at the same time. `cohsh` enforces this with a lock file; set `COHSH_CONSOLE_LOCK=0` only if you understand the risk. For multiplexed deployments, run `hive-gateway` as the sole operator-facing console owner and point host tools at it using REST (`--rest-url`, `COH_REST_URL`, or `SWARMUI_REST_URL`) with request-auth configured (`--rest-auth-token` or `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` / `COHSH_REST_AUTH_TOKEN` / `COH_REST_AUTH_TOKEN`; SwarmUI also supports `SWARMUI_REST_AUTH_TOKEN`). In this mode the gateway may open a bounded internal pool of authenticated TCP sessions for read/telemetry fanout, but external tools still use REST and do not compete for direct console ownership. `coh mount --rest-url` is limited to one active mount per gateway URL (host-side lock).
+The TCP console is single-client. Only one of `cohsh`, `swarmui`, `hive-gateway`, `coh`, `gpu-bridge-host`, `host-sidecar-bridge`, `host-ticket-agent`, `cas-tool`, or a Python `TcpBackend` should be attached at a time. `cohsh` enforces this with a lock file; set `COHSH_CONSOLE_LOCK=0` only if you understand the risk. For multiplexed deployments, run `hive-gateway` as the sole console client and point host tools at it using REST (`--rest-url`, `COH_REST_URL`, or `SWARMUI_REST_URL`) with request-auth configured (`--rest-auth-token` or `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` / `COHSH_REST_AUTH_TOKEN` / `COH_REST_AUTH_TOKEN`; SwarmUI also supports `SWARMUI_REST_AUTH_TOKEN`). `coh mount --rest-url` is limited to one active mount per gateway URL (host-side lock).
 
 **Choosing a transport**
 Use the TCP console when a single tool is active and you want minimal hops. Use `hive-gateway` when you need multiple tools, remote operators, or a REST surface.
 
-`hive-gateway` coalesces concurrent identical read-only requests for hot `/proc`, `/host`, `/gpu`, and root namespace paths behind a short bounded cache. Mutating REST writes invalidate the affected namespace before the next read is served, preserving the documented console/file semantics while avoiding duplicate TCP-console round trips during benchmark fanout. Gateway worker pools are bounded by configured control and telemetry session limits so benchmark fanout cannot turn into unbounded direct console competition.
-
 | Scenario | Recommended transport | Why |
 | --- | --- | --- |
 | Single operator, local machine | TCP console | Lowest latency, simplest mental model. |
-| SwarmUI + CLI together | REST via `hive-gateway` | Direct console ownership stays centralized; REST multiplexes. |
+| SwarmUI + CLI together | REST via `hive-gateway` | Console is single-client; REST multiplexes. |
 | Remote Mac controlling a GPU host | REST via SSH tunnel | Keeps console on the host, secure remote access. |
 | Multiple publishers (gpu + host-sidecar) | REST via `hive-gateway` | One console client, many REST clients. |
 
@@ -89,7 +87,7 @@ Canonical operator shell for Cohesix. Runs on the host and attaches to NineDoor 
 # TCP console (single client).
 ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen
 
-# REST gateway (multiplexed; hive-gateway is the operator-facing console owner).
+# REST gateway (multiplexed; hive-gateway is the sole console client).
 ./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 \
   --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --role queen
 
@@ -547,10 +545,6 @@ Host-only REST gateway that maps 1:1 to Cohesix console/file semantics (`LS`, `C
                                 Override pooled control session capacity
       --pool-telemetry-sessions <POOL_TELEMETRY_SESSIONS>
                                 Override pooled telemetry session capacity
-      --broker-control-timeout-ms <BROKER_CONTROL_TIMEOUT_MS>
-                                Control broker response timeout in ms
-      --broker-telemetry-timeout-ms <BROKER_TELEMETRY_TIMEOUT_MS>
-                                Telemetry/read broker response timeout in ms
       --mock                     Use the in-process mock NineDoor backend
   -h, --help                     Print help
   -V, --version                  Print version
@@ -570,7 +564,6 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 ### Notes
 - Environment overrides: `HIVE_GATEWAY_BIND`, `HIVE_GATEWAY_MOCK`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_TCP_HOST`, `COH_TCP_PORT`, `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`), `COH_ROLE`, `COH_TICKET`, `HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND`, `HIVE_GATEWAY_ALLOW_INSECURE_CONSOLE_AUTH`, `COHESIX_ALLOW_INSECURE_CONSOLE_AUTH`.
 - Pool overrides: `HIVE_GATEWAY_POOL_CONTROL_SESSIONS`, `HIVE_GATEWAY_POOL_TELEMETRY_SESSIONS`.
-- Broker timeout overrides: `HIVE_GATEWAY_BROKER_CONTROL_TIMEOUT_MS`, `HIVE_GATEWAY_BROKER_TELEMETRY_TIMEOUT_MS`; valid range is `1..=120000` ms. Keep the default for local QEMU and raise these when a physical target has multi-second console reads.
 - OpenAPI spec + examples live in `docs/HOST_API.md` and are served at `/v1/openapi.yaml`.
 - Swagger UI is served at `/docs` and uses public CDN assets; use the YAML spec for air-gapped environments.
 - The gateway is the console client; do not attach `cohsh` or `swarmui` in console mode at the same time. Use `SWARMUI_TRANSPORT=rest` and host tool `--rest-url` flags when multiplexing.
@@ -729,7 +722,7 @@ Real-world flow (continuous publish + REST read):
 ```bash
 ./qemu/run.sh
 
-# Start the REST gateway (operator-facing console owner).
+# Start the REST gateway (sole console client).
 COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
   HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
   COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \

@@ -17,15 +17,13 @@ use core::hint::spin_loop;
 use core::ops::Range;
 use core::sync::atomic::{compiler_fence, fence, Ordering};
 
-use heapless::{Deque, Vec as HeaplessVec};
-use log::{debug, info, trace, warn};
+use heapless::Vec as HeaplessVec;
+use log::{debug, info, warn};
 use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
-use crate::hal::{
-    bcmgenet as genet_hal, dma, runtime_service_budget, DeviceHal, HalError, HardwareServiceClass,
-};
+use crate::hal::{bcmgenet as genet_hal, dma, DeviceHal, HalError};
 use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError};
 use crate::sel4::{RamFrame, PAGE_BITS};
 
@@ -33,7 +31,7 @@ const PAGE_SIZE: usize = 1 << PAGE_BITS;
 const MAX_FRAME_LEN: usize = crate::net_consts::MAX_FRAME_LEN;
 const RX_RING_DESCS: usize = HW_TOTAL_DESCS;
 const TX_RING_DESCS: usize = HW_TOTAL_DESCS;
-const RX_READY_CAP: usize = 128;
+const RX_READY_CAP: usize = 8;
 
 const GENET_SYS_OFF: usize = 0x0000;
 const GENET_EXT_OFF: usize = 0x0080;
@@ -93,7 +91,6 @@ const MII_CTRL1000: u8 = 9;
 const MII_STAT1000: u8 = 10;
 const MII_PHYSID1: u8 = 2;
 const MII_PHYSID2: u8 = 3;
-const PI4_GENET_PHY_ADDR: u8 = 1;
 const MII_BMSR_LSTATUS: u16 = 1 << 2;
 const MII_BMSR_ANEGCOMPLETE: u16 = 1 << 5;
 const MII_BMCR_SPEED100: u16 = 1 << 13;
@@ -160,12 +157,6 @@ const TX_STALL_LOG_POLL_THRESHOLD: u32 = 8_192;
 const TX_BACKPRESSURE_LOG_POLL_THRESHOLD: u32 = 8_192;
 const TX_DROP_LOG_INTERVAL: u32 = 512;
 const RX_IDLE_LOG_POLL_THRESHOLD: u32 = 65_536;
-const GENET_NETWORK_SERVICE_BUDGET: crate::hal::HardwareServiceBudget =
-    runtime_service_budget(HardwareServiceClass::Network);
-const GENET_RX_SERVICE_OPS: usize = GENET_NETWORK_SERVICE_BUDGET.max_ops;
-const GENET_RX_SERVICE_BYTES: usize = GENET_NETWORK_SERVICE_BUDGET.max_bytes;
-const GENET_TX_SERVICE_OPS: usize = GENET_NETWORK_SERVICE_BUDGET.max_ops;
-const GENET_TX_SERVICE_BYTES: usize = GENET_NETWORK_SERVICE_BUDGET.max_bytes;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct DmaDesc {
@@ -184,12 +175,9 @@ enum BreadcrumbReason {
     TxConsJump,
     TxSwIndexInvalid,
     TxHwIndexInvalid,
-    TxReclaimFailed,
     TxFirstCompletion,
     RxProdStalled,
     RxProdRecovered,
-    RxDescInvalid,
-    RxReclaimFailed,
     RxFirstFrame,
 }
 
@@ -204,12 +192,9 @@ impl BreadcrumbReason {
             Self::TxConsJump => "tx-cons-jump",
             Self::TxSwIndexInvalid => "tx-sw-index-invalid",
             Self::TxHwIndexInvalid => "tx-hw-index-invalid",
-            Self::TxReclaimFailed => "tx-reclaim-failed",
             Self::TxFirstCompletion => "tx-first-completion",
             Self::RxProdStalled => "rx-prod-stalled",
             Self::RxProdRecovered => "rx-prod-recovered",
-            Self::RxDescInvalid => "rx-desc-invalid",
-            Self::RxReclaimFailed => "rx-reclaim-failed",
             Self::RxFirstFrame => "rx-first-frame",
         }
     }
@@ -249,25 +234,9 @@ struct DmaBreadcrumbSnapshot {
     rx_ready_len: u16,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PhyLinkStatus {
-    phy_addr: u8,
-    link_up: bool,
-    autoneg_complete: bool,
-    speed: u32,
-    resolved_speed: bool,
-}
-
-impl PhyLinkStatus {
-    const fn is_ready(self) -> bool {
-        self.link_up && (self.autoneg_complete || self.resolved_speed)
-    }
-}
-
 #[derive(Debug)]
 pub enum DriverError {
     NoDevice,
-    LinkDown,
     Hal(HalError),
     QueueInit,
 }
@@ -276,7 +245,6 @@ impl fmt::Display for DriverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoDevice => f.write_str("bcmgenet device not present"),
-            Self::LinkDown => f.write_str("bcmgenet link not ready"),
             Self::Hal(err) => write!(f, "{err}"),
             Self::QueueInit => f.write_str("bcmgenet queue init failed"),
         }
@@ -291,7 +259,7 @@ impl From<HalError> for DriverError {
 
 impl NetDriverError for DriverError {
     fn is_absent(&self) -> bool {
-        matches!(self, Self::NoDevice | Self::LinkDown)
+        matches!(self, Self::NoDevice)
     }
 }
 
@@ -305,7 +273,7 @@ pub struct BcmGenetDevice {
     tx_prod_index: u16,
     tx_cons_index: u16,
     rx_cons_index: u16,
-    rx_ready: Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_READY_CAP>,
+    rx_ready: HeaplessVec<HeaplessVec<u8, MAX_FRAME_LEN>, RX_READY_CAP>,
     mac: EthernetAddress,
     dma_cacheable: bool,
     tx_drops: u32,
@@ -316,10 +284,6 @@ pub struct BcmGenetDevice {
     tx_backpressure_logged: bool,
     rx_idle_polls: u32,
     rx_idle_logged: bool,
-    rx_service_ops_remaining: usize,
-    rx_service_bytes_remaining: usize,
-    tx_service_ops_remaining: usize,
-    tx_service_bytes_remaining: usize,
     crumb_seq: u64,
     crumb_repeat: u32,
     crumb_suppressed: u32,
@@ -385,7 +349,7 @@ impl BcmGenetDevice {
             tx_prod_index: 0,
             tx_cons_index: 0,
             rx_cons_index: 0,
-            rx_ready: Deque::new(),
+            rx_ready: HeaplessVec::new(),
             mac: EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x01]),
             dma_cacheable,
             tx_drops: 0,
@@ -396,17 +360,13 @@ impl BcmGenetDevice {
             tx_backpressure_logged: false,
             rx_idle_polls: 0,
             rx_idle_logged: false,
-            rx_service_ops_remaining: GENET_RX_SERVICE_OPS,
-            rx_service_bytes_remaining: GENET_RX_SERVICE_BYTES,
-            tx_service_ops_remaining: GENET_TX_SERVICE_OPS,
-            tx_service_bytes_remaining: GENET_TX_SERVICE_BYTES,
             crumb_seq: 0,
             crumb_repeat: 0,
             crumb_suppressed: 0,
             crumb_last_reason: None,
             crumb_last_snapshot: None,
         };
-        device.init_hardware()?;
+        device.init_hardware();
         device.mac = device.read_or_default_mac();
         device.write_mac(device.mac);
         device.refresh_tx_counters();
@@ -512,10 +472,10 @@ impl BcmGenetDevice {
         Ok(())
     }
 
-    fn init_hardware(&mut self) -> Result<(), DriverError> {
+    fn init_hardware(&mut self) {
         self.disable_dma();
         self.init_umac();
-        let phy = self.init_phy_link()?;
+        self.init_phy_link();
         self.init_rx_ring();
         self.init_tx_ring();
         self.init_rx_descriptors();
@@ -523,15 +483,6 @@ impl BcmGenetDevice {
         self.enable_dma();
         let cmd = self.read_reg32(GENET_UMAC_CMD);
         self.write_reg32(GENET_UMAC_CMD, cmd | CMD_TX_EN | CMD_RX_EN);
-        info!(
-            "[bcmgenet] phy ready addr={} link_up={} autoneg={} speed={} resolved={}",
-            phy.phy_addr,
-            phy.link_up,
-            phy.autoneg_complete,
-            speed_label(phy.speed),
-            if phy.resolved_speed { 1 } else { 0 },
-        );
-        Ok(())
     }
 
     fn init_umac(&mut self) {
@@ -567,7 +518,7 @@ impl BcmGenetDevice {
         self.write_reg32(UMAC_TX_FLUSH, 0);
     }
 
-    fn init_phy_link(&mut self) -> Result<PhyLinkStatus, DriverError> {
+    fn init_phy_link(&mut self) {
         self.write_reg32(SYS_PORT_CTRL, PORT_MODE_EXT_GPHY);
         let mut oob = self.read_reg32(EXT_RGMII_OOB_CTRL);
         oob &= !OOB_DISABLE;
@@ -581,15 +532,7 @@ impl BcmGenetDevice {
         let mut link_up = false;
         let mut autoneg_complete = false;
         let mut resolved_speed = None;
-        let Some(phy_addr) = self.discover_phy_addr() else {
-            warn!(
-                "[bcmgenet] expected Pi4 MDIO PHY addr={} not discovered; refusing ready state",
-                PI4_GENET_PHY_ADDR
-            );
-            return Err(DriverError::NoDevice);
-        };
-
-        {
+        if let Some(phy_addr) = self.discover_phy_addr() {
             if let Ok(bmcr) = self.mdio_read(phy_addr, MII_BMCR) {
                 if (bmcr & MII_BMCR_ANENABLE) == 0 {
                     let mut next = bmcr | MII_BMCR_ANENABLE | MII_BMCR_ANRESTART;
@@ -641,49 +584,29 @@ impl BcmGenetDevice {
                 speed_label(initial_speed),
                 if resolved_speed.is_some() { 1 } else { 0 },
             );
-
-            let status = PhyLinkStatus {
-                phy_addr,
-                link_up,
-                autoneg_complete,
-                speed,
-                resolved_speed: resolved_speed.is_some(),
-            };
-            if !status.is_ready() {
-                warn!(
-                    "[bcmgenet] PHY link not ready addr={} link_up={} autoneg={} resolved={}",
-                    phy_addr,
-                    link_up,
-                    autoneg_complete,
-                    if resolved_speed.is_some() { 1 } else { 0 },
-                );
-                return Err(DriverError::LinkDown);
-            }
-            self.set_umac_speed(speed);
-            Ok(status)
+        } else {
+            warn!(
+                "[bcmgenet] no MDIO PHY discovered; retaining UMAC speed={}",
+                speed_label(speed)
+            );
         }
+        self.set_umac_speed(speed);
     }
 
     fn discover_phy_addr(&self) -> Option<u8> {
-        if self.phy_addr_has_valid_id(PI4_GENET_PHY_ADDR) {
-            Some(PI4_GENET_PHY_ADDR)
-        } else {
-            warn!(
-                "[bcmgenet] Pi4 PHY addr={} did not return a valid MDIO id",
-                PI4_GENET_PHY_ADDR
-            );
-            None
+        for addr in 0..32u8 {
+            let Ok(id1) = self.mdio_read(addr, MII_PHYSID1) else {
+                continue;
+            };
+            let Ok(id2) = self.mdio_read(addr, MII_PHYSID2) else {
+                continue;
+            };
+            if id1 == 0 || id1 == u16::MAX || id2 == 0 || id2 == u16::MAX {
+                continue;
+            }
+            return Some(addr);
         }
-    }
-
-    fn phy_addr_has_valid_id(&self, addr: u8) -> bool {
-        let Ok(id1) = self.mdio_read(addr, MII_PHYSID1) else {
-            return false;
-        };
-        let Ok(id2) = self.mdio_read(addr, MII_PHYSID2) else {
-            return false;
-        };
-        id1 != 0 && id1 != u16::MAX && id2 != 0 && id2 != u16::MAX
+        None
     }
 
     fn mdio_wait_idle(&self) -> bool {
@@ -782,13 +705,6 @@ impl BcmGenetDevice {
             spin_loop();
         }
         self.write_reg32(UMAC_TX_FLUSH, 0);
-    }
-
-    fn shutdown_hardware_for_drop(&mut self) {
-        let cmd = self.read_reg32(GENET_UMAC_CMD);
-        self.write_reg32(GENET_UMAC_CMD, cmd & !(CMD_TX_EN | CMD_RX_EN));
-        tx_doorbell_barrier();
-        self.disable_dma();
     }
 
     fn enable_dma(&mut self) {
@@ -976,37 +892,6 @@ impl BcmGenetDevice {
         }
     }
 
-    const fn tx_service_available(&self) -> bool {
-        self.tx_service_ops_remaining > 0 && self.tx_service_bytes_remaining > 0
-    }
-
-    fn consume_tx_service_budget(&mut self, frame_len: usize) -> bool {
-        if self.tx_service_ops_remaining == 0 || self.tx_service_bytes_remaining == 0 {
-            return false;
-        }
-        if frame_len > self.tx_service_bytes_remaining
-            && self.tx_service_bytes_remaining < GENET_TX_SERVICE_BYTES
-        {
-            return false;
-        }
-        self.tx_service_ops_remaining = self.tx_service_ops_remaining.saturating_sub(1);
-        self.tx_service_bytes_remaining = self.tx_service_bytes_remaining.saturating_sub(frame_len);
-        true
-    }
-
-    fn record_tx_budget_blocked(&mut self, dropped: bool) {
-        if dropped {
-            self.tx_drops = self.tx_drops.saturating_add(1);
-        }
-        self.counters.tx_budget_blocked = self.counters.tx_budget_blocked.saturating_add(1);
-        self.refresh_tx_counters();
-        trace!(
-            "[bcmgenet] tx blocked reason=service-budget ops_remaining={} bytes_remaining={}",
-            self.tx_service_ops_remaining,
-            self.tx_service_bytes_remaining
-        );
-    }
-
     fn capture_breadcrumb_snapshot(&self) -> DmaBreadcrumbSnapshot {
         let tx_ring_len = self.tx_ring_len();
         let rx_ring_len = self.rx_ring_len();
@@ -1140,12 +1025,11 @@ impl BcmGenetDevice {
         }
         let new_cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
         let hw_prod = self.read_reg32(TDMA_PROD_INDEX) as u16;
-        if !ring_distance_within_ring(hw_prod, new_cons, ring_len) {
+        let hw_in_flight = ring_distance(hw_prod, new_cons) as usize;
+        if hw_in_flight > ring_len {
             self.counters.tx_invalid_used_state =
                 self.counters.tx_invalid_used_state.saturating_add(1);
             self.log_dma_breadcrumb(BreadcrumbReason::TxHwIndexInvalid);
-            self.refresh_tx_counters();
-            return;
         }
         let completed = ring_distance(new_cons, self.tx_cons_index);
         if completed == 0 {
@@ -1162,14 +1046,19 @@ impl BcmGenetDevice {
             self.refresh_tx_counters();
             return;
         }
-        if !ring_distance_within_ring(new_cons, self.tx_cons_index, ring_len) {
+        if completed as usize > ring_len {
             self.counters.tx_invalid_used_state =
                 self.counters.tx_invalid_used_state.saturating_add(1);
             self.log_dma_breadcrumb(BreadcrumbReason::TxConsJump);
-            self.refresh_tx_counters();
-            return;
         } else {
             let prev_complete = self.counters.tx_complete;
+            for completed_offset in 0..completed as usize {
+                let slot = ring_slot(
+                    self.tx_cons_index.wrapping_add(completed_offset as u16),
+                    ring_len,
+                );
+                self.unshare_tx_slot(slot);
+            }
             self.counters.tx_used_advances = self
                 .counters
                 .tx_used_advances
@@ -1208,8 +1097,8 @@ impl BcmGenetDevice {
         })
     }
 
-    fn unshare_dma_range(range: &dma::PinnedDmaRange) -> bool {
-        if let Err(err) = dma::unpin(range) {
+    fn unshare_dma_range(range: dma::PinnedDmaRange) {
+        if let Err(err) = dma::unpin(&range) {
             warn!(
                 "[bcmgenet] DMA unshare failed label={} vaddr=0x{:016x} paddr=0x{:016x} len={} err={err}",
                 range.label(),
@@ -1217,39 +1106,18 @@ impl BcmGenetDevice {
                 range.paddr(),
                 range.len(),
             );
-            false
-        } else {
-            true
         }
     }
 
-    fn unshare_rx_slot(&mut self, slot: usize) -> bool {
-        let Some(entry) = self.rx_dma_shares.get_mut(slot) else {
-            return true;
-        };
-        let Some(share) = entry.as_ref() else {
-            return true;
-        };
-        if Self::unshare_dma_range(share) {
-            *entry = None;
-            true
-        } else {
-            false
+    fn unshare_rx_slot(&mut self, slot: usize) {
+        if let Some(share) = self.rx_dma_shares.get_mut(slot).and_then(Option::take) {
+            Self::unshare_dma_range(share);
         }
     }
 
-    fn unshare_tx_slot(&mut self, slot: usize) -> bool {
-        let Some(entry) = self.tx_dma_shares.get_mut(slot) else {
-            return true;
-        };
-        let Some(share) = entry.as_ref() else {
-            return true;
-        };
-        if Self::unshare_dma_range(share) {
-            *entry = None;
-            true
-        } else {
-            false
+    fn unshare_tx_slot(&mut self, slot: usize) {
+        if let Some(share) = self.tx_dma_shares.get_mut(slot).and_then(Option::take) {
+            Self::unshare_dma_range(share);
         }
     }
 
@@ -1274,52 +1142,23 @@ impl BcmGenetDevice {
         Ok(())
     }
 
-    fn sync_dma_for_device(
-        &self,
-        vaddr: usize,
-        paddr: usize,
-        len: usize,
-        label: &'static str,
-    ) -> Result<(), DriverError> {
-        if len == 0 {
-            return Ok(());
-        }
-        compiler_fence(Ordering::Release);
-        if let Err(err) = dma::sync_for_device(vaddr, paddr, len, label) {
-            warn!(
-                "[bcmgenet] DMA device sync failed label={label} vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} len={len} err={err:?}"
-            );
-            return Err(DriverError::QueueInit);
-        }
-        Ok(())
-    }
-
     fn rearm_rx_slot(&mut self, slot: usize) {
+        self.unshare_rx_slot(slot);
         let Some(frame) = self.rx_frames.get(slot) else {
             return;
         };
         let frame_ptr = frame.ptr().as_ptr() as usize;
         let frame_paddr = frame.paddr();
-        let share_missing = self
-            .rx_dma_shares
-            .get(slot)
-            .map(Option::is_none)
-            .unwrap_or(false);
-        if share_missing {
-            let Ok(range) = self.share_dma_for_device(
-                frame_ptr,
-                frame_paddr,
-                RX_BUF_LENGTH,
-                "bcmgenet-rx-rearm",
-            ) else {
-                return;
-            };
-            let Some(share) = self.rx_dma_shares.get_mut(slot) else {
-                Self::unshare_dma_range(&range);
-                return;
-            };
-            *share = Some(range);
-        }
+        let Ok(range) =
+            self.share_dma_for_device(frame_ptr, frame_paddr, RX_BUF_LENGTH, "bcmgenet-rx-rearm")
+        else {
+            return;
+        };
+        let Some(share) = self.rx_dma_shares.get_mut(slot) else {
+            Self::unshare_dma_range(range);
+            return;
+        };
+        *share = Some(range);
         let frame_dma = genet_hal::dma_bus_addr(frame_paddr as u64);
         self.write_rx_desc(slot, frame_dma, rx_owned_len_status());
     }
@@ -1344,10 +1183,6 @@ impl BcmGenetDevice {
         if self.tx_frames.is_empty() {
             return Err(DriverError::QueueInit);
         }
-        if !self.consume_tx_service_budget(packet.len()) {
-            self.record_tx_budget_blocked(true);
-            return Ok(());
-        }
 
         self.poll_tx_completions();
         let ring_len = self.tx_ring_len();
@@ -1364,6 +1199,7 @@ impl BcmGenetDevice {
         }
 
         let slot = ring_slot(self.tx_prod_index, self.tx_ring_len());
+        self.unshare_tx_slot(slot);
         let (frame_ptr, frame_paddr) = {
             let frame = self.tx_frames.get_mut(slot).ok_or(DriverError::QueueInit)?;
             let frame_ptr = frame.ptr().as_ptr() as usize;
@@ -1372,120 +1208,20 @@ impl BcmGenetDevice {
             buf[..packet.len()].copy_from_slice(packet);
             (frame_ptr, frame_paddr)
         };
-        self.submit_tx_slot(
-            slot,
-            frame_ptr,
-            frame_paddr,
-            packet.len(),
-            &packet[..packet.len().min(8)],
-        )
-    }
-
-    fn transmit_in_place<R, F>(&mut self, len: usize, f: F) -> R
-    where
-        F: FnOnce(&mut [u8]) -> R,
-    {
-        if len == 0 || len > MAX_FRAME_LEN || len > RX_BUF_LENGTH || self.tx_frames.is_empty() {
-            let mut temp = [0u8; MAX_FRAME_LEN];
-            let fill = &mut temp[..len.min(MAX_FRAME_LEN)];
-            let result = f(fill);
-            self.tx_drops = self.tx_drops.saturating_add(1);
-            if len == 0 {
-                self.counters.tx_zero_len_attempt =
-                    self.counters.tx_zero_len_attempt.saturating_add(1);
-            } else if len > MAX_FRAME_LEN || len > RX_BUF_LENGTH {
-                warn!("[bcmgenet] drop oversized tx len={}", len);
-            }
-            self.refresh_tx_counters();
-            return result;
-        }
-
-        self.poll_tx_completions();
-        if !self.consume_tx_service_budget(len) {
-            let mut temp = [0u8; MAX_FRAME_LEN];
-            let result = f(&mut temp[..len]);
-            self.record_tx_budget_blocked(true);
-            return result;
-        }
-
-        let ring_len = self.tx_ring_len();
-        let in_flight = ring_distance(self.tx_prod_index, self.tx_cons_index) as usize;
-        if in_flight >= ring_len {
-            let mut temp = [0u8; MAX_FRAME_LEN];
-            let result = f(&mut temp[..len]);
-            self.tx_drops = self.tx_drops.saturating_add(1);
-            self.counters.tx_alloc_blocked_inflight =
-                self.counters.tx_alloc_blocked_inflight.saturating_add(1);
-            if should_log_tx_drop(self.tx_drops) {
-                self.log_dma_breadcrumb(BreadcrumbReason::TxRingFull);
-            }
-            self.refresh_tx_counters();
-            return result;
-        }
-
-        let slot = ring_slot(self.tx_prod_index, self.tx_ring_len());
-        let first_len = len.min(8);
-        let mut first = [0u8; 8];
-        let Some(frame) = self.tx_frames.get_mut(slot) else {
-            let mut temp = [0u8; MAX_FRAME_LEN];
-            let result = f(&mut temp[..len]);
-            self.tx_drops = self.tx_drops.saturating_add(1);
-            self.refresh_tx_counters();
-            return result;
-        };
-        let frame_ptr = frame.ptr().as_ptr() as usize;
-        let frame_paddr = frame.paddr() as u64;
-        let result = {
-            let fill = &mut frame.as_mut_slice()[..len];
-            let result = f(fill);
-            first[..first_len].copy_from_slice(&fill[..first_len]);
-            result
-        };
-        if let Err(err) =
-            self.submit_tx_slot(slot, frame_ptr, frame_paddr, len, &first[..first_len])
-        {
-            self.tx_drops = self.tx_drops.saturating_add(1);
-            warn!("[bcmgenet] tx error: {err}");
-            self.refresh_tx_counters();
-        }
-        result
-    }
-
-    fn submit_tx_slot(
-        &mut self,
-        slot: usize,
-        frame_ptr: usize,
-        frame_paddr: u64,
-        packet_len: usize,
-        first: &[u8],
-    ) -> Result<(), DriverError> {
-        let share_missing = self
-            .tx_dma_shares
-            .get(slot)
-            .map(Option::is_none)
-            .unwrap_or(true);
-        if share_missing {
-            let range = self.share_dma_for_device(
-                frame_ptr,
-                frame_paddr as usize,
-                RX_BUF_LENGTH,
-                "bcmgenet-tx-submit",
-            )?;
-            let Some(share) = self.tx_dma_shares.get_mut(slot) else {
-                Self::unshare_dma_range(&range);
-                return Err(DriverError::QueueInit);
-            };
-            *share = Some(range);
-        }
-        self.sync_dma_for_device(
+        let range = self.share_dma_for_device(
             frame_ptr,
             frame_paddr as usize,
-            packet_len,
+            packet.len(),
             "bcmgenet-tx-submit",
         )?;
+        let Some(share) = self.tx_dma_shares.get_mut(slot) else {
+            Self::unshare_dma_range(range);
+            return Err(DriverError::QueueInit);
+        };
+        *share = Some(range);
 
         let frame_dma = genet_hal::dma_bus_addr(frame_paddr);
-        self.write_tx_desc(slot, frame_dma, encode_tx_len_status(packet_len));
+        self.write_tx_desc(slot, frame_dma, encode_tx_len_status(packet.len()));
         tx_doorbell_barrier();
         self.tx_prod_index = self.tx_prod_index.wrapping_add(1);
         self.write_reg32(TDMA_PROD_INDEX, self.tx_prod_index as u32);
@@ -1495,30 +1231,23 @@ impl BcmGenetDevice {
         self.refresh_tx_counters();
         debug!(
             "[bcmgenet] tx len={} slot={} prod={} cons={} first={:02x?}",
-            packet_len, slot, self.tx_prod_index, self.tx_cons_index, first,
+            packet.len(),
+            slot,
+            self.tx_prod_index,
+            self.tx_cons_index,
+            &packet[..packet.len().min(8)]
         );
         Ok(())
     }
 
     fn poll_rx(&mut self) -> Option<HeaplessVec<u8, MAX_FRAME_LEN>> {
-        if self.rx_service_ops_remaining == 0 || self.rx_service_bytes_remaining == 0 {
-            return None;
-        }
         self.poll_tx_completions();
+        self.drain_rx_ready();
         if self.rx_ready.is_empty() {
-            self.drain_rx_ready();
+            None
+        } else {
+            Some(self.rx_ready.remove(0))
         }
-        let next_len = self.rx_ready.front().map(|frame| frame.len())?;
-        if next_len > self.rx_service_bytes_remaining
-            && self.rx_service_bytes_remaining < GENET_RX_SERVICE_BYTES
-        {
-            return None;
-        }
-        let frame = self.rx_ready.pop_front()?;
-        self.rx_service_ops_remaining = self.rx_service_ops_remaining.saturating_sub(1);
-        self.rx_service_bytes_remaining =
-            self.rx_service_bytes_remaining.saturating_sub(frame.len());
-        Some(frame)
     }
 
     fn drain_rx_ready(&mut self) {
@@ -1526,9 +1255,8 @@ impl BcmGenetDevice {
             return;
         }
 
-        let mut op_budget = self.rx_ring_len().min(self.rx_service_ops_remaining);
-        let mut byte_budget = self.rx_service_bytes_remaining;
-        while op_budget > 0 && byte_budget > 0 && self.rx_ready.len() < RX_READY_CAP {
+        let mut budget = self.rx_ring_len();
+        while budget > 0 && self.rx_ready.len() < RX_READY_CAP {
             let prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
             if prod == self.rx_cons_index {
                 self.rx_idle_polls = self.rx_idle_polls.saturating_add(1);
@@ -1548,13 +1276,8 @@ impl BcmGenetDevice {
             let Some(desc) = self.read_rx_desc(slot) else {
                 break;
             };
-            if !rx_desc_is_complete(desc.len_status) {
-                self.log_dma_breadcrumb(BreadcrumbReason::RxDescInvalid);
-                break;
-            }
             let length = decode_rx_length(desc.len_status);
             let mut maybe_frame = None;
-            let mut payload_len_for_budget = 0usize;
             if length <= RX_BUF_OFFSET || length > RX_BUF_LENGTH {
                 warn!(
                     "[bcmgenet] rx len invalid len={} slot={} len_status=0x{:08x} addr=0x{:08x}{:08x}",
@@ -1563,10 +1286,6 @@ impl BcmGenetDevice {
             } else {
                 let mut frame = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
                 if let Some(source) = self.rx_frames.get(slot) {
-                    let payload_len = length.saturating_sub(RX_BUF_OFFSET).min(MAX_FRAME_LEN);
-                    if payload_len > byte_budget && byte_budget < GENET_RX_SERVICE_BYTES {
-                        break;
-                    }
                     let source_ptr = source.ptr().as_ptr() as usize;
                     if self
                         .sync_dma_for_cpu(
@@ -1575,10 +1294,9 @@ impl BcmGenetDevice {
                             length,
                             "bcmgenet-rx-complete",
                         )
-                        .is_err()
+                        .is_ok()
                     {
-                        self.log_dma_breadcrumb(BreadcrumbReason::RxReclaimFailed);
-                    } else {
+                        let payload_len = length.saturating_sub(RX_BUF_OFFSET).min(MAX_FRAME_LEN);
                         let payload_start = RX_BUF_OFFSET;
                         let payload_end = payload_start.saturating_add(payload_len);
                         let src_slice = source.as_slice();
@@ -1587,13 +1305,13 @@ impl BcmGenetDevice {
                                 .extend_from_slice(&src_slice[payload_start..payload_end])
                                 .is_ok()
                         {
-                            payload_len_for_budget = payload_len;
                             maybe_frame = Some(frame);
                         }
                     }
                 }
             }
 
+            self.unshare_rx_slot(slot);
             self.rearm_rx_slot(slot);
             self.advance_rx_consumer();
             self.counters.rx_used_advances = self.counters.rx_used_advances.saturating_add(1);
@@ -1610,10 +1328,9 @@ impl BcmGenetDevice {
                     self.rx_cons_index,
                     &frame[..frame.len().min(8)]
                 );
-                let _ = self.rx_ready.push_back(frame);
-                byte_budget = byte_budget.saturating_sub(payload_len_for_budget);
+                let _ = self.rx_ready.push(frame);
             }
-            op_budget = op_budget.saturating_sub(1);
+            budget = budget.saturating_sub(1);
         }
     }
 
@@ -1638,12 +1355,11 @@ impl BcmGenetDevice {
 
 impl Drop for BcmGenetDevice {
     fn drop(&mut self) {
-        self.shutdown_hardware_for_drop();
         for slot in 0..self.rx_dma_shares.len() {
-            let _ = self.unshare_rx_slot(slot);
+            self.unshare_rx_slot(slot);
         }
         for slot in 0..self.tx_dma_shares.len() {
-            let _ = self.unshare_tx_slot(slot);
+            self.unshare_tx_slot(slot);
         }
     }
 }
@@ -1658,10 +1374,6 @@ const fn ring_slot(index: u16, slots: usize) -> usize {
 
 const fn ring_distance(newer: u16, older: u16) -> u16 {
     newer.wrapping_sub(older)
-}
-
-const fn ring_distance_within_ring(newer: u16, older: u16, ring_len: usize) -> bool {
-    (ring_distance(newer, older) as usize) <= ring_len
 }
 
 const fn desc_dma_addr(addr_hi: u32, addr_lo: u32) -> u64 {
@@ -1694,10 +1406,6 @@ const fn encode_tx_len_status(len: usize) -> u32 {
 
 const fn decode_rx_length(len_status: u32) -> usize {
     ((len_status >> DMA_BUFLENGTH_SHIFT) & DMA_BUFLENGTH_MASK) as usize
-}
-
-const fn rx_desc_is_complete(len_status: u32) -> bool {
-    (len_status & DMA_OWN) == 0 && (len_status & DMA_SOP) != 0 && (len_status & DMA_EOP) != 0
 }
 
 const fn ring_end_addr(ring_descs: usize) -> u32 {
@@ -1784,7 +1492,13 @@ impl<'a> phy::TxToken for TxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        self.device.transmit_in_place(len, f)
+        let mut temp = [0u8; MAX_FRAME_LEN];
+        let fill = &mut temp[..len.min(MAX_FRAME_LEN)];
+        let result = f(fill);
+        if let Err(err) = self.device.transmit(fill) {
+            warn!("[bcmgenet] tx error: {err}");
+        }
+        result
     }
 }
 
@@ -1804,10 +1518,6 @@ impl Device for BcmGenetDevice {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        if !self.tx_service_available() {
-            self.record_tx_budget_blocked(false);
-            return None;
-        }
         if self.tx_has_room() {
             Some(TxToken { device: self })
         } else {
@@ -1889,13 +1599,6 @@ impl NetDevice for BcmGenetDevice {
         self.counters
     }
 
-    fn begin_service_turn(&mut self) {
-        self.rx_service_ops_remaining = GENET_RX_SERVICE_OPS;
-        self.rx_service_bytes_remaining = GENET_RX_SERVICE_BYTES;
-        self.tx_service_ops_remaining = GENET_TX_SERVICE_OPS;
-        self.tx_service_bytes_remaining = GENET_TX_SERVICE_BYTES;
-    }
-
     fn buffer_bounds(&self) -> Option<Range<usize>> {
         let mut start = usize::MAX;
         let mut end = 0usize;
@@ -1916,17 +1619,13 @@ impl NetDevice for BcmGenetDevice {
 #[cfg(test)]
 mod tests {
     use crate::hal::bcmgenet as genet_hal;
-    use crate::net::NetDriverError;
 
     use super::{
-        decode_bmcr_speed, decode_rx_length, encode_tx_len_status, ring_distance,
-        ring_distance_within_ring, ring_slot, rx_desc_is_complete, rx_owned_len_status,
-        should_emit_repeated_breadcrumb, should_log_rx_idle, should_log_tx_drop, DriverError,
-        PhyLinkStatus, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP, DMA_OWN, DMA_SOP,
-        DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, GENET_RX_SERVICE_BYTES, GENET_RX_SERVICE_OPS,
-        GENET_TX_SERVICE_BYTES, GENET_TX_SERVICE_OPS, HW_TOTAL_DESCS, MII_BMCR_SPEED100,
-        MII_BMCR_SPEED1000, PI4_GENET_PHY_ADDR, RX_BUF_LENGTH, RX_READY_CAP, RX_RING_DESCS,
-        TX_RING_DESCS, UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
+        decode_bmcr_speed, decode_rx_length, encode_tx_len_status, ring_distance, ring_slot,
+        rx_owned_len_status, should_emit_repeated_breadcrumb, should_log_rx_idle,
+        should_log_tx_drop, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP, DMA_OWN, DMA_SOP,
+        DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH,
+        UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
     };
 
     #[test]
@@ -1949,14 +1648,6 @@ mod tests {
     }
 
     #[test]
-    fn ring_distance_within_ring_rejects_invalid_hw_jumps() {
-        assert!(ring_distance_within_ring(10, 7, 256));
-        assert!(ring_distance_within_ring(0, u16::MAX, 256));
-        assert!(ring_distance_within_ring(256, 0, 256));
-        assert!(!ring_distance_within_ring(257, 0, 256));
-    }
-
-    #[test]
     fn tx_len_status_sets_required_bits() {
         let length = 512usize;
         let len_status = encode_tx_len_status(length);
@@ -1975,147 +1666,6 @@ mod tests {
         let len_status = rx_owned_len_status();
         assert_eq!(decode_rx_length(len_status), RX_BUF_LENGTH);
         assert_ne!(len_status & DMA_OWN, 0);
-    }
-
-    #[test]
-    fn rx_completion_requires_device_ownership_release_and_single_frame_bits() {
-        let complete = ((128u32 + 2) << DMA_BUFLENGTH_SHIFT) | DMA_SOP | DMA_EOP;
-        assert!(rx_desc_is_complete(complete));
-        assert!(!rx_desc_is_complete(complete | DMA_OWN));
-        assert!(!rx_desc_is_complete(complete & !DMA_SOP));
-        assert!(!rx_desc_is_complete(complete & !DMA_EOP));
-        assert!(!rx_desc_is_complete(rx_owned_len_status()));
-    }
-
-    #[test]
-    fn pi4_genet_requires_expected_phy_addr_and_ready_link() {
-        assert_eq!(PI4_GENET_PHY_ADDR, 1);
-        assert!(PhyLinkStatus {
-            phy_addr: PI4_GENET_PHY_ADDR,
-            link_up: true,
-            autoneg_complete: true,
-            speed: UMAC_SPEED_1000,
-            resolved_speed: false,
-        }
-        .is_ready());
-        assert!(PhyLinkStatus {
-            phy_addr: PI4_GENET_PHY_ADDR,
-            link_up: true,
-            autoneg_complete: false,
-            speed: UMAC_SPEED_1000,
-            resolved_speed: true,
-        }
-        .is_ready());
-        assert!(!PhyLinkStatus {
-            phy_addr: PI4_GENET_PHY_ADDR,
-            link_up: false,
-            autoneg_complete: true,
-            speed: UMAC_SPEED_1000,
-            resolved_speed: true,
-        }
-        .is_ready());
-        assert!(DriverError::LinkDown.is_absent());
-    }
-
-    #[test]
-    fn pi4_genet_buffers_match_large_board_profile() {
-        assert_eq!(RX_RING_DESCS, HW_TOTAL_DESCS);
-        assert_eq!(TX_RING_DESCS, HW_TOTAL_DESCS);
-        assert_eq!(RX_RING_DESCS, 256);
-        assert_eq!(TX_RING_DESCS, 256);
-        assert!(RX_READY_CAP >= 128);
-        assert!(RX_RING_DESCS * RX_BUF_LENGTH >= 512 * 1024);
-        assert!(TX_RING_DESCS * RX_BUF_LENGTH >= 512 * 1024);
-    }
-
-    #[test]
-    fn pi4_genet_rx_service_matches_shared_network_budget() {
-        let budget = crate::hal::runtime_service_budget(crate::hal::HardwareServiceClass::Network);
-        assert_eq!(GENET_RX_SERVICE_OPS, budget.max_ops);
-        assert_eq!(GENET_RX_SERVICE_BYTES, budget.max_bytes);
-        assert_eq!(GENET_TX_SERVICE_OPS, budget.max_ops);
-        assert_eq!(GENET_TX_SERVICE_BYTES, budget.max_bytes);
-        assert!(GENET_RX_SERVICE_OPS < RX_RING_DESCS);
-    }
-
-    #[test]
-    fn pi4_genet_tx_service_is_bounded_and_visible() {
-        let source = include_str!("bcmgenet.rs");
-        assert!(source.contains("fn consume_tx_service_budget"));
-        assert!(source.contains("fn record_tx_budget_blocked"));
-        assert!(source.contains("self.counters.tx_budget_blocked"));
-        assert!(source.contains("if !self.tx_service_available()"));
-        assert!(source.contains("self.tx_service_ops_remaining = GENET_TX_SERVICE_OPS"));
-        assert!(source.contains("self.tx_service_bytes_remaining = GENET_TX_SERVICE_BYTES"));
-    }
-
-    #[test]
-    fn tx_token_uses_dma_slot_staging_path() {
-        let source = include_str!("bcmgenet.rs");
-        let token_impl = source
-            .find("impl<'a> phy::TxToken for TxToken<'a>")
-            .expect("GENET TxToken impl remains present");
-        let token_body = &source[token_impl..];
-        assert!(token_body.contains("self.device.transmit_in_place(len, f)"));
-        assert!(source.contains("fn transmit_in_place"));
-        assert!(source.contains("fn submit_tx_slot"));
-    }
-
-    #[test]
-    fn drop_path_quiesces_hardware_before_reclaiming_dma_shares() {
-        let source = include_str!("bcmgenet.rs");
-        let drop_impl = source
-            .find("impl Drop for BcmGenetDevice")
-            .expect("drop impl remains present");
-        let drop_body = &source[drop_impl..];
-        let shutdown = drop_body
-            .find("self.shutdown_hardware_for_drop();")
-            .expect("drop path quiesces hardware");
-        let rx_unshare = drop_body
-            .find("self.unshare_rx_slot(slot)")
-            .expect("drop path reclaims RX shares");
-        let tx_unshare = drop_body
-            .find("self.unshare_tx_slot(slot)")
-            .expect("drop path reclaims TX shares");
-        assert!(shutdown < rx_unshare);
-        assert!(shutdown < tx_unshare);
-    }
-
-    #[test]
-    fn rx_ready_queue_uses_bounded_o1_dequeue() {
-        let source = include_str!("bcmgenet.rs");
-        let implementation = source
-            .split("mod tests")
-            .next()
-            .expect("implementation section remains present");
-        assert!(implementation
-            .contains("rx_ready: Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_READY_CAP>"));
-        assert!(implementation.contains("self.rx_ready.pop_front()"));
-        assert!(implementation.contains("self.rx_ready.push_back(frame)"));
-        assert!(!implementation.contains("self.rx_ready.remove(0)"));
-    }
-
-    #[test]
-    fn rx_reclaim_failure_drops_and_rearms_descriptor() {
-        let source = include_str!("bcmgenet.rs");
-        let drain_body = source
-            .split("fn drain_rx_ready(&mut self)")
-            .nth(1)
-            .and_then(|tail| tail.split("const fn should_log_tx_drop").next())
-            .expect("drain_rx_ready body remains before helper functions");
-        let failure = drain_body
-            .find("self.log_dma_breadcrumb(BreadcrumbReason::RxReclaimFailed);")
-            .expect("RX reclaim failure remains explicitly breadcrumbed");
-        let rearm = drain_body
-            .find("self.rearm_rx_slot(slot);")
-            .expect("RX descriptor is rearmed after drain decision");
-        let advance = drain_body
-            .find("self.advance_rx_consumer();")
-            .expect("RX consumer advances after descriptor service");
-        let failure_window = &drain_body[failure..rearm];
-        assert!(!failure_window.contains("break;"));
-        assert!(failure < rearm);
-        assert!(rearm < advance);
     }
 
     #[test]

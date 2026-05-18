@@ -3657,9 +3657,8 @@ const fn experimental_no_ht_f2_fifo_chunk_limit(write: bool) -> usize {
     // sizing used by the upstream Broadcom stack. The transfer planner keeps
     // that size in CMD53 byte mode, matching Linux's `sdio_writesb()` path.
     // Linux `brcmfmac` then switches reply polls to a 64-byte
-    // `BRCMF_FIRSTREAD` followed by one sized bulk read. The Pi 4 runtime
-    // profile allows a wider second read so RX glom superframes do not collapse
-    // back into oversize recovery under benchmark traffic.
+    // `BRCMF_FIRSTREAD` followed by one sized bulk read, so allow the second
+    // fixed-address Function 2 read to use the captured 2048-byte cadence.
     if write {
         SDIO_FUNCTION_ENABLE_F2.block_size as usize
     } else {
@@ -7135,7 +7134,7 @@ const SDHCI_WRITE_DELAY_LOOPS: usize = 256;
 const SDHCI_WRITE_GAP_SPIN_LOOPS: usize = SDHCI_WRITE_DELAY_LOOPS * 32;
 const CYW43_READY_LOOPS: usize = 1_000;
 const CYW43_FUNCTION2_READY_IRQ_PROOF_LOOPS: usize = 1;
-const CYW43_TRANSFER_CHUNK: usize = SDIO_MAX_BYTE_MODE;
+const CYW43_TRANSFER_CHUNK: usize = 256;
 // CYW43455 firmware upload follows Linux's 32 KiB backplane windows. If the
 // seL4 SDHCI path rejects the large CMD53 transfer, the upload loop switches to
 // bounded byte-mode chunks after the first transport error.
@@ -7332,16 +7331,6 @@ const fn sdhci_interrupt_buffer_ready_mask(write: bool) -> u32 {
     }
 }
 
-#[inline]
-const fn sdhci_pio_ready_burst_len(plan: SdioTransferPlan, remaining: usize) -> usize {
-    let host_window = plan.block_size as usize;
-    if host_window == 0 || remaining < host_window {
-        remaining
-    } else {
-        host_window
-    }
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct SdioFunctionEnableStep {
     function: SdioFunction,
@@ -7372,7 +7361,7 @@ const SDIO_FUNCTION_ENABLE_SEQUENCE: [SdioFunctionEnableStep; 2] =
     [SDIO_FUNCTION_ENABLE_F1, SDIO_FUNCTION_ENABLE_F2];
 const CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN: usize = 64;
 const CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN: usize =
-    SDIO_FUNCTION_ENABLE_F2.block_size as usize * 8;
+    SDIO_FUNCTION_ENABLE_F2.block_size as usize * 4;
 const CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY: usize =
     CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN + CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN;
 const CYW43_SDPCM_PREFIX_MIN_LEN: usize = 8;
@@ -7772,27 +7761,6 @@ const fn runtime_rx_oversize_recovery_should_log(recovery_count: u16) -> bool {
         || recovery_count == 16
         || recovery_count == 32
         || recovery_count == 64
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RuntimeRxFrameLenAction {
-    Read,
-    DropClearAck,
-    RejectOversize,
-}
-
-const fn runtime_rx_frame_len_action(
-    runtime_irq_ack_pending: bool,
-    frame_len: usize,
-    capacity: usize,
-) -> RuntimeRxFrameLenAction {
-    if frame_len <= capacity {
-        RuntimeRxFrameLenAction::Read
-    } else if runtime_irq_ack_pending {
-        RuntimeRxFrameLenAction::DropClearAck
-    } else {
-        RuntimeRxFrameLenAction::RejectOversize
-    }
 }
 
 const fn runtime_rx_invalid_firstread_should_clear_latch(
@@ -18619,14 +18587,14 @@ impl SdioHost {
             port = control_plane_function2_port_addr(),
             window = control_plane_function2_window_addr(),
         ));
-        let remainder_end = first_read_len + remainder_request_len;
+        let mut remainder = [0u8; CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN];
         let remainder_result = self.with_control_plane_function2_port(|this, function_addr| {
             this.io_extended(
                 SdioFunction::Function2,
                 function_addr,
                 control_plane_read_uses_incrementing_addr(),
                 false,
-                &mut out[first_read_len..remainder_end],
+                &mut remainder[..remainder_request_len],
             )
         });
         if let Err(err) = &remainder_result {
@@ -18639,6 +18607,7 @@ impl SdioHost {
             }
         }
         remainder_result?;
+        out[first_read_len..frame_len].copy_from_slice(&remainder[..remainder_len]);
         Ok(())
     }
 
@@ -19014,19 +18983,12 @@ impl SdioHost {
         if frame_len == 0 {
             return Ok(0);
         }
-        match runtime_rx_frame_len_action(
-            self.runtime_frame_read_needs_irq_ack,
-            frame_len,
-            out.len(),
-        ) {
-            RuntimeRxFrameLenAction::Read => {}
-            RuntimeRxFrameLenAction::DropClearAck => {
+        if frame_len > out.len() {
+            if self.runtime_frame_read_needs_irq_ack {
                 self.recover_runtime_rx_oversize_frame("runtime-rx-oversize", frame_len, out.len());
                 return Ok(0);
             }
-            RuntimeRxFrameLenAction::RejectOversize => {
-                return Err(HalError::Unsupported("cyw43-frame-oversize"));
-            }
+            return Err(HalError::Unsupported("cyw43-frame-oversize"));
         }
         let ack_runtime_rx_after_drain = self.runtime_frame_read_needs_irq_ack;
         if let Err(err) = self.read_frame_with_linux_request_shape(frame_len, out) {
@@ -24350,14 +24312,12 @@ impl SdioHost {
                     return Err(HalError::Unsupported("sdhci-transfer-data"));
                 }
             }
-            if (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) == 0 {
-                continue;
-            }
 
-            let burst_end = offset + sdhci_pio_ready_burst_len(plan, buffer.len() - offset);
-            while offset < burst_end {
+            while offset < buffer.len()
+                && (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) != 0
+            {
                 let mut word = [0u8; 4];
-                let chunk_len = cmp::min(4, burst_end - offset);
+                let chunk_len = cmp::min(4, buffer.len() - offset);
                 if write {
                     word[..chunk_len].copy_from_slice(&buffer[offset..offset + chunk_len]);
                     self.write32(SDHCI_BUFFER, u32::from_le_bytes(word));
@@ -25080,8 +25040,7 @@ mod tests {
         required_ht_clock_linux_active_transition_resets_chipclk,
         required_ht_clock_linux_active_transition_resets_chipclk_for_attempt,
         required_ht_clock_linux_active_transition_resets_chipclk_for_stage,
-        runtime_rx_drains_before_irq_clear, runtime_rx_frame_len_action,
-        runtime_rx_host_latch_without_dongle_source,
+        runtime_rx_drains_before_irq_clear, runtime_rx_host_latch_without_dongle_source,
         runtime_rx_invalid_firstread_should_clear_latch, runtime_rx_oversize_recovery_should_log,
         runtime_rx_stale_host_latch_should_log,
         runtime_rx_uses_linux_firstread_on_frame_indication,
@@ -28164,9 +28123,6 @@ mod tests {
         );
 
         let linux_large_reply_len = 2064usize;
-        let linux_large_remainder = control_plane_frame_request_len(
-            linux_large_reply_len - CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN,
-        );
         let linux_large_reply_len_u16 =
             u16::try_from(linux_large_reply_len).expect("packet length fits");
         first_read[0..2].copy_from_slice(&linux_large_reply_len_u16.to_le_bytes());
@@ -28176,14 +28132,14 @@ mod tests {
                 &first_read,
                 CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY,
             ),
-            Some(linux_large_remainder)
+            Some(CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN)
         );
         assert_eq!(
             control_plane_reply_remainder_len_from_firstread(
                 &first_read,
                 CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN,
             ),
-            Some(linux_large_remainder)
+            None
         );
     }
 
@@ -28201,14 +28157,6 @@ mod tests {
         );
         assert_eq!(
             control_plane_linux_firstread_remainder_request_len(2064),
-            Some(control_plane_frame_request_len(
-                2064 - CYW43_CONTROL_PLANE_LINUX_FIRSTREAD_LEN
-            ))
-        );
-        assert_eq!(
-            control_plane_linux_firstread_remainder_request_len(
-                CYW43_CONTROL_PLANE_SPECULATIVE_FRAME_CAPACITY
-            ),
             Some(CYW43_CONTROL_PLANE_LINUX_BULK_READ_LEN)
         );
         assert_eq!(
@@ -29633,7 +29581,7 @@ mod tests {
 
     #[test]
     fn firmware_transfer_stays_fast_until_byte_mode_fallback() {
-        assert_eq!(CYW43_TRANSFER_CHUNK, SDIO_MAX_BYTE_MODE);
+        assert_eq!(CYW43_TRANSFER_CHUNK, 256);
         assert_eq!(CYW43_FIRMWARE_TRANSFER_CHUNK, 32 * 1024);
         assert_eq!(firmware_transfer_chunk_limit(false), 32 * 1024);
         assert_eq!(firmware_transfer_chunk_limit(true), SDIO_MAX_BYTE_MODE);
@@ -30409,32 +30357,6 @@ mod tests {
     }
 
     #[test]
-    fn sdhci_pio_ready_burst_len_uses_one_host_block_window() {
-        let f2_block_plan = SdioTransferPlan {
-            block_size: SDIO_FUNCTION_ENABLE_F2.block_size,
-            block_count: 8,
-            cmd53_count: 8,
-            block_mode: true,
-            transfer_mode: SDHCI_TRNS_BLK_CNT_EN | SDHCI_TRNS_MULTI | SDHCI_TRNS_READ,
-        };
-        assert_eq!(
-            sdhci_pio_ready_burst_len(f2_block_plan, 4096),
-            usize::from(SDIO_FUNCTION_ENABLE_F2.block_size)
-        );
-        assert_eq!(sdhci_pio_ready_burst_len(f2_block_plan, 96), 96);
-
-        let f1_byte_plan = SdioTransferPlan {
-            block_size: 64,
-            block_count: 1,
-            cmd53_count: 64,
-            block_mode: false,
-            transfer_mode: SDHCI_TRNS_BLK_CNT_EN,
-        };
-        assert_eq!(sdhci_pio_ready_burst_len(f1_byte_plan, 64), 64);
-        assert_eq!(sdhci_pio_ready_burst_len(f1_byte_plan, 1), 1);
-    }
-
-    #[test]
     fn function2_ready_timeout_allows_only_bounded_experimental_f2_probe() {
         let desired = SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2;
         assert!(sdio_function_ready_timeout_can_continue_experimentally(
@@ -31012,26 +30934,6 @@ mod tests {
         assert!(runtime_rx_oversize_recovery_should_log(1));
         assert!(runtime_rx_oversize_recovery_should_log(64));
         assert!(!runtime_rx_oversize_recovery_should_log(65));
-    }
-
-    #[test]
-    fn runtime_rx_oversize_decision_drops_only_irq_owned_runtime_frames() {
-        assert_eq!(
-            runtime_rx_frame_len_action(true, 4096, 2048),
-            RuntimeRxFrameLenAction::DropClearAck
-        );
-        assert_eq!(
-            runtime_rx_frame_len_action(false, 4096, 2048),
-            RuntimeRxFrameLenAction::RejectOversize
-        );
-        assert_eq!(
-            runtime_rx_frame_len_action(true, 2048, 2048),
-            RuntimeRxFrameLenAction::Read
-        );
-        assert_eq!(
-            runtime_rx_frame_len_action(false, 2048, 2048),
-            RuntimeRxFrameLenAction::Read
-        );
     }
 
     #[test]

@@ -10,7 +10,6 @@ import json
 import pathlib
 import socket
 import sys
-import threading
 
 MODULE_PATH = (
     pathlib.Path(__file__).resolve().parents[1]
@@ -23,39 +22,6 @@ rest_perf = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 sys.modules[spec.name] = rest_perf
 spec.loader.exec_module(rest_perf)
-
-
-def write_tcp_frame(stream: socket.socket, line: str) -> None:
-    payload = line.encode("utf-8")
-    frame = (len(payload) + 4).to_bytes(4, "little") + payload
-    stream.sendall(frame)
-
-
-def start_auth_server(
-    responses: list[str | None],
-) -> tuple[str, int, threading.Thread, list[bytes]]:
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.bind(("127.0.0.1", 0))
-    listener.listen()
-    listener.settimeout(5.0)
-    host, port = listener.getsockname()
-    received: list[bytes] = []
-
-    def serve() -> None:
-        try:
-            for response in responses:
-                conn, _ = listener.accept()
-                with conn:
-                    if response is None:
-                        continue
-                    received.append(conn.recv(64))
-                    write_tcp_frame(conn, response)
-        finally:
-            listener.close()
-
-    thread = threading.Thread(target=serve, daemon=True)
-    thread.start()
-    return host, port, thread, received
 
 
 def test_normalize_rest_url_trims_slashes() -> None:
@@ -158,28 +124,6 @@ def test_assert_bind_available_rejects_in_use_port() -> None:
         sock.close()
 
 
-def test_validate_tcp_auth_retries_after_listener_recycle() -> None:
-    host, port, thread, received = start_auth_server([None, "OK AUTH"])
-
-    rest_perf.validate_tcp_auth(host, port, "secret", 2.0)
-    thread.join(timeout=1.0)
-
-    assert any(b"AUTH secret" in frame for frame in received)
-
-
-def test_validate_tcp_auth_rejects_explicit_auth_failure() -> None:
-    host, port, thread, _ = start_auth_server(["ERR AUTH reason=invalid-token"])
-
-    try:
-        rest_perf.validate_tcp_auth(host, port, "wrong", 2.0)
-    except rest_perf.TcpAuthRejected as exc:
-        assert "rejected" in str(exc)
-    else:
-        raise AssertionError("Expected TCP auth rejection to fail preflight")
-    finally:
-        thread.join(timeout=1.0)
-
-
 def test_is_transient_error_policy_denied() -> None:
     err = Exception(
         "ERR ECHO reason=policy detail=denied path=/queen/ctl error=EPERM"
@@ -199,72 +143,6 @@ def test_is_transient_error_http_429() -> None:
     assert rest_perf.is_transient_error(err)
 
 
-def test_rest_client_get_json_wraps_socket_timeout() -> None:
-    original_fetch_json = rest_perf.fetch_json
-
-    def raise_timeout(
-        _url: str,
-        _timeout: float,
-        _headers: dict[str, str] | None = None,
-    ) -> dict:
-        raise TimeoutError("timed out")
-
-    rest_perf.fetch_json = raise_timeout
-    try:
-        client = rest_perf.RestClient("http://127.0.0.1:18080", 0.1)
-        try:
-            client.get_json("/v1/meta/status")
-        except rest_perf.RestError as exc:
-            assert "timed out" in str(exc)
-        else:
-            raise AssertionError("Expected socket timeout to become RestError")
-    finally:
-        rest_perf.fetch_json = original_fetch_json
-
-
-def test_list_workers_with_retry_recovers_timeout() -> None:
-    class DummyClient:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def ls(self, path: str) -> rest_perf.GatewayResponse:
-            assert path == "/worker"
-            self.calls += 1
-            if self.calls == 1:
-                raise rest_perf.RestError("Timeout for /worker: timed out")
-            return rest_perf.GatewayResponse(
-                status="OK",
-                verb="LS",
-                path=path,
-                end=True,
-                lines=["worker-2"],
-                bytes=None,
-                error=None,
-            )
-
-    state = rest_perf.SimState(
-        bounds={},
-        rest_url="http://127.0.0.1:8080",
-        rng=rest_perf.random.Random(0),
-        id_prefix="test",
-        entropy=0.0,
-        tail_bytes=0,
-        policy_enabled=True,
-        actions_enabled=True,
-        telemetry_enabled=False,
-        include_lifecycle=False,
-        auto_approve=True,
-        transient_retries=True,
-        strict_control_errors=False,
-    )
-    client = DummyClient()
-
-    workers = rest_perf.list_workers_with_retry(client, state, timeout_s=2.0)
-
-    assert workers == ["worker-2"]
-    assert client.calls == 2
-
-
 def test_is_buffer_full_error_matches() -> None:
     err = Exception("buffer full")
     assert rest_perf.is_buffer_full_error(err)
@@ -279,7 +157,6 @@ def test_lease_tracking_helpers() -> None:
         bounds={},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
-        id_prefix="test",
         entropy=0.0,
         tail_bytes=0,
         policy_enabled=True,
@@ -315,7 +192,6 @@ def test_allocate_ids_are_monotonic() -> None:
         bounds={},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
-        id_prefix="test",
         entropy=0.0,
         tail_bytes=0,
         policy_enabled=True,
@@ -326,10 +202,10 @@ def test_allocate_ids_are_monotonic() -> None:
         transient_retries=True,
         strict_control_errors=False,
     )
-    assert rest_perf.allocate_schedule_id(state) == "sched-test-000001"
-    assert rest_perf.allocate_schedule_id(state) == "sched-test-000002"
-    assert rest_perf.allocate_lease_id(state) == "lease-test-000001"
-    assert rest_perf.allocate_lease_id(state) == "lease-test-000002"
+    assert rest_perf.allocate_schedule_id(state) == "sched-00000001"
+    assert rest_perf.allocate_schedule_id(state) == "sched-00000002"
+    assert rest_perf.allocate_lease_id(state) == "lease-00000001"
+    assert rest_perf.allocate_lease_id(state) == "lease-00000002"
 
 
 def test_telemetry_append_rotates_segment_on_quota() -> None:
@@ -384,7 +260,6 @@ def test_telemetry_append_rotates_segment_on_quota() -> None:
         bounds={},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
-        id_prefix="test",
         entropy=0.0,
         tail_bytes=0,
         policy_enabled=True,
@@ -458,7 +333,6 @@ def test_echo_with_policy_retry_queues_on_buffer_full() -> None:
         bounds={},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
-        id_prefix="test",
         entropy=0.0,
         tail_bytes=0,
         policy_enabled=True,
@@ -532,7 +406,6 @@ def test_echo_with_policy_retry_waits_for_policy_consumption() -> None:
         bounds={},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
-        id_prefix="test",
         entropy=0.0,
         tail_bytes=0,
         policy_enabled=True,
@@ -560,7 +433,6 @@ def test_run_with_retry_policy_honors_no_retry_mode() -> None:
         bounds={},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
-        id_prefix="test",
         entropy=0.0,
         tail_bytes=0,
         policy_enabled=True,
@@ -592,7 +464,6 @@ def test_run_with_retry_policy_retries_when_enabled() -> None:
         bounds={},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
-        id_prefix="test",
         entropy=0.0,
         tail_bytes=0,
         policy_enabled=True,
@@ -629,7 +500,6 @@ def test_should_tolerate_buffer_full_respects_strict_mode() -> None:
         bounds={},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
-        id_prefix="test",
         entropy=0.0,
         tail_bytes=0,
         policy_enabled=True,
@@ -644,7 +514,6 @@ def test_should_tolerate_buffer_full_respects_strict_mode() -> None:
         bounds={},
         rest_url="http://127.0.0.1:8080",
         rng=rest_perf.random.Random(0),
-        id_prefix="test",
         entropy=0.0,
         tail_bytes=0,
         policy_enabled=True,
@@ -684,18 +553,6 @@ def test_build_telemetry_reference_records_cover_size() -> None:
         assert isinstance(payload["sha256"], str) and payload["sha256"]
         total += payload["len"]
     assert total == 1 * 1024 * 1024
-
-
-def test_run_scoped_ids_include_prefix_and_stay_bounded() -> None:
-    prefix = rest_perf.build_run_id_prefix(260532, nonce=12345)
-    assert prefix == "5320012345"
-    assert rest_perf.build_run_id_prefix(260532, nonce=12346) != prefix
-    lease_id = rest_perf.format_run_scoped_id("lease", prefix, 1)
-    assert lease_id == "lease-5320012345-000001"
-    assert len(lease_id) <= 32
-    noisy = rest_perf.format_run_scoped_id("approve", "run:abc/def-ghi", 42)
-    assert noisy == "approve-runabcdefg-000042"
-    assert len(noisy) <= 32
 
 
 def test_apply_fast_ramp_defaults_updates_default_inputs() -> None:
@@ -774,62 +631,3 @@ def test_parse_args_no_retries_alias_disables_transient_retries() -> None:
     assert not args.transient_retries
     assert args.scenario == "telemetry-1mb"
     assert abs(args.error_budget_rate - 0.01) < 1e-9
-
-
-def test_parse_args_accepts_gateway_broker_timeout_overrides() -> None:
-    original_argv = list(sys.argv)
-    try:
-        sys.argv = [
-            "rest_perf_harness.py",
-            "--mode",
-            "simulate",
-            "--auth-token",
-            "changeme",
-            "--gateway-broker-control-timeout-ms",
-            "30000",
-            "--gateway-broker-telemetry-timeout-ms",
-            "45000",
-        ]
-        args = rest_perf.parse_args()
-    finally:
-        sys.argv = original_argv
-    assert args.gateway_broker_control_timeout_ms == 30000
-    assert args.gateway_broker_telemetry_timeout_ms == 45000
-
-
-def test_parse_args_accepts_spawn_list_verify_limit() -> None:
-    original_argv = list(sys.argv)
-    try:
-        sys.argv = [
-            "rest_perf_harness.py",
-            "--mode",
-            "simulate",
-            "--auth-token",
-            "changeme",
-            "--spawn-list-verify-limit",
-            "0",
-        ]
-        args = rest_perf.parse_args()
-    finally:
-        sys.argv = original_argv
-    assert args.spawn_list_verify_limit == 0
-
-
-def test_parse_args_accepts_quiet_log_tail_controls() -> None:
-    original_argv = list(sys.argv)
-    try:
-        sys.argv = [
-            "rest_perf_harness.py",
-            "--mode",
-            "simulate",
-            "--auth-token",
-            "changeme",
-            "--include-log-tail",
-            "--log-tail-bytes",
-            "1024",
-        ]
-        args = rest_perf.parse_args()
-    finally:
-        sys.argv = original_argv
-    assert args.include_log_tail
-    assert args.log_tail_bytes == 1024
