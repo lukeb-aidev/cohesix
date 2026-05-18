@@ -85,10 +85,11 @@ required_snippets = [
     "--features release-qemu",
     "--features release-pi4",
     "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",
-    "cargo test --workspace",
-    "pytest tests/test_pi4_trace_normalize.py",
-    "pytest tests/test_pi4_gate_proof.py",
-]
+	    "cargo test --workspace",
+	    "pytest tests/test_pi4_trace_normalize.py",
+	    "pytest tests/test_pi4_gate_proof.py",
+	    "pytest tests/test_rest_perf_harness.py",
+	]
 for snippet in required_snippets:
     if snippet not in text:
         print(f"missing required TEST_PLAN entry: {snippet}", file=sys.stderr)
@@ -124,10 +125,11 @@ required_stage_02_commands = [
     "--features release-qemu",
     "--features release-pi4",
     "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",
-    "cargo test --workspace",
-    "pytest tests/test_pi4_trace_normalize.py",
-    "pytest tests/test_pi4_gate_proof.py",
-]
+	    "cargo test --workspace",
+	    "pytest tests/test_pi4_trace_normalize.py",
+	    "pytest tests/test_pi4_gate_proof.py",
+	    "pytest tests/test_rest_perf_harness.py",
+	]
 for command in required_stage_02_commands:
     if command not in stage_02_text:
         print(

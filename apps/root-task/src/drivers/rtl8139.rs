@@ -463,6 +463,8 @@ impl NetDevice for Rtl8139Device {
             tx_dup_used_ignored: 0,
             tx_invalid_used_state: 0,
             tx_alloc_blocked_inflight: 0,
+            tx_budget_blocked: 0,
+            tx_credit_blocked: 0,
             wifi_assoc: 0,
             wifi_link_up: 0,
             wifi_host_eapol_rx: 0,

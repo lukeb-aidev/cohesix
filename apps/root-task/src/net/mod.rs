@@ -552,6 +552,10 @@ pub struct NetDeviceCounters {
     pub tx_invalid_used_state: u64,
     /// TX allocations blocked while descriptors remain in-flight.
     pub tx_alloc_blocked_inflight: u64,
+    /// TX attempts blocked by the per-service-turn hardware budget.
+    pub tx_budget_blocked: u64,
+    /// TX attempts blocked by missing immediate device credit.
+    pub tx_credit_blocked: u64,
     /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.
     pub wifi_assoc: u64,
     /// Wi-Fi link state, encoded as 0 or 1 for compact diagnostics.
@@ -615,6 +619,10 @@ pub struct NetCounters {
     pub tx_invalid_used_state: u64,
     /// TX allocations blocked while descriptors remain in-flight.
     pub tx_alloc_blocked_inflight: u64,
+    /// TX attempts blocked by the per-service-turn hardware budget.
+    pub tx_budget_blocked: u64,
+    /// TX attempts blocked by missing immediate device credit.
+    pub tx_credit_blocked: u64,
     /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.
     pub wifi_assoc: u64,
     /// Wi-Fi link state, encoded as 0 or 1 for compact diagnostics.
@@ -813,6 +821,9 @@ pub trait NetDevice: Device {
     fn bringup_status_label(&self) -> Option<&'static str> {
         None
     }
+
+    /// Reset per-service-turn runtime budgets before smoltcp polls the device.
+    fn begin_service_turn(&mut self) {}
 
     /// Optional debug snapshot hook surfaced to stack callers.
     fn debug_snapshot(&mut self);

@@ -2154,6 +2154,225 @@ impl<H: Dma> UsbDevice<H> {
         }
     }
 
+    /// Perform an IN control transfer using caller-owned DMA memory.
+    ///
+    /// This variant is for runtime paths that must not allocate a transient
+    /// EP0 data-stage buffer after the platform DMA pool has been sealed.
+    pub fn control_transfer_in_physmem_with_wait_spins(
+        &self,
+        setup: &SetupPacket,
+        data_buf: &PhysMem<H>,
+        offset: usize,
+        len: usize,
+        wait_spins: usize,
+    ) -> Result<usize> {
+        let data_dir = (setup.request_type & 0x80) != 0; // true = IN
+        let data_len = setup.length as usize;
+        if !data_dir || data_len == 0 || data_len > len {
+            return Err(UsbError::NotSupported);
+        }
+        let _ = offset.checked_add(data_len).ok_or(UsbError::DmaSync)?;
+
+        let host = self.ctrl.host();
+        let mut ep0_ring = self.ep0_ring.lock();
+        let wait_limit = wait_spins.max(1);
+
+        self.ctrl.emit_diag(
+            0x03a9,
+            ((setup.request_type as u64) << 56)
+                | ((setup.request as u64) << 48)
+                | ((setup.value as u64) << 32)
+                | (setup.index as u64),
+            ((setup.length as u64) << 48) | (data_len as u64),
+            self.slot_id as u64,
+        );
+
+        let value = setup.value.to_le_bytes();
+        let index = setup.index.to_le_bytes();
+        let length = setup.length.to_le_bytes();
+        let setup_immediate = u64::from_le_bytes([
+            setup.request_type,
+            setup.request,
+            value[0],
+            value[1],
+            index[0],
+            index[1],
+            length[0],
+            length[1],
+        ]);
+
+        let setup_trb = Trb {
+            param: setup_immediate,
+            status: 8,
+            control: (trb_type::SETUP << 10) | (1 << 6) | (3 << 16),
+        };
+        let setup_trb_addr = ep0_ring.try_enqueue(host, setup_trb)?;
+
+        let data_bus = data_buf.share_range_for_device(
+            host,
+            offset,
+            data_len,
+            "xhci-control-in-prealloc",
+        )?;
+        let data_trb = Trb {
+            param: data_bus,
+            status: setup.length as u32,
+            control: (trb_type::DATA << 10) | (1 << 16) | (1 << 5),
+        };
+        let data_trb_addr = ep0_ring.try_enqueue(host, data_trb)?;
+
+        let status_trb = Trb {
+            param: 0,
+            status: 0,
+            control: (trb_type::STATUS << 10) | (1 << 5),
+        };
+        let status_trb_addr = ep0_ring.try_enqueue(host, status_trb)?;
+        ep0_ring.sync_for_device(host, "xhci-ep0-ring-submit")?;
+        self.ctrl
+            .emit_diag(0x03a4, setup_trb_addr, data_trb_addr, status_trb_addr);
+
+        drop(ep0_ring);
+        self.ctrl.ring_doorbell(self.slot_id, 1)?;
+
+        let mut waited = 0usize;
+        let mut data_stage_remaining: Option<u32> = None;
+        let control_endpoint_ids = [1u8];
+        loop {
+            if let Some(evt) = self
+                .ctrl
+                .poll_transfer_event_for_slot_endpoint_ids(self.slot_id, &control_endpoint_ids)
+            {
+                let completion_ptr = evt.param & !0x0f;
+                let ep_id = evt.endpoint_id();
+                let stage = if completion_ptr == setup_trb_addr {
+                    1u8
+                } else if completion_ptr == data_trb_addr {
+                    2u8
+                } else if completion_ptr == status_trb_addr {
+                    3u8
+                } else {
+                    0u8
+                };
+                let code = evt.completion_code();
+                self.ctrl.emit_diag(
+                    0x03a5,
+                    completion_ptr,
+                    ((code as u64) << 56)
+                        | ((stage as u64) << 48)
+                        | ((ep_id as u64) << 40)
+                        | evt.transfer_length() as u64,
+                    evt.control as u64,
+                );
+                if ep_id != 1 {
+                    continue;
+                }
+
+                if stage == 1 {
+                    continue;
+                }
+
+                if stage == 2 {
+                    data_stage_remaining = Some(evt.transfer_length());
+                    match code {
+                        completion::SUCCESS | completion::SHORT_PACKET => continue,
+                        completion::STALL_ERROR => {
+                            self.recover_ep0_after_failure(completion_ptr, code, stage);
+                            self.emit_control_failure_context(
+                                setup,
+                                data_len,
+                                completion_ptr,
+                                code,
+                                stage,
+                                waited,
+                            );
+                            return Err(UsbError::Stall);
+                        }
+                        _ => {
+                            self.recover_ep0_after_failure(completion_ptr, code, stage);
+                            self.emit_control_failure_context(
+                                setup,
+                                data_len,
+                                completion_ptr,
+                                code,
+                                stage,
+                                waited,
+                            );
+                            return Err(UsbError::XferFail(code));
+                        }
+                    }
+                }
+
+                if stage != 3 {
+                    continue;
+                }
+
+                match code {
+                    completion::SUCCESS | completion::SHORT_PACKET => {
+                        let remaining =
+                            data_stage_remaining.unwrap_or_else(|| evt.transfer_length());
+                        let transferred = (setup.length as usize).saturating_sub(remaining as usize);
+                        if transferred != 0 {
+                            data_buf.sync_for_cpu_range(
+                                host,
+                                offset,
+                                transferred.min(data_len),
+                                "xhci-control-in-prealloc-cpu",
+                            )?;
+                        }
+                        return Ok(transferred);
+                    }
+                    completion::STALL_ERROR => {
+                        self.recover_ep0_after_failure(completion_ptr, code, stage);
+                        self.emit_control_failure_context(
+                            setup,
+                            data_len,
+                            completion_ptr,
+                            code,
+                            stage,
+                            waited,
+                        );
+                        return Err(UsbError::Stall);
+                    }
+                    _ => {
+                        self.recover_ep0_after_failure(completion_ptr, code, stage);
+                        self.emit_control_failure_context(
+                            setup,
+                            data_len,
+                            completion_ptr,
+                            code,
+                            stage,
+                            waited,
+                        );
+                        return Err(UsbError::XferFail(code));
+                    }
+                }
+            }
+            waited = waited.saturating_add(1);
+            if waited >= wait_limit {
+                self.ctrl.emit_diag(
+                    0x03aa,
+                    ((setup.request_type as u64) << 56)
+                        | ((setup.request as u64) << 48)
+                        | ((setup.value as u64) << 32)
+                        | (setup.index as u64),
+                    ((setup.length as u64) << 48) | (data_len as u64),
+                    wait_limit as u64,
+                );
+                self.recover_ep0_after_failure(status_trb_addr, 0xff, 0);
+                self.emit_control_failure_context(
+                    setup,
+                    data_len,
+                    status_trb_addr,
+                    0xff,
+                    0,
+                    waited,
+                );
+                return Err(UsbError::Timeout);
+            }
+            spin_loop();
+        }
+    }
+
     /// Get device descriptor
     pub fn get_device_descriptor(&mut self) -> Result<DeviceDesc> {
         if self.speed == reg::SPEED_FULL {

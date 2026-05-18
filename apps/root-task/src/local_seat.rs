@@ -288,6 +288,22 @@ impl LocalSeatRuntime {
         }
     }
 
+    /// Mirror raw console output bytes without forcing a line break.
+    ///
+    /// This is used for prompt fan-out so HDMI and serial can render the same
+    /// logical prompt without treating it as a completed scrollback line.
+    pub fn mirror_output_bytes(&mut self, bytes: &[u8]) {
+        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        if let Some(backend) = self.backend.as_mut() {
+            backend.write_bytes(bytes);
+        }
+
+        #[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+        {
+            let _ = bytes;
+        }
+    }
+
     /// Snapshot mirrored lines for diagnostics/tests.
     #[must_use]
     pub fn mirrored_lines_snapshot(&self) -> Vec<String> {

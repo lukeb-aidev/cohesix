@@ -6146,7 +6146,7 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <STATIC_IP> --tcp-port 31337 --script scripts/cohsh/boot_v0.coh`
-- `python3 scripts/rest_perf_harness.py simulate --tcp-host <STATIC_IP> --tcp-port 31337 --gateway-pool-control-sessions 2 --gateway-pool-telemetry-sessions 8 --duration-mins 1 --workers-min 1 --workers-max 1 --intensity-min 1 --intensity-max 1 --error-budget-rate 0.01`
+- `python3 scripts/rest_perf_harness.py simulate --no-qemu --tcp-host <STATIC_IP> --tcp-port 31337 --auth-token <console-auth-token> --request-auth-token <rest-request-auth-token> --gateway-pool-control-sessions 2 --gateway-pool-telemetry-sessions 8 --duration-mins 1 --workers-min 1 --workers-max 1 --intensity-min 1 --intensity-max 1 --error-budget-rate 0.01 --no-retries`
 
 ### Checks (DoD)
 - Pi 4 U-Boot boot reaches root-task network init and reports `GENETv5` backend with static IPv4 from manifest-generated config.
@@ -6250,7 +6250,7 @@ Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
-  - python3 scripts/rest_perf_harness.py simulate --tcp-host <GENET_IP> --tcp-port 31337 --gateway-pool-control-sessions 2 --gateway-pool-telemetry-sessions 8 --duration-mins 1 --workers-min 1 --workers-max 1 --intensity-min 1 --intensity-max 1 --error-budget-rate 0.01
+  - python3 scripts/rest_perf_harness.py simulate --no-qemu --tcp-host <GENET_IP> --tcp-port 31337 --auth-token <console-auth-token> --request-auth-token <rest-request-auth-token> --gateway-pool-control-sessions 2 --gateway-pool-telemetry-sessions 8 --duration-mins 1 --workers-min 1 --workers-max 1 --intensity-min 1 --intensity-max 1 --error-budget-rate 0.01 --no-retries
 Checks:
   - GENET RX/TX service uses HAL IRQ acknowledgement ordering: observe notification, clear device source, then acknowledge IRQHandler.
   - Descriptor service is batched and bounded; ring full, queue full, and cache maintenance failures are visible in diagnostics without UART/log spam on successful hot paths.
@@ -6335,7 +6335,7 @@ Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
-- `python3 scripts/rest_perf_harness.py simulate --tcp-host <WIFI_IP> --tcp-port 31337 --gateway-pool-control-sessions 2 --gateway-pool-telemetry-sessions 8 --duration-mins 1 --workers-min 1 --workers-max 1 --intensity-min 1 --intensity-max 1 --error-budget-rate 0.01`
+- `python3 scripts/rest_perf_harness.py simulate --no-qemu --tcp-host <WIFI_IP> --tcp-port 31337 --auth-token <console-auth-token> --request-auth-token <rest-request-auth-token> --gateway-pool-control-sessions 2 --gateway-pool-telemetry-sessions 8 --duration-mins 1 --workers-min 1 --workers-max 1 --intensity-min 1 --intensity-max 1 --error-budget-rate 0.01 --no-retries`
 
 ### Checks (DoD)
 - Pi 4 wired path acquires a DHCP lease within bounded retries/timeouts and exposes acquired config through existing diagnostics surfaces.
@@ -6564,7 +6564,7 @@ Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::
   - pytest -q tests/test_rest_perf_harness.py
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
-  - python3 scripts/rest_perf_harness.py simulate --tcp-host <WIFI_IP> --tcp-port 31337 --gateway-pool-control-sessions 2 --gateway-pool-telemetry-sessions 8 --duration-mins 1 --workers-min 1 --workers-max 1 --intensity-min 1 --intensity-max 1 --error-budget-rate 0.01
+  - python3 scripts/rest_perf_harness.py simulate --no-qemu --tcp-host <WIFI_IP> --tcp-port 31337 --auth-token <console-auth-token> --request-auth-token <rest-request-auth-token> --gateway-pool-control-sessions 2 --gateway-pool-telemetry-sessions 8 --duration-mins 1 --workers-min 1 --workers-max 1 --intensity-min 1 --intensity-max 1 --error-budget-rate 0.01 --no-retries
 Checks:
   - Wi-Fi secure join, DHCP, TCP console, and REST gateway benchmark traffic run without reintroducing root-prompt log noise beyond critical warnings/errors.
   - USB keyboard first-byte/printable proof and prompt responsiveness remain intact during Wi-Fi benchmark traffic.

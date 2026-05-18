@@ -73,8 +73,12 @@ const TCP_RX_BUFFER: usize = 16384;
 // Pi 4 WiFi has enough real transport latency that a 2 KiB socket send window
 // throttles multi-line REST replies before one poll can drain them.
 const TCP_TX_BUFFER: usize = 65536;
-const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 128;
-const MAX_CONSOLE_BYTES_PER_POLL: usize = 65_536;
+const NETWORK_SERVICE_BUDGET: crate::hal::HardwareServiceBudget =
+    crate::hal::runtime_service_budget(crate::hal::HardwareServiceClass::Network);
+const MAX_CONSOLE_FRAMES_PER_POLL: u32 = NETWORK_SERVICE_BUDGET.max_ops as u32;
+const MAX_CONSOLE_BYTES_PER_POLL: usize = NETWORK_SERVICE_BUDGET.max_bytes;
+const MAX_TCP_RECV_CHUNKS_PER_POLL: usize = NETWORK_SERVICE_BUDGET.max_ops;
+const MAX_TCP_RECV_BYTES_PER_POLL: usize = NETWORK_SERVICE_BUDGET.max_bytes;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
 const SOCKET_CAPACITY: usize = 6;
@@ -96,6 +100,7 @@ const CONSOLE_SELFTEST_RECOVERY_DEADLINE_MS: u64 = 3_000;
 const CONSOLE_SELFTEST_RETRY_MS: u64 = 250;
 const DISCONNECT_GRACE_MS: u64 = 250;
 const DISCONNECT_GRACE_POLLS: u8 = 64;
+const TIMEBASE_STALL_WARN_POLL_THRESHOLD: u16 = 512;
 const BOOTINFO_NET_LOGGER_PREFIX_BUDGET: usize = 48;
 const BOOTINFO_NET_LOGGER_FRAME_LIMIT: usize = 192;
 #[cfg(feature = "net-outbound-probe")]
@@ -174,6 +179,16 @@ fn console_listener_defer_reason_for(
 
 fn timebase_stall_warning_suppressed(bringup_status: Option<&'static str>) -> bool {
     matches!(bringup_status, Some("wifi-host-eapol-pending"))
+}
+
+fn timebase_stall_warning_due(
+    bringup_status: Option<&'static str>,
+    same_now_ms_polls: u16,
+    already_warned: bool,
+) -> bool {
+    !already_warned
+        && same_now_ms_polls >= TIMEBASE_STALL_WARN_POLL_THRESHOLD
+        && !timebase_stall_warning_suppressed(bringup_status)
 }
 
 #[cfg(feature = "net-backend-virtio")]
@@ -1135,6 +1150,7 @@ pub struct NetStack<D: NetDevice> {
     #[cfg(feature = "net-outbound-probe")]
     probe_hint_logged: bool,
     last_now_ms: Option<u64>,
+    same_now_ms_polls: u16,
     time_stall_warned: bool,
 }
 
@@ -2685,6 +2701,7 @@ impl<D: NetDevice> NetStack<D> {
             #[cfg(feature = "net-outbound-probe")]
             probe_hint_logged: false,
             last_now_ms: None,
+            same_now_ms_polls: 0,
             time_stall_warned: false,
         });
         stack.assert_bootinfo_overlaps();
@@ -2880,16 +2897,22 @@ impl<D: NetDevice> NetStack<D> {
                     "[net-console] timebase regression detected: prev_now_ms={} now_ms={}",
                     previous, now_ms
                 );
-            } else if now_ms == previous
-                && !self.time_stall_warned
-                && !timebase_stall_warning_suppressed(self.device.bringup_status_label())
-            {
-                warn!(
-                    "[net-console] timebase stalled: now_ms={} (no forward progress)",
-                    now_ms
-                );
-                self.time_stall_warned = true;
+                self.same_now_ms_polls = 0;
+            } else if now_ms == previous {
+                self.same_now_ms_polls = self.same_now_ms_polls.saturating_add(1);
+                if timebase_stall_warning_due(
+                    self.device.bringup_status_label(),
+                    self.same_now_ms_polls,
+                    self.time_stall_warned,
+                ) {
+                    warn!(
+                        "[net-console] timebase stalled: now_ms={} polls={} (no forward progress)",
+                        now_ms, self.same_now_ms_polls
+                    );
+                    self.time_stall_warned = true;
+                }
             } else if now_ms > previous {
+                self.same_now_ms_polls = 0;
                 self.time_stall_warned = false;
             }
         }
@@ -2919,6 +2942,7 @@ impl<D: NetDevice> NetStack<D> {
         if self.stage_policy.tx_only && !self.tx_only_sent {
             let activity = self.send_udp_beacon();
             if activity {
+                self.device.begin_service_turn();
                 let poll_result =
                     self.interface
                         .poll(timestamp, self.device.as_mut(), &mut self.sockets);
@@ -2936,6 +2960,7 @@ impl<D: NetDevice> NetStack<D> {
             return activity;
         }
 
+        self.device.begin_service_turn();
         let mut poll_result =
             self.interface
                 .poll(timestamp, self.device.as_mut(), &mut self.sockets);
@@ -2966,6 +2991,7 @@ impl<D: NetDevice> NetStack<D> {
                 return true;
             }
             self.bump_poll_counter();
+            self.device.begin_service_turn();
             poll_result = self
                 .interface
                 .poll(timestamp, self.device.as_mut(), &mut self.sockets);
@@ -3232,6 +3258,8 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.tx_dup_used_ignored = device_counters.tx_dup_used_ignored;
         self.counters.tx_invalid_used_state = device_counters.tx_invalid_used_state;
         self.counters.tx_alloc_blocked_inflight = device_counters.tx_alloc_blocked_inflight;
+        self.counters.tx_budget_blocked = device_counters.tx_budget_blocked;
+        self.counters.tx_credit_blocked = device_counters.tx_credit_blocked;
         self.counters.wifi_assoc = device_counters.wifi_assoc;
         self.counters.wifi_link_up = device_counters.wifi_link_up;
         self.counters.wifi_host_eapol_rx = device_counters.wifi_host_eapol_rx;
@@ -3266,6 +3294,8 @@ impl<D: NetDevice> NetStack<D> {
             tx_dup_used_ignored: device_counters.tx_dup_used_ignored,
             tx_invalid_used_state: device_counters.tx_invalid_used_state,
             tx_alloc_blocked_inflight: device_counters.tx_alloc_blocked_inflight,
+            tx_budget_blocked: device_counters.tx_budget_blocked,
+            tx_credit_blocked: device_counters.tx_credit_blocked,
             wifi_assoc: device_counters.wifi_assoc,
             wifi_link_up: device_counters.wifi_link_up,
             wifi_host_eapol_rx: device_counters.wifi_host_eapol_rx,
@@ -4387,8 +4417,14 @@ impl<D: NetDevice> NetStack<D> {
                     socket.may_recv(),
                     socket.state()
                 );
-                while socket.can_recv() {
+                let mut recv_chunks = 0usize;
+                let mut recv_bytes = 0usize;
+                while socket.can_recv()
+                    && recv_chunks < MAX_TCP_RECV_CHUNKS_PER_POLL
+                    && recv_bytes < MAX_TCP_RECV_BYTES_PER_POLL
+                {
                     let mut copied = 0usize;
+                    let remaining_budget = MAX_TCP_RECV_BYTES_PER_POLL.saturating_sub(recv_bytes);
                     let recv_result = socket.recv(|data| {
                         let preview_len = core::cmp::min(data.len(), 32);
                         log::debug!(
@@ -4397,7 +4433,10 @@ impl<D: NetDevice> NetStack<D> {
                             data.len(),
                             &data[..preview_len],
                         );
-                        let copy_len = core::cmp::min(data.len(), temp.len());
+                        let copy_len = core::cmp::min(
+                            core::cmp::min(data.len(), temp.len()),
+                            remaining_budget,
+                        );
                         let _ = maybe_report_str_write(
                             temp.as_mut_ptr(),
                             copy_len,
@@ -4412,6 +4451,8 @@ impl<D: NetDevice> NetStack<D> {
                     match recv_result {
                         Ok(()) if copied == 0 => break,
                         Ok(()) => {
+                            recv_chunks = recv_chunks.saturating_add(1);
+                            recv_bytes = recv_bytes.saturating_add(copied);
                             let conn_id = self.active_client_id.unwrap_or(0);
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(copied as u64);
@@ -5690,6 +5731,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.self_test.console_probe_auth_sent = false;
         self.self_test.console_ok = false;
         self.last_now_ms = None;
+        self.same_now_ms_polls = 0;
         self.time_stall_warned = false;
         #[cfg(feature = "net-outbound-probe")]
         {
@@ -6125,6 +6167,44 @@ mod tests {
             "wifi-host-eapol-required"
         )));
         assert!(!timebase_stall_warning_suppressed(None));
+    }
+
+    #[test]
+    fn same_turn_network_bursts_do_not_warn_as_timebase_stalls() {
+        assert!(!timebase_stall_warning_due(
+            Some("ready"),
+            TIMEBASE_STALL_WARN_POLL_THRESHOLD - 1,
+            false,
+        ));
+        assert!(timebase_stall_warning_due(
+            Some("ready"),
+            TIMEBASE_STALL_WARN_POLL_THRESHOLD,
+            false,
+        ));
+        assert!(!timebase_stall_warning_due(
+            Some("ready"),
+            TIMEBASE_STALL_WARN_POLL_THRESHOLD,
+            true,
+        ));
+        assert!(!timebase_stall_warning_due(
+            Some("wifi-host-eapol-pending"),
+            TIMEBASE_STALL_WARN_POLL_THRESHOLD,
+            false,
+        ));
+    }
+
+    #[test]
+    fn tcp_console_runtime_budgets_match_network_service_budget() {
+        assert_eq!(MAX_TCP_RECV_CHUNKS_PER_POLL, NETWORK_SERVICE_BUDGET.max_ops);
+        assert_eq!(
+            MAX_TCP_RECV_BYTES_PER_POLL,
+            NETWORK_SERVICE_BUDGET.max_bytes
+        );
+        assert_eq!(
+            MAX_CONSOLE_FRAMES_PER_POLL,
+            NETWORK_SERVICE_BUDGET.max_ops as u32
+        );
+        assert_eq!(MAX_CONSOLE_BYTES_PER_POLL, NETWORK_SERVICE_BUDGET.max_bytes);
     }
 
     #[test]

@@ -8969,6 +8969,8 @@ impl NetDevice for VirtioNet {
             tx_dup_used_ignored: self.tx_dup_used_ignored as u64,
             tx_invalid_used_state: self.tx_invalid_used_state as u64,
             tx_alloc_blocked_inflight: self.tx_alloc_blocked_inflight as u64,
+            tx_budget_blocked: 0,
+            tx_credit_blocked: 0,
             wifi_assoc: 0,
             wifi_link_up: 0,
             wifi_host_eapol_rx: 0,

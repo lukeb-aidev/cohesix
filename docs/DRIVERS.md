@@ -739,18 +739,23 @@ power/reset state.
   timeout. `wifi-host-eapol-pending` is not a data-path success; it exists to
   release `cohesix>` while DHCP/data stay blocked and prompt-side `wifi diag` /
   `nettest` can report the exact WPA/EAPOL boundary. While that state is live,
-  root-task performs bounded pre-root host-EAPOL burst polls, then post-root
-  runtime polling yields after one Wi-Fi poll per event turn. Serial RX is
-  sampled, but local-seat USB keyboard input is drained before serial command
-  dispatch; if keyboard bytes were consumed before runtime, runtime work and
-  serial command dispatch wait for the next turn. If USB bytes arrive during a
-  ready network poll, the event pump drains them before network-console command
-  dispatch, IPC, or stream flushing continue. When local-seat is active, serial
-  input dispatch is capped to one complete command line per pump turn, and
-  serial-origin output is staged in small cooperative chunks instead of holding
-  the UART in a blocking write across a whole line. The event pump settles
-  across bounded idle HID polls, and HDMI echoes accepted USB keyboard bytes
-  immediately at parser ingress. HID polling drains a burst of interrupt-IN
+  root-task performs bounded pre-root host-EAPOL burst polls and services the
+  local-seat keyboard backend between those network polls without dispatching
+  local-seat commands before root-console handoff; post-root runtime polling
+  yields after one Wi-Fi poll per event turn. Serial RX is sampled, but
+  local-seat USB keyboard input is drained before serial command dispatch; if
+  keyboard bytes were consumed before runtime, runtime work and serial command
+  dispatch wait for the next turn. If USB bytes arrive during a ready network
+  poll, the event pump drains them before network-console command dispatch, IPC,
+  or stream flushing continue. When local-seat is active, serial input dispatch
+  is capped to one complete command line per pump turn, serial-origin output is
+  staged as bounded nonblocking TX records, the cooperative serial poll drains
+  at most 128 RX bytes and 1024 TX bytes per turn, and network-console ingress
+  drains into the pending parser queue only when there is reserve for a full
+  inbound console queue. Network-console dispatch remains capped to one complete
+  line per pump turn. The event pump settles across bounded idle HID polls, and
+  HDMI echoes accepted USB keyboard bytes immediately at parser ingress. HID
+  polling drains a burst of interrupt-IN
   reports in one pass and keeps 128 keyboard interrupt-IN reads armed on the
   poll-only Pi 4 path, so press/release/next-key sequences can complete while
   console output, HDMI echo, or bounded Wi-Fi diagnostics are in progress.
@@ -798,7 +803,14 @@ power/reset state.
   data windows while retaining block-boundary backpressure. Once the authenticated
   interface is ready and local-seat input is idle, the network service slice may
   perform 16 bounded polls and flush up to 16 KiB of outbound console/REST
-  payloads per cooperative turn. Queued data observed before host-EAPOL secure
+  payloads per cooperative turn. GENET RX completion and CYW43 SDPCM/glom RX
+  delivery spend the same per-turn network budget before returning to the root
+  event pump, so a burst from one network device cannot monopolize USB keyboard,
+  serial, or console-output service. GENET TX admission and CYW43 steady-state
+  data TX admission also spend bounded network-class service operations before
+  a frame is handed to hardware; `netstats` exposes `budget_blocked` and, for
+  CYW43 SDPCM flow control, `credit_blocked` so benchmark stalls are visible
+  without UART flooding. Queued data observed before host-EAPOL secure
   completion is dropped instead of replayed after the data admission boundary.
 - Repeated CYW43 runtime RX errors have a generic UART warning budget in
   addition to the tighter oversize/glom budget. The first few occurrences stay
@@ -1236,12 +1248,23 @@ For GENET this means batched RX/TX completion and replenish work with explicit
 ring-pressure/drop/reclaim counters. RX and TX frame buffers should stay
 DMA-pinned for device lifetime when the HAL cache contract permits it; per-frame
 work is limited to CPU/device cache synchronization and descriptor ownership
-updates, with final unpin during teardown. For CYW43/SDIO it means keeping long
-association/control-plane retries separate from steady-state SDPCM/RX/TX service,
-draining bounded post-data RX bursts into the ready queue, aligning outbound
-flush capacity with the 16-op/16-KiB network budget, and using block-sized SDHCI
-PIO bursts instead of per-word `PRESENT_STATE` polling before returning to the
-cooperative event loop. For USB it means preserving the existing proof gates while moving
+updates, with final unpin during teardown. The as-built GENET RX path only
+drains the hardware ring when the ready queue is empty and then admits frames
+through the shared 16-op/16-KiB network slice; RX reclaim/cache-sync failures
+drop and rearm the affected descriptor rather than pinning the consumer on the
+same failed slot. GENET steady-state TX admission is bounded by the same
+network-class budget and reports `tx_budget_blocked` through `netstats` when the
+cooperative slice is exhausted. For CYW43/SDIO it means keeping long
+association/control-plane retries separate from steady-state SDPCM/RX/TX
+service, draining bounded post-data RX bursts into the ready queue, aligning
+outbound flush capacity with the 16-op/16-KiB network budget, and using
+block-sized SDHCI PIO bursts instead of per-word `PRESENT_STATE` polling before
+returning to the cooperative event loop. The as-built CYW43 RX path applies that
+same network slice to direct SDPCM frames, queued glom subframes, post-data
+prefetch, and deferred host-EAPOL join service. CYW43 steady-state TX requires
+immediate SDPCM credit and an available TX service slice before handing data to
+hardware; missing credit and budget exhaustion are separate counters. For USB it
+means preserving the existing proof gates while moving
 runtime keyboard progress toward event-ring readiness only after the xHCI
 interrupt path is separately proven. For future block IO it means HAL-owned
 request/completion queues that use the shared HAL hardware-service budget and

@@ -20,8 +20,8 @@ use smoltcp::wire::EthernetAddress;
 
 use crate::hal::pi4_wifi::Pi4WifiState;
 use crate::hal::{
-    Cyw43Hal, HalError, Hardware, SdioBusWidth, SdioFunction, WifiFirmwareBundle, WifiPowerState,
-    WifiResetState,
+    runtime_service_budget, Cyw43Hal, HalError, Hardware, HardwareServiceClass, SdioBusWidth,
+    SdioFunction, WifiFirmwareBundle, WifiPowerState, WifiResetState,
 };
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
 use crate::local_seat_pi4::{wifi_progress_begin, wifi_progress_finish, wifi_progress_tick};
@@ -98,6 +98,12 @@ const RX_ERROR_WARNING_LOG_LIMIT: u8 = 8;
 const RX_OVERSIZE_WARNING_LOG_LIMIT: u8 = 4;
 const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
 const POST_UP_EVENT_DRAIN_BUDGET: usize = 64;
+const CYW43_NETWORK_SERVICE_BUDGET: crate::hal::HardwareServiceBudget =
+    runtime_service_budget(HardwareServiceClass::Network);
+const CYW43_RX_SERVICE_OPS: usize = CYW43_NETWORK_SERVICE_BUDGET.max_ops;
+const CYW43_RX_SERVICE_BYTES: usize = CYW43_NETWORK_SERVICE_BUDGET.max_bytes;
+const CYW43_TX_SERVICE_OPS: usize = CYW43_NETWORK_SERVICE_BUDGET.max_ops;
+const CYW43_TX_SERVICE_BYTES: usize = CYW43_NETWORK_SERVICE_BUDGET.max_bytes;
 
 const CHANNEL_CONTROL: u8 = 0;
 const CHANNEL_EVENT: u8 = 1;
@@ -2901,6 +2907,12 @@ pub struct Cyw43NetDevice {
     glom_warning_logs: u8,
     rx_error_warning_logs: u8,
     rx_oversize_warning_logs: u8,
+    rx_service_ops_remaining: usize,
+    rx_service_bytes_remaining: usize,
+    tx_service_ops_remaining: usize,
+    tx_service_bytes_remaining: usize,
+    tx_budget_blocked: u64,
+    tx_credit_blocked: u64,
 }
 
 pub struct RxToken {
@@ -3074,6 +3086,12 @@ impl Cyw43NetDevice {
             glom_warning_logs: 0,
             rx_error_warning_logs: 0,
             rx_oversize_warning_logs: 0,
+            rx_service_ops_remaining: CYW43_RX_SERVICE_OPS,
+            rx_service_bytes_remaining: CYW43_RX_SERVICE_BYTES,
+            tx_service_ops_remaining: CYW43_TX_SERVICE_OPS,
+            tx_service_bytes_remaining: CYW43_TX_SERVICE_BYTES,
+            tx_budget_blocked: 0,
+            tx_credit_blocked: 0,
         };
 
         info!("[cyw43] step: init_control_plane");
@@ -4901,11 +4919,12 @@ impl Cyw43NetDevice {
             host_eapol_required.then(crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart);
         let _wifi_log_uart_guard =
             host_eapol_required.then(crate::bootstrap::log::suppress_uart_log_output);
-        let frame_budget = if host_eapol_required {
+        let frame_budget = (if host_eapol_required {
             HOST_EAPOL_DEFERRED_FRAME_BUDGET
         } else {
             DEFERRED_JOIN_FRAME_BUDGET
-        };
+        })
+        .min(self.rx_service_ops_remaining);
         let mut event_frames = 0usize;
         let mut control_frames = 0usize;
         let mut data_frames = 0usize;
@@ -4913,6 +4932,7 @@ impl Cyw43NetDevice {
         let mut transient_errors = 0usize;
 
         for _ in 0..frame_budget {
+            self.rx_service_ops_remaining = self.rx_service_ops_remaining.saturating_sub(1);
             match self.process_next_frame(false) {
                 Ok(RxFrameResult::Event(event)) => {
                     event_frames = event_frames.saturating_add(1);
@@ -6350,6 +6370,9 @@ impl Cyw43NetDevice {
         if !deferred_join_allows_rx_polling(self.deferred_join_state) {
             return None;
         }
+        if self.rx_service_ops_remaining == 0 || self.rx_service_bytes_remaining == 0 {
+            return None;
+        }
 
         if matches!(self.deferred_join_state, DeferredJoinState::Pending { .. }) {
             self.service_deferred_join();
@@ -6365,9 +6388,14 @@ impl Cyw43NetDevice {
             (!allow_data).then(crate::bootstrap::log::suppress_uart_log_output);
         match glom_queued_data_action(allow_data, self.glom_rx_ready.len()) {
             GlomQueuedDataAction::Pop => {
+                let next_len = self.glom_rx_ready.front().map(|frame| frame.len())?;
+                if !self.rx_service_can_deliver(next_len) {
+                    return None;
+                }
                 let Some(frame) = self.glom_rx_ready.pop_front() else {
                     return None;
                 };
+                self.consume_rx_service_frame(frame.len());
                 self.rx_packets = self.rx_packets.saturating_add(1);
                 return Some(frame);
             }
@@ -6380,9 +6408,18 @@ impl Cyw43NetDevice {
             }
             GlomQueuedDataAction::Empty => {}
         }
-        for _ in 0..RX_PUMP_LIMIT {
+        if self.rx_service_bytes_remaining < MAX_FRAME_LEN
+            && self.rx_service_bytes_remaining < CYW43_RX_SERVICE_BYTES
+        {
+            return None;
+        }
+        let mut pump_budget = RX_PUMP_LIMIT.min(self.rx_service_ops_remaining);
+        while pump_budget > 0 && self.rx_service_ops_remaining > 0 {
+            self.rx_service_ops_remaining = self.rx_service_ops_remaining.saturating_sub(1);
+            pump_budget = pump_budget.saturating_sub(1);
             match self.process_next_frame(allow_data) {
                 Ok(RxFrameResult::Data(frame)) if allow_data => {
+                    self.consume_rx_service_bytes(frame.len());
                     self.rx_packets = self.rx_packets.saturating_add(1);
                     let (prefetched, dropped) = self.prefetch_rx_after_first_data(allow_data);
                     if prefetched != 0 || dropped != 0 {
@@ -6426,13 +6463,25 @@ impl Cyw43NetDevice {
         let mut queued = 0usize;
         let mut dropped = 0usize;
         let mut consecutive_empty = 0usize;
-        for _ in 0..RX_POST_DATA_PREFETCH_LIMIT {
+        let mut prefetch_budget = RX_POST_DATA_PREFETCH_LIMIT.min(self.rx_service_ops_remaining);
+        while prefetch_budget > 0
+            && self.rx_service_ops_remaining > 0
+            && self.rx_service_bytes_remaining > 0
+        {
+            if self.rx_service_bytes_remaining < MAX_FRAME_LEN
+                && self.rx_service_bytes_remaining < CYW43_RX_SERVICE_BYTES
+            {
+                break;
+            }
             if self.glom_rx_ready.len() >= RX_GLOM_QUEUE_CAP {
                 break;
             }
+            self.rx_service_ops_remaining = self.rx_service_ops_remaining.saturating_sub(1);
+            prefetch_budget = prefetch_budget.saturating_sub(1);
             match self.process_next_frame(allow_data) {
                 Ok(RxFrameResult::Data(frame)) => {
                     consecutive_empty = 0;
+                    self.consume_rx_service_bytes(frame.len());
                     if self.glom_rx_ready.push_back(frame).is_ok() {
                         queued = queued.saturating_add(1);
                     } else {
@@ -6464,6 +6513,59 @@ impl Cyw43NetDevice {
             }
         }
         (queued, dropped)
+    }
+
+    fn rx_service_can_deliver(&self, frame_len: usize) -> bool {
+        self.rx_service_ops_remaining > 0
+            && (frame_len <= self.rx_service_bytes_remaining
+                || self.rx_service_bytes_remaining == CYW43_RX_SERVICE_BYTES)
+    }
+
+    fn consume_rx_service_frame(&mut self, frame_len: usize) {
+        self.rx_service_ops_remaining = self.rx_service_ops_remaining.saturating_sub(1);
+        self.consume_rx_service_bytes(frame_len);
+    }
+
+    fn consume_rx_service_bytes(&mut self, frame_len: usize) {
+        self.rx_service_bytes_remaining = self.rx_service_bytes_remaining.saturating_sub(frame_len);
+    }
+
+    const fn tx_service_available(&self) -> bool {
+        self.tx_service_ops_remaining > 0 && self.tx_service_bytes_remaining > 0
+    }
+
+    fn consume_tx_service_budget(&mut self, frame_len: usize) -> bool {
+        if self.tx_service_ops_remaining == 0 || self.tx_service_bytes_remaining == 0 {
+            return false;
+        }
+        if frame_len > self.tx_service_bytes_remaining
+            && self.tx_service_bytes_remaining < CYW43_TX_SERVICE_BYTES
+        {
+            return false;
+        }
+        self.tx_service_ops_remaining = self.tx_service_ops_remaining.saturating_sub(1);
+        self.tx_service_bytes_remaining = self.tx_service_bytes_remaining.saturating_sub(frame_len);
+        true
+    }
+
+    fn record_tx_budget_blocked(&mut self, dropped: bool) {
+        if dropped {
+            self.tx_drops = self.tx_drops.saturating_add(1);
+        }
+        self.tx_budget_blocked = self.tx_budget_blocked.saturating_add(1);
+        trace!(
+            "[cyw43] tx blocked reason=service-budget ops_remaining={} bytes_remaining={}",
+            self.tx_service_ops_remaining,
+            self.tx_service_bytes_remaining
+        );
+    }
+
+    fn record_tx_credit_blocked(&mut self, dropped: bool) {
+        if dropped {
+            self.tx_drops = self.tx_drops.saturating_add(1);
+        }
+        self.tx_credit_blocked = self.tx_credit_blocked.saturating_add(1);
+        trace!("[cyw43] tx blocked reason=no-sdpcm-credit");
     }
 
     fn transmit(&mut self, packet: &[u8]) -> Result<SdpcmTxProof, DriverError> {
@@ -6596,6 +6698,14 @@ impl<'a> phy::TxToken for TxToken<'a> {
             let mut temp = [0u8; MAX_FRAME_LEN];
             let frame = &mut temp[..len.min(MAX_FRAME_LEN)];
             let result = f(frame);
+            if !self.device.has_credit() {
+                self.device.record_tx_credit_blocked(true);
+                return result;
+            }
+            if !self.device.consume_tx_service_budget(frame.len()) {
+                self.device.record_tx_budget_blocked(true);
+                return result;
+            }
             if let Err(err) = self.device.transmit(frame) {
                 self.device.tx_drops = self.device.tx_drops.saturating_add(1);
                 warn!("[cyw43] tx error: {err}");
@@ -6608,6 +6718,14 @@ impl<'a> phy::TxToken for TxToken<'a> {
             let frame = &mut self.device.tx_frame[SDPCM_DATA_TX_PAYLOAD_OFFSET..payload_end];
             f(frame)
         };
+        if !self.device.has_credit() {
+            self.device.record_tx_credit_blocked(true);
+            return result;
+        }
+        if !self.device.consume_tx_service_budget(len) {
+            self.device.record_tx_budget_blocked(true);
+            return result;
+        }
         if let Err(err) = self.device.transmit_preloaded_payload(len) {
             self.device.tx_drops = self.device.tx_drops.saturating_add(1);
             warn!("[cyw43] tx error: {err}");
@@ -6632,15 +6750,22 @@ impl Device for Cyw43NetDevice {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        if cyw43_data_tx_allowed(
+        if !cyw43_data_tx_allowed(
             self.link_up,
             self.host_eapol_secure_complete(),
             self.deferred_join_state,
         ) {
-            Some(TxToken { device: self })
-        } else {
-            None
+            return None;
         }
+        if !self.has_credit() {
+            self.record_tx_credit_blocked(false);
+            return None;
+        }
+        if !self.tx_service_available() {
+            self.record_tx_budget_blocked(false);
+            return None;
+        }
+        Some(TxToken { device: self })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -6725,7 +6850,11 @@ impl NetDevice for Cyw43NetDevice {
             tx_used_advances: self.tx_packets,
             tx_submit: self.tx_packets,
             tx_complete: self.tx_packets,
-            tx_free: 1,
+            tx_free: if self.has_credit() && self.tx_service_available() {
+                1
+            } else {
+                0
+            },
             tx_in_flight: 0,
             tx_double_submit: 0,
             tx_zero_len_attempt: 0,
@@ -6734,6 +6863,8 @@ impl NetDevice for Cyw43NetDevice {
             tx_dup_used_ignored: 0,
             tx_invalid_used_state: 0,
             tx_alloc_blocked_inflight: 0,
+            tx_budget_blocked: self.tx_budget_blocked,
+            tx_credit_blocked: self.tx_credit_blocked,
             wifi_assoc: if self.associated { 1 } else { 0 },
             wifi_link_up: if self.link_up { 1 } else { 0 },
             wifi_host_eapol_rx: u64::from(self.host_eapol_rx_packets),
@@ -6744,6 +6875,13 @@ impl NetDevice for Cyw43NetDevice {
                 0
             },
         }
+    }
+
+    fn begin_service_turn(&mut self) {
+        self.rx_service_ops_remaining = CYW43_RX_SERVICE_OPS;
+        self.rx_service_bytes_remaining = CYW43_RX_SERVICE_BYTES;
+        self.tx_service_ops_remaining = CYW43_TX_SERVICE_OPS;
+        self.tx_service_bytes_remaining = CYW43_TX_SERVICE_BYTES;
     }
 
     fn buffer_bounds(&self) -> Option<Range<usize>> {
@@ -7416,16 +7554,17 @@ mod tests {
         BRCMF_EVENT_FLAGS_OFFSET, BRCMF_EVENT_MIN_PACKET_LEN, BRCMF_EVENT_REASON_OFFSET,
         BRCMF_EVENT_STATUS_OFFSET, BRCMF_EVENT_TYPE_OFFSET, BRCMF_PRIMARY_KEY, BROADCOM_OUI,
         BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA, CHANNEL_EVENT,
-        CHANNEL_GLOM, CLM_CHUNK_SIZE, CRYPTO_ALGO_AES_CCM, DEFERRED_JOIN_POLL_LIMIT,
-        EAPOL_HEADER_LEN, EAPOL_KEY_BODY_DATA_LEN_OFFSET, EAPOL_KEY_BODY_KEY_INFO_OFFSET,
-        EAPOL_KEY_BODY_MIC_OFFSET, EAPOL_KEY_INFO_ACK, EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA,
-        EAPOL_KEY_INFO_GROUP_M2, EAPOL_KEY_INFO_INSTALL, EAPOL_KEY_INFO_KEY_TYPE,
-        EAPOL_KEY_INFO_M2, EAPOL_KEY_INFO_MIC, EAPOL_KEY_INFO_SECURE, EAPOL_KEY_MIN_BODY_LEN,
-        EAPOL_PACKET_TYPE_KEY, EAPOL_PACKET_TYPE_START, ETHER_ADDR_LEN, ETH_HEADER_LEN,
-        ETH_P_EAPOL, ETH_P_LINK_CTL, EVENTMSGS_EXT_SET_MASK, EVENTMSGS_EXT_VER, EVENT_ASSOC,
-        EVENT_ASSOC_IND, EVENT_AUTH, EVENT_DISASSOC_IND, EVENT_FLAG_LINK, EVENT_IF, EVENT_LINK,
-        EVENT_MASK_LEN, EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC, EVENT_REASSOC_IND,
-        EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN, HOST_EAPOL_BDC_PRIORITY,
+        CHANNEL_GLOM, CLM_CHUNK_SIZE, CRYPTO_ALGO_AES_CCM, CYW43_RX_SERVICE_BYTES,
+        CYW43_RX_SERVICE_OPS, CYW43_TX_SERVICE_BYTES, CYW43_TX_SERVICE_OPS,
+        DEFERRED_JOIN_POLL_LIMIT, EAPOL_HEADER_LEN, EAPOL_KEY_BODY_DATA_LEN_OFFSET,
+        EAPOL_KEY_BODY_KEY_INFO_OFFSET, EAPOL_KEY_BODY_MIC_OFFSET, EAPOL_KEY_INFO_ACK,
+        EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA, EAPOL_KEY_INFO_GROUP_M2, EAPOL_KEY_INFO_INSTALL,
+        EAPOL_KEY_INFO_KEY_TYPE, EAPOL_KEY_INFO_M2, EAPOL_KEY_INFO_MIC, EAPOL_KEY_INFO_SECURE,
+        EAPOL_KEY_MIN_BODY_LEN, EAPOL_PACKET_TYPE_KEY, EAPOL_PACKET_TYPE_START, ETHER_ADDR_LEN,
+        ETH_HEADER_LEN, ETH_P_EAPOL, ETH_P_LINK_CTL, EVENTMSGS_EXT_SET_MASK, EVENTMSGS_EXT_VER,
+        EVENT_ASSOC, EVENT_ASSOC_IND, EVENT_AUTH, EVENT_DISASSOC_IND, EVENT_FLAG_LINK, EVENT_IF,
+        EVENT_LINK, EVENT_MASK_LEN, EVENT_MIC_ERROR, EVENT_PSK_SUP, EVENT_REASSOC,
+        EVENT_REASSOC_IND, EVENT_ROAM, EVENT_SET_SSID, FRAME_BUF_LEN, HOST_EAPOL_BDC_PRIORITY,
         HOST_EAPOL_DEFERRED_POLL_LIMIT, HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS,
         HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS, HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS,
         HOST_EAPOL_KEY_DATA_MAX_LEN, HOST_EAPOL_MCAST_LIST_PAYLOAD_LEN,
@@ -9295,13 +9434,61 @@ mod tests {
     }
 
     #[test]
+    fn pi4_wifi_rx_service_matches_shared_network_budget() {
+        let budget = crate::hal::runtime_service_budget(crate::hal::HardwareServiceClass::Network);
+        assert_eq!(CYW43_RX_SERVICE_OPS, budget.max_ops);
+        assert_eq!(CYW43_RX_SERVICE_BYTES, budget.max_bytes);
+        assert_eq!(CYW43_TX_SERVICE_OPS, budget.max_ops);
+        assert_eq!(CYW43_TX_SERVICE_BYTES, budget.max_bytes);
+        assert!(CYW43_RX_SERVICE_OPS <= RX_PUMP_LIMIT);
+    }
+
+    #[test]
+    fn steady_state_tx_token_requires_immediate_credit() {
+        let source = include_str!("cyw43.rs");
+        let tx_token_impl = source
+            .split("impl<'a> phy::TxToken for TxToken<'a>")
+            .nth(1)
+            .and_then(|tail| tail.split("impl Device for Cyw43NetDevice").next())
+            .expect("TxToken implementation remains before Device implementation");
+        assert!(tx_token_impl.contains("if !self.device.has_credit()"));
+        assert!(tx_token_impl.contains("record_tx_credit_blocked(true)"));
+        assert!(tx_token_impl.contains("consume_tx_service_budget"));
+
+        let device_tx = source
+            .split("fn transmit(&mut self, _timestamp: Instant)")
+            .nth(1)
+            .expect("Device transmit implementation remains present");
+        assert!(device_tx.contains("if !self.has_credit()"));
+        assert!(device_tx.contains("record_tx_credit_blocked(false)"));
+        assert!(device_tx.contains("if !self.tx_service_available()"));
+        assert!(device_tx.contains("record_tx_budget_blocked(false)"));
+    }
+
+    #[test]
+    fn deferred_join_spends_rx_service_ops() {
+        let source = include_str!("cyw43.rs");
+        let deferred_join = source
+            .split("fn service_deferred_join(&mut self)")
+            .nth(1)
+            .and_then(|tail| tail.split("fn poll_rx(&mut self)").next())
+            .expect("deferred join helper remains before runtime poll_rx");
+        assert!(deferred_join.contains(".min(self.rx_service_ops_remaining)"));
+        assert!(deferred_join.contains(
+            "self.rx_service_ops_remaining = self.rx_service_ops_remaining.saturating_sub(1)"
+        ));
+    }
+
+    #[test]
     fn runtime_rx_prefetches_bounded_bursts_after_first_data() {
         let source = include_str!("cyw43.rs");
         assert!(source.contains("fn prefetch_rx_after_first_data"));
         assert!(source.contains("self.prefetch_rx_after_first_data(allow_data)"));
-        assert!(source.contains("for _ in 0..RX_POST_DATA_PREFETCH_LIMIT"));
+        assert!(source.contains("RX_POST_DATA_PREFETCH_LIMIT.min(self.rx_service_ops_remaining)"));
+        assert!(source.contains("self.rx_service_bytes_remaining < MAX_FRAME_LEN"));
         assert!(source.contains("self.glom_rx_ready.push_back(frame)"));
         assert!(source.contains("consecutive_empty >= RX_POST_DATA_PREFETCH_IDLE_LIMIT"));
+        assert!(source.contains("fn begin_service_turn(&mut self)"));
     }
 
     #[test]

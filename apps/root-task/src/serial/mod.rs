@@ -90,12 +90,14 @@ pub(crate) fn with_uart_tx_lock<R>(f: impl FnOnce() -> R) -> R {
 pub const DEFAULT_RX_CAPACITY: usize = 512;
 
 /// Capacity of the TX staging queue used by [`SerialPort`].
-pub const DEFAULT_TX_CAPACITY: usize = 256;
+pub const DEFAULT_TX_CAPACITY: usize = 4096;
 
 /// Maximum number of UTF-8 codepoints retained in a console line.
 pub const DEFAULT_LINE_CAPACITY: usize = 256;
 
 const BLOCKING_TX_SPIN_LIMIT: usize = 1_000_000;
+const SERIAL_RX_POLL_BUDGET: usize = 128;
+const SERIAL_TX_POLL_BUDGET: usize = 1024;
 
 /// Error type surfaced by the serial subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +220,41 @@ where
         accepted
     }
 
+    /// Stage one ordered serial record without blocking or partially enqueueing it.
+    ///
+    /// Slow serial peers must not hold up HDMI or USB keyboard service. This
+    /// method therefore fails the whole record when the bounded queue cannot
+    /// hold it, preserving transcript ordering for records that are accepted.
+    pub fn try_enqueue_tx_record(&mut self, parts: &[&[u8]]) -> bool {
+        let mut total = 0usize;
+        for part in parts {
+            total = total.saturating_add(part.len());
+        }
+        let pending = self
+            .tx
+            .len()
+            .saturating_add(usize::from(self.pending_tx.is_some()));
+        let capacity = TX.saturating_sub(1);
+        if total > capacity.saturating_sub(pending) {
+            self.telemetry.tx_overflow();
+            return false;
+        }
+        for part in parts {
+            for &byte in *part {
+                if self.tx.enqueue(byte).is_err() {
+                    self.telemetry.tx_overflow();
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Stage a complete line record with CRLF serial line ending.
+    pub fn try_enqueue_line_record(&mut self, line: &str) -> bool {
+        self.try_enqueue_tx_record(&[line.as_bytes(), b"\r\n"])
+    }
+
     /// Flush currently staged TX bytes without polling RX.
     pub fn flush_tx(&mut self) {
         self.flush_tx_locked();
@@ -252,7 +289,7 @@ where
         let mut rx_activity = false;
         // Drain RX side first so newly available bytes can be processed in the
         // same cycle.
-        loop {
+        for _ in 0..SERIAL_RX_POLL_BUDGET {
             match self.driver.read_byte() {
                 Ok(byte) => {
                     rx_activity = true;
@@ -268,7 +305,7 @@ where
             }
         }
 
-        self.flush_tx_locked();
+        self.flush_tx_budgeted(SERIAL_TX_POLL_BUDGET);
         rx_activity
     }
 
@@ -279,10 +316,25 @@ where
     }
 
     fn flush_tx_unlocked(&mut self) {
+        self.flush_tx_budgeted_unlocked(usize::MAX);
+    }
+
+    fn flush_tx_budgeted(&mut self, max_bytes: usize) {
+        with_uart_tx_lock(|| {
+            self.flush_tx_budgeted_unlocked(max_bytes);
+        });
+    }
+
+    fn flush_tx_budgeted_unlocked(&mut self, mut max_bytes: usize) {
         // Flush staged TX bytes to the device until it reports back-pressure.
+        if max_bytes == 0 {
+            return;
+        }
         if let Some(byte) = self.pending_tx.take() {
             match self.driver.write_byte(byte) {
-                Ok(()) => {}
+                Ok(()) => {
+                    max_bytes = max_bytes.saturating_sub(1);
+                }
                 Err(NbError::WouldBlock) => {
                     self.pending_tx = Some(byte);
                     return;
@@ -294,9 +346,14 @@ where
             }
         }
 
-        while let Some(byte) = self.tx.dequeue() {
+        while max_bytes > 0 {
+            let Some(byte) = self.tx.dequeue() else {
+                break;
+            };
             match self.driver.write_byte(byte) {
-                Ok(()) => {}
+                Ok(()) => {
+                    max_bytes = max_bytes.saturating_sub(1);
+                }
                 Err(NbError::WouldBlock) => {
                     self.pending_tx = Some(byte);
                     return;
@@ -355,7 +412,7 @@ where
                 }
                 0x08 | 0x7f => {
                     if self.line.pop().is_some() && self.echo {
-                        self.enqueue_tx(b"\x08 \x08");
+                        let _ = self.try_enqueue_tx_record(&[b"\x08 \x08"]);
                     }
                 }
                 byte if byte.is_ascii_control() => {
@@ -367,7 +424,7 @@ where
                         continue;
                     }
                     if self.echo {
-                        self.enqueue_tx(&[byte]);
+                        let _ = self.try_enqueue_tx_record(&[core::slice::from_ref(&byte)]);
                     }
                 }
             }
@@ -386,7 +443,7 @@ where
 
     fn emit_newline(&mut self) {
         if self.echo {
-            self.enqueue_tx(b"\r\n");
+            let _ = self.try_enqueue_tx_record(&[b"\r\n"]);
         }
     }
 
@@ -568,5 +625,60 @@ mod tests {
         let emitted = port.driver_mut().drain_tx();
         assert_eq!(emitted.as_slice(), b"ab0123456789abcdef\r\n");
         assert_eq!(port.telemetry().tx_backpressure, 0);
+    }
+
+    #[test]
+    fn record_enqueue_is_atomic_when_queue_lacks_space() {
+        let driver = LoopbackSerial::<8>::new();
+        let mut port: SerialPort<_, 4, 4, 16> = SerialPort::new(driver);
+
+        assert!(port.try_enqueue_tx_record(&[b"abc"]));
+        assert!(!port.try_enqueue_tx_record(&[b"de"]));
+
+        port.poll_io();
+        let emitted = port.driver_mut().drain_tx();
+        assert_eq!(emitted.as_slice(), b"abc");
+        assert_eq!(port.telemetry().tx_backpressure, 1);
+    }
+
+    #[test]
+    fn serial_echo_is_best_effort_and_nonblocking() {
+        let driver = LoopbackSerial::<4>::new();
+        let mut port: SerialPort<_, 8, 3, 8> = SerialPort::new(driver);
+
+        assert!(port.try_enqueue_tx_record(&[b"xy"]));
+        port.driver_mut().push_rx(b"a\n");
+        port.poll_io();
+        let line = port
+            .next_line()
+            .expect("line should parse even when echo drops");
+
+        assert_eq!(line.as_str(), "a");
+        assert!(port.telemetry().tx_backpressure > 0);
+    }
+
+    #[test]
+    fn poll_io_uses_bounded_rx_and_tx_service() {
+        const RX_INPUT: usize = SERIAL_RX_POLL_BUDGET + 7;
+        const TX_INPUT: usize = SERIAL_TX_POLL_BUDGET + 7;
+        let driver = LoopbackSerial::<2048>::new();
+        let mut port: SerialPort<_, 512, 2048, 16> = SerialPort::new(driver);
+        let rx_input = [b'a'; RX_INPUT];
+        let tx_input = [b'b'; TX_INPUT];
+
+        port.driver_mut().push_rx(&rx_input);
+        port.enqueue_tx(&tx_input);
+        let rx_activity = port.poll_io();
+
+        assert!(rx_activity);
+        assert_eq!(port.rx.len(), SERIAL_RX_POLL_BUDGET);
+        let emitted = port.driver_mut().drain_tx();
+        assert_eq!(emitted.len(), SERIAL_TX_POLL_BUDGET);
+
+        port.poll_io();
+
+        assert!(port.rx.len() > SERIAL_RX_POLL_BUDGET);
+        let emitted = port.driver_mut().drain_tx();
+        assert_eq!(emitted.len(), TX_INPUT - SERIAL_TX_POLL_BUDGET);
     }
 }
