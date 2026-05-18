@@ -17,6 +17,7 @@ hex = { workspace = true }
 toml = "0.8"
 cohesix-cas = { workspace = true }
 cohsh-core = { workspace = true }
+cohesix-ticket = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

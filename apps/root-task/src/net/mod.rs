@@ -62,8 +62,13 @@ pub const AUTH_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
     10 * 60 * 1000
 };
 
-/// Number of console lines retained between pump cycles.
-pub const CONSOLE_QUEUE_DEPTH: usize = 8;
+/// Number of inbound console command lines retained between pump cycles.
+pub const CONSOLE_QUEUE_DEPTH: usize = 32;
+/// Number of non-priority outbound console response lines retained while the
+/// transport drains. Sized to hold a full `/log/queen.log` snapshot on Pi 4 WiFi.
+pub const CONSOLE_OUTBOUND_QUEUE_DEPTH: usize = 512;
+/// Number of priority outbound console lines retained for ACK/ERR/END traffic.
+pub const CONSOLE_PRIORITY_QUEUE_DEPTH: usize = 128;
 
 pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(_reason: &str) -> bool {
     // The bounded startup-link / sideband recovery ladder already retries

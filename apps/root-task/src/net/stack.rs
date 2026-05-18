@@ -69,10 +69,12 @@ use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
 use spin::Mutex;
 
-const TCP_RX_BUFFER: usize = 2048;
-const TCP_TX_BUFFER: usize = 2048;
-const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 16;
-const MAX_CONSOLE_BYTES_PER_POLL: usize = 8_192;
+const TCP_RX_BUFFER: usize = 16384;
+// Pi 4 WiFi has enough real transport latency that a 2 KiB socket send window
+// throttles multi-line REST replies before one poll can drain them.
+const TCP_TX_BUFFER: usize = 65536;
+const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 128;
+const MAX_CONSOLE_BYTES_PER_POLL: usize = 65_536;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
 const SOCKET_CAPACITY: usize = 6;

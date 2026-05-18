@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: TCP console session management shared between kernel and host stacks, including buffering and drop policy.
 // Author: Lukas Bower
@@ -11,7 +11,10 @@ use log::{debug, info, warn};
 use portable_atomic::{AtomicBool, Ordering};
 use secure9p_codec::MAX_MSIZE;
 
-use super::{ConsoleLine, AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
+use super::{
+    ConsoleLine, AUTH_TIMEOUT_MS, CONSOLE_OUTBOUND_QUEUE_DEPTH, CONSOLE_PRIORITY_QUEUE_DEPTH,
+    CONSOLE_QUEUE_DEPTH,
+};
 use crate::console::proto::{render_ack, AckStatus, LineFormatError};
 use crate::observe::{IngestMetrics, IngestSnapshot};
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -72,8 +75,8 @@ pub struct TcpConsoleServer {
     frame_payload_len: Option<usize>,
     drop_remaining: usize,
     inbound: Deque<ConsoleLine, CONSOLE_QUEUE_DEPTH>,
-    priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, { CONSOLE_QUEUE_DEPTH * 4 }>,
-    outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
+    priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_PRIORITY_QUEUE_DEPTH>,
+    outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_OUTBOUND_QUEUE_DEPTH>,
     // Retains the oldest and newest console lines while no authenticated client is
     // attached to avoid saturating the live outbound queue with boot-time bursts.
     preauth_first: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, PREAUTH_FIRST_CAPACITY>,
@@ -859,17 +862,16 @@ impl TcpConsoleServer {
     }
 
     fn evict_oldest_non_priority(&mut self) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
-        let mut scratch: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH> =
-            HeaplessVec::new();
         let mut dropped: Option<HeaplessString<DEFAULT_LINE_CAPACITY>> = None;
-        while let Some(line) = self.outbound.pop_front() {
+        let original_len = self.outbound.len();
+        for _ in 0..original_len {
+            let Some(line) = self.outbound.pop_front() else {
+                break;
+            };
             if dropped.is_none() && !Self::is_priority_line(line.as_str()) {
                 dropped = Some(line);
                 continue;
             }
-            let _ = scratch.push(line);
-        }
-        for line in scratch {
             let _ = self.outbound.push_back(line);
         }
         dropped
@@ -1026,6 +1028,30 @@ mod tests {
 
         assert!(server.enqueue_outbound("   \t").is_ok());
         assert!(!server.has_outbound());
+    }
+
+    #[test]
+    fn live_outbound_queue_holds_full_log_snapshot_window() {
+        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(9));
+        let payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
+        assert_eq!(
+            server.ingest(payload.as_slice(), 1),
+            SessionEvent::Authenticated
+        );
+        let _ = server.pop_outbound();
+
+        for idx in 0..CONSOLE_OUTBOUND_QUEUE_DEPTH {
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            write!(&mut line, "log line {idx}").unwrap();
+            assert!(server.enqueue_outbound(line.as_str()).is_ok());
+        }
+
+        let mut drained = 0usize;
+        while server.pop_outbound().is_some() {
+            drained = drained.saturating_add(1);
+        }
+        assert_eq!(drained, CONSOLE_OUTBOUND_QUEUE_DEPTH);
     }
 
     #[test]

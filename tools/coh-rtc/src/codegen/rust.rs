@@ -37,7 +37,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "#![allow(clippy::all)]")?;
     writeln!(mod_contents, "#![allow(dead_code)]")?;
     writeln!(mod_contents)?;
-    writeln!(mod_contents, "use cohesix_ticket::Role;")?;
+    writeln!(mod_contents, "use cohesix_ticket::{{Role, TicketKey}};")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "mod bootstrap;")?;
     writeln!(mod_contents)?;
@@ -45,6 +45,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "pub struct TicketSpec {{")?;
     writeln!(mod_contents, "    pub role: Role,")?;
     writeln!(mod_contents, "    pub secret: &'static str,")?;
+    writeln!(mod_contents, "    pub key: TicketKey,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -995,7 +996,10 @@ pub fn emit_rust(
         bootstrap_contents,
         "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
-    writeln!(bootstrap_contents, "use cohesix_ticket::Role;")?;
+    writeln!(
+        bootstrap_contents,
+        "use cohesix_ticket::{{Role, TicketKey}};"
+    )?;
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
@@ -1020,11 +1024,13 @@ pub fn emit_rust(
         manifest.tickets.len()
     )?;
     for ticket in &manifest.tickets {
+        let key_bytes = ticket_key_literal(&ticket.secret)?;
         writeln!(
             bootstrap_contents,
-            "    TicketSpec {{ role: {}, secret: \"{}\" }},",
+            "    TicketSpec {{ role: {}, secret: \"{}\", key: TicketKey::from_bytes({}) }},",
             role_to_rust(ticket.role),
-            escape_literal(&ticket.secret)
+            escape_literal(&ticket.secret),
+            key_bytes
         )?;
     }
     writeln!(bootstrap_contents, "];\n")?;
@@ -1704,6 +1710,19 @@ fn role_to_rust(role: Role) -> &'static str {
         Role::WorkerBus => "Role::WorkerBus",
         Role::WorkerLora => "Role::WorkerLora",
     }
+}
+
+fn ticket_key_literal(secret: &str) -> Result<String> {
+    let key = cohesix_ticket::TicketKey::from_secret(secret).to_bytes();
+    let mut literal = String::from("[");
+    for (idx, byte) in key.iter().copied().enumerate() {
+        if idx > 0 {
+            literal.push_str(", ");
+        }
+        write!(literal, "0x{byte:02x}")?;
+    }
+    literal.push(']');
+    Ok(literal)
 }
 
 fn attestation_policy_to_rust(policy: AttestationPolicy) -> &'static str {

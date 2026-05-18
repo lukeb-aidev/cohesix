@@ -33,16 +33,24 @@ This section is a mandatory execution contract for all contributors and agents w
 - If execution behavior changes, update this document and the corresponding scripts in the same change.
 - `scripts/ci/check_test_plan.sh` must pass before continuing.
 
+5. Respect the current target boundary.
+- As built, `scripts/ci/test_plan_run.sh` does not accept `--target`.
+- A staged Test Plan PASS currently means the source-tree QEMU/host matrix passed through Stage 05.
+- Pi 4 hardware acceptance remains a separate Milestone 26b evidence workflow described in Section 6e.
+- Target-qualified `--target qemu|pi4` staged PASS semantics are Milestone 26c work, not part of the current runner.
+
 ## Definition of "Test Plan PASS" (Normative)
 A run is **PASS** if and only if:
 - It is executed via the staged runner with a shared state dir: `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`.
 - Stages **01-05** complete successfully and create `stage_01.done` ... `stage_05.done` in the shared state dir.
 - No stage wrote an INCOMPLETE marker (presence of any `stage_*.incomplete` or any files under `out/test-plan/<run-id>/incomplete/` means **FAIL**).
 - Stage 05 runs `scripts/ci/due_diligence_gate.sh` and it is green.
+- Stage 04 requires both a gateway URL and a request auth token exported before the runner reaches that stage. The stage does not launch `hive-gateway`; it validates the gateway already attached to the QEMU TCP console.
 
 Notes:
 - Running individual stages (for example `--stage 2`) is for iteration only; it is not a "PASS" run.
 - "NA" checks must still be logged, but they do not cause failure; INCOMPLETE always fails.
+- Do not pass `--target qemu` or `--target pi4` to the current runner. Those options belong to the Milestone 26c target-qualified runner task.
 
 ## Purpose
 Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.
@@ -64,6 +72,7 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 ## Preflight and guardrails
 - `scripts/ci/test_plan_run.sh --list` (verify scripted stage inventory before execution)
 - `scripts/ci/check_test_plan.sh`
+- If the repo-local virtualenv exists, prefer `TP_PYTHON_BIN=$REPO/.venv/bin/python3` for Python-backed stages. Otherwise Stage 02 auto-creates `${TEST_PLAN_STATE_DIR}/.venv` when `pytest` is missing from `python3`.
 - If IR or manifest changes: `cargo run -p coh-rtc` then `scripts/check-generated.sh`.
 - Ensure `SEL4_BUILD_DIR` points at the SMP kernel build (`$REPO/seL4/SMP_build` by default); override to `$REPO/seL4/build` when validating single-core baselines.
 - Default QEMU SMP topology is four single-threaded cores; set `COHESIX_QEMU_SMP=1` for single-core baselines or `COHESIX_QEMU_SMP_TOPO` for explicit topologies.
@@ -428,8 +437,8 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - Snapshot coverage runs against the current browser matrix: `webkit-desktop` (baseline shell), `webkit-narrow` (responsive shell and scheduler), and `chromium-tablet` (interaction parity without snapshot gating).
 
 ### 6) Regression pack (full-stack, recommended before release)
-- `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires `COHESIX_GATEWAY_URL` or equivalent gateway env var)
-- `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
+- `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires a gateway URL plus `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` or equivalent auth-token env var)
+- `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> HIVE_GATEWAY_REQUEST_AUTH_TOKEN=<token> scripts/cohsh/REST_regression_batch.sh`
 - Stage 04 runs two REST batches:
   - A concurrent "core" batch (boot/proc/pool coverage): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/session_pool.coh`.
   - A strict "parity" batch (control-plane smoke): `scripts/cohsh/rest_control_plane_smoke.coh`.
@@ -439,7 +448,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
   - Scripted Stage 04 writes REST batch logs under the stage state dir (for example `out/test-plan/<run-id>/rest-regression-logs/`).
   - Manual runs of `scripts/cohsh/REST_regression_batch.sh` default to `out/regression-logs/<batch>/<script>.run*.log` unless `COHSH_LOG_ROOT` is set.
 - Verify logs show no unexpected errors or disconnects.
-- From Milestone 25 onward, use the REST batch above; the TCP/QEMU batch remains a local bring-up tool only.
+- Stage 03 QEMU/TCP regression batch remains mandatory in the staged PASS contract. Stage 04 REST coverage is an additional multiplexer/parity gate, not a replacement for direct TCP console regression coverage.
 
 ### 6a) SMP parity (Milestone 25+)
 - Boot QEMU with a single core: `COHESIX_QEMU_SMP=1 scripts/cohesix-build-run.sh --transport tcp`
@@ -454,6 +463,8 @@ Run this matrix with `hive-gateway` attached and **no retry paths**. These runs 
 - `python3 scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01`
 - `python3 scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01`
 - `python3 scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01`
+
+The reliability matrix intentionally leaves `/log/queen.log` tail traffic out of the hot mix so benchmark results are not dominated by UART/log churn. Use `--include-log-tail --log-tail-bytes <bytes>` only when measuring log-tail behavior itself.
 
 Pass criteria:
 - Every run exits `0`.
@@ -517,6 +528,11 @@ Run this matrix in addition to the staged runner when Milestone 26 files change.
 
 ### 6e) Pi 4 DHCP + U-Boot policy compatibility (Milestone 26b as-built)
 Run this matrix in addition to the staged runner when Milestone 26b files change.
+
+Current runner boundary:
+- This section is not driven by `scripts/ci/test_plan_run.sh` yet.
+- Milestone 26b completion evidence is recorded in `docs/audit/M26B_COMPLETION_EVIDENCE.md`.
+- The target-qualified Pi 4 runner contract is Milestone 26c, not part of the current runner.
 
 - Compiler + docs gate:
   - `cargo test -p coh-rtc`

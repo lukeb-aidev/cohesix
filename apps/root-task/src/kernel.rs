@@ -53,8 +53,8 @@ use crate::debug_uart::debug_uart_str;
 #[cfg(debug_assertions)]
 use crate::event::EventPump;
 use crate::event::{
-    AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent, TicketTable,
-    TimerSource,
+    AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent,
+    TicketRegistryError, TicketTable, TimerSource,
 };
 use crate::generated;
 use crate::guards;
@@ -82,6 +82,7 @@ use crate::serial::{
     SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
 use crate::uart::pl011 as early_uart;
+use cohesix_ticket::Role;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use spin::Mutex;
 
@@ -140,6 +141,20 @@ fn emit_manifest_boot_lines<P: Platform>(console: &mut DebugConsole<'_, P>) {
         }
         console.writeln_prefixed(line.as_str());
     }
+}
+
+fn role_boot_label(role: Role) -> &'static str {
+    match role {
+        Role::Queen => "queen",
+        Role::WorkerHeartbeat => "worker-heartbeat",
+        Role::WorkerGpu => "worker-gpu",
+        Role::WorkerBus => "worker-bus",
+        Role::WorkerLora => "worker-lora",
+    }
+}
+
+fn ticket_registry_error_label(err: TicketRegistryError) -> &'static str {
+    err.as_str()
 }
 
 #[inline(always)]
@@ -4868,17 +4883,36 @@ fn bootstrap<P: Platform>(
             }
         }
 
+        boot_log::force_uart_line("[manifest] ticket register begin source=generated");
         let mut tickets: TicketTable<{ generated::TICKET_COUNT }> = TicketTable::new();
         for spec in generated::ticket_inventory() {
-            let _ = tickets.register(spec.role, spec.secret);
-            let mut line = heapless::String::<96>::new();
+            let role_label = role_boot_label(spec.role);
+            let mut begin_line = heapless::String::<96>::new();
             let _ = write!(
-                line,
-                "[manifest] ticket role={:?} source=generated",
-                spec.role
+                begin_line,
+                "[manifest] ticket register role={role_label} source=generated"
             );
+            boot_log::force_uart_line(begin_line.as_str());
+            if let Err(err) = tickets.register_key(spec.role, spec.key) {
+                let mut fail_line = heapless::String::<128>::new();
+                let _ = write!(
+                    fail_line,
+                    "[manifest] ticket register failed role={role_label} reason={}",
+                    ticket_registry_error_label(err)
+                );
+                console.writeln_prefixed(fail_line.as_str());
+                boot_log::force_uart_line(fail_line.as_str());
+                return Err(BootError::Fatal(format!(
+                    "manifest ticket registration failed for {role_label}: {}",
+                    ticket_registry_error_label(err)
+                )));
+            }
+            let mut line = heapless::String::<96>::new();
+            let _ = write!(line, "[manifest] ticket role={role_label} source=generated");
             console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
         }
+        boot_log::force_uart_line("[manifest] ticket register end source=generated");
 
         crate::bp!("spawn.worker.begin");
         crate::bp!("spawn.worker.end");

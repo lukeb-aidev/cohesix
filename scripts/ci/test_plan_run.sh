@@ -28,10 +28,13 @@ Options:
 Environment pass-through:
   TEST_PLAN_STATE_DIR
   COHESIX_GATEWAY_URL / HIVE_GATEWAY_URL / COHSH_REST_URL / COH_REST_URL
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN / COHSH_REST_AUTH_TOKEN / COH_REST_AUTH_TOKEN
+  TP_PYTHON_BIN
   TP_SKIP_GENERATED_CHECK, TP_SKIP_PYTHON, TP_SKIP_FUSE, TP_WRITE_TRACE_FIXTURES
 
 Notes:
   - TP_SKIP_* options record an INCOMPLETE marker and the stage fails (they are for local iteration only).
+  - The current runner has no --target option; target-qualified qemu/pi4 runs are Milestone 26c work.
 USAGE
 }
 

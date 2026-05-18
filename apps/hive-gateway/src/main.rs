@@ -63,8 +63,9 @@ const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const DEFAULT_PROC_CACHE_TTL_MS: u64 = 500;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
-const CONTROL_POOL_WAIT_LIMIT_MS: u64 = 5_000;
-const TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 5_000;
+const DEFAULT_CONTROL_POOL_WAIT_LIMIT_MS: u64 = 5_000;
+const DEFAULT_TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 5_000;
+const MAX_BROKER_POOL_WAIT_LIMIT_MS: u64 = 120_000;
 const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
 const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
@@ -140,6 +141,12 @@ struct Cli {
     /// Override pooled telemetry session capacity for this gateway process.
     #[arg(long)]
     pool_telemetry_sessions: Option<u16>,
+    /// Control broker response timeout in milliseconds.
+    #[arg(long)]
+    broker_control_timeout_ms: Option<u64>,
+    /// Telemetry/read broker response timeout in milliseconds.
+    #[arg(long)]
+    broker_telemetry_timeout_ms: Option<u64>,
     /// Use the in-process mock NineDoor backend.
     #[arg(long, default_value_t = false)]
     mock: bool,
@@ -160,6 +167,8 @@ struct GatewayInner {
     bounds: BoundsResponse,
     policy: CohshPolicy,
     broker: Arc<BrokerMetrics>,
+    broker_control_timeout_ms: u64,
+    broker_telemetry_timeout_ms: u64,
     proc_cache: Mutex<ProcReadCache>,
 }
 
@@ -327,6 +336,8 @@ impl BrokerMetrics {
 struct ProcReadCache {
     entries: HashMap<String, ProcReadCacheEntry>,
     order: VecDeque<String>,
+    inflight: HashMap<String, Arc<Mutex<()>>>,
+    generation: u64,
 }
 
 #[derive(Clone)]
@@ -466,6 +477,8 @@ async fn main() -> Result<()> {
             bounds,
             policy,
             broker: broker_metrics,
+            broker_control_timeout_ms: config.broker_control_timeout_ms,
+            broker_telemetry_timeout_ms: config.broker_telemetry_timeout_ms,
             proc_cache: Mutex::new(ProcReadCache::default()),
         }),
     };
@@ -519,6 +532,8 @@ struct GatewayConfig {
     ticket: Option<String>,
     pool_control_sessions: Option<u16>,
     pool_telemetry_sessions: Option<u16>,
+    broker_control_timeout_ms: u64,
+    broker_telemetry_timeout_ms: u64,
     mock: bool,
     allow_non_loopback_bind: bool,
 }
@@ -569,6 +584,22 @@ impl GatewayConfig {
             cli.pool_telemetry_sessions,
             "HIVE_GATEWAY_POOL_TELEMETRY_SESSIONS",
         );
+        let broker_control_timeout_ms = normalize_broker_timeout_ms(
+            env_override_opt_u64(
+                cli.broker_control_timeout_ms,
+                "HIVE_GATEWAY_BROKER_CONTROL_TIMEOUT_MS",
+            )?,
+            DEFAULT_CONTROL_POOL_WAIT_LIMIT_MS,
+            "broker-control-timeout-ms",
+        )?;
+        let broker_telemetry_timeout_ms = normalize_broker_timeout_ms(
+            env_override_opt_u64(
+                cli.broker_telemetry_timeout_ms,
+                "HIVE_GATEWAY_BROKER_TELEMETRY_TIMEOUT_MS",
+            )?,
+            DEFAULT_TELEMETRY_POOL_WAIT_LIMIT_MS,
+            "broker-telemetry-timeout-ms",
+        )?;
         let allow_non_loopback_bind =
             cli.allow_non_loopback_bind || env_flag("HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND");
         let auth_token = normalize_required_secret("tcp auth token", auth_token, mock)?;
@@ -584,6 +615,8 @@ impl GatewayConfig {
             ticket,
             pool_control_sessions,
             pool_telemetry_sessions,
+            broker_control_timeout_ms,
+            broker_telemetry_timeout_ms,
             mock,
             allow_non_loopback_bind,
         })
@@ -630,6 +663,34 @@ fn env_override_opt_u16(value: Option<u16>, key: &str) -> Option<u16> {
         return None;
     };
     env_value.trim().parse::<u16>().ok().filter(|v| *v > 0)
+}
+
+fn env_override_opt_u64(value: Option<u64>, key: &str) -> Result<Option<u64>> {
+    if value.is_some() {
+        return Ok(value);
+    }
+    let Ok(env_value) = env::var(key) else {
+        return Ok(None);
+    };
+    let trimmed = env_value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let parsed = trimmed
+        .parse::<u64>()
+        .with_context(|| format!("{key} must be an unsigned millisecond timeout"))?;
+    Ok(Some(parsed))
+}
+
+fn normalize_broker_timeout_ms(value: Option<u64>, default_value: u64, label: &str) -> Result<u64> {
+    match value {
+        Some(0) => Err(anyhow::anyhow!("{label} must be greater than 0")),
+        Some(timeout_ms) if timeout_ms > MAX_BROKER_POOL_WAIT_LIMIT_MS => Err(anyhow::anyhow!(
+            "{label} must be <= {MAX_BROKER_POOL_WAIT_LIMIT_MS}"
+        )),
+        Some(timeout_ms) => Ok(timeout_ms),
+        None => Ok(default_value),
+    }
 }
 
 fn seed_relay_metrics_from_env(metrics: &BrokerMetrics) {
@@ -1024,8 +1085,8 @@ async fn shutdown_signal(state: AppState) {
 impl AppState {
     fn submit_broker(&self, kind: PoolKind, request: BrokerRequest) -> Result<BrokerResponse> {
         let timeout_ms = match kind {
-            PoolKind::Control => CONTROL_POOL_WAIT_LIMIT_MS,
-            PoolKind::Telemetry => TELEMETRY_POOL_WAIT_LIMIT_MS,
+            PoolKind::Control => self.inner.broker_control_timeout_ms,
+            PoolKind::Telemetry => self.inner.broker_telemetry_timeout_ms,
         };
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let tx = match kind {
@@ -1153,13 +1214,17 @@ impl AppState {
     fn list(&self, path: &str) -> Result<Vec<String>> {
         self.ensure_connected()?;
         if is_cacheable_list_path(path) {
-            if let Some(lines) = self.read_cache_get(path) {
-                return Ok(lines);
-            }
-            self.inner
-                .broker
-                .proc_cache_misses
-                .fetch_add(1, Ordering::Relaxed);
+            return self.cached_read(path, || {
+                match self.submit_broker(
+                    PoolKind::Telemetry,
+                    BrokerRequest::List {
+                        path: path.to_owned(),
+                    },
+                )? {
+                    BrokerResponse::Lines(lines) => Ok(lines),
+                    BrokerResponse::Unit => Ok(Vec::new()),
+                }
+            });
         }
         let lines = match self.submit_broker(
             PoolKind::Telemetry,
@@ -1170,22 +1235,23 @@ impl AppState {
             BrokerResponse::Lines(lines) => lines,
             BrokerResponse::Unit => Vec::new(),
         };
-        if is_cacheable_list_path(path) {
-            self.read_cache_insert(path, lines.clone());
-        }
         Ok(lines)
     }
 
     fn read(&self, path: &str) -> Result<Vec<String>> {
         self.ensure_connected()?;
         if is_cacheable_read_path(path) {
-            if let Some(lines) = self.read_cache_get(path) {
-                return Ok(lines);
-            }
-            self.inner
-                .broker
-                .proc_cache_misses
-                .fetch_add(1, Ordering::Relaxed);
+            return self.cached_read(path, || {
+                match self.submit_broker(
+                    PoolKind::Telemetry,
+                    BrokerRequest::Read {
+                        path: path.to_owned(),
+                    },
+                )? {
+                    BrokerResponse::Lines(lines) => Ok(lines),
+                    BrokerResponse::Unit => Ok(Vec::new()),
+                }
+            });
         }
         let lines = match self.submit_broker(
             PoolKind::Telemetry,
@@ -1196,9 +1262,6 @@ impl AppState {
             BrokerResponse::Lines(lines) => lines,
             BrokerResponse::Unit => Vec::new(),
         };
-        if is_cacheable_read_path(path) {
-            self.read_cache_insert(path, lines.clone());
-        }
         Ok(lines)
     }
 
@@ -1300,6 +1363,31 @@ impl AppState {
         self.inner.request_auth_token.as_str()
     }
 
+    fn cached_read<F>(&self, path: &str, fetch: F) -> Result<Vec<String>>
+    where
+        F: FnOnce() -> Result<Vec<String>>,
+    {
+        if let Some(lines) = self.read_cache_get(path) {
+            return Ok(lines);
+        }
+        let generation = self.read_cache_generation();
+        let gate = self.read_cache_gate(path);
+        let _guard = gate.lock().expect("cache gate lock poisoned");
+        if let Some(lines) = self.read_cache_get(path) {
+            return Ok(lines);
+        }
+        self.inner
+            .broker
+            .proc_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+        let result = fetch();
+        if let Ok(lines) = &result {
+            self.read_cache_insert_if_current(path, lines.clone(), generation);
+        }
+        self.read_cache_finish_gate(path, &gate);
+        result
+    }
+
     fn read_cache_get(&self, path: &str) -> Option<Vec<String>> {
         let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
         let entry = cache.entries.get(path).cloned()?;
@@ -1315,8 +1403,36 @@ impl AppState {
         Some(entry.lines)
     }
 
-    fn read_cache_insert(&self, path: &str, lines: Vec<String>) {
+    fn read_cache_generation(&self) -> u64 {
+        let cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        cache.generation
+    }
+
+    fn read_cache_gate(&self, path: &str) -> Arc<Mutex<()>> {
         let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        cache
+            .inflight
+            .entry(path.to_owned())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    fn read_cache_finish_gate(&self, path: &str, gate: &Arc<Mutex<()>>) {
+        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        if cache
+            .inflight
+            .get(path)
+            .is_some_and(|candidate| Arc::ptr_eq(candidate, gate))
+        {
+            cache.inflight.remove(path);
+        }
+    }
+
+    fn read_cache_insert_if_current(&self, path: &str, lines: Vec<String>, generation: u64) {
+        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        if cache.generation != generation {
+            return;
+        }
         if !cache.entries.contains_key(path)
             && cache.entries.len() >= DEFAULT_PROC_CACHE_MAX_ENTRIES
         {
@@ -1341,6 +1457,7 @@ impl AppState {
 
     fn read_cache_invalidate_for_write(&self, write_path: &str) {
         let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        cache.generation = cache.generation.wrapping_add(1);
         let Some(namespaces) = cache_invalidation_namespaces(write_path) else {
             cache.entries.clear();
             cache.order.clear();
@@ -2038,6 +2155,8 @@ mod tests {
             ticket: None,
             pool_control_sessions: Some(3),
             pool_telemetry_sessions: Some(12),
+            broker_control_timeout_ms: DEFAULT_CONTROL_POOL_WAIT_LIMIT_MS,
+            broker_telemetry_timeout_ms: DEFAULT_TELEMETRY_POOL_WAIT_LIMIT_MS,
             mock: true,
             allow_non_loopback_bind: false,
         };
@@ -2058,5 +2177,27 @@ mod tests {
             unchanged.pool.telemetry_sessions,
             CohshPolicy::from_generated().pool.telemetry_sessions
         );
+    }
+
+    #[test]
+    fn broker_timeout_normalization_rejects_zero_and_preserves_defaults() {
+        assert_eq!(
+            normalize_broker_timeout_ms(None, 5_000, "test-timeout").expect("default"),
+            5_000
+        );
+        assert_eq!(
+            normalize_broker_timeout_ms(Some(30_000), 5_000, "test-timeout").expect("override"),
+            30_000
+        );
+        let err = normalize_broker_timeout_ms(Some(0), 5_000, "test-timeout")
+            .expect_err("zero timeout rejected");
+        assert!(err.to_string().contains("test-timeout"));
+        let err = normalize_broker_timeout_ms(
+            Some(MAX_BROKER_POOL_WAIT_LIMIT_MS + 1),
+            5_000,
+            "test-timeout",
+        )
+        .expect_err("oversized timeout rejected");
+        assert!(err.to_string().contains("must be <="));
     }
 }

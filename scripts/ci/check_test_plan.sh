@@ -44,6 +44,12 @@ for rel_path, expected in entries:
 required_snippets = [
     "## Mandatory Agent Execution Contract",
     "Defect resolution is mandatory before progression.",
+    "Respect the current target boundary.",
+    "As built, `scripts/ci/test_plan_run.sh` does not accept `--target`.",
+    "Target-qualified `--target qemu|pi4` staged PASS semantics are Milestone 26c work, not part of the current runner.",
+    "Stage 04 requires both a gateway URL and a request auth token",
+    "TP_PYTHON_BIN=$REPO/.venv/bin/python3",
+    "Stage 03 QEMU/TCP regression batch remains mandatory",
     "scripts/ci/test_plan_run.sh",
     "scripts/ci/test_plan_stage_01_integrity.sh",
     "scripts/ci/test_plan_stage_02_host_fast.sh",
@@ -84,6 +90,14 @@ required_snippets = [
 for snippet in required_snippets:
     if snippet not in text:
         print(f"missing required TEST_PLAN entry: {snippet}", file=sys.stderr)
+        errors += 1
+
+stale_snippets = [
+    "TCP/QEMU batch remains a local bring-up tool only",
+]
+for snippet in stale_snippets:
+    if snippet in text:
+        print(f"stale TEST_PLAN wording remains: {snippet}", file=sys.stderr)
         errors += 1
 
 required_stage_02_commands = [

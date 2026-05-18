@@ -427,15 +427,31 @@ impl<const N: usize> TicketTable<N> {
         if secret.len() > MAX_TICKET_LEN {
             return Err(TicketRegistryError::SecretTooLong);
         }
+        self.register_key(role, cohesix_ticket::TicketKey::from_secret(secret))
+    }
+
+    /// Register a manifest-generated ticket key without deriving it during boot.
+    pub fn register_key(
+        &mut self,
+        role: Role,
+        key: cohesix_ticket::TicketKey,
+    ) -> Result<(), TicketRegistryError> {
         if self.entries.is_full() {
             return Err(TicketRegistryError::Capacity);
         }
         self.entries
-            .push(TicketRecord {
-                role,
-                key: cohesix_ticket::TicketKey::from_secret(secret),
-            })
+            .push(TicketRecord { role, key })
             .map_err(|_| TicketRegistryError::Capacity)
+    }
+}
+
+impl TicketRegistryError {
+    /// Stable boot-log label for ticket registration failures.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Capacity => "capacity",
+            Self::SecretTooLong => "secret-too-long",
+        }
     }
 }
 
@@ -1340,17 +1356,12 @@ where
     /// Execute a single cooperative polling cycle.
     pub fn poll(&mut self) {
         let serial_rx_activity = self.serial.poll_io();
-        let poll_ready_runtime = self.ready_network_poll_allowed_with_physical_input();
-        let local_input =
-            self.consume_local_seat(LocalSeatConsumePhase::PreRuntime, !poll_ready_runtime);
+        let local_input = self.consume_local_seat(LocalSeatConsumePhase::PreRuntime, true);
         if local_input {
             self.serial.flush_tx();
             self.serial.poll_io();
             self.consume_local_seat(LocalSeatConsumePhase::PriorityFollowup, false);
             self.serial.flush_tx();
-            if poll_ready_runtime {
-                self.poll_runtime(false, true);
-            }
             return;
         }
         let serial_input = self.consume_serial();
@@ -1370,18 +1381,6 @@ where
     /// console input.
     pub fn poll_pre_root_network(&mut self) {
         self.poll_runtime(true, false);
-    }
-
-    #[cfg(feature = "net-console")]
-    fn ready_network_poll_allowed_with_physical_input(&self) -> bool {
-        self.net
-            .as_ref()
-            .is_some_and(|net| !net_status_should_yield_to_physical_input(&net.status_report()))
-    }
-
-    #[cfg(not(feature = "net-console"))]
-    fn ready_network_poll_allowed_with_physical_input(&self) -> bool {
-        false
     }
 
     fn poll_runtime(&mut self, suppress_console_input: bool, physical_input_active: bool) {
@@ -6827,7 +6826,7 @@ mod tests {
     use crate::ninedoor::NineDoorBridge;
     use crate::serial::test_support::LoopbackSerial;
     use crate::serial::SerialPort;
-    use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
+    use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer, TicketKey};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestTimer {
@@ -7614,6 +7613,20 @@ mod tests {
         assert!(store.validate(Role::WorkerHeartbeat, Some(token.as_str())));
     }
 
+    #[test]
+    fn precomputed_ticket_key_validates_like_secret_registration() {
+        let mut store: TicketTable<4> = TicketTable::new();
+        store
+            .register_key(
+                Role::WorkerHeartbeat,
+                TicketKey::from_secret("worker-ticket"),
+            )
+            .unwrap();
+
+        let token = issue_token("worker-ticket", Role::WorkerHeartbeat);
+        assert!(store.validate(Role::WorkerHeartbeat, Some(token.as_str())));
+    }
+
     #[cfg(feature = "kernel")]
     struct CaptureBootstrap {
         messages: heapless::Vec<BootstrapMessage, 4>,
@@ -7885,7 +7898,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn local_seat_input_keeps_ready_network_poll_for_keyboard_turn() {
+    fn local_seat_input_skips_ready_network_poll_for_keyboard_turn() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -7910,9 +7923,9 @@ mod tests {
         let metrics = pump.metrics();
         drop(pump);
 
-        assert_eq!(net.polls, 1);
+        assert_eq!(net.polls, 0);
         assert_eq!(metrics.local_seat_keyboard_priority_turns, 1);
-        assert_eq!(metrics.local_seat_runtime_skipped_turns, 0);
+        assert_eq!(metrics.local_seat_runtime_skipped_turns, 1);
         assert_eq!(metrics.local_seat_serial_dispatch_yielded_turns, 1);
     }
 
@@ -7954,7 +7967,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn physical_input_does_not_pause_ready_network_poll() {
+    fn keyboard_input_pauses_ready_network_poll_for_one_turn() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -7976,7 +7989,7 @@ mod tests {
         pump.poll();
         drop(pump);
 
-        assert_eq!(net.polls, 1);
+        assert_eq!(net.polls, 0);
     }
 
     #[cfg(feature = "net-console")]

@@ -42,7 +42,7 @@ DEFAULT_RUNS = 3
 DEFAULT_TIMEOUT_SECS = 3.0
 DEFAULT_MAX_WORKERS = 4
 DEFAULT_TAIL_BYTES = 256
-DEFAULT_LOG_TAIL_BYTES = 32768
+DEFAULT_LOG_TAIL_BYTES = 4096
 DEFAULT_QEMU_SMP = "4,cores=4,threads=1,sockets=1"
 DEFAULT_WORKERS_MIN = 8
 DEFAULT_WORKERS_MAX = 50
@@ -62,6 +62,7 @@ DEFAULT_ROLE = "queen"
 DEFAULT_SUMMARY_MAX_ERROR_LINES = 400
 DEFAULT_READY_TIMEOUT_SECS = 180
 DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES = 16 * 1024 * 1024
+DEFAULT_SPAWN_LIST_VERIFY_LIMIT = 4
 
 FAST_RAMP_WORKERS_MIN = 24
 FAST_RAMP_WORKERS_MAX = 120
@@ -298,6 +299,7 @@ class SimState:
     bounds: dict
     rest_url: str
     rng: random.Random
+    id_prefix: str
     entropy: float
     tail_bytes: int
     policy_enabled: bool
@@ -307,6 +309,9 @@ class SimState:
     auto_approve: bool
     transient_retries: bool
     strict_control_errors: bool
+    log_tail_bytes: int = DEFAULT_LOG_TAIL_BYTES
+    include_log_tail: bool = False
+    spawn_list_verify_limit: int = DEFAULT_SPAWN_LIST_VERIFY_LIMIT
     worker_cap: Optional[int] = None
     next_worker_seq: int = 1
     approval_seq: int = 0
@@ -681,6 +686,19 @@ def build_telemetry_reference_records_for_bytes(
     return records
 
 
+def build_run_id_prefix(seed: Optional[int], nonce: Optional[int] = None) -> str:
+    """Build a short run-scoped identifier prefix for generated control IDs."""
+    seed_source = abs(seed) if seed is not None else os.getpid()
+    nonce_source = nonce if nonce is not None else (time.time_ns() ^ (os.getpid() << 16))
+    return f"{seed_source % 1_000:03d}{abs(nonce_source) % 10_000_000:07d}"
+
+
+def format_run_scoped_id(kind: str, prefix: str, seq: int) -> str:
+    """Format a bounded ID that avoids collisions across benchmark runs."""
+    safe_prefix = "".join(ch for ch in prefix if ch.isalnum())[:10] or "run"
+    return f"{kind}-{safe_prefix}-{seq:06d}"
+
+
 def apply_fast_ramp_defaults(args: argparse.Namespace) -> None:
     if not args.fast_ramp:
         return
@@ -856,6 +874,18 @@ def parse_args() -> argparse.Namespace:
         help="Override hive-gateway pooled telemetry sessions (optional).",
     )
     launch.add_argument(
+        "--gateway-broker-control-timeout-ms",
+        type=int,
+        default=None,
+        help="Override hive-gateway control broker response timeout in ms (optional).",
+    )
+    launch.add_argument(
+        "--gateway-broker-telemetry-timeout-ms",
+        type=int,
+        default=None,
+        help="Override hive-gateway telemetry/read broker response timeout in ms (optional).",
+    )
+    launch.add_argument(
         "--no-gateway",
         action="store_true",
         help="Skip launching hive-gateway (assume already running).",
@@ -1028,6 +1058,29 @@ def parse_args() -> argparse.Namespace:
         help="Count control-plane buffer-full responses as errors.",
     )
     sim.add_argument(
+        "--spawn-list-verify-limit",
+        type=int,
+        default=DEFAULT_SPAWN_LIST_VERIFY_LIMIT,
+        help=(
+            "List /worker after each spawn while current worker count is below this "
+            "limit; use 0 to trust monotonic worker IDs immediately."
+        ),
+    )
+    sim.add_argument(
+        "--include-log-tail",
+        action="store_true",
+        help=(
+            "Include /log/queen.log tail traffic in the simulation mix. "
+            "Leave disabled for throughput ceilings so UART/log churn is not measured."
+        ),
+    )
+    sim.add_argument(
+        "--log-tail-bytes",
+        type=int,
+        default=DEFAULT_LOG_TAIL_BYTES,
+        help="Configured max_bytes for optional /log/queen.log tail traffic.",
+    )
+    sim.add_argument(
         "--summary-max-error-lines",
         type=int,
         default=DEFAULT_SUMMARY_MAX_ERROR_LINES,
@@ -1095,6 +1148,18 @@ def parse_args() -> argparse.Namespace:
             args.error_budget_rate = clamp_float(
                 args.error_budget_rate, 0.0, 1.0, "error-budget-rate"
             )
+        args.spawn_list_verify_limit = clamp_int(
+            args.spawn_list_verify_limit,
+            0,
+            32,
+            "spawn-list-verify-limit",
+        )
+        args.log_tail_bytes = clamp_int(
+            args.log_tail_bytes,
+            64,
+            65_536,
+            "log-tail-bytes",
+        )
         args.summary_max_error_lines = clamp_int(
             args.summary_max_error_lines,
             32,
@@ -1120,6 +1185,20 @@ def parse_args() -> argparse.Namespace:
                 1,
                 512,
                 "gateway-pool-telemetry-sessions",
+            )
+        if args.gateway_broker_control_timeout_ms is not None:
+            args.gateway_broker_control_timeout_ms = clamp_int(
+                args.gateway_broker_control_timeout_ms,
+                1,
+                120_000,
+                "gateway-broker-control-timeout-ms",
+            )
+        if args.gateway_broker_telemetry_timeout_ms is not None:
+            args.gateway_broker_telemetry_timeout_ms = clamp_int(
+                args.gateway_broker_telemetry_timeout_ms,
+                1,
+                120_000,
+                "gateway-broker-telemetry-timeout-ms",
             )
 
     return args
@@ -1430,7 +1509,7 @@ def telemetry_ingest_enabled(client: RestClient) -> bool:
 
 def queue_approval(client: RestClient, target: str, state: SimState) -> None:
     state.approval_seq += 1
-    approval_id = f"approve-{state.approval_seq:06d}"
+    approval_id = format_run_scoped_id("approve", state.id_prefix, state.approval_seq)
     line = json.dumps(
         {"id": approval_id, "target": target, "decision": "approve"},
         separators=(",", ":"),
@@ -1468,13 +1547,13 @@ def remove_lease_id(state: SimState, lease_id: str) -> None:
 def allocate_schedule_id(state: SimState) -> str:
     with state.id_lock:
         state.next_schedule_seq += 1
-        return f"sched-{state.next_schedule_seq:08d}"
+        return format_run_scoped_id("sched", state.id_prefix, state.next_schedule_seq)
 
 
 def allocate_lease_id(state: SimState) -> str:
     with state.id_lock:
         state.next_lease_seq += 1
-        return f"lease-{state.next_lease_seq:08d}"
+        return format_run_scoped_id("lease", state.id_prefix, state.next_lease_seq)
 
 
 def echo_with_policy_retry(
@@ -1567,7 +1646,7 @@ def spawn_worker(
     # At high worker counts, repeatedly listing /worker for every spawn turns into
     # a benchmark-side bottleneck. The root-task worker ids are monotonic, so once
     # spawn is acknowledged we can advance deterministically.
-    if len(before) < 32:
+    if len(before) < state.spawn_list_verify_limit:
         try:
             current_workers = list_workers(client)
         except RestError as exc:
@@ -1655,16 +1734,16 @@ def build_operations(
     def op_tail_log(path: str, max_bytes: int) -> Callable[[RestClient, str, SimState], None]:
         def _run(client: RestClient, _worker: str, _state: SimState) -> None:
             def attempt() -> None:
-                attempt_bytes = max_bytes
-                for _ in range(3):
-                    response = client.tail(path, attempt_bytes)
-                    if response.status == "OK":
-                        return
-                    if response.error and "tail exceeded max_bytes" in response.error:
-                        attempt_bytes = min(attempt_bytes * 2, 65536)
-                        continue
-                    raise RestError(f"TAIL {path} failed: {response.error}", response)
-                raise RestError(f"TAIL {path} failed after max_bytes retries")
+                response = client.tail(path, max_bytes)
+                if response.status == "OK":
+                    return
+                if response.error and "tail exceeded max_bytes" in response.error:
+                    raise RestError(
+                        f"TAIL {path} exceeded configured log_tail_bytes={max_bytes}: "
+                        f"{response.error}",
+                        response,
+                    )
+                raise RestError(f"TAIL {path} failed: {response.error}", response)
 
             run_with_retry_policy(
                 attempt,
@@ -1843,8 +1922,8 @@ def build_operations(
     for spec in status_specs:
         ops.append(Operation(f"cat_{spec.path}", 1.0, "status", op_cat(spec.path, spec.max_bytes)))
 
-    if "log" in root_entries:
-        log_bytes = max(state.tail_bytes, DEFAULT_LOG_TAIL_BYTES)
+    if "log" in root_entries and state.include_log_tail:
+        log_bytes = state.log_tail_bytes
         ops.append(
             Operation(
                 "tail_queen_log",
@@ -2278,6 +2357,8 @@ def adjust_workers(
 def run_simulation(args: argparse.Namespace) -> int:
     rng = random.Random(args.seed)
     entropy = args.entropy / 10.0
+    id_prefix = build_run_id_prefix(args.seed)
+    args.id_prefix = id_prefix
 
     bundle = resolve_bundle_path(args.version, args.bundle)
     qemu_run = args.qemu_run
@@ -2357,6 +2438,20 @@ def run_simulation(args: argparse.Namespace) -> int:
                         str(args.gateway_pool_telemetry_sessions),
                     ]
                 )
+            if args.gateway_broker_control_timeout_ms is not None:
+                gateway_cmd.extend(
+                    [
+                        "--broker-control-timeout-ms",
+                        str(args.gateway_broker_control_timeout_ms),
+                    ]
+                )
+            if args.gateway_broker_telemetry_timeout_ms is not None:
+                gateway_cmd.extend(
+                    [
+                        "--broker-telemetry-timeout-ms",
+                        str(args.gateway_broker_telemetry_timeout_ms),
+                    ]
+                )
             gateway_proc = launch_process(
                 gateway_cmd,
                 env,
@@ -2384,6 +2479,7 @@ def run_simulation(args: argparse.Namespace) -> int:
             bounds=bounds,
             rest_url=rest_url,
             rng=rng,
+            id_prefix=id_prefix,
             entropy=entropy,
             tail_bytes=args.tail_bytes,
             policy_enabled=policy_on,
@@ -2393,6 +2489,9 @@ def run_simulation(args: argparse.Namespace) -> int:
             auto_approve=args.auto_approve,
             transient_retries=args.transient_retries,
             strict_control_errors=args.strict_control_errors,
+            log_tail_bytes=args.log_tail_bytes,
+            include_log_tail=args.include_log_tail,
+            spawn_list_verify_limit=args.spawn_list_verify_limit,
             logger=args.logger,
             telemetry_scenario=scenario,
             telemetry_reference_chunk_bytes=args.telemetry_reference_chunk_bytes,
@@ -2428,10 +2527,16 @@ def run_simulation(args: argparse.Namespace) -> int:
             f"workers_per_hive={args.workers_per_hive if args.multi_hive else args.workers_max} "
             f"intensity={args.intensity_min}-{args.intensity_max} "
             f"rest={rest_url} "
+            f"id_prefix={id_prefix} "
             f"transient_retries={'on' if args.transient_retries else 'off'} "
             f"strict_control_errors={'on' if args.strict_control_errors else 'off'} "
+            f"spawn_list_verify_limit={args.spawn_list_verify_limit} "
+            f"include_log_tail={'on' if args.include_log_tail else 'off'} "
+            f"log_tail_bytes={args.log_tail_bytes} "
             f"gateway_pool_control={args.gateway_pool_control_sessions or 'default'} "
             f"gateway_pool_telemetry={args.gateway_pool_telemetry_sessions or 'default'} "
+            f"gateway_broker_control_timeout_ms={args.gateway_broker_control_timeout_ms or 'default'} "
+            f"gateway_broker_telemetry_timeout_ms={args.gateway_broker_telemetry_timeout_ms or 'default'} "
             f"scenario={scenario.name if scenario else 'mixed'} "
             f"error_budget_rate={args.error_budget_rate if args.error_budget_rate is not None else 'none'}"
         )
@@ -2721,6 +2826,7 @@ def write_simulation_artifacts(
     summary_payload = {
         "mode": "simulate",
         "seed": args.seed,
+        "id_prefix": getattr(args, "id_prefix", None),
         "rest_url": args.rest_url,
         "workers_min": args.workers_min,
         "workers_max": args.workers_max,
@@ -2737,6 +2843,9 @@ def write_simulation_artifacts(
         "transient_retries": args.transient_retries,
         "no_retries": not args.transient_retries,
         "strict_control_errors": args.strict_control_errors,
+        "spawn_list_verify_limit": args.spawn_list_verify_limit,
+        "include_log_tail": args.include_log_tail,
+        "log_tail_bytes": args.log_tail_bytes,
         "fast_ramp": args.fast_ramp,
         "scenario": args.scenario,
         "telemetry_reference_chunk_bytes": args.telemetry_reference_chunk_bytes,
@@ -2745,6 +2854,8 @@ def write_simulation_artifacts(
         "error_budget_pass": error_budget_pass,
         "gateway_pool_control_sessions": args.gateway_pool_control_sessions,
         "gateway_pool_telemetry_sessions": args.gateway_pool_telemetry_sessions,
+        "gateway_broker_control_timeout_ms": args.gateway_broker_control_timeout_ms,
+        "gateway_broker_telemetry_timeout_ms": args.gateway_broker_telemetry_timeout_ms,
         "overall": operation_summary(overall, args.summary_max_error_lines),
         "operations": {
             name: operation_summary(entry, args.summary_max_error_lines)

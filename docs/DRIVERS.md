@@ -328,14 +328,17 @@ power/reset state.
   Linux-shaped 64-byte first-read transactions rather than a large CLM
   transfer. After that attach proof, Cohesix keeps the
   `bus:txglom`/`bus:rxglom` state established by the Linux-style SDIO preinit
-  path through firmware `ver`, `clmver`, and `mpc`. Disabling `bus:rxglom` as a
+  path through firmware `ver`, `clmver`, `mpc`, event-mask programming, and
+  `WLC_UP`. Disabling `bus:rxglom` as a
   local safety shortcut before `mpc` is not Linux-equivalent and the
   2026-05-13 Cohesix boot trace showed it can move an otherwise working
-  control plane into a host-`CARD_INT`/no-dongle-source stall. After `mpc`
-  succeeds, the Pi 4 compatibility profile disables runtime `bus:rxglom` until
-  the post-attach RX path supports Linux-sized aggregated superframes. That
-  preserves the working Linux-shaped control-plane order while preventing a
-  single oversized data glom from pinning Function 2 and flooding UART output.
+  control plane into a host-`CARD_INT`/no-dongle-source stall. The 2026-05-18
+  Cohesix trace showed the same failure when a local `bus:rxglom=0` write was
+  inserted between `mpc` and `event_msgs_ext`, so Cohesix must not change
+  rxglom state during control-plane startup. The post-attach RX path handles
+  normal glom subframes and treats oversized glom evidence as bounded,
+  recoverable RX work rather than preventing control-plane startup with an
+  extra iovar.
   Malformed or oversized RX-glom evidence must remain explicit, UART-capped,
   and recoverable by clearing the Function 2 frame condition.
 - The first Linux-order control writes use the plain 12-byte SDPCM header. The
@@ -685,15 +688,17 @@ power/reset state.
   same Function 2 host-transfer shape Linux uses. Do not block that read on
   stale `RFRAME` sideband hints or on a `FUNCTIONINTMASK` readback of zero when
   `CCCR.IENx` is armed and `I_HMB_FRAME_IND` is visible.
-- Control-plane receive buffers must fit the captured Linux `BRCMF_FIRSTREAD`
-  cadence for large replies: the initial 64-byte fixed-address Function 2 read
-  followed by a 2048-byte bulk read. Smaller 2048-byte buffers are not enough to
-  hold the padded SDPCM control frame and will misclassify real reply progress
-  as partial hint visibility.
+- Control-plane receive buffers must fit the Pi 4 runtime `BRCMF_FIRSTREAD`
+  cadence for large replies and RX aggregation: the initial 64-byte
+  fixed-address Function 2 read followed by a bounded 4096-byte bulk window.
+  Smaller 2048-byte buffers are not enough to hold padded SDPCM replies plus
+  useful glom superframes under benchmark traffic and can misclassify real
+  progress as partial hint visibility.
 - The same `BRCMF_FIRSTREAD` cadence applies when `RFRAME` already exposes a
   nonzero reply length. Cohesix must not collapse a 2064-byte control reply into
   one padded 2560-byte Function 2 request; it reads 64 bytes first, then the
-  2048-byte padded remainder, and logs both successful CMD53 shapes.
+  padded remainder within the 4096-byte bulk window, and logs both successful
+  CMD53 shapes.
 - If the first control-plane write succeeds but neither `RFRAME` nor
   `I_HMB_FRAME_IND` becomes visible, the HAL must not spin indefinitely on the
   SDIO-core `int_status` word. It performs a sparse, bounded Linux-shaped
@@ -778,9 +783,15 @@ power/reset state.
   subframes are deaggregated into the data/event/EAPOL path, and malformed or
   oversized glom evidence remains explicit but UART-capped instead of silent or
   flood-prone. Descriptor overshoot is a soft mismatch when the remaining tail is
-  still a complete SDPCM subframe. Runtime `bus:rxglom` stays disabled on Pi 4
-  until larger Linux-style superframes are supported end-to-end; this does not
-  change Linux's preinit `bus:rxglom=1` order before `mpc`.
+  still a complete SDPCM subframe. Pi 4 control-plane startup keeps Linux's
+  `bus:rxglom=1` state through event-mask and `WLC_UP`; runtime RX recovery is
+  responsible for dropping or clearing oversized aggregated frames without
+  changing the startup iovar order.
+- Repeated CYW43 runtime RX errors have a generic UART warning budget in
+  addition to the tighter oversize/glom budget. The first few occurrences stay
+  visible for diagnosis; repeats fall to trace-level output so malformed traffic
+  or a future parser mismatch cannot starve USB keyboard echo, HDMI refresh, or
+  foreground `netstats` output.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize

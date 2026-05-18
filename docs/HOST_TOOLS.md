@@ -30,6 +30,8 @@ The TCP console is single-client. Only one of `cohsh`, `swarmui`, `hive-gateway`
 **Choosing a transport**
 Use the TCP console when a single tool is active and you want minimal hops. Use `hive-gateway` when you need multiple tools, remote operators, or a REST surface.
 
+`hive-gateway` coalesces concurrent identical read-only requests for hot `/proc`, `/host`, `/gpu`, and root namespace paths behind a short bounded cache. Mutating REST writes invalidate the affected namespace before the next read is served, preserving the documented console/file semantics while avoiding duplicate TCP-console round trips during benchmark fanout.
+
 | Scenario | Recommended transport | Why |
 | --- | --- | --- |
 | Single operator, local machine | TCP console | Lowest latency, simplest mental model. |
@@ -545,6 +547,10 @@ Host-only REST gateway that maps 1:1 to Cohesix console/file semantics (`LS`, `C
                                 Override pooled control session capacity
       --pool-telemetry-sessions <POOL_TELEMETRY_SESSIONS>
                                 Override pooled telemetry session capacity
+      --broker-control-timeout-ms <BROKER_CONTROL_TIMEOUT_MS>
+                                Control broker response timeout in ms
+      --broker-telemetry-timeout-ms <BROKER_TELEMETRY_TIMEOUT_MS>
+                                Telemetry/read broker response timeout in ms
       --mock                     Use the in-process mock NineDoor backend
   -h, --help                     Print help
   -V, --version                  Print version
@@ -564,6 +570,7 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 ### Notes
 - Environment overrides: `HIVE_GATEWAY_BIND`, `HIVE_GATEWAY_MOCK`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_TCP_HOST`, `COH_TCP_PORT`, `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`), `COH_ROLE`, `COH_TICKET`, `HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND`, `HIVE_GATEWAY_ALLOW_INSECURE_CONSOLE_AUTH`, `COHESIX_ALLOW_INSECURE_CONSOLE_AUTH`.
 - Pool overrides: `HIVE_GATEWAY_POOL_CONTROL_SESSIONS`, `HIVE_GATEWAY_POOL_TELEMETRY_SESSIONS`.
+- Broker timeout overrides: `HIVE_GATEWAY_BROKER_CONTROL_TIMEOUT_MS`, `HIVE_GATEWAY_BROKER_TELEMETRY_TIMEOUT_MS`; valid range is `1..=120000` ms. Keep the default for local QEMU and raise these when a physical target has multi-second console reads.
 - OpenAPI spec + examples live in `docs/HOST_API.md` and are served at `/v1/openapi.yaml`.
 - Swagger UI is served at `/docs` and uses public CDN assets; use the YAML spec for air-gapped environments.
 - The gateway is the console client; do not attach `cohsh` or `swarmui` in console mode at the same time. Use `SWARMUI_TRANSPORT=rest` and host tool `--rest-url` flags when multiplexing.

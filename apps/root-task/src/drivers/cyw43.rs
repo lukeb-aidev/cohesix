@@ -47,13 +47,16 @@ const SDPCM_CONTROL_TX_EXT_HEADER_LEN: usize = SDPCM_HEADER_LEN + SDPCM_CONTROL_
 const SDPCM_DATA_TX_HEADER_LEN: usize = SDPCM_CONTROL_TX_EXT_HEADER_LEN;
 const SDPCM_DATA_TX_SW_HEADER_OFFSET: usize = SDPCM_HWHDR_LEN + SDPCM_CONTROL_TX_HWEXT_LEN;
 const SDPCM_CONTROL_TX_BLOCK_SIZE: usize = 512;
+const SDPCM_DATA_TX_BLOCK_SIZE: usize = 512;
 const SDPCM_CONTROL_TX_LAST_FRAME: u32 = 1 << 24;
 const CDC_HEADER_LEN: usize = 16;
 const BDC_HEADER_LEN: usize = 4;
 const SDPCM_DATA_TX_PADDING_LEN: usize = 6;
+const SDPCM_DATA_TX_PAYLOAD_OFFSET: usize =
+    SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN + BDC_HEADER_LEN;
 const HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 
-const FRAME_BUF_LEN: usize = 2112;
+const FRAME_BUF_LEN: usize = 4160;
 const CONTROL_RESPONSE_BUF_LEN: usize = 2048;
 const CLM_CHUNK_SIZE: usize = 1400;
 const CLM_IOVAR_NAME_LEN: usize = 8;
@@ -85,13 +88,14 @@ const HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS: usize =
     HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS + HOST_EAPOL_JOIN_POST_ASSOC_PROOF_POLLS;
 const HOST_EAPOL_WAIT_M1_STAGE: &str = "join-security-host-eapol-wait-m1";
 const CREDIT_WAIT_LOOPS: usize = 2_000;
-const RX_PUMP_LIMIT: usize = 8;
-const RX_GLOM_SUBFRAME_CAP: usize = 8;
-const RX_GLOM_QUEUE_CAP: usize = 4;
+const RX_PUMP_LIMIT: usize = 64;
+const RX_GLOM_SUBFRAME_CAP: usize = 64;
+const RX_GLOM_QUEUE_CAP: usize = 64;
 const RX_GLOM_WARNING_LOG_LIMIT: u8 = 4;
+const RX_ERROR_WARNING_LOG_LIMIT: u8 = 8;
 const RX_OVERSIZE_WARNING_LOG_LIMIT: u8 = 4;
 const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
-const POST_UP_EVENT_DRAIN_BUDGET: usize = 8;
+const POST_UP_EVENT_DRAIN_BUDGET: usize = 64;
 
 const CHANNEL_CONTROL: u8 = 0;
 const CHANNEL_EVENT: u8 = 1;
@@ -456,7 +460,7 @@ const fn linux_station_path_keeps_rxglom_configured_before_preinit() -> bool {
 }
 
 #[inline]
-const fn cohesix_runtime_disables_rxglom_until_large_superframes_supported() -> bool {
+const fn cohesix_keeps_rxglom_configured_through_control_startup() -> bool {
     true
 }
 
@@ -2876,6 +2880,7 @@ pub struct Cyw43NetDevice {
     glom_subframe_lens: HeaplessVec<u16, RX_GLOM_SUBFRAME_CAP>,
     glom_rx_ready: Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_GLOM_QUEUE_CAP>,
     glom_warning_logs: u8,
+    rx_error_warning_logs: u8,
     rx_oversize_warning_logs: u8,
 }
 
@@ -3048,6 +3053,7 @@ impl Cyw43NetDevice {
             glom_subframe_lens: HeaplessVec::new(),
             glom_rx_ready: Deque::new(),
             glom_warning_logs: 0,
+            rx_error_warning_logs: 0,
             rx_oversize_warning_logs: 0,
         };
 
@@ -3140,6 +3146,7 @@ impl Cyw43NetDevice {
         self.glom_subframe_lens.clear();
         self.glom_rx_ready.clear();
         self.glom_warning_logs = 0;
+        self.rx_error_warning_logs = 0;
         self.rx_oversize_warning_logs = 0;
     }
 
@@ -3328,13 +3335,14 @@ impl Cyw43NetDevice {
             "linux-preinit-defaults",
             self.apply_linux_preinit_defaults()
         );
-        if cohesix_runtime_disables_rxglom_until_large_superframes_supported() {
-            control_step!(
-                "bus-rxglom-disable-runtime-compat",
-                self.set_iovar_u32("bus:rxglom", 0)
-            );
+        if cohesix_keeps_rxglom_configured_through_control_startup() {
             info!(
-                "[cyw43] control-plane step=bus-rxglom-disable-runtime-compat action=compat reason=large-rxglom-superframes-not-yet-supported"
+                "[cyw43] control-plane step=bus-rxglom-runtime-compat action=skip reason=linux-keeps-rxglom-through-event-mask-up"
+            );
+        } else {
+            control_step!(
+                "bus-rxglom-runtime-compat-disable",
+                self.set_iovar_u32("bus:rxglom", 0)
             );
         }
         if linux_station_path_sets_antdiv_before_join() {
@@ -6360,7 +6368,11 @@ impl Cyw43NetDevice {
                     | RxFrameResult::Data(_),
                 ) => {}
                 Err(err) => {
-                    if rx_error_warning_budget_allows(&mut self.rx_oversize_warning_logs, &err) {
+                    if rx_error_warning_budget_allows(
+                        &mut self.rx_error_warning_logs,
+                        &mut self.rx_oversize_warning_logs,
+                        &err,
+                    ) {
                         warn!("[cyw43] rx error: {err}");
                     } else {
                         trace!("[cyw43] rx error: {err}");
@@ -6373,16 +6385,44 @@ impl Cyw43NetDevice {
     }
 
     fn transmit(&mut self, packet: &[u8]) -> Result<SdpcmTxProof, DriverError> {
-        self.wait_for_credit(false)?;
-        let total_len = SDPCM_DATA_TX_HEADER_LEN
-            .checked_add(SDPCM_DATA_TX_PADDING_LEN)
-            .and_then(|value| value.checked_add(BDC_HEADER_LEN))
-            .and_then(|value| value.checked_add(packet.len()))
+        if packet.len() > MAX_FRAME_LEN {
+            return Err(DriverError::FrameTooLarge);
+        }
+        let payload_end = SDPCM_DATA_TX_PAYLOAD_OFFSET
+            .checked_add(packet.len())
             .ok_or(DriverError::FrameTooLarge)?;
-        let aligned_len = align4(total_len);
+        if payload_end > self.tx_frame.len() {
+            return Err(DriverError::FrameTooLarge);
+        }
+        self.tx_frame[SDPCM_DATA_TX_PAYLOAD_OFFSET..payload_end].copy_from_slice(packet);
+        self.transmit_preloaded_payload(packet.len())
+    }
+
+    fn transmit_preloaded_payload(
+        &mut self,
+        packet_len: usize,
+    ) -> Result<SdpcmTxProof, DriverError> {
+        if packet_len > MAX_FRAME_LEN {
+            return Err(DriverError::FrameTooLarge);
+        }
+        let payload_end = SDPCM_DATA_TX_PAYLOAD_OFFSET
+            .checked_add(packet_len)
+            .ok_or(DriverError::FrameTooLarge)?;
+        if payload_end > self.tx_frame.len() {
+            return Err(DriverError::FrameTooLarge);
+        }
+        let total_len = payload_end;
+        let aligned_len = sdpcm_data_tx_request_len(total_len);
         if aligned_len > self.tx_frame.len() {
             return Err(DriverError::FrameTooLarge);
         }
+
+        let packet = &self.tx_frame[SDPCM_DATA_TX_PAYLOAD_OFFSET..payload_end];
+        let bdc_priority = bdc_priority_for_packet(packet);
+        let is_eapol = ethernet_ethertype(packet) == Some(ETH_P_EAPOL);
+        let dst = ethernet_dst(packet).unwrap_or([0; ETHER_ADDR_LEN]);
+
+        self.wait_for_credit(false)?;
 
         let seq = self.sdpcm_seq;
         let proof = SdpcmTxProof {
@@ -6391,26 +6431,24 @@ impl Cyw43NetDevice {
         };
         self.sdpcm_seq = self.sdpcm_seq.wrapping_add(1);
 
-        self.tx_frame[..aligned_len].fill(0);
+        self.tx_frame[..SDPCM_DATA_TX_PAYLOAD_OFFSET].fill(0);
+        self.tx_frame[total_len..aligned_len].fill(0);
         write_sdpcm_data_tx_header(self.tx_frame.as_mut(), total_len, seq)?;
 
         let bdc_offset = SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN;
-        let bdc_priority = bdc_priority_for_packet(packet);
         self.tx_frame[bdc_offset] = BDC_VERSION << BDC_VERSION_SHIFT;
         self.tx_frame[bdc_offset + 1] = bdc_priority;
         self.tx_frame[bdc_offset + 2] = 0;
         self.tx_frame[bdc_offset + 3] = 0;
-        self.tx_frame[bdc_offset + BDC_HEADER_LEN..bdc_offset + BDC_HEADER_LEN + packet.len()]
-            .copy_from_slice(packet);
-        if ethernet_ethertype(packet) == Some(ETH_P_EAPOL) {
+        if is_eapol {
             info!(
                 "[cyw43] host-eapol action=data-tx-shape eth_len={} sdpcm_len={} aligned_len={} data_offset={} bdc_priority={} dst={} seq={} result=linux-bcdc-priority",
-                packet.len(),
+                packet_len,
                 total_len,
                 aligned_len,
                 bdc_offset,
                 bdc_priority,
-                EthernetAddress(ethernet_dst(packet).unwrap_or([0; ETHER_ADDR_LEN])),
+                EthernetAddress(dst),
                 seq,
             );
         }
@@ -6469,10 +6507,26 @@ impl<'a> phy::TxToken for TxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let mut temp = [0u8; MAX_FRAME_LEN];
-        let frame = &mut temp[..len.min(MAX_FRAME_LEN)];
-        let result = f(frame);
-        if let Err(err) = self.device.transmit(frame) {
+        let payload_end = SDPCM_DATA_TX_PAYLOAD_OFFSET.checked_add(len);
+        let can_stage_in_place = len <= MAX_FRAME_LEN
+            && payload_end.is_some_and(|end| end <= self.device.tx_frame.len());
+        if !can_stage_in_place {
+            let mut temp = [0u8; MAX_FRAME_LEN];
+            let frame = &mut temp[..len.min(MAX_FRAME_LEN)];
+            let result = f(frame);
+            if let Err(err) = self.device.transmit(frame) {
+                self.device.tx_drops = self.device.tx_drops.saturating_add(1);
+                warn!("[cyw43] tx error: {err}");
+            }
+            return result;
+        }
+
+        let payload_end = payload_end.unwrap_or(SDPCM_DATA_TX_PAYLOAD_OFFSET);
+        let result = {
+            let frame = &mut self.device.tx_frame[SDPCM_DATA_TX_PAYLOAD_OFFSET..payload_end];
+            f(frame)
+        };
+        if let Err(err) = self.device.transmit_preloaded_payload(len) {
             self.device.tx_drops = self.device.tx_drops.saturating_add(1);
             warn!("[cyw43] tx error: {err}");
         }
@@ -6746,19 +6800,27 @@ fn glom_warning_budget_allows(logs: &mut u8) -> bool {
     true
 }
 
-fn rx_error_warning_budget_allows(logs: &mut u8, err: &DriverError) -> bool {
+fn rx_error_warning_budget_allows(
+    logs: &mut u8,
+    oversize_logs: &mut u8,
+    err: &DriverError,
+) -> bool {
     if !matches!(
         err,
         DriverError::Hal(HalError::Unsupported("cyw43-frame-oversize"))
             | DriverError::Protocol("cyw43-rxglom-superframe-oversize")
             | DriverError::FrameTooLarge
     ) {
+        if *logs >= RX_ERROR_WARNING_LOG_LIMIT {
+            return false;
+        }
+        *logs = logs.saturating_add(1);
         return true;
     }
-    if *logs >= RX_OVERSIZE_WARNING_LOG_LIMIT {
+    if *oversize_logs >= RX_OVERSIZE_WARNING_LOG_LIMIT {
         return false;
     }
-    *logs = logs.saturating_add(1);
+    *oversize_logs = oversize_logs.saturating_add(1);
     true
 }
 
@@ -6836,6 +6898,19 @@ const fn sdpcm_control_tx_request_len(unpadded_len: usize) -> usize {
             unpadded_len
         } else {
             unpadded_len + (SDPCM_CONTROL_TX_BLOCK_SIZE - remainder)
+        }
+    } else {
+        align4(unpadded_len)
+    }
+}
+
+const fn sdpcm_data_tx_request_len(unpadded_len: usize) -> usize {
+    if unpadded_len > SDPCM_DATA_TX_BLOCK_SIZE {
+        let remainder = unpadded_len % SDPCM_DATA_TX_BLOCK_SIZE;
+        if remainder == 0 {
+            unpadded_len
+        } else {
+            unpadded_len + (SDPCM_DATA_TX_BLOCK_SIZE - remainder)
         }
     } else {
         align4(unpadded_len)
@@ -7187,8 +7262,8 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 mod tests {
     use super::{
         aes128_key_unwrap, align4, bdc_payload, bdc_priority_for_packet, clm_iovar_data_len,
-        clm_setvar_payload_len, control_plane_bootstrap_needs_full_replay_retry,
-        control_plane_data_clock_target_hz,
+        clm_setvar_payload_len, cohesix_keeps_rxglom_configured_through_control_startup,
+        control_plane_bootstrap_needs_full_replay_retry, control_plane_data_clock_target_hz,
         control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait,
         control_plane_retry_after_promoted_timeout_resend_uses_startup_link,
         control_plane_retry_after_promoted_timeout_target_clock_hz,
@@ -7240,8 +7315,8 @@ mod tests {
         parse_rx_sdpcm_header, preserve_cyw43_init_failure_exact_error,
         promoted_cyw43_init_failure_exact_error, psk_is_hex_pmk, put_u16_le,
         rsn_ie_is_wpa2_psk_ccmp_compatible, rx_error_warning_budget_allows,
-        sdpcm_control_tx_request_len, sdpcm_glom_descriptor, sdpcm_glom_subframe_len_valid,
-        sdpcm_header_only_status_frame, set_event_mask_bit,
+        sdpcm_control_tx_request_len, sdpcm_data_tx_request_len, sdpcm_glom_descriptor,
+        sdpcm_glom_subframe_len_valid, sdpcm_header_only_status_frame, set_event_mask_bit,
         speculative_credit_window_after_promoted_timeout_retry,
         startup_link_ioctl_timeout_preserved_exact_error, startup_link_reply_rescue_reason,
         startup_transport_recovery_should_reset_experimental_state, validate_sdpcm_packet_len,
@@ -7279,17 +7354,20 @@ mod tests {
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
         LINUX_BSSCFG_JOIN_PAYLOAD_LEN, LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN,
         LINUX_EXT_JOIN_SCAN_OFFSET, LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN, PAE_GROUP_ADDR,
-        RX_GLOM_WARNING_LOG_LIMIT, RX_OVERSIZE_WARNING_LOG_LIMIT, SDIO_DATA_CLOCK_HZ,
-        SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN, SDPCM_CONTROL_TX_HEADER_LEN,
-        SDPCM_DATA_TX_HEADER_LEN, SDPCM_DATA_TX_PADDING_LEN, SDPCM_DATA_TX_SW_HEADER_OFFSET,
-        SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_FAIL, STATUS_NO_NETWORKS, STATUS_SUCCESS,
-        STATUS_UNSOLICITED, WME_BSS_DISABLE_RSN_DEFAULT, WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK,
+        POST_UP_EVENT_DRAIN_BUDGET, RX_ERROR_WARNING_LOG_LIMIT, RX_GLOM_QUEUE_CAP,
+        RX_GLOM_SUBFRAME_CAP, RX_GLOM_WARNING_LOG_LIMIT, RX_OVERSIZE_WARNING_LOG_LIMIT,
+        RX_PUMP_LIMIT, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_DATA_TX_HEADER_LEN, SDPCM_DATA_TX_PADDING_LEN,
+        SDPCM_DATA_TX_PAYLOAD_OFFSET, SDPCM_DATA_TX_SW_HEADER_OFFSET, SDPCM_HEADER_LEN,
+        STATUS_ABORT, STATUS_FAIL, STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED,
+        WME_BSS_DISABLE_RSN_DEFAULT, WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK,
         WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WPA_KCK_LEN, WPA_NONCE_LEN, WPA_PTK_LEN,
         WPA_REPLAY_COUNTER_LEN, WPA_TK_LEN, WSEC_FLAG_PASSPHRASE, WSEC_KEY_ALGO_OFFSET,
         WSEC_KEY_DATA_OFFSET, WSEC_KEY_EA_OFFSET, WSEC_KEY_LEN_OFFSET, WSEC_KEY_PAYLOAD_LEN,
         WSEC_LEGACY_HEX_PMK_LEN, WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
     };
     use crate::hal::HalError;
+    use crate::net_consts::MAX_FRAME_LEN;
 
     fn unsupported_reason(err: &DriverError) -> Option<&'static str> {
         match err {
@@ -7304,6 +7382,13 @@ mod tests {
         assert_eq!(align4(1), 4);
         assert_eq!(align4(4), 4);
         assert_eq!(align4(5), 8);
+    }
+
+    #[test]
+    fn data_tx_request_len_uses_function2_block_padding_for_large_frames() {
+        assert_eq!(sdpcm_data_tx_request_len(132), 132);
+        assert_eq!(sdpcm_data_tx_request_len(513), 1024);
+        assert_eq!(sdpcm_data_tx_request_len(1536), 1536);
     }
 
     #[test]
@@ -8986,6 +9071,37 @@ mod tests {
     }
 
     #[test]
+    fn data_tx_payload_offset_follows_bdc_header() {
+        assert_eq!(
+            SDPCM_DATA_TX_PAYLOAD_OFFSET,
+            SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN + BDC_HEADER_LEN
+        );
+        assert!(SDPCM_DATA_TX_PAYLOAD_OFFSET + MAX_FRAME_LEN <= FRAME_BUF_LEN);
+    }
+
+    #[test]
+    fn staged_data_tx_header_preserves_payload_region() {
+        let payload = [0xa5u8; 96];
+        let mut frame = [0u8; FRAME_BUF_LEN];
+        let payload_end = SDPCM_DATA_TX_PAYLOAD_OFFSET + payload.len();
+        let total_len = payload_end;
+        let aligned_len = align4(total_len);
+        frame[SDPCM_DATA_TX_PAYLOAD_OFFSET..payload_end].copy_from_slice(&payload);
+
+        frame[..SDPCM_DATA_TX_PAYLOAD_OFFSET].fill(0);
+        frame[total_len..aligned_len].fill(0);
+        write_sdpcm_data_tx_header(&mut frame, total_len, 0x2b).expect("data tx header writes");
+        let bdc_offset = SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN;
+        frame[bdc_offset] = BDC_VERSION << BDC_VERSION_SHIFT;
+
+        assert_eq!(&frame[SDPCM_DATA_TX_PAYLOAD_OFFSET..payload_end], &payload);
+        assert_eq!(
+            usize::from(frame[SDPCM_DATA_TX_SW_HEADER_OFFSET + 3]),
+            bdc_offset
+        );
+    }
+
+    #[test]
     fn eapol_start_data_tx_header_keeps_linux_extended_shape() {
         let ethernet_len = ETH_HEADER_LEN + EAPOL_HEADER_LEN;
         let packet_len =
@@ -9071,14 +9187,32 @@ mod tests {
 
     #[test]
     fn rx_glom_descriptor_rejects_unbounded_superframes() {
-        let too_many = [
-            32u8, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0,
-        ];
+        let mut too_many = [0u8; (RX_GLOM_SUBFRAME_CAP + 1) * 2];
+        for raw_len in too_many.chunks_exact_mut(2) {
+            raw_len[0] = 32;
+        }
 
         assert!(matches!(
             parse_glom_descriptor_lengths(&too_many),
             Err(DriverError::Protocol("cyw43-rxglom-descriptor-overflow"))
         ));
+    }
+
+    #[test]
+    fn pi4_wifi_runtime_buffers_match_large_board_profile() {
+        assert_eq!(FRAME_BUF_LEN, 4160);
+        assert_eq!(RX_PUMP_LIMIT, 64);
+        assert_eq!(RX_GLOM_SUBFRAME_CAP, 64);
+        assert_eq!(RX_GLOM_QUEUE_CAP, 64);
+        assert_eq!(POST_UP_EVENT_DRAIN_BUDGET, 64);
+        assert!(RX_GLOM_QUEUE_CAP * MAX_FRAME_LEN >= 96 * 1024);
+    }
+
+    #[test]
+    fn rx_glom_input_buffer_fits_multiple_mtu_subframes() {
+        let two_mtu_glom = (MAX_FRAME_LEN + SDPCM_HEADER_LEN) * 2;
+        assert!(FRAME_BUF_LEN >= two_mtu_glom);
+        assert!(FRAME_BUF_LEN <= 8 * 1024);
     }
 
     #[test]
@@ -9103,17 +9237,53 @@ mod tests {
     #[test]
     fn rx_oversize_warning_budget_is_bounded_for_uart_safety() {
         let mut logs = 0;
+        let mut oversize_logs = 0;
         let err = DriverError::Hal(HalError::Unsupported("cyw43-frame-oversize"));
         for _ in 0..RX_OVERSIZE_WARNING_LOG_LIMIT {
-            assert!(rx_error_warning_budget_allows(&mut logs, &err));
+            assert!(rx_error_warning_budget_allows(
+                &mut logs,
+                &mut oversize_logs,
+                &err
+            ));
         }
-        assert!(!rx_error_warning_budget_allows(&mut logs, &err));
-        assert!(!rx_error_warning_budget_allows(&mut logs, &err));
-        assert_eq!(logs, RX_OVERSIZE_WARNING_LOG_LIMIT);
+        assert!(!rx_error_warning_budget_allows(
+            &mut logs,
+            &mut oversize_logs,
+            &err
+        ));
+        assert!(!rx_error_warning_budget_allows(
+            &mut logs,
+            &mut oversize_logs,
+            &err
+        ));
+        assert_eq!(logs, 0);
+        assert_eq!(oversize_logs, RX_OVERSIZE_WARNING_LOG_LIMIT);
+    }
 
-        let non_oversize = DriverError::Protocol("other-rx-error");
-        assert!(rx_error_warning_budget_allows(&mut logs, &non_oversize));
-        assert_eq!(logs, RX_OVERSIZE_WARNING_LOG_LIMIT);
+    #[test]
+    fn rx_non_oversize_warning_budget_is_bounded_for_uart_safety() {
+        let mut logs = 0;
+        let mut oversize_logs = 0;
+        let err = DriverError::Protocol("cdc-short-header");
+        for _ in 0..RX_ERROR_WARNING_LOG_LIMIT {
+            assert!(rx_error_warning_budget_allows(
+                &mut logs,
+                &mut oversize_logs,
+                &err
+            ));
+        }
+        assert!(!rx_error_warning_budget_allows(
+            &mut logs,
+            &mut oversize_logs,
+            &err
+        ));
+        assert!(!rx_error_warning_budget_allows(
+            &mut logs,
+            &mut oversize_logs,
+            &err
+        ));
+        assert_eq!(logs, RX_ERROR_WARNING_LOG_LIMIT);
+        assert_eq!(oversize_logs, 0);
     }
 
     #[test]
@@ -9297,6 +9467,40 @@ mod tests {
     fn linux_sdio_preinit_rxglom_is_kept_through_mpc() {
         assert!(linux_station_path_keeps_txglom_configured_before_preinit());
         assert!(linux_station_path_keeps_rxglom_configured_before_preinit());
+    }
+
+    #[test]
+    fn rxglom_stays_enabled_through_control_event_mask_and_up() {
+        let source = include_str!("cyw43.rs");
+        let rxglom_enable = source
+            .find("\"linux-first-iovar-rxglom\"")
+            .expect("linux rxglom enable step remains named");
+        let preinit_defaults = source
+            .find("\"linux-preinit-defaults\"")
+            .expect("linux preinit defaults step remains named");
+        let runtime_skip = source
+            .find("step=bus-rxglom-runtime-compat action=skip")
+            .expect("runtime rxglom compatibility step remains named");
+        let event_mask = source
+            .find("control_step!(\"event-mask\"")
+            .expect("event mask step remains named");
+        let up = source
+            .find("control_step!(\"up\"")
+            .expect("up step remains named");
+        let preinit_body = source
+            .find("fn apply_linux_preinit_defaults")
+            .expect("linux preinit helper remains present");
+        let mpc_preinit = source[preinit_body..]
+            .find("preinit_step!(\"mpc\"")
+            .map(|offset| preinit_body + offset)
+            .expect("mpc remains inside linux preinit defaults");
+
+        assert!(rxglom_enable < preinit_defaults);
+        assert!(preinit_defaults < runtime_skip);
+        assert!(runtime_skip < event_mask);
+        assert!(event_mask < up);
+        assert!(preinit_body < mpc_preinit);
+        assert!(cohesix_keeps_rxglom_configured_through_control_startup());
     }
 
     #[test]

@@ -6,7 +6,7 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 
-use cohesix_ticket::Role;
+use cohesix_ticket::{Role, TicketKey};
 
 mod bootstrap;
 
@@ -14,6 +14,7 @@ mod bootstrap;
 pub struct TicketSpec {
     pub role: Role,
     pub secret: &'static str,
+    pub key: TicketKey,
 }
 
 #[derive(Clone, Copy, Debug)]
