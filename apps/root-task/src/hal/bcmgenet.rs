@@ -65,39 +65,25 @@ where
         }
 
         let mut regs: HeaplessVec<DeviceFrame, BCMGENET_MMIO_PAGE_COUNT> = HeaplessVec::new();
-        let mut failed = false;
         for page in 0..BCMGENET_MMIO_PAGE_COUNT {
-            let Some(offset) = page.checked_mul(PAGE_SIZE) else {
-                failed = true;
-                break;
-            };
-            let Some(paddr) = candidate.checked_add(offset) else {
-                failed = true;
-                break;
-            };
-            match hal.map_device(paddr) {
-                Ok(frame) => regs
-                    .push(frame)
-                    .map_err(|_| HalError::Unsupported("bcmgenet-register-page-capacity"))?,
-                Err(err) => {
-                    failed = true;
-                    warn!(
-                        "[bcmgenet-hal] map_device failed mmio=0x{:016x} page={} err={}",
-                        candidate, page, err
-                    );
-                    break;
-                }
-            }
+            let offset = page
+                .checked_mul(PAGE_SIZE)
+                .ok_or(HalError::Unsupported("bcmgenet-register-offset-overflow"))?;
+            let paddr = candidate
+                .checked_add(offset)
+                .ok_or(HalError::Unsupported("bcmgenet-register-address-overflow"))?;
+            let frame = hal.map_device(paddr).map_err(|err| {
+                warn!(
+                    "[bcmgenet-hal] map_device failed mmio=0x{:016x} page={} err={}",
+                    candidate, page, err
+                );
+                err
+            })?;
+            regs.push(frame)
+                .map_err(|_| HalError::Unsupported("bcmgenet-register-page-capacity"))?;
         }
 
-        if !failed && regs.len() == BCMGENET_MMIO_PAGE_COUNT {
-            return BcmGenetRegisters::new(candidate, regs);
-        }
-
-        warn!(
-            "[bcmgenet-hal] candidate 0x{:016x} mapping incomplete; trying next alias",
-            candidate
-        );
+        return BcmGenetRegisters::new(candidate, regs);
     }
 
     Err(HalError::Unsupported("bcmgenet-mmio-not-covered"))
@@ -192,5 +178,65 @@ mod tests {
             covered_pages: BCMGENET_MMIO_PAGE_COUNT - 1,
         };
         assert!(!candidate_covered(&partial, GENET_MMIO_CANDIDATES[0]));
+    }
+
+    struct MapFailHal {
+        map_calls: usize,
+    }
+
+    impl DeviceHal for MapFailHal {
+        type Error = HalError;
+
+        fn map_device(&mut self, _paddr: usize) -> Result<DeviceFrame, Self::Error> {
+            self.map_calls += 1;
+            Err(HalError::Unsupported("test-map-device-fail"))
+        }
+
+        fn alloc_dma_frame(&mut self) -> Result<RamFrame, Self::Error> {
+            Err(HalError::Unsupported("test-dma-unused"))
+        }
+
+        fn reserve_dma_guard_page(&mut self) -> Result<usize, Self::Error> {
+            Err(HalError::Unsupported("test-guard-unused"))
+        }
+
+        fn device_coverage(&self, paddr: usize, size_bits: usize) -> Option<DeviceCoverage> {
+            if size_bits != PAGE_BITS {
+                return None;
+            }
+            for base in GENET_MMIO_CANDIDATES {
+                let covered_end = base.checked_add(BCMGENET_MMIO_PAGE_COUNT * PAGE_SIZE)?;
+                if (base..covered_end).contains(&paddr) {
+                    return Some(DeviceCoverage {
+                        base,
+                        limit: covered_end,
+                        size_bits: PAGE_BITS as u8,
+                        index: 0,
+                        used: false,
+                    });
+                }
+            }
+            None
+        }
+
+        fn snapshot(&self) -> KernelEnvSnapshot {
+            panic!("GENET HAL mapping tests do not use snapshots")
+        }
+    }
+
+    #[test]
+    fn genet_covered_candidate_mapping_failure_fails_closed_without_alias_retry() {
+        let mut hal = MapFailHal { map_calls: 0 };
+
+        let err = match map_registers(&mut hal) {
+            Ok(_) => panic!("mapping failure should surface"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, HalError::Unsupported("test-map-device-fail"));
+        assert_eq!(
+            hal.map_calls, 1,
+            "a covered GENET aperture with a mapping failure should not consume additional aliases"
+        );
     }
 }

@@ -1314,6 +1314,10 @@ Required Cohesix shape:
 - TX/RX descriptors are fixed-size; RX buffers are preallocated.
 - TX completion and RX producer/consumer movement have breadcrumbs for stalls.
 - DMA address policy is explicit (`physical` vs VC/bus alias) and logged.
+- Packet-rate GENET DMA handoffs (`bcmgenet-rx-rearm`,
+  `bcmgenet-rx-complete`, `bcmgenet-tx-submit`) still perform the required
+  HAL cache maintenance but suppress successful per-packet UART DMA audit
+  lines; failures and driver breadcrumbs remain visible.
 - No DHCP logic is inside the GENET driver; DHCP belongs above `NetDevice`.
 
 Do not proceed to smoltcp until link and one bounded RX/TX smoke path are
@@ -1454,7 +1458,9 @@ bundle applies. Use the focused aliases:
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart`
   covers QEMU and Pi 4 UART physical address constants.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet`
-  covers GENET descriptor, ring, link, and DMA address invariants.
+  covers GENET descriptor, ring, PHY/link-readiness, teardown, and DMA address
+  invariants. It is deterministic contract coverage; physical RX/TX smoke
+  remains a Pi 4 hardware acceptance item.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43`
   covers CYW43 protocol state, Linux-shaped join payloads, first-reply
   recovery, and bounded SDPCM/CDC behavior.

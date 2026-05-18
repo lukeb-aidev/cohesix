@@ -107,6 +107,9 @@ fn audit_suppressed_for_label(label: &str) -> bool {
             | "xhci-hid-report-buffer"
             | "xhci-transfer-buffer"
             | "xhci-transfer-ring-submit"
+            | "bcmgenet-rx-rearm"
+            | "bcmgenet-rx-complete"
+            | "bcmgenet-tx-submit"
     )
 }
 
@@ -328,15 +331,18 @@ pub fn sync_for_cpu(
 /// Audit the release of a pinned DMA span.
 #[inline(always)]
 pub fn unpin(range: &PinnedDmaRange) -> Result<(), CacheError> {
-    let mut line = heapless::String::<192>::new();
-    let _ = core::fmt::write(
-        &mut line,
-        format_args!(
-            "[dma][share] reclaim label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
-            range.label, range.vaddr, range.paddr, range.len,
-        ),
-    );
-    emit_audit_line(line.as_str());
+    let suppress_audit = audit_suppressed_for_label(range.label);
+    if !suppress_audit {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::write(
+            &mut line,
+            format_args!(
+                "[dma][share] reclaim label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
+                range.label, range.vaddr, range.paddr, range.len,
+            ),
+        );
+        emit_audit_line(line.as_str());
+    }
 
     let policy = cache_policy();
     if cache_ops_requested(policy) {
@@ -346,7 +352,9 @@ pub fn unpin(range: &PinnedDmaRange) -> Result<(), CacheError> {
                 return Err(CacheError::new(sel4_sys::seL4_InvalidArgument));
             }
 
-            emit_cache_line("invalidate-after-reclaim", range);
+            if !suppress_audit {
+                emit_cache_line("invalidate-after-reclaim", range);
+            }
             let maintenance = CacheMaintenance::init_thread();
             if let Err(err) = maintenance.invalidate(range.vaddr, range.len) {
                 emit_cache_error("invalidate-after-reclaim", range, err);
@@ -355,15 +363,17 @@ pub fn unpin(range: &PinnedDmaRange) -> Result<(), CacheError> {
         }
     }
 
-    let mut done = heapless::String::<192>::new();
-    let _ = core::fmt::write(
-        &mut done,
-        format_args!(
-            "[dma][share] reclaimed label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
-            range.label, range.vaddr, range.paddr, range.len,
-        ),
-    );
-    emit_audit_line(done.as_str());
+    if !suppress_audit {
+        let mut done = heapless::String::<192>::new();
+        let _ = core::fmt::write(
+            &mut done,
+            format_args!(
+                "[dma][share] reclaimed label={} vaddr=0x{:016x} paddr=0x{:016x} addr_domain=cpu-phys len=0x{:08x}",
+                range.label, range.vaddr, range.paddr, range.len,
+            ),
+        );
+        emit_audit_line(done.as_str());
+    }
     Ok(())
 }
 
@@ -435,6 +445,9 @@ mod tests {
         assert!(audit_suppressed_for_label("xhci-hid-report-buffer"));
         assert!(audit_suppressed_for_label("xhci-transfer-buffer"));
         assert!(audit_suppressed_for_label("xhci-transfer-ring-submit"));
+        assert!(audit_suppressed_for_label("bcmgenet-rx-rearm"));
+        assert!(audit_suppressed_for_label("bcmgenet-rx-complete"));
+        assert!(audit_suppressed_for_label("bcmgenet-tx-submit"));
         assert!(!audit_suppressed_for_label("xhci-cmd-ring-submit-full"));
     }
 

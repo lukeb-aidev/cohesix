@@ -8,7 +8,13 @@
 - Cohesix supports two bring-up paths:
 - QEMU `aarch64/virt` (development/CI baseline).
 - Raspberry Pi 4 (`bcm2711`) via upstream-style boot chain: `Pi firmware -> U-Boot -> seL4 image -> root-task`.
-- Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4; the current 26b as-built state adds the interactive U-Boot policy wizard, DTB `/chosen/cohesix,*` network-policy handoff, Cohesix-owned xHCI/VL805 local-seat cold start, wired DHCP, and the staged Pi 4 Wi-Fi runtime path.
+- Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds
+  profile-gated GENETv5 + static IPv4; the current 26b as-built state adds the
+  interactive U-Boot policy wizard, DTB `/chosen/cohesix,*` network-policy
+  handoff, Cohesix-owned xHCI/VL805 local-seat cold start, wired static/DHCP
+  policy plumbing, and the staged Pi 4 Wi-Fi runtime path. The latest recorded
+  26b hardware completion evidence proves Wi-Fi DHCP; wired GENET still
+  requires a fresh physical capture before it can be cited as hardware-proven.
 
 ## Canonical Pi 4 boot chain
 1. Pi boot firmware loads `start4.elf` and `fixup4.dat`.
@@ -109,7 +115,7 @@
 - `manifest.hw.network.static_ipv4.ip=<configured-ip>`
 - `manifest.hw.networking=enabled-static-ipv4`
 4. Validate TCP console reachability from host:
-- `cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <STATIC_IP> --tcp-port 31337 --script scripts/cohsh/boot_v0.coh`
 
 ## Milestone 26b Pi 4 network wizard checklist (as-built)
 1. Build Pi 4 payload with the 26b policy-capable manifest:
@@ -218,6 +224,8 @@ Capture only these operator-facing lines from that session:
 - on the manifest-default boot, `netstatus` prints `ip=192.168.10.42 gateway=192.168.10.1 src=manifest-static dhcp=disabled`
 - on DHCP boots, `netstatus` prints the compact lease state (`ip=<lease-ip> gateway=<gw> src=dhcp-lease dhcp=bound`) so wrapped serial consoles still show the active address.
 - `nettest` targets the active wired address only.
+  These wired checks are acceptance criteria for the next physical GENET
+  capture; they are not proven by the Wi-Fi completion evidence below.
 6. Current limitation:
 - explicit `policy=wifi` now supports both `dhcp` and `static` when credentials are present.
 - `auto` remains DHCP-only and still tries Wi-Fi first when credentials are present. Its wired fallback is limited to CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack.

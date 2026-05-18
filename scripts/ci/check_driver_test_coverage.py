@@ -149,6 +149,8 @@ def main() -> int:
             "driver-tests-pi4 --lib hal::bcmgenet",
             "driver-tests-pi4 --lib hal::pi4_pcie",
             "driver-tests-pi4 --lib hal::pi4_wifi",
+            "driver-tests-pi4,net-console --lib event::tests::nettest_reports_wifi_host_eapol_pending_detail",
+            "driver-tests-pi4,net-console --lib event::tests::netstats_emits_compact_status_line",
             "driver-tests-pi4 --lib local_seat::",
             "driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::",
             "--features release-qemu",

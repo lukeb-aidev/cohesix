@@ -158,3 +158,24 @@ fn cache_maintenance_dma_pin_handles_xhci_audit_profiles() {
         "xHCI command-ring publication must not use clean-only publication: {lines:?}"
     );
 }
+
+#[test]
+fn cache_maintenance_dma_can_suppress_bcmgenet_hot_path_audit() {
+    let _guard = DMA_TEST_LOCK.lock().expect("cache test lock");
+    let _ = dma::take_audit_log();
+    set_test_error(None);
+
+    let rx_rearm = dma::pin(0x6000, 0x8000, 0x800, "bcmgenet-rx-rearm").expect("rx rearm pin");
+    dma::unpin(&rx_rearm).expect("rx rearm unpin");
+    let rx_complete =
+        dma::sync_for_cpu(0x7000, 0x9000, 0x800, "bcmgenet-rx-complete").expect("rx sync");
+    let tx_submit = dma::pin(0x8000, 0xa000, 0x600, "bcmgenet-tx-submit").expect("tx submit pin");
+    dma::unpin(&tx_submit).expect("tx submit unpin");
+
+    assert_eq!(rx_complete.label(), "bcmgenet-rx-complete");
+    let lines = dma::take_audit_log();
+    assert!(
+        lines.is_empty(),
+        "GENET packet-rate DMA paths keep cache maintenance but suppress repetitive UART audit lines: {lines:?}"
+    );
+}

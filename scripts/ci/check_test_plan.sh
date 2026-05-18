@@ -77,6 +77,8 @@ required_snippets = [
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::nettest_reports_wifi_host_eapol_pending_detail",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::netstats_emits_compact_status_line",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::",
     "cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance",
