@@ -248,17 +248,17 @@ pub fn main(ctx: BootContext) -> ! {
         }
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         wait_for_net_console_before_root_console(&mut pump);
-        log::info!(
+        log::debug!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: root-console.start.begin"
         );
-        log::info!(target: "boot", "[boot] before starting root shell");
+        log::debug!(target: "boot", "[boot] before starting root shell");
         pump.announce_console_ready();
-        log::info!(target: "boot", "[boot] root shell starting");
-        log::info!(target: "console", "[console] starting root CLI");
+        log::debug!(target: "boot", "[boot] root shell starting");
+        log::debug!(target: "console", "[console] starting root CLI");
         boot_log::force_uart_line("[mark] root-console.start.begin");
         pump.start_cli();
-        boot_log::force_uart_line("[mark] root-console.start.ok");
+        log::debug!(target: "boot", "[mark] root-console.start.ok");
         #[cfg(feature = "kernel")]
         {
             let now_ms = crate::hal::timebase().now_ms();
@@ -269,20 +269,20 @@ pub fn main(ctx: BootContext) -> ! {
             };
             log_buffer::append_log_line(line.as_str());
         }
-        log::info!(
+        log::debug!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: root-console.start.ok"
         );
-        log::info!(
+        log::debug!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: queen.start.begin"
         );
-        log::info!(target: "boot", "[boot] root shell started; entering event loop");
-        log::info!(
+        log::debug!(target: "boot", "[boot] root shell started; entering event loop");
+        log::debug!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: queen.start.ok"
         );
-        log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
+        log::debug!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
         boot_log::allow_ep_only_transport();
         pump.run();
     }
@@ -407,7 +407,7 @@ struct LoggerAudit;
 
 impl AuditSink for LoggerAudit {
     fn info(&mut self, message: &str) {
-        log::info!(target: "audit", "{message}");
+        log::debug!(target: "audit", "{message}");
     }
 
     fn denied(&mut self, message: &str) {

@@ -11,7 +11,7 @@ use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -39,7 +39,7 @@ use cohsh::{
     PROC_SCHEDULE_QUEUE_BYTES, PROC_SCHEDULE_QUEUE_ENABLED, PROC_SCHEDULE_SUMMARY_BYTES,
     PROC_SCHEDULE_SUMMARY_ENABLED, SECURE9P_MSIZE, SECURE9P_WALK_DEPTH,
 };
-use cohsh::{NineDoorTransport, PooledTcpTransport, TcpTransport};
+use cohsh::{NineDoorTransport, TcpTransport};
 use cohsh_core::{
     parse_role, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN,
     MAX_TICKET_LEN,
@@ -69,7 +69,6 @@ const MAX_BROKER_POOL_WAIT_LIMIT_MS: u64 = 120_000;
 const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
 const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
-const BROKER_CONTROL_BURST: usize = 6;
 const BROKER_IDLE_WAIT_MS: u64 = 20;
 const CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
 const CONTROL_WRITE_RETRY_SLEEP_MS: u64 = 15;
@@ -802,13 +801,19 @@ fn build_session_pool(config: &GatewayConfig, policy: CohshPolicy) -> Result<Sha
             factory,
         ));
     }
-    let tcp = TcpTransport::new(&config.tcp_host, config.tcp_port)
-        .with_auth_token(&config.auth_token)
-        .with_retry_policy(policy.retry)
-        .with_heartbeat_interval(Duration::from_millis(policy.heartbeat.interval_ms));
-    let inner = Arc::new(Mutex::new(tcp));
+    let tcp_host = config.tcp_host.clone();
+    let tcp_port = config.tcp_port;
+    let auth_token = config.auth_token.clone();
+    let retry = policy.retry;
+    let heartbeat_ms = policy.heartbeat.interval_ms;
     let factory: Arc<dyn TransportFactory> = Arc::new(move || {
-        Ok(Box::new(PooledTcpTransport::new(inner.clone())) as Box<dyn cohsh::Transport + Send>)
+        Ok(Box::new(
+            TcpTransport::new(tcp_host.clone(), tcp_port)
+                .with_auth_token(auth_token.clone())
+                .with_retry_policy(retry)
+                .with_heartbeat_interval(Duration::from_millis(heartbeat_ms))
+                .with_console_lock_enabled(false),
+        ) as Box<dyn cohsh::Transport + Send>)
     });
     Ok(SessionPool::new(
         policy.pool.control_sessions,
@@ -890,72 +895,79 @@ fn build_gateway_broker(
 ) -> GatewayBrokerClient {
     let (control_tx, control_rx) = mpsc::sync_channel(BROKER_CONTROL_QUEUE_CAPACITY);
     let (telemetry_tx, telemetry_rx) = mpsc::sync_channel(BROKER_TELEMETRY_QUEUE_CAPACITY);
-    thread::spawn(move || {
-        run_broker_dispatcher(pool, metrics, shutdown, control_rx, telemetry_rx);
-    });
+    let (_, telemetry_capacity) = pool.capacities();
+    spawn_broker_workers(
+        PoolKind::Control,
+        1,
+        pool.clone(),
+        metrics.clone(),
+        shutdown.clone(),
+        control_rx,
+    );
+    spawn_broker_workers(
+        PoolKind::Telemetry,
+        usize::from(telemetry_capacity.max(1)),
+        pool,
+        metrics,
+        shutdown,
+        telemetry_rx,
+    );
     GatewayBrokerClient {
         control_tx,
         telemetry_tx,
     }
 }
 
-fn run_broker_dispatcher(
+fn spawn_broker_workers(
+    kind: PoolKind,
+    workers: usize,
     pool: SharedPool,
     metrics: Arc<BrokerMetrics>,
     shutdown: Arc<AtomicBool>,
-    control_rx: Receiver<BrokerCommand>,
-    telemetry_rx: Receiver<BrokerCommand>,
+    rx: Receiver<BrokerCommand>,
+) {
+    let rx = Arc::new(Mutex::new(rx));
+    for _ in 0..workers.max(1) {
+        let worker_pool = pool.clone();
+        let worker_metrics = metrics.clone();
+        let worker_shutdown = shutdown.clone();
+        let worker_rx = rx.clone();
+        thread::spawn(move || {
+            run_broker_worker(
+                kind,
+                worker_pool,
+                worker_metrics,
+                worker_shutdown,
+                worker_rx,
+            );
+        });
+    }
+}
+
+fn run_broker_worker(
+    kind: PoolKind,
+    pool: SharedPool,
+    metrics: Arc<BrokerMetrics>,
+    shutdown: Arc<AtomicBool>,
+    rx: Arc<Mutex<Receiver<BrokerCommand>>>,
 ) {
     loop {
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
-
-        let mut dispatched = false;
-        for _ in 0..BROKER_CONTROL_BURST {
-            match control_rx.try_recv() {
-                Ok(command) => {
-                    dispatched = true;
-                    dispatch_broker_command(&pool, &metrics, command);
-                }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
-            }
-        }
-
-        match telemetry_rx.try_recv() {
+        let command = {
+            let receiver = rx.lock().expect("broker receiver lock poisoned");
+            receiver.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS))
+        };
+        match command {
             Ok(command) => {
-                dispatched = true;
+                debug_assert_eq!(command.kind, kind);
                 dispatch_broker_command(&pool, &metrics, command);
             }
-            Err(TryRecvError::Empty) => {
-                if dispatched {
-                    metrics.telemetry_yields.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-            Err(TryRecvError::Disconnected) => {}
-        }
-
-        if dispatched {
-            continue;
-        }
-
-        match control_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
-            Ok(command) => {
-                dispatch_broker_command(&pool, &metrics, command);
-                continue;
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {}
-        }
-
-        match telemetry_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
-            Ok(command) => dispatch_broker_command(&pool, &metrics, command),
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {}
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
-    pool.shutdown();
 }
 
 fn dispatch_broker_command(pool: &SharedPool, metrics: &BrokerMetrics, command: BrokerCommand) {

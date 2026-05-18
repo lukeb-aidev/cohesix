@@ -16,7 +16,7 @@
 //! - With `tcp-echo-31337`, run `nc 127.0.0.1 31337` and type input; expect
 //!   echoed bytes plus `[net-trace]` RX/TX lines for port 31337.
 //! - With tracing enabled, `./cohsh --transport tcp --tcp-port 31337 --role queen`
-//!   should emit auth frame logs showing the exact bytes parsed on the server.
+//!   should emit redacted auth-state logs; auth frame bytes are never logged.
 #![allow(unsafe_code)]
 #![cfg(any(test, feature = "kernel"))]
 
@@ -1999,7 +1999,7 @@ impl<D: NetDevice> NetStack<D> {
     fn set_auth_state(auth_state: &mut AuthState, active_client_id: Option<u64>, next: AuthState) {
         if next != *auth_state {
             let conn_id = active_client_id.unwrap_or(0);
-            info!(
+            debug!(
                 "[cohsh-net][auth] state: {:?} -> {:?} (conn_id={})",
                 auth_state, next, conn_id
             );
@@ -2314,7 +2314,7 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn trace_conn_closed(conn_id: u64, reason: &str, bytes_in: u64, bytes_out: u64) {
-        log::info!(
+        log::debug!(
             "[cohsh-net] conn id={} closed reason={} bytes_in={} bytes_out={}",
             conn_id,
             reason,
@@ -2361,7 +2361,7 @@ impl<D: NetDevice> NetStack<D> {
         if Some(current) == previous {
             return;
         }
-        log::info!(
+        log::debug!(
             target: "cohsh-net",
             "[tcp] state transition: {:?} -> {:?} local={:?} peer={:?}",
             previous_state,
@@ -2373,7 +2373,7 @@ impl<D: NetDevice> NetStack<D> {
 
         match (previous_state, current) {
             (TcpState::Closed, TcpState::Listen) => {
-                log::info!(
+                log::debug!(
                     target: "cohsh-net",
                     "[tcp] listener active local={:?} peer={:?}",
                     socket.local_endpoint(),
@@ -2381,7 +2381,7 @@ impl<D: NetDevice> NetStack<D> {
                 );
             }
             (TcpState::Listen, TcpState::SynReceived) => {
-                log::info!(
+                log::debug!(
                     target: "cohsh-net",
                     "[tcp] syn-received local={:?} peer={:?}",
                     socket.local_endpoint(),
@@ -2389,7 +2389,7 @@ impl<D: NetDevice> NetStack<D> {
                 );
             }
             (TcpState::SynReceived, TcpState::Established) => {
-                log::info!(
+                log::debug!(
                     target: "cohsh-net",
                     "[tcp] established local={:?} peer={:?}",
                     socket.local_endpoint(),
@@ -2397,13 +2397,13 @@ impl<D: NetDevice> NetStack<D> {
                 );
             }
             (_, TcpState::SynReceived) => {
-                info!(
+                debug!(
                     target: "root_task::net",
                     "[tcp] connect.begin addr={peer} port={port} iface_ip={iface_ip}"
                 );
             }
             (_, TcpState::Established) => {
-                info!(
+                debug!(
                     target: "root_task::net",
                     "[tcp] connect.ok addr={peer} port={port} iface_ip={iface_ip}"
                 );
@@ -2416,7 +2416,7 @@ impl<D: NetDevice> NetStack<D> {
             && matches!(current, TcpState::CloseWait | TcpState::Closed)
             && !matches!(previous_state, TcpState::Established)
         {
-            warn!(
+            debug!(
                 target: "root_task::net",
                 "[tcp] connect.err addr={peer} port={port} iface_ip={iface_ip} err={:?}",
                 current
@@ -2438,7 +2438,7 @@ impl<D: NetDevice> NetStack<D> {
             return;
         }
         let (peer, port) = Self::peer_parts(peer_endpoint, socket);
-        info!(
+        debug!(
             target: "root_task::net",
             "[tcp] close addr={peer} port={port} state={:?}",
             socket.state()
@@ -3228,6 +3228,10 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.tx_double_submit = device_counters.tx_double_submit;
         self.counters.tx_zero_len_attempt = device_counters.tx_zero_len_attempt;
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
+        self.counters.tx_dup_publish_blocked = device_counters.tx_dup_publish_blocked;
+        self.counters.tx_dup_used_ignored = device_counters.tx_dup_used_ignored;
+        self.counters.tx_invalid_used_state = device_counters.tx_invalid_used_state;
+        self.counters.tx_alloc_blocked_inflight = device_counters.tx_alloc_blocked_inflight;
         self.counters.wifi_assoc = device_counters.wifi_assoc;
         self.counters.wifi_link_up = device_counters.wifi_link_up;
         self.counters.wifi_host_eapol_rx = device_counters.wifi_host_eapol_rx;
@@ -3258,6 +3262,10 @@ impl<D: NetDevice> NetStack<D> {
             tx_double_submit: device_counters.tx_double_submit,
             tx_zero_len_attempt: device_counters.tx_zero_len_attempt,
             dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
+            tx_dup_publish_blocked: device_counters.tx_dup_publish_blocked,
+            tx_dup_used_ignored: device_counters.tx_dup_used_ignored,
+            tx_invalid_used_state: device_counters.tx_invalid_used_state,
+            tx_alloc_blocked_inflight: device_counters.tx_alloc_blocked_inflight,
             wifi_assoc: device_counters.wifi_assoc,
             wifi_link_up: device_counters.wifi_link_up,
             wifi_host_eapol_rx: device_counters.wifi_host_eapol_rx,
@@ -3268,7 +3276,7 @@ impl<D: NetDevice> NetStack<D> {
 
     fn log_self_test_result(&self, result: NetSelfTestResult) {
         let counters = self.current_counters();
-        info!(
+        debug!(
             "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={}",
             result.tx_ok,
             result.udp_echo_ok,
@@ -3278,7 +3286,7 @@ impl<D: NetDevice> NetStack<D> {
         );
         if !result.udp_echo_ok {
             match self.self_test.udp_last_peer {
-                Some(peer) if result.peer_assisted_ok => info!(
+                Some(peer) if result.peer_assisted_ok => debug!(
                     "[net-selftest] udp-echo peer-assisted summary rx_pkts={} reply_pkts={} last_peer={}:{}",
                     self.self_test.udp_rx_packets,
                     self.self_test.udp_reply_packets,
@@ -3292,7 +3300,7 @@ impl<D: NetDevice> NetStack<D> {
                     peer.addr,
                     peer.port
                 ),
-                None if result.peer_assisted_ok => info!(
+                None if result.peer_assisted_ok => debug!(
                     "[net-selftest] udp-echo peer-assisted summary rx_pkts={} reply_pkts={} last_peer=none",
                     self.self_test.udp_rx_packets, self.self_test.udp_reply_packets
                 ),
@@ -3303,7 +3311,11 @@ impl<D: NetDevice> NetStack<D> {
             }
         }
         if let Some(hint) = self_test_failure_hint(result, counters) {
-            info!("{hint}");
+            if result.peer_assisted_ok {
+                debug!("{hint}");
+            } else {
+                warn!("{hint}");
+            }
         }
     }
 
@@ -3381,11 +3393,7 @@ impl<D: NetDevice> NetStack<D> {
             if poll_result != PollResult::None {
                 self.self_test.post_poll_flush_logs =
                     self.self_test.post_poll_flush_logs.saturating_add(1);
-                if self.self_test.post_poll_flush_logs == 1 {
-                    info!("[net-selftest] post-selftest poll flushed pending work");
-                } else {
-                    debug!("[net-selftest] post-selftest poll flushed pending work");
-                }
+                debug!("[net-selftest] post-selftest poll flushed pending work");
             }
         }
 
@@ -3583,23 +3591,13 @@ impl<D: NetDevice> NetStack<D> {
                         {
                             request_tx_scan = true;
                         }
-                        if self.self_test.beacons_sent < 8 {
-                            info!(
-                                "[net-selftest] udp-beacon queued seq={} -> {}:{} payload='{}'",
-                                self.self_test.beacon_seq.saturating_sub(1),
-                                gateway_addr,
-                                UDP_ECHO_PORT,
-                                payload
-                            );
-                        } else {
-                            debug!(
-                                "[net-selftest] udp-beacon queued seq={} -> {}:{} payload='{}'",
-                                self.self_test.beacon_seq.saturating_sub(1),
-                                gateway_addr,
-                                UDP_ECHO_PORT,
-                                payload
-                            );
-                        }
+                        debug!(
+                            "[net-selftest] udp-beacon queued seq={} -> {}:{} payload='{}'",
+                            self.self_test.beacon_seq.saturating_sub(1),
+                            gateway_addr,
+                            UDP_ECHO_PORT,
+                            payload
+                        );
                         sent = sent.saturating_add(1);
                     }
                     Err(err) => {
@@ -3679,7 +3677,7 @@ impl<D: NetDevice> NetStack<D> {
                     if self.self_test.running {
                         self.self_test.record_udp_echo_rx(endpoint);
                     }
-                    info!(
+                    debug!(
                         "[net-selftest] udp-echo rx len={} from {}:{}",
                         payload.len(),
                         endpoint.addr,
@@ -3691,7 +3689,7 @@ impl<D: NetDevice> NetStack<D> {
                             if self.self_test.running {
                                 self.self_test.record_udp_echo_reply(endpoint);
                             }
-                            info!(
+                            debug!(
                                 "[net-selftest] udp-echo tx len={} to {}:{}",
                                 reply_len, endpoint.addr, endpoint.port
                             );
@@ -3733,7 +3731,7 @@ impl<D: NetDevice> NetStack<D> {
             if !self.self_test.tcp_accept_seen {
                 self.self_test.tcp_accept_seen = true;
                 self.counters.tcp_accepts = self.counters.tcp_accepts.saturating_add(1);
-                info!(
+                debug!(
                     "[net-selftest] tcp-smoke accept peer={:?}",
                     socket.remote_endpoint()
                 );
@@ -3761,7 +3759,7 @@ impl<D: NetDevice> NetStack<D> {
                 self.counters.tcp_rx_bytes =
                     self.counters.tcp_rx_bytes.saturating_add(copied as u64);
                 NET_DIAG.add_bytes_read(copied as u64);
-                info!(
+                debug!(
                     "[net-selftest] tcp-smoke recv bytes={} state={:?}",
                     copied,
                     socket.state()
@@ -3778,7 +3776,7 @@ impl<D: NetDevice> NetStack<D> {
                         NET_DIAG.add_bytes_written(sent as u64);
                         NET_DIAG.record_accept_success();
                         self.self_test.record_tcp_ok();
-                        info!(
+                        debug!(
                             "[net-selftest] tcp-smoke reply sent bytes={} close_reason=active",
                             sent
                         );
@@ -3789,7 +3787,7 @@ impl<D: NetDevice> NetStack<D> {
                     }
                 }
             } else if socket.state() == TcpState::CloseWait {
-                info!("[net-selftest] tcp-smoke peer closed (now_ms={})", now_ms);
+                debug!("[net-selftest] tcp-smoke peer closed (now_ms={})", now_ms);
                 socket.close();
             }
         }
@@ -3829,7 +3827,7 @@ impl<D: NetDevice> NetStack<D> {
                     "console-selftest",
                 ) {
                     Ok(()) => {
-                        info!(
+                        debug!(
                             "[net-selftest] console listener selftest connect -> {}:{} (now_ms={})",
                             dest.addr, dest.port, now_ms
                         );
@@ -3848,7 +3846,7 @@ impl<D: NetDevice> NetStack<D> {
         if socket.state() == TcpState::Established {
             if !self.self_test.console_probe_established {
                 self.self_test.console_probe_established = true;
-                info!("[net-selftest] console listener selftest established");
+                debug!("[net-selftest] console listener selftest established");
             }
             if !self.self_test.console_probe_auth_sent && socket.can_send() {
                 let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
@@ -3901,14 +3899,14 @@ impl<D: NetDevice> NetStack<D> {
                             if frame_len >= 4 && frame_len <= copied {
                                 let payload = &temp[4..frame_len];
                                 if payload.starts_with(b"OK AUTH") {
-                                    info!("[net-selftest] console listener selftest auth OK");
+                                    debug!("[net-selftest] console listener selftest auth OK");
                                 } else if payload.starts_with(b"ERR AUTH") {
                                     warn!("[net-selftest] console listener selftest auth rejected");
                                 }
                             }
                         }
                         let preview_len = core::cmp::min(copied, 16);
-                        info!(
+                        debug!(
                             "[net-selftest] console listener banner bytes={} first={:02x?}",
                             copied,
                             &temp[..preview_len]
@@ -3944,7 +3942,7 @@ impl<D: NetDevice> NetStack<D> {
             self.self_test.console_probe_done = true;
             self.self_test.record_console_ok();
             self.tcp_smoke_last_attempt_ms = now_ms;
-            info!(
+            debug!(
                 "[net-selftest] console listener selftest recovered to listen (now_ms={})",
                 now_ms
             );
@@ -4013,7 +4011,7 @@ impl<D: NetDevice> NetStack<D> {
                 ) {
                     Ok(()) => {
                         self.tcp_smoke_outbound_connecting = true;
-                        info!(
+                        debug!(
                             "[net-selftest] tcp-smoke outbound connect -> {}:{} (now_ms={})",
                             dest.addr, dest.port, now_ms
                         );
@@ -4044,7 +4042,7 @@ impl<D: NetDevice> NetStack<D> {
                         self.tcp_smoke_outbound_sent = true;
                         self.tcp_smoke_outbound_connecting = false;
                         self.self_test.record_tcp_ok();
-                        info!(
+                        debug!(
                             "[net-selftest] tcp-smoke outbound sent bytes={} dest={}:{}",
                             sent, dest.addr, dest.port
                         );
@@ -4140,10 +4138,17 @@ impl<D: NetDevice> NetStack<D> {
                 match socket.listen(IpListenEndpoint::from(self.listen_port)) {
                     Ok(()) => {
                         NET_DIAG.record_listener_bound();
-                        info!(
-                            "[net-console] tcp listener bound: port={} iface_ip={}",
-                            self.listen_port, self.ip
-                        );
+                        if self.listener_announced {
+                            debug!(
+                                "[net-console] tcp listener rebound: port={} iface_ip={}",
+                                self.listen_port, self.ip
+                            );
+                        } else {
+                            info!(
+                                "[net-console] tcp listener bound: port={} iface_ip={}",
+                                self.listen_port, self.ip
+                            );
+                        }
                     }
                     Err(err) => {
                         log::error!(
@@ -4268,7 +4273,7 @@ impl<D: NetDevice> NetStack<D> {
                     .local_endpoint()
                     .map(|endpoint| endpoint.port)
                     .unwrap_or(self.listen_port);
-                info!(
+                debug!(
                     "[cohsh-net] conn new id={} local={}:{} remote={}:{}",
                     client_id, self.ip, local_port, peer_label, peer_port
                 );
@@ -4281,13 +4286,13 @@ impl<D: NetDevice> NetStack<D> {
                     }
                 };
                 if let Some(endpoint) = socket.remote_endpoint() {
-                    info!("[cohsh-net] new TCP client connected from {:?}", endpoint);
-                    info!(
+                    debug!("[cohsh-net] new TCP client connected from {:?}", endpoint);
+                    debug!(
                         target: "net-console",
                         "[net-console] conn: accepted from {:?}",
                         endpoint
                     );
-                    log::info!(
+                    log::debug!(
                         target: "net-console",
                         "[net-console] accept: peer={:?} client_id={}",
                         endpoint,
@@ -4312,13 +4317,13 @@ impl<D: NetDevice> NetStack<D> {
                         AuthState::Attached,
                     );
                     self.session_state.logged_first_recv = true;
-                    log::info!(
+                    log::debug!(
                         "[cohsh-net] conn id={} echo mode enabled; bypassing auth",
                         client_id
                     );
                 } else {
                     self.server.begin_session(now_ms, Some(client_id));
-                    info!(
+                    debug!(
                         target: "net-console",
                         "[net-console] auth: waiting for handshake (client_id={})",
                         client_id
@@ -4328,7 +4333,7 @@ impl<D: NetDevice> NetStack<D> {
                         self.active_client_id,
                         AuthState::WaitingVersion,
                     );
-                    info!("[net-console] auth start client={}", client_id);
+                    debug!("[net-console] auth start client={}", client_id);
                     debug!(
                         "[net-console][auth] new connection client={} state={:?}",
                         client_id, self.auth_state
@@ -4356,7 +4361,7 @@ impl<D: NetDevice> NetStack<D> {
                         self.active_client_id,
                         AuthState::AuthRequested,
                     );
-                    info!(
+                    debug!(
                         "[net-console] auth: waiting for client credentials (client_id={})",
                         client_id
                     );
@@ -4454,15 +4459,11 @@ impl<D: NetDevice> NetStack<D> {
                             {
                                 let (peer_label, peer_port) =
                                     Self::peer_parts(self.peer_endpoint, socket);
-                                info!(
-                                    "[cohsh-net][auth] received candidate auth frame len={} from {}:{}",
+                                debug!(
+                                    "[cohsh-net][auth] received candidate auth frame len={} from {}:{} redacted=yes",
                                     copied,
                                     peer_label,
                                     peer_port
-                                );
-                                info!(
-                                    "[cohsh-net][auth] frame hex: {:02x?}",
-                                    &temp[..copied.min(32)]
                                 );
                             }
                             self.session_state.logged_first_recv = true;
@@ -4475,24 +4476,15 @@ impl<D: NetDevice> NetStack<D> {
                                         self.active_client_id,
                                         AuthState::Attached,
                                     );
-                                    let mut preview: HeaplessString<DEFAULT_LINE_CAPACITY> =
-                                        HeaplessString::new();
-                                    for &byte in &temp[..copied.min(preview.capacity())] {
-                                        if byte == b'\n' || byte == b'\r' {
-                                            break;
-                                        }
-                                        let _ = preview.push(byte as char);
-                                    }
-                                    info!(
+                                    debug!(
                                         target: "net-console",
-                                        "[net-console] recv line on TCP session {}: {}",
-                                        conn_id,
-                                        preview
+                                        "[net-console] auth accepted on TCP session {}",
+                                        conn_id
                                     );
-                                    info!(
-	                                        "[cohsh-net][auth] auth OK, session established (conn_id={})",
-	                                        conn_id
-	                                    );
+                                    debug!(
+                                        "[cohsh-net][auth] auth OK, session established (conn_id={})",
+                                        conn_id
+                                    );
                                     NET_DIAG.record_accept_success();
                                     self.counters.tcp_auth_sessions =
                                         self.counters.tcp_auth_sessions.saturating_add(1);
@@ -4627,7 +4619,7 @@ impl<D: NetDevice> NetStack<D> {
                         Err(err) => {
                             let reason = match err {
                                 TcpRecvError::Finished => {
-                                    info!(
+                                    debug!(
                                         "[net-console] TCP client #{} closed (clean shutdown)",
                                         self.active_client_id.unwrap_or(0)
                                     );
@@ -4670,7 +4662,7 @@ impl<D: NetDevice> NetStack<D> {
                                 Self::note_close_reason(&mut log_closed_conn, conn_id, reason);
                                 Self::note_close_reason(&mut record_closed_conn, conn_id, reason);
                             }
-                            info!(
+                            debug!(
                                 "[net-console] conn {}: bytes read={}, bytes written={}",
                                 self.active_client_id.unwrap_or(0),
                                 self.conn_bytes_read,
@@ -4843,7 +4835,7 @@ impl<D: NetDevice> NetStack<D> {
                     | TcpState::LastAck
                     | TcpState::TimeWait
             ) {
-                info!(
+                debug!(
                     "[net-console] TCP client #{} closing (state={:?})",
                     self.active_client_id.unwrap_or(0),
                     tcp_state
@@ -5082,7 +5074,7 @@ impl<D: NetDevice> NetStack<D> {
                             " queue={}/{} auth={:?}",
                             send_queue, send_capacity, auth_state
                         );
-                        crate::debug_uart::debug_uart_line(message.as_str());
+                        debug!("{}", message.as_str());
                         session_state.last_flush_log_ms = now_ms;
                         if preconnect {
                             session_state.flush_blocked_logged_preconnect = true;
@@ -5118,7 +5110,7 @@ impl<D: NetDevice> NetStack<D> {
             };
             let preconnect = !session_state.connect_reported;
             if Self::should_log_flush_blocked(session_state, blocked_snapshot, now_ms, preconnect) {
-                info!(
+                debug!(
                     target: "cohsh-net",
                     "[cohsh-net] flush_outbound blocked state={:?} auth_state={:?} queued={}",
                     socket.state(),
@@ -5139,7 +5131,7 @@ impl<D: NetDevice> NetStack<D> {
 
         session_state.last_blocked_snapshot = None;
         if state_changed || auth_changed {
-            info!(
+            debug!(
                 target: "cohsh-net",
                 "[cohsh-net] flush_outbound state={:?} auth_state={:?} queued={} can_send={}",
                 socket.state(),
@@ -5150,73 +5142,106 @@ impl<D: NetDevice> NetStack<D> {
             session_state.last_flush_log_ms = now_ms;
         }
         session_state.flush_blocked_since = None;
-        let mut sent_frames: u32 = 0;
-        let mut sent_bytes: usize = 0;
-        while let Some(line) = server.pop_outbound() {
-            if pre_auth && !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
-                server.push_outbound_front(line);
-                break;
-            }
-            if sent_frames >= MAX_CONSOLE_FRAMES_PER_POLL
-                || sent_bytes >= MAX_CONSOLE_BYTES_PER_POLL
-            {
-                server.push_outbound_front(line);
-                break;
-            }
-            let lane = if TcpConsoleServer::is_priority_line(line.as_str()) {
-                OutboundLane::Control
-            } else {
-                OutboundLane::Log
-            };
-            let mut frame: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 4 }> = HeaplessVec::new();
-            let total_len = line.len().saturating_add(4);
-            let total_len_u32 = match u32::try_from(total_len) {
-                Ok(value) => value,
-                Err(_) => {
+        if pre_auth {
+            let mut sent_frames: u32 = 0;
+            let mut sent_bytes: usize = 0;
+            while let Some(line) = server.pop_outbound() {
+                if !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
                     server.push_outbound_front(line);
                     break;
                 }
-            };
-            if frame
-                .extend_from_slice(&total_len_u32.to_le_bytes())
-                .is_err()
-                || frame.extend_from_slice(line.as_bytes()).is_err()
-            {
-                server.push_outbound_front(line);
-                break;
-            }
-            if sent_bytes.saturating_add(frame.len()) > MAX_CONSOLE_BYTES_PER_POLL {
-                server.push_outbound_front(line);
-                break;
-            }
-            match Self::send_payload(
-                server,
-                conn_bytes_written,
-                counters,
-                socket,
-                conn_id,
-                auth_state,
-                session_state,
-                now_ms,
-                frame.as_slice(),
-                lane,
-                pre_auth,
-            ) {
-                Ok(()) => {
-                    sent_frames = sent_frames.saturating_add(1);
-                    sent_bytes = sent_bytes.saturating_add(frame.len());
-                    activity = true;
-                }
-                Err(SendError::WouldBlock) => {
-                    telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
+                if sent_frames >= MAX_CONSOLE_FRAMES_PER_POLL
+                    || sent_bytes >= MAX_CONSOLE_BYTES_PER_POLL
+                {
                     server.push_outbound_front(line);
                     break;
                 }
-                Err(SendError::Fault) => {
+                let mut frame: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 4 }> = HeaplessVec::new();
+                let total_len = line.len().saturating_add(4);
+                let total_len_u32 = match u32::try_from(total_len) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        server.push_outbound_front(line);
+                        break;
+                    }
+                };
+                if frame
+                    .extend_from_slice(&total_len_u32.to_le_bytes())
+                    .is_err()
+                    || frame.extend_from_slice(line.as_bytes()).is_err()
+                {
                     server.push_outbound_front(line);
                     break;
                 }
+                if sent_bytes.saturating_add(frame.len()) > MAX_CONSOLE_BYTES_PER_POLL {
+                    server.push_outbound_front(line);
+                    break;
+                }
+                match Self::send_payload(
+                    server,
+                    conn_bytes_written,
+                    counters,
+                    socket,
+                    conn_id,
+                    auth_state,
+                    session_state,
+                    now_ms,
+                    frame.as_slice(),
+                    OutboundLane::Control,
+                    true,
+                ) {
+                    Ok(()) => {
+                        sent_frames = sent_frames.saturating_add(1);
+                        sent_bytes = sent_bytes.saturating_add(frame.len());
+                        activity = true;
+                    }
+                    Err(SendError::WouldBlock) => {
+                        telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
+                        server.push_outbound_front(line);
+                        break;
+                    }
+                    Err(SendError::Fault) => {
+                        server.push_outbound_front(line);
+                        break;
+                    }
+                }
             }
+        } else {
+            while let Some(line) = server.pop_outbound() {
+                let lane = if TcpConsoleServer::is_priority_line(line.as_str()) {
+                    OutboundLane::Control
+                } else {
+                    OutboundLane::Log
+                };
+                match lane {
+                    OutboundLane::Control => {
+                        if outbound.enqueue_control(line.as_bytes()).is_err() {
+                            server.push_outbound_front(line);
+                            break;
+                        }
+                    }
+                    OutboundLane::Log => outbound.enqueue_log(line.as_bytes()),
+                }
+            }
+            let outcome = outbound.flush(now_ms, |payload, lane| {
+                Self::send_payload(
+                    server,
+                    conn_bytes_written,
+                    counters,
+                    socket,
+                    conn_id,
+                    auth_state,
+                    session_state,
+                    now_ms,
+                    payload,
+                    lane,
+                    false,
+                )
+            });
+            if outcome.would_block {
+                telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
+            }
+            activity |= outcome.sent_frames > 0;
         }
         let stats = outbound.stats();
         NET_DIAG.update_outbound_stats(
@@ -5246,11 +5271,11 @@ impl<D: NetDevice> NetStack<D> {
         pre_auth: bool,
     ) -> Result<(), SendError> {
         if pre_auth && matches!(lane, OutboundLane::Control) {
-            info!(
+            debug!(
                 "[net-console] handshake: sending {}-byte response to client",
                 payload.len()
             );
-            info!(
+            debug!(
                 "[cohsh-net] send: auth response len={} role='AUTH'",
                 payload.len()
             );
@@ -5269,7 +5294,7 @@ impl<D: NetDevice> NetStack<D> {
                     socket.state(),
                     auth_state
                 );
-                crate::debug_uart::debug_uart_line(message.as_str());
+                debug!("{}", message.as_str());
             }
             return Err(SendError::WouldBlock);
         }
@@ -5286,7 +5311,7 @@ impl<D: NetDevice> NetStack<D> {
                 NET_DIAG.add_bytes_written(sent as u64);
                 counters.tcp_tx_bytes = counters.tcp_tx_bytes.saturating_add(sent as u64);
                 if !session_state.logged_first_send {
-                    info!(
+                    debug!(
                         target: "root_task::net",
                         "[tcp] first-send.ok bytes={sent}"
                     );
@@ -5301,7 +5326,7 @@ impl<D: NetDevice> NetStack<D> {
                 {
                     let tcp_state = socket.state();
                     let dump_len = payload.len().min(32);
-                    info!(
+                    debug!(
                         "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
                         sent,
                         tcp_state,
@@ -5310,13 +5335,13 @@ impl<D: NetDevice> NetStack<D> {
                     );
                 }
                 if pre_auth && matches!(lane, OutboundLane::Control) {
-                    info!(
+                    debug!(
                         "[net-console] conn {}: sent pre-auth payload len={} first_bytes={:02x?}",
                         conn_id,
                         payload.len(),
                         &payload[..core::cmp::min(payload.len(), 32)]
                     );
-                    info!(
+                    debug!(
                         "[net-console] auth response sent; session state = {:?}",
                         auth_state
                     );
@@ -5414,7 +5439,7 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn log_conn_summary(&self, conn_id: u64) {
-        info!(
+        debug!(
             "[net-console] conn {}: bytes read={}, bytes written={}",
             conn_id, self.conn_bytes_read, self.conn_bytes_written
         );
@@ -5720,70 +5745,70 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             if !self.selftest_console_loopback_enabled() {
                 self.self_test.console_probe_done = true;
                 self.self_test.console_ok = true;
-                info!(
+                debug!(
                     "[net-selftest] console listener selftest skipped reason=hardware-direct-link proof=remote-cohsh"
                 );
             }
             let udp_target = self.selftest_host_target(UDP_ECHO_PORT);
             let tcp_target = self.selftest_host_target(TCP_SMOKE_PORT);
-            info!(
+            debug!(
                 "[net-selftest] starting run (udp dst={} tcp dst={})",
                 udp_target.primary, tcp_target.primary
             );
             if udp_target.forwarded_hint || tcp_target.forwarded_hint {
-                info!(
+                debug!(
                     "[net-selftest] host capture (hostfwd/tunnel): tcpdump -i lo0 -n 'udp port {} or tcp port {}'",
                     UDP_ECHO_PORT, TCP_SMOKE_PORT
                 );
-                info!(
+                debug!(
                     "[net-selftest] host udp echo (hostfwd/tunnel): echo -n \"ping\" | nc -u -w1 {}",
                     udp_target.primary
                 );
-                info!(
+                debug!(
                     "[net-selftest] host tcp smoke (hostfwd/tunnel): printf \"hi\" | nc -v {}",
                     tcp_target.primary
                 );
-                info!(
+                debug!(
                     "[net-selftest] direct guest access requires bridge/tap networking; guest addr {}",
                     udp_target.direct
                 );
             } else if self.backend.uses_dev_virt_defaults() {
-                info!(
+                debug!(
                     "[net-selftest] host capture (qemu hostfwd): tcpdump -i lo0 -n 'udp port {} or tcp port {}'",
                     UDP_ECHO_PORT, TCP_SMOKE_PORT
                 );
-                info!(
+                debug!(
                     "[net-selftest] qemu user-net without hostfwd → add hostfwd=tcp::31338-:31338,hostfwd=tcp::31339-:31339 and use localhost",
                 );
-                info!(
+                debug!(
                     "[net-selftest] host udp echo (after hostfwd): echo -n \"ping\" | nc -u -w1 {}",
                     udp_target.loopback
                 );
-                info!(
+                debug!(
                     "[net-selftest] host tcp smoke (after hostfwd): printf \"hi\" | nc -v {}",
                     tcp_target.loopback
                 );
-                info!(
+                debug!(
                     "[net-selftest] direct guest address {} requires bridge/tap networking; skip on slirp",
                     udp_target.direct
                 );
             } else {
-                info!(
+                debug!(
                     "[net-selftest] host capture (direct-link): tcpdump -ni <host-iface> 'arp or udp port {} or tcp port {}'",
                     UDP_ECHO_PORT, TCP_SMOKE_PORT
                 );
-                info!(
+                debug!(
                     "[net-selftest] static profile target udp={} tcp={}",
                     udp_target.primary, tcp_target.primary
                 );
-                info!(
+                debug!(
                     "[net-selftest] outbound gateway smoke is peer-assisted on direct hardware; remote cohsh plus netstats are authoritative"
                 );
-                info!(
+                debug!(
                     "[net-selftest] host udp echo: echo -n \"ping\" | nc -u -w1 {}",
                     udp_target.primary
                 );
-                info!(
+                debug!(
                     "[net-selftest] host tcp smoke: printf \"hi\" | nc -v {}",
                     tcp_target.primary
                 );

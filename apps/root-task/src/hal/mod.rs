@@ -54,6 +54,47 @@ pub trait Timebase {
     fn now_ms(&self) -> u64;
 }
 
+/// Independent hardware-service classes scheduled by the root event pump.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum HardwareServiceClass {
+    /// Physical keyboard/display progress must preempt throughput services.
+    LocalSeat,
+    /// Network RX/TX service for GENET, CYW43 Wi-Fi, and virtual NICs.
+    Network,
+    /// Future filesystem or block-device request/completion service.
+    BlockIo,
+    /// Serial/TCP console output flushing.
+    ConsoleOutput,
+}
+
+/// Bounded per-turn service budget for a hardware class.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct HardwareServiceBudget {
+    /// Maximum operations/polls/completions to service in one cooperative turn.
+    pub max_ops: usize,
+    /// Maximum payload bytes to move in one cooperative turn.
+    pub max_bytes: usize,
+}
+
+impl HardwareServiceBudget {
+    /// Construct a hardware service budget.
+    #[must_use]
+    pub const fn new(max_ops: usize, max_bytes: usize) -> Self {
+        Self { max_ops, max_bytes }
+    }
+}
+
+/// Per-turn runtime budget for Pi 4 hardware-service classes.
+#[must_use]
+pub const fn runtime_service_budget(class: HardwareServiceClass) -> HardwareServiceBudget {
+    match class {
+        HardwareServiceClass::LocalSeat => HardwareServiceBudget::new(16, 512),
+        HardwareServiceClass::Network => HardwareServiceBudget::new(16, 16 * 1024),
+        HardwareServiceClass::BlockIo => HardwareServiceBudget::new(4, 16 * 1024),
+        HardwareServiceClass::ConsoleOutput => HardwareServiceBudget::new(8, 8 * 1024),
+    }
+}
+
 /// Supported SDIO bus widths for the Pi 4 Wi-Fi transport.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum SdioBusWidth {
@@ -1584,7 +1625,10 @@ impl<'a> Cyw43Hal for KernelHal<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SdioBusWidth, SdioFunction, WifiFirmwareBundle};
+    use super::{
+        runtime_service_budget, HardwareServiceClass, SdioBusWidth, SdioFunction,
+        WifiFirmwareBundle,
+    };
 
     #[cfg(feature = "kernel")]
     use super::{irq_notification_badge, Irq, IrqTrigger};
@@ -1628,6 +1672,22 @@ mod tests {
         assert_eq!(SdioFunction::Function0.number(), 0);
         assert_eq!(SdioFunction::Function1.number(), 1);
         assert_eq!(SdioFunction::Function2.number(), 2);
+    }
+
+    #[test]
+    fn runtime_service_budgets_are_independent_and_bounded() {
+        let local = runtime_service_budget(HardwareServiceClass::LocalSeat);
+        let network = runtime_service_budget(HardwareServiceClass::Network);
+        let block = runtime_service_budget(HardwareServiceClass::BlockIo);
+        let console = runtime_service_budget(HardwareServiceClass::ConsoleOutput);
+
+        assert!(local.max_ops > 0);
+        assert!(network.max_ops > 0);
+        assert!(block.max_ops > 0);
+        assert!(console.max_ops > 0);
+        assert!(block.max_ops <= network.max_ops);
+        assert!(block.max_bytes <= network.max_bytes);
+        assert!(console.max_bytes <= network.max_bytes);
     }
 
     #[test]

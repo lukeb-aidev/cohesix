@@ -200,9 +200,11 @@ Start QEMU (source tree or bundle), then verify:
 Run while QEMU is up:
 - Repeat `tcp-diag` 5–10 times and record results (example: `... | tee logs/tcp-diag.log`).
 - Run `pool bench path=/log/queen.log ops=500 batch=8 payload_bytes=64` and record throughput/latency (example: `... | tee logs/pool-bench.log`).
+- For 26a/26b performance gates, run `scripts/rest_perf_harness.py` through `hive-gateway` with configured request auth and bounded control/telemetry pools. The gateway is the operator-facing console owner; benchmark clients use REST or the harness gateway mode rather than competing direct TCP owners.
 - Reasonable acceptance:
   - `tcp-diag` has zero failures.
   - `pool bench` shows non-zero throughput and stable latency.
+  - Gateway-backed performance runs report distinct failures for TCP auth rejection, gateway queueing, policy denial, backend timeout, and error-budget exhaustion.
   - Any performance regression claim must be backed by committed baseline artifacts under `docs/bench/` (and indexed in `docs/BENCHMARKS.md` when applicable); do not compare against unpublished local runs.
 - Capture logs:
   - cohsh: `logs/cohsh-session.log`
@@ -331,7 +333,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
     - `journalctl -u hive-gateway -n 200 --no-pager | rg -n "reconnect|connected|disconnected"`
     - Re-run: `curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .`
   - `sudo systemctl stop hive-gateway`
-- Multiplexer regression (REST gateway, QEMU running; `hive-gateway` is the sole console client):
+- Multiplexer regression (REST gateway, QEMU running; `hive-gateway` is the operator-facing console owner and any internal pool remains bounded by gateway configuration):
   - REST API smoke (manifest + namespace + log tail):
     - `curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .`
     - `curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/' | jq .`

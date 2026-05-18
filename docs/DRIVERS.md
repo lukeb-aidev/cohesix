@@ -16,6 +16,8 @@ evidence ladder:
 6. Add DMA only after cache, address, and ownership rules are explicit.
 7. Bind the device into Cohesix semantics only after the hardware contract is
    stable.
+8. Promote into a HAL reactor/event service only after polled ownership, DMA,
+   cache, interrupt-source clearing, and queue/backpressure counters are stable.
 
 Do not start at the full driver. Do not debug protocol behavior until the
 seL4 resource path, MMIO mapping, IRQ line, DMA range, and reset/power state
@@ -740,14 +742,16 @@ power/reset state.
   root-task performs bounded pre-root host-EAPOL burst polls, then post-root
   runtime polling yields after one Wi-Fi poll per event turn. Serial RX is
   sampled, but local-seat USB keyboard input is drained before serial command
-  dispatch; if keyboard bytes were consumed in a turn, runtime work and serial
-  command dispatch wait for the next turn. When local-seat is active, serial
+  dispatch; if keyboard bytes were consumed before runtime, runtime work and
+  serial command dispatch wait for the next turn. If USB bytes arrive during a
+  ready network poll, the event pump drains them before network-console command
+  dispatch, IPC, or stream flushing continue. When local-seat is active, serial
   input dispatch is capped to one complete command line per pump turn, and
   serial-origin output is staged in small cooperative chunks instead of holding
   the UART in a blocking write across a whole line. The event pump settles
   across bounded idle HID polls, and HDMI echoes accepted USB keyboard bytes
   immediately at parser ingress. HID polling drains a burst of interrupt-IN
-  reports in one pass and keeps 32 keyboard interrupt-IN reads armed on the
+  reports in one pass and keeps 128 keyboard interrupt-IN reads armed on the
   poll-only Pi 4 path, so press/release/next-key sequences can complete while
   console output, HDMI echo, or bounded Wi-Fi diagnostics are in progress.
   `usb status` exposes low-volume keyboard capture counters for HID
@@ -786,7 +790,16 @@ power/reset state.
   still a complete SDPCM subframe. Pi 4 control-plane startup keeps Linux's
   `bus:rxglom=1` state through event-mask and `WLC_UP`; runtime RX recovery is
   responsible for dropping or clearing oversized aggregated frames without
-  changing the startup iovar order.
+  changing the startup iovar order. The steady-state RX path drains a bounded
+  post-data burst into the same ready queue used for glom subframes, so a busy
+  firmware queue does not require one root-event-loop turn per Wi-Fi frame. The
+  Pi 4 SDHCI PIO path also drains one ready host block window before rechecking
+  `PRESENT_STATE`, avoiding per-word MMIO polling during 512-byte Function 2
+  data windows while retaining block-boundary backpressure. Once the authenticated
+  interface is ready and local-seat input is idle, the network service slice may
+  perform 16 bounded polls and flush up to 16 KiB of outbound console/REST
+  payloads per cooperative turn. Queued data observed before host-EAPOL secure
+  completion is dropped instead of replayed after the data admission boundary.
 - Repeated CYW43 runtime RX errors have a generic UART warning budget in
   addition to the tighter oversize/glom budget. The first few occurrences stay
   visible for diagnosis; repeats fall to trace-level output so malformed traffic
@@ -1209,6 +1222,31 @@ Examples:
 - SDIO Wi-Fi: enumerate card, prove CCCR/FBR values, prove Function 1 register
   windowing, and stop before Function 2 traffic until firmware gate evidence is
   valid.
+
+### 8. HAL Reactor Promotion
+
+Promotion from polled bring-up into high-throughput service is a separate proof
+step. The driver must already have stable HAL-owned DMA, cache maintenance,
+device-clear ordering, and bounded queue diagnostics before it can claim a
+reactor/event-service contract. GENET, CYW43/SDIO, USB, and future block IO must
+use independent service budgets so one busy subsystem cannot monopolize the root
+event loop or hide backpressure from diagnostics.
+
+For GENET this means batched RX/TX completion and replenish work with explicit
+ring-pressure/drop/reclaim counters. RX and TX frame buffers should stay
+DMA-pinned for device lifetime when the HAL cache contract permits it; per-frame
+work is limited to CPU/device cache synchronization and descriptor ownership
+updates, with final unpin during teardown. For CYW43/SDIO it means keeping long
+association/control-plane retries separate from steady-state SDPCM/RX/TX service,
+draining bounded post-data RX bursts into the ready queue, aligning outbound
+flush capacity with the 16-op/16-KiB network budget, and using block-sized SDHCI
+PIO bursts instead of per-word `PRESENT_STATE` polling before returning to the
+cooperative event loop. For USB it means preserving the existing proof gates while moving
+runtime keyboard progress toward event-ring readiness only after the xHCI
+interrupt path is separately proven. For future block IO it means HAL-owned
+request/completion queues that use the shared HAL hardware-service budget and
+therefore cannot receive a larger cooperative slice than network service;
+Milestone 26b does not introduce a filesystem or storage protocol.
 - xHCI: prove live PCI config/BAR/COMMAND and a no-touch ownership verdict
   before any ring or RUN writes.
 

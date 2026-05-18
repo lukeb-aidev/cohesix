@@ -14,8 +14,8 @@ use crate::debug::maybe_report_str_write;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
 pub const MAX_PAYLOAD: usize = 1200;
-const MAX_FRAMES_PER_POLL: usize = 8;
-const MAX_BYTES_PER_POLL: usize = 8_192;
+const MAX_FRAMES_PER_POLL: usize = 16;
+const MAX_BYTES_PER_POLL: usize = 16 * 1024;
 const LOG_Q_CAP: usize = 192;
 const CTRL_Q_CAP: usize = 48;
 const LINE_CAP: usize = DEFAULT_LINE_CAPACITY;
@@ -635,6 +635,13 @@ mod tests {
             8u8, 0, 0, 0, b'l', b'i', b'n', b'e', 8u8, 0, 0, 0, b'l', b'i', b'n', b'e',
         ];
         assert_eq!(payload_seen[0].as_slice(), expected);
+    }
+
+    #[test]
+    fn flush_budget_matches_network_service_slice() {
+        let network = crate::hal::runtime_service_budget(crate::hal::HardwareServiceClass::Network);
+        assert_eq!(MAX_FRAMES_PER_POLL, network.max_ops);
+        assert_eq!(MAX_BYTES_PER_POLL, network.max_bytes);
     }
 
     #[test]

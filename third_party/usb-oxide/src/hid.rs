@@ -36,7 +36,7 @@ const UBOOT_BOOT_KEYBOARD_IDLE_DURATION: u8 = 10;
 const BOOT_KEYBOARD_REPORT_LEN: usize = core::mem::size_of::<KeyboardReport>();
 const FLEXIBLE_KEYBOARD_REPORT_MIN_LEN: usize = 4;
 const HID_LED_CONTROL_WAIT_SPINS: usize = 2_000_000;
-const HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH: usize = 32;
+const HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH: usize = 128;
 const HID_DEFAULT_INTERRUPT_READ_QUEUE_DEPTH: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1852,10 +1852,10 @@ mod tests {
             HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH
         );
         // Low-speed boot keyboards can only report state at the endpoint
-        // interval. Cohesix polls from seL4 userland, so keep enough interrupt
-        // reads armed to cover brief HDMI/serial/WiFi stalls without losing
-        // press/release edges before local-seat can drain them.
-        assert!(HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH >= 32);
+        // interval. Cohesix polls from seL4 userland, so keep about a second of
+        // interrupt reads armed to cover HDMI/serial/WiFi runtime stalls without
+        // losing press/release edges before local-seat can drain them.
+        assert!(HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH >= 128);
         assert_eq!(interrupt_read_queue_depth(HidType::Mouse), 1);
         assert_eq!(interrupt_read_queue_depth(HidType::Other), 1);
     }

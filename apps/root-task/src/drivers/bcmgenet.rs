@@ -1123,19 +1123,6 @@ impl BcmGenetDevice {
             return;
         } else {
             let prev_complete = self.counters.tx_complete;
-            for completed_offset in 0..completed as usize {
-                let slot = ring_slot(
-                    self.tx_cons_index.wrapping_add(completed_offset as u16),
-                    ring_len,
-                );
-                if !self.unshare_tx_slot(slot) {
-                    self.counters.tx_invalid_used_state =
-                        self.counters.tx_invalid_used_state.saturating_add(1);
-                    self.log_dma_breadcrumb(BreadcrumbReason::TxReclaimFailed);
-                    self.refresh_tx_counters();
-                    return;
-                }
-            }
             self.counters.tx_used_advances = self
                 .counters
                 .tx_used_advances
@@ -1240,26 +1227,52 @@ impl BcmGenetDevice {
         Ok(())
     }
 
-    fn rearm_rx_slot(&mut self, slot: usize) {
-        if !self.unshare_rx_slot(slot) {
-            self.log_dma_breadcrumb(BreadcrumbReason::RxReclaimFailed);
-            return;
+    fn sync_dma_for_device(
+        &self,
+        vaddr: usize,
+        paddr: usize,
+        len: usize,
+        label: &'static str,
+    ) -> Result<(), DriverError> {
+        if len == 0 {
+            return Ok(());
         }
+        compiler_fence(Ordering::Release);
+        if let Err(err) = dma::sync_for_device(vaddr, paddr, len, label) {
+            warn!(
+                "[bcmgenet] DMA device sync failed label={label} vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} len={len} err={err:?}"
+            );
+            return Err(DriverError::QueueInit);
+        }
+        Ok(())
+    }
+
+    fn rearm_rx_slot(&mut self, slot: usize) {
         let Some(frame) = self.rx_frames.get(slot) else {
             return;
         };
         let frame_ptr = frame.ptr().as_ptr() as usize;
         let frame_paddr = frame.paddr();
-        let Ok(range) =
-            self.share_dma_for_device(frame_ptr, frame_paddr, RX_BUF_LENGTH, "bcmgenet-rx-rearm")
-        else {
-            return;
-        };
-        let Some(share) = self.rx_dma_shares.get_mut(slot) else {
-            Self::unshare_dma_range(&range);
-            return;
-        };
-        *share = Some(range);
+        let share_missing = self
+            .rx_dma_shares
+            .get(slot)
+            .map(Option::is_none)
+            .unwrap_or(false);
+        if share_missing {
+            let Ok(range) = self.share_dma_for_device(
+                frame_ptr,
+                frame_paddr,
+                RX_BUF_LENGTH,
+                "bcmgenet-rx-rearm",
+            ) else {
+                return;
+            };
+            let Some(share) = self.rx_dma_shares.get_mut(slot) else {
+                Self::unshare_dma_range(&range);
+                return;
+            };
+            *share = Some(range);
+        }
         let frame_dma = genet_hal::dma_bus_addr(frame_paddr as u64);
         self.write_rx_desc(slot, frame_dma, rx_owned_len_status());
     }
@@ -1300,14 +1313,6 @@ impl BcmGenetDevice {
         }
 
         let slot = ring_slot(self.tx_prod_index, self.tx_ring_len());
-        if !self.unshare_tx_slot(slot) {
-            self.tx_drops = self.tx_drops.saturating_add(1);
-            self.counters.tx_invalid_used_state =
-                self.counters.tx_invalid_used_state.saturating_add(1);
-            self.log_dma_breadcrumb(BreadcrumbReason::TxReclaimFailed);
-            self.refresh_tx_counters();
-            return Err(DriverError::QueueInit);
-        }
         let (frame_ptr, frame_paddr) = {
             let frame = self.tx_frames.get_mut(slot).ok_or(DriverError::QueueInit)?;
             let frame_ptr = frame.ptr().as_ptr() as usize;
@@ -1361,16 +1366,6 @@ impl BcmGenetDevice {
         }
 
         let slot = ring_slot(self.tx_prod_index, self.tx_ring_len());
-        if !self.unshare_tx_slot(slot) {
-            let mut temp = [0u8; MAX_FRAME_LEN];
-            let result = f(&mut temp[..len]);
-            self.tx_drops = self.tx_drops.saturating_add(1);
-            self.counters.tx_invalid_used_state =
-                self.counters.tx_invalid_used_state.saturating_add(1);
-            self.log_dma_breadcrumb(BreadcrumbReason::TxReclaimFailed);
-            self.refresh_tx_counters();
-            return result;
-        }
         let first_len = len.min(8);
         let mut first = [0u8; 8];
         let Some(frame) = self.tx_frames.get_mut(slot) else {
@@ -1406,17 +1401,30 @@ impl BcmGenetDevice {
         packet_len: usize,
         first: &[u8],
     ) -> Result<(), DriverError> {
-        let range = self.share_dma_for_device(
+        let share_missing = self
+            .tx_dma_shares
+            .get(slot)
+            .map(Option::is_none)
+            .unwrap_or(true);
+        if share_missing {
+            let range = self.share_dma_for_device(
+                frame_ptr,
+                frame_paddr as usize,
+                RX_BUF_LENGTH,
+                "bcmgenet-tx-submit",
+            )?;
+            let Some(share) = self.tx_dma_shares.get_mut(slot) else {
+                Self::unshare_dma_range(&range);
+                return Err(DriverError::QueueInit);
+            };
+            *share = Some(range);
+        }
+        self.sync_dma_for_device(
             frame_ptr,
             frame_paddr as usize,
             packet_len,
             "bcmgenet-tx-submit",
         )?;
-        let Some(share) = self.tx_dma_shares.get_mut(slot) else {
-            Self::unshare_dma_range(&range);
-            return Err(DriverError::QueueInit);
-        };
-        *share = Some(range);
 
         let frame_dma = genet_hal::dma_bus_addr(frame_paddr);
         self.write_tx_desc(slot, frame_dma, encode_tx_len_status(packet_len));
@@ -1508,10 +1516,6 @@ impl BcmGenetDevice {
                 }
             }
 
-            if !self.unshare_rx_slot(slot) {
-                self.log_dma_breadcrumb(BreadcrumbReason::RxReclaimFailed);
-                break;
-            }
             self.rearm_rx_slot(slot);
             self.advance_rx_consumer();
             self.counters.rx_used_advances = self.counters.rx_used_advances.saturating_add(1);

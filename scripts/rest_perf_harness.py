@@ -123,6 +123,10 @@ class RestError(RuntimeError):
         self.response = response
 
 
+class TcpAuthRejected(RuntimeError):
+    """TCP console explicitly rejected the benchmark auth preflight."""
+
+
 @dataclass
 class RunLogger:
     """Simple run logger that writes to a timestamped file."""
@@ -363,6 +367,10 @@ class RestClient:
             raise RestError(f"HTTP {exc.code} {exc.reason} for {url}") from exc
         except urllib.error.URLError as exc:
             raise RestError(f"URL error for {url}: {exc}") from exc
+        except TimeoutError as exc:
+            raise RestError(f"Timeout for {url}: {exc}") from exc
+        except OSError as exc:
+            raise RestError(f"Socket error for {url}: {exc}") from exc
 
     def post_json(self, path: str, payload: dict) -> dict:
         url = self._build_url(path, None)
@@ -378,6 +386,10 @@ class RestClient:
             raise RestError(f"HTTP {exc.code} {exc.reason} for {url}") from exc
         except urllib.error.URLError as exc:
             raise RestError(f"URL error for {url}: {exc}") from exc
+        except TimeoutError as exc:
+            raise RestError(f"Timeout for {url}: {exc}") from exc
+        except OSError as exc:
+            raise RestError(f"Socket error for {url}: {exc}") from exc
         return json.loads(payload)
 
     def ls(self, path: str) -> GatewayResponse:
@@ -485,6 +497,29 @@ def list_workers(client: RestClient) -> List[str]:
             response,
         )
     return [line.strip() for line in response.lines if line.strip()]
+
+
+def list_workers_with_retry(
+    client: RestClient,
+    state: Optional[SimState],
+    timeout_s: float,
+) -> List[str]:
+    """Fetch worker IDs while tolerating transient gateway/backend stalls."""
+    workers: List[str] = []
+
+    def load() -> None:
+        nonlocal workers
+        workers = list_workers(client)
+
+    run_with_retry_policy(
+        load,
+        state,
+        timeout_s=timeout_s,
+        label="list workers",
+        base_sleep=0.2,
+        max_sleep=1.0,
+    )
+    return workers
 
 
 def parse_worker_seq(worker_id: str) -> Optional[int]:
@@ -1266,6 +1301,17 @@ def wait_for_port(host: str, port: int, timeout_s: float) -> None:
     raise TimeoutError(f"Timeout waiting for {host}:{port}")
 
 
+def recv_exact(sock: socket.socket, size: int, label: str) -> bytes:
+    """Receive exactly ``size`` bytes or raise a retryable timeout."""
+    payload = bytearray()
+    while len(payload) < size:
+        chunk = sock.recv(size - len(payload))
+        if not chunk:
+            raise TimeoutError(f"short {label}")
+        payload.extend(chunk)
+    return bytes(payload)
+
+
 def validate_tcp_auth(host: str, port: int, token: str, timeout_s: float) -> None:
     """Validate raw TCP auth handshake against the VM console."""
     token = token.strip()
@@ -1274,31 +1320,51 @@ def validate_tcp_auth(host: str, port: int, token: str, timeout_s: float) -> Non
     payload = f"AUTH {token}".encode("utf-8")
     frame = (len(payload) + 4).to_bytes(4, "little") + payload
     deadline = time.time() + timeout_s
+    attempts = 0
+    last_error: Optional[Exception] = None
     while time.time() < deadline:
+        attempts += 1
+        remaining_deadline = max(0.1, deadline - time.time())
+        connect_timeout = min(2.0, remaining_deadline)
+        read_timeout = min(3.0, remaining_deadline)
         try:
-            with socket.create_connection((host, port), timeout=1.0) as sock:
-                sock.settimeout(1.5)
+            with socket.create_connection(
+                (host, port),
+                timeout=connect_timeout,
+            ) as sock:
+                sock.settimeout(read_timeout)
                 sock.sendall(frame)
-                header = sock.recv(4)
-                if len(header) != 4:
-                    raise TimeoutError("short auth frame header")
+                header = recv_exact(sock, 4, "auth frame header")
                 total = int.from_bytes(header, "little")
                 if total < 4 or total > 8192:
                     raise TimeoutError(f"invalid auth frame size {total}")
                 remaining = total - 4
-                payload_bytes = b""
-                while len(payload_bytes) < remaining:
-                    part = sock.recv(remaining - len(payload_bytes))
-                    if not part:
-                        break
-                    payload_bytes += part
+                payload_bytes = recv_exact(sock, remaining, "auth frame payload")
                 text = payload_bytes.decode("utf-8", errors="ignore")
-                if "OK AUTH" in text or "ERR AUTH" in text:
+                if "OK AUTH" in text:
                     return
-        except OSError:
-            pass
-        time.sleep(0.4)
-    raise TimeoutError(f"TCP auth handshake did not succeed for {host}:{port}")
+                if "ERR AUTH" in text:
+                    raise TcpAuthRejected(
+                        f"TCP auth handshake rejected by {host}:{port}: {text}"
+                    )
+                raise TimeoutError("unexpected TCP auth response")
+        except TcpAuthRejected:
+            raise
+        except (OSError, TimeoutError) as exc:
+            last_error = exc
+        sleep_s = min(0.4, max(0.0, deadline - time.time()))
+        if sleep_s > 0:
+            time.sleep(sleep_s)
+    detail = f": {last_error}" if last_error is not None else ""
+    raise TimeoutError(
+        f"TCP auth handshake did not succeed for {host}:{port} "
+        f"after {attempts} attempts{detail}"
+    )
+
+
+def wait_for_tcp_auth(host: str, port: int, token: str, timeout_s: float) -> None:
+    """Wait for the TCP console and validate auth without consuming a probe socket."""
+    validate_tcp_auth(host, port, token, timeout_s)
 
 
 def wait_for_gateway(client: RestClient, timeout_s: float) -> dict:
@@ -2295,8 +2361,9 @@ def ensure_workers(
     client: RestClient,
     state: SimState,
     target: int,
+    timeout_s: float,
 ) -> Tuple[List[str], List[str]]:
-    current = list_workers(client)
+    current = list_workers_with_retry(client, state, timeout_s)
     seed_next_worker_seq(state, current)
     spawned: List[str] = []
     while len(current) < target:
@@ -2382,8 +2449,7 @@ def run_simulation(args: argparse.Namespace) -> int:
             env = os.environ.copy()
             env["COHESIX_QEMU_SMP_TOPO"] = args.qemu_smp
             qemu_proc = launch_process([qemu_run], env, args.qemu_log)
-            wait_for_port(args.tcp_host, args.tcp_port, args.ready_timeout_secs)
-            validate_tcp_auth(
+            wait_for_tcp_auth(
                 args.tcp_host,
                 args.tcp_port,
                 args.auth_token,
@@ -2396,8 +2462,7 @@ def run_simulation(args: argparse.Namespace) -> int:
                     "using external gateway; skipping direct TCP auth preflight",
                 )
             else:
-                wait_for_port(args.tcp_host, args.tcp_port, args.ready_timeout_secs)
-                validate_tcp_auth(
+                wait_for_tcp_auth(
                     args.tcp_host,
                     args.tcp_port,
                     args.auth_token,
@@ -2497,7 +2562,12 @@ def run_simulation(args: argparse.Namespace) -> int:
             telemetry_reference_chunk_bytes=args.telemetry_reference_chunk_bytes,
         )
 
-        worker_ids, spawned = ensure_workers(client, state, args.workers_min)
+        worker_ids, spawned = ensure_workers(
+            client,
+            state,
+            args.workers_min,
+            args.ready_timeout_secs,
+        )
 
         operations = build_operations(
             bounds,

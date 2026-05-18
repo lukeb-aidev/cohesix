@@ -109,8 +109,6 @@ use crate::bootstrap::log as boot_log;
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "kernel")]
-use crate::debug_uart::debug_uart_str;
-#[cfg(feature = "kernel")]
 use crate::hal::{
     SdioBusWidth, WifiControlPlaneTrace, WifiDebugOps, WifiDebugSnapshot,
     WifiFirmwareContractTrace, WifiPowerState, WifiResetState, WifiSdhciContractTrace,
@@ -141,9 +139,6 @@ use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPA
 use crate::trace::{RateLimitKey, RateLimiter};
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_CPtr;
-
-#[cfg(not(feature = "kernel"))]
-fn debug_uart_str(_message: &str) {}
 
 fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
     let mut buf = HeaplessString::new();
@@ -210,6 +205,9 @@ const NET_DIAG_STUCK_MS: u64 = 3_000;
 const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 #[cfg(feature = "net-console")]
 const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 0;
+#[cfg(feature = "net-console")]
+const READY_NET_RUNTIME_BURST_POLLS: usize =
+    crate::hal::runtime_service_budget(crate::hal::HardwareServiceClass::Network).max_ops;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 16;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 4;
 const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 2;
@@ -1366,11 +1364,12 @@ where
         }
         let serial_input = self.consume_serial();
         self.serial.flush_tx();
-        self.poll_runtime(false, serial_rx_activity || serial_input || local_input);
+        let runtime_local_input =
+            self.poll_runtime(false, serial_rx_activity || serial_input || local_input);
         self.serial.poll_io();
         let post_runtime_local_input =
             self.consume_local_seat(LocalSeatConsumePhase::PostRuntime, false);
-        if !local_input && !post_runtime_local_input && !serial_input {
+        if !local_input && !runtime_local_input && !post_runtime_local_input && !serial_input {
             self.consume_serial();
         }
         self.serial.flush_tx();
@@ -1380,10 +1379,10 @@ where
     /// Execute the pre-root network/timer portion of the pump without accepting
     /// console input.
     pub fn poll_pre_root_network(&mut self) {
-        self.poll_runtime(true, false);
+        let _ = self.poll_runtime(true, false);
     }
 
-    fn poll_runtime(&mut self, suppress_console_input: bool, physical_input_active: bool) {
+    fn poll_runtime(&mut self, suppress_console_input: bool, physical_input_active: bool) -> bool {
         #[cfg(not(feature = "net-console"))]
         let _ = suppress_console_input;
         #[cfg(not(feature = "net-console"))]
@@ -1424,41 +1423,59 @@ where
             if !yield_for_physical_input {
                 activity = net.poll(self.now_ms);
             }
+            let status_after_first_poll = net.status_report();
             let host_eapol_pending = if yield_for_physical_input {
                 host_eapol_pending_before
             } else {
-                net_status_needs_host_eapol_burst(&net.status_report())
+                net_status_needs_host_eapol_burst(&status_after_first_poll)
             };
-            let burst_limit = if host_eapol_pending && !yield_for_physical_input {
+            let local_seat_bytes_queued = self
+                .local_seat
+                .as_ref()
+                .map(|runtime| runtime.keyboard_trace().queued_bytes > 0)
+                .unwrap_or(false);
+            let burst_requires_host_eapol = host_eapol_pending && !yield_for_physical_input;
+            let burst_limit = if burst_requires_host_eapol {
                 if suppress_console_input {
                     WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS
                 } else {
                     WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS
                 }
+            } else if !suppress_console_input
+                && !physical_input_active
+                && !local_seat_bytes_queued
+                && net_status_allows_root_console(&status_after_first_poll)
+            {
+                READY_NET_RUNTIME_BURST_POLLS.saturating_sub(1)
             } else {
                 0
             };
             for _ in 0..burst_limit {
-                if !net_status_needs_host_eapol_burst(&net.status_report()) {
+                if burst_requires_host_eapol
+                    && !net_status_needs_host_eapol_burst(&net.status_report())
+                {
                     break;
                 }
                 activity |= net.poll(self.now_ms);
             }
             let telemetry = net.telemetry();
             let conn_id = net.active_console_conn_id();
-            let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_QUEUE_DEPTH }> =
-                HeaplessVec::new();
-            net.drain_console_lines(self.now_ms, &mut |line| {
-                let _ = buffered.push(line);
-            });
-            let ingest_snapshot: IngestSnapshot = net.ingest_snapshot();
-            Some((activity, telemetry, buffered, conn_id, ingest_snapshot))
+            Some((activity, telemetry, conn_id))
         } else {
             None
         };
 
         #[cfg(feature = "net-console")]
-        if let Some((activity, telemetry, buffered, conn_id, _ingest_snapshot)) = net_poll {
+        if net_poll.is_some()
+            && !suppress_console_input
+            && self.consume_local_seat(LocalSeatConsumePhase::PostRuntime, false)
+        {
+            self.serial.flush_tx();
+            return true;
+        }
+
+        #[cfg(feature = "net-console")]
+        if let Some((activity, telemetry, conn_id)) = net_poll {
             self.net_conn_id = conn_id;
             if NET_DIAG_FEATURED {
                 self.log_net_diag(telemetry);
@@ -1468,6 +1485,15 @@ where
                     telemetry.link_up, telemetry.tx_drops
                 ));
                 self.audit.info(message.as_str());
+            }
+            let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_QUEUE_DEPTH }> =
+                HeaplessVec::new();
+            let mut _ingest_snapshot = IngestSnapshot::default();
+            if let Some(net) = self.net.as_mut() {
+                net.drain_console_lines(self.now_ms, &mut |line| {
+                    let _ = buffered.push(line);
+                });
+                _ingest_snapshot = net.ingest_snapshot();
             }
             for line in buffered {
                 if !suppress_console_input {
@@ -1486,6 +1512,7 @@ where
         self.drain_bootstrap_ipc();
         #[cfg(feature = "kernel")]
         self.flush_pending_stream();
+        false
     }
 
     #[cfg(feature = "net-console")]
@@ -1640,9 +1667,7 @@ where
     pub fn announce_console_ready(&mut self) {
         if self.ninedoor.is_some() {
             if crate::generated::hardware_config().local_seat.enabled {
-                boot_log::force_uart_line(
-                    "[trace] log channel remains UART during local-seat bring-up",
-                );
+                log::debug!(target: "event", "[trace] log channel remains UART during local-seat bring-up");
             } else {
                 boot_log::switch_logger_to_log_buffer();
             }
@@ -1685,10 +1710,10 @@ where
 
     /// Emit the interactive banner and initial prompt over the serial console.
     pub fn start_cli(&mut self) {
-        debug_uart_str("[dbg] console: root console task entry\n");
+        log::debug!(target: "console", "[dbg] console: root console task entry");
         #[cfg(feature = "kernel")]
         if let Some(context) = self.console_context {
-            log::info!(
+            log::debug!(
                 target: "root_task::console",
                 "[console] starting root shell ep=0x{ep:04x} uart=0x{uart:04x}",
                 ep = context.ep_slot,
@@ -1704,18 +1729,18 @@ where
                 "[net-console] authenticate using AUTH <role> <token> to receive console output",
             );
         }
-        debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
+        log::debug!(target: "console", "[dbg] console: writing 'cohesix>' prompt");
         self.emit_prompt();
         self.serial.poll_io();
         if !self.banner_emitted {
-            log::info!(target: "event", "[event] root console banner emitted");
+            log::debug!(target: "event", "[event] root console banner emitted");
             self.banner_emitted = true;
         }
     }
 
     /// Run the cooperative pump until shutdown.
     pub fn run(mut self) -> ! {
-        log::info!(
+        log::debug!(
             target: "event",
             "[event] pump starting: root_console={}, net_console_enabled={}, ninedoor_enabled={}",
             self.has_root_console(),
@@ -4846,7 +4871,7 @@ where
             net.drain_console_events(&mut |event| match event {
                 NetConsoleEvent::Connected { conn_id, peer } => match peer {
                     Some(remote) => {
-                        log::info!(
+                        log::debug!(
                             target: "net-console",
                             "[net-console] conn {}: tcp-established auth=pending from {}",
                             conn_id,
@@ -4854,7 +4879,7 @@ where
                         );
                     }
                     None => {
-                        log::info!(
+                        log::debug!(
                             target: "net-console",
                             "[net-console] conn {}: tcp-established auth=pending",
                             conn_id
@@ -4862,7 +4887,7 @@ where
                     }
                 },
                 NetConsoleEvent::Authenticated { conn_id } => {
-                    log::info!(
+                    log::debug!(
                         target: "net-console",
                         "[net-console] conn {}: authenticated",
                         conn_id
@@ -4874,7 +4899,7 @@ where
                     bytes_read,
                     bytes_written,
                 } => {
-                    log::info!(
+                    log::debug!(
                         target: "net-console",
                         "[net-console] conn {}: closed reason={} (bytes_read={}, bytes_written={})",
                         conn_id,
@@ -5097,6 +5122,13 @@ where
                             stats.tx_zero_len_attempt
                         ));
                         let line_five = format_message(format_args!(
+                            "netstats: tx_backpressure dup_publish={} dup_used={} invalid_used={} alloc_blocked={}",
+                            stats.tx_dup_publish_blocked,
+                            stats.tx_dup_used_ignored,
+                            stats.tx_invalid_used_state,
+                            stats.tx_alloc_blocked_inflight
+                        ));
+                        let line_six = format_message(format_args!(
                             "netstats: mode={} policy={} active={} standby={} addr_src={} ip={} gateway={} dhcp={}",
                             status.mode,
                             status.interface_policy,
@@ -5115,7 +5147,7 @@ where
                             stats.wifi_host_eapol_start,
                             stats.wifi_host_eapol_secure,
                         ));
-                        let line_six = format_message(format_args!(
+                        let line_seven = format_message(format_args!(
                             "netstatus: ip={} gateway={} src={} dhcp={}",
                             status.ip, status.gateway, status.address_source, status.dhcp_phase
                         ));
@@ -5133,8 +5165,9 @@ where
                         self.emit_console_line(line_three.as_str());
                         self.emit_console_line(line_four.as_str());
                         self.emit_console_line(line_five.as_str());
-                        self.emit_console_line(line_wifi.as_str());
                         self.emit_console_line(line_six.as_str());
+                        self.emit_console_line(line_wifi.as_str());
+                        self.emit_console_line(line_seven.as_str());
                         self.emit_console_line(status_line.as_str());
                         self.metrics.accepted_commands += 1;
                         self.emit_ack_ok(verb_label, None);
@@ -7931,6 +7964,44 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn local_seat_input_after_network_poll_preempts_network_console_dispatch() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        let mut line = HeaplessString::new();
+        line.push_str("ping").unwrap();
+        net.lines.push(ConsoleLine::new(line, 1)).unwrap();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.enqueue_keyboard_bytes(b"x");
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_local_seat(&mut local_seat);
+        let runtime_had_local_input = pump.poll_runtime(false, false);
+        let metrics = pump.metrics();
+
+        assert!(runtime_had_local_input);
+        assert_eq!(pump.local_line.as_str(), "x");
+        assert_eq!(metrics.local_seat_post_runtime_hits, 1);
+        drop(pump);
+        assert_eq!(net.polls, 1);
+        assert!(net.sent.is_empty());
+        assert_eq!(net.lines.len(), 1);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn host_eapol_required_does_not_delay_local_seat_echo() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
@@ -7990,6 +8061,47 @@ mod tests {
         drop(pump);
 
         assert_eq!(net.polls, 0);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn ready_network_uses_bounded_runtime_burst_when_idle() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.poll();
+        drop(pump);
+
+        assert_eq!(net.polls, READY_NET_RUNTIME_BURST_POLLS);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn runtime_service_budgets_keep_storage_from_starving_network_or_usb() {
+        let local = crate::hal::runtime_service_budget(crate::hal::HardwareServiceClass::LocalSeat);
+        let network = crate::hal::runtime_service_budget(crate::hal::HardwareServiceClass::Network);
+        let block = crate::hal::runtime_service_budget(crate::hal::HardwareServiceClass::BlockIo);
+
+        assert_eq!(READY_NET_RUNTIME_BURST_POLLS, network.max_ops);
+        assert!(local.max_ops >= LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD);
+        assert!(network.max_ops > 0);
+        assert!(block.max_ops > 0);
+        assert!(
+            block.max_ops <= network.max_ops,
+            "future block IO must not receive a larger cooperative slice than network"
+        );
+        assert!(
+            block.max_bytes <= network.max_bytes,
+            "future block IO must not monopolize the root event turn"
+        );
     }
 
     #[cfg(feature = "net-console")]
@@ -8180,6 +8292,12 @@ mod tests {
             ),
             "{rendered}"
         );
+        assert!(
+            rendered.contains(
+                "netstats: tx_backpressure dup_publish=0 dup_used=0 invalid_used=0 alloc_blocked=0"
+            ),
+            "{rendered}"
+        );
     }
 
     #[cfg(feature = "net-console")]
@@ -8211,6 +8329,10 @@ mod tests {
         net.counters.wifi_host_eapol_rx = 2;
         net.counters.wifi_host_eapol_start = 1;
         net.counters.wifi_host_eapol_secure = 1;
+        net.counters.tx_dup_publish_blocked = 3;
+        net.counters.tx_dup_used_ignored = 4;
+        net.counters.tx_invalid_used_state = 5;
+        net.counters.tx_alloc_blocked_inflight = 6;
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.session = Some(SessionRole::Queen);
         pump.serial_mut().driver_mut().push_rx(b"netstats\n");
@@ -8243,6 +8365,12 @@ mod tests {
         );
         assert!(
             rendered.contains("netstats: udp_rx=1 udp_tx=2 tcp_accepts=1 tcp_auth=1"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: tx_backpressure dup_publish=3 dup_used=4 invalid_used=5 alloc_blocked=6"
+            ),
             "{rendered}"
         );
     }

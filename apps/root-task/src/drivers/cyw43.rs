@@ -89,8 +89,10 @@ const HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS: usize =
 const HOST_EAPOL_WAIT_M1_STAGE: &str = "join-security-host-eapol-wait-m1";
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 64;
+const RX_POST_DATA_PREFETCH_LIMIT: usize = 32;
+const RX_POST_DATA_PREFETCH_IDLE_LIMIT: usize = 2;
 const RX_GLOM_SUBFRAME_CAP: usize = 64;
-const RX_GLOM_QUEUE_CAP: usize = 64;
+const RX_GLOM_QUEUE_CAP: usize = 128;
 const RX_GLOM_WARNING_LOG_LIMIT: u8 = 4;
 const RX_ERROR_WARNING_LOG_LIMIT: u8 = 8;
 const RX_OVERSIZE_WARNING_LOG_LIMIT: u8 = 4;
@@ -2854,6 +2856,23 @@ const fn yes_no(value: bool) -> &'static str {
         "yes"
     } else {
         "no"
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GlomQueuedDataAction {
+    Empty,
+    Pop,
+    DropPresecure,
+}
+
+const fn glom_queued_data_action(allow_data: bool, queued: usize) -> GlomQueuedDataAction {
+    if queued == 0 {
+        GlomQueuedDataAction::Empty
+    } else if allow_data {
+        GlomQueuedDataAction::Pop
+    } else {
+        GlomQueuedDataAction::DropPresecure
     }
 }
 
@@ -5860,7 +5879,7 @@ impl Cyw43NetDevice {
             }
             Err(err) => {
                 if glom_warning_budget_allows(&mut self.glom_warning_logs) {
-                    warn!(
+                    debug!(
                         "[cyw43] rx glom descriptor action=drop len={} err={err}",
                         header.packet_len,
                     );
@@ -6344,21 +6363,36 @@ impl Cyw43NetDevice {
             (!allow_data).then(crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart);
         let _wifi_log_uart_guard =
             (!allow_data).then(crate::bootstrap::log::suppress_uart_log_output);
-        if allow_data {
-            if let Some(frame) = self.glom_rx_ready.pop_front() {
+        match glom_queued_data_action(allow_data, self.glom_rx_ready.len()) {
+            GlomQueuedDataAction::Pop => {
+                let Some(frame) = self.glom_rx_ready.pop_front() else {
+                    return None;
+                };
                 self.rx_packets = self.rx_packets.saturating_add(1);
                 return Some(frame);
             }
-        } else if !self.glom_rx_ready.is_empty() {
-            trace!(
-                "[cyw43] rx glom queue action=hold reason=host-eapol-secure-pending queued={}",
-                self.glom_rx_ready.len(),
-            );
+            GlomQueuedDataAction::DropPresecure => {
+                let queued = self.glom_rx_ready.len();
+                self.glom_rx_ready.clear();
+                trace!(
+                    "[cyw43] rx glom queue action=drop reason=host-eapol-secure-pending queued={queued}",
+                );
+            }
+            GlomQueuedDataAction::Empty => {}
         }
         for _ in 0..RX_PUMP_LIMIT {
             match self.process_next_frame(allow_data) {
                 Ok(RxFrameResult::Data(frame)) if allow_data => {
                     self.rx_packets = self.rx_packets.saturating_add(1);
+                    let (prefetched, dropped) = self.prefetch_rx_after_first_data(allow_data);
+                    if prefetched != 0 || dropped != 0 {
+                        trace!(
+                            "[cyw43] rx steady-state prefetch queued={} dropped={} queue_depth={}",
+                            prefetched,
+                            dropped,
+                            self.glom_rx_ready.len(),
+                        );
+                    }
                     return Some(frame);
                 }
                 Ok(
@@ -6382,6 +6416,54 @@ impl Cyw43NetDevice {
             }
         }
         None
+    }
+
+    fn prefetch_rx_after_first_data(&mut self, allow_data: bool) -> (usize, usize) {
+        if !allow_data {
+            return (0, 0);
+        }
+
+        let mut queued = 0usize;
+        let mut dropped = 0usize;
+        let mut consecutive_empty = 0usize;
+        for _ in 0..RX_POST_DATA_PREFETCH_LIMIT {
+            if self.glom_rx_ready.len() >= RX_GLOM_QUEUE_CAP {
+                break;
+            }
+            match self.process_next_frame(allow_data) {
+                Ok(RxFrameResult::Data(frame)) => {
+                    consecutive_empty = 0;
+                    if self.glom_rx_ready.push_back(frame).is_ok() {
+                        queued = queued.saturating_add(1);
+                    } else {
+                        dropped = dropped.saturating_add(1);
+                        break;
+                    }
+                }
+                Ok(RxFrameResult::Control { .. } | RxFrameResult::Event(_)) => {
+                    consecutive_empty = 0;
+                }
+                Ok(RxFrameResult::None) => {
+                    consecutive_empty = consecutive_empty.saturating_add(1);
+                    if consecutive_empty >= RX_POST_DATA_PREFETCH_IDLE_LIMIT {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    if rx_error_warning_budget_allows(
+                        &mut self.rx_error_warning_logs,
+                        &mut self.rx_oversize_warning_logs,
+                        &err,
+                    ) {
+                        warn!("[cyw43] rx prefetch error: {err}");
+                    } else {
+                        trace!("[cyw43] rx prefetch error: {err}");
+                    }
+                    break;
+                }
+            }
+        }
+        (queued, dropped)
     }
 
     fn transmit(&mut self, packet: &[u8]) -> Result<SdpcmTxProof, DriverError> {
@@ -7281,7 +7363,7 @@ mod tests {
         firmware_mac_address_from_response, firmware_supplicant_disable_allows_failure,
         first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, glom_descriptor_subframe_len,
-        glom_subframe_end, glom_warning_budget_allows, has_sdpcm_credit,
+        glom_queued_data_action, glom_subframe_end, glom_warning_budget_allows, has_sdpcm_credit,
         host_eapol_association_event_label, host_eapol_deferred_poll_log_due,
         host_eapol_deferred_progress_error_is_transient, host_eapol_event_ap_mac_candidate,
         host_eapol_frame_proof, host_eapol_group_replay_counter_increases, host_eapol_key_body,
@@ -7326,7 +7408,7 @@ mod tests {
         write_sdpcm_control_tx_header, write_sdpcm_data_tx_header, write_wsec_key_payload,
         write_wsec_legacy_hex_pmk_payload, write_wsec_pmk_payload,
         wsec_pmk_error_allows_host_eapol_fallback, wsec_pmk_legacy_hex_fallback_allowed,
-        Cyw43Event, DeferredJoinState, DriverError, FirmwareSupplicantPath,
+        Cyw43Event, DeferredJoinState, DriverError, FirmwareSupplicantPath, GlomQueuedDataAction,
         HostEapolRxAdmissionMode, HostWpaState, Ioctl, JoinCompletionRule, JoinCompletionState,
         RxFrameResult, RxSdpcmHeader, SdpcmTxProof, WsecPmkKind, BCME_BADARG, BCME_UNSUPPORTED,
         BCMILCP_BCM_SUBTYPE_EVENT, BCMILCP_SUBTYPE_VENDOR_LONG, BDC_HEADER_LEN, BDC_VERSION,
@@ -7356,7 +7438,8 @@ mod tests {
         LINUX_EXT_JOIN_SCAN_OFFSET, LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN, PAE_GROUP_ADDR,
         POST_UP_EVENT_DRAIN_BUDGET, RX_ERROR_WARNING_LOG_LIMIT, RX_GLOM_QUEUE_CAP,
         RX_GLOM_SUBFRAME_CAP, RX_GLOM_WARNING_LOG_LIMIT, RX_OVERSIZE_WARNING_LOG_LIMIT,
-        RX_PUMP_LIMIT, SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
+        RX_POST_DATA_PREFETCH_IDLE_LIMIT, RX_POST_DATA_PREFETCH_LIMIT, RX_PUMP_LIMIT,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
         SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_DATA_TX_HEADER_LEN, SDPCM_DATA_TX_PADDING_LEN,
         SDPCM_DATA_TX_PAYLOAD_OFFSET, SDPCM_DATA_TX_SW_HEADER_OFFSET, SDPCM_HEADER_LEN,
         STATUS_ABORT, STATUS_FAIL, STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED,
@@ -9202,10 +9285,23 @@ mod tests {
     fn pi4_wifi_runtime_buffers_match_large_board_profile() {
         assert_eq!(FRAME_BUF_LEN, 4160);
         assert_eq!(RX_PUMP_LIMIT, 64);
+        assert_eq!(RX_POST_DATA_PREFETCH_LIMIT, 32);
+        assert_eq!(RX_POST_DATA_PREFETCH_IDLE_LIMIT, 2);
         assert_eq!(RX_GLOM_SUBFRAME_CAP, 64);
-        assert_eq!(RX_GLOM_QUEUE_CAP, 64);
+        assert_eq!(RX_GLOM_QUEUE_CAP, 128);
         assert_eq!(POST_UP_EVENT_DRAIN_BUDGET, 64);
-        assert!(RX_GLOM_QUEUE_CAP * MAX_FRAME_LEN >= 96 * 1024);
+        assert!(RX_POST_DATA_PREFETCH_LIMIT <= RX_PUMP_LIMIT);
+        assert!(RX_GLOM_QUEUE_CAP * MAX_FRAME_LEN >= 192 * 1024);
+    }
+
+    #[test]
+    fn runtime_rx_prefetches_bounded_bursts_after_first_data() {
+        let source = include_str!("cyw43.rs");
+        assert!(source.contains("fn prefetch_rx_after_first_data"));
+        assert!(source.contains("self.prefetch_rx_after_first_data(allow_data)"));
+        assert!(source.contains("for _ in 0..RX_POST_DATA_PREFETCH_LIMIT"));
+        assert!(source.contains("self.glom_rx_ready.push_back(frame)"));
+        assert!(source.contains("consecutive_empty >= RX_POST_DATA_PREFETCH_IDLE_LIMIT"));
     }
 
     #[test]
@@ -9221,6 +9317,23 @@ mod tests {
         let copied = copy_packet_to_heapless(&packet).expect("packet fits");
 
         assert_eq!(copied.as_slice(), &packet);
+    }
+
+    #[test]
+    fn rx_glom_queued_data_cannot_replay_across_secure_boundary() {
+        assert_eq!(
+            glom_queued_data_action(false, 0),
+            GlomQueuedDataAction::Empty
+        );
+        assert_eq!(glom_queued_data_action(true, 1), GlomQueuedDataAction::Pop);
+        assert_eq!(
+            glom_queued_data_action(false, 1),
+            GlomQueuedDataAction::DropPresecure
+        );
+        assert_eq!(
+            glom_queued_data_action(false, RX_GLOM_QUEUE_CAP),
+            GlomQueuedDataAction::DropPresecure
+        );
     }
 
     #[test]

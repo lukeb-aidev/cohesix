@@ -7332,6 +7332,16 @@ const fn sdhci_interrupt_buffer_ready_mask(write: bool) -> u32 {
     }
 }
 
+#[inline]
+const fn sdhci_pio_ready_burst_len(plan: SdioTransferPlan, remaining: usize) -> usize {
+    let host_window = plan.block_size as usize;
+    if host_window == 0 || remaining < host_window {
+        remaining
+    } else {
+        host_window
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct SdioFunctionEnableStep {
     function: SdioFunction,
@@ -24340,12 +24350,14 @@ impl SdioHost {
                     return Err(HalError::Unsupported("sdhci-transfer-data"));
                 }
             }
+            if (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) == 0 {
+                continue;
+            }
 
-            while offset < buffer.len()
-                && (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) != 0
-            {
+            let burst_end = offset + sdhci_pio_ready_burst_len(plan, buffer.len() - offset);
+            while offset < burst_end {
                 let mut word = [0u8; 4];
-                let chunk_len = cmp::min(4, buffer.len() - offset);
+                let chunk_len = cmp::min(4, burst_end - offset);
                 if write {
                     word[..chunk_len].copy_from_slice(&buffer[offset..offset + chunk_len]);
                     self.write32(SDHCI_BUFFER, u32::from_le_bytes(word));
@@ -30394,6 +30406,32 @@ mod tests {
     fn function_block_sizes_match_linux_baseline() {
         assert_eq!(SDIO_FUNCTION_ENABLE_F1.block_size, 64);
         assert_eq!(SDIO_FUNCTION_ENABLE_F2.block_size, 512);
+    }
+
+    #[test]
+    fn sdhci_pio_ready_burst_len_uses_one_host_block_window() {
+        let f2_block_plan = SdioTransferPlan {
+            block_size: SDIO_FUNCTION_ENABLE_F2.block_size,
+            block_count: 8,
+            cmd53_count: 8,
+            block_mode: true,
+            transfer_mode: SDHCI_TRNS_BLK_CNT_EN | SDHCI_TRNS_MULTI | SDHCI_TRNS_READ,
+        };
+        assert_eq!(
+            sdhci_pio_ready_burst_len(f2_block_plan, 4096),
+            usize::from(SDIO_FUNCTION_ENABLE_F2.block_size)
+        );
+        assert_eq!(sdhci_pio_ready_burst_len(f2_block_plan, 96), 96);
+
+        let f1_byte_plan = SdioTransferPlan {
+            block_size: 64,
+            block_count: 1,
+            cmd53_count: 64,
+            block_mode: false,
+            transfer_mode: SDHCI_TRNS_BLK_CNT_EN,
+        };
+        assert_eq!(sdhci_pio_ready_burst_len(f1_byte_plan, 64), 64);
+        assert_eq!(sdhci_pio_ready_burst_len(f1_byte_plan, 1), 1);
     }
 
     #[test]

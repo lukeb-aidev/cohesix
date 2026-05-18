@@ -45,7 +45,7 @@ use cohsh::{
     PolicyOverrides, QemuTransport, RoleArg, SessionPool, Shell, Transport, TransportFactory,
 };
 #[cfg(feature = "tcp")]
-use cohsh::{PooledTcpTransport, SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
+use cohsh::{SharedTcpTransport, TcpTransport, COHSH_TCP_PORT};
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{
     TraceLog, TraceLogBuilder, TraceLogBuilderRef, TracePolicy, TraceReplayTransport,
@@ -569,10 +569,19 @@ fn main() -> Result<()> {
                             .with_tcp_debug(tcp_debug),
                     ));
                     let transport = Box::new(SharedTcpTransport::new(Arc::clone(&shared)));
-                    let pool_shared = Arc::clone(&shared);
+                    let pool_host = tcp_host.clone();
+                    let pool_auth_token = auth_token.clone();
                     let factory = Arc::new(move || {
-                        Ok(Box::new(PooledTcpTransport::new(Arc::clone(&pool_shared)))
-                            as Box<dyn Transport + Send>)
+                        Ok(Box::new(
+                            TcpTransport::new(pool_host.clone(), tcp_port)
+                                .with_retry_policy(retry)
+                                .with_heartbeat_interval(Duration::from_millis(
+                                    heartbeat.interval_ms,
+                                ))
+                                .with_auth_token(pool_auth_token.clone())
+                                .with_tcp_debug(tcp_debug)
+                                .with_console_lock_enabled(false),
+                        ) as Box<dyn Transport + Send>)
                     });
                     (transport, Some(factory))
                 }
