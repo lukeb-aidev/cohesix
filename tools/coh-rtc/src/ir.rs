@@ -271,6 +271,9 @@ impl Manifest {
                 );
             }
         }
+        affinity
+            .drivers
+            .validate(affinity.authority_core.unwrap_or(0), max_core)?;
         Ok(())
     }
 
@@ -2391,6 +2394,77 @@ pub struct AffinityPolicy {
     pub ninedoor_cores: Vec<u8>,
     pub provider_cores: Vec<u8>,
     pub worker_cores: Vec<u8>,
+    pub drivers: DriverAffinityPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct DriverAffinityPolicy {
+    pub serial: Option<u8>,
+    pub usb_local_seat: Option<u8>,
+    pub hdmi_text: Option<u8>,
+    pub bcmgenet_v5: Option<u8>,
+    pub cyw43455: Option<u8>,
+    pub rtl8139: Option<u8>,
+    pub virtio_net: Option<u8>,
+    pub sdio_host: Option<u8>,
+    pub pcie_root: Option<u8>,
+}
+
+impl DriverAffinityPolicy {
+    fn validate(&self, root_core: u8, max_core: u8) -> Result<()> {
+        for (name, core) in self.entries() {
+            let Some(core) = core else {
+                continue;
+            };
+            if core >= max_core {
+                bail!(
+                    "root_task.affinity.drivers.{} contains {} which exceeds max_core {}",
+                    name,
+                    core,
+                    max_core
+                );
+            }
+            if core == root_core {
+                bail!(
+                    "root_task.affinity.drivers.{} contains root core {}; driver TCBs must use non-root cores",
+                    name,
+                    root_core
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn entries(&self) -> [(&'static str, Option<u8>); 9] {
+        [
+            ("serial", self.serial),
+            ("usb-local-seat", self.usb_local_seat),
+            ("hdmi-text", self.hdmi_text),
+            ("bcmgenet-v5", self.bcmgenet_v5),
+            ("cyw43455", self.cyw43455),
+            ("rtl8139", self.rtl8139),
+            ("virtio-net", self.virtio_net),
+            ("sdio-host", self.sdio_host),
+            ("pcie-root", self.pcie_root),
+        ]
+    }
+}
+
+impl Default for DriverAffinityPolicy {
+    fn default() -> Self {
+        Self {
+            serial: Some(1),
+            usb_local_seat: Some(1),
+            hdmi_text: Some(2),
+            bcmgenet_v5: Some(2),
+            cyw43455: Some(3),
+            rtl8139: Some(2),
+            virtio_net: Some(3),
+            sdio_host: Some(3),
+            pcie_root: Some(2),
+        }
+    }
 }
 
 impl Default for AffinityPolicy {
@@ -2402,6 +2476,7 @@ impl Default for AffinityPolicy {
             ninedoor_cores: vec![1],
             provider_cores: vec![2, 3],
             worker_cores: vec![2, 3],
+            drivers: DriverAffinityPolicy::default(),
         }
     }
 }
@@ -2409,8 +2484,8 @@ impl Default for AffinityPolicy {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_manifest, AffinityPolicy, AttestationPolicy, HardwareDevice, HardwareDeviceKind,
-        NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
+        load_manifest, AffinityPolicy, AttestationPolicy, DriverAffinityPolicy, HardwareDevice,
+        HardwareDeviceKind, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
     };
     use std::path::PathBuf;
 
@@ -2423,6 +2498,32 @@ mod tests {
         assert_eq!(policy.ninedoor_cores, vec![1]);
         assert_eq!(policy.provider_cores, vec![2, 3]);
         assert_eq!(policy.worker_cores, vec![2, 3]);
+        assert_eq!(policy.drivers.serial, Some(1));
+        assert_eq!(policy.drivers.usb_local_seat, Some(1));
+        assert_eq!(policy.drivers.hdmi_text, Some(2));
+        assert_eq!(policy.drivers.bcmgenet_v5, Some(2));
+        assert_eq!(policy.drivers.cyw43455, Some(3));
+        assert_eq!(policy.drivers.rtl8139, Some(2));
+        assert_eq!(policy.drivers.virtio_net, Some(3));
+        assert_eq!(policy.drivers.sdio_host, Some(3));
+        assert_eq!(policy.drivers.pcie_root, Some(2));
+    }
+
+    #[test]
+    fn affinity_rejects_driver_root_core() {
+        let mut manifest = fixture_manifest();
+        manifest.root_task.affinity.drivers = DriverAffinityPolicy {
+            serial: Some(0),
+            ..DriverAffinityPolicy::default()
+        };
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("driver affinity must avoid the root core");
+        assert!(
+            err.to_string()
+                .contains("root_task.affinity.drivers.serial contains root core 0"),
+            "unexpected error: {err}"
+        );
     }
 
     fn fixture_manifest() -> super::Manifest {

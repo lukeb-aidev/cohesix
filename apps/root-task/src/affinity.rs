@@ -35,6 +35,36 @@ impl AffinityRole {
     }
 }
 
+/// Physical hardware driver with a manifest-selected TCB affinity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriverAffinityTarget {
+    Serial,
+    UsbLocalSeat,
+    HdmiText,
+    BcmGenetV5,
+    Cyw43455,
+    Rtl8139,
+    VirtioNet,
+    SdioHost,
+    PcieRoot,
+}
+
+impl DriverAffinityTarget {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Serial => "serial",
+            Self::UsbLocalSeat => "usb-local-seat",
+            Self::HdmiText => "hdmi-text",
+            Self::BcmGenetV5 => "bcmgenet-v5",
+            Self::Cyw43455 => "cyw43455",
+            Self::Rtl8139 => "rtl8139",
+            Self::VirtioNet => "virtio-net",
+            Self::SdioHost => "sdio-host",
+            Self::PcieRoot => "pcie-root",
+        }
+    }
+}
+
 /// Errors surfaced when validating or applying affinity hints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AffinityError {
@@ -47,8 +77,22 @@ pub enum AffinityError {
         core: u8,
         max_cores: u8,
     },
+    InvalidDriverCore {
+        driver: DriverAffinityTarget,
+        core: u8,
+        max_cores: u8,
+    },
+    DriverOnRootCore {
+        driver: DriverAffinityTarget,
+        core: u8,
+    },
     Syscall {
         role: AffinityRole,
+        core: u8,
+        err: i32,
+    },
+    DriverSyscall {
+        driver: DriverAffinityTarget,
         core: u8,
         err: i32,
     },
@@ -73,10 +117,34 @@ impl fmt::Display for AffinityError {
                 role.label(),
                 max_cores
             ),
+            Self::InvalidDriverCore {
+                driver,
+                core,
+                max_cores,
+            } => write!(
+                f,
+                "affinity core {} for driver {} exceeds max_cores {}",
+                core,
+                driver.label(),
+                max_cores
+            ),
+            Self::DriverOnRootCore { driver, core } => write!(
+                f,
+                "affinity core {} for driver {} is the root authority core",
+                core,
+                driver.label()
+            ),
             Self::Syscall { role, core, err } => write!(
                 f,
                 "affinity syscall failed role={} core={} err={}",
                 role.label(),
+                core,
+                err
+            ),
+            Self::DriverSyscall { driver, core, err } => write!(
+                f,
+                "affinity syscall failed driver={} core={} err={}",
+                driver.label(),
                 core,
                 err
             ),
@@ -137,6 +205,10 @@ pub fn validate_policy(
             });
         }
     }
+    let root_core = policy.authority_core.unwrap_or(0);
+    for target in DRIVER_AFFINITY_TARGETS {
+        validate_driver_core(policy, target, root_core)?;
+    }
     Ok(())
 }
 
@@ -154,6 +226,60 @@ pub fn select_core(
         AffinityRole::Provider => pick_core(policy.provider_cores, index),
         AffinityRole::Worker => pick_core(policy.worker_cores, index),
     }
+}
+
+/// Returns the manifest-selected non-root CPU core for a physical driver.
+pub fn select_driver_core(
+    policy: &generated::AffinityPolicy,
+    driver: DriverAffinityTarget,
+) -> Option<u8> {
+    if !policy.enabled {
+        return None;
+    }
+    match driver {
+        DriverAffinityTarget::Serial => policy.drivers.serial,
+        DriverAffinityTarget::UsbLocalSeat => policy.drivers.usb_local_seat,
+        DriverAffinityTarget::HdmiText => policy.drivers.hdmi_text,
+        DriverAffinityTarget::BcmGenetV5 => policy.drivers.bcmgenet_v5,
+        DriverAffinityTarget::Cyw43455 => policy.drivers.cyw43455,
+        DriverAffinityTarget::Rtl8139 => policy.drivers.rtl8139,
+        DriverAffinityTarget::VirtioNet => policy.drivers.virtio_net,
+        DriverAffinityTarget::SdioHost => policy.drivers.sdio_host,
+        DriverAffinityTarget::PcieRoot => policy.drivers.pcie_root,
+    }
+}
+
+const DRIVER_AFFINITY_TARGETS: [DriverAffinityTarget; 9] = [
+    DriverAffinityTarget::Serial,
+    DriverAffinityTarget::UsbLocalSeat,
+    DriverAffinityTarget::HdmiText,
+    DriverAffinityTarget::BcmGenetV5,
+    DriverAffinityTarget::Cyw43455,
+    DriverAffinityTarget::Rtl8139,
+    DriverAffinityTarget::VirtioNet,
+    DriverAffinityTarget::SdioHost,
+    DriverAffinityTarget::PcieRoot,
+];
+
+fn validate_driver_core(
+    policy: &generated::AffinityPolicy,
+    driver: DriverAffinityTarget,
+    root_core: u8,
+) -> Result<(), AffinityError> {
+    let Some(core) = select_driver_core(policy, driver) else {
+        return Ok(());
+    };
+    if core >= policy.max_cores {
+        return Err(AffinityError::InvalidDriverCore {
+            driver,
+            core,
+            max_cores: policy.max_cores,
+        });
+    }
+    if core == root_core {
+        return Err(AffinityError::DriverOnRootCore { driver, core });
+    }
+    Ok(())
 }
 
 fn pick_core(cores: &[u8], index: usize) -> Option<u8> {
@@ -345,6 +471,27 @@ pub fn apply_tcb_affinity(
 }
 
 #[cfg(feature = "kernel")]
+pub fn apply_driver_tcb_affinity(
+    tcb: crate::sel4::seL4_CPtr,
+    driver: DriverAffinityTarget,
+    policy: &generated::AffinityPolicy,
+) -> Result<Option<u8>, AffinityError> {
+    let Some(core) = select_driver_core(policy, driver) else {
+        return Ok(None);
+    };
+    let root_core = policy.authority_core.unwrap_or(0);
+    validate_driver_core(policy, driver, root_core)?;
+    if let Err(err) = crate::sel4::set_tcb_affinity(tcb, core) {
+        return Err(AffinityError::DriverSyscall {
+            driver,
+            core,
+            err: err as i32,
+        });
+    }
+    Ok(Some(core))
+}
+
+#[cfg(feature = "kernel")]
 pub fn apply_boot_policy(view: &crate::sel4::BootInfoView) -> Result<Option<u8>, AffinityError> {
     let policy = policy();
     if !policy.enabled {
@@ -372,6 +519,17 @@ mod tests {
             ninedoor_cores: &NINEDOOR,
             provider_cores: &PROVIDER,
             worker_cores: &WORKER,
+            drivers: generated::DriverAffinityPolicy {
+                serial: Some(1),
+                usb_local_seat: Some(1),
+                hdmi_text: Some(2),
+                bcmgenet_v5: Some(2),
+                cyw43455: Some(3),
+                rtl8139: Some(2),
+                virtio_net: Some(3),
+                sdio_host: Some(3),
+                pcie_root: Some(2),
+            },
         }
     }
 
@@ -388,9 +546,34 @@ mod tests {
     }
 
     #[test]
+    fn select_driver_core_uses_per_driver_manifest_fields() {
+        let policy = sample_policy();
+        assert_eq!(
+            select_driver_core(&policy, DriverAffinityTarget::Serial),
+            Some(1)
+        );
+        assert_eq!(
+            select_driver_core(&policy, DriverAffinityTarget::BcmGenetV5),
+            Some(2)
+        );
+        assert_eq!(
+            select_driver_core(&policy, DriverAffinityTarget::Cyw43455),
+            Some(3)
+        );
+    }
+
+    #[test]
     fn validate_policy_requires_node_match() {
         let policy = sample_policy();
         let err = validate_policy(&policy, 2).unwrap_err();
         assert!(matches!(err, AffinityError::NodesMismatch { .. }));
+    }
+
+    #[test]
+    fn validate_policy_rejects_driver_on_root_core() {
+        let mut policy = sample_policy();
+        policy.drivers.serial = Some(0);
+        let err = validate_policy(&policy, 4).unwrap_err();
+        assert!(matches!(err, AffinityError::DriverOnRootCore { .. }));
     }
 }

@@ -17,6 +17,8 @@
 //!   serial line discipline is intentionally conservative and currently limits
 //!   input to ASCII so deterministic behaviour can be verified in tests.
 
+#![allow(unsafe_code)]
+
 use core::fmt;
 
 use embedded_io::{Error as EmbeddedError, ErrorKind, ErrorType};
@@ -296,6 +298,29 @@ where
     /// Returns true when RX bytes were staged for this polling cycle.
     pub fn poll_io(&mut self) -> bool {
         let contract = <D as SerialDriver>::driver_task_contract();
+        #[cfg(feature = "kernel")]
+        {
+            // SAFETY: The context pointer is `self`, and the root TCB waits
+            // synchronously for the serial driver TCB to finish this bounded
+            // service turn before touching the port again.
+            if let Some(result) = unsafe {
+                crate::hal::driver_task::run_driver_task_service(
+                    contract,
+                    self as *mut Self as usize,
+                    serial_poll_io_driver_task::<D, RX, TX, LINE>,
+                )
+            } {
+                return result != 0;
+            }
+            crate::hal::driver_task::record_driver_task_service(
+                contract,
+                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
+            );
+        }
+        self.poll_io_current_tcb(contract)
+    }
+
+    fn poll_io_current_tcb(&mut self, contract: DriverTaskContract) -> bool {
         let mut budget = match DriverServiceBudget::new(contract) {
             Ok(budget) => budget,
             Err(_) => {
@@ -340,8 +365,33 @@ where
     }
 
     fn flush_tx_locked(&mut self) {
-        let mut budget = match DriverServiceBudget::new(<D as SerialDriver>::driver_task_contract())
+        let contract = <D as SerialDriver>::driver_task_contract();
+        #[cfg(feature = "kernel")]
         {
+            // SAFETY: The context pointer is `self`, and the root TCB waits
+            // synchronously for the serial driver TCB to finish this bounded
+            // TX flush before touching the port again.
+            if unsafe {
+                crate::hal::driver_task::run_driver_task_service(
+                    contract,
+                    self as *mut Self as usize,
+                    serial_flush_tx_driver_task::<D, RX, TX, LINE>,
+                )
+            }
+            .is_some()
+            {
+                return;
+            }
+            crate::hal::driver_task::record_driver_task_service(
+                contract,
+                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
+            );
+        }
+        self.flush_tx_current_tcb(contract);
+    }
+
+    fn flush_tx_current_tcb(&mut self, contract: DriverTaskContract) {
+        let mut budget = match DriverServiceBudget::new(contract) {
             Ok(budget) => budget,
             Err(_) => {
                 self.telemetry.driver_task_budget_overrun();
@@ -515,6 +565,35 @@ where
     pub fn driver_mut(&mut self) -> &mut D {
         &mut self.driver
     }
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn serial_poll_io_driver_task<D, const RX: usize, const TX: usize, const LINE: usize>(
+    context: usize,
+) -> usize
+where
+    D: SerialDriver,
+{
+    // SAFETY: `context` is provided only by `SerialPort::poll_io` while the
+    // root TCB is synchronously waiting for the dedicated serial TCB to finish.
+    let port = unsafe { &mut *(context as *mut SerialPort<D, RX, TX, LINE>) };
+    let contract = <D as SerialDriver>::driver_task_contract();
+    port.poll_io_current_tcb(contract) as usize
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn serial_flush_tx_driver_task<D, const RX: usize, const TX: usize, const LINE: usize>(
+    context: usize,
+) -> usize
+where
+    D: SerialDriver,
+{
+    // SAFETY: `context` is provided only by `SerialPort::flush_tx_locked` while
+    // the root TCB is synchronously waiting for the dedicated serial TCB.
+    let port = unsafe { &mut *(context as *mut SerialPort<D, RX, TX, LINE>) };
+    let contract = <D as SerialDriver>::driver_task_contract();
+    port.flush_tx_current_tcb(contract);
+    0
 }
 
 /// Internal telemetry counters backed by atomics so interrupt handlers can

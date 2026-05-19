@@ -100,8 +100,9 @@ Options:
   --require-wired-ready      Require netstats to report active=wired.
   --require-driver-task-proof
                              Require driver-task substrate, capset, fault,
-                             revoke, scheduling, role, latency, and zero
-                             budget-overrun proof.
+                             revoke, scheduling, per-driver affinity,
+                             VSpace, role, latency, zero bootstrap failure,
+                             and zero budget-overrun proof.
   --require-input-responsive Require serial echo, USB burst, and HDMI proof
                              breadcrumbs with zero USB burst drops.
   --require-ready            Require both USB and WiFi gate 10 with no blocker.
@@ -427,6 +428,8 @@ run_normalizer() {
         args+=("--expect" "NET_ACTIVE=wired")
     fi
     if [[ "${REQUIRE_DRIVER_TASK_PROOF}" -eq 1 ]]; then
+        args+=("--expect" "DRIVER_TASK_DEFAULT_REQUESTED=yes")
+        args+=("--expect" "DRIVER_TASK_LIVE_HOT_PATHS=yes")
         args+=("--expect-min" "DRIVER_TASK_CONTRACTS=4")
         args+=("--expect-min" "DRIVER_TASK_DEDICATED=4")
         args+=("--expect" "DRIVER_TASK_COMPATIBILITY=0")
@@ -436,10 +439,15 @@ run_normalizer() {
         args+=("--expect" "DRIVER_TASK_DISPLAY_DEDICATED=yes")
         args+=("--expect" "DRIVER_TASK_NET_DEDICATED=yes")
         args+=("--expect" "DRIVER_TASK_SUBSTRATE_READY=yes")
+        args+=("--expect" "DRIVER_TASK_FAILED_COUNT=0")
         args+=("--expect" "DRIVER_TASK_CAPSET_PROOF=yes")
         args+=("--expect" "DRIVER_TASK_FAULT_PROOF=yes")
         args+=("--expect" "DRIVER_TASK_REVOKE_PROOF=yes")
         args+=("--expect" "DRIVER_TASK_SCHED_PROOF=yes")
+        args+=("--expect" "DRIVER_TASK_AFFINITY_PROOF=yes")
+        args+=("--expect-min" "DRIVER_TASK_AFFINITY_CONFIGURED=9")
+        args+=("--expect-min" "DRIVER_TASK_AFFINITY_APPLIED=9")
+        args+=("--expect" "DRIVER_TASK_VSPACE_PROOF=yes")
         args+=("--expect" "DRIVER_TASK_BUDGET_OVERRUNS=0")
         args+=("--expect-min" "DRIVER_TASK_LATENCY_PROOFS=4")
     fi

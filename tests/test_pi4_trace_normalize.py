@@ -309,6 +309,8 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "NET_ACTIVE": "unknown",
         "NET_ADDR_SRC": "unknown",
         "NET_DHCP": "unknown",
+        "DRIVER_TASK_DEFAULT_REQUESTED": "no",
+        "DRIVER_TASK_LIVE_HOT_PATHS": "no",
         "DRIVER_TASK_CONTRACTS": 0,
         "DRIVER_TASK_DEDICATED": 0,
         "DRIVER_TASK_COMPATIBILITY": 0,
@@ -318,10 +320,15 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_DISPLAY_DEDICATED": "no",
         "DRIVER_TASK_NET_DEDICATED": "no",
         "DRIVER_TASK_SUBSTRATE_READY": "no",
+        "DRIVER_TASK_FAILED_COUNT": 0,
         "DRIVER_TASK_CAPSET_PROOF": "no",
         "DRIVER_TASK_FAULT_PROOF": "no",
         "DRIVER_TASK_REVOKE_PROOF": "no",
         "DRIVER_TASK_SCHED_PROOF": "no",
+        "DRIVER_TASK_AFFINITY_PROOF": "no",
+        "DRIVER_TASK_AFFINITY_CONFIGURED": 0,
+        "DRIVER_TASK_AFFINITY_APPLIED": 0,
+        "DRIVER_TASK_VSPACE_PROOF": "no",
         "DRIVER_TASK_ACTIVE_NET": "unknown",
         "DRIVER_TASK_BUDGET_OVERRUNS": 0,
         "DRIVER_TASK_LATENCY_PROOFS": 0,
@@ -365,6 +372,10 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["DRIVER_TASK_FAULT_PROOF"] == "no"
     assert record["DRIVER_TASK_REVOKE_PROOF"] == "no"
     assert record["DRIVER_TASK_SCHED_PROOF"] == "no"
+    assert record["DRIVER_TASK_AFFINITY_PROOF"] == "no"
+    assert record["DRIVER_TASK_AFFINITY_CONFIGURED"] == 0
+    assert record["DRIVER_TASK_AFFINITY_APPLIED"] == 0
+    assert record["DRIVER_TASK_VSPACE_PROOF"] == "no"
     assert record["DRIVER_TASK_ACTIVE_NET"] == "unknown"
     assert record["DRIVER_TASK_BUDGET_OVERRUNS"] == 0
     assert record["DRIVER_TASK_LATENCY_PROOFS"] == 2
@@ -380,8 +391,11 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
     events = normalizer.parse_events(
         [
             "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 mcs=0 "
+            "task_count=9 failed_count=0 live_tcb_count=9 "
             "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
-            "broad_caps_leaked=0",
+            "broad_caps_leaked=0 sched=yes affinity=per-driver "
+            "affinity_configured=9 affinity_applied=9 "
+            "vspace=isolated live_hot_paths=yes",
             "DRIVER_TASK role=serial contract=driver-serial isolation=dedicated-sel4-task "
             "capset=console-transport unexpected_caps=0 fault_probe=pass revoke_ready=yes "
             "priority=240 observed_service_us=18",
@@ -395,7 +409,7 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
             "active_net=cyw43 capset=network-frame-transport unexpected_caps=0 "
             "fault_probe=pass revoke_ready=yes priority=160 observed_service_us=73",
             "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes substrate=active capset=pass "
-            "fault=pass revoke=pass sched=pass active_net=cyw43 required=4 "
+            "fault=pass revoke=pass sched=pass affinity=pass active_net=cyw43 required=4 "
             "dedicated=4 compatibility=0",
         ]
     )
@@ -409,6 +423,12 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
     assert record["DRIVER_TASK_FAULT_PROOF"] == "yes"
     assert record["DRIVER_TASK_REVOKE_PROOF"] == "yes"
     assert record["DRIVER_TASK_SCHED_PROOF"] == "yes"
+    assert record["DRIVER_TASK_AFFINITY_PROOF"] == "yes"
+    assert record["DRIVER_TASK_FAILED_COUNT"] == 0
+    assert record["DRIVER_TASK_AFFINITY_CONFIGURED"] == 9
+    assert record["DRIVER_TASK_AFFINITY_APPLIED"] == 9
+    assert record["DRIVER_TASK_VSPACE_PROOF"] == "yes"
+    assert record["DRIVER_TASK_LIVE_HOT_PATHS"] == "yes"
     assert record["DRIVER_TASK_ACTIVE_NET"] == "cyw43"
 
 

@@ -81,6 +81,60 @@ impl DocFragments {
             format_affinity_list(&affinity.worker_cores)
         )
         .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.drivers.serial`: `{}`",
+            format_affinity_core(affinity.drivers.serial)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.drivers.usb-local-seat`: `{}`",
+            format_affinity_core(affinity.drivers.usb_local_seat)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.drivers.hdmi-text`: `{}`",
+            format_affinity_core(affinity.drivers.hdmi_text)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.drivers.bcmgenet-v5`: `{}`",
+            format_affinity_core(affinity.drivers.bcmgenet_v5)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.drivers.cyw43455`: `{}`",
+            format_affinity_core(affinity.drivers.cyw43455)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.drivers.rtl8139`: `{}`",
+            format_affinity_core(affinity.drivers.rtl8139)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.drivers.virtio-net`: `{}`",
+            format_affinity_core(affinity.drivers.virtio_net)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.drivers.sdio-host`: `{}`",
+            format_affinity_core(affinity.drivers.sdio_host)
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.affinity.drivers.pcie-root`: `{}`",
+            format_affinity_core(affinity.drivers.pcie_root)
+        )
+        .ok();
         writeln!(schema_md, "- `profile.name`: `{}`", manifest.profile.name).ok();
         writeln!(
             schema_md,

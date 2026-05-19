@@ -140,10 +140,11 @@ several domains, but new driver logic should prefer the narrowest trait.
 
 ### Driver-Task Scheduling Contracts
 
-Reopened Milestones 26a and 26b move hardware progress toward dedicated seL4
-driver tasks. The current compatibility path may still instantiate selected
-drivers in root-task while each migration lands, but every hardware-facing
-service must first declare a HAL-owned driver-task contract.
+Reopened Milestones 26a and 26b require every hardware-facing driver path to
+run behind a HAL-declared scheduling contract and a live seL4 driver TCB. The
+contract layer is the admission boundary for every hardware service turn. A
+service that has no contract, has an unbounded budget, blocks indefinitely, or
+bypasses the HAL cannot be serviced.
 
 Each contract records:
 
@@ -152,24 +153,74 @@ Each contract records:
   `NetworkData`, `DisplayRefresh`, or `Background`);
 - authority class (`DeviceOnly`, `ConsoleTransport`, `NetworkFrameTransport`,
   or `DisplaySink`);
-- current isolation state (`RootTaskCompatibility` while the direct path is the
-  as-built runtime, then `DedicatedSeL4Task` only after seL4 task creation,
-  fault, revocation, and hardware evidence land);
+- current isolation state (`DedicatedSeL4Task` for the built-in driver task
+  model; any fallback service turn must be recorded separately as
+  `RootTaskCompatibility`);
 - per-turn operation, byte, frame/report, and bounded-spin budgets;
 - bounded IPC/event queue depth.
 
-Scheduling-context fields are profile-qualified for the target dedicated-task
-architecture. A dedicated driver task uses seL4 scheduling contexts when the
-active MCS kernel profile provides them; on non-MCS profiles, the same HAL
-contract must be backed by TCB priority/domain plus bounded IPC turns. The
-current as-built code has the non-MCS TCB syscall wrappers, notification bind,
-remote IPC-buffer bind, revoke helper, and bounded HAL driver-task ring ABI
-needed by the substrate, but it does not yet create and run those driver TCBs.
-Boot proof must report `DRIVER_TASK_DEDICATED_READY=no` until the active hot
-paths have moved behind those TCBs.
-HAL contract validation also rejects any `DedicatedSeL4Task` declaration while
-that substrate is inactive; compatibility-mode service must remain explicitly
-marked `RootTaskCompatibility`.
+Scheduling-context fields are profile-qualified for the target architecture. A
+dedicated driver task uses seL4 scheduling contexts when the active MCS kernel
+profile provides them. On non-MCS profiles, the same HAL contract is enforced
+with TCB priority/domain policy plus bounded IPC and poll turns.
+
+The current as-built substrate creates root-owned seL4 TCBs for every built-in
+hardware contract during boot:
+
+| Contract | Role | Manifest affinity target | Current VSpace | Current hot path |
+| --- | --- | --- | --- | --- |
+| `serial` | serial console | `serial` | shared root VSpace | dedicated TCB service dispatch for normal RX/TX; emergency early UART remains root-owned |
+| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | shared root VSpace | dedicated TCB service dispatch for keyboard polling and VL805/xHCI local-seat progress |
+| `hdmi-text` | HDMI text mirror | `hdmi-text` | shared root VSpace | dedicated TCB service dispatch for bounded text mirroring |
+| `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | shared root VSpace | dedicated TCB service dispatch for active wired network polling |
+| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | shared root VSpace | dedicated TCB service dispatch for active Wi-Fi network polling and CYW43/SDIO progress reached from that poll |
+| `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
+| `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
+| `sdio-host` | SDIO host for CYW43 | `sdio-host` | shared root VSpace | boot-created TCB and affinity contract; CYW43 poll currently contains the SDIO service turn |
+| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | shared root VSpace | boot-created TCB and affinity contract; USB/local-seat poll currently contains the VL805 service turn |
+
+For each created driver TCB, the HAL allocates the TCB object, child CNode,
+command endpoint, notification, IPC frame, stack frame, and fault endpoint
+slot; installs a restricted child CSpace; binds the remote IPC buffer; applies
+the contract priority; applies manifest-selected per-driver affinity through
+`seL4_TCB_SetAffinity`; binds the notification; writes the entry registers; and
+resumes the TCB. The child entry marks its task key as started and then waits
+on the command endpoint. Root dispatches bounded service callbacks through the
+per-driver endpoint and waits only for that bounded turn to complete.
+
+The current substrate intentionally does not yet prove driver VSpace isolation.
+Driver TCBs run with the root VSpace until driver code, data, IPC buffers, and
+rings are mapped into dedicated driver VSpaces. This is an explicit remaining
+isolation proof field, not an excuse for root-task hot paths. Serial, USB,
+HDMI, and active NIC service callbacks now execute on live driver TCBs when the
+TCB is available; fallback to root-task compatibility is preserved only for
+availability failure and is recorded as compatibility evidence. `sdio-host` and
+`pcie-root` have live boot-created driver TCBs and per-driver affinity contracts
+today; their bus operations are still reached through the CYW43 and
+USB/local-seat service callbacks until standalone bus-operation queues are split
+out.
+
+Boot logs must expose the distinction with these breadcrumbs:
+
+- `DRIVER_TASK_DEFAULT requested=dedicated required=yes substrate_active=<yes|no> live_hot_paths=<yes|no>`
+- `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=shared-root`
+- `DRIVER_TASK_BOOT contract=<name> role=<role> status=failed err=<reason>` for any failed creation path
+- `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> live_hot_paths=<yes|no>`
+- one `SCHED_CONTRACT` line per built-in contract, including `live_tcb` and
+  `hot_path`
+- one `DRIVER_TASK` line per role, including `capset`, `fault_probe`, and
+  `revoke_ready`
+- `DRIVER_TASK_SUMMARY` with contract, compatibility, live-role, hot-path, and
+  compatibility-role counts
+- `DRIVER_TASK_ACCEPTANCE dedicated_ready=<yes|no> reason=<reason> ...` as the
+  final machine-checkable verdict
+
+Substrate proof is fail-closed for acceptance. A partial bootstrap may still
+show useful `DRIVER_TASK_BOOT` evidence for the TCBs that started, but closure
+requires the expected nine-task count, `failed_count=0`, live TCB count,
+required role mask, per-driver affinity count, zero leaked broad caps, and all
+proof booleans demanded by `scripts/pi4_gate_proof.sh --require-driver-task-proof`.
+An aggregate task count alone is never sufficient.
 
 The HAL rejects missing, zero-budget, non-preemptible, or unbounded-blocking
 contracts before the driver is serviced. USB/local-seat and serial are
@@ -178,29 +229,24 @@ network-control and network-data budgeting so EAPOL, DHCP, and TCP ACK progress
 cannot be hidden behind bulk RX/TX work, while neither class can starve physical
 input.
 
-The current root-task compatibility path provides a limited interim ratchet,
-not driver-task isolation: serial RX/TX service turns charge the HAL
-driver-task budget, USB/local-seat keyboard polling consumes a HAL service
-budget before backend reads, and the event pump yields any NIC `NetworkData`
-poll to active serial or USB keyboard input. Pending serial output is also
-treated as console pressure, so a slow UART keeps draining before ready
-network data consumes the next pump turn. Budgeted network service is now
-phase-driven instead of post-accounted: one root-loop network quantum runs only
-one of smoltcp device polling, DHCP, TCP-console processing, smoltcp flush, or
-self-test/outbound probe before yielding back to the event pump. Each quantum is
-pre-charged against its HAL service budget, so a ready Wi-Fi/NIC connection
-cannot silently drain an arbitrary backlog inside a single root-task
-compatibility turn. This still does not close the dedicated seL4 driver-task
-migration gates. Boot logs must report
-`isolation=root-task-compatibility` until service actually moves behind a seL4
-TCB/endpoint/fault boundary, and acceptance tooling must not count those lines
-as `DedicatedSeL4Task` proof. Declared `max_service_us` budgets also remain
-contract metadata; latency proof must come from observed service/latency
-fields. `DRIVER_TASK_DEDICATED_READY=yes` is reserved for the first image where
-root can create, schedule, fault-report, and revoke the active driver TCBs with
-declared capsets only. The gate must prove substrate, capset, fault, revoke,
-scheduling, active-net identity, and the serial, USB/local-seat, display, and
-network roles separately so an aggregate count cannot mask a missing hot path.
+Root-task compatibility remains only as a fail-safe and diagnostic path. If a
+service callback cannot be sent to its driver TCB, the current service turn
+falls back to the old in-root implementation and records
+`RootTaskCompatibility`; acceptance tooling must fail that boot. Declared
+`max_service_us` budgets remain contract metadata; latency proof must come from
+observed service/latency fields.
+
+`DRIVER_TASK_SUBSTRATE_READY=yes` means boot evidence saw the nine-task
+substrate with no bootstrap failures. `DRIVER_TASK_DEDICATED_READY=yes` is
+reserved for the first image where root can create, schedule, fault-report,
+revoke, and prove isolated VSpaces for the active driver TCBs with declared
+capsets only, and where serial, USB/local-seat, display, network, SDIO, and PCIe
+hardware progress is served by live driver TCBs with zero root-task
+compatibility roles. The gate must prove substrate, `failed_count=0`, capset,
+fault, revoke, scheduling, per-driver affinity, VSpace isolation, active-net
+identity, zero root-task compatibility roles, zero broad cap leaks, observed
+latency/responsiveness, and each required role separately so an aggregate count
+cannot mask a missing hot path.
 The dedicated seL4 driver-task migration keeps these contracts as the admission
 boundary rather than replacing them with a second scheduling model.
 

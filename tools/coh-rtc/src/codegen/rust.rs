@@ -105,6 +105,20 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub ninedoor_cores: &'static [u8],")?;
     writeln!(mod_contents, "    pub provider_cores: &'static [u8],")?;
     writeln!(mod_contents, "    pub worker_cores: &'static [u8],")?;
+    writeln!(mod_contents, "    pub drivers: DriverAffinityPolicy,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct DriverAffinityPolicy {{")?;
+    writeln!(mod_contents, "    pub serial: Option<u8>,")?;
+    writeln!(mod_contents, "    pub usb_local_seat: Option<u8>,")?;
+    writeln!(mod_contents, "    pub hdmi_text: Option<u8>,")?;
+    writeln!(mod_contents, "    pub bcmgenet_v5: Option<u8>,")?;
+    writeln!(mod_contents, "    pub cyw43455: Option<u8>,")?;
+    writeln!(mod_contents, "    pub rtl8139: Option<u8>,")?;
+    writeln!(mod_contents, "    pub virtio_net: Option<u8>,")?;
+    writeln!(mod_contents, "    pub sdio_host: Option<u8>,")?;
+    writeln!(mod_contents, "    pub pcie_root: Option<u8>,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -994,7 +1008,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DriverAffinityPolicy, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(
         bootstrap_contents,
@@ -1131,9 +1145,23 @@ pub fn emit_rust(
         affinity.worker_cores.len(),
         affinity_worker
     )?;
+    let drivers = &affinity.drivers;
     writeln!(
         bootstrap_contents,
-        "pub const AFFINITY_POLICY: AffinityPolicy = AffinityPolicy {{ enabled: {}, max_cores: {}, authority_core: {}, ninedoor_cores: &AFFINITY_NINEDOOR_CORES, provider_cores: &AFFINITY_PROVIDER_CORES, worker_cores: &AFFINITY_WORKER_CORES }};\n",
+        "pub const DRIVER_AFFINITY_POLICY: DriverAffinityPolicy = DriverAffinityPolicy {{ serial: {}, usb_local_seat: {}, hdmi_text: {}, bcmgenet_v5: {}, cyw43455: {}, rtl8139: {}, virtio_net: {}, sdio_host: {}, pcie_root: {} }};\n",
+        format_optional_u8(drivers.serial),
+        format_optional_u8(drivers.usb_local_seat),
+        format_optional_u8(drivers.hdmi_text),
+        format_optional_u8(drivers.bcmgenet_v5),
+        format_optional_u8(drivers.cyw43455),
+        format_optional_u8(drivers.rtl8139),
+        format_optional_u8(drivers.virtio_net),
+        format_optional_u8(drivers.sdio_host),
+        format_optional_u8(drivers.pcie_root),
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const AFFINITY_POLICY: AffinityPolicy = AffinityPolicy {{ enabled: {}, max_cores: {}, authority_core: {}, ninedoor_cores: &AFFINITY_NINEDOOR_CORES, provider_cores: &AFFINITY_PROVIDER_CORES, worker_cores: &AFFINITY_WORKER_CORES, drivers: DRIVER_AFFINITY_POLICY }};\n",
         affinity.enabled,
         affinity.max_cores,
         affinity_authority
@@ -2311,6 +2339,13 @@ fn write_if_changed(path: &Path, contents: &str) -> Result<()> {
     // Always rewrite so mtimes advance when the manifest changes; build.rs enforces freshness by time.
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+fn format_optional_u8(value: Option<u8>) -> String {
+    match value {
+        Some(value) => format!("Some({value})"),
+        None => "None".to_owned(),
+    }
 }
 
 fn escape_literal(value: &str) -> String {

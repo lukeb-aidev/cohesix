@@ -16,6 +16,17 @@ ninedoor_cores = [1]
 provider_cores = [2, 3]
 worker_cores = [2, 3]
 
+[root_task.affinity.drivers]
+serial = 1
+usb-local-seat = 1
+hdmi-text = 2
+bcmgenet-v5 = 2
+cyw43455 = 3
+rtl8139 = 2
+virtio-net = 3
+sdio-host = 3
+pcie-root = 2
+
 [profile]
 name = "virt-aarch64"
 kernel = true

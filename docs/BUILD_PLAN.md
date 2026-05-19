@@ -6121,7 +6121,9 @@ Add the HAL-enforced driver-task substrate, migrate serial/display and GENET beh
 
 - **seL4 driver-task substrate**
   - Add root-owned wrappers for driver TCB creation, CSpace/VSpace setup, IPC-buffer installation, badged endpoints, notifications, IRQ binding, fault endpoints, scheduling-context parameters where available, and revocation.
-  - As-built substrate work now includes non-MCS TCB priority/scheduling/resume/notification wrappers, CNode revoke, a remote-safe IPC-buffer bind helper, and bounded HAL driver-task command/completion rings; hot-path migration remains open until those primitives are wired into live driver TCBs.
+  - As-built substrate work now includes non-MCS TCB priority/scheduling/resume/notification wrappers, CNode revoke, a remote-safe IPC-buffer bind helper, bounded HAL driver-task command/completion rings, bootstrap-created driver TCBs for all nine built-in driver contracts, restricted child CSpaces, command endpoints, notifications, fault endpoint slots, stacks, and manifest-selected per-driver SMP affinity.
+  - Serial RX/TX, USB/local-seat keyboard polling, HDMI text mirroring, and active GENET/CYW43/RTL8139/virtio network polling now dispatch bounded service callbacks through live driver TCBs. SDIO and PCIe have boot-created contract TCBs and affinity assignments; their current bus operations are reached from the CYW43 and USB/local-seat callbacks until standalone bus-operation queues are split out.
+  - The current substrate intentionally still reports shared-root VSpace until driver code/data/rings are mapped into isolated driver VSpaces. Any root-task compatibility fallback service turn remains diagnostic evidence and fails reopened closure.
   - Root keeps authority and revocation; driver tasks receive only compiler-declared caps and bounded shared rings.
   - seL4 scheduling-context fields are profile-qualified: MCS builds bind explicit scheduling contexts, while non-MCS builds enforce the same contract with TCB priority/domain plus bounded IPC/poll budgets.
   - The substrate must not introduce POSIX threads, implicit async runtimes, unbounded queues, or a second listener/protocol.
@@ -6163,7 +6165,7 @@ Add the HAL-enforced driver-task substrate, migrate serial/display and GENET beh
 ### Checks (DoD)
 - HAL driver-task contracts exist and validate for serial, USB/local-seat, HDMI text, GENET, CYW43, SDIO host, PCIe root, RTL8139, and virtio-net.
 - Network stack construction rejects missing or invalid driver scheduling contracts before device initialisation.
-- Pi 4 and QEMU driver-task acceptance must distinguish contract declaration from isolation: `SCHED_CONTRACT ... isolation=root-task-compatibility` is useful diagnostic evidence only, while reopened closure requires `DRIVER_TASK_DEDICATED>=4`, `DRIVER_TASK_COMPATIBILITY=0`, `DRIVER_TASK_DEDICATED_READY=yes`, role-specific `DRIVER_TASK_SERIAL_DEDICATED=yes`, `DRIVER_TASK_USB_DEDICATED=yes`, `DRIVER_TASK_DISPLAY_DEDICATED=yes`, and `DRIVER_TASK_NET_DEDICATED=yes`, plus `DRIVER_TASK_SUBSTRATE_READY=yes`, `DRIVER_TASK_CAPSET_PROOF=yes`, `DRIVER_TASK_FAULT_PROOF=yes`, `DRIVER_TASK_REVOKE_PROOF=yes`, `DRIVER_TASK_SCHED_PROOF=yes`, and active-net identity proof under `scripts/pi4_gate_proof.sh --require-driver-task-proof`.
+- Pi 4 and QEMU driver-task acceptance must distinguish contract declaration from isolation: root-task compatibility service turns are useful diagnostic evidence only, while reopened closure requires `DRIVER_TASK_DEDICATED>=4`, `DRIVER_TASK_COMPATIBILITY=0`, `DRIVER_TASK_DEDICATED_READY=yes`, role-specific `DRIVER_TASK_SERIAL_DEDICATED=yes`, `DRIVER_TASK_USB_DEDICATED=yes`, `DRIVER_TASK_DISPLAY_DEDICATED=yes`, and `DRIVER_TASK_NET_DEDICATED=yes`, plus `DRIVER_TASK_SUBSTRATE_READY=yes`, `DRIVER_TASK_FAILED_COUNT=0`, `DRIVER_TASK_CAPSET_PROOF=yes`, `DRIVER_TASK_FAULT_PROOF=yes`, `DRIVER_TASK_REVOKE_PROOF=yes`, `DRIVER_TASK_SCHED_PROOF=yes`, `DRIVER_TASK_AFFINITY_PROOF=yes`, `DRIVER_TASK_AFFINITY_CONFIGURED>=9`, `DRIVER_TASK_AFFINITY_APPLIED>=9`, `DRIVER_TASK_VSPACE_PROOF=yes`, and active-net identity proof under `scripts/pi4_gate_proof.sh --require-driver-task-proof`.
 - Root-owned driver-task substrate can create, monitor, fault-report, and revoke at least one non-authority driver task without changing console grammar.
 - Serial and HDMI service remain responsive while synthetic GENET traffic consumes its full allowed budget.
 - Pi 4 U-Boot boot reaches root-task network init and reports `GENETv5` backend with static IPv4 from manifest-generated config.
@@ -6208,8 +6210,8 @@ Goal: Add root-owned seL4 task/capability substrate for hardware driver tasks wi
 Inputs: apps/root-task/src/kernel.rs, apps/root-task/src/hal/*, apps/root-task/src/cspace*, configs/root_task.toml, docs/ROLES_AND_SCHEDULING.md.
 Changes:
   - crates/sel4-sys/src/lib.rs + apps/root-task/src/sel4.rs — add driver TCB scheduling/resume/notification wrappers, CNode revoke, and remote-safe IPC buffer install.
-  - apps/root-task/src/hal/* + apps/root-task/src/kernel.rs — add driver-task handles/rings for TCB creation, CSpace/VSpace setup, scheduling attributes, notification binding, fault endpoint badges, and revocation.
-  - configs/root_task.toml + coh-rtc outputs — add profile-gated driver-task specs and bounds.
+  - apps/root-task/src/hal/* + apps/root-task/src/kernel.rs — add driver-task handles/rings for TCB creation, CSpace/VSpace setup, scheduling attributes, per-driver SMP affinity, notification binding, fault endpoint badges, and revocation.
+  - configs/root_task.toml + coh-rtc outputs — add profile-gated driver-task specs, per-driver affinity, and bounds.
 Commands:
   - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
   - cargo test -p sel4-sys
@@ -6218,7 +6220,7 @@ Checks:
   - Root retains cap ownership and can fault-report/revoke a driver task.
   - Driver tasks receive only declared device grants and bounded ring frames.
 Deliverables:
-  - Dedicated driver-task creation substrate ready for serial/display and GENET migration.
+  - Dedicated driver-task creation substrate ready for serial/display, GENET, USB, CYW43, SDIO, and PCIe migration.
 
 Title/ID: m26a-serial-display-driver-tasks
 Goal: Move normal serial and HDMI display service behind dedicated driver-task contracts while preserving emergency debug fallback.

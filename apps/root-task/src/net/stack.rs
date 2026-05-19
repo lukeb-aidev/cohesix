@@ -5665,6 +5665,31 @@ impl DefaultNetStack {
 
 impl<D: NetDevice> NetPoller for NetStack<D> {
     fn poll(&mut self, now_ms: u64) -> bool {
+        let contract = D::driver_task_contract();
+        #[cfg(feature = "kernel")]
+        {
+            let mut context = NetDriverTaskContext::<D> {
+                stack: self as *mut NetStack<D> as usize,
+                budget: 0,
+                now_ms,
+                _marker: core::marker::PhantomData,
+            };
+            // SAFETY: The context points at `self`; root waits synchronously
+            // for the active NIC driver TCB before touching the stack again.
+            if let Some(result) = unsafe {
+                crate::hal::driver_task::run_driver_task_service(
+                    contract,
+                    &mut context as *mut NetDriverTaskContext<D> as usize,
+                    net_poll_driver_task::<D>,
+                )
+            } {
+                return result != 0;
+            }
+            crate::hal::driver_task::record_driver_task_service(
+                contract,
+                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
+            );
+        }
         self.poll_with_time(now_ms)
     }
 
@@ -5673,6 +5698,32 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         now_ms: u64,
         budget: &mut DriverServiceBudget,
     ) -> Result<bool, DriverServiceBudgetError> {
+        let contract = D::driver_task_contract();
+        #[cfg(feature = "kernel")]
+        {
+            let mut context = NetDriverTaskContext::<D> {
+                stack: self as *mut NetStack<D> as usize,
+                budget: budget as *mut DriverServiceBudget as usize,
+                now_ms,
+                _marker: core::marker::PhantomData,
+            };
+            // SAFETY: The context points at `self` and the caller-owned budget;
+            // root waits synchronously for the active NIC driver TCB before
+            // touching either object again.
+            if let Some(result) = unsafe {
+                crate::hal::driver_task::run_driver_task_service(
+                    contract,
+                    &mut context as *mut NetDriverTaskContext<D> as usize,
+                    net_poll_budgeted_driver_task::<D>,
+                )
+            } {
+                return unpack_net_poll_result(result);
+            }
+            crate::hal::driver_task::record_driver_task_service(
+                contract,
+                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
+            );
+        }
         self.poll_budgeted_with_time(now_ms, budget)
     }
 
@@ -6018,6 +6069,66 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             gateway,
             dhcp_phase,
         }
+    }
+}
+
+#[cfg(feature = "kernel")]
+struct NetDriverTaskContext<D: NetDevice> {
+    stack: usize,
+    budget: usize,
+    now_ms: u64,
+    _marker: core::marker::PhantomData<fn() -> D>,
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn net_poll_driver_task<D: NetDevice>(context: usize) -> usize {
+    // SAFETY: `context` is built by `NetStack::poll`; root waits synchronously
+    // while the active NIC driver TCB borrows the stack.
+    let task = unsafe { &mut *(context as *mut NetDriverTaskContext<D>) };
+    // SAFETY: `stack` is the `self` pointer from the caller and is exclusively
+    // borrowed for the duration of this synchronous driver-task callback.
+    let stack = unsafe { &mut *(task.stack as *mut NetStack<D>) };
+    stack.poll_with_time(task.now_ms) as usize
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn net_poll_budgeted_driver_task<D: NetDevice>(context: usize) -> usize {
+    // SAFETY: `context` is built by `NetStack::poll_with_budget`; root waits
+    // synchronously while the active NIC driver TCB borrows the stack/budget.
+    let task = unsafe { &mut *(context as *mut NetDriverTaskContext<D>) };
+    // SAFETY: `stack` and `budget` are caller-owned objects borrowed
+    // exclusively until the synchronous driver-task callback returns.
+    let stack = unsafe { &mut *(task.stack as *mut NetStack<D>) };
+    let budget = unsafe { &mut *(task.budget as *mut DriverServiceBudget) };
+    pack_net_poll_result(stack.poll_budgeted_with_time(task.now_ms, budget))
+}
+
+#[cfg(feature = "kernel")]
+fn pack_net_poll_result(result: Result<bool, DriverServiceBudgetError>) -> usize {
+    match result {
+        Ok(false) => 0,
+        Ok(true) => 1,
+        Err(DriverServiceBudgetError::ZeroCharge) => 0x100,
+        Err(DriverServiceBudgetError::OperationsExhausted) => 0x101,
+        Err(DriverServiceBudgetError::BytesExhausted) => 0x102,
+        Err(DriverServiceBudgetError::FramesExhausted) => 0x103,
+        Err(DriverServiceBudgetError::BlockingForbidden) => 0x104,
+        Err(DriverServiceBudgetError::BlockingExhausted) => 0x105,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn unpack_net_poll_result(word: usize) -> Result<bool, DriverServiceBudgetError> {
+    match word {
+        0 => Ok(false),
+        1 => Ok(true),
+        0x100 => Err(DriverServiceBudgetError::ZeroCharge),
+        0x101 => Err(DriverServiceBudgetError::OperationsExhausted),
+        0x102 => Err(DriverServiceBudgetError::BytesExhausted),
+        0x103 => Err(DriverServiceBudgetError::FramesExhausted),
+        0x104 => Err(DriverServiceBudgetError::BlockingForbidden),
+        0x105 => Err(DriverServiceBudgetError::BlockingExhausted),
+        _ => Err(DriverServiceBudgetError::OperationsExhausted),
     }
 }
 

@@ -71,6 +71,20 @@ pub struct AffinityPolicy {
     pub ninedoor_cores: &'static [u8],
     pub provider_cores: &'static [u8],
     pub worker_cores: &'static [u8],
+    pub drivers: DriverAffinityPolicy,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DriverAffinityPolicy {
+    pub serial: Option<u8>,
+    pub usb_local_seat: Option<u8>,
+    pub hdmi_text: Option<u8>,
+    pub bcmgenet_v5: Option<u8>,
+    pub cyw43455: Option<u8>,
+    pub rtl8139: Option<u8>,
+    pub virtio_net: Option<u8>,
+    pub sdio_host: Option<u8>,
+    pub pcie_root: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -562,7 +576,7 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
 pub const MANIFEST_SHA256: &str =
-    "9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf";
+    "bdd02b671876b5f9fc0c96c7750c46cc20988cdd3c8841be6b1c585ca65ae3da";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

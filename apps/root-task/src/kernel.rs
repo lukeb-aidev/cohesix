@@ -4363,6 +4363,24 @@ fn bootstrap<P: Platform>(
     if consumed_slots > 0 {
         hal.consume_bootstrap_slots(consumed_slots);
     }
+    let driver_task_report = hal.bootstrap_driver_task_substrate(fault_ep_slot);
+    let mut driver_task_line = heapless::String::<192>::new();
+    let _ = write!(
+        driver_task_line,
+        "[driver-task] substrate configured={} failed={} live={} roles=0x{:x} affinity={}/{} vspace={}",
+        driver_task_report.configured_count,
+        driver_task_report.failed_count,
+        driver_task_report.live_tcb_count,
+        driver_task_report.live_tcb_role_mask,
+        driver_task_report.affinity_applied_count,
+        driver_task_report.affinity_configured_count,
+        if driver_task_report.vspace_proof {
+            "isolated"
+        } else {
+            "shared-root"
+        },
+    );
+    boot_log::force_uart_line(driver_task_line.as_str());
 
     let hardware = generated::hardware_config();
     // Reserve the low mailbox/GPIO pages before mid/high Pi4 MMIO mappings

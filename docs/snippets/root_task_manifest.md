@@ -12,6 +12,15 @@
 - `root_task.affinity.ninedoor_cores`: `[1]`
 - `root_task.affinity.provider_cores`: `[2, 3]`
 - `root_task.affinity.worker_cores`: `[2, 3]`
+- `root_task.affinity.drivers.serial`: `1`
+- `root_task.affinity.drivers.usb-local-seat`: `1`
+- `root_task.affinity.drivers.hdmi-text`: `2`
+- `root_task.affinity.drivers.bcmgenet-v5`: `2`
+- `root_task.affinity.drivers.cyw43455`: `3`
+- `root_task.affinity.drivers.rtl8139`: `2`
+- `root_task.affinity.drivers.virtio-net`: `3`
+- `root_task.affinity.drivers.sdio-host`: `3`
+- `root_task.affinity.drivers.pcie-root`: `2`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
@@ -199,7 +208,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf`
+- `manifest.sha256`: `bdd02b671876b5f9fc0c96c7750c46cc20988cdd3c8841be6b1c585ca65ae3da`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -261,4 +270,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf`)._
+_Generated from `configs/root_task.toml` (sha256: `bdd02b671876b5f9fc0c96c7750c46cc20988cdd3c8841be6b1c585ca65ae3da`)._

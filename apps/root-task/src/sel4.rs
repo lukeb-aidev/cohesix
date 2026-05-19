@@ -1821,6 +1821,116 @@ pub fn set_tcb_sched_params(
     }
 }
 
+/// Sets the CSpace/VSpace/fault endpoint for a TCB.
+#[cfg(feature = "kernel")]
+pub fn set_tcb_space(
+    tcb_cap: seL4_CPtr,
+    fault_ep: seL4_CPtr,
+    cspace_root: seL4_CNode,
+    cspace_root_data: seL4_Word,
+    vspace_root: seL4_CPtr,
+    vspace_root_data: seL4_Word,
+) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.SetSpace";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let guarded_cspace = sel4_guard::guard_cptr(guard_stage, "cspace_root", cspace_root);
+    let guarded_vspace = sel4_guard::guard_cptr(guard_stage, "vspace_root", vspace_root);
+    // SAFETY: The guarded CPtrs are kernel capabilities supplied by bootstrap code. seL4
+    // validates the target TCB, CSpace root, VSpace root, and target fault endpoint.
+    let result = unsafe {
+        sel4_sys::seL4_TCB_SetSpace(
+            guarded_tcb,
+            fault_ep,
+            guarded_cspace,
+            cspace_root_data,
+            guarded_vspace,
+            vspace_root_data,
+        )
+    };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] set-space failed tcb=0x{tcb:04x} fault_ep=0x{fault_ep:04x} cspace=0x{cspace:04x} vspace=0x{vspace:04x} err={err} ({name})",
+            tcb = guarded_tcb,
+            cspace = guarded_cspace,
+            vspace = guarded_vspace,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
+/// Writes the initial AArch64 register set for a newly configured TCB.
+#[cfg(feature = "kernel")]
+pub fn write_tcb_registers(
+    tcb_cap: seL4_CPtr,
+    entry: usize,
+    stack_top: usize,
+    arg0: seL4_Word,
+    resume_target: bool,
+) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.WriteRegisters";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let regs = sel4_sys::seL4_UserContext {
+        pc: entry as seL4_Word,
+        sp: stack_top as seL4_Word,
+        spsr: 0,
+        x0: arg0,
+        x1: 0,
+        x2: 0,
+        x3: 0,
+        x4: 0,
+        x5: 0,
+        x6: 0,
+        x7: 0,
+        x8: 0,
+        x16: 0,
+        x17: 0,
+        x18: 0,
+        x29: 0,
+        x30: 0,
+        x9: 0,
+        x10: 0,
+        x11: 0,
+        x12: 0,
+        x13: 0,
+        x14: 0,
+        x15: 0,
+        x19: 0,
+        x20: 0,
+        x21: 0,
+        x22: 0,
+        x23: 0,
+        x24: 0,
+        x25: 0,
+        x26: 0,
+        x27: 0,
+        x28: 0,
+        tpidr_el0: 0,
+        tpidrro_el0: 0,
+    };
+    let resume: sel4_sys::seL4_Bool = if resume_target { 1 } else { 0 };
+    // SAFETY: The register block is fully initialized and lives for the duration of the
+    // syscall. seL4 validates the TCB capability and register count.
+    let result =
+        unsafe { sel4_sys::seL4_TCB_WriteRegisters(guarded_tcb, resume, 0, 36, &regs as *const _) };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] write-registers failed tcb=0x{tcb:04x} entry=0x{entry:016x} sp=0x{sp:016x} err={err} ({name})",
+            tcb = guarded_tcb,
+            entry = entry,
+            sp = stack_top,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
 /// Suspends a TCB.
 #[cfg(feature = "kernel")]
 pub fn suspend_tcb(tcb_cap: seL4_CPtr) -> Result<(), seL4_Error> {
@@ -4237,6 +4347,75 @@ impl<'a> KernelEnv<'a> {
             reserved.cap() as seL4_CPtr,
             sel4_sys::seL4_NotificationObject as seL4_Word,
             sel4_sys::seL4_NotificationBits as seL4_Word,
+            slot,
+        ) {
+            Ok(()) => Ok(slot),
+            Err(err) => {
+                self.untyped.release(&reserved);
+                Err(err.into_sel4_error())
+            }
+        }
+    }
+
+    /// Retypes and returns an endpoint object in the init CSpace.
+    pub fn alloc_endpoint(&mut self) -> Result<seL4_CPtr, seL4_Error> {
+        let reserved = self
+            .untyped
+            .reserve_ram(sel4_sys::seL4_EndpointBits as u8)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let slot = self.allocate_slot();
+        match cspace_sys::untyped_retype_into_init_root(
+            reserved.cap() as seL4_CPtr,
+            sel4_sys::seL4_EndpointObject as seL4_Word,
+            0,
+            slot,
+        ) {
+            Ok(()) => Ok(slot),
+            Err(err) => {
+                self.untyped.release(&reserved);
+                Err(err.into_sel4_error())
+            }
+        }
+    }
+
+    /// Retypes and returns a TCB object in the init CSpace.
+    pub fn alloc_tcb(&mut self) -> Result<seL4_CPtr, seL4_Error> {
+        let reserved = self
+            .untyped
+            .reserve_ram(sel4_sys::seL4_TCBBits as u8)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let slot = self.allocate_slot();
+        match cspace_sys::untyped_retype_into_init_root(
+            reserved.cap() as seL4_CPtr,
+            sel4_sys::seL4_TCBObject as seL4_Word,
+            0,
+            slot,
+        ) {
+            Ok(()) => Ok(slot),
+            Err(err) => {
+                self.untyped.release(&reserved);
+                Err(err.into_sel4_error())
+            }
+        }
+    }
+
+    /// Retypes and returns a CNode object with `radix_bits` slots.
+    pub fn alloc_cnode(&mut self, radix_bits: u8) -> Result<seL4_CPtr, seL4_Error> {
+        if radix_bits == 0 || seL4_Word::from(radix_bits) >= word_bits() {
+            return Err(seL4_RangeError);
+        }
+        let object_bits = (sel4_sys::seL4_SlotBits as u8)
+            .checked_add(radix_bits)
+            .ok_or(seL4_RangeError)?;
+        let reserved = self
+            .untyped
+            .reserve_ram(object_bits)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let slot = self.allocate_slot();
+        match cspace_sys::untyped_retype_into_init_root(
+            reserved.cap() as seL4_CPtr,
+            sel4_sys::seL4_CapTableObject as seL4_Word,
+            radix_bits as seL4_Word,
             slot,
         ) {
             Ok(()) => Ok(slot),

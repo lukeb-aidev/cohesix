@@ -5,6 +5,8 @@
 
 //! Local diagnostics seat policy helpers (Milestone 26).
 
+#![allow(unsafe_code)]
+
 extern crate alloc;
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -283,6 +285,36 @@ impl LocalSeatRuntime {
 
     /// Mirror a console line into the bounded local-seat output ring.
     pub fn mirror_line(&mut self, line: &str) {
+        #[cfg(feature = "kernel")]
+        {
+            let mut context = DisplayMirrorTaskContext {
+                runtime: self as *mut Self as usize,
+                line_ptr: line.as_ptr() as usize,
+                line_len: line.len(),
+            };
+            // SAFETY: The context points at `self` plus the borrowed `line`;
+            // root waits synchronously until the HDMI driver TCB finishes this
+            // bounded mirror operation.
+            if unsafe {
+                crate::hal::driver_task::run_driver_task_service(
+                    crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                    &mut context as *mut DisplayMirrorTaskContext as usize,
+                    display_mirror_driver_task,
+                )
+            }
+            .is_some()
+            {
+                return;
+            }
+            crate::hal::driver_task::record_driver_task_service(
+                crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
+            );
+        }
+        self.mirror_line_current_tcb(line);
+    }
+
+    fn mirror_line_current_tcb(&mut self, line: &str) {
         let truncated = truncate_for_display(line, self.status.line_bytes);
         let mut mirrored = String::new();
         mirrored.push_str(truncated);
@@ -416,8 +448,33 @@ impl LocalSeatRuntime {
 
     /// Poll the platform local-seat input backend and enqueue discovered bytes.
     pub fn poll_backend_keyboard(&mut self) {
-        self.backend_keyboard_poll_calls = self.backend_keyboard_poll_calls.saturating_add(1);
         let contract = driver_task_contract();
+        #[cfg(feature = "kernel")]
+        {
+            // SAFETY: The context pointer is `self`, and root waits
+            // synchronously for the USB/local-seat driver TCB before touching
+            // the runtime again.
+            if unsafe {
+                crate::hal::driver_task::run_driver_task_service(
+                    contract,
+                    self as *mut Self as usize,
+                    usb_keyboard_poll_driver_task,
+                )
+            }
+            .is_some()
+            {
+                return;
+            }
+            crate::hal::driver_task::record_driver_task_service(
+                contract,
+                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
+            );
+        }
+        self.poll_backend_keyboard_current_tcb(contract);
+    }
+
+    fn poll_backend_keyboard_current_tcb(&mut self, contract: DriverTaskContract) {
+        self.backend_keyboard_poll_calls = self.backend_keyboard_poll_calls.saturating_add(1);
         let mut budget = match DriverServiceBudget::new(contract) {
             Ok(budget) => budget,
             Err(_) => {
@@ -531,6 +588,39 @@ fn keyboard_poll_read_limit(contract: DriverTaskContract) -> usize {
         .min(contract.budget.max_bytes_per_turn as usize)
         .min(usize::from(contract.budget.max_frames_per_turn))
         .min(usize::from(contract.budget.max_ops_per_turn))
+}
+
+#[cfg(feature = "kernel")]
+struct DisplayMirrorTaskContext {
+    runtime: usize,
+    line_ptr: usize,
+    line_len: usize,
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn display_mirror_driver_task(context: usize) -> usize {
+    // SAFETY: `context` is built by `LocalSeatRuntime::mirror_line`; root waits
+    // synchronously while this callback borrows the runtime and line slice.
+    let task = unsafe { &mut *(context as *mut DisplayMirrorTaskContext) };
+    // SAFETY: `line_ptr/line_len` describe the borrowed `&str` passed to
+    // `mirror_line`, which remains live until the synchronous dispatch returns.
+    let bytes = unsafe { core::slice::from_raw_parts(task.line_ptr as *const u8, task.line_len) };
+    // SAFETY: The original input was `&str`, so the byte slice is valid UTF-8.
+    let line = unsafe { core::str::from_utf8_unchecked(bytes) };
+    // SAFETY: `runtime` is the `self` pointer from `mirror_line`, exclusively
+    // borrowed while root waits for this driver TCB callback to complete.
+    let runtime = unsafe { &mut *(task.runtime as *mut LocalSeatRuntime) };
+    runtime.mirror_line_current_tcb(line);
+    0
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn usb_keyboard_poll_driver_task(context: usize) -> usize {
+    // SAFETY: `context` is the `self` pointer from `poll_backend_keyboard`;
+    // root waits synchronously while the USB/local-seat TCB polls the backend.
+    let runtime = unsafe { &mut *(context as *mut LocalSeatRuntime) };
+    runtime.poll_backend_keyboard_current_tcb(driver_task_contract());
+    0
 }
 
 /// Runtime local-seat backend initialisation error.

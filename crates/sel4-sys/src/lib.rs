@@ -1323,6 +1323,73 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_TCB_WriteRegisters(
+        service: seL4_TCB,
+        resume_target: seL4_Bool,
+        arch_flags: seL4_Uint8,
+        count: seL4_Word,
+        regs: *const seL4_UserContext,
+    ) -> seL4_Error {
+        if regs.is_null() {
+            return seL4_InvalidArgument;
+        }
+
+        let regs = &*regs;
+        let mut mr0: seL4_Word =
+            ((resume_target as seL4_Word) & 0x1) | (((arch_flags as seL4_Word) & 0xff) << 8);
+        let mut mr1: seL4_Word = count;
+        let mut mr2: seL4_Word = regs.pc;
+        let mut mr3: seL4_Word = regs.sp;
+        seL4_SetMR(4, regs.spsr);
+        seL4_SetMR(5, regs.x0);
+        seL4_SetMR(6, regs.x1);
+        seL4_SetMR(7, regs.x2);
+        seL4_SetMR(8, regs.x3);
+        seL4_SetMR(9, regs.x4);
+        seL4_SetMR(10, regs.x5);
+        seL4_SetMR(11, regs.x6);
+        seL4_SetMR(12, regs.x7);
+        seL4_SetMR(13, regs.x8);
+        seL4_SetMR(14, regs.x16);
+        seL4_SetMR(15, regs.x17);
+        seL4_SetMR(16, regs.x18);
+        seL4_SetMR(17, regs.x29);
+        seL4_SetMR(18, regs.x30);
+        seL4_SetMR(19, regs.x9);
+        seL4_SetMR(20, regs.x10);
+        seL4_SetMR(21, regs.x11);
+        seL4_SetMR(22, regs.x12);
+        seL4_SetMR(23, regs.x13);
+        seL4_SetMR(24, regs.x14);
+        seL4_SetMR(25, regs.x15);
+        seL4_SetMR(26, regs.x19);
+        seL4_SetMR(27, regs.x20);
+        seL4_SetMR(28, regs.x21);
+        seL4_SetMR(29, regs.x22);
+        seL4_SetMR(30, regs.x23);
+        seL4_SetMR(31, regs.x24);
+        seL4_SetMR(32, regs.x25);
+        seL4_SetMR(33, regs.x26);
+        seL4_SetMR(34, regs.x27);
+        seL4_SetMR(35, regs.x28);
+        seL4_SetMR(36, regs.tpidr_el0);
+        seL4_SetMR(37, regs.tpidrro_el0);
+
+        let tag = seL4_MessageInfo::new(invocation_label_TCBWriteRegisters as seL4_Word, 0, 0, 38);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_TCB_SetPriority(
         service: seL4_TCB,
         authority: seL4_TCB,
@@ -1848,6 +1915,8 @@ mod imp {
     pub const seL4_CapInitThreadSC: seL4_CPtr = 14;
     pub const seL4_CapSMC: seL4_CPtr = 15;
     pub const seL4_NumInitialCaps: seL4_CPtr = seL4_CapSMC + 1;
+    pub const seL4_TCBBits: seL4_Word = 11;
+    pub const seL4_SlotBits: seL4_Word = 5;
 
     pub const seL4_UntypedObject: seL4_Word = 0;
     pub const seL4_TCBObject: seL4_Word = 1;
@@ -1858,7 +1927,7 @@ mod imp {
     pub const seL4_ARM_LargePageObject: seL4_Word = 7;
     pub const seL4_ARM_PageTableObject: seL4_Word = 8;
     pub const seL4_EndpointBits: seL4_Word = 4;
-    pub const seL4_NotificationBits: seL4_Word = 4;
+    pub const seL4_NotificationBits: seL4_Word = 5;
 
     #[repr(usize)]
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1913,8 +1982,102 @@ mod imp {
     }
 
     pub type seL4_CapRights = seL4_CapRights_t;
+    pub type seL4_Bool = i8;
     pub type seL4_Uint8 = u8;
     pub type seL4_Uint32 = u32;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct seL4_UserContext_ {
+        pub pc: seL4_Word,
+        pub sp: seL4_Word,
+        pub spsr: seL4_Word,
+        pub x0: seL4_Word,
+        pub x1: seL4_Word,
+        pub x2: seL4_Word,
+        pub x3: seL4_Word,
+        pub x4: seL4_Word,
+        pub x5: seL4_Word,
+        pub x6: seL4_Word,
+        pub x7: seL4_Word,
+        pub x8: seL4_Word,
+        pub x16: seL4_Word,
+        pub x17: seL4_Word,
+        pub x18: seL4_Word,
+        pub x29: seL4_Word,
+        pub x30: seL4_Word,
+        pub x9: seL4_Word,
+        pub x10: seL4_Word,
+        pub x11: seL4_Word,
+        pub x12: seL4_Word,
+        pub x13: seL4_Word,
+        pub x14: seL4_Word,
+        pub x15: seL4_Word,
+        pub x19: seL4_Word,
+        pub x20: seL4_Word,
+        pub x21: seL4_Word,
+        pub x22: seL4_Word,
+        pub x23: seL4_Word,
+        pub x24: seL4_Word,
+        pub x25: seL4_Word,
+        pub x26: seL4_Word,
+        pub x27: seL4_Word,
+        pub x28: seL4_Word,
+        pub tpidr_el0: seL4_Word,
+        pub tpidrro_el0: seL4_Word,
+    }
+
+    impl seL4_UserContext_ {
+        #[inline(always)]
+        pub const fn zeroed() -> Self {
+            Self {
+                pc: 0,
+                sp: 0,
+                spsr: 0,
+                x0: 0,
+                x1: 0,
+                x2: 0,
+                x3: 0,
+                x4: 0,
+                x5: 0,
+                x6: 0,
+                x7: 0,
+                x8: 0,
+                x16: 0,
+                x17: 0,
+                x18: 0,
+                x29: 0,
+                x30: 0,
+                x9: 0,
+                x10: 0,
+                x11: 0,
+                x12: 0,
+                x13: 0,
+                x14: 0,
+                x15: 0,
+                x19: 0,
+                x20: 0,
+                x21: 0,
+                x22: 0,
+                x23: 0,
+                x24: 0,
+                x25: 0,
+                x26: 0,
+                x27: 0,
+                x28: 0,
+                tpidr_el0: 0,
+                tpidrro_el0: 0,
+            }
+        }
+    }
+
+    impl Default for seL4_UserContext_ {
+        fn default() -> Self {
+            Self::zeroed()
+        }
+    }
+
+    pub type seL4_UserContext = seL4_UserContext_;
 
     #[derive(Clone, Copy)]
     pub struct seL4_MessageInfo {
@@ -2379,6 +2542,63 @@ mod imp {
         let ipc = ensure_ipc_buffer();
         (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBSetIPCBuffer, 0, 1, 1);
         (*ipc).msg[0] = buffer_addr;
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_WriteRegisters(
+        _service: seL4_TCB,
+        resume_target: seL4_Bool,
+        arch_flags: seL4_Uint8,
+        count: seL4_Word,
+        regs: *const seL4_UserContext,
+    ) -> seL4_Error {
+        if regs.is_null() {
+            return seL4_InvalidArgument;
+        }
+
+        let regs = *regs;
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBWriteRegisters, 0, 0, 38);
+        (*ipc).msg[0] =
+            ((resume_target as seL4_Word) & 0x1) | (((arch_flags as seL4_Word) & 0xff) << 8);
+        (*ipc).msg[1] = count;
+        (*ipc).msg[2] = regs.pc;
+        (*ipc).msg[3] = regs.sp;
+        (*ipc).msg[4] = regs.spsr;
+        (*ipc).msg[5] = regs.x0;
+        (*ipc).msg[6] = regs.x1;
+        (*ipc).msg[7] = regs.x2;
+        (*ipc).msg[8] = regs.x3;
+        (*ipc).msg[9] = regs.x4;
+        (*ipc).msg[10] = regs.x5;
+        (*ipc).msg[11] = regs.x6;
+        (*ipc).msg[12] = regs.x7;
+        (*ipc).msg[13] = regs.x8;
+        (*ipc).msg[14] = regs.x16;
+        (*ipc).msg[15] = regs.x17;
+        (*ipc).msg[16] = regs.x18;
+        (*ipc).msg[17] = regs.x29;
+        (*ipc).msg[18] = regs.x30;
+        (*ipc).msg[19] = regs.x9;
+        (*ipc).msg[20] = regs.x10;
+        (*ipc).msg[21] = regs.x11;
+        (*ipc).msg[22] = regs.x12;
+        (*ipc).msg[23] = regs.x13;
+        (*ipc).msg[24] = regs.x14;
+        (*ipc).msg[25] = regs.x15;
+        (*ipc).msg[26] = regs.x19;
+        (*ipc).msg[27] = regs.x20;
+        (*ipc).msg[28] = regs.x21;
+        (*ipc).msg[29] = regs.x22;
+        (*ipc).msg[30] = regs.x23;
+        (*ipc).msg[31] = regs.x24;
+        (*ipc).msg[32] = regs.x25;
+        (*ipc).msg[33] = regs.x26;
+        (*ipc).msg[34] = regs.x27;
+        (*ipc).msg[35] = regs.x28;
+        (*ipc).msg[36] = regs.tpidr_el0;
+        (*ipc).msg[37] = regs.tpidrro_el0;
         seL4_NoError
     }
 

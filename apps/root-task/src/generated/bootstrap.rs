@@ -7,18 +7,19 @@
 
 use super::{
     AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig,
-    ControlPlaneConfig, DhcpPolicyConfig, ExportControlConfig, HardwareConfig, HardwareDevice,
-    HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig,
-    HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState,
-    LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig,
-    NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig,
-    PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig,
-    ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig,
-    Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig,
-    SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig,
-    StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema,
-    TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec,
-    UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig,
+    ControlPlaneConfig, DhcpPolicyConfig, DriverAffinityPolicy, ExportControlConfig,
+    HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig,
+    HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig,
+    HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig,
+    LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy,
+    NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig,
+    Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig,
+    ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy,
+    SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter,
+    SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig,
+    TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits,
+    TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig,
+    UiUpdatesConfig,
 };
 use cohesix_ticket::{Role, TicketKey};
 
@@ -27,7 +28,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "495ee845e396052cebbbae5605a53083fd03b972520251c776dcfeaf509b5779";
+    "f772aa0554a2457458b451102f8634be3b6ffa753834dba2f3f97f922e75cb12";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -118,6 +119,18 @@ pub const AFFINITY_PROVIDER_CORES: [u8; 2] = [2, 3];
 
 pub const AFFINITY_WORKER_CORES: [u8; 2] = [2, 3];
 
+pub const DRIVER_AFFINITY_POLICY: DriverAffinityPolicy = DriverAffinityPolicy {
+    serial: Some(1),
+    usb_local_seat: Some(1),
+    hdmi_text: Some(2),
+    bcmgenet_v5: Some(2),
+    cyw43455: Some(3),
+    rtl8139: Some(2),
+    virtio_net: Some(3),
+    sdio_host: Some(3),
+    pcie_root: Some(2),
+};
+
 pub const AFFINITY_POLICY: AffinityPolicy = AffinityPolicy {
     enabled: true,
     max_cores: 4,
@@ -125,6 +138,7 @@ pub const AFFINITY_POLICY: AffinityPolicy = AffinityPolicy {
     ninedoor_cores: &AFFINITY_NINEDOOR_CORES,
     provider_cores: &AFFINITY_PROVIDER_CORES,
     worker_cores: &AFFINITY_WORKER_CORES,
+    drivers: DRIVER_AFFINITY_POLICY,
 };
 
 pub const SHARD_LABELS: [&str; 256] = [
@@ -517,7 +531,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 36] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=9508011a97545c95df885b868516acd4a74ac4021e56b880035a1f9d0f1a8eaf",
+    "manifest.sha256=bdd02b671876b5f9fc0c96c7750c46cc20988cdd3c8841be6b1c585ca65ae3da",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

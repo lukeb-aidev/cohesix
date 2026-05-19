@@ -242,6 +242,7 @@ def test_gate_proof_rejects_dedicated_contracts_without_substrate_ready(
     log_path.write_text(
         "\n".join(
             [
+                "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
                 "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task max_service_us=40 observed_service_us=18",
                 "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task max_service_us=40 observed_service_us=22",
                 "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task max_service_us=80 observed_service_us=44",
@@ -294,11 +295,13 @@ def test_gate_proof_rejects_aggregate_dedicated_count_without_required_roles(
     log_path.write_text(
         "\n".join(
             [
+                "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+                "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 mcs=0 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated live_hot_paths=yes",
                 "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task observed_service_us=73",
                 "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task observed_service_us=91",
                 "SCHED_CONTRACT contract=rtl8139 isolation=dedicated-sel4-task observed_service_us=62",
                 "SCHED_CONTRACT contract=virtio-net isolation=dedicated-sel4-task observed_service_us=64",
-                "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate required=4 dedicated=4 compatibility=0",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated required=4 dedicated=4 compatibility=0",
                 "SERIAL_ECHO p95_us=800 max_gap_us=1200",
                 "USB_BURST bytes=256 drops=0 max_latency_us=900",
                 "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",

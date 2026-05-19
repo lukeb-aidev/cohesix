@@ -250,6 +250,8 @@ class GateSummary:
     net_active: str = "unknown"
     net_addr_src: str = "unknown"
     net_dhcp: str = "unknown"
+    driver_task_default_requested: bool = False
+    driver_task_live_hot_paths: bool = False
     driver_task_contracts: int = 0
     driver_task_dedicated: int = 0
     driver_task_compatibility: int = 0
@@ -259,10 +261,15 @@ class GateSummary:
     driver_task_display_dedicated: bool = False
     driver_task_net_dedicated: bool = False
     driver_task_substrate_ready: bool = False
+    driver_task_failed_count: int = 0
     driver_task_capset_proof: bool = False
     driver_task_fault_proof: bool = False
     driver_task_revoke_proof: bool = False
     driver_task_sched_proof: bool = False
+    driver_task_affinity_proof: bool = False
+    driver_task_affinity_configured: int = 0
+    driver_task_affinity_applied: int = 0
+    driver_task_vspace_proof: bool = False
     driver_task_active_net: str = "unknown"
     driver_task_budget_overruns: int = 0
     driver_task_latency_proofs: int = 0
@@ -306,6 +313,12 @@ class GateSummary:
             "NET_ACTIVE": self.net_active,
             "NET_ADDR_SRC": self.net_addr_src,
             "NET_DHCP": self.net_dhcp,
+            "DRIVER_TASK_DEFAULT_REQUESTED": (
+                "yes" if self.driver_task_default_requested else "no"
+            ),
+            "DRIVER_TASK_LIVE_HOT_PATHS": (
+                "yes" if self.driver_task_live_hot_paths else "no"
+            ),
             "DRIVER_TASK_CONTRACTS": self.driver_task_contracts,
             "DRIVER_TASK_DEDICATED": self.driver_task_dedicated,
             "DRIVER_TASK_COMPATIBILITY": self.driver_task_compatibility,
@@ -327,6 +340,7 @@ class GateSummary:
             "DRIVER_TASK_SUBSTRATE_READY": (
                 "yes" if self.driver_task_substrate_ready else "no"
             ),
+            "DRIVER_TASK_FAILED_COUNT": self.driver_task_failed_count,
             "DRIVER_TASK_CAPSET_PROOF": (
                 "yes" if self.driver_task_capset_proof else "no"
             ),
@@ -338,6 +352,14 @@ class GateSummary:
             ),
             "DRIVER_TASK_SCHED_PROOF": (
                 "yes" if self.driver_task_sched_proof else "no"
+            ),
+            "DRIVER_TASK_AFFINITY_PROOF": (
+                "yes" if self.driver_task_affinity_proof else "no"
+            ),
+            "DRIVER_TASK_AFFINITY_CONFIGURED": self.driver_task_affinity_configured,
+            "DRIVER_TASK_AFFINITY_APPLIED": self.driver_task_affinity_applied,
+            "DRIVER_TASK_VSPACE_PROOF": (
+                "yes" if self.driver_task_vspace_proof else "no"
             ),
             "DRIVER_TASK_ACTIVE_NET": self.driver_task_active_net,
             "DRIVER_TASK_BUDGET_OVERRUNS": self.driver_task_budget_overruns,
@@ -4003,39 +4025,53 @@ def classify_driver_task_role(label: str) -> str | None:
 def summarize_driver_task_proofs(
     events: Iterable[TraceEvent],
 ) -> tuple[
-    int,
-    int,
-    int,
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    str,
-    int,
-    int,
-    bool,
-    bool,
-    int,
-    bool,
+    bool,  # default_requested
+    bool,  # live_hot_paths
+    int,  # contracts
+    int,  # dedicated_contracts
+    int,  # compatibility_contracts
+    bool,  # dedicated_ready
+    bool,  # serial dedicated
+    bool,  # usb dedicated
+    bool,  # display dedicated
+    bool,  # net dedicated
+    bool,  # substrate_ready
+    int,  # failed_count
+    bool,  # capset_proof
+    bool,  # fault_proof
+    bool,  # revoke_proof
+    bool,  # sched_proof
+    bool,  # affinity_proof
+    int,  # affinity_configured
+    int,  # affinity_applied
+    bool,  # vspace_proof
+    str,  # active_net
+    int,  # budget_overruns
+    int,  # latency_proofs
+    bool,  # serial_responsive
+    bool,  # usb_burst_proof
+    int,  # usb_burst_drops
+    bool,  # hdmi_responsive
 ]:
     """Summarize Pi 4 driver-task and responsiveness proof breadcrumbs."""
 
+    default_requested = False
+    live_hot_paths = False
     contracts: set[str] = set()
     dedicated_contracts: set[str] = set()
     compatibility_contracts: set[str] = set()
     dedicated_roles: set[str] = set()
     dedicated_ready = False
     substrate_ready = False
+    failed_count = 0
     capset_proof = False
     fault_proof = False
     revoke_proof = False
     sched_proof = False
+    affinity_proof = False
+    affinity_configured = 0
+    affinity_applied = 0
+    vspace_proof = False
     active_net = "unknown"
     budget_overruns = 0
     latency_proofs = 0
@@ -4054,6 +4090,13 @@ def summarize_driver_task_proofs(
             or "budget overrun" in raw
         )
         if driver_task_line:
+            if "driver_task_default" in raw:
+                default_requested |= fields.get("requested", "").lower() in {
+                    "dedicated",
+                    "dedicated-sel4-task",
+                    "yes",
+                }
+                live_hot_paths |= _truthy_field(fields.get("live_hot_paths"))
             contract_declaration_line = (
                 (
                     "sched_contract" in raw
@@ -4108,15 +4151,40 @@ def summarize_driver_task_proofs(
                 fault_proof |= fields.get("fault", "").lower() == "pass"
                 revoke_proof |= fields.get("revoke", "").lower() == "pass"
                 sched_proof |= fields.get("sched", "").lower() == "pass"
+                affinity_proof |= fields.get("affinity", "").lower() in {
+                    "pass",
+                    "per-driver",
+                    "yes",
+                }
+                vspace_proof |= fields.get("vspace", "").lower() in {"isolated", "yes", "pass"}
+                live_hot_paths |= _truthy_field(fields.get("live_hot_paths"))
                 active_net = fields.get("active_net", active_net)
             if "driver_task_substrate" in raw:
                 substrate_ready |= fields.get("active", "").lower() == "yes"
+                parsed_failed = parse_hex_int(fields.get("failed_count"))
+                if parsed_failed is not None:
+                    failed_count = max(failed_count, parsed_failed)
                 capset_proof |= fields.get("root_authority_retained", "").lower() == "yes" and (
                     parse_hex_int(fields.get("broad_caps_leaked")) == 0
                 )
                 fault_proof |= fields.get("fault_endpoint_ready", "").lower() == "yes"
                 revoke_proof |= fields.get("revoke_ready", "").lower() == "yes"
                 sched_proof |= "mcs" in fields or _truthy_field(fields.get("sched"))
+                configured = parse_hex_int(fields.get("affinity_configured"))
+                applied = parse_hex_int(fields.get("affinity_applied"))
+                if configured is not None:
+                    affinity_configured = max(affinity_configured, configured)
+                if applied is not None:
+                    affinity_applied = max(affinity_applied, applied)
+                if configured is not None and applied is not None:
+                    affinity_proof |= configured == applied and configured > 0
+                affinity_proof |= fields.get("affinity", "").lower() in {
+                    "pass",
+                    "per-driver",
+                    "yes",
+                }
+                vspace_proof |= fields.get("vspace", "").lower() in {"isolated", "yes", "pass"}
+                live_hot_paths |= _truthy_field(fields.get("live_hot_paths"))
             unexpected_caps = parse_hex_int(fields.get("unexpected_caps"))
             if unexpected_caps == 0:
                 capset_proof |= fields.get("capset", "").lower() in {
@@ -4160,6 +4228,8 @@ def summarize_driver_task_proofs(
         if line_has_hdmi_responsiveness(raw, fields):
             hdmi_responsive = True
     return (
+        default_requested,
+        live_hot_paths,
         len(contracts),
         len(dedicated_contracts),
         len(compatibility_contracts),
@@ -4169,10 +4239,15 @@ def summarize_driver_task_proofs(
         "display" in dedicated_roles,
         "net" in dedicated_roles,
         substrate_ready,
+        failed_count,
         capset_proof,
         fault_proof,
         revoke_proof,
         sched_proof,
+        affinity_proof,
+        affinity_configured,
+        affinity_applied,
+        vspace_proof,
         active_net,
         budget_overruns,
         latency_proofs,
@@ -4299,6 +4374,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     )
     net_active, net_addr_src, net_dhcp = summarize_net_state(event_list)
     (
+        driver_task_default_requested,
+        driver_task_live_hot_paths,
         driver_task_contracts,
         driver_task_dedicated,
         driver_task_compatibility,
@@ -4308,10 +4385,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_display_dedicated,
         driver_task_net_dedicated,
         driver_task_substrate_ready,
+        driver_task_failed_count,
         driver_task_capset_proof,
         driver_task_fault_proof,
         driver_task_revoke_proof,
         driver_task_sched_proof,
+        driver_task_affinity_proof,
+        driver_task_affinity_configured,
+        driver_task_affinity_applied,
+        driver_task_vspace_proof,
         driver_task_active_net,
         driver_task_budget_overruns,
         driver_task_latency_proofs,
@@ -4348,6 +4430,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         net_active=net_active,
         net_addr_src=net_addr_src,
         net_dhcp=net_dhcp,
+        driver_task_default_requested=driver_task_default_requested,
+        driver_task_live_hot_paths=driver_task_live_hot_paths,
         driver_task_contracts=driver_task_contracts,
         driver_task_dedicated=driver_task_dedicated,
         driver_task_compatibility=driver_task_compatibility,
@@ -4357,10 +4441,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_display_dedicated=driver_task_display_dedicated,
         driver_task_net_dedicated=driver_task_net_dedicated,
         driver_task_substrate_ready=driver_task_substrate_ready,
+        driver_task_failed_count=driver_task_failed_count,
         driver_task_capset_proof=driver_task_capset_proof,
         driver_task_fault_proof=driver_task_fault_proof,
         driver_task_revoke_proof=driver_task_revoke_proof,
         driver_task_sched_proof=driver_task_sched_proof,
+        driver_task_affinity_proof=driver_task_affinity_proof,
+        driver_task_affinity_configured=driver_task_affinity_configured,
+        driver_task_affinity_applied=driver_task_affinity_applied,
+        driver_task_vspace_proof=driver_task_vspace_proof,
         driver_task_active_net=driver_task_active_net,
         driver_task_budget_overruns=driver_task_budget_overruns,
         driver_task_latency_proofs=driver_task_latency_proofs,

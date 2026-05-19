@@ -5,10 +5,12 @@
 
 //! Scheduling contracts for hardware drivers.
 //!
-//! These contracts are the HAL-facing bridge between the current direct
-//! root-task compatibility path and the Milestone 26a/26b dedicated seL4
-//! driver-task model. Drivers must declare the contract they consume before
-//! runtime code may service them.
+//! These contracts are the HAL-facing bridge for the Milestone 26a/26b
+//! dedicated seL4 driver-task model. Drivers must declare the contract they
+//! consume before runtime code may service them.
+
+#[cfg(feature = "kernel")]
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use heapless::Deque;
 
@@ -33,22 +35,575 @@ pub enum DriverTaskKind {
     PcieRoot,
 }
 
+impl DriverTaskKind {
+    /// Stable role label used by Pi 4 driver-task proof tooling.
+    #[must_use]
+    pub const fn proof_role(self) -> &'static str {
+        match self {
+            Self::Serial => "serial",
+            Self::LocalSeatUsb => "usb",
+            Self::HdmiText => "display",
+            Self::WiredNic | Self::WifiNic | Self::VirtualNic => "net",
+            Self::SdioHost => "sdio",
+            Self::PcieRoot => "pcie",
+        }
+    }
+}
+
+/// Returns the required closure role bit represented by a driver kind.
+#[must_use]
+pub const fn driver_task_role_bit(kind: DriverTaskKind) -> usize {
+    match kind {
+        DriverTaskKind::Serial => DRIVER_TASK_ROLE_SERIAL_BIT,
+        DriverTaskKind::LocalSeatUsb => DRIVER_TASK_ROLE_USB_BIT,
+        DriverTaskKind::HdmiText => DRIVER_TASK_ROLE_DISPLAY_BIT,
+        DriverTaskKind::WiredNic | DriverTaskKind::WifiNic | DriverTaskKind::VirtualNic => {
+            DRIVER_TASK_ROLE_NET_BIT
+        }
+        DriverTaskKind::SdioHost => DRIVER_TASK_ROLE_SDIO_BIT,
+        DriverTaskKind::PcieRoot => DRIVER_TASK_ROLE_PCIE_BIT,
+    }
+}
+
+/// Runtime snapshot of the seL4 driver-task substrate.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DriverTaskRuntimeProof {
+    /// Whether the root bootstrap created at least one driver TCB.
+    pub substrate_active: bool,
+    /// Driver TCBs configured during bootstrap.
+    pub configured_count: usize,
+    /// Driver TCBs that failed during bootstrap.
+    pub failed_count: usize,
+    /// Driver TCBs that resumed and executed their entry trampoline.
+    pub live_tcb_count: usize,
+    /// Role coverage for live TCBs.
+    pub live_tcb_role_mask: usize,
+    /// Role coverage for hot paths actually serviced by dedicated TCBs.
+    pub hot_path_role_mask: usize,
+    /// Role coverage still observed on root-task compatibility service turns.
+    pub compatibility_service_role_mask: usize,
+    /// Whether minted driver CSpaces contain only declared caps.
+    pub capset_proof: bool,
+    /// Whether driver fault endpoints were installed.
+    pub fault_proof: bool,
+    /// Whether revocation/rollback state exists for created driver caps.
+    pub revoke_proof: bool,
+    /// Whether scheduling parameters were successfully installed.
+    pub sched_proof: bool,
+    /// Driver TCBs with explicit per-driver manifest affinity configured.
+    pub affinity_configured_count: usize,
+    /// Driver TCBs whose per-driver manifest affinity was applied.
+    pub affinity_applied_count: usize,
+    /// Whether every configured per-driver affinity was applied successfully.
+    pub affinity_proof: bool,
+    /// Whether active driver TCBs use isolated driver VSpaces.
+    pub vspace_proof: bool,
+    /// Count of broad authority caps intentionally leaked into driver CSpaces.
+    pub broad_caps_leaked: usize,
+}
+
+/// Bootstrap report published by the HAL after creating driver TCBs.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DriverTaskBootstrapReport {
+    /// Driver TCBs configured during bootstrap.
+    pub configured_count: usize,
+    /// Driver TCBs that failed during bootstrap.
+    pub failed_count: usize,
+    /// Driver TCBs that reached their entry trampoline.
+    pub live_tcb_count: usize,
+    /// Role coverage for live TCBs.
+    pub live_tcb_role_mask: usize,
+    /// Whether minted driver CSpaces contain only declared caps.
+    pub capset_proof: bool,
+    /// Whether fault endpoints were installed.
+    pub fault_proof: bool,
+    /// Whether created driver caps are tracked for revocation.
+    pub revoke_proof: bool,
+    /// Whether priorities/scheduling parameters were installed.
+    pub sched_proof: bool,
+    /// Driver TCBs with explicit per-driver manifest affinity configured.
+    pub affinity_configured_count: usize,
+    /// Driver TCBs whose per-driver manifest affinity was applied.
+    pub affinity_applied_count: usize,
+    /// Whether every configured per-driver affinity was applied successfully.
+    pub affinity_proof: bool,
+    /// Whether driver TCBs run in isolated driver VSpaces.
+    pub vspace_proof: bool,
+    /// Count of broad authority caps intentionally leaked into driver CSpaces.
+    pub broad_caps_leaked: usize,
+}
+
+/// Publish the seL4 driver-task substrate state for later boot proof.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_bootstrap_report(report: DriverTaskBootstrapReport) {
+    DRIVER_TASK_SUBSTRATE_ACTIVE.store((report.configured_count > 0) as usize, Ordering::Release);
+    DRIVER_TASK_CONFIGURED_COUNT.store(report.configured_count, Ordering::Release);
+    DRIVER_TASK_FAILED_COUNT.store(report.failed_count, Ordering::Release);
+    DRIVER_TASK_LIVE_TCB_COUNT.store(report.live_tcb_count, Ordering::Release);
+    DRIVER_TASK_LIVE_TCB_ROLE_MASK.store(report.live_tcb_role_mask, Ordering::Release);
+    DRIVER_TASK_CAPSET_PROOF.store(report.capset_proof as usize, Ordering::Release);
+    DRIVER_TASK_FAULT_PROOF.store(report.fault_proof as usize, Ordering::Release);
+    DRIVER_TASK_REVOKE_PROOF.store(report.revoke_proof as usize, Ordering::Release);
+    DRIVER_TASK_SCHED_PROOF.store(report.sched_proof as usize, Ordering::Release);
+    DRIVER_TASK_AFFINITY_CONFIGURED_COUNT
+        .store(report.affinity_configured_count, Ordering::Release);
+    DRIVER_TASK_AFFINITY_APPLIED_COUNT.store(report.affinity_applied_count, Ordering::Release);
+    DRIVER_TASK_AFFINITY_PROOF.store(report.affinity_proof as usize, Ordering::Release);
+    DRIVER_TASK_VSPACE_PROOF.store(report.vspace_proof as usize, Ordering::Release);
+    DRIVER_TASK_BROAD_CAPS_LEAKED.store(report.broad_caps_leaked, Ordering::Release);
+}
+
+/// Snapshot the current runtime proof state.
+#[must_use]
+pub fn driver_task_runtime_proof() -> DriverTaskRuntimeProof {
+    #[cfg(feature = "kernel")]
+    {
+        return DriverTaskRuntimeProof {
+            substrate_active: DRIVER_TASK_SUBSTRATE_ACTIVE.load(Ordering::Acquire) != 0,
+            configured_count: DRIVER_TASK_CONFIGURED_COUNT.load(Ordering::Acquire),
+            failed_count: DRIVER_TASK_FAILED_COUNT.load(Ordering::Acquire),
+            live_tcb_count: DRIVER_TASK_LIVE_TCB_COUNT.load(Ordering::Acquire),
+            live_tcb_role_mask: DRIVER_TASK_LIVE_TCB_ROLE_MASK.load(Ordering::Acquire),
+            hot_path_role_mask: DRIVER_TASK_HOT_PATH_ROLE_MASK.load(Ordering::Acquire),
+            compatibility_service_role_mask: DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK
+                .load(Ordering::Acquire),
+            capset_proof: DRIVER_TASK_CAPSET_PROOF.load(Ordering::Acquire) != 0,
+            fault_proof: DRIVER_TASK_FAULT_PROOF.load(Ordering::Acquire) != 0,
+            revoke_proof: DRIVER_TASK_REVOKE_PROOF.load(Ordering::Acquire) != 0,
+            sched_proof: DRIVER_TASK_SCHED_PROOF.load(Ordering::Acquire) != 0,
+            affinity_configured_count: DRIVER_TASK_AFFINITY_CONFIGURED_COUNT
+                .load(Ordering::Acquire),
+            affinity_applied_count: DRIVER_TASK_AFFINITY_APPLIED_COUNT.load(Ordering::Acquire),
+            affinity_proof: DRIVER_TASK_AFFINITY_PROOF.load(Ordering::Acquire) != 0,
+            vspace_proof: DRIVER_TASK_VSPACE_PROOF.load(Ordering::Acquire) != 0,
+            broad_caps_leaked: DRIVER_TASK_BROAD_CAPS_LEAKED.load(Ordering::Acquire),
+        };
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    {
+        DriverTaskRuntimeProof::default()
+    }
+}
+
+/// Records which execution path serviced a hardware driver turn.
+#[cfg(feature = "kernel")]
+pub fn record_driver_task_service(contract: DriverTaskContract, isolation: DriverTaskIsolation) {
+    let role_bit = driver_task_role_bit(contract.kind);
+    if role_bit == 0 {
+        return;
+    }
+    match isolation {
+        DriverTaskIsolation::DedicatedSeL4Task => {
+            DRIVER_TASK_HOT_PATH_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+        }
+        DriverTaskIsolation::RootTaskCompatibility => {
+            DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+        }
+    }
+}
+
+/// Type-erased service callback executed by a driver TCB.
+///
+/// The argument is a caller-owned context pointer and the return value is a
+/// small role-specific status word. The callback ABI is intentionally narrow so
+/// hot paths can be moved one driver at a time without adding a second driver
+/// framework.
+#[cfg(feature = "kernel")]
+pub type DriverTaskServiceHandler = unsafe fn(usize) -> usize;
+
+/// Entry point for bootstrap-created driver TCBs.
+#[cfg(feature = "kernel")]
+pub extern "C" fn driver_task_entry(task_key: usize) -> ! {
+    let role_bit = driver_task_task_key_role_bit(task_key).unwrap_or(0);
+    DRIVER_TASK_STARTED_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+    if task_key < usize::BITS as usize {
+        DRIVER_TASK_STARTED_TASK_MASK.fetch_or(1usize << task_key, Ordering::AcqRel);
+    }
+    loop {
+        let mut badge: sel4_sys::seL4_Word = 0;
+        // SAFETY: The driver task CSpace is populated with a command endpoint
+        // at `DRIVER_TASK_CHILD_COMMAND_SLOT` before the TCB is resumed.
+        let _ = unsafe { sel4_sys::seL4_Recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge) };
+        let _ = badge;
+        let result = service_pending_driver_task_command(task_key);
+        // SAFETY: The command was delivered by `seL4_Call`; the kernel
+        // installed a reply capability for this TCB, and the single reply word
+        // mirrors the already-published completion slot result.
+        unsafe {
+            sel4_sys::seL4_SetMR(0, result as sel4_sys::seL4_Word);
+            #[cfg(target_os = "none")]
+            sel4_sys::seL4_Reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1));
+        }
+        #[cfg(not(target_os = "none"))]
+        crate::sel4::reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1));
+        DRIVER_TASK_ENTRY_HEARTBEATS.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+/// Wait briefly for a newly resumed driver TCB to execute its entry trampoline.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn wait_for_driver_task_start(task_key: usize, spins: usize) -> bool {
+    let mask = if task_key < usize::BITS as usize {
+        1usize << task_key
+    } else {
+        0
+    };
+    if mask == 0 {
+        return false;
+    }
+    for _ in 0..spins {
+        if DRIVER_TASK_STARTED_TASK_MASK.load(Ordering::Acquire) & mask != 0 {
+            return true;
+        }
+        #[cfg(target_os = "none")]
+        {
+            // SAFETY: Yield has no memory operand and only donates the current
+            // scheduling slice while waiting for the child TCB startup bit.
+            unsafe { sel4_sys::seL4_Yield() };
+        }
+        #[cfg(not(target_os = "none"))]
+        {
+            sel4_sys::seL4_Yield();
+        }
+    }
+    DRIVER_TASK_STARTED_TASK_MASK.load(Ordering::Acquire) & mask != 0
+}
+
 /// Maximum bounded IPC/event queue admitted by the HAL contract layer.
 pub const MAX_DRIVER_TASK_QUEUE_DEPTH: u16 = 256;
 
 /// Number of active hardware driver roles required before reopened Pi 4
 /// acceptance may claim dedicated driver-task isolation.
-pub const MIN_DEDICATED_PI4_DRIVER_TASKS: usize = 4;
+pub const MIN_DEDICATED_PI4_DRIVER_TASKS: usize = 6;
 
 /// Maximum Ethernet-sized frame admitted through a dedicated driver-task ring.
 pub const MAX_DRIVER_TASK_FRAME_BYTES: usize = 1536;
 
 /// Current as-built state of the seL4 driver-task creation substrate.
 ///
-/// This remains `false` until root-task can create a separate TCB, install its
-/// IPC buffer, set fault handling, grant only declared device caps, and revoke
-/// it without running driver hot paths in root.
-pub const DEDICATED_DRIVER_TASK_SUBSTRATE_READY: bool = false;
+/// This is true only because boot now creates live driver TCBs, gives them
+/// restricted child CSpaces, installs command/fault IPC, and dispatches runtime
+/// service callbacks through those TCBs. VSpace isolation remains a separate
+/// proof field and must not be inferred from this constant.
+pub const DEDICATED_DRIVER_TASK_SUBSTRATE_READY: bool = true;
+
+/// Dedicated driver-task mode is the default requested hardware-driver policy.
+///
+/// This is deliberately separate from `DEDICATED_DRIVER_TASK_SUBSTRATE_READY`:
+/// the build should ask for dedicated driver tasks by default, while boot proof
+/// and acceptance must still fail closed until live TCB-backed hot paths exist.
+pub const DEDICATED_DRIVER_TASKS_DEFAULT_ENABLED: bool = true;
+
+/// Current as-built live-hot-path state for the dedicated driver-task default.
+pub const DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_READY: bool = true;
+
+/// Stable rejection reason emitted while default-dedicated mode lacks live TCBs.
+pub const DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_MISSING: &str =
+    "driver-task-live-tcb-hot-paths-missing";
+
+/// Child CSpace slot used for a badged fault endpoint.
+#[cfg(feature = "kernel")]
+pub const DRIVER_TASK_CHILD_FAULT_SLOT: sel4_sys::seL4_CPtr = 1;
+
+/// Child CSpace slot used for the root-to-driver command endpoint.
+#[cfg(feature = "kernel")]
+pub const DRIVER_TASK_CHILD_COMMAND_SLOT: sel4_sys::seL4_CPtr = 2;
+
+/// Child CSpace slot used for device/doorbell notification delivery.
+#[cfg(feature = "kernel")]
+pub const DRIVER_TASK_CHILD_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr = 3;
+
+/// Small dedicated CSpace radix for bootstrap driver tasks.
+#[cfg(feature = "kernel")]
+pub const DRIVER_TASK_CHILD_CNODE_RADIX_BITS: u8 = 4;
+
+/// Role bit required for serial dedicated-task proof.
+pub const DRIVER_TASK_ROLE_SERIAL_BIT: usize = 1 << 0;
+/// Role bit required for USB/local-seat dedicated-task proof.
+pub const DRIVER_TASK_ROLE_USB_BIT: usize = 1 << 1;
+/// Role bit required for display dedicated-task proof.
+pub const DRIVER_TASK_ROLE_DISPLAY_BIT: usize = 1 << 2;
+/// Role bit required for active network dedicated-task proof.
+pub const DRIVER_TASK_ROLE_NET_BIT: usize = 1 << 3;
+/// Role bit required for the SDIO host dedicated-task proof.
+pub const DRIVER_TASK_ROLE_SDIO_BIT: usize = 1 << 4;
+/// Role bit required for the PCIe root dedicated-task proof.
+pub const DRIVER_TASK_ROLE_PCIE_BIT: usize = 1 << 5;
+/// Required role coverage for reopened 26a/26b closure.
+pub const REQUIRED_DRIVER_TASK_ROLE_MASK: usize = DRIVER_TASK_ROLE_SERIAL_BIT
+    | DRIVER_TASK_ROLE_USB_BIT
+    | DRIVER_TASK_ROLE_DISPLAY_BIT
+    | DRIVER_TASK_ROLE_NET_BIT
+    | DRIVER_TASK_ROLE_SDIO_BIT
+    | DRIVER_TASK_ROLE_PCIE_BIT;
+
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SUBSTRATE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_CONFIGURED_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_FAILED_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_LIVE_TCB_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_LIVE_TCB_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_STARTED_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_STARTED_TASK_MASK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_HOT_PATH_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_CAPSET_PROOF: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_FAULT_PROOF: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_REVOKE_PROOF: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SCHED_PROOF: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_AFFINITY_CONFIGURED_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_AFFINITY_APPLIED_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_AFFINITY_PROOF: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_VSPACE_PROOF: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_BROAD_CAPS_LEAKED: AtomicUsize = AtomicUsize::new(usize::MAX);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_ENTRY_HEARTBEATS: AtomicUsize = AtomicUsize::new(0);
+
+/// Stable key for the serial driver TCB.
+pub const DRIVER_TASK_KEY_SERIAL: usize = 0;
+/// Stable key for the USB/local-seat driver TCB.
+pub const DRIVER_TASK_KEY_USB_LOCAL_SEAT: usize = 1;
+/// Stable key for the HDMI text driver TCB.
+pub const DRIVER_TASK_KEY_HDMI_TEXT: usize = 2;
+/// Stable key for the GENET driver TCB.
+pub const DRIVER_TASK_KEY_BCMGENET_V5: usize = 3;
+/// Stable key for the CYW43 Wi-Fi driver TCB.
+pub const DRIVER_TASK_KEY_CYW43455: usize = 4;
+/// Stable key for the RTL8139 driver TCB.
+pub const DRIVER_TASK_KEY_RTL8139: usize = 5;
+/// Stable key for the virtio-net driver TCB.
+pub const DRIVER_TASK_KEY_VIRTIO_NET: usize = 6;
+/// Stable key for the SDIO host driver TCB.
+pub const DRIVER_TASK_KEY_SDIO_HOST: usize = 7;
+/// Stable key for the PCIe root driver TCB.
+pub const DRIVER_TASK_KEY_PCIE_ROOT: usize = 8;
+
+/// Number of built-in driver TCBs expected for full substrate bootstrap.
+pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
+
+#[cfg(feature = "kernel")]
+struct DriverTaskCommandSlot {
+    endpoint: AtomicUsize,
+    handler: AtomicUsize,
+    context: AtomicUsize,
+    request_seq: AtomicUsize,
+    done_seq: AtomicUsize,
+    result: AtomicUsize,
+    active: AtomicUsize,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskCommandSlot {
+    const fn new() -> Self {
+        Self {
+            endpoint: AtomicUsize::new(0),
+            handler: AtomicUsize::new(0),
+            context: AtomicUsize::new(0),
+            request_seq: AtomicUsize::new(0),
+            done_seq: AtomicUsize::new(0),
+            result: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SLOT_SERIAL: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SLOT_USB_LOCAL_SEAT: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SLOT_HDMI_TEXT: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SLOT_BCMGENET_V5: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SLOT_CYW43455: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SLOT_RTL8139: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SLOT_VIRTIO_NET: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SLOT_SDIO_HOST: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SLOT_PCIE_ROOT: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+
+/// Return the stable driver-task key for a contract.
+#[must_use]
+pub fn driver_task_contract_key(contract: DriverTaskContract) -> Option<usize> {
+    match contract.name {
+        "serial" => Some(DRIVER_TASK_KEY_SERIAL),
+        "usb-local-seat" => Some(DRIVER_TASK_KEY_USB_LOCAL_SEAT),
+        "hdmi-text" => Some(DRIVER_TASK_KEY_HDMI_TEXT),
+        "bcmgenet-v5" => Some(DRIVER_TASK_KEY_BCMGENET_V5),
+        "cyw43455" => Some(DRIVER_TASK_KEY_CYW43455),
+        "rtl8139" => Some(DRIVER_TASK_KEY_RTL8139),
+        "virtio-net" => Some(DRIVER_TASK_KEY_VIRTIO_NET),
+        "sdio-host" => Some(DRIVER_TASK_KEY_SDIO_HOST),
+        "pcie-root" => Some(DRIVER_TASK_KEY_PCIE_ROOT),
+        _ => None,
+    }
+}
+
+/// Return the role mask bit covered by a stable driver-task key.
+#[must_use]
+pub const fn driver_task_task_key_role_bit(task_key: usize) -> Option<usize> {
+    match task_key {
+        DRIVER_TASK_KEY_SERIAL => Some(DRIVER_TASK_ROLE_SERIAL_BIT),
+        DRIVER_TASK_KEY_USB_LOCAL_SEAT => Some(DRIVER_TASK_ROLE_USB_BIT),
+        DRIVER_TASK_KEY_HDMI_TEXT => Some(DRIVER_TASK_ROLE_DISPLAY_BIT),
+        DRIVER_TASK_KEY_BCMGENET_V5
+        | DRIVER_TASK_KEY_CYW43455
+        | DRIVER_TASK_KEY_RTL8139
+        | DRIVER_TASK_KEY_VIRTIO_NET => Some(DRIVER_TASK_ROLE_NET_BIT),
+        DRIVER_TASK_KEY_SDIO_HOST => Some(DRIVER_TASK_ROLE_SDIO_BIT),
+        DRIVER_TASK_KEY_PCIE_ROOT => Some(DRIVER_TASK_ROLE_PCIE_BIT),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn slot_for_task_key(task_key: usize) -> Option<&'static DriverTaskCommandSlot> {
+    match task_key {
+        DRIVER_TASK_KEY_SERIAL => Some(&DRIVER_TASK_SLOT_SERIAL),
+        DRIVER_TASK_KEY_USB_LOCAL_SEAT => Some(&DRIVER_TASK_SLOT_USB_LOCAL_SEAT),
+        DRIVER_TASK_KEY_HDMI_TEXT => Some(&DRIVER_TASK_SLOT_HDMI_TEXT),
+        DRIVER_TASK_KEY_BCMGENET_V5 => Some(&DRIVER_TASK_SLOT_BCMGENET_V5),
+        DRIVER_TASK_KEY_CYW43455 => Some(&DRIVER_TASK_SLOT_CYW43455),
+        DRIVER_TASK_KEY_RTL8139 => Some(&DRIVER_TASK_SLOT_RTL8139),
+        DRIVER_TASK_KEY_VIRTIO_NET => Some(&DRIVER_TASK_SLOT_VIRTIO_NET),
+        DRIVER_TASK_KEY_SDIO_HOST => Some(&DRIVER_TASK_SLOT_SDIO_HOST),
+        DRIVER_TASK_KEY_PCIE_ROOT => Some(&DRIVER_TASK_SLOT_PCIE_ROOT),
+        _ => None,
+    }
+}
+
+/// Publish the root-side command endpoint for a created driver TCB.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_command_endpoint(contract: DriverTaskContract, endpoint: usize) {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.endpoint.store(endpoint, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+fn service_pending_driver_task_command(task_key: usize) -> usize {
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return usize::MAX;
+    };
+    let request = slot.request_seq.load(Ordering::Acquire);
+    if request == 0 || slot.done_seq.load(Ordering::Acquire) == request {
+        return usize::MAX;
+    }
+    let handler_word = slot.handler.load(Ordering::Acquire);
+    let context = slot.context.load(Ordering::Acquire);
+    let result = if handler_word == 0 {
+        usize::MAX
+    } else {
+        // SAFETY: `run_driver_task_service` stores only function pointers with
+        // the exact `DriverTaskServiceHandler` ABI in `handler`. The integer
+        // round trip is used because the slot is shared across TCBs through
+        // atomics; no data pointer is interpreted as code.
+        let handler: DriverTaskServiceHandler =
+            unsafe { core::mem::transmute::<usize, DriverTaskServiceHandler>(handler_word) };
+        // SAFETY: The caller owns the context object, waits synchronously until
+        // `done_seq` reaches `request`, and does not access the pointed-to
+        // driver state while this callback executes on the driver TCB.
+        unsafe { handler(context) }
+    };
+    slot.result.store(result, Ordering::Release);
+    slot.done_seq.store(request, Ordering::Release);
+    result
+}
+
+/// Execute a bounded driver service callback on the contract's live driver TCB.
+///
+/// Returns `None` when the task is not available or the command does not finish
+/// within the bounded wait. Callers must then preserve functionality through an
+/// explicit root-task compatibility path, which keeps acceptance proof honest.
+#[cfg(feature = "kernel")]
+pub unsafe fn run_driver_task_service(
+    contract: DriverTaskContract,
+    context: usize,
+    handler: DriverTaskServiceHandler,
+) -> Option<usize> {
+    let task_key = driver_task_contract_key(contract)?;
+    let role_bit = driver_task_task_key_role_bit(task_key)?;
+    let slot = slot_for_task_key(task_key)?;
+    if DRIVER_TASK_STARTED_TASK_MASK.load(Ordering::Acquire) & (1usize << task_key) == 0 {
+        return None;
+    }
+    let endpoint = slot.endpoint.load(Ordering::Acquire);
+    if endpoint == 0 {
+        return None;
+    }
+    if slot.active.swap(1, Ordering::AcqRel) != 0 {
+        return None;
+    }
+    let request = slot
+        .request_seq
+        .load(Ordering::Relaxed)
+        .wrapping_add(1)
+        .max(1);
+    slot.context.store(context, Ordering::Release);
+    slot.handler
+        .store(handler as *const () as usize, Ordering::Release);
+    slot.result.store(0, Ordering::Release);
+    slot.request_seq.store(request, Ordering::Release);
+
+    // SAFETY: `endpoint` is the root-held command endpoint cap published by
+    // `KernelHal::create_driver_task`; the call carries no caps and all service
+    // payload is in the shared command slot above. Blocking the root here is
+    // deliberate: it hands CPU time to lower-priority driver TCBs instead of
+    // relying on `Yield`, which is not a cross-priority rendezvous.
+    unsafe {
+        sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
+        let _ = crate::sel4::call_unchecked(
+            endpoint as sel4_sys::seL4_CPtr,
+            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+        );
+    }
+
+    let completed = (slot.done_seq.load(Ordering::Acquire) == request)
+        .then(|| slot.result.load(Ordering::Acquire));
+    slot.active.store(0, Ordering::Release);
+    if completed.is_some() {
+        record_driver_task_service(contract, DriverTaskIsolation::DedicatedSeL4Task);
+        DRIVER_TASK_HOT_PATH_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+    }
+    completed
+}
+
+/// Host/test fallback: no live seL4 driver TCB exists.
+#[cfg(not(feature = "kernel"))]
+pub unsafe fn run_driver_task_service(
+    _contract: DriverTaskContract,
+    _context: usize,
+    _handler: unsafe fn(usize) -> usize,
+) -> Option<usize> {
+    None
+}
 
 /// Scheduling class used when seL4 assigns budgets and priorities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -266,6 +821,16 @@ impl DriverTaskContract {
     #[must_use]
     pub const fn service_order(self) -> u8 {
         self.class.service_order()
+    }
+
+    /// Requested isolation under the default hardware-driver policy.
+    #[must_use]
+    pub const fn requested_isolation(self) -> DriverTaskIsolation {
+        if DEDICATED_DRIVER_TASKS_DEFAULT_ENABLED {
+            DriverTaskIsolation::DedicatedSeL4Task
+        } else {
+            self.isolation
+        }
     }
 
     /// Nominal per-turn service latency budget surfaced in Pi 4 proof logs.
@@ -666,7 +1231,7 @@ pub const SERIAL_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContract {
     kind: DriverTaskKind::Serial,
     class: DriverTaskClass::RealtimeInput,
     authority: DriverTaskAuthority::ConsoleTransport,
-    isolation: DriverTaskIsolation::RootTaskCompatibility,
+    isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(64, 512, 64),
     queue_depth: 64,
 };
@@ -677,7 +1242,7 @@ pub const USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskCo
     kind: DriverTaskKind::LocalSeatUsb,
     class: DriverTaskClass::RealtimeInput,
     authority: DriverTaskAuthority::DeviceOnly,
-    isolation: DriverTaskIsolation::RootTaskCompatibility,
+    isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(256, 4096, 128),
     queue_depth: 128,
 };
@@ -688,7 +1253,7 @@ pub const HDMI_TEXT_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContrac
     kind: DriverTaskKind::HdmiText,
     class: DriverTaskClass::DisplayRefresh,
     authority: DriverTaskAuthority::DisplaySink,
-    isolation: DriverTaskIsolation::RootTaskCompatibility,
+    isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(64, 4096, 64),
     queue_depth: 64,
 };
@@ -699,7 +1264,7 @@ pub const GENET_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContract {
     kind: DriverTaskKind::WiredNic,
     class: DriverTaskClass::NetworkData,
     authority: DriverTaskAuthority::NetworkFrameTransport,
-    isolation: DriverTaskIsolation::RootTaskCompatibility,
+    isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(256, 131_072, 128),
     queue_depth: 128,
 };
@@ -710,7 +1275,7 @@ pub const CYW43_WIFI_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContra
     kind: DriverTaskKind::WifiNic,
     class: DriverTaskClass::NetworkData,
     authority: DriverTaskAuthority::NetworkFrameTransport,
-    isolation: DriverTaskIsolation::RootTaskCompatibility,
+    isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(192, 65_536, 64),
     queue_depth: 128,
 };
@@ -721,7 +1286,7 @@ pub const RTL8139_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContract 
     kind: DriverTaskKind::VirtualNic,
     class: DriverTaskClass::NetworkData,
     authority: DriverTaskAuthority::NetworkFrameTransport,
-    isolation: DriverTaskIsolation::RootTaskCompatibility,
+    isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(128, 65_536, 64),
     queue_depth: 64,
 };
@@ -732,7 +1297,7 @@ pub const VIRTIO_NET_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContra
     kind: DriverTaskKind::VirtualNic,
     class: DriverTaskClass::NetworkData,
     authority: DriverTaskAuthority::NetworkFrameTransport,
-    isolation: DriverTaskIsolation::RootTaskCompatibility,
+    isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(256, 131_072, 128),
     queue_depth: 128,
 };
@@ -743,7 +1308,7 @@ pub const SDIO_HOST_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContrac
     kind: DriverTaskKind::SdioHost,
     class: DriverTaskClass::NetworkControl,
     authority: DriverTaskAuthority::DeviceOnly,
-    isolation: DriverTaskIsolation::RootTaskCompatibility,
+    isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(256, 65_536, 64),
     queue_depth: 64,
 };
@@ -754,7 +1319,7 @@ pub const PCIE_ROOT_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContrac
     kind: DriverTaskKind::PcieRoot,
     class: DriverTaskClass::NetworkControl,
     authority: DriverTaskAuthority::DeviceOnly,
-    isolation: DriverTaskIsolation::RootTaskCompatibility,
+    isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(128, 16_384, 32),
     queue_depth: 32,
 };
@@ -777,6 +1342,8 @@ pub const BUILTIN_DRIVER_TASK_CONTRACTS: &[DriverTaskContract] = &[
 pub struct DriverTaskIsolationSummary {
     /// Valid contracts declared by built-in hardware paths.
     pub contracts: usize,
+    /// Contracts that default policy requests as dedicated seL4 tasks.
+    pub requested_dedicated_sel4_tasks: usize,
     /// Contracts still serviced in root-task compatibility mode.
     pub root_task_compatibility: usize,
     /// Contracts backed by dedicated seL4 task isolation.
@@ -792,6 +1359,13 @@ pub fn builtin_isolation_summary() -> DriverTaskIsolationSummary {
             continue;
         }
         summary.contracts = summary.contracts.saturating_add(1);
+        if matches!(
+            contract.requested_isolation(),
+            DriverTaskIsolation::DedicatedSeL4Task
+        ) {
+            summary.requested_dedicated_sel4_tasks =
+                summary.requested_dedicated_sel4_tasks.saturating_add(1);
+        }
         match contract.isolation {
             DriverTaskIsolation::RootTaskCompatibility => {
                 summary.root_task_compatibility = summary.root_task_compatibility.saturating_add(1);
@@ -809,7 +1383,20 @@ pub fn builtin_isolation_summary() -> DriverTaskIsolationSummary {
 #[must_use]
 pub fn dedicated_driver_task_acceptance_ready() -> bool {
     let summary = builtin_isolation_summary();
-    DEDICATED_DRIVER_TASK_SUBSTRATE_READY
+    let proof = driver_task_runtime_proof();
+    proof.substrate_active
+        && proof.capset_proof
+        && proof.fault_proof
+        && proof.revoke_proof
+        && proof.sched_proof
+        && proof.affinity_proof
+        && proof.vspace_proof
+        && proof.broad_caps_leaked == 0
+        && proof.live_tcb_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ROLE_MASK
+        && proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ROLE_MASK
+        && proof.compatibility_service_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK == 0
         && summary.dedicated_sel4_tasks >= MIN_DEDICATED_PI4_DRIVER_TASKS
         && summary.root_task_compatibility == 0
 }
@@ -821,6 +1408,58 @@ pub fn emit_boot_contract_proof() {
 
     use heapless::String;
 
+    let proof = driver_task_runtime_proof();
+    let mut line = String::<192>::new();
+    let _ = write!(
+        line,
+        "DRIVER_TASK_DEFAULT requested={} required={} substrate_active={} live_hot_paths={}",
+        if DEDICATED_DRIVER_TASKS_DEFAULT_ENABLED {
+            "dedicated"
+        } else {
+            "compatibility"
+        },
+        if DEDICATED_DRIVER_TASKS_DEFAULT_ENABLED {
+            "yes"
+        } else {
+            "no"
+        },
+        if proof.substrate_active { "yes" } else { "no" },
+        if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ROLE_MASK
+        {
+            "yes"
+        } else {
+            "no"
+        },
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+
+    let mut line = String::<384>::new();
+    let _ = write!(
+        line,
+        "DRIVER_TASK_SUBSTRATE active={} profile=pi4-uboot-aarch64 task_count={} failed_count={} live_tcb_count={} root_authority_retained=yes fault_endpoint_ready={} revoke_ready={} broad_caps_leaked={} sched={} affinity={} affinity_configured={} affinity_applied={} vspace={} live_hot_paths={}",
+        if proof.substrate_active { "yes" } else { "no" },
+        proof.configured_count,
+        proof.failed_count,
+        proof.live_tcb_count,
+        if proof.fault_proof { "yes" } else { "no" },
+        if proof.revoke_proof { "yes" } else { "no" },
+        proof.broad_caps_leaked,
+        if proof.sched_proof { "yes" } else { "no" },
+        if proof.affinity_proof { "per-driver" } else { "missing" },
+        proof.affinity_configured_count,
+        proof.affinity_applied_count,
+        if proof.vspace_proof { "isolated" } else { "shared-root" },
+        if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ROLE_MASK
+        {
+            "yes"
+        } else {
+            "no"
+        },
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+
     for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
         let mut line = String::<256>::new();
         let status = if contract.validate().is_ok() {
@@ -828,13 +1467,19 @@ pub fn emit_boot_contract_proof() {
         } else {
             "invalid"
         };
+        let role_bit = driver_task_role_bit(contract.kind);
+        let live_tcb = role_bit != 0 && proof.live_tcb_role_mask & role_bit != 0;
+        let hot_path = role_bit != 0 && proof.hot_path_role_mask & role_bit != 0;
         let _ = write!(
             line,
-            "SCHED_CONTRACT contract={} status={} service_class={} isolation={} priority={} service_order={} max_ops={} max_bytes={} max_frames={} max_service_us={}",
+            "SCHED_CONTRACT contract={} status={} service_class={} isolation={} requested_isolation={} live_tcb={} hot_path={} priority={} service_order={} max_ops={} max_bytes={} max_frames={} max_service_us={}",
             contract.name,
             status,
             contract.class.as_str(),
             contract.isolation.as_str(),
+            contract.requested_isolation().as_str(),
+            if live_tcb { "yes" } else { "no" },
+            if hot_path { "dedicated" } else { "root-task-compatibility" },
             contract.sel4_priority(),
             contract.service_order(),
             contract.budget.max_ops_per_turn,
@@ -843,23 +1488,56 @@ pub fn emit_boot_contract_proof() {
             contract.max_service_us(),
         );
         crate::bootstrap::log::force_uart_line(line.as_str());
+
+        let mut line = String::<256>::new();
+        let _ = write!(
+            line,
+            "DRIVER_TASK role={} contract={} isolation={} requested_isolation={} live_tcb={} hot_path={} capset={} fault_probe={} revoke_ready={} priority={}",
+            contract.kind.proof_role(),
+            contract.name,
+            contract.isolation.as_str(),
+            contract.requested_isolation().as_str(),
+            if live_tcb { "yes" } else { "no" },
+            if hot_path { "dedicated" } else { "root-task-compatibility" },
+            if proof.capset_proof { "pass" } else { "fail" },
+            if proof.fault_proof { "pass" } else { "fail" },
+            if proof.revoke_proof { "yes" } else { "no" },
+            contract.sel4_priority(),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
     }
 
     let summary = builtin_isolation_summary();
-    let mut line = String::<160>::new();
+    let mut line = String::<256>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_SUMMARY contracts={} dedicated={} compatibility={}",
-        summary.contracts, summary.dedicated_sel4_tasks, summary.root_task_compatibility,
+        "DRIVER_TASK_SUMMARY contracts={} requested_dedicated={} dedicated={} compatibility={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
+        summary.contracts,
+        summary.requested_dedicated_sel4_tasks,
+        summary.dedicated_sel4_tasks,
+        summary.root_task_compatibility,
+        proof.live_tcb_role_mask,
+        proof.hot_path_role_mask,
+        proof.compatibility_service_role_mask,
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
 
-    let mut line = String::<192>::new();
+    let mut line = String::<384>::new();
     let ready = dedicated_driver_task_acceptance_ready();
     let reason = if ready {
         "dedicated-sel4-substrate-active"
-    } else if !DEDICATED_DRIVER_TASK_SUBSTRATE_READY {
+    } else if !proof.substrate_active {
         "dedicated-sel4-substrate-not-active"
+    } else if proof.failed_count != 0 {
+        "driver-task-bootstrap-failures"
+    } else if !proof.affinity_proof {
+        "driver-task-affinity-not-proven"
+    } else if !proof.vspace_proof {
+        "driver-task-vspace-isolation-not-proven"
+    } else if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
+        != REQUIRED_DRIVER_TASK_ROLE_MASK
+    {
+        DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_MISSING
     } else if summary.root_task_compatibility != 0 {
         "root-task-compatibility-contracts-active"
     } else {
@@ -867,12 +1545,22 @@ pub fn emit_boot_contract_proof() {
     };
     let _ = write!(
         line,
-        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} required={} dedicated={} compatibility={}",
+        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
         if ready { "yes" } else { "no" },
         reason,
         MIN_DEDICATED_PI4_DRIVER_TASKS,
         summary.dedicated_sel4_tasks,
         summary.root_task_compatibility,
+        if proof.substrate_active { "active" } else { "inactive" },
+        if proof.capset_proof { "pass" } else { "fail" },
+        if proof.fault_proof { "pass" } else { "fail" },
+        if proof.revoke_proof { "pass" } else { "fail" },
+        if proof.sched_proof { "pass" } else { "fail" },
+        if proof.affinity_proof { "pass" } else { "fail" },
+        if proof.vspace_proof { "isolated" } else { "shared-root" },
+        proof.live_tcb_role_mask,
+        proof.hot_path_role_mask,
+        proof.compatibility_service_role_mask,
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
 }
@@ -882,13 +1570,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_driver_task_contracts_are_valid_and_mark_current_compatibility() {
+    fn builtin_driver_task_contracts_are_valid_and_dedicated() {
         for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
             assert_eq!(contract.validate(), Ok(()), "{contract:?}");
-            assert_eq!(
-                contract.isolation,
-                DriverTaskIsolation::RootTaskCompatibility
-            );
+            assert_eq!(contract.isolation, DriverTaskIsolation::DedicatedSeL4Task);
+            assert!(driver_task_contract_key(*contract).is_some());
             assert!(contract.authority_matches_kind(), "{contract:?}");
             assert!(contract.class_matches_kind(), "{contract:?}");
             assert!(contract.budget.preemptible);
@@ -927,15 +1613,15 @@ mod tests {
     }
 
     #[test]
-    fn builtin_isolation_summary_does_not_fake_dedicated_tasks() {
+    fn builtin_isolation_summary_requires_runtime_proof_for_acceptance() {
         let summary = builtin_isolation_summary();
         assert_eq!(summary.contracts, BUILTIN_DRIVER_TASK_CONTRACTS.len());
-        assert_eq!(summary.dedicated_sel4_tasks, 0);
         assert_eq!(
-            summary.root_task_compatibility,
+            summary.dedicated_sel4_tasks,
             BUILTIN_DRIVER_TASK_CONTRACTS.len()
         );
-        assert!(!DEDICATED_DRIVER_TASK_SUBSTRATE_READY);
+        assert_eq!(summary.root_task_compatibility, 0);
+        assert!(DEDICATED_DRIVER_TASK_SUBSTRATE_READY);
         assert!(!dedicated_driver_task_acceptance_ready());
     }
 
@@ -1037,13 +1723,5 @@ mod tests {
         invalid.class = DriverTaskClass::NetworkData;
         let err = invalid.validate().unwrap_err();
         assert_eq!(err.reason(), "driver-task-contract-invalid-class");
-
-        invalid = SERIAL_DRIVER_TASK_CONTRACT;
-        invalid.isolation = DriverTaskIsolation::DedicatedSeL4Task;
-        let err = invalid.validate().unwrap_err();
-        assert_eq!(
-            err.reason(),
-            "driver-task-contract-dedicated-substrate-not-ready"
-        );
     }
 }

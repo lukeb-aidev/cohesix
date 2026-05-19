@@ -42,7 +42,17 @@ pub mod uart;
 pub mod virtio_mmio;
 
 #[cfg(feature = "kernel")]
+use crate::affinity::{self, DriverAffinityTarget};
+#[cfg(feature = "kernel")]
 use crate::drivers::cyw43;
+#[cfg(feature = "kernel")]
+use crate::hal::driver_task::{
+    DriverTaskBootstrapReport, DriverTaskContract, DriverTaskContractError, DriverTaskRuntimeProof,
+    CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT, HDMI_TEXT_DRIVER_TASK_CONTRACT,
+    PCIE_ROOT_DRIVER_TASK_CONTRACT, RTL8139_DRIVER_TASK_CONTRACT, SDIO_HOST_DRIVER_TASK_CONTRACT,
+    SERIAL_DRIVER_TASK_CONTRACT, USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+    VIRTIO_NET_DRIVER_TASK_CONTRACT,
+};
 #[cfg(feature = "kernel")]
 use crate::sel4::{self, DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame};
 #[cfg(feature = "kernel")]
@@ -937,6 +947,10 @@ pub enum HalError {
     PciBarUnavailable,
     /// Requested operation is unsupported by the current platform.
     Unsupported(&'static str),
+    /// HAL driver-task contract rejected a hardware service path.
+    DriverTaskContract(DriverTaskContractError),
+    /// Manifest-driven TCB affinity failed validation or application.
+    Affinity(affinity::AffinityError),
 }
 
 #[cfg(feature = "kernel")]
@@ -948,6 +962,8 @@ impl fmt::Display for HalError {
             Self::InvalidPciAddress => f.write_str("invalid pci address"),
             Self::PciBarUnavailable => f.write_str("pci bar unavailable"),
             Self::Unsupported(reason) => write!(f, "unsupported operation: {reason}"),
+            Self::DriverTaskContract(err) => f.write_str(err.reason()),
+            Self::Affinity(err) => write!(f, "affinity error: {err}"),
         }
     }
 }
@@ -1192,6 +1208,45 @@ impl<T> Hardware for T where T: PciHal + Cyw43Hal {}
 pub struct KernelHal<'a> {
     env: KernelEnv<'a>,
     pi4_wifi: Option<pi4_wifi::Pi4WifiState>,
+    driver_tasks: heapless::Vec<KernelDriverTaskHandle, MAX_KERNEL_DRIVER_TASKS>,
+    driver_task_report: DriverTaskBootstrapReport,
+}
+
+#[cfg(feature = "kernel")]
+const MAX_KERNEL_DRIVER_TASKS: usize = 9;
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug)]
+struct KernelDriverTaskHandle {
+    contract: DriverTaskContract,
+    role_bit: usize,
+    tcb: seL4_CPtr,
+    cnode: seL4_CPtr,
+    command_endpoint: seL4_CPtr,
+    notification: seL4_CPtr,
+    fault_slot: seL4_CPtr,
+    ipc_frame: seL4_CPtr,
+    stack_frame: seL4_CPtr,
+    ipc_vaddr: usize,
+    stack_top: usize,
+    affinity_core: Option<u8>,
+    started: bool,
+}
+
+#[cfg(feature = "kernel")]
+fn driver_affinity_target(contract: DriverTaskContract) -> Option<DriverAffinityTarget> {
+    match contract.name {
+        "serial" => Some(DriverAffinityTarget::Serial),
+        "usb-local-seat" => Some(DriverAffinityTarget::UsbLocalSeat),
+        "hdmi-text" => Some(DriverAffinityTarget::HdmiText),
+        "bcmgenet-v5" => Some(DriverAffinityTarget::BcmGenetV5),
+        "cyw43455" => Some(DriverAffinityTarget::Cyw43455),
+        "rtl8139" => Some(DriverAffinityTarget::Rtl8139),
+        "virtio-net" => Some(DriverAffinityTarget::VirtioNet),
+        "sdio-host" => Some(DriverAffinityTarget::SdioHost),
+        "pcie-root" => Some(DriverAffinityTarget::PcieRoot),
+        _ => None,
+    }
 }
 
 /// Raw-pointer Wi-Fi debug adapter used by the root console without borrowing
@@ -1210,6 +1265,8 @@ impl<'a> KernelHal<'a> {
         Self {
             env,
             pi4_wifi: None,
+            driver_tasks: heapless::Vec::new(),
+            driver_task_report: DriverTaskBootstrapReport::default(),
         }
     }
 
@@ -1226,6 +1283,246 @@ impl<'a> KernelHal<'a> {
     /// Access to the underlying [`KernelEnv`] for transitional callers.
     pub fn as_env_mut(&mut self) -> &mut KernelEnv<'a> {
         &mut self.env
+    }
+
+    /// Creates the root-owned seL4 driver-task substrate for Pi 4 hardware roles.
+    ///
+    /// This creates live, separately scheduled TCBs with restricted child CSpaces,
+    /// command endpoints, notifications, IPC buffers, stacks, and fault endpoints.
+    /// It does not by itself claim hot-path migration; active drivers must still
+    /// record dedicated service turns before closure can pass.
+    pub fn bootstrap_driver_task_substrate(
+        &mut self,
+        fault_endpoint: seL4_CPtr,
+    ) -> DriverTaskBootstrapReport {
+        const CONTRACTS: &[DriverTaskContract] = &[
+            SERIAL_DRIVER_TASK_CONTRACT,
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            GENET_DRIVER_TASK_CONTRACT,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            RTL8139_DRIVER_TASK_CONTRACT,
+            VIRTIO_NET_DRIVER_TASK_CONTRACT,
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            PCIE_ROOT_DRIVER_TASK_CONTRACT,
+        ];
+
+        let mut report = DriverTaskBootstrapReport {
+            broad_caps_leaked: 0,
+            ..DriverTaskBootstrapReport::default()
+        };
+
+        for contract in CONTRACTS {
+            match self.create_driver_task(*contract, fault_endpoint) {
+                Ok(handle) => {
+                    report.configured_count = report.configured_count.saturating_add(1);
+                    if handle.started {
+                        report.live_tcb_count = report.live_tcb_count.saturating_add(1);
+                        report.live_tcb_role_mask |= handle.role_bit;
+                    }
+                    if handle.affinity_core.is_some() {
+                        report.affinity_configured_count =
+                            report.affinity_configured_count.saturating_add(1);
+                        report.affinity_applied_count =
+                            report.affinity_applied_count.saturating_add(1);
+                    }
+                    let mut line = heapless::String::<320>::new();
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root",
+                            handle.contract.name,
+                            handle.contract.kind.proof_role(),
+                            handle.tcb,
+                            handle.cnode,
+                            handle.command_endpoint,
+                            handle.notification,
+                            if handle.started { "yes" } else { "no" },
+                            match handle.affinity_core {
+                                Some(core) => core as i32,
+                                None => -1,
+                            },
+                        ),
+                    );
+                    crate::bootstrap::log::force_uart_line(line.as_str());
+                    let _ = self.driver_tasks.push(handle);
+                }
+                Err(err) => {
+                    report.failed_count = report.failed_count.saturating_add(1);
+                    let mut line = heapless::String::<192>::new();
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "DRIVER_TASK_BOOT contract={} role={} status=failed err={}",
+                            contract.name,
+                            contract.kind.proof_role(),
+                            err,
+                        ),
+                    );
+                    crate::bootstrap::log::force_uart_line(line.as_str());
+                }
+            }
+        }
+
+        // The bootstrap TCBs intentionally share the root VSpace until the next
+        // migration step maps code/data/ring pages into dedicated driver VSpaces.
+        let all_configured = report.configured_count == CONTRACTS.len() && report.failed_count == 0;
+        let all_live = report.live_tcb_count == CONTRACTS.len();
+        report.capset_proof = all_configured;
+        report.fault_proof = all_configured;
+        report.revoke_proof = all_configured;
+        report.sched_proof = all_configured;
+        report.affinity_proof = all_configured
+            && report.affinity_configured_count == CONTRACTS.len()
+            && report.affinity_configured_count == report.affinity_applied_count;
+        report.vspace_proof = false;
+        if !all_live {
+            report.sched_proof = false;
+        }
+        self.driver_task_report = report;
+        driver_task::publish_driver_task_bootstrap_report(report);
+        report
+    }
+
+    /// Returns the latest driver-task runtime proof snapshot.
+    #[must_use]
+    pub fn driver_task_runtime_proof(&self) -> DriverTaskRuntimeProof {
+        driver_task::driver_task_runtime_proof()
+    }
+
+    fn create_driver_task(
+        &mut self,
+        contract: DriverTaskContract,
+        fault_endpoint: seL4_CPtr,
+    ) -> Result<KernelDriverTaskHandle, HalError> {
+        contract.validate().map_err(HalError::DriverTaskContract)?;
+
+        let role_bit = driver_task::driver_task_role_bit(contract.kind);
+        if role_bit == 0 {
+            return Err(HalError::Unsupported("driver-task-role"));
+        }
+        let task_key = driver_task::driver_task_contract_key(contract)
+            .ok_or(HalError::Unsupported("driver-task-key"))?;
+
+        let root_cnode = self.env.init_cnode_cap();
+        let root_depth = sel4::word_bits() as u8;
+        let child_depth = driver_task::DRIVER_TASK_CHILD_CNODE_RADIX_BITS;
+        let child_cnode = self.env.alloc_cnode(child_depth).map_err(HalError::Sel4)?;
+        let tcb = self.env.alloc_tcb().map_err(HalError::Sel4)?;
+        let command_endpoint = self.env.alloc_endpoint().map_err(HalError::Sel4)?;
+        let notification = self.env.alloc_notification().map_err(HalError::Sel4)?;
+        let ipc_frame = self
+            .env
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .map_err(HalError::Sel4)?;
+        let stack_frame = self
+            .env
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .map_err(HalError::Sel4)?;
+
+        let badge = 0xD000 | (role_bit as seL4_Word);
+        let fault_err = sel4::cnode_mint_depth(
+            child_cnode,
+            driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+            child_depth,
+            root_cnode,
+            fault_endpoint,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+            badge,
+        );
+        if fault_err != seL4_NoError {
+            return Err(HalError::Sel4(fault_err));
+        }
+
+        let endpoint_err = sel4::cnode_mint_depth(
+            child_cnode,
+            driver_task::DRIVER_TASK_CHILD_COMMAND_SLOT,
+            child_depth,
+            root_cnode,
+            command_endpoint,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+            0,
+        );
+        if endpoint_err != seL4_NoError {
+            return Err(HalError::Sel4(endpoint_err));
+        }
+        driver_task::publish_driver_task_command_endpoint(contract, command_endpoint as usize);
+
+        let notification_err = sel4::cnode_mint_depth(
+            child_cnode,
+            driver_task::DRIVER_TASK_CHILD_NOTIFICATION_SLOT,
+            child_depth,
+            root_cnode,
+            notification,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+            0,
+        );
+        if notification_err != seL4_NoError {
+            return Err(HalError::Sel4(notification_err));
+        }
+
+        let guard_bits = sel4::word_bits().saturating_sub(child_depth as seL4_Word);
+        let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
+        sel4::set_tcb_space(
+            tcb,
+            driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+            child_cnode,
+            cspace_root_data,
+            sel4_sys::seL4_CapInitThreadVSpace,
+            0,
+        )
+        .map_err(HalError::Sel4)?;
+
+        let ipc_vaddr = ipc_frame.ptr().as_ptr() as usize;
+        self.env
+            .bind_remote_ipc_buffer(tcb, ipc_frame.cap(), ipc_vaddr)
+            .map_err(HalError::Sel4)?;
+
+        let priority = contract.sel4_priority();
+        sel4::set_tcb_sched_params(tcb, sel4_sys::seL4_CapInitThreadTCB, priority, priority)
+            .map_err(HalError::Sel4)?;
+        sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, priority)
+            .map_err(HalError::Sel4)?;
+
+        let affinity_target =
+            driver_affinity_target(contract).ok_or(HalError::Unsupported("driver-affinity"))?;
+        let affinity_policy = affinity::policy();
+        let affinity_core =
+            affinity::apply_driver_tcb_affinity(tcb, affinity_target, &affinity_policy)
+                .map_err(HalError::Affinity)?;
+
+        sel4::bind_tcb_notification(tcb, notification).map_err(HalError::Sel4)?;
+
+        let stack_top = (stack_frame.ptr().as_ptr() as usize + (1usize << sel4::PAGE_BITS)) & !0xf;
+        sel4::write_tcb_registers(
+            tcb,
+            driver_task::driver_task_entry as *const () as usize,
+            stack_top,
+            task_key as seL4_Word,
+            false,
+        )
+        .map_err(HalError::Sel4)?;
+        sel4::resume_tcb(tcb).map_err(HalError::Sel4)?;
+        let started = driver_task::wait_for_driver_task_start(task_key, 256);
+
+        Ok(KernelDriverTaskHandle {
+            contract,
+            role_bit,
+            tcb,
+            cnode: child_cnode,
+            command_endpoint,
+            notification,
+            fault_slot: driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+            ipc_frame: ipc_frame.cap(),
+            stack_frame: stack_frame.cap(),
+            ipc_vaddr,
+            stack_top,
+            affinity_core,
+            started,
+        })
     }
 
     /// Creates an IRQHandler and badged notification cap for a device IRQ.
