@@ -137,6 +137,8 @@ pub fn main(ctx: BootContext) -> ! {
     pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut(), None);
     pump = attach_local_seat(pump, &ctx);
     pump = attach_ninedoor_bridge(pump, &ctx);
+    #[cfg(feature = "kernel")]
+    crate::hal::driver_task::emit_boot_contract_proof();
 
     #[cfg(feature = "net-console")]
     {
@@ -191,6 +193,16 @@ pub fn main(ctx: BootContext) -> ! {
                     boot_log::force_uart_line(
                         "[net-console] deferred resume reason=pre-root-console action=start-wifi",
                     );
+                    let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
+                    if local_seat_enabled {
+                        boot_log::force_uart_line(
+                            "[trace] log channel switching to /log/queen.log before deferred Wi-Fi",
+                        );
+                        let _ = boot_log::switch_logger_to_log_buffer();
+                    }
+                    let _wifi_breadcrumb_uart_guard =
+                        crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart();
+                    let _wifi_log_uart_guard = crate::bootstrap::log::suppress_uart_log_output();
                     log::info!(
                         target: "net-console",
                         "[net-console] deferred resume before serial root console; starting Wi-Fi stack"
@@ -213,7 +225,11 @@ pub fn main(ctx: BootContext) -> ! {
                                 status.dhcp_phase,
                                 crate::net::CONSOLE_TCP_PORT,
                             );
-                            boot_log::force_uart_line(line.as_str());
+                            if local_seat_enabled {
+                                boot_log::force_uart_line_raw(line.as_str());
+                            } else {
+                                boot_log::force_uart_line(line.as_str());
+                            }
                             log::info!(target: "net-console", "{}", line.as_str());
                             net_stack = Some(stack);
                             net_unavailable_detail = None;
@@ -227,7 +243,11 @@ pub fn main(ctx: BootContext) -> ! {
                                 "[net-console] deferred failed detail={}",
                                 detail.as_str(),
                             );
-                            boot_log::force_uart_line(line.as_str());
+                            if local_seat_enabled {
+                                boot_log::force_uart_line_raw(line.as_str());
+                            } else {
+                                boot_log::force_uart_line(line.as_str());
+                            }
                             log::warn!(target: "net-console", "{}", line.as_str());
                             net_unavailable_detail = Some(detail);
                         }

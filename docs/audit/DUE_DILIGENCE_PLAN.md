@@ -159,7 +159,9 @@ scripts/check-generated.sh
 scripts/ci/check_test_plan.sh
 scripts/cohsh/run_regression_batch.sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings
+CARGO_INCREMENTAL=0 cargo check --workspace
+CARGO_INCREMENTAL=0 cargo test --workspace
 cargo audit
 cargo deny check advisories
 ```

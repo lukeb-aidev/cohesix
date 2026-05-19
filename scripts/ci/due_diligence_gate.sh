@@ -413,11 +413,11 @@ PY
 
 run_step "required-audit-assets" check_required_audit_assets
 run_step "cargo-fmt-check" cargo fmt --all -- --check
-run_step "cargo-clippy-workspace" cargo clippy --workspace --all-targets -- -D warnings
-run_step "cargo-check-workspace" cargo check --workspace
+run_step "cargo-clippy-workspace" env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings
+run_step "cargo-check-workspace" env CARGO_INCREMENTAL=0 cargo check --workspace
 run_step "secure9p-codec-tests" cargo test -p secure9p-codec
 run_step "integration-tests" cargo test -p tests
-run_step "workspace-tests" cargo test --workspace
+run_step "workspace-tests" env CARGO_INCREMENTAL=0 cargo test --workspace
 if [[ "${DD_SKIP_CARGO_AUDIT:-0}" == "1" ]]; then
   mark_incomplete_step "cargo-audit" "DD_SKIP_CARGO_AUDIT=1"
 else

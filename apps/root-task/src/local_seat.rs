@@ -11,6 +11,9 @@ extern crate alloc;
 use crate::bootstrap::log as boot_log;
 use crate::console::{Command, CommandParser, ConsoleError};
 use crate::generated::{self, HardwareDeviceKind};
+use crate::hal::driver_task::{
+    DriverServiceBudget, DriverTaskContract, USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+};
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
 use crate::local_seat_pi4::{
     Pi4FramebufferHint, Pi4LocalSeat, Pi4LocalSeatHints, Pi4SeatError, UsbProbePreflightStatus,
@@ -31,6 +34,12 @@ pub const KEYBOARD_QUEUE_MAX_BYTES: usize = 4_096;
 
 /// Maximum keyboard bytes drained from the runtime in one event-pump cycle.
 pub const KEYBOARD_POLL_CHUNK_BYTES: usize = 128;
+
+/// HAL-enforced scheduling contract for USB local-seat input service.
+#[must_use]
+pub const fn driver_task_contract() -> DriverTaskContract {
+    USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT
+}
 
 /// Return whether a USB ownership status line may report replayed COMMAND as
 /// fresh runtime authority.
@@ -112,6 +121,8 @@ pub struct LocalSeatKeyboardTrace {
     pub echoed_bytes: u64,
     /// Bytes dropped because the queue was full.
     pub dropped_bytes: u64,
+    /// Service turns stopped by the HAL driver-task budget.
+    pub driver_task_budget_overruns: u64,
 }
 
 /// Runtime state for local-seat keyboard ingress and mirrored line egress.
@@ -132,6 +143,7 @@ pub struct LocalSeatRuntime {
     accepted_keyboard_bytes: u64,
     drained_keyboard_bytes: u64,
     echoed_keyboard_bytes: u64,
+    driver_task_budget_overruns: u64,
     backend_keyboard_polling_enabled: bool,
     backend_keyboard_poll_deferred_logged: bool,
     #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
@@ -220,6 +232,7 @@ impl LocalSeatRuntime {
             accepted_keyboard_bytes: 0,
             drained_keyboard_bytes: 0,
             echoed_keyboard_bytes: 0,
+            driver_task_budget_overruns: 0,
             // Keep boot fail-open: the root shell must stay reachable even if
             // a platform keyboard backend can still wedge during first probe.
             backend_keyboard_polling_enabled: false,
@@ -323,6 +336,7 @@ impl LocalSeatRuntime {
             drained_bytes: self.drained_keyboard_bytes,
             echoed_bytes: self.echoed_keyboard_bytes,
             dropped_bytes: self.dropped_keyboard_bytes,
+            driver_task_budget_overruns: self.driver_task_budget_overruns,
         }
     }
 
@@ -403,35 +417,62 @@ impl LocalSeatRuntime {
     /// Poll the platform local-seat input backend and enqueue discovered bytes.
     pub fn poll_backend_keyboard(&mut self) {
         self.backend_keyboard_poll_calls = self.backend_keyboard_poll_calls.saturating_add(1);
-        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
-        {
-            if !LOCAL_SEAT_POLL_LOGGED.swap(true, Ordering::AcqRel) {
-                boot_log::force_uart_line("[local-seat] runtime keyboard poll active");
+        let contract = driver_task_contract();
+        let mut budget = match DriverServiceBudget::new(contract) {
+            Ok(budget) => budget,
+            Err(_) => {
+                self.driver_task_budget_overruns =
+                    self.driver_task_budget_overruns.saturating_add(1);
+                return;
             }
-            let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
-            if let Some(backend) = self.backend.as_mut() {
-                if !self.backend_keyboard_polling_enabled {
-                    if !self.backend_keyboard_poll_deferred_logged {
-                        self.backend_keyboard_poll_deferred_logged = true;
-                        boot_log::force_uart_line(
-                            "[local-seat] runtime keyboard poll deferred action=serial-shell-first",
-                        );
-                    }
-                    return;
+        };
+        if budget.charge_ops(1).is_err() {
+            self.driver_task_budget_overruns = self.driver_task_budget_overruns.saturating_add(1);
+            return;
+        }
+        {
+            #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+            {
+                if !LOCAL_SEAT_POLL_LOGGED.swap(true, Ordering::AcqRel) {
+                    boot_log::force_uart_line("[local-seat] runtime keyboard poll active");
                 }
-                let read = backend.poll_keyboard_bytes(&mut chunk);
-                if read > 0 {
-                    self.backend_keyboard_read_bytes =
-                        self.backend_keyboard_read_bytes.saturating_add(read as u64);
-                    if !LOCAL_SEAT_DATA_LOGGED.swap(true, Ordering::AcqRel) {
-                        let mut line = heapless::String::<128>::new();
-                        let _ = core::fmt::Write::write_fmt(
-                            &mut line,
-                            format_args!("[local-seat] runtime keyboard first-byte read={read}"),
-                        );
-                        boot_log::force_uart_line(line.as_str());
+                let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
+                if let Some(backend) = self.backend.as_mut() {
+                    if !self.backend_keyboard_polling_enabled {
+                        if !self.backend_keyboard_poll_deferred_logged {
+                            self.backend_keyboard_poll_deferred_logged = true;
+                            boot_log::force_uart_line(
+                                "[local-seat] runtime keyboard poll deferred action=serial-shell-first",
+                            );
+                        }
+                        return;
                     }
-                    let _ = self.enqueue_keyboard_bytes(&chunk[..read]);
+                    let read_limit = keyboard_poll_read_limit(contract);
+                    let read = backend.poll_keyboard_bytes(&mut chunk[..read_limit]);
+                    if read > 0 {
+                        let read_budget_ok = budget
+                            .charge_bytes(read as u32)
+                            .and_then(|_| budget.charge_frames(read as u16))
+                            .is_ok();
+                        if !read_budget_ok {
+                            self.driver_task_budget_overruns =
+                                self.driver_task_budget_overruns.saturating_add(1);
+                            return;
+                        }
+                        self.backend_keyboard_read_bytes =
+                            self.backend_keyboard_read_bytes.saturating_add(read as u64);
+                        if !LOCAL_SEAT_DATA_LOGGED.swap(true, Ordering::AcqRel) {
+                            let mut line = heapless::String::<128>::new();
+                            let _ = core::fmt::Write::write_fmt(
+                                &mut line,
+                                format_args!(
+                                    "[local-seat] runtime keyboard first-byte read={read}"
+                                ),
+                            );
+                            boot_log::force_uart_line(line.as_str());
+                        }
+                        let _ = self.enqueue_keyboard_bytes(&chunk[..read]);
+                    }
                 }
             }
         }
@@ -483,6 +524,13 @@ impl LocalSeatRuntime {
             backend.preseed_keyboard_mmio();
         }
     }
+}
+
+fn keyboard_poll_read_limit(contract: DriverTaskContract) -> usize {
+    KEYBOARD_POLL_CHUNK_BYTES
+        .min(contract.budget.max_bytes_per_turn as usize)
+        .min(usize::from(contract.budget.max_frames_per_turn))
+        .min(usize::from(contract.budget.max_ops_per_turn))
 }
 
 /// Runtime local-seat backend initialisation error.
@@ -880,6 +928,18 @@ mod tests {
         assert_eq!(trace.drained_bytes, 2);
         assert_eq!(trace.echoed_bytes, 2);
         assert_eq!(trace.dropped_bytes, 0);
+    }
+
+    #[test]
+    fn local_seat_declares_valid_realtime_driver_task_contract() {
+        let contract = driver_task_contract();
+
+        assert_eq!(contract.name, "usb-local-seat");
+        assert!(contract.preempts_network_data());
+        assert_eq!(contract.validate(), Ok(()));
+        assert!(contract.budget.max_ops_per_turn as usize >= KEYBOARD_POLL_CHUNK_BYTES);
+        assert!(contract.budget.max_bytes_per_turn as usize >= KEYBOARD_POLL_CHUNK_BYTES);
+        assert!(contract.budget.max_frames_per_turn as usize >= KEYBOARD_POLL_CHUNK_BYTES);
     }
 
     #[test]

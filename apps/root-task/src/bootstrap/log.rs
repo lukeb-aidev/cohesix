@@ -358,6 +358,19 @@ pub fn force_uart_line(line: &str) {
     with_raw_uart_lock(|| sel4::debug_put_line_unlocked(line.as_bytes()));
 }
 
+/// Emit a compact critical UART line even when normal diagnostics are buffered.
+///
+/// Use this only for operator-visible readiness/failure summaries; verbose
+/// driver traces must continue through [`force_uart_line`] so the log buffer can
+/// protect serial responsiveness after the root console starts.
+pub fn force_uart_line_raw(line: &str) {
+    if line.trim().is_empty() {
+        return;
+    }
+
+    with_raw_uart_lock(|| sel4::debug_put_line_unlocked(line.as_bytes()));
+}
+
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
     #[cfg(feature = "kernel")]
     {
@@ -596,6 +609,18 @@ mod tests {
         force_uart_line("[bootstrap-test] raw uart helper");
         let captured = sel4::take_debug_uart_capture();
         assert_eq!(captured.as_slice(), b"[bootstrap-test] raw uart helper\r\n");
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    #[test]
+    fn force_uart_line_raw_routes_via_raw_helper() {
+        sel4::clear_debug_uart_capture();
+        force_uart_line_raw("[bootstrap-test] compact uart summary");
+        let captured = sel4::take_debug_uart_capture();
+        assert_eq!(
+            captured.as_slice(),
+            b"[bootstrap-test] compact uart summary\r\n"
+        );
     }
 
     #[cfg(feature = "kernel")]

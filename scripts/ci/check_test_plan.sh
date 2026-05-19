@@ -8,8 +8,9 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 doc_path="${repo_root}/docs/TEST_PLAN.md"
 stage_02_path="${repo_root}/scripts/ci/test_plan_stage_02_host_fast.sh"
+due_diligence_path="${repo_root}/scripts/ci/due_diligence_gate.sh"
 
-python3 - "$repo_root" "$doc_path" "$stage_02_path" <<'PY'
+python3 - "$repo_root" "$doc_path" "$stage_02_path" "$due_diligence_path" <<'PY'
 import hashlib
 import pathlib
 import re
@@ -18,8 +19,10 @@ import sys
 root = pathlib.Path(sys.argv[1])
 doc = pathlib.Path(sys.argv[2])
 stage_02 = pathlib.Path(sys.argv[3])
+due_diligence = pathlib.Path(sys.argv[4])
 text = doc.read_text()
 stage_02_text = stage_02.read_text()
+due_diligence_text = due_diligence.read_text()
 pattern = re.compile(r'^- `([^`]+)` — `sha256:([0-9a-f]{64})`$', re.M)
 entries = pattern.findall(text)
 if not entries:
@@ -53,7 +56,23 @@ required_snippets = [
     "scripts/cohsh/run_regression_batch.sh",
     "scripts/cohsh/REST_regression_batch.sh",
     "scripts/ci/due_diligence_gate.sh",
+    "TP_STAGE4_GATEWAY_BIND",
+    "self-contained local QEMU by default",
     "scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json",
+    "scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-usb-ready --require-wired-ready --require-driver-task-proof --require-input-responsive",
+    "scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-ready",
+    "DRIVER_TASK_CONTRACTS",
+    "DRIVER_TASK_DEDICATED_READY=yes",
+    "DRIVER_TASK_SERIAL_DEDICATED",
+    "DRIVER_TASK_USB_DEDICATED",
+    "DRIVER_TASK_DISPLAY_DEDICATED",
+    "DRIVER_TASK_NET_DEDICATED",
+    "declared `max_service_us` budgets are diagnostic",
+    "SERIAL_RESPONSIVE_PROOF=yes",
+    "USB_BURST_DROPS=0",
+    "HDMI_RESPONSIVE_PROOF=yes",
+    "NET_ACTIVE=wired",
+    "ROOT_PROMPT_SEEN=yes",
     "scripts/uboot/qemu-uboot-smoke.sh --net user",
     "scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none",
     "cargo check -p swarmui --bin swarmui",
@@ -66,6 +85,11 @@ required_snippets = [
     "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci",
     "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio",
     "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::poll_io_obeys_driver_task_budget",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::flush_tx_backpressure_does_not_count_as_budget_overrun",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_skips_ready_network_data_poll_for_driver_task_turn",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_defers_buffered_network_console_lines_for_driver_task_turn",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet",
@@ -77,7 +101,9 @@ required_snippets = [
     "--features release-qemu",
     "--features release-pi4",
     "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",
-    "cargo test --workspace",
+    "CARGO_INCREMENTAL=0 cargo test --workspace",
+    "CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings",
+    "CARGO_INCREMENTAL=0 cargo check --workspace",
     "pytest tests/test_pi4_trace_normalize.py",
     "pytest tests/test_pi4_gate_proof.py",
 ]
@@ -97,6 +123,11 @@ required_stage_02_commands = [
     "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci",
     "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio",
     "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::poll_io_obeys_driver_task_budget",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::flush_tx_backpressure_does_not_count_as_budget_overrun",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_skips_ready_network_data_poll_for_driver_task_turn",
+    "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_defers_buffered_network_console_lines_for_driver_task_turn",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43",
     "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet",
@@ -108,7 +139,7 @@ required_stage_02_commands = [
     "--features release-qemu",
     "--features release-pi4",
     "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture",
-    "cargo test --workspace",
+    "CARGO_INCREMENTAL=0 cargo test --workspace",
     "pytest tests/test_pi4_trace_normalize.py",
     "pytest tests/test_pi4_gate_proof.py",
 ]
@@ -116,6 +147,19 @@ for command in required_stage_02_commands:
     if command not in stage_02_text:
         print(
             f"missing required stage 02 command in {stage_02.relative_to(root)}: {command}",
+            file=sys.stderr,
+        )
+        errors += 1
+
+required_due_diligence_commands = [
+    "env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings",
+    "env CARGO_INCREMENTAL=0 cargo check --workspace",
+    "env CARGO_INCREMENTAL=0 cargo test --workspace",
+]
+for command in required_due_diligence_commands:
+    if command not in due_diligence_text:
+        print(
+            f"missing required due diligence command in {due_diligence.relative_to(root)}: {command}",
             file=sys.stderr,
         )
         errors += 1

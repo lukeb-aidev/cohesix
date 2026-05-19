@@ -18,6 +18,7 @@ use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+use crate::hal::driver_task::{DriverTaskContract, CYW43_WIFI_DRIVER_TASK_CONTRACT};
 use crate::hal::pi4_wifi::Pi4WifiState;
 use crate::hal::{
     Cyw43Hal, HalError, Hardware, SdioBusWidth, SdioFunction, WifiFirmwareBundle, WifiPowerState,
@@ -456,7 +457,7 @@ const fn linux_station_path_keeps_rxglom_configured_before_preinit() -> bool {
 }
 
 #[inline]
-const fn cohesix_runtime_disables_rxglom_until_large_superframes_supported() -> bool {
+const fn cohesix_defers_runtime_rxglom_disable_until_after_attach() -> bool {
     true
 }
 
@@ -3303,11 +3304,6 @@ impl Cyw43NetDevice {
             info!(
                 "[cyw43] control-plane step=bus-rxglom-disable-bounded-rx action=skip reason=linux-keeps-sdio-preinit-rxglom-before-mpc"
             );
-        } else {
-            control_step!(
-                "bus-rxglom-disable-bounded-rx",
-                self.set_iovar_u32("bus:rxglom", 0)
-            );
         }
         if linux_station_path_enables_apsta() {
             optional_iovar_step!("apsta-enable", "apsta", self.set_iovar_u32("apsta", 1));
@@ -3328,13 +3324,9 @@ impl Cyw43NetDevice {
             "linux-preinit-defaults",
             self.apply_linux_preinit_defaults()
         );
-        if cohesix_runtime_disables_rxglom_until_large_superframes_supported() {
-            control_step!(
-                "bus-rxglom-disable-runtime-compat",
-                self.set_iovar_u32("bus:rxglom", 0)
-            );
+        if cohesix_defers_runtime_rxglom_disable_until_after_attach() {
             info!(
-                "[cyw43] control-plane step=bus-rxglom-disable-runtime-compat action=compat reason=large-rxglom-superframes-not-yet-supported"
+                "[cyw43] control-plane step=bus-rxglom-disable-runtime-compat action=defer reason=preserve-linux-attach-order-through-event-mask-wlc-up"
             );
         }
         if linux_station_path_sets_antdiv_before_join() {
@@ -6553,6 +6545,13 @@ impl NetDevice for Cyw43NetDevice {
         "cyw43455"
     }
 
+    fn driver_task_contract() -> DriverTaskContract
+    where
+        Self: Sized,
+    {
+        CYW43_WIFI_DRIVER_TASK_CONTRACT
+    }
+
     fn interface_label(&self) -> &'static str {
         "wifi"
     }
@@ -7187,8 +7186,8 @@ fn get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
 mod tests {
     use super::{
         aes128_key_unwrap, align4, bdc_payload, bdc_priority_for_packet, clm_iovar_data_len,
-        clm_setvar_payload_len, control_plane_bootstrap_needs_full_replay_retry,
-        control_plane_data_clock_target_hz,
+        clm_setvar_payload_len, cohesix_defers_runtime_rxglom_disable_until_after_attach,
+        control_plane_bootstrap_needs_full_replay_retry, control_plane_data_clock_target_hz,
         control_plane_retry_after_promoted_timeout_can_resend_after_reply_wait,
         control_plane_retry_after_promoted_timeout_resend_uses_startup_link,
         control_plane_retry_after_promoted_timeout_target_clock_hz,
@@ -7251,7 +7250,7 @@ mod tests {
         write_sdpcm_control_tx_header, write_sdpcm_data_tx_header, write_wsec_key_payload,
         write_wsec_legacy_hex_pmk_payload, write_wsec_pmk_payload,
         wsec_pmk_error_allows_host_eapol_fallback, wsec_pmk_legacy_hex_fallback_allowed,
-        Cyw43Event, DeferredJoinState, DriverError, FirmwareSupplicantPath,
+        Cyw43Event, Cyw43NetDevice, DeferredJoinState, DriverError, FirmwareSupplicantPath,
         HostEapolRxAdmissionMode, HostWpaState, Ioctl, JoinCompletionRule, JoinCompletionState,
         RxFrameResult, RxSdpcmHeader, SdpcmTxProof, WsecPmkKind, BCME_BADARG, BCME_UNSUPPORTED,
         BCMILCP_BCM_SUBTYPE_EVENT, BCMILCP_SUBTYPE_VENDOR_LONG, BDC_HEADER_LEN, BDC_VERSION,
@@ -7290,6 +7289,7 @@ mod tests {
         WSEC_LEGACY_HEX_PMK_LEN, WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
     };
     use crate::hal::HalError;
+    use crate::net::NetDevice;
 
     fn unsupported_reason(err: &DriverError) -> Option<&'static str> {
         match err {
@@ -9300,6 +9300,12 @@ mod tests {
     }
 
     #[test]
+    fn runtime_rxglom_disable_is_deferred_until_after_attach() {
+        assert!(linux_station_path_keeps_rxglom_configured_before_preinit());
+        assert!(cohesix_defers_runtime_rxglom_disable_until_after_attach());
+    }
+
+    #[test]
     fn linux_optional_ulp_sdioctrl_accepts_unsupported_status() {
         assert!(linux_optional_iovar_allows_unsupported(
             "ulp_sdioctrl",
@@ -10590,5 +10596,13 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn cyw43_declares_valid_driver_task_contract() {
+        let contract = Cyw43NetDevice::driver_task_contract();
+
+        assert_eq!(contract.name, Cyw43NetDevice::name());
+        assert_eq!(contract.validate(), Ok(()));
     }
 }

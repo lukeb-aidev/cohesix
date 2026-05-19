@@ -110,6 +110,8 @@ use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
+#[cfg(feature = "net-console")]
+use crate::hal::driver_task::DriverServiceBudget;
 #[cfg(feature = "kernel")]
 use crate::hal::{
     SdioBusWidth, WifiControlPlaneTrace, WifiDebugOps, WifiDebugSnapshot,
@@ -1366,7 +1368,11 @@ where
         }
         let serial_input = self.consume_serial();
         self.serial.flush_tx();
-        self.poll_runtime(false, serial_rx_activity || serial_input || local_input);
+        let serial_output_pending = self.serial.tx_pending();
+        self.poll_runtime(
+            false,
+            serial_rx_activity || serial_input || local_input || serial_output_pending,
+        );
         self.serial.poll_io();
         let post_runtime_local_input =
             self.consume_local_seat(LocalSeatConsumePhase::PostRuntime, false);
@@ -1415,14 +1421,36 @@ where
             let should_yield_before =
                 net_status_should_yield_to_physical_input(&net.status_report());
             let host_eapol_pending_before = net_status_needs_host_eapol_burst(&net.status_report());
-            let yield_for_physical_input =
-                physical_input_active && !suppress_console_input && should_yield_before;
+            let net_contract = net.driver_task_contract();
+            let network_data_yields_to_input = net_contract
+                .validate()
+                .map(|_| !net_contract.preempts_network_data())
+                .unwrap_or(true);
+            let yield_for_physical_input = physical_input_active
+                && !suppress_console_input
+                && (should_yield_before || network_data_yields_to_input);
             let mut activity = false;
+            let mut net_budget = DriverServiceBudget::new(net_contract).ok();
             // Host-EAPOL pending/required has no DHCP/data progress yet; once
             // the root console is available, yield those SDIO polls to active
-            // keyboards.
+            // keyboards. The same contract rule applies to all NIC data paths:
+            // active serial/USB input or pending serial output owns this
+            // event-pump turn.
             if !yield_for_physical_input {
-                activity = net.poll(self.now_ms);
+                if let Some(budget) = net_budget.as_mut() {
+                    match net.poll_with_budget(self.now_ms, budget) {
+                        Ok(polled) => activity = polled,
+                        Err(err) => {
+                            let message = format_message(format_args!(
+                                "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                                net_contract.name,
+                                err.reason(),
+                                net_contract.max_service_us(),
+                            ));
+                            self.audit.denied(message.as_str());
+                        }
+                    }
+                }
             }
             let host_eapol_pending = if yield_for_physical_input {
                 host_eapol_pending_before
@@ -1442,15 +1470,32 @@ where
                 if !net_status_needs_host_eapol_burst(&net.status_report()) {
                     break;
                 }
-                activity |= net.poll(self.now_ms);
+                let Some(budget) = net_budget.as_mut() else {
+                    break;
+                };
+                match net.poll_with_budget(self.now_ms, budget) {
+                    Ok(polled) => activity |= polled,
+                    Err(err) => {
+                        let message = format_message(format_args!(
+                            "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                            net_contract.name,
+                            err.reason(),
+                            net_contract.max_service_us(),
+                        ));
+                        self.audit.denied(message.as_str());
+                        break;
+                    }
+                }
             }
             let telemetry = net.telemetry();
             let conn_id = net.active_console_conn_id();
             let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_QUEUE_DEPTH }> =
                 HeaplessVec::new();
-            net.drain_console_lines(self.now_ms, &mut |line| {
-                let _ = buffered.push(line);
-            });
+            if !yield_for_physical_input {
+                net.drain_console_lines(self.now_ms, &mut |line| {
+                    let _ = buffered.push(line);
+                });
+            }
             let ingest_snapshot: IngestSnapshot = net.ingest_snapshot();
             Some((activity, telemetry, buffered, conn_id, ingest_snapshot))
         } else {
@@ -1640,12 +1685,9 @@ where
     pub fn announce_console_ready(&mut self) {
         if self.ninedoor.is_some() {
             if crate::generated::hardware_config().local_seat.enabled {
-                boot_log::force_uart_line(
-                    "[trace] log channel remains UART during local-seat bring-up",
-                );
-            } else {
-                boot_log::switch_logger_to_log_buffer();
+                boot_log::force_uart_line("[trace] log channel buffered after local-seat handoff");
             }
+            boot_log::switch_logger_to_log_buffer();
         }
         self.audit.info("console: attach uart");
         if let Some(bridge) = self.ninedoor.as_mut() {
@@ -2750,8 +2792,8 @@ where
             let keyboard_drop = local_seat.dropped_keyboard_bytes();
             let trace = local_seat.keyboard_trace();
             let drop_line = format_message(format_args!(
-                "usb: local-seat drops keyboard_drop={}",
-                keyboard_drop,
+                "usb: local-seat drops keyboard_drop={} driver_task_budget_overruns={}",
+                keyboard_drop, trace.driver_task_budget_overruns,
             ));
             self.emit_console_line(drop_line.as_str());
             let trace_line = format_message(format_args!(
@@ -7274,6 +7316,10 @@ mod tests {
             true
         }
 
+        fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {
+            crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
+        }
+
         fn telemetry(&self) -> NetTelemetry {
             NetTelemetry {
                 link_up: true,
@@ -7753,8 +7799,8 @@ mod tests {
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
         let mut line = HeaplessString::new();
-        line.push_str("ping").unwrap();
-        net.lines.push(ConsoleLine::new(line, 1)).unwrap();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 1)).is_ok());
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.poll();
         drop(pump);
@@ -7775,8 +7821,8 @@ mod tests {
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
         let mut line = HeaplessString::new();
-        line.push_str("ping").unwrap();
-        net.lines.push(ConsoleLine::new(line, 1)).unwrap();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 1)).is_ok());
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.serial_mut().driver_mut().push_rx(b"ping\n");
 
@@ -7927,6 +7973,83 @@ mod tests {
         assert_eq!(metrics.local_seat_keyboard_priority_turns, 1);
         assert_eq!(metrics.local_seat_runtime_skipped_turns, 1);
         assert_eq!(metrics.local_seat_serial_dispatch_yielded_turns, 1);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn serial_input_skips_ready_network_data_poll_for_driver_task_turn() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().driver_mut().push_rx(b"n");
+        pump.poll();
+        let echoed = pump.serial_mut().driver_mut().drain_tx();
+        drop(pump);
+
+        assert_eq!(net.polls, 0);
+        assert_eq!(echoed.as_slice(), b"n");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn serial_input_defers_buffered_network_console_lines_for_driver_task_turn() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 1)).is_ok());
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().driver_mut().push_rx(b"n");
+        pump.poll();
+        let echoed = pump.serial_mut().driver_mut().drain_tx();
+        drop(pump);
+
+        assert_eq!(net.polls, 0);
+        assert_eq!(net.lines.len(), 1);
+        assert!(net.sent.is_empty());
+        assert_eq!(echoed.as_slice(), b"n");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn serial_tx_backlog_skips_ready_network_data_poll_for_driver_task_turn() {
+        let driver = LoopbackSerial::<8>::new();
+        let serial = SerialPort::<_, 32, 128, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().enqueue_tx(
+            b"serial backlog must drain before ready network data consumes the pump turn",
+        );
+        pump.poll();
+        let emitted = pump.serial_mut().driver_mut().drain_tx();
+        drop(pump);
+
+        assert_eq!(net.polls, 0);
+        assert!(!emitted.is_empty());
+        assert!(emitted.len() < 64);
     }
 
     #[cfg(feature = "net-console")]

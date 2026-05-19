@@ -208,6 +208,11 @@ def main() -> int:
         "apps/root-task/src/hal/cache.rs": [
             "cache_labels_use_sel4_aarch64_vspace_invocations",
         ],
+        "apps/root-task/src/hal/driver_task.rs": [
+            "builtin_driver_task_contracts_are_valid_and_mark_current_compatibility",
+            "priority_order_matches_sel4_and_cooperative_service_rules",
+            "builtin_isolation_summary_does_not_fake_dedicated_tasks",
+        ],
         "apps/root-task/src/hal/pci.rs": [
             "topology_find_by_id_matches_expected_device",
             "topology_returns_none_for_missing_device",
@@ -235,12 +240,22 @@ def main() -> int:
             'any(target_os = "none", test)',
             "mod local_seat_pi4",
         ],
+        "apps/root-task/src/event/mod.rs": [
+            "serial_input_skips_ready_network_data_poll_for_driver_task_turn",
+            "serial_tx_backlog_skips_ready_network_data_poll_for_driver_task_turn",
+            "local_seat_input_skips_ready_network_poll_for_keyboard_turn",
+        ],
         "apps/root-task/src/local_seat_pi4.rs": [
             "driver_coverage_pi4_local_seat_usb_vl805_dma_contracts",
             "pre_reset_irq_quiesce_requires_hal_source_clear_before_ack",
             "pi4_pcie_dma_window_uses_linux_captured_bcm2711_dma_range",
             "pi4_xhci_dma_policy_never_tries_raw_phys_after_pcie_alias",
             "xhci_high_bar_runtime_runs_polling_only",
+        ],
+        "apps/root-task/src/serial/mod.rs": [
+            "poll_io_obeys_driver_task_budget",
+            "flush_tx_obeys_driver_task_budget",
+            "flush_tx_backpressure_does_not_count_as_budget_overrun",
         ],
         "apps/root-task/tests/cache_maintenance.rs": [
             "cache_maintenance_dma_audit_logs_flush_before_share_ready",

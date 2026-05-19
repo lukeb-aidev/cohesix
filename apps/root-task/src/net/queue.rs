@@ -459,6 +459,10 @@ impl NetPoller for NetStack {
         self.poll_with_time(now_ms)
     }
 
+    fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {
+        crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
+    }
+
     fn telemetry(&self) -> NetTelemetry {
         self.telemetry()
     }

@@ -306,7 +306,126 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "SDIO_IRQ158_SEEN": "no",
         "SDIO_IRQ158_BOUND": "no",
         "SDIO_IRQ158_LINE": 0,
+        "NET_ACTIVE": "unknown",
+        "NET_ADDR_SRC": "unknown",
+        "NET_DHCP": "unknown",
+        "DRIVER_TASK_CONTRACTS": 0,
+        "DRIVER_TASK_DEDICATED": 0,
+        "DRIVER_TASK_COMPATIBILITY": 0,
+        "DRIVER_TASK_DEDICATED_READY": "no",
+        "DRIVER_TASK_SERIAL_DEDICATED": "no",
+        "DRIVER_TASK_USB_DEDICATED": "no",
+        "DRIVER_TASK_DISPLAY_DEDICATED": "no",
+        "DRIVER_TASK_NET_DEDICATED": "no",
+        "DRIVER_TASK_SUBSTRATE_READY": "no",
+        "DRIVER_TASK_CAPSET_PROOF": "no",
+        "DRIVER_TASK_FAULT_PROOF": "no",
+        "DRIVER_TASK_REVOKE_PROOF": "no",
+        "DRIVER_TASK_SCHED_PROOF": "no",
+        "DRIVER_TASK_ACTIVE_NET": "unknown",
+        "DRIVER_TASK_BUDGET_OVERRUNS": 0,
+        "DRIVER_TASK_LATENCY_PROOFS": 0,
+        "SERIAL_RESPONSIVE_PROOF": "no",
+        "USB_BURST_PROOF": "no",
+        "USB_BURST_DROPS": -1,
+        "HDMI_RESPONSIVE_PROOF": "no",
     }
+
+
+def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
+    """Pi 4 closure gates must be machine-checkable beyond USB/WiFi ready."""
+
+    events = normalizer.parse_events(
+        [
+            "netstats: mode=static policy=wired active=wired standby=wifi "
+            "addr_src=static ip=192.168.1.50 gateway=192.168.1.1 dhcp=off",
+            "DRIVER_TASK contract=serial service_class=realtime isolation=dedicated-sel4-task max_service_us=40 observed_service_us=18",
+            "SCHED_CONTRACT contract=genet service_class=network-data isolation=root-task-compatibility max_service_us=120 service_us=90",
+            "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=root-task-compatibility-contracts-active required=4 dedicated=1 compatibility=1",
+            "SERIAL_ECHO p95_us=800 max_gap_us=1200",
+            "USB_BURST bytes=256 drops=0 max_latency_us=900",
+            "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["NET_ACTIVE"] == "wired"
+    assert record["NET_ADDR_SRC"] == "static"
+    assert record["NET_DHCP"] == "off"
+    assert record["DRIVER_TASK_CONTRACTS"] == 2
+    assert record["DRIVER_TASK_DEDICATED"] == 1
+    assert record["DRIVER_TASK_COMPATIBILITY"] == 1
+    assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
+    assert record["DRIVER_TASK_SERIAL_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_USB_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_DISPLAY_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_NET_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_SUBSTRATE_READY"] == "no"
+    assert record["DRIVER_TASK_CAPSET_PROOF"] == "no"
+    assert record["DRIVER_TASK_FAULT_PROOF"] == "no"
+    assert record["DRIVER_TASK_REVOKE_PROOF"] == "no"
+    assert record["DRIVER_TASK_SCHED_PROOF"] == "no"
+    assert record["DRIVER_TASK_ACTIVE_NET"] == "unknown"
+    assert record["DRIVER_TASK_BUDGET_OVERRUNS"] == 0
+    assert record["DRIVER_TASK_LATENCY_PROOFS"] == 2
+    assert record["SERIAL_RESPONSIVE_PROOF"] == "yes"
+    assert record["USB_BURST_PROOF"] == "yes"
+    assert record["USB_BURST_DROPS"] == 0
+    assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
+    """Dedicated closure must prove substrate, capset, fault, revoke, and scheduling."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 mcs=0 "
+            "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
+            "broad_caps_leaked=0",
+            "DRIVER_TASK role=serial contract=driver-serial isolation=dedicated-sel4-task "
+            "capset=console-transport unexpected_caps=0 fault_probe=pass revoke_ready=yes "
+            "priority=240 observed_service_us=18",
+            "DRIVER_TASK role=usb contract=driver-usb isolation=dedicated-sel4-task "
+            "capset=device-only unexpected_caps=0 fault_probe=pass revoke_ready=yes "
+            "priority=240 observed_service_us=22",
+            "DRIVER_TASK role=display contract=driver-display isolation=dedicated-sel4-task "
+            "capset=display-sink unexpected_caps=0 fault_probe=pass revoke_ready=yes "
+            "priority=120 observed_service_us=44",
+            "DRIVER_TASK role=net contract=driver-wifi isolation=dedicated-sel4-task "
+            "active_net=cyw43 capset=network-frame-transport unexpected_caps=0 "
+            "fault_probe=pass revoke_ready=yes priority=160 observed_service_us=73",
+            "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes substrate=active capset=pass "
+            "fault=pass revoke=pass sched=pass active_net=cyw43 required=4 "
+            "dedicated=4 compatibility=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_CONTRACTS"] == 4
+    assert record["DRIVER_TASK_DEDICATED"] == 4
+    assert record["DRIVER_TASK_DEDICATED_READY"] == "yes"
+    assert record["DRIVER_TASK_SUBSTRATE_READY"] == "yes"
+    assert record["DRIVER_TASK_CAPSET_PROOF"] == "yes"
+    assert record["DRIVER_TASK_FAULT_PROOF"] == "yes"
+    assert record["DRIVER_TASK_REVOKE_PROOF"] == "yes"
+    assert record["DRIVER_TASK_SCHED_PROOF"] == "yes"
+    assert record["DRIVER_TASK_ACTIVE_NET"] == "cyw43"
+
+
+def test_gate_summary_counts_driver_task_budget_overruns() -> None:
+    """A budget overrun breadcrumb must be visible to hardware acceptance."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK contract=cyw43 service_class=network-data max_service_us=250",
+            "BUDGET_OVERRUN contract=cyw43 budget_overrun=1 service_us=900",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_CONTRACTS"] == 1
+    assert record["DRIVER_TASK_BUDGET_OVERRUNS"] == 1
+    assert record["DRIVER_TASK_LATENCY_PROOFS"] == 1
 
 
 def test_gate_summary_tracks_root_console_readiness() -> None:

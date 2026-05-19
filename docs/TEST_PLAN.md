@@ -138,6 +138,11 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci`
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio`
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::poll_io_obeys_driver_task_budget`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::flush_tx_backpressure_does_not_count_as_budget_overrun`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_skips_ready_network_data_poll_for_driver_task_turn`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_defers_buffered_network_console_lines_for_driver_task_turn`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet`
@@ -150,7 +155,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`
 - `SEL4_BUILD_DIR=$REPO/seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu`
 - `SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
-- `cargo test --workspace`
+- `CARGO_INCREMENTAL=0 cargo test --workspace`
 - If `pytest` is not available in the host `python3`, `scripts/ci/test_plan_stage_02_host_fast.sh` auto-creates `${TEST_PLAN_STATE_DIR}/.venv` and installs `pytest` there.
 - `python3 -m pytest tools/cohesix-py/tests`
 - `python3 tools/cohesix-py/examples/lease_run.py --mock`
@@ -164,6 +169,8 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p nine-door --features scale-tests --test shard_scale sharded_attach_1k_scale_gate_exports_metrics -- --nocapture`
 
 Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` and `scripts/pi4_gate_proof.sh` tests directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `USB_BLOCKER=usbcmd-run-preserved-reset-bit`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, `WIFI_BLOCKER=ht-clock-timeout`, `BOOT_HALTED=yes`, `PANIC_SEEN=yes`, `PANIC_REASON=bootinfo-snapshot-corrupted`, or `TIMER_IRQ27_SEEN=yes`. The Pi 4 local-seat driver coverage module is part of Stage 02 because it owns USB keyboard input proof contracts, Caps/Num/Scroll LED bitmaps, post-seal LED-sync enablement, HDMI progress refresh cadence, and Wi-Fi progress suppression while USB boot activity is active.
+
+Reopened Milestones 26a/26b also require HAL driver-task contract coverage before hardware claims: `hal::driver_task` must validate the serial, USB/local-seat, HDMI, GENET, CYW43, SDIO host, PCIe root, RTL8139, and virtio-net contracts. Historical M26B completion evidence remains a compatibility baseline, not reopened acceptance proof. Reopened Pi 4 captures must include compact `DRIVER_TASK_*`, `SCHED_CONTRACT`, `BUDGET_OVERRUN`, observed per-driver latency, `SERIAL_ECHO`, `USB_BURST`, and `HDMI_RESPONSIVE` evidence; `scripts/pi4_trace_normalize.py --gate-summary` now exposes those as machine-checkable hardware proof fields. Dedicated-driver-task closure is stricter than contract declaration: `DRIVER_TASK_DEDICATED` must cover the required active roles, `DRIVER_TASK_COMPATIBILITY` must be `0`, `DRIVER_TASK_DEDICATED_READY=yes` must be present, serial, USB/local-seat, display, and network role booleans must all be `yes`, and substrate/capset/fault/revoke/scheduling proof fields must all be `yes` when `scripts/pi4_gate_proof.sh --require-driver-task-proof` is used.
 
 ### 3) QEMU boot + TCP console baseline
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
@@ -188,6 +195,16 @@ Start QEMU (source tree or bundle), then verify:
   - ACK/ERR/END ordering stable.
 
 ### 4) TCP reliability & performance (QEMU)
+Stage 04 is self-contained for local QEMU. If no `COHESIX_GATEWAY_URL`
+(`HIVE_GATEWAY_URL`, `COHSH_REST_URL`, or `COH_REST_URL`) is supplied, the stage
+boots a local QEMU instance, starts `hive-gateway` against that TCP console, and
+uses a stage-local request-auth token. Local mode allocates free loopback ports
+by default; override the local bind/port with `TP_STAGE4_GATEWAY_BIND` and
+`TP_STAGE4_QEMU_TCP_PORT`. Supplying an explicit gateway URL keeps the
+external-gateway path and requires
+`HIVE_GATEWAY_REQUEST_AUTH_TOKEN` (`COHSH_REST_AUTH_TOKEN` or
+`COH_REST_AUTH_TOKEN`).
+
 Run while QEMU is up:
 - Repeat `tcp-diag` 5–10 times and record results (example: `... | tee logs/tcp-diag.log`).
 - Run `pool bench path=/log/queen.log ops=500 batch=8 payload_bytes=64` and record throughput/latency (example: `... | tee logs/pool-bench.log`).
@@ -428,13 +445,13 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - Snapshot coverage runs against the current browser matrix: `webkit-desktop` (baseline shell), `webkit-narrow` (responsive shell and scheduler), and `chromium-tablet` (interaction parity without snapshot gating).
 
 ### 6) Regression pack (full-stack, recommended before release)
-- `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (requires `COHESIX_GATEWAY_URL` or equivalent gateway env var)
-- `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> scripts/cohsh/REST_regression_batch.sh`
+- `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (self-contained local QEMU by default; set `COHESIX_GATEWAY_URL` or equivalent to target an already running gateway)
+- `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> HIVE_GATEWAY_REQUEST_AUTH_TOKEN=<token> scripts/cohsh/REST_regression_batch.sh`
 - Stage 04 runs two REST batches:
   - A concurrent "core" batch (boot/proc/pool coverage): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/session_pool.coh`.
   - A strict "parity" batch (control-plane smoke): `scripts/cohsh/rest_control_plane_smoke.coh`.
     - Note: `scripts/cohsh/busy_backpressure.coh` and `scripts/cohsh/policy_gate.coh` remain covered by the TCP/QEMU regression matrix (Stage 03), where console-parser semantics are validated directly.
-- Stage 04 also runs a Python REST smoke (`tools/cohesix-py` `RestBackend`) that performs `LS /` and `CAT /log/queen.log` against the same gateway.
+- Stage 04 also runs a Python REST smoke (`tools/cohesix-py` `RestBackend`) that performs `LS /` and reads `/proc/lifecycle/state` against the same gateway.
 - Logs:
   - Scripted Stage 04 writes REST batch logs under the stage state dir (for example `out/test-plan/<run-id>/rest-regression-logs/`).
   - Manual runs of `scripts/cohsh/REST_regression_batch.sh` default to `out/regression-logs/<batch>/<script>.run*.log` unless `COHSH_LOG_ROOT` is set.
@@ -515,8 +532,8 @@ Run this matrix in addition to the staged runner when Milestone 26 files change.
   - `rg -n "EFI_|boot_services|runtime_services|uefi::" apps/root-task/src apps/nine-door/src tools/coh-rtc/src`
   - The runtime code path must not introduce direct EFI service calls after seL4 handoff.
 
-### 6e) Pi 4 DHCP + U-Boot policy compatibility (Milestone 26b as-built)
-Run this matrix in addition to the staged runner when Milestone 26b files change.
+### 6e) Pi 4 DHCP + U-Boot policy compatibility and reopened driver-task proof (Milestones 26a/26b)
+Run this matrix in addition to the staged runner when Milestone 26a or 26b files change. Older checked-in M26B Wi-Fi/DHCP captures prove the retained compatibility baseline only; reopened 26a/26b closure additionally requires fresh USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load plus the driver-task scheduling fields below.
 
 - Compiler + docs gate:
   - `cargo test -p coh-rtc`
@@ -533,6 +550,14 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
   - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
   - Existing QEMU hostfwd defaults (`127.0.0.1:{31337,31338,31339}`) and ACK/ERR/END fixtures must remain unchanged.
 - Pi 4 runtime evidence gate:
+  - Build-only/stage-only validation is useful but is not Pi 4 acceptance. A reopened 26a/26b hardware run must include a fresh serial capture from the reflashed image, not an older checked-in or operator-provided transcript.
+  - The minimum 26a wired/GENET closure command is:
+    - `scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-usb-ready --require-wired-ready --require-driver-task-proof --require-input-responsive --expect DRIVER_TASK_ACTIVE_NET=genet --expect ROOT_PROMPT_SEEN=yes --expect SERIAL_CLEAN=yes --expect USB_BOOTLOADER_HANDOFF_SEEN=no --expect USB_COLD_BOOT_SEEN=yes`
+  - The minimum 26b Wi-Fi closure command is:
+    - `scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-ready --require-driver-task-proof --require-input-responsive --expect DRIVER_TASK_ACTIVE_NET=cyw43 --expect ROOT_PROMPT_SEEN=yes --expect SERIAL_CLEAN=yes --expect USB_BOOTLOADER_HANDOFF_SEEN=no --expect USB_COLD_BOOT_SEEN=yes`
+  - Existing logs may be normalized for triage only:
+    - `scripts/pi4_gate_proof.sh --normalize-only --log <existing-log> --allow-summary-only`
+    - `--allow-summary-only` is not acceptance proof and must not be combined with any `--require-*` hardware acceptance flag.
   - When `cohsh` reaches the Pi over Wi-Fi/TCP, keep the raw serial log and the `cohsh` transcript together in the Pi 4 evidence directory. TCP `cohsh` output is not mirrored back into the UART log, so the normalizer may be run over a combined serial-plus-`cohsh` evidence file for the final `netstats`/`netstatus` assertions while retaining the raw serial log as the boot source of truth.
   - Capture boot evidence showing:
     - `manifest.hw.network.mode=<static|dhcp>`
@@ -549,7 +574,9 @@ Run this matrix in addition to the staged runner when Milestone 26b files change
   - `netstats` must report:
     - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`
     - `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`
-    - for Wi-Fi ready acceptance, the final post-`nettest` `netstats` capture must show `active=wifi`, `addr_src=dhcp-lease`, `dhcp=bound`, `eapol_secure=1`, and non-zero TX/RX packet counters.
+    - driver-task scheduling evidence for the active hardware path in reopened 26a/26b acceptance captures: contract name, service class, isolation mode, poll/service count, budget exhaustion/yield count, RX/TX queue depth, drop count, and observed service latency. The normalizer exposes this as `DRIVER_TASK_CONTRACTS`, `DRIVER_TASK_DEDICATED`, `DRIVER_TASK_COMPATIBILITY`, `DRIVER_TASK_DEDICATED_READY`, `DRIVER_TASK_SERIAL_DEDICATED`, `DRIVER_TASK_USB_DEDICATED`, `DRIVER_TASK_DISPLAY_DEDICATED`, `DRIVER_TASK_NET_DEDICATED`, `DRIVER_TASK_SUBSTRATE_READY`, `DRIVER_TASK_CAPSET_PROOF`, `DRIVER_TASK_FAULT_PROOF`, `DRIVER_TASK_REVOKE_PROOF`, `DRIVER_TASK_SCHED_PROOF`, `DRIVER_TASK_ACTIVE_NET`, `DRIVER_TASK_BUDGET_OVERRUNS`, and `DRIVER_TASK_LATENCY_PROOFS`. Contract-only root-task compatibility evidence and declared `max_service_us` budgets are diagnostic and must not be counted as dedicated driver-task closure or latency proof.
+    - responsiveness evidence under network load: `SERIAL_RESPONSIVE_PROOF=yes`, `USB_BURST_PROOF=yes`, `USB_BURST_DROPS=0`, and `HDMI_RESPONSIVE_PROOF=yes`.
+    - wired 26a closure must show `NET_ACTIVE=wired`; Wi-Fi 26b closure still requires `active=wifi`, `addr_src=dhcp-lease`, `dhcp=bound`, `eapol_secure=1`, and non-zero TX/RX packet counters.
     - `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`
   - `nettest` refusal detail must preserve the reason when the run cannot start:
     - `detail=dhcp-pending`
@@ -568,6 +595,9 @@ Run Sections 3–5 using the extracted bundle in a clean temp directory (not the
 ### 8) Final release gate (must pass)
 - `scripts/ci/test_plan_stage_05_due_diligence.sh`
 - `scripts/ci/due_diligence_gate.sh`
+- `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings`
+- `CARGO_INCREMENTAL=0 cargo check --workspace`
+- `CARGO_INCREMENTAL=0 cargo test --workspace`
 - Do not progress beyond this stage until all prior scripted stages have completion markers and the due-diligence gate is fully green.
 
 ## Trace replay limits

@@ -32,7 +32,11 @@ use core::{
 use spin::Mutex;
 
 const BOOT_KEYBOARD_DECODE_FALLBACK_THRESHOLD: u8 = 4;
-const UBOOT_BOOT_KEYBOARD_IDLE_DURATION: u8 = 10;
+// Keep boot keyboards event-driven after Cohesix owns xHCI. U-Boot's short
+// idle cadence is useful for firmware polling, but in the root task it creates
+// a steady stream of empty interrupt-IN completions that can fill the xHCI
+// event ring while Wi-Fi is doing bounded but long SDIO work.
+const BOOT_KEYBOARD_IDLE_DURATION: u8 = 0;
 const BOOT_KEYBOARD_REPORT_LEN: usize = core::mem::size_of::<KeyboardReport>();
 const FLEXIBLE_KEYBOARD_REPORT_MIN_LEN: usize = 4;
 const HID_LED_CONTROL_WAIT_SPINS: usize = 2_000_000;
@@ -1021,7 +1025,7 @@ impl<H: Dma> HidDevice<H> {
         }
 
         let idle_duration = if hid_type == HidType::Keyboard {
-            UBOOT_BOOT_KEYBOARD_IDLE_DURATION
+            BOOT_KEYBOARD_IDLE_DURATION
         } else {
             0
         };
@@ -1585,7 +1589,7 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
 mod tests {
     use super::{
         KeyboardCompletionAction, KeyboardDecodeMode, KeyboardDecodeTransition,
-        KeyboardProtocolMode, UBOOT_BOOT_KEYBOARD_IDLE_DURATION, decode_keyboard_report_payload,
+        KeyboardProtocolMode, BOOT_KEYBOARD_IDLE_DURATION, decode_keyboard_report_payload,
         decode_keyboard_report_payload_boot_compatible,
         decode_keyboard_report_payload_flexible_key_report, forced_keyboard_profile,
         has_report_payload, keyboard_completion_action, keyboard_decode_transition,
@@ -1841,8 +1845,8 @@ mod tests {
     }
 
     #[test]
-    fn boot_keyboard_idle_duration_matches_uboot_polling_config() {
-        assert_eq!(UBOOT_BOOT_KEYBOARD_IDLE_DURATION, 10);
+    fn boot_keyboard_idle_duration_is_event_driven_for_root_task() {
+        assert_eq!(BOOT_KEYBOARD_IDLE_DURATION, 0);
     }
 
     #[test]

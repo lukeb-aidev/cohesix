@@ -23,6 +23,7 @@ use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+use crate::hal::driver_task::{DriverTaskContract, GENET_DRIVER_TASK_CONTRACT};
 use crate::hal::{bcmgenet as genet_hal, dma, DeviceHal, HalError};
 use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError};
 use crate::sel4::{RamFrame, PAGE_BITS};
@@ -1571,6 +1572,13 @@ impl NetDevice for BcmGenetDevice {
         "bcmgenet-v5"
     }
 
+    fn driver_task_contract() -> DriverTaskContract
+    where
+        Self: Sized,
+    {
+        GENET_DRIVER_TASK_CONTRACT
+    }
+
     fn debug_snapshot(&mut self) {
         self.poll_tx_completions();
         let cmd = self.read_reg32(GENET_UMAC_CMD);
@@ -1619,13 +1627,14 @@ impl NetDevice for BcmGenetDevice {
 #[cfg(test)]
 mod tests {
     use crate::hal::bcmgenet as genet_hal;
+    use crate::net::NetDevice;
 
     use super::{
         decode_bmcr_speed, decode_rx_length, encode_tx_len_status, ring_distance, ring_slot,
         rx_owned_len_status, should_emit_repeated_breadcrumb, should_log_rx_idle,
-        should_log_tx_drop, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP, DMA_OWN, DMA_SOP,
-        DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH,
-        UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
+        should_log_tx_drop, BcmGenetDevice, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP,
+        DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100,
+        MII_BMCR_SPEED1000, RX_BUF_LENGTH, UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
     };
 
     #[test]
@@ -1705,6 +1714,14 @@ mod tests {
         assert!(should_emit_repeated_breadcrumb(64));
         assert!(should_emit_repeated_breadcrumb(128));
         assert!(!should_emit_repeated_breadcrumb(96));
+    }
+
+    #[test]
+    fn genet_declares_valid_driver_task_contract() {
+        let contract = BcmGenetDevice::driver_task_contract();
+
+        assert_eq!(contract.name, BcmGenetDevice::name());
+        assert_eq!(contract.validate(), Ok(()));
     }
 
     #[test]

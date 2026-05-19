@@ -1,15 +1,20 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Record Milestone 26b completion evidence for Pi 4 DHCP/Wi-Fi and QEMU compatibility. -->
+<!-- Purpose: Record historical Milestone 26b compatibility evidence for Pi 4 DHCP/Wi-Fi and QEMU compatibility. -->
 <!-- Author: Lukas Bower -->
 
-# Milestone 26b Completion Evidence
+# Historical Milestone 26b Compatibility Evidence
 
-Milestone 26b is complete. Milestone 26c has not started.
+This file records the pre-reopen 26b compatibility baseline. Reopened 26a/26b
+driver-task acceptance is not complete until fresh hardware captures prove
+`DRIVER_TASK_DEDICATED_READY=yes`, `DRIVER_TASK_DEDICATED>=4`, and
+`DRIVER_TASK_COMPATIBILITY=0`, plus `DRIVER_TASK_SERIAL_DEDICATED=yes`,
+`DRIVER_TASK_USB_DEDICATED=yes`, `DRIVER_TASK_DISPLAY_DEDICATED=yes`, and
+`DRIVER_TASK_NET_DEDICATED=yes` for the active Pi 4 driver set.
 
 ## Scope
 
-This evidence closes the Milestone 26b Pi 4 DHCP/Wi-Fi baseline and QEMU compatibility guardrail. It does not start the Milestone 26c target-qualified runner, audit refactor, or cleanup work.
+This evidence closes only the historical Milestone 26b Pi 4 DHCP/Wi-Fi baseline and QEMU compatibility guardrail. It does not close reopened 26a/26b driver-task isolation, and it does not start the Milestone 26c target-qualified runner, audit refactor, or cleanup work.
 
 ## QEMU Evidence
 
@@ -48,11 +53,12 @@ The raw serial boot reached USB Gate 10 and Wi-Fi Gate 9. Final Wi-Fi Gate 10 pr
 Follow-up review of the same long-running raw serial capture found a post-proof
 RX resilience bug: after the final remote `cohsh` proof, a malformed or
 oversized RX-glom descriptor could leave the SDIO Function 2 runtime receive
-path reporting `cyw43-frame-oversize` repeatedly. The completion evidence above
+path reporting `cyw43-frame-oversize` repeatedly. The compatibility evidence above
 still proves DHCP, EAPOL security, `netstats`, and remote `cohsh`, but the
-runtime fix now disables Pi 4 runtime RX glom after the Linux-shaped `mpc`
-preinit point, clears/acks oversized Function 2 receive conditions, and caps the
-corresponding Wi-Fi/self-test logs so the UART and local seat remain responsive.
+current runtime fix keeps Linux's `bus:rxglom=1` attach order through `mpc`,
+`event_msgs_ext`, and `WLC_UP`, clears/acks oversized Function 2 receive
+conditions, and caps the corresponding Wi-Fi/self-test logs so the UART and
+local seat remain responsive.
 
 Final `cohsh` post-nettest `netstats` proved the Pi 4 was DHCP-bound on Wi-Fi:
 
@@ -99,6 +105,7 @@ USB_COLD_BOOT_SEEN=yes
 
 ## Acceptance
 
-- Milestone 26a: Complete.
-- Milestone 26b: Complete.
+- Historical 26a GENET/static compatibility baseline: Complete.
+- Historical 26b DHCP/Wi-Fi compatibility baseline: Complete.
+- Reopened 26a/26b dedicated driver-task acceptance: Not Complete.
 - Milestone 26c: Not Started.

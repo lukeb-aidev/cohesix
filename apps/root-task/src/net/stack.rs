@@ -60,6 +60,7 @@ use crate::drivers::cyw43::{Cyw43NetDevice, DriverError as Cyw43DriverError};
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
+use crate::hal::driver_task::{DriverServiceBudget, DriverServiceBudgetError};
 use crate::hal::{HalError, Hardware};
 use crate::observe::IngestSnapshot;
 use crate::readiness;
@@ -73,6 +74,10 @@ const TCP_RX_BUFFER: usize = 2048;
 const TCP_TX_BUFFER: usize = 2048;
 const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 16;
 const MAX_CONSOLE_BYTES_PER_POLL: usize = 8_192;
+const MAX_DHCP_RX_PACKETS_PER_POLL: usize = 2;
+const MAX_UDP_ECHO_PACKETS_PER_POLL: usize = 2;
+const MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL: usize = 4;
+const MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL: usize = 2;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
 const SOCKET_CAPACITY: usize = 6;
@@ -265,6 +270,7 @@ pub enum NetStackError<DE> {
     DhcpSocketBind(UdpBindError),
     TcpProbeRxStorageInUse,
     TcpProbeTxStorageInUse,
+    DriverTaskContract(&'static str),
 }
 
 impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
@@ -287,6 +293,9 @@ impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
             Self::DhcpSocketBind(err) => write!(f, "DHCP socket bind failed: {err:?}"),
             Self::TcpProbeRxStorageInUse => f.write_str("TCP probe RX storage already in use"),
             Self::TcpProbeTxStorageInUse => f.write_str("TCP probe TX storage already in use"),
+            Self::DriverTaskContract(reason) => {
+                write!(f, "driver task contract rejected: {reason}")
+            }
         }
     }
 }
@@ -1134,6 +1143,7 @@ pub struct NetStack<D: NetDevice> {
     probe_hint_logged: bool,
     last_now_ms: Option<u64>,
     time_stall_warned: bool,
+    budgeted_phase: BudgetedNetPhase,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1145,6 +1155,27 @@ struct PollSnapshot {
     can_recv: bool,
     can_send: bool,
     staged_events: usize,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum BudgetedNetPhase {
+    Interface,
+    Dhcp,
+    Tcp,
+    InterfaceFlush,
+    SelfTest,
+}
+
+impl BudgetedNetPhase {
+    const fn next(self) -> Self {
+        match self {
+            Self::Interface => Self::Dhcp,
+            Self::Dhcp => Self::Tcp,
+            Self::Tcp => Self::InterfaceFlush,
+            Self::InterfaceFlush => Self::SelfTest,
+            Self::SelfTest => Self::Interface,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -1909,6 +1940,9 @@ where
         NetStackError::TcpProbeTxStorageInUse => {
             NetConsoleError::Init(NetStackError::TcpProbeTxStorageInUse)
         }
+        NetStackError::DriverTaskContract(reason) => {
+            NetConsoleError::Init(NetStackError::DriverTaskContract(reason))
+        }
     }
 }
 
@@ -2549,6 +2583,9 @@ impl<D: NetDevice> NetStack<D> {
         };
         log_net_watch_targets("net.init.begin");
         BOOTINFO_WINDOW_GUARD.check("net.init.device.pre");
+        D::driver_task_contract()
+            .validate()
+            .map_err(|err| NetStackError::DriverTaskContract(err.reason()))?;
         let mut device = Box::new(D::create_with_stage(hal, &console_config, stage)?);
         BOOTINFO_WINDOW_GUARD.check("net.init.device.post");
         let mac = device.mac();
@@ -2684,6 +2721,7 @@ impl<D: NetDevice> NetStack<D> {
             probe_hint_logged: false,
             last_now_ms: None,
             time_stall_warned: false,
+            budgeted_phase: BudgetedNetPhase::Interface,
         });
         stack.assert_bootinfo_overlaps();
         stack.log_buffer_addresses_once("net.init.buffers");
@@ -2866,8 +2904,7 @@ impl<D: NetDevice> NetStack<D> {
         Ok(())
     }
 
-    /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
-    pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
+    fn begin_poll_turn(&mut self, now_ms: u64) -> Instant {
         if !self.service_logged {
             info!("[net-console] service loop running");
             self.service_logged = true;
@@ -2906,42 +2943,52 @@ impl<D: NetDevice> NetStack<D> {
             self.device.debug_snapshot();
         }
 
+        timestamp
+    }
+
+    fn finish_poll_turn(&mut self, now_ms: u64, activity: bool) {
+        self.telemetry.last_poll_ms = now_ms;
+        if self.device.bringup_status_label().is_some() {
+            self.telemetry.link_up = false;
+        } else if activity {
+            self.telemetry.link_up = true;
+        }
+        self.telemetry.tx_drops = self.device.tx_drop_count();
+        self.sync_device_counters();
+    }
+
+    fn poll_smoltcp_once(&mut self, timestamp: Instant, now_ms: u64, label: &'static str) -> bool {
+        self.bump_poll_counter();
+        let poll_result = self
+            .interface
+            .poll(timestamp, self.device.as_mut(), &mut self.sockets);
+        let activity = poll_result != PollResult::None;
+        if activity {
+            log::debug!("[net] smoltcp: {label} poll now_ms={now_ms}");
+        }
+        activity
+    }
+
+    /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
+    pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
+        let timestamp = self.begin_poll_turn(now_ms);
+
         if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
-            self.telemetry.last_poll_ms = now_ms;
-            self.telemetry.tx_drops = self.device.tx_drop_count();
-            self.sync_device_counters();
+            self.finish_poll_turn(now_ms, false);
             return true;
         }
 
-        self.bump_poll_counter();
         if self.stage_policy.tx_only && !self.tx_only_sent {
             let activity = self.send_udp_beacon();
             if activity {
-                let poll_result =
-                    self.interface
-                        .poll(timestamp, self.device.as_mut(), &mut self.sockets);
-                if poll_result != PollResult::None {
-                    log::debug!("[net] smoltcp: tx-only poll now_ms={}", now_ms);
-                }
+                let _ = self.poll_smoltcp_once(timestamp, now_ms, "tx-only");
             }
             self.tx_only_sent = true;
-            self.telemetry.last_poll_ms = now_ms;
-            self.telemetry.tx_drops = self.device.tx_drop_count();
-            self.sync_device_counters();
-            if activity {
-                self.telemetry.link_up = true;
-            }
+            self.finish_poll_turn(now_ms, activity);
             return activity;
         }
 
-        let mut poll_result =
-            self.interface
-                .poll(timestamp, self.device.as_mut(), &mut self.sockets);
-        if poll_result != PollResult::None {
-            log::debug!("[net] smoltcp: events processed at now_ms={}", now_ms);
-        }
-        let mut activity = false;
-        activity |= poll_result != PollResult::None;
+        let mut activity = self.poll_smoltcp_once(timestamp, now_ms, "main");
         let dhcp_start_activity = self.start_dhcp_if_ready(now_ms);
         activity |= dhcp_start_activity;
         let dhcp_activity = self.service_dhcp(now_ms);
@@ -2958,20 +3005,10 @@ impl<D: NetDevice> NetStack<D> {
         // without waiting for the next timer tick.
         if tcp_activity || dhcp_activity {
             if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
-                self.telemetry.last_poll_ms = now_ms;
-                self.telemetry.tx_drops = self.device.tx_drop_count();
-                self.sync_device_counters();
+                self.finish_poll_turn(now_ms, activity);
                 return true;
             }
-            self.bump_poll_counter();
-            poll_result = self
-                .interface
-                .poll(timestamp, self.device.as_mut(), &mut self.sockets);
-            let poll_activity = poll_result != PollResult::None;
-            if poll_activity {
-                log::debug!("[net] smoltcp: post-tcp poll now_ms={}", now_ms);
-            }
-            activity |= poll_activity;
+            activity |= self.poll_smoltcp_once(timestamp, now_ms, "post-tcp");
         }
 
         activity |= self.stage_policy.allow_selftest && self.service_self_test(now_ms, timestamp);
@@ -2982,15 +3019,101 @@ impl<D: NetDevice> NetStack<D> {
                 && self.service_outbound_probe(now_ms, timestamp);
         }
 
-        self.telemetry.last_poll_ms = now_ms;
-        if self.device.bringup_status_label().is_some() {
-            self.telemetry.link_up = false;
-        } else if activity {
-            self.telemetry.link_up = true;
-        }
-        self.telemetry.tx_drops = self.device.tx_drop_count();
-        self.sync_device_counters();
+        self.finish_poll_turn(now_ms, activity);
         activity
+    }
+
+    fn poll_budgeted_with_time(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        budget.charge_ops(1)?;
+
+        if self.stage_policy.tx_only && !self.tx_only_sent {
+            budget.charge_ops(2)?;
+            budget.charge_frames(1)?;
+            budget.charge_bytes(256)?;
+
+            let timestamp = self.begin_poll_turn(now_ms);
+            if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
+                self.finish_poll_turn(now_ms, false);
+                return Ok(true);
+            }
+
+            let activity = self.send_udp_beacon();
+            if activity {
+                let _ = self.poll_smoltcp_once(timestamp, now_ms, "budgeted-tx-only");
+            }
+            self.tx_only_sent = true;
+            self.budgeted_phase = self.budgeted_phase.next();
+            self.finish_poll_turn(now_ms, activity);
+            return Ok(activity);
+        }
+
+        let phase = self.budgeted_phase;
+        match phase {
+            BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush => {
+                budget.charge_ops(2)?;
+                budget.charge_frames(1)?;
+                budget.charge_bytes(2048)?;
+            }
+            BudgetedNetPhase::Dhcp => {
+                budget.charge_ops(16)?;
+                budget.charge_frames(MAX_DHCP_RX_PACKETS_PER_POLL as u16 + 1)?;
+                budget.charge_bytes((MAX_DHCP_RX_PACKETS_PER_POLL as u32 + 1) * 1024)?;
+            }
+            BudgetedNetPhase::Tcp => {
+                budget.charge_ops(32)?;
+                budget.charge_frames(8)?;
+                budget.charge_bytes(16 * 1024)?;
+            }
+            BudgetedNetPhase::SelfTest => {
+                budget.charge_ops(16)?;
+                budget.charge_frames(8)?;
+                budget.charge_bytes(8 * 1024)?;
+            }
+        }
+
+        let timestamp = self.begin_poll_turn(now_ms);
+        if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
+            self.finish_poll_turn(now_ms, false);
+            self.budgeted_phase = phase.next();
+            return Ok(true);
+        }
+
+        let activity = match phase {
+            BudgetedNetPhase::Interface => {
+                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
+            }
+            BudgetedNetPhase::Dhcp => {
+                let start_activity = self.start_dhcp_if_ready(now_ms);
+                let service_activity = self.service_dhcp(now_ms);
+                start_activity || service_activity
+            }
+            BudgetedNetPhase::Tcp => self.stage_policy.allow_tcp && self.process_tcp(now_ms),
+            BudgetedNetPhase::InterfaceFlush => {
+                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
+            }
+            BudgetedNetPhase::SelfTest => {
+                let selftest_activity =
+                    self.stage_policy.allow_selftest && self.service_self_test(now_ms, timestamp);
+                #[cfg(feature = "net-outbound-probe")]
+                {
+                    let outbound_activity = self.stage_policy.allow_outbound_probe
+                        && self.service_outbound_probe(now_ms, timestamp);
+                    selftest_activity || outbound_activity
+                }
+                #[cfg(not(feature = "net-outbound-probe"))]
+                {
+                    selftest_activity
+                }
+            }
+        };
+
+        self.budgeted_phase = phase.next();
+        self.finish_poll_turn(now_ms, activity);
+        Ok(activity)
     }
 
     fn bump_poll_counter(&mut self) {
@@ -3011,8 +3134,12 @@ impl<D: NetDevice> NetStack<D> {
         let mut activity = false;
         let mac = self.device.mac().0;
         let mut rx_packet = [0u8; DHCP_PAYLOAD_CAPACITY];
+        let mut packets = 0usize;
 
         loop {
+            if packets >= MAX_DHCP_RX_PACKETS_PER_POLL {
+                break;
+            }
             let recv = {
                 let socket = self.sockets.get_mut::<UdpSocket>(handle);
                 match socket.recv() {
@@ -3032,6 +3159,7 @@ impl<D: NetDevice> NetStack<D> {
             let Some(len) = recv else {
                 break;
             };
+            packets = packets.saturating_add(1);
             self.counters.udp_rx = self.counters.udp_rx.saturating_add(1);
             let before_status = client.status();
             let event = client.handle_packet(mac, &rx_packet[..len], now_ms);
@@ -3647,9 +3775,14 @@ impl<D: NetDevice> NetStack<D> {
         };
         let socket = self.sockets.get_mut::<UdpSocket>(handle);
         let mut activity = false;
+        let mut packets = 0usize;
         loop {
+            if packets >= MAX_UDP_ECHO_PACKETS_PER_POLL {
+                break;
+            }
             match socket.recv() {
                 Ok((payload, meta)) => {
+                    packets = packets.saturating_add(1);
                     let endpoint = meta.endpoint;
                     let mut reply = [0u8; UDP_PAYLOAD_CAPACITY];
                     let prefix = b"ECHO:";
@@ -3739,7 +3872,11 @@ impl<D: NetDevice> NetStack<D> {
 
             let mut copied = 0usize;
             let mut temp = [0u8; 64];
+            let mut chunks = 0usize;
             while socket.can_recv() {
+                if chunks >= MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL {
+                    break;
+                }
                 let recv_result = socket.recv(|data| {
                     let copy_len = core::cmp::min(data.len(), temp.len());
                     let _ = maybe_report_str_write(
@@ -3759,13 +3896,13 @@ impl<D: NetDevice> NetStack<D> {
                 self.counters.tcp_rx_bytes =
                     self.counters.tcp_rx_bytes.saturating_add(copied as u64);
                 NET_DIAG.add_bytes_read(copied as u64);
+                chunks = chunks.saturating_add(1);
                 info!(
                     "[net-selftest] tcp-smoke recv bytes={} state={:?}",
                     copied,
                     socket.state()
                 );
                 activity = true;
-                break;
             }
 
             if socket.can_send() && (copied > 0 || !socket.can_recv()) {
@@ -4380,7 +4517,11 @@ impl<D: NetDevice> NetStack<D> {
                     socket.may_recv(),
                     socket.state()
                 );
+                let mut recv_chunks = 0usize;
                 while socket.can_recv() {
+                    if recv_chunks >= MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL {
+                        break;
+                    }
                     let mut copied = 0usize;
                     let recv_result = socket.recv(|data| {
                         let preview_len = core::cmp::min(data.len(), 32);
@@ -4411,6 +4552,7 @@ impl<D: NetDevice> NetStack<D> {
                             NET_DIAG.add_bytes_read(copied as u64);
                             self.counters.tcp_rx_bytes =
                                 self.counters.tcp_rx_bytes.saturating_add(copied as u64);
+                            recv_chunks = recv_chunks.saturating_add(1);
                             #[cfg(feature = "net-trace-31337")]
                             {
                                 let (peer_label, peer_port) =
@@ -5526,6 +5668,18 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.poll_with_time(now_ms)
     }
 
+    fn poll_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        self.poll_budgeted_with_time(now_ms, budget)
+    }
+
+    fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {
+        D::driver_task_contract()
+    }
+
     fn telemetry(&self) -> NetTelemetry {
         self.telemetry()
     }
@@ -5664,6 +5818,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.self_test.console_ok = false;
         self.last_now_ms = None;
         self.time_stall_warned = false;
+        self.budgeted_phase = BudgetedNetPhase::Interface;
         #[cfg(feature = "net-outbound-probe")]
         {
             self.probe_sent = false;
@@ -5874,6 +6029,30 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43(stack) => stack.poll(now_ms),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.poll(now_ms),
+        }
+    }
+
+    fn poll_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        match self {
+            Self::Rtl8139(stack) => stack.poll_with_budget(now_ms, budget),
+            Self::BcmGenet(stack) => stack.poll_with_budget(now_ms, budget),
+            Self::Cyw43(stack) => stack.poll_with_budget(now_ms, budget),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.poll_with_budget(now_ms, budget),
+        }
+    }
+
+    fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {
+        match self {
+            Self::Rtl8139(stack) => stack.driver_task_contract(),
+            Self::BcmGenet(stack) => stack.driver_task_contract(),
+            Self::Cyw43(stack) => stack.driver_task_contract(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.driver_task_contract(),
         }
     }
 
@@ -6170,6 +6349,16 @@ mod tests {
             TCP_RX_BUFFER,
             3
         ));
+    }
+
+    #[test]
+    fn network_poll_quanta_stay_bounded_for_driver_contracts() {
+        assert!(MAX_DHCP_RX_PACKETS_PER_POLL <= 2);
+        assert!(MAX_UDP_ECHO_PACKETS_PER_POLL <= 2);
+        assert!(MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL <= 2);
+        assert!(MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL <= 4);
+        assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 16);
+        assert!(MAX_CONSOLE_BYTES_PER_POLL <= 8_192);
     }
 
     #[test]

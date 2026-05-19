@@ -28,6 +28,11 @@ use portable_atomic::{AtomicU64, Ordering as AtomicOrdering};
 #[cfg(feature = "kernel")]
 use spin::Mutex as SpinMutex;
 
+use crate::hal::driver_task::{
+    DriverServiceBudget, DriverServiceBudgetError, DriverTaskContract, ScheduledHardwareDriver,
+    SERIAL_DRIVER_TASK_CONTRACT,
+};
+
 #[cfg(feature = "kernel")]
 pub mod bcm2711_mini_uart;
 #[cfg(feature = "kernel")]
@@ -123,13 +128,36 @@ impl EmbeddedError for SerialError {
     }
 }
 
+/// HAL-enforced scheduling contract for physical serial service.
+#[must_use]
+pub const fn driver_task_contract() -> DriverTaskContract {
+    SERIAL_DRIVER_TASK_CONTRACT
+}
+
 /// Lightweight trait abstracting the MMIO-backed console device.
 pub trait SerialDriver: ErrorType {
+    /// HAL scheduling contract consumed by this serial driver.
+    fn driver_task_contract() -> DriverTaskContract
+    where
+        Self: Sized,
+    {
+        SERIAL_DRIVER_TASK_CONTRACT
+    }
+
     /// Attempt to read a single byte from the device.
     fn read_byte(&mut self) -> nb::Result<u8, Self::Error>;
 
     /// Attempt to write a single byte to the device.
     fn write_byte(&mut self, byte: u8) -> nb::Result<(), Self::Error>;
+}
+
+impl<T> ScheduledHardwareDriver for T
+where
+    T: SerialDriver,
+{
+    fn driver_task_contract() -> DriverTaskContract {
+        <T as SerialDriver>::driver_task_contract()
+    }
 }
 
 /// Metrics reported by the serial subsystem for observability.
@@ -141,6 +169,8 @@ pub struct SerialTelemetry {
     pub tx_backpressure: u32,
     /// Number of bytes dropped because they could not be encoded as UTF-8.
     pub utf8_dropped: u32,
+    /// Number of service turns stopped by the HAL driver-task budget.
+    pub driver_task_budget_overruns: u32,
 }
 
 /// Serial console abstraction with bounded RX/TX queues and UTF-8 sanitisation.
@@ -168,6 +198,10 @@ where
 {
     /// Construct a new serial port backed by the supplied driver.
     pub fn new(driver: D) -> Self {
+        debug_assert_eq!(
+            <D as SerialDriver>::driver_task_contract().validate(),
+            Ok(())
+        );
         Self {
             driver,
             rx: Queue::new(),
@@ -184,6 +218,18 @@ where
     #[must_use]
     pub fn telemetry(&self) -> SerialTelemetry {
         self.telemetry.snapshot()
+    }
+
+    /// Whether bytes remain staged for the serial TX driver.
+    #[must_use]
+    pub fn tx_pending(&self) -> bool {
+        self.pending_tx.is_some() || !self.tx.is_empty()
+    }
+
+    /// HAL scheduling contract consumed by this port.
+    #[must_use]
+    pub fn driver_task_contract(&self) -> DriverTaskContract {
+        <D as SerialDriver>::driver_task_contract()
     }
 
     /// Inject data that should be transmitted to the remote peer.
@@ -249,12 +295,29 @@ where
     ///
     /// Returns true when RX bytes were staged for this polling cycle.
     pub fn poll_io(&mut self) -> bool {
+        let contract = <D as SerialDriver>::driver_task_contract();
+        let mut budget = match DriverServiceBudget::new(contract) {
+            Ok(budget) => budget,
+            Err(_) => {
+                self.telemetry.driver_task_budget_overrun();
+                return false;
+            }
+        };
+        let mut budget_exhausted = false;
         let mut rx_activity = false;
         // Drain RX side first so newly available bytes can be processed in the
         // same cycle.
         loop {
+            if self.serial_byte_budget_available(&budget).is_err() {
+                budget_exhausted = true;
+                break;
+            }
             match self.driver.read_byte() {
                 Ok(byte) => {
+                    if self.charge_serial_byte(&mut budget).is_err() {
+                        self.telemetry.driver_task_budget_overrun();
+                        break;
+                    }
                     rx_activity = true;
                     if self.rx.enqueue(byte).is_err() {
                         self.telemetry.rx_overflow();
@@ -268,21 +331,41 @@ where
             }
         }
 
-        self.flush_tx_locked();
+        if budget_exhausted {
+            self.telemetry.driver_task_budget_overrun();
+        } else {
+            with_uart_tx_lock(|| self.flush_tx_unlocked(&mut budget));
+        }
         rx_activity
     }
 
     fn flush_tx_locked(&mut self) {
-        with_uart_tx_lock(|| {
-            self.flush_tx_unlocked();
-        });
+        let mut budget = match DriverServiceBudget::new(<D as SerialDriver>::driver_task_contract())
+        {
+            Ok(budget) => budget,
+            Err(_) => {
+                self.telemetry.driver_task_budget_overrun();
+                return;
+            }
+        };
+        with_uart_tx_lock(|| self.flush_tx_unlocked(&mut budget));
     }
 
-    fn flush_tx_unlocked(&mut self) {
+    fn flush_tx_unlocked(&mut self, budget: &mut DriverServiceBudget) {
         // Flush staged TX bytes to the device until it reports back-pressure.
         if let Some(byte) = self.pending_tx.take() {
+            if self.serial_byte_budget_available(budget).is_err() {
+                self.telemetry.driver_task_budget_overrun();
+                self.pending_tx = Some(byte);
+                return;
+            }
             match self.driver.write_byte(byte) {
-                Ok(()) => {}
+                Ok(()) => {
+                    if self.charge_serial_byte(budget).is_err() {
+                        self.telemetry.driver_task_budget_overrun();
+                        return;
+                    }
+                }
                 Err(NbError::WouldBlock) => {
                     self.pending_tx = Some(byte);
                     return;
@@ -294,9 +377,21 @@ where
             }
         }
 
-        while let Some(byte) = self.tx.dequeue() {
+        while !self.tx.is_empty() {
+            if self.serial_byte_budget_available(budget).is_err() {
+                self.telemetry.driver_task_budget_overrun();
+                return;
+            }
+            let Some(byte) = self.tx.dequeue() else {
+                break;
+            };
             match self.driver.write_byte(byte) {
-                Ok(()) => {}
+                Ok(()) => {
+                    if self.charge_serial_byte(budget).is_err() {
+                        self.telemetry.driver_task_budget_overrun();
+                        return;
+                    }
+                }
                 Err(NbError::WouldBlock) => {
                     self.pending_tx = Some(byte);
                     return;
@@ -307,6 +402,32 @@ where
                 }
             }
         }
+    }
+
+    fn serial_byte_budget_available(
+        &self,
+        budget: &DriverServiceBudget,
+    ) -> Result<(), DriverServiceBudgetError> {
+        if budget.ops_left() == 0 {
+            return Err(DriverServiceBudgetError::OperationsExhausted);
+        }
+        if budget.bytes_left() == 0 {
+            return Err(DriverServiceBudgetError::BytesExhausted);
+        }
+        if budget.frames_left() == 0 {
+            return Err(DriverServiceBudgetError::FramesExhausted);
+        }
+        Ok(())
+    }
+
+    fn charge_serial_byte(
+        &self,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<(), DriverServiceBudgetError> {
+        self.serial_byte_budget_available(budget)?;
+        budget.charge_ops(1)?;
+        budget.charge_bytes(1)?;
+        budget.charge_frames(1)
     }
 
     fn flush_tx_blocking_unlocked(&mut self) {
@@ -403,6 +524,7 @@ struct SerialTelemetryCounters {
     rx_backpressure: AtomicU32,
     tx_backpressure: AtomicU32,
     utf8_dropped: AtomicU32,
+    driver_task_budget_overruns: AtomicU32,
 }
 
 impl SerialTelemetryCounters {
@@ -416,6 +538,9 @@ impl SerialTelemetryCounters {
                 .load(core::sync::atomic::Ordering::Relaxed),
             utf8_dropped: self
                 .utf8_dropped
+                .load(core::sync::atomic::Ordering::Relaxed),
+            driver_task_budget_overruns: self
+                .driver_task_budget_overruns
                 .load(core::sync::atomic::Ordering::Relaxed),
         }
     }
@@ -432,6 +557,11 @@ impl SerialTelemetryCounters {
 
     fn utf8_drop(&self) {
         self.utf8_dropped
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn driver_task_budget_overrun(&self) {
+        self.driver_task_budget_overruns
             .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -540,6 +670,71 @@ mod tests {
         let emitted = port.driver_mut().drain_tx();
         assert_eq!(emitted.len(), accepted);
         assert_eq!(emitted.as_slice(), &b"abcd"[..accepted]);
+    }
+
+    #[test]
+    fn serial_declares_valid_realtime_driver_task_contract() {
+        let contract = driver_task_contract();
+
+        assert_eq!(contract.name, "serial");
+        assert!(contract.preempts_network_data());
+        assert_eq!(contract.validate(), Ok(()));
+    }
+
+    #[test]
+    fn poll_io_obeys_driver_task_budget() {
+        let driver = LoopbackSerial::<1024>::new();
+        let mut port: SerialPort<_, 1024, 1024, 16> = SerialPort::new(driver);
+        let input = [b'a'; 128];
+        port.driver_mut().push_rx(&input);
+
+        assert!(port.poll_io());
+
+        assert_eq!(port.rx.len(), 64);
+        assert_eq!(port.driver_mut().rx.borrow().len(), 64);
+        assert!(port.telemetry().driver_task_budget_overruns > 0);
+    }
+
+    #[test]
+    fn flush_tx_obeys_driver_task_budget() {
+        let driver = LoopbackSerial::<1024>::new();
+        let mut port: SerialPort<_, 1024, 1024, 16> = SerialPort::new(driver);
+        let output = [b'x'; 128];
+        port.enqueue_tx(&output);
+
+        port.flush_tx();
+
+        let emitted = port.driver_mut().drain_tx();
+        assert_eq!(emitted.len(), 64);
+        assert!(port.telemetry().driver_task_budget_overruns > 0);
+    }
+
+    #[test]
+    fn flush_tx_backpressure_does_not_count_as_budget_overrun() {
+        let driver = LoopbackSerial::<4>::new();
+        let mut port: SerialPort<_, 16, 16, 16> = SerialPort::new(driver);
+        let output = [b'x'; 10];
+        port.enqueue_tx(&output);
+
+        port.flush_tx();
+
+        let emitted = port.driver_mut().drain_tx();
+        assert!(emitted.len() < output.len());
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+    }
+
+    #[test]
+    fn poll_io_preserves_full_tx_budget_after_idle_rx_probe() {
+        let driver = LoopbackSerial::<1024>::new();
+        let mut port: SerialPort<_, 1024, 1024, 16> = SerialPort::new(driver);
+        let output = [b'x'; 64];
+        port.enqueue_tx(&output);
+
+        assert!(!port.poll_io());
+
+        let emitted = port.driver_mut().drain_tx();
+        assert_eq!(emitted.len(), 64);
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
     }
 
     #[test]

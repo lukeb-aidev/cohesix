@@ -42,6 +42,7 @@ use crate::debug::watched_write_bytes;
 use crate::guards;
 use crate::hal::cache::{cache_clean, cache_invalidate};
 use crate::hal::dma::{self, PinnedDmaRange};
+use crate::hal::driver_task::{DriverTaskContract, VIRTIO_NET_DRIVER_TASK_CONTRACT};
 use crate::hal::{virtio_mmio, DeviceHal, HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetStage, CONSOLE_TCP_PORT,
@@ -8984,6 +8985,13 @@ impl NetDevice for VirtioNet {
         "virtio-net"
     }
 
+    fn driver_task_contract() -> DriverTaskContract
+    where
+        Self: Sized,
+    {
+        VIRTIO_NET_DRIVER_TASK_CONTRACT
+    }
+
     fn debug_snapshot(&mut self) {
         VirtioNet::debug_snapshot(self);
     }
@@ -9035,6 +9043,13 @@ impl NetDevice for VirtioNetStatic {
         Self: Sized,
     {
         VirtioNet::name()
+    }
+
+    fn driver_task_contract() -> DriverTaskContract
+    where
+        Self: Sized,
+    {
+        VIRTIO_NET_DRIVER_TASK_CONTRACT
     }
 
     fn debug_snapshot(&mut self) {
@@ -12328,5 +12343,13 @@ mod tx_tests {
             1,
             "slot tracker unchanged on invalid id"
         );
+    }
+
+    #[test]
+    fn virtio_net_declares_valid_driver_task_contract() {
+        let contract = VirtioNet::driver_task_contract();
+
+        assert_eq!(contract.name, VirtioNet::name());
+        assert_eq!(contract.validate(), Ok(()));
     }
 }

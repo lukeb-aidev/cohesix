@@ -247,6 +247,29 @@ class GateSummary:
     usb_psc_drain_mask: int = 0
     root_console_ready: bool = False
     root_prompt_seen: bool = False
+    net_active: str = "unknown"
+    net_addr_src: str = "unknown"
+    net_dhcp: str = "unknown"
+    driver_task_contracts: int = 0
+    driver_task_dedicated: int = 0
+    driver_task_compatibility: int = 0
+    driver_task_dedicated_ready: bool = False
+    driver_task_serial_dedicated: bool = False
+    driver_task_usb_dedicated: bool = False
+    driver_task_display_dedicated: bool = False
+    driver_task_net_dedicated: bool = False
+    driver_task_substrate_ready: bool = False
+    driver_task_capset_proof: bool = False
+    driver_task_fault_proof: bool = False
+    driver_task_revoke_proof: bool = False
+    driver_task_sched_proof: bool = False
+    driver_task_active_net: str = "unknown"
+    driver_task_budget_overruns: int = 0
+    driver_task_latency_proofs: int = 0
+    serial_responsive_proof: bool = False
+    usb_burst_proof: bool = False
+    usb_burst_drops: int = -1
+    hdmi_responsive_proof: bool = False
 
     def to_record(self) -> dict[str, object]:
         """Return a JSON-serializable gate summary."""
@@ -280,6 +303,51 @@ class GateSummary:
             "USB_PSC_DRAIN_MASK": f"0x{self.usb_psc_drain_mask:08x}",
             "ROOT_CONSOLE_READY": "yes" if self.root_console_ready else "no",
             "ROOT_PROMPT_SEEN": "yes" if self.root_prompt_seen else "no",
+            "NET_ACTIVE": self.net_active,
+            "NET_ADDR_SRC": self.net_addr_src,
+            "NET_DHCP": self.net_dhcp,
+            "DRIVER_TASK_CONTRACTS": self.driver_task_contracts,
+            "DRIVER_TASK_DEDICATED": self.driver_task_dedicated,
+            "DRIVER_TASK_COMPATIBILITY": self.driver_task_compatibility,
+            "DRIVER_TASK_DEDICATED_READY": (
+                "yes" if self.driver_task_dedicated_ready else "no"
+            ),
+            "DRIVER_TASK_SERIAL_DEDICATED": (
+                "yes" if self.driver_task_serial_dedicated else "no"
+            ),
+            "DRIVER_TASK_USB_DEDICATED": (
+                "yes" if self.driver_task_usb_dedicated else "no"
+            ),
+            "DRIVER_TASK_DISPLAY_DEDICATED": (
+                "yes" if self.driver_task_display_dedicated else "no"
+            ),
+            "DRIVER_TASK_NET_DEDICATED": (
+                "yes" if self.driver_task_net_dedicated else "no"
+            ),
+            "DRIVER_TASK_SUBSTRATE_READY": (
+                "yes" if self.driver_task_substrate_ready else "no"
+            ),
+            "DRIVER_TASK_CAPSET_PROOF": (
+                "yes" if self.driver_task_capset_proof else "no"
+            ),
+            "DRIVER_TASK_FAULT_PROOF": (
+                "yes" if self.driver_task_fault_proof else "no"
+            ),
+            "DRIVER_TASK_REVOKE_PROOF": (
+                "yes" if self.driver_task_revoke_proof else "no"
+            ),
+            "DRIVER_TASK_SCHED_PROOF": (
+                "yes" if self.driver_task_sched_proof else "no"
+            ),
+            "DRIVER_TASK_ACTIVE_NET": self.driver_task_active_net,
+            "DRIVER_TASK_BUDGET_OVERRUNS": self.driver_task_budget_overruns,
+            "DRIVER_TASK_LATENCY_PROOFS": self.driver_task_latency_proofs,
+            "SERIAL_RESPONSIVE_PROOF": (
+                "yes" if self.serial_responsive_proof else "no"
+            ),
+            "USB_BURST_PROOF": "yes" if self.usb_burst_proof else "no",
+            "USB_BURST_DROPS": self.usb_burst_drops,
+            "HDMI_RESPONSIVE_PROOF": "yes" if self.hdmi_responsive_proof else "no",
         }
 
     def to_env_lines(self) -> list[str]:
@@ -478,6 +546,25 @@ def classify_domain(line: str) -> str | None:
         return "kernel"
     if line.startswith("Kernel entry via Interrupt"):
         return "kernel"
+    if (
+        "DRIVER_TASK" in line
+        or "SCHED_CONTRACT" in line
+        or "BUDGET_OVERRUN" in line
+        or "[driver-task]" in lower
+        or "driver-task" in lower
+        or "driver task" in lower
+    ):
+        return "driver"
+    if (
+        line.startswith("SERIAL_ECHO")
+        or line.startswith("USB_BURST")
+        or line.startswith("HDMI_RESPONSIVE")
+        or "serial echo" in lower
+        or "keyboard burst" in lower
+        or "hdmi stats" in lower
+        or "display stats" in lower
+    ):
+        return "driver"
     if "[pi4-wifi]" in lower and (
         "vl805-usb-hcd-power" in lower
         or "xhci-reset-notify" in lower
@@ -3849,6 +3936,284 @@ def summarize_wifi_failure_detail(
     return exact, phase, line
 
 
+def _truthy_field(value: str | None) -> bool:
+    """Return whether a normalized field value represents true/non-zero."""
+
+    if value is None:
+        return False
+    return value.lower() not in {"", "0", "false", "no", "none", "n/a"}
+
+
+def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str]:
+    """Return the latest compact netstats/netstatus state."""
+
+    active = "unknown"
+    addr_src = "unknown"
+    dhcp = "unknown"
+    for event in events:
+        if not event.raw.lower().startswith(("netstats:", "netstatus:")):
+            continue
+        active = event.fields.get("active", active)
+        addr_src = event.fields.get("addr_src", event.fields.get("src", addr_src))
+        dhcp = event.fields.get("dhcp", dhcp)
+    return active, addr_src, dhcp
+
+
+def classify_driver_task_role(label: str) -> str | None:
+    """Classify a driver-task label into a reopened 26a/26b proof role."""
+
+    normalized = label.lower().replace("_", "-")
+    if "serial" in normalized or "uart" in normalized:
+        return "serial"
+    if (
+        "usb" in normalized
+        or "xhci" in normalized
+        or "hid" in normalized
+        or "local-seat" in normalized
+        or "keyboard" in normalized
+    ):
+        return "usb"
+    if (
+        "hdmi" in normalized
+        or "display" in normalized
+        or "framebuffer" in normalized
+        or normalized in {"fb", "video"}
+    ):
+        return "display"
+    if any(
+        token in normalized
+        for token in (
+            "bcmgenet",
+            "genet",
+            "cyw",
+            "43455",
+            "wifi",
+            "wireless",
+            "wired",
+            "ethernet",
+            "rtl8139",
+            "virtio-net",
+            "nic",
+        )
+    ):
+        return "net"
+    return None
+
+
+def summarize_driver_task_proofs(
+    events: Iterable[TraceEvent],
+) -> tuple[
+    int,
+    int,
+    int,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    str,
+    int,
+    int,
+    bool,
+    bool,
+    int,
+    bool,
+]:
+    """Summarize Pi 4 driver-task and responsiveness proof breadcrumbs."""
+
+    contracts: set[str] = set()
+    dedicated_contracts: set[str] = set()
+    compatibility_contracts: set[str] = set()
+    dedicated_roles: set[str] = set()
+    dedicated_ready = False
+    substrate_ready = False
+    capset_proof = False
+    fault_proof = False
+    revoke_proof = False
+    sched_proof = False
+    active_net = "unknown"
+    budget_overruns = 0
+    latency_proofs = 0
+    serial_responsive = False
+    usb_burst_proof = False
+    usb_burst_drops = -1
+    hdmi_responsive = False
+    for event in events:
+        raw = event.raw.lower()
+        fields = event.fields
+        driver_task_line = (
+            "driver_task" in raw
+            or "driver-task" in raw
+            or "sched_contract" in raw
+            or "budget_overrun" in raw
+            or "budget overrun" in raw
+        )
+        if driver_task_line:
+            contract_declaration_line = (
+                (
+                    "sched_contract" in raw
+                    or raw.startswith("driver_task ")
+                    or raw.startswith("driver-task ")
+                )
+                and "driver_task_acceptance" not in raw
+                and "driver_task_summary" not in raw
+            )
+            contract_names: set[str] = set()
+            for key in ("contract", "name", "task", "driver"):
+                value = fields.get(key)
+                if value:
+                    contracts.add(value)
+                    contract_names.add(value)
+            if not contract_names:
+                value = fields.get("role")
+                if value:
+                    contracts.add(value)
+                    contract_names.add(value)
+            if contract_declaration_line and not contract_names:
+                contracts.add("unnamed")
+                contract_names.add("unnamed")
+            isolation = fields.get("isolation", "").lower()
+            dedicated = isolation in {"dedicated-sel4-task", "dedicated", "sel4-task"}
+            compatibility = isolation in {
+                "root-task-compatibility",
+                "root-task",
+                "compatibility",
+            }
+            for name in contract_names:
+                if dedicated:
+                    dedicated_contracts.add(name)
+                    role = classify_driver_task_role(name)
+                    if role is not None:
+                        dedicated_roles.add(role)
+                elif compatibility:
+                    compatibility_contracts.add(name)
+            if "driver_task_summary" in raw:
+                dedicated_summary = parse_hex_int(fields.get("dedicated"))
+                if dedicated_summary is not None:
+                    for index in range(dedicated_summary):
+                        dedicated_contracts.add(f"summary-dedicated-{index}")
+                compatibility_summary = parse_hex_int(fields.get("compatibility"))
+                if compatibility_summary is not None:
+                    for index in range(compatibility_summary):
+                        compatibility_contracts.add(f"summary-compatibility-{index}")
+            if "driver_task_acceptance" in raw:
+                dedicated_ready = fields.get("dedicated_ready", "").lower() == "yes"
+                substrate_ready |= fields.get("substrate", "").lower() in {"active", "yes", "pass"}
+                capset_proof |= fields.get("capset", "").lower() == "pass"
+                fault_proof |= fields.get("fault", "").lower() == "pass"
+                revoke_proof |= fields.get("revoke", "").lower() == "pass"
+                sched_proof |= fields.get("sched", "").lower() == "pass"
+                active_net = fields.get("active_net", active_net)
+            if "driver_task_substrate" in raw:
+                substrate_ready |= fields.get("active", "").lower() == "yes"
+                capset_proof |= fields.get("root_authority_retained", "").lower() == "yes" and (
+                    parse_hex_int(fields.get("broad_caps_leaked")) == 0
+                )
+                fault_proof |= fields.get("fault_endpoint_ready", "").lower() == "yes"
+                revoke_proof |= fields.get("revoke_ready", "").lower() == "yes"
+                sched_proof |= "mcs" in fields or _truthy_field(fields.get("sched"))
+            unexpected_caps = parse_hex_int(fields.get("unexpected_caps"))
+            if unexpected_caps == 0:
+                capset_proof |= fields.get("capset", "").lower() in {
+                    "device-only",
+                    "network-frame-transport",
+                    "console-transport",
+                    "display-sink",
+                    "pass",
+                }
+            fault_proof |= fields.get("fault_probe", "").lower() == "pass"
+            revoke_proof |= fields.get("revoke_ready", "").lower() == "yes"
+            sched_proof |= _truthy_field(fields.get("sched")) or _truthy_field(
+                fields.get("priority")
+            )
+            active_net = fields.get("active_net", active_net)
+            if "budget_overrun" in raw or "budget overrun" in raw or _truthy_field(
+                fields.get("budget_overrun")
+            ):
+                budget_overruns += 1
+            if any(
+                key in fields
+                for key in (
+                    "observed_service_us",
+                    "latency_us",
+                    "max_latency_us",
+                    "service_us",
+                    "service_max_us",
+                    "p95_us",
+                    "p99_us",
+                )
+            ):
+                latency_proofs += 1
+        if line_has_serial_responsiveness(raw, fields):
+            serial_responsive = True
+        if line_has_usb_burst_proof(raw, fields):
+            usb_burst_proof = True
+            drops = parse_hex_int(fields.get("drops"))
+            if drops is None:
+                drops = parse_hex_int(fields.get("dropped"))
+            usb_burst_drops = 0 if drops is None else drops
+        if line_has_hdmi_responsiveness(raw, fields):
+            hdmi_responsive = True
+    return (
+        len(contracts),
+        len(dedicated_contracts),
+        len(compatibility_contracts),
+        dedicated_ready,
+        "serial" in dedicated_roles,
+        "usb" in dedicated_roles,
+        "display" in dedicated_roles,
+        "net" in dedicated_roles,
+        substrate_ready,
+        capset_proof,
+        fault_proof,
+        revoke_proof,
+        sched_proof,
+        active_net,
+        budget_overruns,
+        latency_proofs,
+        serial_responsive,
+        usb_burst_proof,
+        usb_burst_drops,
+        hdmi_responsive,
+    )
+
+
+def line_has_serial_responsiveness(raw: str, fields: dict[str, str]) -> bool:
+    """Return whether a line proves serial echo/display responsiveness."""
+
+    return (
+        raw.startswith("serial_echo")
+        or "serial echo" in raw
+        or fields.get("serial_responsive") in {"1", "true", "yes"}
+    )
+
+
+def line_has_usb_burst_proof(raw: str, fields: dict[str, str]) -> bool:
+    """Return whether a line proves sustained USB keyboard burst handling."""
+
+    return (
+        raw.startswith("usb_burst")
+        or "keyboard burst" in raw
+        or fields.get("usb_burst") in {"1", "true", "yes"}
+    )
+
+
+def line_has_hdmi_responsiveness(raw: str, fields: dict[str, str]) -> bool:
+    """Return whether a line proves HDMI/display local-seat responsiveness."""
+
+    return (
+        raw.startswith("hdmi_responsive")
+        or "hdmi stats" in raw
+        or "display stats" in raw
+        or fields.get("hdmi_responsive") in {"1", "true", "yes"}
+    )
+
+
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
@@ -3932,6 +4297,29 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     root_console_ready = (
         any(root_console_ready_evidence(event) for event in event_list) or root_prompt_seen
     )
+    net_active, net_addr_src, net_dhcp = summarize_net_state(event_list)
+    (
+        driver_task_contracts,
+        driver_task_dedicated,
+        driver_task_compatibility,
+        driver_task_dedicated_ready,
+        driver_task_serial_dedicated,
+        driver_task_usb_dedicated,
+        driver_task_display_dedicated,
+        driver_task_net_dedicated,
+        driver_task_substrate_ready,
+        driver_task_capset_proof,
+        driver_task_fault_proof,
+        driver_task_revoke_proof,
+        driver_task_sched_proof,
+        driver_task_active_net,
+        driver_task_budget_overruns,
+        driver_task_latency_proofs,
+        serial_responsive_proof,
+        usb_burst_proof,
+        usb_burst_drops,
+        hdmi_responsive_proof,
+    ) = summarize_driver_task_proofs(event_list)
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -3957,6 +4345,29 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_psc_drain_mask=usb_psc_drain_mask,
         root_console_ready=root_console_ready,
         root_prompt_seen=root_prompt_seen,
+        net_active=net_active,
+        net_addr_src=net_addr_src,
+        net_dhcp=net_dhcp,
+        driver_task_contracts=driver_task_contracts,
+        driver_task_dedicated=driver_task_dedicated,
+        driver_task_compatibility=driver_task_compatibility,
+        driver_task_dedicated_ready=driver_task_dedicated_ready,
+        driver_task_serial_dedicated=driver_task_serial_dedicated,
+        driver_task_usb_dedicated=driver_task_usb_dedicated,
+        driver_task_display_dedicated=driver_task_display_dedicated,
+        driver_task_net_dedicated=driver_task_net_dedicated,
+        driver_task_substrate_ready=driver_task_substrate_ready,
+        driver_task_capset_proof=driver_task_capset_proof,
+        driver_task_fault_proof=driver_task_fault_proof,
+        driver_task_revoke_proof=driver_task_revoke_proof,
+        driver_task_sched_proof=driver_task_sched_proof,
+        driver_task_active_net=driver_task_active_net,
+        driver_task_budget_overruns=driver_task_budget_overruns,
+        driver_task_latency_proofs=driver_task_latency_proofs,
+        serial_responsive_proof=serial_responsive_proof,
+        usb_burst_proof=usb_burst_proof,
+        usb_burst_drops=usb_burst_drops,
+        hdmi_responsive_proof=hdmi_responsive_proof,
     )
 
 
@@ -4117,7 +4528,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("log", help="serial log path, or '-' for stdin")
     parser.add_argument(
         "--domain",
-        choices=("usb", "wifi"),
+        choices=("usb", "wifi", "driver"),
         action="append",
         default=[],
         help="limit output to a domain; may be repeated",

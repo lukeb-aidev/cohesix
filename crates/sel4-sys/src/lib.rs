@@ -1108,6 +1108,28 @@ mod imp {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn seL4_CNode_Revoke(
+        dest_root: seL4_CNode,
+        index: seL4_Word,
+        depth: seL4_Word,
+    ) -> seL4_Error {
+        let tag = seL4_MessageInfo_new(invocation_label_CNodeRevoke as seL4_Word, 0, 0, 2);
+
+        let mut mr0 = index;
+        let mut mr1 = encode_depth(depth as seL4_Uint8);
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+
+        let output_tag = seL4_CallWithMRs(dest_root, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            set_error_mrs(mr0, mr1, mr2, mr3);
+        }
+
+        result
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn seL4_Untyped_Retype(
         ut_cap: seL4_Untyped,
         obj_type: seL4_Word,
@@ -1301,6 +1323,71 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_TCB_SetPriority(
+        service: seL4_TCB,
+        authority: seL4_TCB,
+        priority: seL4_Word,
+    ) -> seL4_Error {
+        seL4_SetCap(0, authority);
+
+        let mut mr0: seL4_Word = priority;
+        let mut mr1: seL4_Word = 0;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
+
+        let tag = seL4_MessageInfo::new(invocation_label_TCBSetPriority as seL4_Word, 0, 1, 1);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetSchedParams(
+        service: seL4_TCB,
+        authority: seL4_TCB,
+        mcp: seL4_Word,
+        priority: seL4_Word,
+    ) -> seL4_Error {
+        #[cfg(sel4_config_kernel_mcs)]
+        {
+            let _ = (service, authority, mcp, priority);
+            seL4_IllegalOperation
+        }
+
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            seL4_SetCap(0, authority);
+
+            let mut mr0: seL4_Word = mcp;
+            let mut mr1: seL4_Word = priority;
+            let mut mr2: seL4_Word = 0;
+            let mut mr3: seL4_Word = 0;
+
+            let tag =
+                seL4_MessageInfo::new(invocation_label_TCBSetSchedParams as seL4_Word, 0, 1, 2);
+            let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+            let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+            if result != seL4_NoError {
+                seL4_SetMR(0, mr0);
+                seL4_SetMR(1, mr1);
+                seL4_SetMR(2, mr2);
+                seL4_SetMR(3, mr3);
+            }
+
+            result
+        }
+    }
+
+    #[inline(always)]
     #[cfg(sel4_sys_has_tcb_set_affinity)]
     pub unsafe fn seL4_TCB_SetAffinity(service: seL4_TCB, affinity: seL4_Word) -> seL4_Error {
         let mut mr0: seL4_Word = affinity;
@@ -1309,6 +1396,75 @@ mod imp {
         let mut mr3: seL4_Word = 0;
 
         let tag = seL4_MessageInfo::new(invocation_label_TCBSetAffinity as seL4_Word, 0, 0, 1);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_Resume(service: seL4_TCB) -> seL4_Error {
+        let mut mr0: seL4_Word = 0;
+        let mut mr1: seL4_Word = 0;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
+
+        let tag = seL4_MessageInfo::new(invocation_label_TCBResume as seL4_Word, 0, 0, 0);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_BindNotification(
+        service: seL4_TCB,
+        notification: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, notification);
+
+        let mut mr0: seL4_Word = 0;
+        let mut mr1: seL4_Word = 0;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
+
+        let tag = seL4_MessageInfo::new(invocation_label_TCBBindNotification as seL4_Word, 0, 1, 0);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_UnbindNotification(service: seL4_TCB) -> seL4_Error {
+        let mut mr0: seL4_Word = 0;
+        let mut mr1: seL4_Word = 0;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
+
+        let tag =
+            seL4_MessageInfo::new(invocation_label_TCBUnbindNotification as seL4_Word, 0, 0, 0);
         let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
         let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
 
@@ -1680,7 +1836,15 @@ mod imp {
     pub const seL4_CapDomain: seL4_CPtr = 11;
     pub const seL4_CapSMMUSIDControl: seL4_CPtr = 12;
     pub const seL4_CapSMMUCBControl: seL4_CPtr = 13;
+    pub const invocation_label_TCBWriteRegisters: seL4_Word = 3;
+    pub const invocation_label_TCBSetPriority: seL4_Word = 6;
+    pub const invocation_label_TCBSetMCPriority: seL4_Word = 7;
+    pub const invocation_label_TCBSetSchedParams: seL4_Word = 8;
     pub const invocation_label_TCBSetIPCBuffer: seL4_Word = 9;
+    pub const invocation_label_TCBSuspend: seL4_Word = 11;
+    pub const invocation_label_TCBResume: seL4_Word = 12;
+    pub const invocation_label_TCBBindNotification: seL4_Word = 13;
+    pub const invocation_label_TCBUnbindNotification: seL4_Word = 14;
     pub const seL4_CapInitThreadSC: seL4_CPtr = 14;
     pub const seL4_CapSMC: seL4_CPtr = 15;
     pub const seL4_NumInitialCaps: seL4_CPtr = seL4_CapSMC + 1;
@@ -1982,6 +2146,15 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_CNode_Revoke(
+        _root: seL4_CNode,
+        _index: seL4_Word,
+        _depth: seL4_Word,
+    ) -> seL4_Error {
+        seL4_NoError
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_CNode_Move(
         _dest_root: seL4_CNode,
         _dest_index: seL4_Word,
@@ -2210,7 +2383,62 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_TCB_SetPriority(
+        _service: seL4_TCB,
+        authority: seL4_TCB,
+        priority: seL4_Word,
+    ) -> seL4_Error {
+        seL4_SetCap(0, authority);
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBSetPriority, 0, 1, 1);
+        (*ipc).msg[0] = priority;
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetSchedParams(
+        _service: seL4_TCB,
+        authority: seL4_TCB,
+        mcp: seL4_Word,
+        priority: seL4_Word,
+    ) -> seL4_Error {
+        seL4_SetCap(0, authority);
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBSetSchedParams, 0, 1, 2);
+        (*ipc).msg[0] = mcp;
+        (*ipc).msg[1] = priority;
+        seL4_NoError
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_TCB_Suspend(_service: seL4_TCB) -> seL4_Error {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBSuspend, 0, 0, 0);
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_Resume(_service: seL4_TCB) -> seL4_Error {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBResume, 0, 0, 0);
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_BindNotification(
+        _service: seL4_TCB,
+        notification: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, notification);
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBBindNotification, 0, 1, 0);
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_UnbindNotification(_service: seL4_TCB) -> seL4_Error {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBUnbindNotification, 0, 0, 0);
         seL4_NoError
     }
 
@@ -2267,19 +2495,121 @@ pub use imp::*;
 
 #[cfg(all(test, not(target_os = "none")))]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    static HOST_IPC_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn host_ipc_tag() -> seL4_MessageInfo {
+        // SAFETY: Host tests use the crate-owned synthetic IPC buffer.
+        let ipc = unsafe { seL4_GetIPCBuffer() };
+        // SAFETY: `seL4_GetIPCBuffer` returns the synthetic host IPC buffer for host tests.
+        unsafe { (*ipc).tag }
+    }
+
+    fn host_cap(index: usize) -> seL4_CPtr {
+        // SAFETY: Host tests use the crate-owned synthetic IPC buffer.
+        let ipc = unsafe { seL4_GetIPCBuffer() };
+        // SAFETY: The synthetic IPC buffer has a fixed cap array and tests pass valid indices.
+        unsafe { (*ipc).caps_or_badges[index] }
+    }
+
+    fn host_mr(index: usize) -> seL4_Word {
+        // SAFETY: Host tests use the crate-owned synthetic IPC buffer.
+        let ipc = unsafe { seL4_GetIPCBuffer() };
+        // SAFETY: The synthetic IPC buffer has a fixed message array and tests pass valid indices.
+        unsafe { (*ipc).msg[index] }
+    }
 
     #[test]
     fn tcb_set_ipc_buffer_uses_v13_invocation_shape() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_SetIPCBuffer(0x44, 0x8000_0000, 0x55) };
         assert_eq!(result, seL4_NoError);
 
-        let ipc = unsafe { seL4_GetIPCBuffer() };
-        let tag = unsafe { (*ipc).tag };
+        let tag = host_ipc_tag();
         assert_eq!(tag.label(), invocation_label_TCBSetIPCBuffer);
         assert_eq!(tag.extra_caps(), 1);
         assert_eq!(tag.length(), 1);
-        assert_eq!(unsafe { (*ipc).caps_or_badges[0] }, 0x55);
-        assert_eq!(unsafe { (*ipc).msg[0] }, 0x8000_0000);
+        assert_eq!(host_cap(0), 0x55);
+        assert_eq!(host_mr(0), 0x8000_0000);
+    }
+
+    #[test]
+    fn tcb_set_sched_params_uses_v13_invocation_shape() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_TCB_SetSchedParams(0x44, 0x01, 220, 200) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), invocation_label_TCBSetSchedParams);
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 2);
+        assert_eq!(host_cap(0), 0x01);
+        assert_eq!(host_mr(0), 220);
+        assert_eq!(host_mr(1), 200);
+    }
+
+    #[test]
+    fn tcb_set_priority_uses_v13_invocation_shape() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_TCB_SetPriority(0x44, 0x01, 240) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), invocation_label_TCBSetPriority);
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 1);
+        assert_eq!(host_cap(0), 0x01);
+        assert_eq!(host_mr(0), 240);
+    }
+
+    #[test]
+    fn tcb_bind_and_unbind_notification_use_v13_invocation_shape() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_TCB_BindNotification(0x44, 0x99) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), invocation_label_TCBBindNotification);
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 0);
+        assert_eq!(host_cap(0), 0x99);
+
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_TCB_UnbindNotification(0x44) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), invocation_label_TCBUnbindNotification);
+        assert_eq!(tag.extra_caps(), 0);
+        assert_eq!(tag.length(), 0);
+    }
+
+    #[test]
+    fn tcb_suspend_resume_use_v13_invocation_shape() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_TCB_Suspend(0x44) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), invocation_label_TCBSuspend);
+        assert_eq!(tag.extra_caps(), 0);
+        assert_eq!(tag.length(), 0);
+
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_TCB_Resume(0x44) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), invocation_label_TCBResume);
+        assert_eq!(tag.extra_caps(), 0);
+        assert_eq!(tag.length(), 0);
     }
 }

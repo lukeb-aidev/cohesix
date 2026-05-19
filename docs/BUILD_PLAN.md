@@ -102,8 +102,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Complete |
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Complete |
 | [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | In Progress |
-| [26a](#26a) | Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) | Complete |
-| [26b](#26b) | Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) | Complete |
+| [26a](#26a) | Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation | Reopened |
+| [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Reopened |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Not Started |
 | [26d](#26d) | seL4 15 Baseline Refresh + Reference Manual Realignment | Pending |
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
@@ -6084,13 +6084,13 @@ Deliverables:
 ```
 ---
 
-## Milestone 26a — Pi 4 Networking Baseline (GENETv5 + Static IPv4, U-Boot Configurable) <a id="26a"></a>
+## Milestone 26a — Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation <a id="26a"></a>
 [Milestones](#Milestones)
 
-**Status:** Complete — profile-gated GENETv5/static-IPv4 compiler and root-task wiring are in tree, QEMU regression coverage remains green, and the U-Boot smoke + Pi 4 validation command path is documented and reproducible.
+**Status:** Reopened — the original GENETv5/static-IPv4 baseline remains a known-good compatibility target, but 26a now owns the driver-task substrate and the first hardware migrations required to prevent Pi 4 network work from starving USB, serial, or HDMI.
 
 **Why now (platform continuity):**  
-Milestone 26 establishes Pi 4 U-Boot boot, identity, and a local diagnostics seat with an intentional no-NIC runtime baseline. Milestone 26a introduces the first Pi 4 native NIC path while preserving the existing root-task networking model and Cohesix control-plane semantics.
+Milestone 25 established Cohesix's performance model: parallelism comes from isolated seL4 tasks, while root-task authority stays serialized. The first 26a implementation proved Pi 4 GENET reachability, but later Wi-Fi tuning exposed a system-level flaw: hardware drivers still share the cooperative root-task turn. Reopened 26a converts HAL from a broad in-root provider into a driver admission layer with explicit scheduling contracts, then migrates low-risk hardware paths before CYW43.
 
 **Non-negotiable constraints:**
 - No new in-VM listeners or protocols; the authenticated root-task TCP console remains the only in-VM TCP listener.
@@ -6098,6 +6098,11 @@ Milestone 26 establishes Pi 4 U-Boot boot, identity, and a local diagnostics sea
 - DHCP is intentionally out of scope for 26a and is delivered in Milestone 26b; 26a uses static IPv4 only.
 - Any VM vs Pi 4 networking differences must be profile-gated, manifest-defined, and documented.
 - Driver implementation must remain HAL-bound with bounded queues and deterministic memory budgets.
+- Root-task remains the single authority for tickets, console grammar, namespace, policy, and replay; driver tasks own only device progress.
+- Every hardware-facing service path must declare a HAL driver-task scheduling contract before it can be serviced. Missing, unbounded, or non-preemptible contracts fail closed.
+- Driver tasks receive only their declared MMIO, DMA, IRQ notification, endpoint, fault, and ring capabilities. No driver task may receive Secure9P authority, ticket material, broad namespace state, or a catch-all `KernelHal`.
+- Serial RX and USB/local-seat input are the highest-priority service class; HDMI/log flushing and network data are preemptible.
+- Direct root-task driver paths may remain only as compatibility fallbacks until the corresponding driver task has passed QEMU and Pi 4 gates; they must share the same HAL contract and budget checks.
 - Backward compatibility is mandatory: 26a network changes must preserve existing macOS/Linux QEMU console and networking workflows unless explicitly profile-gated for Pi 4 `pi4-uboot-aarch64` (with transitional alias support for legacy `uefi-aarch64` manifests).
 
 ### Prerequisite
@@ -6105,14 +6110,33 @@ Milestone 26 establishes Pi 4 U-Boot boot, identity, and a local diagnostics sea
 - Milestone 26 hardware evidence includes deterministic no-NIC boot transcripts for Pi 4 (`pi4-uboot-aarch64`).
 
 ### Goal
-Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` GENETv5) and wire `pi4-uboot-aarch64` static IPv4 configuration through manifest -> generated artifacts -> root-task net bring-up.
+Add the HAL-enforced driver-task substrate, migrate serial/display and GENET behind explicit scheduling contracts, and preserve the original Pi 4 GENET static IPv4 behavior as the compatibility target.
 
 ### Deliverables
+- **HAL driver-task admission substrate**
+  - Add a HAL-owned driver scheduling contract surface for serial, USB/local-seat, HDMI text, GENET, CYW43, SDIO host, PCIe root, and QEMU compatibility NICs.
+  - Each contract declares role, service class, authority, isolation target, per-turn operation/byte/frame budget, queue depth, and blocking policy.
+  - Runtime driver construction and polling fail closed when a hardware-facing path does not declare a valid, preemptible contract.
+  - The initial compatibility implementation may still run selected drivers in-process, but the same contract is the admission record for the dedicated seL4 task that replaces it.
+
+- **seL4 driver-task substrate**
+  - Add root-owned wrappers for driver TCB creation, CSpace/VSpace setup, IPC-buffer installation, badged endpoints, notifications, IRQ binding, fault endpoints, scheduling-context parameters where available, and revocation.
+  - As-built substrate work now includes non-MCS TCB priority/scheduling/resume/notification wrappers, CNode revoke, a remote-safe IPC-buffer bind helper, and bounded HAL driver-task command/completion rings; hot-path migration remains open until those primitives are wired into live driver TCBs.
+  - Root keeps authority and revocation; driver tasks receive only compiler-declared caps and bounded shared rings.
+  - seL4 scheduling-context fields are profile-qualified: MCS builds bind explicit scheduling contexts, while non-MCS builds enforce the same contract with TCB priority/domain plus bounded IPC/poll budgets.
+  - The substrate must not introduce POSIX threads, implicit async runtimes, unbounded queues, or a second listener/protocol.
+
+- **Serial/display driver-task migration**
+  - Move normal UART service behind a `driver-serial` contract and preserve emergency early-boot debug UART fallback only until handoff.
+  - Move HDMI/text flushing behind a `driver-display` contract so display refresh cannot block serial input, USB keyboard input, or network control progress.
+  - Prove serial command echo and HDMI mirror behavior under synthetic GENET traffic.
+
 - **GENETv5 NIC backend (Pi 4)**
   - Add a root-task driver backend for Broadcom GENETv5, implemented in pure Rust with HAL ownership for MMIO, IRQ, DMA, and cache maintenance.
   - Use this design-reference order for architecture review: Linux `bcmgenet` driver behavior (primary) -> Linux `bcm2711` Pi 4 DT bindings for GENET/MDIO/PHY wiring (secondary) -> U-Boot `bcmgenet` bring-up behavior (tertiary sanity reference).
   - References are design-only inputs; no direct code lift is permitted.
   - Integrate backend selection into existing `NetBackend` plumbing and keep QEMU backends (`rtl8139`/`virtio-net`) unchanged.
+  - Promote GENET from in-root compatibility path to `driver-genet` once the frame-driver ABI, DMA ring grants, IRQ notification, and bounded frame IPC pass QEMU and Pi 4 checks.
 
 - **Profile-gated static IPv4 for `pi4-uboot-aarch64`**
   - Extend manifest IR and validation with bounded static IPv4 fields for Pi 4 U-Boot profile (interface IP, prefix length, optional gateway).
@@ -6128,6 +6152,8 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 
 ### Commands
 - `cargo check -p root-task`
+- `cargo test -p sel4-sys`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task`
 - `cargo test -p root-task net:: -- --nocapture`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
@@ -6135,6 +6161,11 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 - `cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <STATIC_IP> --tcp-port 31337 --script scripts/cohsh/boot_v0.coh`
 
 ### Checks (DoD)
+- HAL driver-task contracts exist and validate for serial, USB/local-seat, HDMI text, GENET, CYW43, SDIO host, PCIe root, RTL8139, and virtio-net.
+- Network stack construction rejects missing or invalid driver scheduling contracts before device initialisation.
+- Pi 4 and QEMU driver-task acceptance must distinguish contract declaration from isolation: `SCHED_CONTRACT ... isolation=root-task-compatibility` is useful diagnostic evidence only, while reopened closure requires `DRIVER_TASK_DEDICATED>=4`, `DRIVER_TASK_COMPATIBILITY=0`, `DRIVER_TASK_DEDICATED_READY=yes`, role-specific `DRIVER_TASK_SERIAL_DEDICATED=yes`, `DRIVER_TASK_USB_DEDICATED=yes`, `DRIVER_TASK_DISPLAY_DEDICATED=yes`, and `DRIVER_TASK_NET_DEDICATED=yes`, plus `DRIVER_TASK_SUBSTRATE_READY=yes`, `DRIVER_TASK_CAPSET_PROOF=yes`, `DRIVER_TASK_FAULT_PROOF=yes`, `DRIVER_TASK_REVOKE_PROOF=yes`, `DRIVER_TASK_SCHED_PROOF=yes`, and active-net identity proof under `scripts/pi4_gate_proof.sh --require-driver-task-proof`.
+- Root-owned driver-task substrate can create, monitor, fault-report, and revoke at least one non-authority driver task without changing console grammar.
+- Serial and HDMI service remain responsive while synthetic GENET traffic consumes its full allowed budget.
 - Pi 4 U-Boot boot reaches root-task network init and reports `GENETv5` backend with static IPv4 from manifest-generated config.
 - `cohsh --transport tcp` succeeds against the configured static address with no console grammar or ACK/ERR/END drift.
 - Invalid Pi 4 static IPv4 manifest settings are rejected deterministically (compiler validation and/or early-boot fail-fast).
@@ -6144,6 +6175,7 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 - Full regression pack remains green on QEMU; any profile-gated divergence is explicitly documented and fixture-backed.
 
 ### Compiler touchpoints
+- `coh-rtc` emits driver-task contract tables for profile-selected hardware roles, including task id, service class, priority band, period/budget target, IRQ badge, DMA/ring bounds, queue depth, and shutdown/revoke behavior.
 - `coh-rtc` emits profile-gated network config tables (backend selection + static IPv4 fields) into generated root-task artifacts.
 - Manifest validation enforces:
   - static IPv4 required for `pi4-uboot-aarch64` network-enabled profile,
@@ -6153,6 +6185,74 @@ Add a production-safe, profile-gated NIC backend for Raspberry Pi 4 (`bcm2711` G
 
 ### Task Breakdown
 ```
+Title/ID: m26a-driver-task-hal-contracts
+Goal: Make hardware driver service admissible only through HAL-declared scheduling contracts.
+Inputs: apps/root-task/src/hal/*, apps/root-task/src/net/*, apps/root-task/src/serial/*, apps/root-task/src/local_seat.rs, docs/DRIVERS.md, docs/TEST_PLAN.md.
+Changes:
+  - apps/root-task/src/hal/* — add driver-task contract types, built-in role contracts, and per-turn budget validation.
+  - apps/root-task/src/net/mod.rs + apps/root-task/src/net/stack.rs — require valid NIC driver contracts before network device construction and expose active contract diagnostics.
+  - apps/root-task/src/serial/mod.rs + apps/root-task/src/local_seat.rs — expose serial and local-seat contracts for event-loop admission.
+Commands:
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib net::tests::network_driver_task_contracts_match_backend_labels
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::poll_io_obeys_driver_task_budget
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_skips_ready_network_data_poll_for_driver_task_turn
+Checks:
+  - Missing, zero-budget, blocking, or non-preemptible driver contracts fail deterministically before service.
+  - Built-in contracts preserve the priority order: serial/USB input before network control, network control before network data, diagnostics/display last.
+Deliverables:
+  - HAL scheduling-contract ratchet for current compatibility drivers and future dedicated seL4 driver tasks.
+
+Title/ID: m26a-driver-task-kernel-substrate
+Goal: Add root-owned seL4 task/capability substrate for hardware driver tasks without changing authority semantics.
+Inputs: apps/root-task/src/kernel.rs, apps/root-task/src/hal/*, apps/root-task/src/cspace*, configs/root_task.toml, docs/ROLES_AND_SCHEDULING.md.
+Changes:
+  - crates/sel4-sys/src/lib.rs + apps/root-task/src/sel4.rs — add driver TCB scheduling/resume/notification wrappers, CNode revoke, and remote-safe IPC buffer install.
+  - apps/root-task/src/hal/* + apps/root-task/src/kernel.rs — add driver-task handles/rings for TCB creation, CSpace/VSpace setup, scheduling attributes, notification binding, fault endpoint badges, and revocation.
+  - configs/root_task.toml + coh-rtc outputs — add profile-gated driver-task specs and bounds.
+Commands:
+  - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
+  - cargo test -p sel4-sys
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task
+Checks:
+  - Root retains cap ownership and can fault-report/revoke a driver task.
+  - Driver tasks receive only declared device grants and bounded ring frames.
+Deliverables:
+  - Dedicated driver-task creation substrate ready for serial/display and GENET migration.
+
+Title/ID: m26a-serial-display-driver-tasks
+Goal: Move normal serial and HDMI display service behind dedicated driver-task contracts while preserving emergency debug fallback.
+Inputs: apps/root-task/src/serial/*, apps/root-task/src/local_seat_pi4.rs, apps/root-task/src/event/*, docs/DRIVERS.md.
+Changes:
+  - apps/root-task/src/serial/* — replace blocking normal-output paths with bounded driver-task IPC after early boot handoff.
+  - apps/root-task/src/local_seat_pi4.rs — route HDMI text refresh through a bounded display-sink task.
+  - apps/root-task/src/event/* — preserve serial/USB priority over network data and display flushing.
+Commands:
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::tests
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests
+Checks:
+  - Serial echo and HDMI mirror remain fluid while GENET consumes its full data budget.
+  - Emergency debug UART remains available only for boot/fault diagnostics, not normal console output.
+Deliverables:
+  - Serial/display task isolation proof with no ACK/ERR/END grammar drift.
+
+Title/ID: m26a-genet-driver-task
+Goal: Promote GENET from in-root compatibility driver to isolated frame driver task.
+Inputs: apps/root-task/src/drivers/bcmgenet.rs, apps/root-task/src/hal/bcmgenet.rs, apps/root-task/src/net/*.
+Changes:
+  - apps/root-task/src/drivers/bcmgenet.rs — move DMA ring ownership, TX reclaim, RX refill, and IRQ service into `driver-genet`.
+  - apps/root-task/src/net/* — consume bounded Ethernet-frame IPC from the GENET task while keeping smoltcp/listener semantics in root.
+Commands:
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+Checks:
+  - GENET static IPv4 reachability is preserved, ring pressure is observable, and serial/HDMI remain responsive under wired load.
+Deliverables:
+  - First production dataplane driver task and preserved 26a static IPv4 behavior.
+
+Compatibility baseline tasks below are retained because they describe the original 26a GENET/static-IPv4 behavior that must keep working. They do not close reopened 26a by themselves; closure now requires both the baseline behavior and the driver-task substrate/migration checks above.
+
 Title/ID: m26a-bcmgenet-driver
 Goal: Add HAL-bound Broadcom GENETv5 NIC backend for Raspberry Pi 4 bring-up.
 Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/*, apps/root-task/src/hal/*, docs/SECURITY.md, Linux `bcmgenet` + Linux `bcm2711` DT binding notes + U-Boot `bcmgenet` bring-up notes (reference-only).
@@ -6223,13 +6323,13 @@ Deliverables:
 
 ---
 
-## Milestone 26b — Pi 4 DHCP Baseline (NIC + Wi-Fi Policy, U-Boot Configurable) <a id="26b"></a>
+## Milestone 26b — Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency <a id="26b"></a>
 [Milestones](#Milestones)
 
-**Status:** Complete — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi, and QEMU compatibility guardrails are in tree. Closure evidence is recorded in `docs/audit/M26B_COMPLETION_EVIDENCE.md`: the QEMU staged Test Plan state dir is `out/test-plan/m26b-qemu-20260517T111933Z`, and the Pi 4 hardware evidence pairs `/Users/lukasbower/pi4-serial-20260517-204318.log` with `out/test-plan/m26b-pi4-evidence-20260517T111457Z/pi4-combined-serial-cohsh.log`, proving `USB_GATE=10`, `USB_BLOCKER=none`, `WIFI_GATE=10`, `WIFI_BLOCKER=none`, `WIFI_EXACT=none`, Wi-Fi DHCP lease `192.168.86.154`, `active=wifi`, `addr_src=dhcp-lease`, `dhcp=bound`, and `eapol_secure=1`.
+**Status:** Reopened — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi, and QEMU compatibility guardrails remain the compatibility baseline. The reopened scope moves USB/xHCI/HID and CYW43/SDIO behind dedicated driver-task scheduling contracts and adds concurrency/performance gates so Wi-Fi work cannot regress USB keyboard, serial console, or HDMI responsiveness.
 
 **Why now (operator continuity):**  
-Milestone 26a brings up deterministic static IPv4 on Pi 4 wired NIC. Milestone 26b introduces a minimal DHCP path so operators can boot and diagnose in less-controlled edge environments without hand-editing static addresses, while preserving `no_std`, bounded behavior, and existing console/9P semantics.
+Reopened Milestone 26b depends on reopened 26a providing the driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi performance must improve by moving SDIO/firmware/RX/TX progress onto a bounded driver task, not by extending the root event-loop turn.
 
 **Non-negotiable constraints:**
 - DHCP implementation must be pure Rust, `no_std`, and intentionally bare-bones (DHCPv4 only: DISCOVER/OFFER/REQUEST/ACK plus bounded timeout/retry logic).
@@ -6239,15 +6339,36 @@ Milestone 26a brings up deterministic static IPv4 on Pi 4 wired NIC. Milestone 2
 - Wi-Fi scope is minimal diagnostics connectivity only (join + DHCP + existing TCP console path); no in-VM supplicant stack, roaming framework, or broad feature surface.
 - Milestone 26b includes a new profile-gated Pi 4 CYW43xx Wi-Fi driver path; all Wi-Fi dataplane/control-plane access must be HAL-backed (SDIO, power/reset, IRQ/OOB, firmware handoff hooks) with no direct MMIO or firmware-service calls outside HAL.
 - CYW43xx design references must be used in this order for architecture review: OpenBSD `bwfm` -> Zephyr/Infineon WHD HAL split -> Linux `brcmfmac` SDIO edge-case behavior. These are design references only; no source copy/paste is permitted.
+- USB/xHCI/HID owns a higher-priority driver-task contract than Wi-Fi data. Keyboard first-byte and fast-typing proof are hard gates before Wi-Fi performance claims.
+- CYW43/SDIO runs under separate network-control and network-data budgets. EAPOL, DHCP, ARP, and TCP ACK progress may preempt Wi-Fi bulk data, but neither class may preempt USB/local-seat or serial input.
+- Runtime RX aggregation/glom may be enabled only after bounded superframe storage, capped deaggregation work, drop counters, and recovery gates are implemented inside the Wi-Fi driver task.
+- Performance claims use normalized parity: raw `cohsh` over Pi Wi-Fi is measured first, REST gateway overhead is measured separately, and QEMU remains a compatibility/capacity reference rather than a physical Wi-Fi ceiling.
 - Backward compatibility is mandatory: Milestone 26b must not break existing macOS/Linux QEMU workflows, fixtures, or transport semantics.
 
 ### Prerequisite
-- Milestone **26a** completed (Pi 4 GENETv5 + static IPv4 + profile-gated NIC bring-up).
+- Reopened Milestone **26a** must be completed before 26b closure, including the HAL driver-task admission substrate, serial/display isolation, GENET driver-task migration, and preserved Pi 4 GENETv5/static-IPv4 compatibility behavior.
 
 ### Goal
-Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC and profile-gated Wi-Fi paths, with bounded U-Boot-configurable network policy selection where available, while keeping all pre-existing QEMU flows backward compatible on macOS and Linux.
+Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task contracts, preserve DHCP and single-interface policy behavior, and prove Wi-Fi/network load cannot degrade USB keyboard, serial console, or HDMI responsiveness.
 
 ### Deliverables
+- **USB/xHCI/HID driver task**
+  - Promote Pi 4 VL805/xHCI/HID keyboard service from in-root compatibility polling to a `driver-usb` task with a realtime-input scheduling contract.
+  - Preserve the poll-only xHCI lane until hardware proves interrupt delivery; timer IRQ 27 remains timer-only evidence, not USB evidence.
+  - Preserve the 32 armed keyboard interrupt-IN runway, bounded HID event draining, and Gate 10 first-byte/first-printable-byte acceptance criteria.
+  - Root consumes only bounded local-seat byte events; it does not own xHCI registers, rings, DMA, or HID polling after driver-task handoff.
+
+- **CYW43/SDIO Wi-Fi driver task**
+  - Promote SDIO host I/O, CYW43 firmware/control plane, EAPOL admission, RX/TX queues, credit handling, and optional glom/deaggregation into `driver-wifi`.
+  - Split Wi-Fi work into network-control and network-data budgets so EAPOL/DHCP/TCP ACK progress cannot be starved by bulk RX/TX, while USB/serial still preempt both.
+  - Root receives Ethernet frames through bounded IPC/rings and never waits synchronously on SDIO credit, CMD52/CMD53 loops, firmware replies, or glom deaggregation.
+  - CYW43 startup preserves Linux's `bus:rxglom=1` through `event_msgs_ext` and `WLC_UP`; aggregated RX is bounded in the driver task, and any future runtime disable/superframe expansion must run only after secure carrier proof with capped work and recovery gates.
+
+- **Normalized benchmark gates**
+  - Add benchmark reporting that separates raw `cohsh` over Pi Wi-Fi, REST cold gateway overhead, and REST hot/cache projection.
+  - QEMU benchmark results remain semantic/capacity references; they must not be used to claim Pi Wi-Fi physical parity.
+  - Pi 4 performance acceptance requires zero USB/serial/HDMI responsiveness regression during Wi-Fi/NIC load.
+
 - **Minimal DHCP core (`no_std`)**
   - Add a bounded DHCPv4 client core in root-task with strict packet validation, deterministic timers, bounded retransmits, and no dynamic protocol extensions beyond required lease fields.
   - Keep memory usage fixed and auditable; no unbounded allocations, no background worker threads, and no protocol parser ambiguity.
@@ -6275,6 +6396,12 @@ Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC
 
 ### Commands
 - `cargo check -p root-task`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::tests`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet`
 - `cargo test -p root-task net:: -- --nocapture`
 - `cargo test -p coh-rtc`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
@@ -6283,16 +6410,22 @@ Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC
 - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
 
 ### Checks (DoD)
+- `driver-usb` proves `USB_GATE=10`, `USB_BLOCKER=none`, first-byte/first-printable-byte evidence, and fast typing remains fluid during simultaneous Wi-Fi/GENET load.
+- Serial command echo p50/p95 and HDMI mirror progress remain bounded while Wi-Fi and wired network tasks consume their data budgets.
+- `driver-wifi` reports bounded control/data service counters: SDIO ops, bytes, RX/TX frames, credit waits, budget exhaustion/yield count, queued frames, drops, and max service latency.
+- Wi-Fi accepts load only through the driver-task frame ABI; root never spins on SDIO credit, CMD52/CMD53 loops, firmware replies, or glom deaggregation.
 - Pi 4 wired path acquires a DHCP lease within bounded retries/timeouts and exposes acquired config through existing diagnostics surfaces.
 - Pi 4 Wi-Fi path (when enabled in profile and credentials are present) reaches link-up and acquires DHCP with deterministic failure modes and audited errors.
 - Invalid DHCP options, malformed offers, lease overflows, and timeout exhaustion fail safely and deterministically.
 - U-Boot-configurable network policy (where available) is honored through compiler-validated handoff structures; missing/unsupported bootloader policy cleanly falls back to manifest defaults.
 - Existing macOS/Linux QEMU workflows remain backward compatible, including serial/TCP console behavior and existing regression fixtures.
 - CYW43xx Wi-Fi path demonstrates HAL-only access in runtime code and tests; no direct MMIO/bootloader-service usage exists outside HAL-owned modules.
+- Raw Pi `cohsh` Wi-Fi latency, REST cold gateway overhead, and REST hot projection latency are reported separately; QEMU benchmark results are not used as Pi Wi-Fi hardware proof.
 - Full regression pack remains green on QEMU; any profile-gated divergence is explicitly documented and fixture-backed.
 
 ### Compiler touchpoints
 - `coh-rtc` adds bounded `pi4-uboot-aarch64` network policy fields for mode/interface selection and DHCP retry/timing limits.
+- `coh-rtc` extends driver-task contract emission for USB, CYW43/SDIO, and network-control/network-data priority classes.
 - Validation enforces:
   - policy bounds and enum validity,
   - interface/profile compatibility (wired vs Wi-Fi declarations),
@@ -6301,6 +6434,77 @@ Add a deterministic `no_std` DHCP client core that can operate on Pi 4 wired NIC
 
 ### Task Breakdown
 ```
+Title/ID: m26b-usb-driver-task
+Goal: Move Pi 4 xHCI/HID keyboard service behind the realtime USB driver-task contract.
+Inputs: apps/root-task/src/local_seat_pi4.rs, third_party/usb-oxide/src/{xhci.rs,hid.rs,ram.rs}, apps/root-task/src/event/*, docs/DRIVERS.md.
+Changes:
+  - apps/root-task/src/local_seat_pi4.rs — route xHCI/HID polling and keyboard-byte publication through `driver-usb`.
+  - third_party/usb-oxide/src/* — add budget-aware poll entrypoints that yield cleanly without losing queued keyboard state.
+  - apps/root-task/src/event/* — consume bounded local-seat byte events and preserve USB priority over serial dispatch and all network work.
+Commands:
+  - cargo test --manifest-path third_party/usb-oxide/Cargo.toml --lib
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::tests
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests
+Checks:
+  - USB first-byte and first-printable-byte proof remain Gate 10.
+  - Fast typing remains fluid while network data queues are saturated.
+Deliverables:
+  - Isolated USB keyboard task path with existing local-seat console semantics preserved.
+
+Title/ID: m26b-wifi-driver-task
+Goal: Move CYW43/SDIO Wi-Fi service behind a dedicated driver task with bounded control/data budgets.
+Inputs: apps/root-task/src/drivers/cyw43.rs, apps/root-task/src/hal/pi4_wifi.rs, apps/root-task/src/net/*, docs/DRIVERS.md.
+Changes:
+  - apps/root-task/src/hal/pi4_wifi.rs — grant only SDIO, power/reset, firmware-bundle, IRQ/OOB, and DMA/ring resources declared for `driver-wifi`.
+  - apps/root-task/src/drivers/cyw43.rs — move SDIO credit waits, firmware/control replies, RX/TX queues, EAPOL admission, and glom/deaggregation into the Wi-Fi driver task.
+  - apps/root-task/src/net/* — consume bounded Ethernet-frame IPC without changing authenticated TCP console semantics.
+Commands:
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib net::
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+Checks:
+  - Wi-Fi control progress yields on budget exhaustion instead of spinning.
+  - CYW43 startup does not write `bus:rxglom=0` before `event_msgs_ext`/`WLC_UP`; aggregated RX is bounded, counted, and recoverable inside the Wi-Fi driver task.
+Deliverables:
+  - CYW43/SDIO driver task that can make Wi-Fi progress without stealing root-task USB/serial turns.
+
+Title/ID: m26b-net-control-priority
+Goal: Split network-control and network-data work so EAPOL/DHCP/TCP ACK progress is prioritized without starving physical input.
+Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/cyw43.rs, apps/root-task/src/event/*.
+Changes:
+  - apps/root-task/src/net/* — add diagnostics and scheduling hooks for network-control vs network-data service classes.
+  - apps/root-task/src/drivers/cyw43.rs — expose separate counters for EAPOL/DHCP/control progress and bulk RX/TX data.
+  - apps/root-task/src/event/* — preserve USB/serial priority before either network class.
+Commands:
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib net::
+Checks:
+  - Synthetic Wi-Fi data backlog cannot delay keyboard bytes or serial command echo.
+  - Control traffic is not blocked behind bulk data queue pressure.
+Deliverables:
+  - Observable network-control/data scheduling contract for Pi 4 Wi-Fi and future high-performance drivers.
+
+Title/ID: m26b-rest-normalized-parity
+Goal: Reframe Wi-Fi performance proof as raw Pi Wi-Fi latency plus measured REST gateway overhead.
+Inputs: scripts/rest_perf_harness.py, docs/BENCHMARKS.md, apps/hive-gateway/src/main.rs, apps/cohsh/src/transport/tcp.rs.
+Changes:
+  - scripts/rest_perf_harness.py — report raw/cold/hot modes separately and preserve no-retry failure accounting.
+  - docs/BENCHMARKS.md — distinguish QEMU loopback capacity from Pi Wi-Fi physical proof.
+  - apps/hive-gateway/src/main.rs — preserve cache/coalescing as host-side projection only; no write bypass.
+Commands:
+  - .venv/bin/python -m pytest -q tests/test_rest_perf_harness.py
+  - cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <wifi-lease-ip> --tcp-port 31337 --auth-token <token> --script scripts/cohsh/boot_v0.coh
+  - python3 scripts/rest_perf_harness.py --mode perf --rest-url <pi4-rest-url> --suite status --runs 20 --no-transient-retries
+Checks:
+  - REST cold p95 is reported as raw `cohsh` p95 plus gateway overhead.
+  - Hot projection results are labeled separately and cannot satisfy raw Wi-Fi hardware gates.
+Deliverables:
+  - Honest Pi Wi-Fi benchmark model that optimizes toward QEMU semantics without claiming impossible physical loopback parity.
+
+Compatibility baseline tasks below are retained because they describe the original 26b DHCP, U-Boot policy, Wi-Fi, and QEMU guardrails that must not regress. They do not close reopened 26b by themselves; closure now requires the USB/Wi-Fi driver-task and concurrency/benchmark gates above plus the retained baseline checks below.
+
 Title/ID: m26b-dhcp-core-nostd
 Goal: Implement bare-bones, bounded DHCPv4 client logic for root-task networking.
 Inputs: apps/root-task/src/net/*, docs/INTERFACES.md, docs/SECURITY.md.
@@ -6432,7 +6636,7 @@ Deliverables:
   - End-to-end Pi 4 Wi-Fi diagnostics path with DHCP and console reachability.
 
 Title/ID: m26b-pi4-wifi-hardware-validation
-Goal: Capture Pi 4 on-device evidence for CYW43455 join, DHCP, and deterministic `auto` fallback before marking 26b complete.
+Goal: Capture Pi 4 on-device evidence for CYW43455 join, DHCP, and deterministic `auto` fallback before closing the retained historical 26b compatibility baseline.
 Inputs: flashed Pi 4 SD image, serial capture, Linux known-good brcmfmac/MMC/SDHCI capture, U-Boot USB handoff trace, Wi-Fi credentials, direct-link/wired fallback host setup, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
 Changes:
   - scripts/pi4_trace_normalize.py — normalize Pi 4 USB/Wi-Fi serial traces into JSONL/summary artifacts for boot-to-boot comparison.
@@ -6453,7 +6657,7 @@ Checks:
   - `netstats` / `netstatus` report the Wi-Fi lease on `policy=wifi`.
   - `auto` proves single-active-interface behavior by using Wi-Fi when healthy and falling back to wired only after explicit Wi-Fi failure.
 Deliverables:
-  - Pi 4 hardware validation evidence, normalized trace summaries, and known-good Linux/U-Boot comparison artifacts required to mark Milestone 26b complete.
+  - Pi 4 hardware validation evidence, normalized trace summaries, and known-good Linux/U-Boot comparison artifacts required to preserve the historical Milestone 26b compatibility baseline.
 
 Title/ID: m26b-qemu-compat-gate
 Goal: Prove 26/26a/26b changes do not break macOS/Linux QEMU backward compatibility.
@@ -6536,7 +6740,7 @@ Deliverables:
 **Why now (reviewer trust):**
 Milestones 25-26b establish technical capability, transport breadth, and Pi 4 bring-up evidence, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
-**Current planning status:** Not Started. Milestone 26b is complete with Pi 4 DHCP/Wi-Fi hardware evidence and QEMU compatibility evidence, so 26c is no longer blocked by 26b; no 26c cleanup, refactor, target-qualified runner implementation, or closure evidence has started yet.
+**Current planning status:** Not Started. Milestones 26a and 26b have been reopened for the Pi 4 driver-task migration, so 26c is blocked until those reopened acceptance gates close. No 26c cleanup, refactor, target-qualified runner implementation, or closure evidence has started yet.
 
 **Non-negotiable constraints:**
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, console grammar, Secure9P, or release-behavior changes are permitted under a "refactor" or "humanizing" label.
@@ -6549,7 +6753,7 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Required file headers may be narrowed, reformatted, or reduced only by updating `AGENTS.md`, `CONTRIBUTING.md`, and `docs/CODING_GUIDELINES.md` in the same change.
 - Milestone 26c inventories tracked Markdown only via `git ls-files '*.md' | sort`; ignored or untracked build outputs, caches, local virtualenvs, nested dependency trees, and local evidence directories are excluded unless committed as canonical sources.
 - Large `root-task`, HAL, driver, and host-tool monoliths are explicit 26c refactor targets, but they are not first-wave edit targets. They may be decomposed only after characterization tests, parity matrices, dependency-tree evidence, and rollback-sized ownership plans exist for the touched surface.
-- Driver-enabling HAL abstractions are allowed in 26c only as narrow, behavior-preserving extractions from current Pi 4 behavior. `SdioHostHal`-style seams may sit underneath the current CYW43 path, and USB platform/DMA seams may sit underneath the current local-seat/VL805 path, but 26c must not add support for new Wi-Fi chipsets, new USB controllers, new USB classes, or a generic future-driver framework.
+- Driver-enabling HAL abstractions in 26c are limited to behavior-preserving cleanup of the driver-task model established by reopened 26a/26b. `SdioHostHal`-style seams may sit underneath the current CYW43 path, and USB platform/DMA seams may sit underneath the current local-seat/VL805 path, but 26c must not add support for new Wi-Fi chipsets, new USB controllers, new USB classes, or a second driver framework parallel to the 26a/26b driver-task substrate.
 - Milestone 26c must not collapse host-side `std` capability into the seL4 build. VM-side Cohesix remains `no_std`; any "convergence" under 26c is limited to contracts, fixtures, generated artifacts, and explicitly `no_std`-safe semantic helpers.
 - Runtime-boundary-sensitive surfaces include `apps/root-task/src/ninedoor.rs`, `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, `apps/root-task/src/net/**`, `apps/root-task/src/hal/**`, `apps/root-task/src/local_seat_pi4.rs`, and `apps/nine-door/src/host/*`. 26c may structurally refactor these files only behind existing public contracts, with no adapter collapse, no host capability leakage, no new HAL bypass, and no external grammar drift.
 - Any new shared semantic helper must be `no_std` by construction, must have host and VM tests where it represents overlapping behavior, and must not import host transport, filesystem, process, network, or provider crates into VM closure profiles.
@@ -6561,7 +6765,7 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Milestone closure is also blocked until the 26c as-built blocker ledger is empty or every remaining item is explicitly deferred to a named later milestone with a non-overlapping dependency boundary. The initial blocker set includes: Pi 4 network IR/docs validation drift, target-qualified Test Plan runner implementation, Secure9P NUL and `..` path rejection, removal or reclassification of any non-console in-VM TCP listener, HAL ownership for driver MMIO/physical-address access, generated-snippet embedding drift in canonical docs, fixture/default secret handling in release/operator paths, placeholder auth defaults in host tools/docs, and the mismatch between worker documentation and current root-task worker task spawning.
 
 ### Prerequisite
-- Milestone **26b** completed (Pi 4 DHCP baseline + QEMU compatibility guardrails), including checked-in Pi 4 join/DHCP evidence and regenerated profile-specific manifest evidence. This prerequisite is now satisfied, but 26c has not started.
+- Reopened Milestones **26a** and **26b** completed, including checked-in Pi 4 USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load, driver-task scheduling evidence, GENET/static compatibility evidence, DHCP/Wi-Fi compatibility evidence, QEMU compatibility evidence, and regenerated profile-specific manifest evidence.
 
 ### Goal
 Refactor and humanize the authored Cohesix code and documentation surfaces without protocol or behavioral regression by:
@@ -7058,10 +7262,10 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (kernel truth):**
-Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 15.0.0, anchors manual alignment to the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)), proves the current direct root-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions.
+Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 15.0.0, anchors manual alignment to the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)), proves the reopened 26a/26b driver-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions.
 
 **Non-negotiable constraints:**
-- No system-model change. Cohesix remains an upstream seL4, pure-Rust root-task system; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26d.
+- No further system-model change beyond the reopened 26a/26b driver-task baseline. Cohesix remains an upstream seL4, pure-Rust root-task authority system with hardware driver tasks; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26d.
 - No new operator-visible protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a kernel-refresh label.
 - `rust-sel4` adoption is out of scope. Cohesix may audit upstream Rust support for compatibility reference, but 26d must preserve the current Cohesix-owned `sel4-sys` / `sel4-runtime` / root-task bootstrap stack unless a separate milestone authorizes replacement.
 - Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
@@ -7073,7 +7277,7 @@ Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM
 - Milestone **26c** completed (target-qualified test-plan runner, docs-as-built audit, refactor map, risk-ratchet baseline, and no-std boundary evidence available).
 
 ### Goal
-Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0 while preserving the existing direct root-task architecture and proving zero operator-visible drift across QEMU and Pi 4.
+Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0 while preserving root-task authority plus the reopened 26a/26b hardware driver-task model, and prove zero operator-visible drift across QEMU and Pi 4.
 
 ### Deliverables
 - **Kernel baseline refresh**
@@ -7191,7 +7395,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 - `/proc` remains read-only observability. Milestone 27 must not introduce write-only or append-only controls under `/proc`; mutating spool/settings controls live under explicit role-scoped control roots.
 
 ### Prerequisite
-- Milestones **26b**, **26c**, and **26d** completed where they are dependencies for the selected profile: Pi 4 DHCP/Wi-Fi evidence is available, the 26c blocker ledger is clear or scoped, and the seL4 baseline used by the persistence profile is current.
+- Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed where they are dependencies for the selected profile: Pi 4 driver-task concurrency evidence is available, the 26c blocker ledger is clear or scoped, and the seL4 baseline used by the persistence profile is current.
 
 ### Goal
 Provide **bounded, crash‑resilient on‑device persistence** for:

@@ -20,6 +20,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
 use crate::debug::{watched_copy_nonoverlapping, watched_write_bytes};
+use crate::hal::driver_task::{DriverTaskContract, RTL8139_DRIVER_TASK_CONTRACT};
 use crate::hal::pci::{PciBarKind, PciDeviceInfo};
 use crate::hal::{HalError, Hardware, MapPerms, MappedRegion, PciCommandFlags, PciHal};
 use crate::net::{ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError};
@@ -478,6 +479,13 @@ impl NetDevice for Rtl8139Device {
         "rtl8139"
     }
 
+    fn driver_task_contract() -> DriverTaskContract
+    where
+        Self: Sized,
+    {
+        RTL8139_DRIVER_TASK_CONTRACT
+    }
+
     fn debug_snapshot(&mut self) {
         Rtl8139Device::debug_snapshot(self);
     }
@@ -615,5 +623,13 @@ mod tests {
                 | RTL_RCR_WRAP,
             0x0000_188d
         );
+    }
+
+    #[test]
+    fn rtl8139_declares_valid_driver_task_contract() {
+        let contract = Rtl8139Device::driver_task_contract();
+
+        assert_eq!(contract.name, Rtl8139Device::name());
+        assert_eq!(contract.validate(), Ok(()));
     }
 }

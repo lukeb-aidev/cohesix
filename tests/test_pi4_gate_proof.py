@@ -229,6 +229,109 @@ def test_gate_proof_rejects_missing_root_console_prompt(
     assert "ROOT_PROMPT_SEEN expected yes got no" in result.stderr
 
 
+def test_gate_proof_rejects_dedicated_contracts_without_substrate_ready(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Dedicated-looking contract counts still need substrate-ready proof."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task max_service_us=40 observed_service_us=18",
+                "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task max_service_us=40 observed_service_us=22",
+                "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task max_service_us=80 observed_service_us=44",
+                "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task max_service_us=120 observed_service_us=73",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=dedicated-sel4-substrate-not-active required=4 dedicated=4 compatibility=0",
+                "SERIAL_ECHO p95_us=800 max_gap_us=1200",
+                "USB_BURST bytes=256 drops=0 max_latency_us=900",
+                "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-driver-task-proof",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "DRIVER_TASK_DEDICATED=4" in result.stdout
+    assert "DRIVER_TASK_DEDICATED_READY=no" in result.stdout
+    assert "DRIVER_TASK_SERIAL_DEDICATED=yes" in result.stdout
+    assert "DRIVER_TASK_USB_DEDICATED=yes" in result.stdout
+    assert "DRIVER_TASK_DISPLAY_DEDICATED=yes" in result.stdout
+    assert "DRIVER_TASK_NET_DEDICATED=yes" in result.stdout
+    assert "DRIVER_TASK_DEDICATED_READY expected yes got no" in result.stderr
+
+
+def test_gate_proof_rejects_aggregate_dedicated_count_without_required_roles(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Aggregate dedicated counts cannot replace serial/USB/display/net proof."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task observed_service_us=73",
+                "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task observed_service_us=91",
+                "SCHED_CONTRACT contract=rtl8139 isolation=dedicated-sel4-task observed_service_us=62",
+                "SCHED_CONTRACT contract=virtio-net isolation=dedicated-sel4-task observed_service_us=64",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate required=4 dedicated=4 compatibility=0",
+                "SERIAL_ECHO p95_us=800 max_gap_us=1200",
+                "USB_BURST bytes=256 drops=0 max_latency_us=900",
+                "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-driver-task-proof",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "DRIVER_TASK_DEDICATED=4" in result.stdout
+    assert "DRIVER_TASK_NET_DEDICATED=yes" in result.stdout
+    assert "DRIVER_TASK_SERIAL_DEDICATED=no" in result.stdout
+    assert "DRIVER_TASK_USB_DEDICATED=no" in result.stdout
+    assert "DRIVER_TASK_DISPLAY_DEDICATED=no" in result.stdout
+    assert "DRIVER_TASK_SERIAL_DEDICATED expected yes got no" in result.stderr
+
+
 def test_gate_proof_rejects_root_task_panic(tmp_path: pathlib.Path) -> None:
     """Default hardware proof must fail on root-task panic evidence."""
 
@@ -320,8 +423,18 @@ def test_gate_proof_rejects_stale_uefi_usb_hint(tmp_path: pathlib.Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--require-usb-ready",
+        "--require-wired-ready",
+        "--require-driver-task-proof",
+        "--require-input-responsive",
+    ],
+)
 def test_gate_proof_rejects_summary_only_ready_requirements(
     tmp_path: pathlib.Path,
+    flag: str,
 ) -> None:
     """Ready gates must keep safety expectations enabled."""
 
@@ -337,7 +450,7 @@ def test_gate_proof_rejects_summary_only_ready_requirements(
             str(SCRIPT_PATH),
             "--normalize-only",
             "--allow-summary-only",
-            "--require-usb-ready",
+            flag,
             "--venv",
             str(venv_dir),
             "--log",

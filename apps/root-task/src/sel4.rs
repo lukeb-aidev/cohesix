@@ -40,14 +40,14 @@ use heapless::Vec as HeaplessVec;
 use heapless::{String as HeaplessString, Vec};
 pub use sel4_sys::{
     seL4_AllRights, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CNode_Mint,
-    seL4_CNode_Move, seL4_CPtr, seL4_CapASIDControl, seL4_CapBootInfoFrame, seL4_CapDomain,
-    seL4_CapIOPort, seL4_CapIOSpace, seL4_CapIRQControl, seL4_CapInitThreadASIDPool,
-    seL4_CapInitThreadCNode, seL4_CapInitThreadIPCBuffer, seL4_CapInitThreadSC,
-    seL4_CapInitThreadTCB, seL4_CapInitThreadVSpace, seL4_CapNull, seL4_CapRights,
-    seL4_CapRights_All, seL4_CapRights_ReadWrite, seL4_CapSMC, seL4_CapSMMUCBControl,
-    seL4_CapSMMUSIDControl, seL4_DeleteFirst, seL4_Error, seL4_FailedLookup, seL4_GetBootInfo,
-    seL4_MessageInfo, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType, seL4_RangeError,
-    seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
+    seL4_CNode_Move, seL4_CNode_Revoke, seL4_CPtr, seL4_CapASIDControl, seL4_CapBootInfoFrame,
+    seL4_CapDomain, seL4_CapIOPort, seL4_CapIOSpace, seL4_CapIRQControl,
+    seL4_CapInitThreadASIDPool, seL4_CapInitThreadCNode, seL4_CapInitThreadIPCBuffer,
+    seL4_CapInitThreadSC, seL4_CapInitThreadTCB, seL4_CapInitThreadVSpace, seL4_CapNull,
+    seL4_CapRights, seL4_CapRights_All, seL4_CapRights_ReadWrite, seL4_CapSMC,
+    seL4_CapSMMUCBControl, seL4_CapSMMUSIDControl, seL4_DeleteFirst, seL4_Error, seL4_FailedLookup,
+    seL4_GetBootInfo, seL4_MessageInfo, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType,
+    seL4_RangeError, seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
 };
 use static_assertions::const_assert;
 
@@ -1757,6 +1757,157 @@ pub fn set_tcb_affinity_silent(tcb_cap: seL4_CPtr, core: u8) -> Result<(), seL4_
     set_tcb_affinity_impl(tcb_cap, core, false)
 }
 
+/// Sets a TCB priority through the configured seL4 kernel invocation shape.
+#[cfg(feature = "kernel")]
+pub fn set_tcb_priority(
+    tcb_cap: seL4_CPtr,
+    authority_tcb: seL4_CPtr,
+    priority: u8,
+) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.SetPriority";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let guarded_authority = sel4_guard::guard_cptr(guard_stage, "authority_tcb", authority_tcb);
+    // SAFETY: The guarded CPtrs are kernel capabilities supplied by bootstrap code; seL4
+    // validates authority and priority bounds.
+    let result = unsafe {
+        sel4_sys::seL4_TCB_SetPriority(guarded_tcb, guarded_authority, priority as seL4_Word)
+    };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] set-priority failed tcb=0x{tcb:04x} authority=0x{authority:04x} priority={priority} err={err} ({name})",
+            tcb = guarded_tcb,
+            authority = guarded_authority,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
+/// Sets non-MCS TCB scheduling parameters through the seL4 kernel invocation shape.
+#[cfg(feature = "kernel")]
+pub fn set_tcb_sched_params(
+    tcb_cap: seL4_CPtr,
+    authority_tcb: seL4_CPtr,
+    mcp: u8,
+    priority: u8,
+) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.SetSchedParams";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let guarded_authority = sel4_guard::guard_cptr(guard_stage, "authority_tcb", authority_tcb);
+    // SAFETY: The guarded CPtrs are kernel capabilities supplied by bootstrap code; seL4
+    // validates authority and scheduler bounds for the configured kernel.
+    let result = unsafe {
+        sel4_sys::seL4_TCB_SetSchedParams(
+            guarded_tcb,
+            guarded_authority,
+            mcp as seL4_Word,
+            priority as seL4_Word,
+        )
+    };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] set-sched-params failed tcb=0x{tcb:04x} authority=0x{authority:04x} mcp={mcp} priority={priority} err={err} ({name})",
+            tcb = guarded_tcb,
+            authority = guarded_authority,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
+/// Suspends a TCB.
+#[cfg(feature = "kernel")]
+pub fn suspend_tcb(tcb_cap: seL4_CPtr) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.Suspend";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    // SAFETY: The guarded CPtr is a TCB capability; seL4 validates the operation.
+    let result = unsafe { sel4_sys::seL4_TCB_Suspend(guarded_tcb) };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] suspend failed tcb=0x{tcb:04x} err={err} ({name})",
+            tcb = guarded_tcb,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
+/// Resumes a suspended TCB.
+#[cfg(feature = "kernel")]
+pub fn resume_tcb(tcb_cap: seL4_CPtr) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.Resume";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    // SAFETY: The guarded CPtr is a TCB capability; seL4 validates the operation.
+    let result = unsafe { sel4_sys::seL4_TCB_Resume(guarded_tcb) };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] resume failed tcb=0x{tcb:04x} err={err} ({name})",
+            tcb = guarded_tcb,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
+/// Binds a notification object to a TCB.
+#[cfg(feature = "kernel")]
+pub fn bind_tcb_notification(
+    tcb_cap: seL4_CPtr,
+    notification_cap: seL4_CPtr,
+) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.BindNotification";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let guarded_notification =
+        sel4_guard::guard_cptr(guard_stage, "notification_cap", notification_cap);
+    // SAFETY: The guarded CPtrs are kernel capabilities supplied by bootstrap code; seL4
+    // validates object types and binding state.
+    let result = unsafe { sel4_sys::seL4_TCB_BindNotification(guarded_tcb, guarded_notification) };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] bind-notification failed tcb=0x{tcb:04x} notification=0x{notification:04x} err={err} ({name})",
+            tcb = guarded_tcb,
+            notification = guarded_notification,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
+/// Unbinds any notification object from a TCB.
+#[cfg(feature = "kernel")]
+pub fn unbind_tcb_notification(tcb_cap: seL4_CPtr) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.UnbindNotification";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    // SAFETY: The guarded CPtr is a TCB capability; seL4 validates binding state.
+    let result = unsafe { sel4_sys::seL4_TCB_UnbindNotification(guarded_tcb) };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] unbind-notification failed tcb=0x{tcb:04x} err={err} ({name})",
+            tcb = guarded_tcb,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
 /// Safe projection of `seL4_CNode_Copy` for bootstrap modules.
 #[cfg(feature = "kernel")]
 #[inline(always)]
@@ -1829,7 +1980,19 @@ pub fn cnode_copy_depth(
 pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
     debug_put_char(b'C' as i32);
     let depth_word: seL4_Word = depth.into();
+    // SAFETY: Callers provide a valid CNode root/index/depth triple from bootstrap-owned caps;
+    // seL4 validates the addressed slot.
     unsafe { seL4_CNode_Delete(root, index, depth_word) }
+}
+
+/// Safe projection of `seL4_CNode_Revoke` for driver-task cap rollback.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn cnode_revoke(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
+    let depth_word: seL4_Word = depth.into();
+    // SAFETY: Callers provide a valid CNode root/index/depth triple from bootstrap-owned caps;
+    // seL4 validates the addressed slot before revoking descendants.
+    unsafe { seL4_CNode_Revoke(root, index, depth_word) }
 }
 
 /// Creates a level-triggered IRQ handler capability in the supplied init-root slot.
@@ -4330,6 +4493,53 @@ impl<'a> KernelEnv<'a> {
     }
 
     /// Binds the supplied IPC buffer frame to the provided TCB capability.
+    ///
+    /// This configures a non-current TCB and deliberately does not replace the
+    /// root task's active IPC buffer pointer.
+    pub fn bind_remote_ipc_buffer(
+        &mut self,
+        tcb_cap: seL4_CPtr,
+        buffer_frame: seL4_CPtr,
+        buffer_vaddr: usize,
+    ) -> Result<(), seL4_Error> {
+        debug_assert_ne!(buffer_vaddr, 0, "IPC buffer pointer must be non-null");
+        let _cap_tag = self.log_ipc_buffer_cap(buffer_frame, buffer_vaddr);
+        let buffer_word = sel4_sys::seL4_Word::try_from(buffer_vaddr)
+            .expect("IPC buffer pointer must fit in seL4_Word");
+        let guard_stage = "IPCInstall.bind_remote_ipc_buffer";
+        let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+        let guarded_frame = sel4_guard::guard_cptr(guard_stage, "ipc_frame", buffer_frame);
+        let mut breadcrumb = HeaplessString::<192>::new();
+        let _ = fmt::write(
+            &mut breadcrumb,
+            format_args!(
+                "remote_tcb=0x{tcb:04x} buffer=0x{buffer:08x} frame=0x{frame:04x}",
+                tcb = guarded_tcb,
+                buffer = buffer_word,
+                frame = guarded_frame
+            ),
+        );
+        sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_SetIPCBuffer", breadcrumb.as_str());
+        // SAFETY: The guarded TCB and frame are kernel capabilities supplied by bootstrap code;
+        // seL4 validates object types and IPC-buffer alignment.
+        let result =
+            unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(guarded_tcb, buffer_word, guarded_frame) };
+        if result == seL4_NoError {
+            Ok(())
+        } else {
+            ::log::error!(
+                "[ipcbuf] remote bind failed tcb=0x{tcb:04x} frame=0x{frame:04x} vaddr=0x{vaddr:08x} err={err} ({name})",
+                tcb = guarded_tcb,
+                frame = guarded_frame,
+                vaddr = buffer_vaddr,
+                err = result,
+                name = error_name(result),
+            );
+            Err(result)
+        }
+    }
+
+    /// Binds the supplied IPC buffer frame to the current root TCB capability.
     pub fn bind_ipc_buffer(
         &mut self,
         tcb_cap: seL4_CPtr,
@@ -4368,6 +4578,8 @@ impl<'a> KernelEnv<'a> {
             ),
         );
         sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_SetIPCBuffer", breadcrumb.as_str());
+        // SAFETY: The guarded TCB and frame are kernel capabilities supplied by bootstrap code;
+        // seL4 validates object types and IPC-buffer alignment.
         let result =
             unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(guarded_tcb, buffer_word, guarded_frame) };
 
@@ -4375,11 +4587,16 @@ impl<'a> KernelEnv<'a> {
             if self.ipcbuf_trace {
                 crate::bp!("ipcbuf.tcb.bind.ok");
             }
+            // SAFETY: This method is only used for the current root TCB; after a successful
+            // kernel bind, the root task must update the local libsel4 IPC buffer pointer.
             unsafe {
                 sel4_sys::seL4_SetIPCBuffer(buffer_vaddr as *mut sel4_sys::seL4_IPCBuffer);
             }
+            // SAFETY: `buffer_vaddr` names the mapped IPC buffer frame installed above.
             let view = unsafe { IpcBufView::new(buffer_vaddr as *const u8, buffer_frame) };
             self.ipcbuf_view = Some(view);
+            // SAFETY: The IPC buffer page is mapped and page-sized; touching first/last byte
+            // validates the mapping without relying on compiler-elided ordinary loads/stores.
             unsafe {
                 let base = buffer_vaddr as *mut u8;
                 let last = base.add(IpcBufView::PAGE_LEN - 1);

@@ -117,8 +117,10 @@ that authority through capabilities. The kernel provides the mechanisms:
   memory into frames and mapping those frames into a VSpace;
 - IRQs can be represented by IRQHandler capabilities and delivered as
   notification signals;
-- CPU time is controlled by TCBs, priorities, domains, and scheduling context
-  policy;
+- CPU time is controlled by TCBs, priorities, domains, and scheduling-context
+  policy where the selected seL4 profile exposes it; non-MCS profiles still
+  enforce driver budgets through priority/domain assignment plus bounded
+  IPC/poll turns;
 - DMA safety is outside the standard verified proof unless an IOMMU/SMMU
   configuration constrains device writes.
 
@@ -135,6 +137,78 @@ depend on the narrow HAL trait that represents the resource they need:
 
 The compatibility `Hardware` facade may remain where legacy call sites span
 several domains, but new driver logic should prefer the narrowest trait.
+
+### Driver-Task Scheduling Contracts
+
+Reopened Milestones 26a and 26b move hardware progress toward dedicated seL4
+driver tasks. The current compatibility path may still instantiate selected
+drivers in root-task while each migration lands, but every hardware-facing
+service must first declare a HAL-owned driver-task contract.
+
+Each contract records:
+
+- stable driver name and hardware role;
+- service class (`RealtimeInput`, `ConsoleOutput`, `NetworkControl`,
+  `NetworkData`, `DisplayRefresh`, or `Background`);
+- authority class (`DeviceOnly`, `ConsoleTransport`, `NetworkFrameTransport`,
+  or `DisplaySink`);
+- current isolation state (`RootTaskCompatibility` while the direct path is the
+  as-built runtime, then `DedicatedSeL4Task` only after seL4 task creation,
+  fault, revocation, and hardware evidence land);
+- per-turn operation, byte, frame/report, and bounded-spin budgets;
+- bounded IPC/event queue depth.
+
+Scheduling-context fields are profile-qualified for the target dedicated-task
+architecture. A dedicated driver task uses seL4 scheduling contexts when the
+active MCS kernel profile provides them; on non-MCS profiles, the same HAL
+contract must be backed by TCB priority/domain plus bounded IPC turns. The
+current as-built code has the non-MCS TCB syscall wrappers, notification bind,
+remote IPC-buffer bind, revoke helper, and bounded HAL driver-task ring ABI
+needed by the substrate, but it does not yet create and run those driver TCBs.
+Boot proof must report `DRIVER_TASK_DEDICATED_READY=no` until the active hot
+paths have moved behind those TCBs.
+HAL contract validation also rejects any `DedicatedSeL4Task` declaration while
+that substrate is inactive; compatibility-mode service must remain explicitly
+marked `RootTaskCompatibility`.
+
+The HAL rejects missing, zero-budget, non-preemptible, or unbounded-blocking
+contracts before the driver is serviced. USB/local-seat and serial are
+`RealtimeInput` and preempt network data. CYW43/SDIO Wi-Fi uses separate
+network-control and network-data budgeting so EAPOL, DHCP, and TCP ACK progress
+cannot be hidden behind bulk RX/TX work, while neither class can starve physical
+input.
+
+The current root-task compatibility path provides a limited interim ratchet,
+not driver-task isolation: serial RX/TX service turns charge the HAL
+driver-task budget, USB/local-seat keyboard polling consumes a HAL service
+budget before backend reads, and the event pump yields any NIC `NetworkData`
+poll to active serial or USB keyboard input. Pending serial output is also
+treated as console pressure, so a slow UART keeps draining before ready
+network data consumes the next pump turn. Budgeted network service is now
+phase-driven instead of post-accounted: one root-loop network quantum runs only
+one of smoltcp device polling, DHCP, TCP-console processing, smoltcp flush, or
+self-test/outbound probe before yielding back to the event pump. Each quantum is
+pre-charged against its HAL service budget, so a ready Wi-Fi/NIC connection
+cannot silently drain an arbitrary backlog inside a single root-task
+compatibility turn. This still does not close the dedicated seL4 driver-task
+migration gates. Boot logs must report
+`isolation=root-task-compatibility` until service actually moves behind a seL4
+TCB/endpoint/fault boundary, and acceptance tooling must not count those lines
+as `DedicatedSeL4Task` proof. Declared `max_service_us` budgets also remain
+contract metadata; latency proof must come from observed service/latency
+fields. `DRIVER_TASK_DEDICATED_READY=yes` is reserved for the first image where
+root can create, schedule, fault-report, and revoke the active driver TCBs with
+declared capsets only. The gate must prove substrate, capset, fault, revoke,
+scheduling, active-net identity, and the serial, USB/local-seat, display, and
+network roles separately so an aggregate count cannot mask a missing hot path.
+The dedicated seL4 driver-task migration keeps these contracts as the admission
+boundary rather than replacing them with a second scheduling model.
+
+Root-task keeps authority over tickets, console grammar, namespaces, policy,
+replay, and capability revocation. Driver tasks receive only declared MMIO,
+DMA/ring, IRQ notification, endpoint, and fault-reporting capabilities. Shared
+rings are allowed only when compiler-declared, bounded, and single-producer /
+single-consumer by construction.
 
 ## HAL, MMIO, DMA, SDIO, And PCIe Contracts
 
@@ -328,14 +402,15 @@ power/reset state.
   Linux-shaped 64-byte first-read transactions rather than a large CLM
   transfer. After that attach proof, Cohesix keeps the
   `bus:txglom`/`bus:rxglom` state established by the Linux-style SDIO preinit
-  path through firmware `ver`, `clmver`, and `mpc`. Disabling `bus:rxglom` as a
-  local safety shortcut before `mpc` is not Linux-equivalent and the
-  2026-05-13 Cohesix boot trace showed it can move an otherwise working
-  control plane into a host-`CARD_INT`/no-dongle-source stall. After `mpc`
-  succeeds, the Pi 4 compatibility profile disables runtime `bus:rxglom` until
-  the post-attach RX path supports Linux-sized aggregated superframes. That
-  preserves the working Linux-shaped control-plane order while preventing a
-  single oversized data glom from pinning Function 2 and flooding UART output.
+  path through firmware `ver`, `clmver`, `mpc`, `event_msgs_ext`, and `WLC_UP`.
+  Disabling `bus:rxglom` as a local safety shortcut before `mpc` is not
+  Linux-equivalent and the 2026-05-13 Cohesix boot trace showed it can move an
+  otherwise working control plane into a host-`CARD_INT`/no-dongle-source stall.
+  The 2026-05-19 board trace proved that the same compatibility write after
+  `mpc` but before `event_msgs_ext`/`WLC_UP` can still break the attach path, so
+  Cohesix now defers any runtime `bus:rxglom=0` transition out of control-plane
+  attach. Oversized or malformed aggregated RX is bounded in the receive path
+  instead of by mutating the Linux attach order.
   Malformed or oversized RX-glom evidence must remain explicit, UART-capped,
   and recoverable by clearing the Function 2 frame condition.
 - The first Linux-order control writes use the plain 12-byte SDPCM header. The
@@ -739,12 +814,17 @@ power/reset state.
   command dispatch wait for the next turn. When local-seat is active, serial
   input dispatch is capped to one complete command line per pump turn, and
   serial-origin output is staged in small cooperative chunks instead of holding
-  the UART in a blocking write across a whole line. The event pump settles
-  across bounded idle HID polls, and HDMI echoes accepted USB keyboard bytes
+  the UART in a blocking write across a whole line. HID boot keyboards use idle
+  duration `0` once Cohesix owns xHCI, so Wi-Fi cannot strand the event ring
+  behind periodic empty completions; HDMI echoes accepted USB keyboard bytes
   immediately at parser ingress. HID polling drains a burst of interrupt-IN
   reports in one pass and keeps 32 keyboard interrupt-IN reads armed on the
   poll-only Pi 4 path, so press/release/next-key sequences can complete while
-  console output, HDMI echo, or bounded Wi-Fi diagnostics are in progress.
+  console output, HDMI echo, or bounded Wi-Fi diagnostics are in progress. When
+  deferred Pi 4 Wi-Fi starts before the root prompt, verbose driver diagnostics
+  are written to `/log/queen.log` and the serial UART keeps compact
+  readiness/error summaries so HDMI and serial do not diverge behind a boot-log
+  backlog.
   `usb status` exposes low-volume keyboard capture counters for HID
   reports/filtering, local-seat queue accept/drain/echo, event-loop
   keyboard-priority turns, and output-side keyboard service polls so missed
@@ -778,9 +858,10 @@ power/reset state.
   subframes are deaggregated into the data/event/EAPOL path, and malformed or
   oversized glom evidence remains explicit but UART-capped instead of silent or
   flood-prone. Descriptor overshoot is a soft mismatch when the remaining tail is
-  still a complete SDPCM subframe. Runtime `bus:rxglom` stays disabled on Pi 4
-  until larger Linux-style superframes are supported end-to-end; this does not
-  change Linux's preinit `bus:rxglom=1` order before `mpc`.
+  still a complete SDPCM subframe. Pi 4 keeps Linux's `bus:rxglom=1` through
+  attach and join; any future runtime disable or superframe expansion must be
+  owned by the Wi-Fi driver task after secure carrier proof, with bounded work,
+  counters, and recovery gates.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
@@ -1483,6 +1564,8 @@ Use this before merging any driver change:
 - Local `seL4/build/` generated artifacts were checked for object/API/IRQ truth.
 - MMIO, IRQ, DMA, PCI, SDIO, power/reset, and firmware service calls are HAL
   owned.
+- The driver declares a valid HAL driver-task scheduling contract before any
+  runtime service path can poll, map, DMA, ack IRQs, or move frames.
 - Polled proof exists before IRQ use.
 - Device source is cleared before IRQHandler ack.
 - DMA buffers are HAL-allocated, pinned, and cache-maintained.
@@ -1511,6 +1594,9 @@ Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci
   - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio
   - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::poll_io_obeys_driver_task_budget
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_skips_ready_network_data_poll_for_driver_task_turn
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet

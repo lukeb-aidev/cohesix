@@ -16,6 +16,8 @@ pub use diag::{NetDiagSnapshot, NET_DIAG, NET_DIAG_FEATURED};
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 use core::ops::Range;
 
+#[cfg(feature = "net-console")]
+use crate::hal::driver_task::{DriverServiceBudget, DriverServiceBudgetError};
 use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
 #[cfg(feature = "kernel")]
@@ -791,6 +793,11 @@ pub trait NetDevice: Device {
     where
         Self: Sized;
 
+    /// HAL-enforced scheduling contract required before this device is serviced.
+    fn driver_task_contract() -> crate::hal::driver_task::DriverTaskContract
+    where
+        Self: Sized;
+
     /// Active interface label surfaced through diagnostics.
     fn interface_label(&self) -> &'static str {
         "wired"
@@ -906,6 +913,20 @@ pub const DEFAULT_NET_BACKEND: NetBackend = NetBackend::Virtio;
 pub trait NetPoller {
     /// Poll the network subsystem and return whether new work occurred.
     fn poll(&mut self, now_ms: u64) -> bool;
+
+    /// Poll the network subsystem through a HAL driver-task service budget.
+    fn poll_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        budget.charge_ops(1)?;
+        budget.charge_frames(1)?;
+        Ok(self.poll(now_ms))
+    }
+
+    /// Return the active network driver scheduling contract.
+    fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract;
 
     /// Obtain telemetry for diagnostics.
     fn telemetry(&self) -> NetTelemetry;
@@ -1029,6 +1050,11 @@ pub use queue::*;
 mod tests {
     use super::*;
 
+    #[cfg(feature = "net-console")]
+    use crate::hal::driver_task::{
+        CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT, RTL8139_DRIVER_TASK_CONTRACT,
+    };
+
     #[test]
     fn auth_timeout_scales_with_timebase() {
         if cfg!(feature = "timers-arch-counter") {
@@ -1086,6 +1112,23 @@ mod tests {
         assert!(!NetBackend::Rtl8139.supports_interface_policy(NetInterfacePolicy::Wifi));
         assert!(NetBackend::BcmGenet.supports_interface_policy(NetInterfacePolicy::Wifi));
         assert!(NetBackend::BcmGenet.supports_interface_policy(NetInterfacePolicy::Auto));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn network_driver_task_contracts_match_backend_labels() {
+        assert_eq!(
+            RTL8139_DRIVER_TASK_CONTRACT.name,
+            NetBackend::Rtl8139.label()
+        );
+        assert_eq!(
+            GENET_DRIVER_TASK_CONTRACT.name,
+            NetBackend::BcmGenet.label()
+        );
+        assert_eq!(CYW43_WIFI_DRIVER_TASK_CONTRACT.name, "cyw43455");
+        assert_eq!(RTL8139_DRIVER_TASK_CONTRACT.validate(), Ok(()));
+        assert_eq!(GENET_DRIVER_TASK_CONTRACT.validate(), Ok(()));
+        assert_eq!(CYW43_WIFI_DRIVER_TASK_CONTRACT.validate(), Ok(()));
     }
 
     #[cfg(feature = "net-console")]

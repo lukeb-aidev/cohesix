@@ -22,6 +22,8 @@ use core::{
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod cache;
 
+pub mod driver_task;
+
 #[cfg(feature = "kernel")]
 pub mod bcmgenet;
 

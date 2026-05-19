@@ -55,6 +55,11 @@ host_matrix=(
   "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci"
   "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio"
   "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart"
+  "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task"
+  "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::poll_io_obeys_driver_task_budget"
+  "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::flush_tx_backpressure_does_not_count_as_budget_overrun"
+  "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_skips_ready_network_data_poll_for_driver_task_turn"
+  "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_defers_buffered_network_console_lines_for_driver_task_turn"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet"
@@ -68,7 +73,7 @@ host_matrix=(
   "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/SMP_build\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu"
   "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/build_UBOOT\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4"
   "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture"
-  "cargo test --workspace"
+  "CARGO_INCREMENTAL=0 cargo test --workspace"
 )
 
 for command in "${host_matrix[@]}"; do

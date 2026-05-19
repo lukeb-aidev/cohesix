@@ -27,6 +27,9 @@ NORMALIZE_ONLY=0
 ALLOW_SUMMARY_ONLY=0
 REQUIRE_USB_READY=0
 REQUIRE_WIFI_READY=0
+REQUIRE_WIRED_READY=0
+REQUIRE_DRIVER_TASK_PROOF=0
+REQUIRE_INPUT_RESPONSIVE=0
 
 DEFAULT_COMMANDS=(
     "wifi diag"
@@ -94,6 +97,13 @@ Options:
                              for exploratory summaries only, not proof output.
   --require-usb-ready        Require USB gate 10 with USB_BLOCKER=none.
   --require-wifi-ready       Require WiFi gate 10 with WIFI_BLOCKER=none.
+  --require-wired-ready      Require netstats to report active=wired.
+  --require-driver-task-proof
+                             Require driver-task substrate, capset, fault,
+                             revoke, scheduling, role, latency, and zero
+                             budget-overrun proof.
+  --require-input-responsive Require serial echo, USB burst, and HDMI proof
+                             breadcrumbs with zero USB burst drops.
   --require-ready            Require both USB and WiFi gate 10 with no blocker.
   -h, --help                 Show this help
 
@@ -413,6 +423,32 @@ run_normalizer() {
     if [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]; then
         args+=("--expect-min" "WIFI_GATE=10" "--expect" "WIFI_BLOCKER=none")
     fi
+    if [[ "${REQUIRE_WIRED_READY}" -eq 1 ]]; then
+        args+=("--expect" "NET_ACTIVE=wired")
+    fi
+    if [[ "${REQUIRE_DRIVER_TASK_PROOF}" -eq 1 ]]; then
+        args+=("--expect-min" "DRIVER_TASK_CONTRACTS=4")
+        args+=("--expect-min" "DRIVER_TASK_DEDICATED=4")
+        args+=("--expect" "DRIVER_TASK_COMPATIBILITY=0")
+        args+=("--expect" "DRIVER_TASK_DEDICATED_READY=yes")
+        args+=("--expect" "DRIVER_TASK_SERIAL_DEDICATED=yes")
+        args+=("--expect" "DRIVER_TASK_USB_DEDICATED=yes")
+        args+=("--expect" "DRIVER_TASK_DISPLAY_DEDICATED=yes")
+        args+=("--expect" "DRIVER_TASK_NET_DEDICATED=yes")
+        args+=("--expect" "DRIVER_TASK_SUBSTRATE_READY=yes")
+        args+=("--expect" "DRIVER_TASK_CAPSET_PROOF=yes")
+        args+=("--expect" "DRIVER_TASK_FAULT_PROOF=yes")
+        args+=("--expect" "DRIVER_TASK_REVOKE_PROOF=yes")
+        args+=("--expect" "DRIVER_TASK_SCHED_PROOF=yes")
+        args+=("--expect" "DRIVER_TASK_BUDGET_OVERRUNS=0")
+        args+=("--expect-min" "DRIVER_TASK_LATENCY_PROOFS=4")
+    fi
+    if [[ "${REQUIRE_INPUT_RESPONSIVE}" -eq 1 ]]; then
+        args+=("--expect" "SERIAL_RESPONSIVE_PROOF=yes")
+        args+=("--expect" "USB_BURST_PROOF=yes")
+        args+=("--expect" "USB_BURST_DROPS=0")
+        args+=("--expect" "HDMI_RESPONSIVE_PROOF=yes")
+    fi
     for ((index = 0; index < ${#EXPECTATIONS[@]}; index++)); do
         args+=("--expect" "${EXPECTATIONS[$index]}")
     done
@@ -531,6 +567,18 @@ while [[ $# -gt 0 ]]; do
             REQUIRE_WIFI_READY=1
             shift
             ;;
+        --require-wired-ready)
+            REQUIRE_WIRED_READY=1
+            shift
+            ;;
+        --require-driver-task-proof)
+            REQUIRE_DRIVER_TASK_PROOF=1
+            shift
+            ;;
+        --require-input-responsive)
+            REQUIRE_INPUT_RESPONSIVE=1
+            shift
+            ;;
         --require-ready)
             REQUIRE_USB_READY=1
             REQUIRE_WIFI_READY=1
@@ -553,7 +601,11 @@ require_nonnegative_integer "--command-delay" "${COMMAND_DELAY_SECONDS}"
 require_file "${PYTHON}"
 
 if [[ "${ALLOW_SUMMARY_ONLY}" -eq 1 ]] \
-    && { [[ "${REQUIRE_USB_READY}" -eq 1 ]] || [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]; }; then
+    && { [[ "${REQUIRE_USB_READY}" -eq 1 ]] \
+        || [[ "${REQUIRE_WIFI_READY}" -eq 1 ]] \
+        || [[ "${REQUIRE_WIRED_READY}" -eq 1 ]] \
+        || [[ "${REQUIRE_DRIVER_TASK_PROOF}" -eq 1 ]] \
+        || [[ "${REQUIRE_INPUT_RESPONSIVE}" -eq 1 ]]; }; then
     echo "[pi4-gate] error: --allow-summary-only cannot be combined with ready-gate requirements" >&2
     exit 2
 fi
