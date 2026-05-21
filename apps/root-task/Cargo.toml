@@ -32,7 +32,8 @@ default = []   # no debug features by default (always pass --no-default-features
 #    untyped-debug, cap-probes, canonical_cspace, bootstrap-minimal, bootstrap-debug,
 #    bootstrap-early-exit, strict-bootstrap, sel4-debug, debug-input, tcp-echo-31337,
 #    net-outbound-probe, virtio_guard_queue, virtio-mmio-legacy, net-virtio-tx-v2,
-#    test-support, ffi_shim, mock-sel4, bypass-timers, bypass-timers-ipc
+#    qemu-driver-task-smoke, test-support, ffi_shim, mock-sel4, bypass-timers,
+#    bypass-timers-ipc
 # C) Removed (obsolete): allow-ipcbuf-fallback, net-irq, timers-bypass
 release-qemu = [
     "kernel",
@@ -101,6 +102,7 @@ debug-input = []
 tcp-echo-31337 = ["net-console"]
 net-outbound-probe = ["net-console"]
 net-backend-virtio = []
+qemu-driver-task-smoke = ["net-backend-virtio"]
 net-selftest = ["net-console"]
 virtio-mmio-legacy = []
 net-virtio-tx-v2 = []

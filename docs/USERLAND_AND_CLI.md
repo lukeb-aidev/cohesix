@@ -46,7 +46,7 @@ Use the root console for low-level validation (bootinfo, capability layout, unty
 - `help` – list available commands.【F:apps/root-task/src/console/mod.rs†L224-L233】
 - `bi` – bootinfo summary (node bits, empty window, IPC buffer if present).【F:apps/root-task/src/console/mod.rs†L234-L250】
 - `caps` – key capability slots (root CNode, endpoint, UART).【F:apps/root-task/src/console/mod.rs†L252-L263】
-- `smp` – dump SMP scheduler/CPU info in debug builds (prints `ERR reason=unsupported` otherwise). The command emits mirrored `[smp] ...` probe lines; raw kernel scheduler/CPU dump bodies are serial/UART only.【F:apps/root-task/src/console/mod.rs†L265-L300】
+- `smp [activity]` – `smp` dumps seL4 scheduler/CPU info only in debug-kernel builds (prints `ERR reason=unsupported` otherwise). `smp activity` is always userspace-owned: it does not require kernel benchmark builds, emits no cycle claims, and reports bounded event-pump, serial, local-seat/HDMI, network, driver-contract, driver-task proof, and affinity diagnostics. Event-pump `smp activity` lines are mirrored through the local-seat HDMI path when active; raw seL4 debug dump bodies from plain `smp` remain serial/UART only.【F:apps/root-task/src/event/mod.rs†L2064-L2200】
 - `mem` – untyped cap counts with RAM vs device breakdown.【F:apps/root-task/src/console/mod.rs†L265-L283】
 - `ping` – replies `pong` as a liveness check.【F:apps/root-task/src/console/mod.rs†L285-L293】
 - `usb <help|status|dump-state|diag|enable-kbd|probe-kbd>` – Pi 4 USB local-seat diagnostics on the serial/local diagnostics console only, including when HDMI has degraded to headless mode. `usb status` and `usb probe-kbd` surface a compact `golden_path ...` route summary before the existing `verdict=... focus=...` line; ownership, route, enum, and runtime lines carry `proof_gate` for the 10-gate USB ladder. `usb probe-kbd` emits a cold-boot-only `golden_path preflight ...` / `irq_contract preflight ...` block before xHCI MMIO starts: current high-BAR probes report `route=trusted-high-bar-primary`, `policy=full-reset-start`, `origin=live-runtime-default`, `handoff=none`, `seed=none`, `pre=mailbox-reset-required`, and `run=run-default` until the VideoCore mailbox reset plus live HAL BCM2711 EXT_CFG BAR/COMMAND proof promotes the controller to `policy=platform-reset-complete`, `origin=mailbox-reset-complete`, and `run=run-cold`. The same commands emit `usb: contract ...`, `usb: diag_contract ...`, `usb: diag_values ...`, `usb: runtime_contract ...`, and labeled `usb: xhci_recent[...] ...` value tuples summarising the active step, decisive blocker, freshness, runtime proof edge, and latest xHCI diagnostics. Stop-seed, preserve-state, bootloader-authorized reset, and U-Boot handoff evidence is diagnostic-only and is rejected by the proof loop through `USB_BOOTLOADER_HANDOFF_SEEN=yes`; it is not a fallback path. Command proof still republishes the late command TRB, snapshots command/event rings, rings doorbell 0, polls the event ring with PCIe INTx/MSI/MSI-X masked, and avoids live xHCI register reads on fragile timeout paths. `irq27`/`IRQ 27` is the seL4 virtual-timer PPI on Pi 4 and is never reported as a USB/xHCI interrupt source; the Pi 4 trace normalizer reports such entries separately as `TIMER_IRQ27_SEEN` / `BOOT_HALTED` gate evidence.
@@ -71,7 +71,7 @@ Commands:
   help  - Show this help
   bi    - Show bootinfo summary
   caps  - Show capability slots
-  smp   - Show SMP scheduler/CPU info (debug builds only)
+  smp [activity] - Show SMP scheduler info or userspace activity
   mem   - Show untyped summary
   ping  - Respond with pong
   usb <help|status|dump-state|diag|enable-kbd|probe-kbd> - USB local-seat diagnostics (serial/local only)
@@ -190,7 +190,7 @@ Shared console grammar and ticket policy are emitted by `coh-rtc` from `cohsh-co
 - `help`
 - `bi`
 - `caps`
-- `smp`
+- `smp [activity]`
 - `mem`
 - `ping`
 - `test`

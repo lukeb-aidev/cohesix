@@ -781,6 +781,27 @@ fn pi4_local_usb_boot_wifi_defer_detail(reason: &str) -> HeaplessString<192> {
     detail
 }
 
+fn should_bootstrap_live_driver_tasks(qemu_virtio_compat: bool) -> bool {
+    !qemu_virtio_compat
+}
+
+fn live_driver_task_bootstrap_skip_reason(qemu_virtio_compat: bool) -> Option<&'static str> {
+    if should_bootstrap_live_driver_tasks(qemu_virtio_compat) {
+        None
+    } else {
+        Some("qemu-virtio-pre-net-resource-guard")
+    }
+}
+
+fn should_bootstrap_qemu_post_net_driver_task_smoke(
+    qemu_virtio_compat: bool,
+    smoke_enabled: bool,
+    net_ready: bool,
+    backend_label: &str,
+) -> bool {
+    qemu_virtio_compat && smoke_enabled && net_ready && backend_label == "virtio-net"
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 fn format_net_console_init_detail<DE: fmt::Display>(
     err: &crate::net::NetConsoleError<DE>,
@@ -4363,7 +4384,13 @@ fn bootstrap<P: Platform>(
     if consumed_slots > 0 {
         hal.consume_bootstrap_slots(consumed_slots);
     }
-    let driver_task_report = hal.bootstrap_driver_task_substrate(fault_ep_slot);
+    let driver_task_report = if let Some(reason) =
+        live_driver_task_bootstrap_skip_reason(cfg!(feature = "net-backend-virtio"))
+    {
+        hal.skip_driver_task_substrate(reason)
+    } else {
+        hal.bootstrap_driver_task_substrate(fault_ep_slot)
+    };
     let mut driver_task_line = heapless::String::<192>::new();
     let _ = write!(
         driver_task_line,
@@ -4818,6 +4845,14 @@ fn bootstrap<P: Platform>(
                         boot_guard.record_invariant("net-console.ready");
                         let virtio_selected = cfg!(feature = "net-backend-virtio")
                             && net_backend_label == "virtio-net";
+                        if should_bootstrap_qemu_post_net_driver_task_smoke(
+                            cfg!(feature = "net-backend-virtio"),
+                            cfg!(feature = "qemu-driver-task-smoke"),
+                            true,
+                            net_backend_label,
+                        ) {
+                            let _ = hal.bootstrap_qemu_post_net_driver_task_smoke(fault_ep_slot);
+                        }
                         (Some(stack), virtio_selected, None, net_backend_label, None)
                     }
                     Err(err) => {
@@ -7086,6 +7121,52 @@ mod tests {
             )),
             Some("wifi-psk-too-short")
         );
+    }
+
+    #[test]
+    fn qemu_virtio_compat_skips_live_driver_task_bootstrap_before_net_init() {
+        assert!(!super::should_bootstrap_live_driver_tasks(true));
+        assert_eq!(
+            super::live_driver_task_bootstrap_skip_reason(true),
+            Some("qemu-virtio-pre-net-resource-guard")
+        );
+    }
+
+    #[test]
+    fn pi4_profile_keeps_live_driver_task_bootstrap_enabled_by_default() {
+        assert!(super::should_bootstrap_live_driver_tasks(false));
+        assert_eq!(super::live_driver_task_bootstrap_skip_reason(false), None);
+    }
+
+    #[test]
+    fn qemu_post_net_driver_task_smoke_requires_net_ready_and_virtio() {
+        assert!(super::should_bootstrap_qemu_post_net_driver_task_smoke(
+            true,
+            true,
+            true,
+            "virtio-net",
+        ));
+        assert!(!super::should_bootstrap_qemu_post_net_driver_task_smoke(
+            true,
+            false,
+            true,
+            "virtio-net",
+        ));
+        assert!(!super::should_bootstrap_qemu_post_net_driver_task_smoke(
+            true,
+            true,
+            false,
+            "virtio-net",
+        ));
+        assert!(!super::should_bootstrap_qemu_post_net_driver_task_smoke(
+            true, true, true, "rtl8139",
+        ));
+        assert!(!super::should_bootstrap_qemu_post_net_driver_task_smoke(
+            false,
+            true,
+            true,
+            "virtio-net",
+        ));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

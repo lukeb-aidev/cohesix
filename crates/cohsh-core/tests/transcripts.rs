@@ -249,7 +249,7 @@ impl ConsoleHarness {
             }
             ConsoleCommand::BootInfo
             | ConsoleCommand::Caps
-            | ConsoleCommand::Smp
+            | ConsoleCommand::Smp { .. }
             | ConsoleCommand::Mem
             | ConsoleCommand::Test
             | ConsoleCommand::NetTest

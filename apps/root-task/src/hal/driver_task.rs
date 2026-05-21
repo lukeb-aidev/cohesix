@@ -582,6 +582,13 @@ pub unsafe fn run_driver_task_service(
 }
 
 /// Host/test fallback: no live seL4 driver TCB exists.
+///
+/// # Safety
+///
+/// This fallback never dereferences `context` and never invokes `handler`; it
+/// exists only to preserve the same unsafe ABI as the kernel-backed service
+/// path. Callers must still uphold the kernel-path ownership contract because
+/// the same call site may dispatch through a live driver TCB in kernel builds.
 #[cfg(not(feature = "kernel"))]
 pub unsafe fn run_driver_task_service(
     _contract: DriverTaskContract,
@@ -1607,7 +1614,10 @@ mod tests {
             BUILTIN_DRIVER_TASK_CONTRACTS.len()
         );
         assert_eq!(summary.root_task_compatibility, 0);
-        assert!(DEDICATED_DRIVER_TASK_SUBSTRATE_READY);
+        assert_eq!(
+            DEDICATED_DRIVER_TASK_SUBSTRATE_READY,
+            summary.dedicated_sel4_tasks > 0
+        );
         assert!(!dedicated_driver_task_acceptance_ready());
     }
 

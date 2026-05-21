@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Shared Cohesix console grammar and transport primitives.
 // Author: Lukas Bower
@@ -27,8 +27,8 @@ pub mod wire;
 pub mod tcp;
 
 pub use command::{
-    Command, CommandParser, ConsoleError, RateLimiter, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN,
-    MAX_LINE_LEN, MAX_PATH_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
+    Command, CommandParser, ConsoleError, RateLimiter, SmpMode, MAX_ECHO_LEN, MAX_ID_LEN,
+    MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
 };
 pub use secure9p::{ClientError as Secure9pError, Secure9pClient, Secure9pTransport};
 pub use tail::{BoundedLineBuffer, TailPollPolicy, TailPoller};

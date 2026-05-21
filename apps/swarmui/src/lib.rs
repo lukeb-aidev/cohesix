@@ -420,7 +420,7 @@ where
             | ConsoleCommand::Kill(_)
             | ConsoleCommand::BootInfo
             | ConsoleCommand::Caps
-            | ConsoleCommand::Smp
+            | ConsoleCommand::Smp { .. }
             | ConsoleCommand::Mem
             | ConsoleCommand::Test
             | ConsoleCommand::NetTest
@@ -1713,7 +1713,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             ConsoleCommand::Quit => self.console_quit(),
             ConsoleCommand::BootInfo
             | ConsoleCommand::Caps
-            | ConsoleCommand::Smp
+            | ConsoleCommand::Smp { .. }
             | ConsoleCommand::Mem
             | ConsoleCommand::Test
             | ConsoleCommand::NetTest

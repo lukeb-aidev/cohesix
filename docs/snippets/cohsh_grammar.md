@@ -6,7 +6,7 @@
 - `help`
 - `bi`
 - `caps`
-- `smp`
+- `smp [activity]`
 - `mem`
 - `ping`
 - `test`

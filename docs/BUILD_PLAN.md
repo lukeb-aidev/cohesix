@@ -6121,7 +6121,7 @@ Add the HAL-enforced driver-task substrate, migrate serial/display and GENET beh
 
 - **seL4 driver-task substrate**
   - Add root-owned wrappers for driver TCB creation, CSpace/VSpace setup, IPC-buffer installation, badged endpoints, notifications, IRQ binding, fault endpoints, scheduling-context parameters where available, and revocation.
-  - As-built substrate work now includes non-MCS TCB priority/scheduling/resume/notification wrappers, CNode revoke, a remote-safe IPC-buffer bind helper, bounded HAL driver-task command/completion rings, bootstrap-created driver TCB attempts for all nine built-in driver contracts, restricted child CSpaces, command endpoints, notifications, fault endpoint slots, stacks, manifest-selected per-driver SMP affinity, and tolerant handling for boot-seeded intermediate page tables while mapping driver IPC/stack frames.
+  - As-built substrate work now includes non-MCS TCB priority/scheduling/resume/notification wrappers, CNode revoke, a remote-safe IPC-buffer bind helper, bounded HAL driver-task command/completion rings, Pi 4 bootstrap-created driver TCB attempts for all nine built-in driver contracts, restricted child CSpaces, command endpoints, notifications, fault endpoint slots, stacks, manifest-selected per-driver SMP affinity, and tolerant handling for boot-seeded intermediate page tables while mapping driver IPC/stack frames. QEMU virtio compatibility builds keep the same contract set but publish an inactive `qemu-virtio-pre-net-resource-guard` report before network init so failed live-task bootstrap cannot exhaust resources needed by the virtio TCP regression path; with the explicit `qemu-driver-task-smoke` feature, they may create all nine declared driver-task TCBs after virtio networking is ready and emit `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu` as partial QEMU live-TCB/cap/affinity proof.
   - Serial RX/TX, USB/local-seat keyboard polling, HDMI text mirroring, and active GENET/CYW43/RTL8139/virtio network polling dispatch bounded service callbacks through live driver TCBs only when the boot-created TCBs start. The May 20 Pi 4 proof is not closure because every driver-task bootstrap failed with `seL4_DeleteFirst` and hot paths stayed root-task compatibility. SDIO and PCIe have declared contract TCBs and affinity assignments; their current bus operations are reached from the CYW43 and USB/local-seat callbacks until standalone bus-operation queues are split out and fresh hardware proof shows live ownership.
   - The current substrate intentionally still reports shared-root VSpace until driver code/data/rings are mapped into isolated driver VSpaces. Any root-task compatibility fallback service turn remains diagnostic evidence and fails reopened closure.
   - Root keeps authority and revocation; driver tasks receive only compiler-declared caps and bounded shared rings.
@@ -6205,6 +6205,26 @@ Checks:
 Deliverables:
   - HAL scheduling-contract ratchet for current compatibility drivers and future dedicated seL4 driver tasks.
 
+Title/ID: m26a-smp-activity-diagnostic
+Goal: Add `smp activity` as a bounded root-console diagnostic for cross-core activity evidence without enabling seL4 kernel benchmark builds.
+Inputs: crates/cohsh-core/src/command.rs, crates/cohsh-core/src/verb.rs, apps/root-task/src/event/mod.rs, apps/root-task/src/console/mod.rs, apps/root-task/src/local_seat.rs, apps/root-task/src/net/mod.rs, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/affinity.rs, docs/USERLAND_AND_CLI.md.
+Changes:
+  - crates/cohsh-core/src/command.rs + crates/cohsh-core/src/verb.rs — extend the canonical grammar from `smp` to `smp [activity]`, reject unknown pseudo-profile arguments, and keep plain `smp` mapped to the existing debug-kernel scheduler snapshot.
+  - apps/root-task/src/event/mod.rs — implement `smp activity` from bounded userspace telemetry: event-pump command/timer counters, serial backpressure, local-seat keyboard/HDMI mirror counters, network status/counters when present, HAL driver-task contracts, driver-task runtime proof masks, and manifest affinity assignments.
+  - apps/root-task/src/console/mod.rs — keep early-console behavior explicit when the event-pump telemetry source is unavailable.
+  - docs/USERLAND_AND_CLI.md + docs/snippets/cohsh_grammar.md — document that `smp activity` is not a cycle-accurate profiler, does not require kernel benchmark builds, and is mirrored to HDMI through the local-seat path while raw seL4 debug dump text remains UART-only.
+Commands:
+  - cargo test -p cohsh-core smp
+  - cargo test -p root-task smp_activity
+  - cargo test -p root-task --features net-console smp_activity
+Checks:
+  - `smp activity` never depends on `CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES`, debug-kernel benchmark syscalls, PMU counters, or unbounded sampling.
+  - Output is line-bounded and useful for Pi 4 diagnostics: it distinguishes parser/event-loop progress, serial pressure, HDMI/local-seat mirroring, attached network progress, driver-task compatibility vs dedicated proof, and configured role/driver affinity.
+  - HDMI display receives the same event-pump `smp activity` lines when local-seat mirroring is active; raw kernel debug output from plain `smp` remains serial-only.
+  - Unknown arguments such as `smp profile` fail grammar validation instead of silently aliasing to plain `smp`.
+Deliverables:
+  - Root-console `smp activity` diagnostic with parser, event-pump, HDMI mirror, and feature-scoped network test coverage.
+
 Title/ID: m26a-driver-task-kernel-substrate
 Goal: Add root-owned seL4 task/capability substrate for hardware driver tasks without changing authority semantics.
 Inputs: apps/root-task/src/kernel.rs, apps/root-task/src/hal/*, apps/root-task/src/cspace*, configs/root_task.toml, docs/ROLES_AND_SCHEDULING.md.
@@ -6243,7 +6263,7 @@ Title/ID: m26a-genet-driver-task
 Goal: Promote GENET from in-root compatibility driver to isolated frame driver task.
 Inputs: apps/root-task/src/drivers/bcmgenet.rs, apps/root-task/src/hal/bcmgenet.rs, apps/root-task/src/net/*.
 Changes:
-  - apps/root-task/src/drivers/bcmgenet.rs — move DMA ring ownership, TX reclaim, RX refill, and IRQ service into `driver-genet`.
+  - apps/root-task/src/drivers/bcmgenet.rs — move DMA ring ownership, TX reclaim, RX refill, and IRQ service into `driver-genet`; the compatibility path already bounds one service turn to an 8-frame RX drain and 32-completion TX reclaim cap so wired load cannot monopolize serial/USB turns while migration proof is pending.
   - apps/root-task/src/net/* — consume bounded Ethernet-frame IPC from the GENET task while keeping smoltcp/listener semantics in root.
 Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet
@@ -6469,6 +6489,8 @@ Commands:
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
 Checks:
   - Wi-Fi control progress yields on budget exhaustion instead of spinning.
+  - Runtime CYW43 data TX admits smoltcp TX tokens only when the firmware SDPCM credit window is open; no-credit data TX must return/yield without a credit-spin loop in the root service turn.
+  - Runtime CYW43 TX staging lets smoltcp fill the bounded SDPCM/BDC transmit frame directly instead of copying through an extra stack frame buffer.
   - CYW43 startup does not write `bus:rxglom=0` before `event_msgs_ext`/`WLC_UP`; aggregated RX is bounded, counted, and recoverable inside the Wi-Fi driver task.
 Deliverables:
   - CYW43/SDIO driver task that can make Wi-Fi progress without stealing root-task USB/serial turns.

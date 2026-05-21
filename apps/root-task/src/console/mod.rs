@@ -15,7 +15,7 @@ mod io;
 pub use io::Console;
 
 pub use cohsh_core::{
-    Command, CommandParser, ConsoleError, MAX_LINE_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
+    Command, CommandParser, ConsoleError, SmpMode, MAX_LINE_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
 };
 
 #[cfg(feature = "kernel")]
@@ -170,6 +170,12 @@ impl CohesixConsole {
         self.emit_line("ERR reason=unsupported");
     }
 
+    fn print_smp_activity(&mut self) {
+        self.emit_line("[smp] activity begin source=early-console benchmark=off hdmi=unavailable");
+        self.emit_line("[smp] activity detail=event-pump-unavailable use=post-handoff-root-shell");
+        self.emit_line("[smp] activity end");
+    }
+
     fn print_mem(&mut self) {
         let bi = self.bootinfo();
         let count = (bi.untyped.end - bi.untyped.start) as usize;
@@ -195,7 +201,12 @@ impl CohesixConsole {
             Command::Help => self.print_help(),
             Command::BootInfo => self.print_bootinfo(),
             Command::Caps => self.print_caps(),
-            Command::Smp => self.print_smp(),
+            Command::Smp {
+                mode: SmpMode::Snapshot,
+            } => self.print_smp(),
+            Command::Smp {
+                mode: SmpMode::Activity,
+            } => self.print_smp_activity(),
             Command::Mem => self.print_mem(),
             Command::Ping => self.emit_line("pong"),
             Command::Test => self.emit_line("test not supported on root console"),

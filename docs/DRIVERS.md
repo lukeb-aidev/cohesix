@@ -164,10 +164,19 @@ dedicated driver task uses seL4 scheduling contexts when the active MCS kernel
 profile provides them. On non-MCS profiles, the same HAL contract is enforced
 with TCB priority/domain policy plus bounded IPC and poll turns.
 
-The current source path attempts to create root-owned seL4 TCBs for every
-built-in hardware contract during boot. A boot counts as dedicated-driver-task
-execution only when the breadcrumbs below prove live TCBs, valid cap/fault/
-revoke/scheduling/affinity fields, and hot-path dispatch through those TCBs.
+The Pi 4 source path attempts to create root-owned seL4 TCBs for every
+built-in hardware contract during boot. QEMU virtio compatibility builds keep
+the same contract declarations but deliberately skip live driver-task bootstrap
+before network init (`qemu-virtio-pre-net-resource-guard`) so scarce seL4
+object/page-table budget remains available for the virtio TCP regression path.
+When the explicit `qemu-driver-task-smoke` feature is enabled, QEMU may run a
+post-network smoke probe after virtio networking is online; that probe creates
+the full nine-contract driver-task set and publishes partial live-TCB proof.
+That is useful for exercising the seL4 task mechanics under QEMU, but it is not
+Pi 4 hardware proof and cannot satisfy the full dedicated-driver-task closure gate. A
+boot counts as dedicated-driver-task execution only when the breadcrumbs below
+prove live TCBs, valid cap/fault/revoke/scheduling/affinity fields, and hot-path
+dispatch through those TCBs.
 The May 20 Pi 4 capture reached Wi-Fi DHCP but is explicitly pre-closure
 evidence: all nine `DRIVER_TASK_BOOT` attempts failed with `seL4_DeleteFirst`,
 `live_tcb_count=0`, and the hot paths remained root-task compatibility. The
@@ -212,6 +221,15 @@ Boot logs must expose the distinction with these breadcrumbs:
 - `DRIVER_TASK_DEFAULT requested=dedicated required=yes substrate_active=<yes|no> live_hot_paths=<yes|no>`
 - `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=shared-root`
 - `DRIVER_TASK_BOOT contract=<name> role=<role> status=failed err=<reason>` for any failed creation path
+- `DRIVER_TASK_BOOT status=skipped reason=qemu-virtio-pre-net-resource-guard`
+  for QEMU virtio compatibility boots that preserve pre-network resources for
+  TCP regression coverage
+- `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract=<name> role=<role> status=<created|failed> ...`
+  for each declared contract in the explicit `qemu-driver-task-smoke`
+  post-network live-TCB probe. This may update `DRIVER_TASK_SUBSTRATE` to a
+  full-contract QEMU partial report and must still fail full Pi 4
+  dedicated-driver-task acceptance because Pi hardware roles, VSpace isolation,
+  and hardware hot-path ownership are not proved.
 - `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> live_hot_paths=<yes|no>`
 - one `SCHED_CONTRACT` line per built-in contract, including `live_tcb` and
   `hot_path`
@@ -242,6 +260,15 @@ reply reads from runtime data/glom reads. Control replies keep the Linux-derived
 512-byte block-aligned Function 2 request into an 8192-byte bounded frame buffer
 and deaggregates at most 16 glom subframes into a 16-entry bounded queue before
 yielding back to the driver-service budget.
+
+Runtime CYW43 data TX follows the same bounded-service rule. The smoltcp
+`TxToken` is admitted only when link/security policy allows data and the current
+SDPCM firmware credit window is open. The token fills the driver-owned
+SDPCM/BDC transmit frame directly, then publishes one block-shaped Function 2
+write; the data path no longer waits in a credit-spin loop or copies through an
+extra stack frame before the HAL write. Control/EAPOL submit paths may still use
+their explicit credit-wait probes because they are part of join/security
+progress, not ordinary bulk data service.
 
 Root-task compatibility remains only as a fail-safe and diagnostic path. If a
 service callback cannot be sent to its driver TCB, the current service turn
@@ -1443,6 +1470,9 @@ Required Cohesix shape:
 - MDIO polling is bounded; PHY address is validated against platform evidence.
 - TX/RX descriptors are fixed-size; RX buffers are preallocated.
 - TX completion and RX producer/consumer movement have breadcrumbs for stalls.
+- The compatibility path reclaims at most 32 TX completions and drains at most
+  eight RX descriptors in one service turn before yielding; raising those caps
+  requires fresh USB/serial responsiveness proof under wired load.
 - DMA address policy is explicit (`physical` vs VC/bus alias) and logged.
 - No DHCP logic is inside the GENET driver; DHCP belongs above `NetDevice`.
 

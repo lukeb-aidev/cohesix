@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Canonical console verb inventory for Cohesix.
 // Author: Lukas Bower
@@ -14,7 +14,7 @@ pub enum ConsoleVerb {
     BootInfo,
     /// `caps`
     Caps,
-    /// `smp`
+    /// `smp [activity]`
     Smp,
     /// `mem`
     Mem,
@@ -104,8 +104,8 @@ pub const VERB_SPECS: [VerbSpec; VERB_SPEC_COUNT] = [
     },
     VerbSpec {
         verb: ConsoleVerb::Smp,
-        usage: "smp",
-        example: "smp",
+        usage: "smp [activity]",
+        example: "smp activity",
     },
     VerbSpec {
         verb: ConsoleVerb::Mem,

@@ -107,7 +107,7 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 #[cfg(feature = "kernel")]
 use crate::bootstrap::log as boot_log;
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
-use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
+use crate::console::{Command, CommandParser, ConsoleError, SmpMode, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "net-console")]
@@ -1936,7 +1936,7 @@ where
         self.emit_console_line("  help  - Show this help");
         self.emit_console_line("  bi    - Show bootinfo summary");
         self.emit_console_line("  caps  - Show capability slots");
-        self.emit_console_line("  smp   - Show SMP scheduler/CPU info (debug builds only)");
+        self.emit_console_line("  smp [activity] - Show SMP scheduler info or userspace activity");
         self.emit_console_line("  mem   - Show untyped summary");
         self.emit_console_line("  ping  - Respond with pong");
         self.emit_console_line("  test  - Self-test (host-only; use cohsh)");
@@ -1954,7 +1954,7 @@ where
         self.emit_serial_line("  help  - Show this help");
         self.emit_serial_line("  bi    - Show bootinfo summary");
         self.emit_serial_line("  caps  - Show capability slots");
-        self.emit_serial_line("  smp   - Show SMP scheduler/CPU info (debug builds only)");
+        self.emit_serial_line("  smp [activity] - Show SMP scheduler info or userspace activity");
         self.emit_serial_line("  mem   - Show untyped summary");
         self.emit_serial_line("  ping  - Respond with pong");
         self.emit_serial_line("  test  - Self-test (host-only; use cohsh)");
@@ -2059,9 +2059,19 @@ where
         false
     }
 
+    fn emit_smp(&mut self, mode: SmpMode) -> bool {
+        match mode {
+            SmpMode::Snapshot => self.emit_smp_snapshot(),
+            SmpMode::Activity => {
+                self.emit_smp_activity();
+                true
+            }
+        }
+    }
+
     #[allow(unsafe_code)]
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-    fn emit_smp(&mut self) -> bool {
+    fn emit_smp_snapshot(&mut self) -> bool {
         self.emit_console_line("[smp] debug scheduler dump begin");
         let policy = affinity::policy();
         affinity::debug_dump_per_core(&policy, |line| self.emit_console_line(line));
@@ -2070,9 +2080,263 @@ where
     }
 
     #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
-    fn emit_smp(&mut self) -> bool {
+    fn emit_smp_snapshot(&mut self) -> bool {
         self.emit_console_line("ERR reason=unsupported");
         false
+    }
+
+    fn emit_smp_activity(&mut self) {
+        self.emit_console_line("[smp] activity begin source=userspace benchmark=off hdmi=mirrored");
+        self.emit_smp_activity_pump();
+        self.emit_smp_activity_local_seat();
+        self.emit_smp_activity_net();
+        self.emit_smp_activity_driver_contracts();
+        self.emit_smp_activity_affinity();
+        self.emit_console_line("[smp] activity end");
+    }
+
+    fn emit_smp_activity_pump(&mut self) {
+        let metrics = self.metrics;
+        let serial = self.serial_telemetry();
+        let line = format_message(format_args!(
+            "[smp] activity pump now_ms={} input={} lines={} ok={} denied={} ticks={} serial_rx_drop={} serial_tx_drop={} utf8_drop={} serial_budget_overruns={}",
+            self.now_ms,
+            self.last_input_source.label(),
+            metrics.console_lines,
+            metrics.accepted_commands,
+            metrics.denied_commands,
+            metrics.timer_ticks,
+            serial.rx_backpressure,
+            serial.tx_backpressure,
+            serial.utf8_dropped,
+            serial.driver_task_budget_overruns,
+        ));
+        self.emit_console_line(line.as_str());
+    }
+
+    fn emit_smp_activity_local_seat(&mut self) {
+        let Some(runtime) = self.local_seat.as_ref() else {
+            self.emit_console_line("[smp] activity local-seat attached=no hdmi=unavailable");
+            return;
+        };
+        let status = runtime.status();
+        let trace = runtime.keyboard_trace();
+        let mirrored_drops = runtime.dropped_mirrored_lines();
+        let backend_enabled = runtime.backend_keyboard_polling_enabled();
+        let metrics = self.metrics;
+        let line = format_message(format_args!(
+            "[smp] activity local-seat attached=yes keyboard={} display={} backend_poll={} queued={} accepted={} drained={} echoed={} drop={} hdmi_drop={}",
+            status.keyboard_device,
+            status.display_device,
+            Self::yes_no(backend_enabled),
+            trace.queued_bytes,
+            trace.accepted_bytes,
+            trace.drained_bytes,
+            trace.echoed_bytes,
+            trace.dropped_bytes,
+            mirrored_drops,
+        ));
+        self.emit_console_line(line.as_str());
+        let turns = format_message(format_args!(
+            "[smp] activity local-seat-turns output_polls={} priority={} skipped={} serial_yield={} post_runtime={}",
+            metrics.local_seat_output_keyboard_polls,
+            metrics.local_seat_keyboard_priority_turns,
+            metrics.local_seat_runtime_skipped_turns,
+            metrics.local_seat_serial_dispatch_yielded_turns,
+            metrics.local_seat_post_runtime_hits,
+        ));
+        self.emit_console_line(turns.as_str());
+    }
+
+    #[cfg(feature = "net-console")]
+    fn emit_smp_activity_net(&mut self) {
+        let Some(net) = self.net.as_ref() else {
+            self.emit_console_line("[smp] activity net attached=no feature=net-console");
+            return;
+        };
+        let telemetry = net.telemetry();
+        let counters = net.stats();
+        let status = net.status_report();
+        let contract = net.driver_task_contract();
+        let state = format_message(format_args!(
+            "[smp] activity net attached=yes backend={} mode={} active={} standby={} src={} dhcp={} contract={}",
+            status.backend,
+            status.mode,
+            status.active_interface,
+            status.standby_interface,
+            status.address_source,
+            status.dhcp_phase,
+            contract.name,
+        ));
+        self.emit_console_line(state.as_str());
+        let link = format_message(format_args!(
+            "[smp] activity net-link link={} last_poll_ms={} tx_drops={} ip={} gw={}",
+            Self::yes_no(telemetry.link_up),
+            telemetry.last_poll_ms,
+            telemetry.tx_drops,
+            status.ip.as_str(),
+            status.gateway.as_str(),
+        ));
+        self.emit_console_line(link.as_str());
+        let io = format_message(format_args!(
+            "[smp] activity net-io rx={} tx={} rx_used={} tx_used={} smoltcp={} udp_rx={} udp_tx={} tx_free={} tx_inflight={}",
+            counters.rx_packets,
+            counters.tx_packets,
+            counters.rx_used_advances,
+            counters.tx_used_advances,
+            counters.smoltcp_polls,
+            counters.udp_rx,
+            counters.udp_tx,
+            counters.tx_free,
+            counters.tx_in_flight,
+        ));
+        self.emit_console_line(io.as_str());
+        let tcp = format_message(format_args!(
+            "[smp] activity net-tcp accepts={} auth={} rx_bytes={} tx_bytes={} smoke_ok={} smoke_fail={}",
+            counters.tcp_accepts,
+            counters.tcp_auth_sessions,
+            counters.tcp_rx_bytes,
+            counters.tcp_tx_bytes,
+            counters.tcp_smoke_outbound,
+            counters.tcp_smoke_outbound_failures,
+        ));
+        self.emit_console_line(tcp.as_str());
+        let wifi = format_message(format_args!(
+            "[smp] activity net-wifi assoc={} link={} eapol_rx={} eapol_start={} eapol_secure={}",
+            counters.wifi_assoc,
+            counters.wifi_link_up,
+            counters.wifi_host_eapol_rx,
+            counters.wifi_host_eapol_start,
+            counters.wifi_host_eapol_secure,
+        ));
+        self.emit_console_line(wifi.as_str());
+    }
+
+    #[cfg(not(feature = "net-console"))]
+    fn emit_smp_activity_net(&mut self) {
+        self.emit_console_line("[smp] activity net attached=no feature=disabled");
+    }
+
+    fn emit_smp_activity_driver_contracts(&mut self) {
+        use crate::hal::driver_task::{
+            builtin_isolation_summary, driver_task_runtime_proof, CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            GENET_DRIVER_TASK_CONTRACT, HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            PCIE_ROOT_DRIVER_TASK_CONTRACT, RTL8139_DRIVER_TASK_CONTRACT,
+            SDIO_HOST_DRIVER_TASK_CONTRACT, SERIAL_DRIVER_TASK_CONTRACT,
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT, VIRTIO_NET_DRIVER_TASK_CONTRACT,
+        };
+
+        let summary = builtin_isolation_summary();
+        let proof = driver_task_runtime_proof();
+        let line = format_message(format_args!(
+            "[smp] activity driver-proof contracts={} requested_dedicated={} dedicated={} compat={} substrate={} configured={} live={} failed={} hot_mask=0x{:x} compat_mask=0x{:x}",
+            summary.contracts,
+            summary.requested_dedicated_sel4_tasks,
+            summary.dedicated_sel4_tasks,
+            summary.root_task_compatibility,
+            Self::yes_no(proof.substrate_active),
+            proof.configured_count,
+            proof.live_tcb_count,
+            proof.failed_count,
+            proof.hot_path_role_mask,
+            proof.compatibility_service_role_mask,
+        ));
+        self.emit_console_line(line.as_str());
+        let input_display =
+            format_message(format_args!(
+            "[smp] activity contracts serial={}:{}:{}/{}/{} usb={}:{}:{}/{}/{} hdmi={}:{}:{}/{}/{}",
+            SERIAL_DRIVER_TASK_CONTRACT.name,
+            SERIAL_DRIVER_TASK_CONTRACT.class.as_str(),
+            SERIAL_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            SERIAL_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            SERIAL_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.name,
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.class.as_str(),
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+            HDMI_TEXT_DRIVER_TASK_CONTRACT.name,
+            HDMI_TEXT_DRIVER_TASK_CONTRACT.class.as_str(),
+            HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+        ));
+        self.emit_console_line(input_display.as_str());
+        let net_contracts = format_message(format_args!(
+            "[smp] activity contracts genet={}:{}:{}/{}/{} cyw43={}:{}:{}/{}/{} virtio={}:{}:{}/{}/{}",
+            GENET_DRIVER_TASK_CONTRACT.name,
+            GENET_DRIVER_TASK_CONTRACT.class.as_str(),
+            GENET_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            GENET_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            GENET_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT.name,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT.class.as_str(),
+            CYW43_WIFI_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+            VIRTIO_NET_DRIVER_TASK_CONTRACT.name,
+            VIRTIO_NET_DRIVER_TASK_CONTRACT.class.as_str(),
+            VIRTIO_NET_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            VIRTIO_NET_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            VIRTIO_NET_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+        ));
+        self.emit_console_line(net_contracts.as_str());
+        let bus_contracts = format_message(format_args!(
+            "[smp] activity contracts rtl8139={}:{}:{}/{}/{} sdio={}:{}:{}/{}/{} pcie={}:{}:{}/{}/{}",
+            RTL8139_DRIVER_TASK_CONTRACT.name,
+            RTL8139_DRIVER_TASK_CONTRACT.class.as_str(),
+            RTL8139_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            RTL8139_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            RTL8139_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+            SDIO_HOST_DRIVER_TASK_CONTRACT.name,
+            SDIO_HOST_DRIVER_TASK_CONTRACT.class.as_str(),
+            SDIO_HOST_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            SDIO_HOST_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            SDIO_HOST_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+            PCIE_ROOT_DRIVER_TASK_CONTRACT.name,
+            PCIE_ROOT_DRIVER_TASK_CONTRACT.class.as_str(),
+            PCIE_ROOT_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
+            PCIE_ROOT_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
+            PCIE_ROOT_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
+        ));
+        self.emit_console_line(bus_contracts.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_smp_activity_affinity(&mut self) {
+        let policy = affinity::policy();
+        let authority = Self::format_optional_core(policy.authority_core);
+        let ninedoor = Self::format_core_slice(policy.ninedoor_cores);
+        let provider = Self::format_core_slice(policy.provider_cores);
+        let worker = Self::format_core_slice(policy.worker_cores);
+        let line = format_message(format_args!(
+            "[smp] activity affinity enabled={} max_cores={} authority={} ninedoor={} provider={} worker={}",
+            Self::yes_no(policy.enabled),
+            policy.max_cores,
+            authority.as_str(),
+            ninedoor.as_str(),
+            provider.as_str(),
+            worker.as_str(),
+        ));
+        self.emit_console_line(line.as_str());
+        let drivers = format_message(format_args!(
+            "[smp] activity affinity-drivers serial={} usb={} hdmi={} genet={} cyw43={} rtl8139={} virtio={} sdio={} pcie={}",
+            Self::format_optional_core(policy.drivers.serial).as_str(),
+            Self::format_optional_core(policy.drivers.usb_local_seat).as_str(),
+            Self::format_optional_core(policy.drivers.hdmi_text).as_str(),
+            Self::format_optional_core(policy.drivers.bcmgenet_v5).as_str(),
+            Self::format_optional_core(policy.drivers.cyw43455).as_str(),
+            Self::format_optional_core(policy.drivers.rtl8139).as_str(),
+            Self::format_optional_core(policy.drivers.virtio_net).as_str(),
+            Self::format_optional_core(policy.drivers.sdio_host).as_str(),
+            Self::format_optional_core(policy.drivers.pcie_root).as_str(),
+        ));
+        self.emit_console_line(drivers.as_str());
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    fn emit_smp_activity_affinity(&mut self) {
+        self.emit_console_line("[smp] activity affinity unavailable=host-test");
     }
 
     #[cfg(feature = "kernel")]
@@ -4582,13 +4846,42 @@ where
         }
     }
 
-    #[cfg(feature = "kernel")]
     const fn yes_no(value: bool) -> &'static str {
         if value {
             "yes"
         } else {
             "no"
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_optional_core(value: Option<u8>) -> HeaplessString<16> {
+        let mut buf = HeaplessString::new();
+        match value {
+            Some(value) => {
+                let _ = write!(buf, "{value}");
+            }
+            None => {
+                let _ = buf.push_str("n/a");
+            }
+        }
+        buf
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_core_slice(values: &[u8]) -> HeaplessString<32> {
+        let mut buf = HeaplessString::new();
+        if values.is_empty() {
+            let _ = buf.push_str("n/a");
+            return buf;
+        }
+        for (index, value) in values.iter().enumerate() {
+            if index > 0 {
+                let _ = buf.push(',');
+            }
+            let _ = write!(buf, "{value}");
+        }
+        buf
     }
 
     #[cfg(feature = "kernel")]
@@ -5003,10 +5296,16 @@ where
                     );
                 }
             }
-            Command::Smp => {
-                if self.emit_smp() {
+            Command::Smp { mode } => {
+                if self.emit_smp(mode) {
                     self.metrics.accepted_commands += 1;
-                    self.emit_ack_ok(verb_label, None);
+                    self.emit_ack_ok(
+                        verb_label,
+                        Some(match mode {
+                            SmpMode::Snapshot => "mode=snapshot",
+                            SmpMode::Activity => "mode=activity",
+                        }),
+                    );
                 } else {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
@@ -6136,7 +6435,7 @@ where
             | Command::Quit
             | Command::BootInfo
             | Command::Caps
-            | Command::Smp
+            | Command::Smp { .. }
             | Command::Mem
             | Command::CacheLog { .. }
             | Command::Ping
@@ -7764,6 +8063,119 @@ mod tests {
         assert_eq!(handler.messages.len(), 1);
         assert_eq!(handler.messages[0], message);
         assert_eq!(metrics.bootstrap_messages, 1);
+    }
+
+    #[test]
+    fn smp_activity_emits_userspace_diagnostics_and_hdmi_mirror() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 42,
+        });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 256,
+            buffer_lines: 32,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.serial_mut().driver_mut().push_rx(b"smp activity\n");
+
+        pump.poll();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("[smp] activity begin source=userspace benchmark=off hdmi=mirrored"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[smp] activity pump now_ms="),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .contains("[smp] activity local-seat attached=yes keyboard=usb-kbd0 display=hdmi0"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[smp] activity driver-proof contracts="),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[smp] activity affinity unavailable=host-test"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("OK SMP mode=activity"), "{rendered}");
+        assert!(
+            !rendered.contains("debug scheduler dump begin"),
+            "{rendered}"
+        );
+        drop(pump);
+
+        let mirrored = local_seat.mirrored_lines_snapshot();
+        assert!(mirrored.iter().any(|line| line
+            .contains("[smp] activity begin source=userspace benchmark=off hdmi=mirrored")));
+        assert!(mirrored
+            .iter()
+            .any(|line| line.contains("[smp] activity end")));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn smp_activity_includes_net_telemetry_when_attached() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 7 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.backend = "virtio-net";
+        net.status.mode = "dhcp";
+        net.status.active_interface = "wired";
+        net.status.standby_interface = "none";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.status.ip.push_str("192.168.10.50").unwrap();
+        net.status.gateway.push_str("192.168.10.1").unwrap();
+        net.counters.rx_packets = 3;
+        net.counters.tx_packets = 5;
+        net.counters.tcp_accepts = 2;
+        net.counters.tcp_auth_sessions = 1;
+        net.counters.wifi_host_eapol_start = 1;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().driver_mut().push_rx(b"smp activity\n");
+
+        pump.poll();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("[smp] activity net attached=yes backend=virtio-net"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("ip=192.168.10.50"), "{rendered}");
+        assert!(
+            rendered.contains("[smp] activity net-io rx=3 tx=5"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[smp] activity net-tcp accepts=2 auth=1"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[smp] activity net-wifi assoc=0 link=0 eapol_rx=0 eapol_start=1"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("OK SMP mode=activity"), "{rendered}");
     }
 
     #[test]

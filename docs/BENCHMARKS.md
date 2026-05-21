@@ -46,6 +46,7 @@ No `--mock` mode was used for reported results.
 - The latest repaired Pi REST gateway artifact (`out/bench/pi4-rest-gateway-repair-20260519T214321Z/`) measured about `1.447 s` average, `2.690 s` p95, `6.502 s` max, and zero errors.
 - The QEMU fixed27 reference (`out/bench/qemu-rest-fixed27-20260518T000007Z/`) measured about `0.00885 s` average and `0.0261 s` p95, making the latest Pi Wi-Fi REST run roughly `164x` slower on average and `103x` slower at p95.
 - These numbers are diagnostic baselines, not post-change proof. Any improved-performance claim requires a fresh Pi run that also proves live driver TCBs, Wi-Fi DHCP, clean serial, USB/local-seat responsiveness, and HDMI responsiveness under load.
+- The current offline performance pass changes code-level hot-path shape only: CYW43 data TX token admission is firmware-credit-gated and in-place, GENET compatibility RX/TX service turns are capped, and an explicit `qemu-driver-task-smoke` build can run a post-network full-contract live-TCB smoke probe. These are expected to reduce root-task stalls and improve load fairness, but they are not benchmark results until measured on a freshly flashed Pi 4.
 
 ### Runtime/Config Changes Under Test
 - `apps/root-task/src/ninedoor.rs`

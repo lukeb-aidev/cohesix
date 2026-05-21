@@ -1216,6 +1216,19 @@ pub struct KernelHal<'a> {
 const MAX_KERNEL_DRIVER_TASKS: usize = 9;
 
 #[cfg(feature = "kernel")]
+const DRIVER_TASK_BOOTSTRAP_CONTRACTS: &[DriverTaskContract] = &[
+    SERIAL_DRIVER_TASK_CONTRACT,
+    USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+    HDMI_TEXT_DRIVER_TASK_CONTRACT,
+    GENET_DRIVER_TASK_CONTRACT,
+    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+    RTL8139_DRIVER_TASK_CONTRACT,
+    VIRTIO_NET_DRIVER_TASK_CONTRACT,
+    SDIO_HOST_DRIVER_TASK_CONTRACT,
+    PCIE_ROOT_DRIVER_TASK_CONTRACT,
+];
+
+#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug)]
 struct KernelDriverTaskHandle {
     contract: DriverTaskContract,
@@ -1231,6 +1244,39 @@ struct KernelDriverTaskHandle {
     stack_top: usize,
     affinity_core: Option<u8>,
     started: bool,
+}
+
+#[cfg(feature = "kernel")]
+fn add_driver_task_handle_to_report(
+    report: &mut DriverTaskBootstrapReport,
+    handle: &KernelDriverTaskHandle,
+) {
+    report.configured_count = report.configured_count.saturating_add(1);
+    if handle.started {
+        report.live_tcb_count = report.live_tcb_count.saturating_add(1);
+        report.live_tcb_role_mask |= handle.role_bit;
+    }
+    if handle.affinity_core.is_some() {
+        report.affinity_configured_count = report.affinity_configured_count.saturating_add(1);
+        report.affinity_applied_count = report.affinity_applied_count.saturating_add(1);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn finalize_driver_task_bootstrap_report(
+    report: &mut DriverTaskBootstrapReport,
+    expected_count: usize,
+) {
+    let all_configured = report.configured_count == expected_count && report.failed_count == 0;
+    let all_live = report.live_tcb_count == expected_count;
+    report.capset_proof = all_configured;
+    report.fault_proof = all_configured;
+    report.revoke_proof = all_configured;
+    report.sched_proof = all_configured && all_live;
+    report.affinity_proof = all_configured
+        && report.affinity_configured_count == expected_count
+        && report.affinity_configured_count == report.affinity_applied_count;
+    report.vspace_proof = false;
 }
 
 #[cfg(feature = "kernel")]
@@ -1295,37 +1341,29 @@ impl<'a> KernelHal<'a> {
         &mut self,
         fault_endpoint: seL4_CPtr,
     ) -> DriverTaskBootstrapReport {
-        const CONTRACTS: &[DriverTaskContract] = &[
-            SERIAL_DRIVER_TASK_CONTRACT,
-            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-            HDMI_TEXT_DRIVER_TASK_CONTRACT,
-            GENET_DRIVER_TASK_CONTRACT,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            RTL8139_DRIVER_TASK_CONTRACT,
-            VIRTIO_NET_DRIVER_TASK_CONTRACT,
-            SDIO_HOST_DRIVER_TASK_CONTRACT,
-            PCIE_ROOT_DRIVER_TASK_CONTRACT,
-        ];
-
         let mut report = DriverTaskBootstrapReport {
             broad_caps_leaked: 0,
             ..DriverTaskBootstrapReport::default()
         };
 
-        for contract in CONTRACTS {
+        for contract in DRIVER_TASK_BOOTSTRAP_CONTRACTS {
             match self.create_driver_task(*contract, fault_endpoint) {
                 Ok(handle) => {
-                    report.configured_count = report.configured_count.saturating_add(1);
-                    if handle.started {
-                        report.live_tcb_count = report.live_tcb_count.saturating_add(1);
-                        report.live_tcb_role_mask |= handle.role_bit;
+                    if self.driver_tasks.push(handle).is_err() {
+                        report.failed_count = report.failed_count.saturating_add(1);
+                        let mut line = heapless::String::<192>::new();
+                        let _ = fmt::write(
+                            &mut line,
+                            format_args!(
+                                "DRIVER_TASK_BOOT contract={} role={} status=failed err=driver-task-handle-capacity",
+                                contract.name,
+                                contract.kind.proof_role(),
+                            ),
+                        );
+                        crate::bootstrap::log::force_uart_line(line.as_str());
+                        continue;
                     }
-                    if handle.affinity_core.is_some() {
-                        report.affinity_configured_count =
-                            report.affinity_configured_count.saturating_add(1);
-                        report.affinity_applied_count =
-                            report.affinity_applied_count.saturating_add(1);
-                    }
+                    add_driver_task_handle_to_report(&mut report, &handle);
                     let mut line = heapless::String::<320>::new();
                     let _ = fmt::write(
                         &mut line,
@@ -1345,7 +1383,6 @@ impl<'a> KernelHal<'a> {
                         ),
                     );
                     crate::bootstrap::log::force_uart_line(line.as_str());
-                    let _ = self.driver_tasks.push(handle);
                 }
                 Err(err) => {
                     report.failed_count = report.failed_count.saturating_add(1);
@@ -1366,19 +1403,123 @@ impl<'a> KernelHal<'a> {
 
         // The bootstrap TCBs intentionally share the root VSpace until the next
         // migration step maps code/data/ring pages into dedicated driver VSpaces.
-        let all_configured = report.configured_count == CONTRACTS.len() && report.failed_count == 0;
-        let all_live = report.live_tcb_count == CONTRACTS.len();
-        report.capset_proof = all_configured;
-        report.fault_proof = all_configured;
-        report.revoke_proof = all_configured;
-        report.sched_proof = all_configured;
-        report.affinity_proof = all_configured
-            && report.affinity_configured_count == CONTRACTS.len()
-            && report.affinity_configured_count == report.affinity_applied_count;
-        report.vspace_proof = false;
-        if !all_live {
-            report.sched_proof = false;
+        finalize_driver_task_bootstrap_report(&mut report, DRIVER_TASK_BOOTSTRAP_CONTRACTS.len());
+        self.driver_task_report = report;
+        driver_task::publish_driver_task_bootstrap_report(report);
+        report
+    }
+
+    /// Publishes an inactive driver-task substrate when a profile must preserve
+    /// scarce boot resources for a compatibility path.
+    ///
+    /// Contract declarations remain valid and later proof still fails closed:
+    /// no boot may claim dedicated driver-task isolation from this report.
+    pub fn skip_driver_task_substrate(
+        &mut self,
+        reason: &'static str,
+    ) -> DriverTaskBootstrapReport {
+        let report = DriverTaskBootstrapReport {
+            broad_caps_leaked: 0,
+            ..DriverTaskBootstrapReport::default()
+        };
+        let mut line = heapless::String::<160>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!("DRIVER_TASK_BOOT status=skipped reason={reason}"),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        self.driver_task_report = report;
+        driver_task::publish_driver_task_bootstrap_report(report);
+        report
+    }
+
+    /// Creates a QEMU-only post-network driver-task smoke probe.
+    ///
+    /// QEMU virtio compatibility builds intentionally skip the full pre-network
+    /// substrate so TCP console bring-up keeps enough boot resources. After
+    /// virtio net is already online, this creates the full declared driver-task
+    /// contract set so the QEMU run can prove TCB/cap/affinity mechanics
+    /// without claiming Pi 4 hardware closure or isolated driver VSpaces.
+    pub fn bootstrap_qemu_post_net_driver_task_smoke(
+        &mut self,
+        fault_endpoint: seL4_CPtr,
+    ) -> DriverTaskBootstrapReport {
+        if !self.driver_tasks.is_empty() {
+            let mut line = heapless::String::<192>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contracts={} status=failed err=driver-task-substrate-already-active action=root-task-compatibility",
+                    DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
+                ),
+            );
+            crate::bootstrap::log::force_uart_line(line.as_str());
+            return self.driver_task_report;
         }
+
+        let mut report = DriverTaskBootstrapReport {
+            broad_caps_leaked: 0,
+            ..DriverTaskBootstrapReport::default()
+        };
+
+        for contract in DRIVER_TASK_BOOTSTRAP_CONTRACTS {
+            match self.create_driver_task(*contract, fault_endpoint) {
+                Ok(handle) => {
+                    if self.driver_tasks.push(handle).is_err() {
+                        report.failed_count = report.failed_count.saturating_add(1);
+                        let mut line = heapless::String::<192>::new();
+                        let _ = fmt::write(
+                            &mut line,
+                            format_args!(
+                                "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=failed err=driver-task-handle-capacity action=root-task-compatibility",
+                                contract.name,
+                                contract.kind.proof_role(),
+                            ),
+                        );
+                        crate::bootstrap::log::force_uart_line(line.as_str());
+                        continue;
+                    }
+
+                    add_driver_task_handle_to_report(&mut report, &handle);
+
+                    let mut line = heapless::String::<320>::new();
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root proof=partial",
+                            handle.contract.name,
+                            handle.contract.kind.proof_role(),
+                            handle.tcb,
+                            handle.cnode,
+                            handle.command_endpoint,
+                            handle.notification,
+                            if handle.started { "yes" } else { "no" },
+                            match handle.affinity_core {
+                                Some(core) => core as i32,
+                                None => -1,
+                            },
+                        ),
+                    );
+                    crate::bootstrap::log::force_uart_line(line.as_str());
+                }
+                Err(err) => {
+                    report.failed_count = report.failed_count.saturating_add(1);
+                    let mut line = heapless::String::<192>::new();
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=failed err={} action=root-task-compatibility",
+                            contract.name,
+                            contract.kind.proof_role(),
+                            err,
+                        ),
+                    );
+                    crate::bootstrap::log::force_uart_line(line.as_str());
+                }
+            }
+        }
+
+        finalize_driver_task_bootstrap_report(&mut report, DRIVER_TASK_BOOTSTRAP_CONTRACTS.len());
         self.driver_task_report = report;
         driver_task::publish_driver_task_bootstrap_report(report);
         report
@@ -1889,6 +2030,29 @@ mod tests {
     use super::{irq_notification_badge, Irq, IrqTrigger};
 
     #[cfg(feature = "kernel")]
+    fn fake_driver_task_handle(
+        contract: super::DriverTaskContract,
+        started: bool,
+        affinity_core: Option<u8>,
+    ) -> super::KernelDriverTaskHandle {
+        super::KernelDriverTaskHandle {
+            contract,
+            role_bit: super::driver_task::driver_task_role_bit(contract.kind),
+            tcb: 0x100,
+            cnode: 0x101,
+            command_endpoint: 0x102,
+            notification: 0x103,
+            fault_slot: super::driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+            ipc_frame: 0x104,
+            stack_frame: 0x105,
+            ipc_vaddr: 0x4000_0000,
+            stack_top: 0x4000_1000,
+            affinity_core,
+            started,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     #[test]
     fn irq_notification_badges_are_nonzero_and_irq_derived() {
         assert_eq!(irq_notification_badge(Irq(0)), 1);
@@ -1900,6 +2064,107 @@ mod tests {
     fn irq_trigger_words_match_arm_sel4_contract() {
         assert_eq!(IrqTrigger::Level.arm_trigger_word(), 0);
         assert_eq!(IrqTrigger::Edge.arm_trigger_word(), 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_task_bootstrap_report_covers_full_contract_set() {
+        let mut report = super::DriverTaskBootstrapReport::default();
+        for contract in super::DRIVER_TASK_BOOTSTRAP_CONTRACTS {
+            let handle = fake_driver_task_handle(*contract, true, Some(2));
+            super::add_driver_task_handle_to_report(&mut report, &handle);
+        }
+        super::finalize_driver_task_bootstrap_report(
+            &mut report,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
+        );
+
+        assert_eq!(
+            report.configured_count,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len()
+        );
+        assert_eq!(report.failed_count, 0);
+        assert_eq!(
+            report.live_tcb_count,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len()
+        );
+        assert_eq!(
+            report.live_tcb_role_mask & super::driver_task::REQUIRED_DRIVER_TASK_ROLE_MASK,
+            super::driver_task::REQUIRED_DRIVER_TASK_ROLE_MASK
+        );
+        assert!(report.capset_proof);
+        assert!(report.fault_proof);
+        assert!(report.revoke_proof);
+        assert!(report.sched_proof);
+        assert_eq!(
+            report.affinity_configured_count,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len()
+        );
+        assert_eq!(
+            report.affinity_applied_count,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len()
+        );
+        assert!(report.affinity_proof);
+        assert!(!report.vspace_proof);
+        assert_eq!(report.broad_caps_leaked, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_task_bootstrap_report_fails_when_task_does_not_start() {
+        let mut report = super::DriverTaskBootstrapReport::default();
+        for (index, contract) in super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.iter().enumerate() {
+            let handle = fake_driver_task_handle(*contract, index != 0, Some(2));
+            super::add_driver_task_handle_to_report(&mut report, &handle);
+        }
+        super::finalize_driver_task_bootstrap_report(
+            &mut report,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
+        );
+
+        assert_eq!(
+            report.configured_count,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len()
+        );
+        assert_eq!(
+            report.live_tcb_count,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len() - 1
+        );
+        assert!(report.capset_proof);
+        assert!(report.fault_proof);
+        assert!(report.revoke_proof);
+        assert!(!report.sched_proof);
+        assert!(report.affinity_proof);
+        assert!(!report.vspace_proof);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_task_bootstrap_report_fails_when_contract_is_missing() {
+        let mut report = super::DriverTaskBootstrapReport {
+            failed_count: 1,
+            ..super::DriverTaskBootstrapReport::default()
+        };
+        for contract in super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.iter().skip(1) {
+            let handle = fake_driver_task_handle(*contract, true, Some(2));
+            super::add_driver_task_handle_to_report(&mut report, &handle);
+        }
+        super::finalize_driver_task_bootstrap_report(
+            &mut report,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
+        );
+
+        assert_eq!(
+            report.configured_count,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len() - 1
+        );
+        assert_eq!(report.failed_count, 1);
+        assert!(!report.capset_proof);
+        assert!(!report.fault_proof);
+        assert!(!report.revoke_proof);
+        assert!(!report.sched_proof);
+        assert!(!report.affinity_proof);
+        assert!(!report.vspace_proof);
     }
 
     #[test]

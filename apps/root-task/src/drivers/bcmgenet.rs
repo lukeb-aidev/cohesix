@@ -33,6 +33,8 @@ const MAX_FRAME_LEN: usize = crate::net_consts::MAX_FRAME_LEN;
 const RX_RING_DESCS: usize = HW_TOTAL_DESCS;
 const TX_RING_DESCS: usize = HW_TOTAL_DESCS;
 const RX_READY_CAP: usize = 8;
+const RX_DRAIN_BUDGET: usize = 8;
+const TX_COMPLETION_RECLAIM_BUDGET: usize = 32;
 type RxReadyQueue = Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_READY_CAP>;
 
 const GENET_SYS_OFF: usize = 0x0000;
@@ -1054,7 +1056,8 @@ impl BcmGenetDevice {
             self.log_dma_breadcrumb(BreadcrumbReason::TxConsJump);
         } else {
             let prev_complete = self.counters.tx_complete;
-            for completed_offset in 0..completed as usize {
+            let reclaim = genet_tx_completion_reclaim_count(completed as usize);
+            for completed_offset in 0..reclaim {
                 let slot = ring_slot(
                     self.tx_cons_index.wrapping_add(completed_offset as u16),
                     ring_len,
@@ -1064,13 +1067,13 @@ impl BcmGenetDevice {
             self.counters.tx_used_advances = self
                 .counters
                 .tx_used_advances
-                .saturating_add(completed as u64);
-            self.counters.tx_complete = self.counters.tx_complete.saturating_add(completed as u64);
+                .saturating_add(reclaim as u64);
+            self.counters.tx_complete = self.counters.tx_complete.saturating_add(reclaim as u64);
             if prev_complete == 0 {
                 self.log_dma_breadcrumb(BreadcrumbReason::TxFirstCompletion);
             }
+            self.tx_cons_index = self.tx_cons_index.wrapping_add(reclaim as u16);
         }
-        self.tx_cons_index = new_cons;
         if self.tx_stall_logged {
             self.log_dma_breadcrumb(BreadcrumbReason::TxConsRecovered);
         }
@@ -1253,7 +1256,7 @@ impl BcmGenetDevice {
             return;
         }
 
-        let mut budget = self.rx_ring_len();
+        let mut budget = genet_rx_drain_budget(self.rx_ring_len());
         while budget > 0 && self.rx_ready.len() < RX_READY_CAP {
             let prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
             if prod == self.rx_cons_index {
@@ -1391,6 +1394,22 @@ const fn desc_dma_addr(addr_hi: u32, addr_lo: u32) -> u64 {
 
 const fn should_log_tx_drop(tx_drops: u32) -> bool {
     tx_drops == 1 || (tx_drops % TX_DROP_LOG_INTERVAL) == 0
+}
+
+const fn genet_rx_drain_budget(ring_len: usize) -> usize {
+    if ring_len < RX_DRAIN_BUDGET {
+        ring_len
+    } else {
+        RX_DRAIN_BUDGET
+    }
+}
+
+const fn genet_tx_completion_reclaim_count(completed: usize) -> usize {
+    if completed < TX_COMPLETION_RECLAIM_BUDGET {
+        completed
+    } else {
+        TX_COMPLETION_RECLAIM_BUDGET
+    }
 }
 
 const fn should_log_rx_idle(rx_idle_polls: u32, already_logged: bool) -> bool {
@@ -1638,11 +1657,13 @@ mod tests {
     use crate::net::NetDevice;
 
     use super::{
-        decode_bmcr_speed, decode_rx_length, encode_tx_len_status, ring_distance, ring_slot,
-        rx_owned_len_status, should_emit_repeated_breadcrumb, should_log_rx_idle,
-        should_log_tx_drop, BcmGenetDevice, RxReadyQueue, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG,
-        DMA_EOP, DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100,
-        MII_BMCR_SPEED1000, RX_BUF_LENGTH, UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
+        decode_bmcr_speed, decode_rx_length, encode_tx_len_status, genet_rx_drain_budget,
+        genet_tx_completion_reclaim_count, ring_distance, ring_slot, rx_owned_len_status,
+        should_emit_repeated_breadcrumb, should_log_rx_idle, should_log_tx_drop, BcmGenetDevice,
+        RxReadyQueue, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP, DMA_OWN, DMA_SOP,
+        DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH,
+        RX_DRAIN_BUDGET, TX_COMPLETION_RECLAIM_BUDGET, UMAC_SPEED_10, UMAC_SPEED_100,
+        UMAC_SPEED_1000,
     };
 
     #[test]
@@ -1684,6 +1705,28 @@ mod tests {
             &[0xbb, 0x02]
         );
         assert!(super::pop_rx_ready_frame(&mut queue).is_none());
+    }
+
+    #[test]
+    fn rx_drain_budget_caps_one_service_turn() {
+        assert_eq!(genet_rx_drain_budget(0), 0);
+        assert_eq!(genet_rx_drain_budget(4), 4);
+        assert_eq!(genet_rx_drain_budget(RX_DRAIN_BUDGET), RX_DRAIN_BUDGET);
+        assert_eq!(genet_rx_drain_budget(RX_DRAIN_BUDGET + 1), RX_DRAIN_BUDGET);
+    }
+
+    #[test]
+    fn tx_completion_reclaim_budget_caps_one_service_turn() {
+        assert_eq!(genet_tx_completion_reclaim_count(0), 0);
+        assert_eq!(genet_tx_completion_reclaim_count(4), 4);
+        assert_eq!(
+            genet_tx_completion_reclaim_count(TX_COMPLETION_RECLAIM_BUDGET),
+            TX_COMPLETION_RECLAIM_BUDGET
+        );
+        assert_eq!(
+            genet_tx_completion_reclaim_count(TX_COMPLETION_RECLAIM_BUDGET + 1),
+            TX_COMPLETION_RECLAIM_BUDGET
+        );
     }
 
     #[test]

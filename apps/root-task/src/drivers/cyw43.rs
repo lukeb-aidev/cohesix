@@ -2045,6 +2045,18 @@ fn cyw43_data_tx_allowed(link_up: bool, host_eapol_secure: bool, state: Deferred
 }
 
 #[inline]
+fn cyw43_runtime_tx_token_allowed(
+    link_up: bool,
+    host_eapol_secure: bool,
+    state: DeferredJoinState,
+    sdpcm_seq: u8,
+    sdpcm_seq_max: u8,
+) -> bool {
+    cyw43_data_tx_allowed(link_up, host_eapol_secure, state)
+        && has_sdpcm_credit(sdpcm_seq, sdpcm_seq_max)
+}
+
+#[inline]
 fn cyw43_data_rx_allowed(host_eapol_secure: bool, state: DeferredJoinState) -> bool {
     host_eapol_secure || !deferred_join_forces_eapol_only_rx(state)
 }
@@ -6412,6 +6424,92 @@ impl Cyw43NetDevice {
         Ok(proof)
     }
 
+    fn transmit_runtime_filled<R, F>(
+        &mut self,
+        len: usize,
+        f: F,
+    ) -> (R, Result<SdpcmTxProof, DriverError>)
+    where
+        F: FnOnce(&mut [u8]) -> R,
+    {
+        let packet_len = len.min(MAX_FRAME_LEN);
+        let total_len = SDPCM_DATA_TX_HEADER_LEN
+            .checked_add(SDPCM_DATA_TX_PADDING_LEN)
+            .and_then(|value| value.checked_add(BDC_HEADER_LEN))
+            .and_then(|value| value.checked_add(packet_len))
+            .unwrap_or(usize::MAX);
+        let aligned_len = align4(total_len);
+        let bdc_offset = SDPCM_DATA_TX_HEADER_LEN + SDPCM_DATA_TX_PADDING_LEN;
+        let payload_offset = bdc_offset + BDC_HEADER_LEN;
+
+        if aligned_len > self.tx_frame.len()
+            || payload_offset.saturating_add(packet_len) > self.tx_frame.len()
+        {
+            let result = f(&mut []);
+            return (result, Err(DriverError::FrameTooLarge));
+        }
+
+        self.tx_frame[..aligned_len].fill(0);
+        let result = f(&mut self.tx_frame[payload_offset..payload_offset + packet_len]);
+
+        if !self.has_credit() {
+            return (
+                result,
+                Err(DriverError::Protocol("sdpcm-credit-unavailable")),
+            );
+        }
+
+        let seq = self.sdpcm_seq;
+        let proof = SdpcmTxProof {
+            seq,
+            credit_observation: self.sdpcm_credit_observations,
+        };
+        self.sdpcm_seq = self.sdpcm_seq.wrapping_add(1);
+
+        if let Err(err) = write_sdpcm_data_tx_header(self.tx_frame.as_mut(), total_len, seq) {
+            return (result, Err(err));
+        }
+
+        let (bdc_priority, eapol_dst) = {
+            let packet = &self.tx_frame[payload_offset..payload_offset + packet_len];
+            (
+                bdc_priority_for_packet(packet),
+                if ethernet_ethertype(packet) == Some(ETH_P_EAPOL) {
+                    Some(ethernet_dst(packet).unwrap_or([0; ETHER_ADDR_LEN]))
+                } else {
+                    None
+                },
+            )
+        };
+        self.tx_frame[bdc_offset] = BDC_VERSION << BDC_VERSION_SHIFT;
+        self.tx_frame[bdc_offset + 1] = bdc_priority;
+        self.tx_frame[bdc_offset + 2] = 0;
+        self.tx_frame[bdc_offset + 3] = 0;
+        if let Some(dst) = eapol_dst {
+            info!(
+                "[cyw43] host-eapol action=data-tx-shape eth_len={} sdpcm_len={} aligned_len={} data_offset={} bdc_priority={} dst={} seq={} result=linux-bcdc-priority",
+                packet_len,
+                total_len,
+                aligned_len,
+                bdc_offset,
+                bdc_priority,
+                EthernetAddress(dst),
+                seq,
+            );
+        }
+
+        match self
+            .state
+            .write_cyw43_frame(&mut self.tx_frame[..aligned_len])
+        {
+            Ok(()) => {
+                self.tx_packets = self.tx_packets.saturating_add(1);
+                (result, Ok(proof))
+            }
+            Err(err) => (result, Err(DriverError::from(err))),
+        }
+    }
+
     fn payload_mut(&mut self, payload_len: usize) -> Result<&mut [u8], DriverError> {
         if payload_len > self.payload_capacity() {
             return Err(DriverError::FrameTooLarge);
@@ -6461,10 +6559,8 @@ impl<'a> phy::TxToken for TxToken<'a> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let mut temp = [0u8; MAX_FRAME_LEN];
-        let frame = &mut temp[..len.min(MAX_FRAME_LEN)];
-        let result = f(frame);
-        if let Err(err) = self.device.transmit(frame) {
+        let (result, tx_result) = self.device.transmit_runtime_filled(len, f);
+        if let Err(err) = tx_result {
             self.device.tx_drops = self.device.tx_drops.saturating_add(1);
             warn!("[cyw43] tx error: {err}");
         }
@@ -6488,10 +6584,12 @@ impl Device for Cyw43NetDevice {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        if cyw43_data_tx_allowed(
+        if cyw43_runtime_tx_token_allowed(
             self.link_up,
             self.host_eapol_secure_complete(),
             self.deferred_join_state,
+            self.sdpcm_seq,
+            self.sdpcm_seq_max,
         ) {
             Some(TxToken { device: self })
         } else {
@@ -7196,13 +7294,14 @@ mod tests {
         control_plane_retry_after_startup_link_reply_failure_target_clock_hz,
         control_response_copy_len, control_response_matches, control_tx_payload_offset_for_header,
         copy_packet_to_heapless, cyw43_bringup_status_label, cyw43_data_rx_allowed,
-        cyw43_data_tx_allowed, cyw43_queued_glom_data_allowed, deferred_join_allows_rx_polling,
-        deferred_join_bringup_status_label, deferred_join_forces_eapol_only_rx,
-        deferred_join_poll_limit, deferred_join_requires_host_eapol, derive_host_snonce,
-        derive_wpa2_pairwise_ptk, derive_wpa2_psk_pmk, eapol_key_data_contains_compatible_rsn_ie,
-        eapol_key_data_contains_ie, eapol_replay_counter_increases, event_association_state_update,
-        event_link_state_update, event_msgs_ext_payload_len, find_gtk_kde,
-        firmware_mac_address_from_response, firmware_supplicant_disable_allows_failure,
+        cyw43_data_tx_allowed, cyw43_queued_glom_data_allowed, cyw43_runtime_tx_token_allowed,
+        deferred_join_allows_rx_polling, deferred_join_bringup_status_label,
+        deferred_join_forces_eapol_only_rx, deferred_join_poll_limit,
+        deferred_join_requires_host_eapol, derive_host_snonce, derive_wpa2_pairwise_ptk,
+        derive_wpa2_psk_pmk, eapol_key_data_contains_compatible_rsn_ie, eapol_key_data_contains_ie,
+        eapol_replay_counter_increases, event_association_state_update, event_link_state_update,
+        event_msgs_ext_payload_len, find_gtk_kde, firmware_mac_address_from_response,
+        firmware_supplicant_disable_allows_failure,
         first_control_plane_retry_after_promoted_timeout,
         first_control_plane_retry_after_startup_link_reply_failure, glom_descriptor_subframe_len,
         glom_subframe_end, glom_warning_budget_allows, has_sdpcm_credit,
@@ -10531,6 +10630,40 @@ mod tests {
         assert!(has_sdpcm_credit(1, 2));
         assert!(has_sdpcm_credit(u8::MAX, 0));
         assert!(!has_sdpcm_credit(2, 1));
+    }
+
+    #[test]
+    fn runtime_tx_token_requires_link_policy_and_firmware_credit() {
+        assert!(cyw43_runtime_tx_token_allowed(
+            true,
+            true,
+            DeferredJoinState::Disabled,
+            1,
+            2
+        ));
+        assert!(!cyw43_runtime_tx_token_allowed(
+            false,
+            true,
+            DeferredJoinState::Disabled,
+            1,
+            2
+        ));
+        assert!(!cyw43_runtime_tx_token_allowed(
+            true,
+            true,
+            DeferredJoinState::Disabled,
+            1,
+            1
+        ));
+        assert!(!cyw43_runtime_tx_token_allowed(
+            true,
+            false,
+            DeferredJoinState::Failed {
+                reason: "host-eapol-required",
+            },
+            1,
+            2
+        ));
     }
 
     #[test]

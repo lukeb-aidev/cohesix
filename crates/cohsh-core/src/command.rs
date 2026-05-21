@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Console command parser and rate limiter shared across Cohesix.
 // Author: Lukas Bower
@@ -27,6 +27,26 @@ pub const MAX_ID_LEN: usize = 32;
 /// Maximum number of characters accepted for echo payloads.
 pub const MAX_ECHO_LEN: usize = 224;
 
+/// Diagnostic mode selected for the `smp` console command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SmpMode {
+    /// Kernel debug scheduler/CPU snapshot, available only in debug-kernel builds.
+    Snapshot,
+    /// Userspace activity snapshot sourced from bounded root-task telemetry.
+    Activity,
+}
+
+impl SmpMode {
+    /// Stable label used in diagnostics and ACK details.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Snapshot => "snapshot",
+            Self::Activity => "activity",
+        }
+    }
+}
+
 const MAX_FAILED_LOGINS: u32 = 3;
 const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
 const COOLDOWN_MS: u64 = 90_000;
@@ -38,7 +58,9 @@ pub enum Command {
     Help,
     BootInfo,
     Caps,
-    Smp,
+    Smp {
+        mode: SmpMode,
+    },
     Mem,
     Ping,
     Test,
@@ -78,7 +100,7 @@ impl Command {
             Self::Help => ConsoleVerb::Help,
             Self::BootInfo => ConsoleVerb::BootInfo,
             Self::Caps => ConsoleVerb::Caps,
-            Self::Smp => ConsoleVerb::Smp,
+            Self::Smp { .. } => ConsoleVerb::Smp,
             Self::Mem => ConsoleVerb::Mem,
             Self::Ping => ConsoleVerb::Ping,
             Self::Test => ConsoleVerb::Test,
@@ -259,7 +281,9 @@ fn parse_line_inner(line: &str) -> Result<Command, ConsoleError> {
         ConsoleVerb::Help => Ok(Command::Help),
         ConsoleVerb::BootInfo => Ok(Command::BootInfo),
         ConsoleVerb::Caps => Ok(Command::Caps),
-        ConsoleVerb::Smp => Ok(Command::Smp),
+        ConsoleVerb::Smp => Ok(Command::Smp {
+            mode: parse_smp_mode(remainder)?,
+        }),
         ConsoleVerb::Mem => Ok(Command::Mem),
         ConsoleVerb::Ping => Ok(Command::Ping),
         ConsoleVerb::Test => {
@@ -389,6 +413,21 @@ fn parse_line_inner(line: &str) -> Result<Command, ConsoleError> {
     }
 }
 
+fn parse_smp_mode(remainder: &str) -> Result<SmpMode, ConsoleError> {
+    let mut tokens = remainder.split_whitespace();
+    let Some(mode) = tokens.next() else {
+        return Ok(SmpMode::Snapshot);
+    };
+    if tokens.next().is_some() {
+        return Err(ConsoleError::InvalidValue("smp"));
+    }
+    if mode.eq_ignore_ascii_case("activity") {
+        Ok(SmpMode::Activity)
+    } else {
+        Err(ConsoleError::InvalidValue("smp"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,7 +461,9 @@ mod tests {
             Command::Help,
             Command::BootInfo,
             Command::Caps,
-            Command::Smp,
+            Command::Smp {
+                mode: SmpMode::Snapshot,
+            },
             Command::Mem,
             Command::Ping,
             Command::Test,
@@ -462,6 +503,44 @@ mod tests {
         assert_eq!(
             parse("attach\n").unwrap_err(),
             ConsoleError::MissingArgument("role")
+        );
+    }
+
+    #[test]
+    fn smp_defaults_to_snapshot_mode() {
+        assert_eq!(
+            parse("smp\n").unwrap(),
+            Command::Smp {
+                mode: SmpMode::Snapshot
+            }
+        );
+    }
+
+    #[test]
+    fn smp_activity_mode_parses() {
+        assert_eq!(
+            parse("smp activity\n").unwrap(),
+            Command::Smp {
+                mode: SmpMode::Activity
+            }
+        );
+        assert_eq!(
+            parse("smp ACTIVITY\n").unwrap(),
+            Command::Smp {
+                mode: SmpMode::Activity
+            }
+        );
+    }
+
+    #[test]
+    fn smp_rejects_profile_or_extra_arguments() {
+        assert_eq!(
+            parse("smp profile\n").unwrap_err(),
+            ConsoleError::InvalidValue("smp")
+        );
+        assert_eq!(
+            parse("smp activity extra\n").unwrap_err(),
+            ConsoleError::InvalidValue("smp")
         );
     }
 
