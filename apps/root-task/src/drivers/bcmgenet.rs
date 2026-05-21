@@ -17,7 +17,7 @@ use core::hint::spin_loop;
 use core::ops::Range;
 use core::sync::atomic::{compiler_fence, fence, Ordering};
 
-use heapless::Vec as HeaplessVec;
+use heapless::{Deque, Vec as HeaplessVec};
 use log::{debug, info, warn};
 use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
@@ -33,6 +33,7 @@ const MAX_FRAME_LEN: usize = crate::net_consts::MAX_FRAME_LEN;
 const RX_RING_DESCS: usize = HW_TOTAL_DESCS;
 const TX_RING_DESCS: usize = HW_TOTAL_DESCS;
 const RX_READY_CAP: usize = 8;
+type RxReadyQueue = Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_READY_CAP>;
 
 const GENET_SYS_OFF: usize = 0x0000;
 const GENET_EXT_OFF: usize = 0x0080;
@@ -274,7 +275,7 @@ pub struct BcmGenetDevice {
     tx_prod_index: u16,
     tx_cons_index: u16,
     rx_cons_index: u16,
-    rx_ready: HeaplessVec<HeaplessVec<u8, MAX_FRAME_LEN>, RX_READY_CAP>,
+    rx_ready: RxReadyQueue,
     mac: EthernetAddress,
     dma_cacheable: bool,
     tx_drops: u32,
@@ -350,7 +351,7 @@ impl BcmGenetDevice {
             tx_prod_index: 0,
             tx_cons_index: 0,
             rx_cons_index: 0,
-            rx_ready: HeaplessVec::new(),
+            rx_ready: Deque::new(),
             mac: EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x01]),
             dma_cacheable,
             tx_drops: 0,
@@ -1244,11 +1245,7 @@ impl BcmGenetDevice {
     fn poll_rx(&mut self) -> Option<HeaplessVec<u8, MAX_FRAME_LEN>> {
         self.poll_tx_completions();
         self.drain_rx_ready();
-        if self.rx_ready.is_empty() {
-            None
-        } else {
-            Some(self.rx_ready.remove(0))
-        }
+        pop_rx_ready_frame(&mut self.rx_ready)
     }
 
     fn drain_rx_ready(&mut self) {
@@ -1329,7 +1326,7 @@ impl BcmGenetDevice {
                     self.rx_cons_index,
                     &frame[..frame.len().min(8)]
                 );
-                let _ = self.rx_ready.push(frame);
+                let _ = push_rx_ready_frame(&mut self.rx_ready, frame);
             }
             budget = budget.saturating_sub(1);
         }
@@ -1375,6 +1372,17 @@ const fn ring_slot(index: u16, slots: usize) -> usize {
 
 const fn ring_distance(newer: u16, older: u16) -> u16 {
     newer.wrapping_sub(older)
+}
+
+fn push_rx_ready_frame(
+    queue: &mut RxReadyQueue,
+    frame: HeaplessVec<u8, MAX_FRAME_LEN>,
+) -> Result<(), HeaplessVec<u8, MAX_FRAME_LEN>> {
+    queue.push_back(frame)
+}
+
+fn pop_rx_ready_frame(queue: &mut RxReadyQueue) -> Option<HeaplessVec<u8, MAX_FRAME_LEN>> {
+    queue.pop_front()
 }
 
 const fn desc_dma_addr(addr_hi: u32, addr_lo: u32) -> u64 {
@@ -1632,8 +1640,8 @@ mod tests {
     use super::{
         decode_bmcr_speed, decode_rx_length, encode_tx_len_status, ring_distance, ring_slot,
         rx_owned_len_status, should_emit_repeated_breadcrumb, should_log_rx_idle,
-        should_log_tx_drop, BcmGenetDevice, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP,
-        DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100,
+        should_log_tx_drop, BcmGenetDevice, RxReadyQueue, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG,
+        DMA_EOP, DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100,
         MII_BMCR_SPEED1000, RX_BUF_LENGTH, UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
     };
 
@@ -1654,6 +1662,28 @@ mod tests {
     fn ring_distance_handles_wrap() {
         assert_eq!(ring_distance(10, 7), 3);
         assert_eq!(ring_distance(0, u16::MAX), 1);
+    }
+
+    #[test]
+    fn rx_ready_queue_pops_fifo_without_shift_remove() {
+        let mut queue = RxReadyQueue::new();
+        let mut first = heapless::Vec::<u8, { crate::net_consts::MAX_FRAME_LEN }>::new();
+        let mut second = heapless::Vec::<u8, { crate::net_consts::MAX_FRAME_LEN }>::new();
+        first.extend_from_slice(&[0xaa, 0x01]).unwrap();
+        second.extend_from_slice(&[0xbb, 0x02]).unwrap();
+
+        super::push_rx_ready_frame(&mut queue, first).unwrap();
+        super::push_rx_ready_frame(&mut queue, second).unwrap();
+
+        assert_eq!(
+            super::pop_rx_ready_frame(&mut queue).unwrap().as_slice(),
+            &[0xaa, 0x01]
+        );
+        assert_eq!(
+            super::pop_rx_ready_frame(&mut queue).unwrap().as_slice(),
+            &[0xbb, 0x02]
+        );
+        assert!(super::pop_rx_ready_frame(&mut queue).is_none());
     }
 
     #[test]

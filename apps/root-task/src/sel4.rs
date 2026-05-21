@@ -5200,7 +5200,7 @@ impl<'a> KernelEnv<'a> {
         }
 
         if result == sel4_sys::seL4_FailedLookup {
-            self.ensure_page_table(vaddr, strict)?;
+            self.ensure_page_table(vaddr)?;
             if self.ipcbuf_trace {
                 crate::bp!("ipcbuf.page.map.retry");
             }
@@ -5398,8 +5398,8 @@ impl<'a> KernelEnv<'a> {
             .ok_or(seL4_NotEnoughMemory)
     }
 
-    fn ensure_page_table(&mut self, vaddr: usize, strict: bool) -> Result<(), seL4_Error> {
-        self.ensure_page_directory(vaddr, strict)?;
+    fn ensure_page_table(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
+        self.ensure_page_directory(vaddr)?;
         let pt_base = PageTableBookkeeper::<MAX_PAGE_TABLES>::base_for(vaddr);
         if self.page_tables.contains_base(pt_base) {
             return Ok(());
@@ -5451,7 +5451,11 @@ impl<'a> KernelEnv<'a> {
         }
         self.release_reserved_page_table(&reserved);
 
-        if !strict && Self::mapping_already_present(map_res) {
+        if Self::mapping_already_present(map_res) {
+            // The kernel may boot with intermediate tables already installed
+            // for the selected root-task window. Keep final frame mappings
+            // strict in `map_frame`; only the intermediate table collision is
+            // accepted here.
             log::trace!(
                 "[cohesix:root-task] page table already mapped @ 0x{base:08x}",
                 base = pt_base
@@ -5470,13 +5474,13 @@ impl<'a> KernelEnv<'a> {
         Err(map_res)
     }
 
-    fn ensure_page_directory(&mut self, vaddr: usize, strict: bool) -> Result<(), seL4_Error> {
+    fn ensure_page_directory(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
         let pd_base = PageDirectoryBookkeeper::<MAX_PAGE_DIRECTORIES>::base_for(vaddr);
         if self.page_directories.contains_base(pd_base) {
             return Ok(());
         }
 
-        self.ensure_page_upper_directory(vaddr, strict)?;
+        self.ensure_page_upper_directory(vaddr)?;
 
         let reserved = self.reserve_page_table_for_vaddr(pd_base, vaddr, "page_directory")?;
         let pd_slot = self.allocate_slot();
@@ -5518,7 +5522,9 @@ impl<'a> KernelEnv<'a> {
         }
         self.untyped.release(&reserved);
 
-        if !strict && Self::mapping_already_present(map_res) {
+        if Self::mapping_already_present(map_res) {
+            // The final page mapping remains strict; this accepts only a
+            // boot-seeded intermediate directory at the selected VSpace slot.
             log::trace!(
                 "[cohesix:root-task] page directory already mapped @ 0x{base:08x}",
                 base = pd_base
@@ -5533,11 +5539,7 @@ impl<'a> KernelEnv<'a> {
         Err(map_res)
     }
 
-    fn ensure_page_upper_directory(
-        &mut self,
-        vaddr: usize,
-        strict: bool,
-    ) -> Result<(), seL4_Error> {
+    fn ensure_page_upper_directory(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
         let pud_base = PageUpperDirectoryBookkeeper::<MAX_PAGE_UPPER_DIRECTORIES>::base_for(vaddr);
         if self.page_upper_directories.contains_base(pud_base) {
             return Ok(());
@@ -5584,7 +5586,9 @@ impl<'a> KernelEnv<'a> {
         }
         self.untyped.release(&reserved);
 
-        if !strict && Self::mapping_already_present(map_res) {
+        if Self::mapping_already_present(map_res) {
+            // Treat a pre-existing intermediate directory as discovered boot
+            // state, not as final frame aliasing.
             log::trace!(
                 "[cohesix:root-task] page upper directory already mapped @ 0x{base:08x}",
                 base = pud_base
@@ -5899,6 +5903,22 @@ mod tests {
         }
 
         assert_eq!(error_name(42), "seL4_UnknownError");
+    }
+
+    #[test]
+    fn boot_seeded_intermediate_mapping_errors_are_recognized() {
+        assert!(KernelEnv::mapping_already_present(
+            sel4_sys::seL4_DeleteFirst
+        ));
+        assert!(KernelEnv::mapping_already_present(
+            sel4_sys::seL4_IllegalOperation
+        ));
+        assert!(!KernelEnv::mapping_already_present(
+            sel4_sys::seL4_FailedLookup
+        ));
+        assert!(!KernelEnv::mapping_already_present(
+            sel4_sys::seL4_InvalidArgument
+        ));
     }
 
     #[test]

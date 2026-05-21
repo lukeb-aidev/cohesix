@@ -209,9 +209,9 @@ def main() -> int:
             "cache_labels_use_sel4_aarch64_vspace_invocations",
         ],
         "apps/root-task/src/hal/driver_task.rs": [
-            "builtin_driver_task_contracts_are_valid_and_mark_current_compatibility",
+            "builtin_driver_task_contracts_are_valid_and_dedicated",
             "priority_order_matches_sel4_and_cooperative_service_rules",
-            "builtin_isolation_summary_does_not_fake_dedicated_tasks",
+            "builtin_isolation_summary_requires_runtime_proof_for_acceptance",
         ],
         "apps/root-task/src/hal/pci.rs": [
             "topology_find_by_id_matches_expected_device",

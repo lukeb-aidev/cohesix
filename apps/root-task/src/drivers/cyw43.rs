@@ -54,7 +54,7 @@ const BDC_HEADER_LEN: usize = 4;
 const SDPCM_DATA_TX_PADDING_LEN: usize = 6;
 const HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 
-const FRAME_BUF_LEN: usize = 2112;
+const FRAME_BUF_LEN: usize = 8192;
 const CONTROL_RESPONSE_BUF_LEN: usize = 2048;
 const CLM_CHUNK_SIZE: usize = 1400;
 const CLM_IOVAR_NAME_LEN: usize = 8;
@@ -87,8 +87,8 @@ const HOST_EAPOL_JOIN_SUBMIT_PROOF_POLLS: usize =
 const HOST_EAPOL_WAIT_M1_STAGE: &str = "join-security-host-eapol-wait-m1";
 const CREDIT_WAIT_LOOPS: usize = 2_000;
 const RX_PUMP_LIMIT: usize = 8;
-const RX_GLOM_SUBFRAME_CAP: usize = 8;
-const RX_GLOM_QUEUE_CAP: usize = 4;
+const RX_GLOM_SUBFRAME_CAP: usize = 16;
+const RX_GLOM_QUEUE_CAP: usize = 16;
 const RX_GLOM_WARNING_LOG_LIMIT: u8 = 4;
 const RX_OVERSIZE_WARNING_LOG_LIMIT: u8 = 4;
 const LINUX_STARTUP_STATUS_DRAIN_BUDGET: usize = 2;
@@ -2875,7 +2875,7 @@ pub struct Cyw43NetDevice {
     tx_frame: Box<[u8; FRAME_BUF_LEN]>,
     control_response: Box<[u8; CONTROL_RESPONSE_BUF_LEN]>,
     glom_subframe_lens: HeaplessVec<u16, RX_GLOM_SUBFRAME_CAP>,
-    glom_rx_ready: Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_GLOM_QUEUE_CAP>,
+    glom_rx_ready: Box<Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_GLOM_QUEUE_CAP>>,
     glom_warning_logs: u8,
     rx_oversize_warning_logs: u8,
 }
@@ -3047,7 +3047,7 @@ impl Cyw43NetDevice {
             tx_frame: Box::new([0; FRAME_BUF_LEN]),
             control_response: Box::new([0; CONTROL_RESPONSE_BUF_LEN]),
             glom_subframe_lens: HeaplessVec::new(),
-            glom_rx_ready: Deque::new(),
+            glom_rx_ready: Box::new(Deque::new()),
             glom_warning_logs: 0,
             rx_oversize_warning_logs: 0,
         };
@@ -7278,15 +7278,15 @@ mod tests {
         IOCTL_WAIT_LOOPS_STARTUP_LINK_RESCUE_REPEAT, IOCTL_WAIT_LOOPS_STARTUP_LINK_STABILIZED,
         LINUX_BSSCFG_JOIN_PAYLOAD_LEN, LINUX_EXT_JOIN_ASSOC_OFFSET, LINUX_EXT_JOIN_PARAMS_LEN,
         LINUX_EXT_JOIN_SCAN_OFFSET, LINUX_EXT_JOIN_SSID_OFFSET, LINUX_REVINFO_LEN, PAE_GROUP_ADDR,
-        RX_GLOM_WARNING_LOG_LIMIT, RX_OVERSIZE_WARNING_LOG_LIMIT, SDIO_DATA_CLOCK_HZ,
-        SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN, SDPCM_CONTROL_TX_HEADER_LEN,
-        SDPCM_DATA_TX_HEADER_LEN, SDPCM_DATA_TX_PADDING_LEN, SDPCM_DATA_TX_SW_HEADER_OFFSET,
-        SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_FAIL, STATUS_NO_NETWORKS, STATUS_SUCCESS,
-        STATUS_UNSOLICITED, WME_BSS_DISABLE_RSN_DEFAULT, WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK,
-        WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WPA_KCK_LEN, WPA_NONCE_LEN, WPA_PTK_LEN,
-        WPA_REPLAY_COUNTER_LEN, WPA_TK_LEN, WSEC_FLAG_PASSPHRASE, WSEC_KEY_ALGO_OFFSET,
-        WSEC_KEY_DATA_OFFSET, WSEC_KEY_EA_OFFSET, WSEC_KEY_LEN_OFFSET, WSEC_KEY_PAYLOAD_LEN,
-        WSEC_LEGACY_HEX_PMK_LEN, WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
+        RX_GLOM_SUBFRAME_CAP, RX_GLOM_WARNING_LOG_LIMIT, RX_OVERSIZE_WARNING_LOG_LIMIT,
+        SDIO_DATA_CLOCK_HZ, SDIO_STARTUP_CLOCK_HZ, SDPCM_CONTROL_TX_EXT_HEADER_LEN,
+        SDPCM_CONTROL_TX_HEADER_LEN, SDPCM_DATA_TX_HEADER_LEN, SDPCM_DATA_TX_PADDING_LEN,
+        SDPCM_DATA_TX_SW_HEADER_OFFSET, SDPCM_HEADER_LEN, STATUS_ABORT, STATUS_FAIL,
+        STATUS_NO_NETWORKS, STATUS_SUCCESS, STATUS_UNSOLICITED, WME_BSS_DISABLE_RSN_DEFAULT,
+        WPA2_PSK_CCMP_RSN_IE, WPA_AUTH_WPA2_PSK, WPA_AUTH_WPA2_PSK_OR_UNSPECIFIED, WPA_KCK_LEN,
+        WPA_NONCE_LEN, WPA_PTK_LEN, WPA_REPLAY_COUNTER_LEN, WPA_TK_LEN, WSEC_FLAG_PASSPHRASE,
+        WSEC_KEY_ALGO_OFFSET, WSEC_KEY_DATA_OFFSET, WSEC_KEY_EA_OFFSET, WSEC_KEY_LEN_OFFSET,
+        WSEC_KEY_PAYLOAD_LEN, WSEC_LEGACY_HEX_PMK_LEN, WSEC_PMK_LEN, WSEC_PMK_PAYLOAD_LEN,
     };
     use crate::hal::HalError;
     use crate::net::NetDevice;
@@ -9071,13 +9071,34 @@ mod tests {
 
     #[test]
     fn rx_glom_descriptor_rejects_unbounded_superframes() {
-        let too_many = [
-            32u8, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0, 32, 0,
-        ];
+        let mut bounded = [0u8; RX_GLOM_SUBFRAME_CAP * 2];
+        for chunk in bounded.chunks_exact_mut(2) {
+            chunk[0] = 32;
+        }
+        assert_eq!(
+            parse_glom_descriptor_lengths(&bounded)
+                .expect("bounded descriptor fits")
+                .len(),
+            RX_GLOM_SUBFRAME_CAP
+        );
+
+        let mut too_many = [0u8; (RX_GLOM_SUBFRAME_CAP + 1) * 2];
+        for chunk in too_many.chunks_exact_mut(2) {
+            chunk[0] = 32;
+        }
 
         assert!(matches!(
             parse_glom_descriptor_lengths(&too_many),
             Err(DriverError::Protocol("cyw43-rxglom-descriptor-overflow"))
+        ));
+
+        let mut oversized = [0u8; RX_GLOM_SUBFRAME_CAP * 2];
+        for chunk in oversized.chunks_exact_mut(2) {
+            chunk.copy_from_slice(&600u16.to_le_bytes());
+        }
+        assert!(matches!(
+            parse_glom_descriptor_lengths(&oversized),
+            Err(DriverError::Protocol("cyw43-rxglom-superframe-oversize"))
         ));
     }
 

@@ -856,6 +856,28 @@ def parse_args() -> argparse.Namespace:
         help="Override hive-gateway pooled telemetry sessions (optional).",
     )
     launch.add_argument(
+        "--gateway-broker-control-response-timeout-ms",
+        "--gateway-broker-control-timeout-ms",
+        dest="gateway_broker_control_response_timeout_ms",
+        type=int,
+        default=None,
+        help=(
+            "Override hive-gateway control broker response timeout in milliseconds "
+            "(optional)."
+        ),
+    )
+    launch.add_argument(
+        "--gateway-broker-telemetry-response-timeout-ms",
+        "--gateway-broker-telemetry-timeout-ms",
+        dest="gateway_broker_telemetry_response_timeout_ms",
+        type=int,
+        default=None,
+        help=(
+            "Override hive-gateway telemetry broker response timeout in milliseconds "
+            "(optional)."
+        ),
+    )
+    launch.add_argument(
         "--no-gateway",
         action="store_true",
         help="Skip launching hive-gateway (assume already running).",
@@ -1120,6 +1142,20 @@ def parse_args() -> argparse.Namespace:
                 1,
                 512,
                 "gateway-pool-telemetry-sessions",
+            )
+        if args.gateway_broker_control_response_timeout_ms is not None:
+            args.gateway_broker_control_response_timeout_ms = clamp_int(
+                args.gateway_broker_control_response_timeout_ms,
+                5000,
+                1_200_000,
+                "gateway-broker-control-response-timeout-ms",
+            )
+        if args.gateway_broker_telemetry_response_timeout_ms is not None:
+            args.gateway_broker_telemetry_response_timeout_ms = clamp_int(
+                args.gateway_broker_telemetry_response_timeout_ms,
+                5000,
+                1_200_000,
+                "gateway-broker-telemetry-response-timeout-ms",
             )
 
     return args
@@ -2357,6 +2393,26 @@ def run_simulation(args: argparse.Namespace) -> int:
                         str(args.gateway_pool_telemetry_sessions),
                     ]
                 )
+            if args.gateway_broker_control_response_timeout_ms is not None:
+                env["HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS"] = str(
+                    args.gateway_broker_control_response_timeout_ms
+                )
+                gateway_cmd.extend(
+                    [
+                        "--broker-control-response-timeout-ms",
+                        str(args.gateway_broker_control_response_timeout_ms),
+                    ]
+                )
+            if args.gateway_broker_telemetry_response_timeout_ms is not None:
+                env["HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS"] = str(
+                    args.gateway_broker_telemetry_response_timeout_ms
+                )
+                gateway_cmd.extend(
+                    [
+                        "--broker-telemetry-response-timeout-ms",
+                        str(args.gateway_broker_telemetry_response_timeout_ms),
+                    ]
+                )
             gateway_proc = launch_process(
                 gateway_cmd,
                 env,
@@ -2432,6 +2488,10 @@ def run_simulation(args: argparse.Namespace) -> int:
             f"strict_control_errors={'on' if args.strict_control_errors else 'off'} "
             f"gateway_pool_control={args.gateway_pool_control_sessions or 'default'} "
             f"gateway_pool_telemetry={args.gateway_pool_telemetry_sessions or 'default'} "
+            f"gateway_broker_control_response_timeout_ms="
+            f"{args.gateway_broker_control_response_timeout_ms or 'default'} "
+            f"gateway_broker_telemetry_response_timeout_ms="
+            f"{args.gateway_broker_telemetry_response_timeout_ms or 'default'} "
             f"scenario={scenario.name if scenario else 'mixed'} "
             f"error_budget_rate={args.error_budget_rate if args.error_budget_rate is not None else 'none'}"
         )
@@ -2745,6 +2805,12 @@ def write_simulation_artifacts(
         "error_budget_pass": error_budget_pass,
         "gateway_pool_control_sessions": args.gateway_pool_control_sessions,
         "gateway_pool_telemetry_sessions": args.gateway_pool_telemetry_sessions,
+        "gateway_broker_control_response_timeout_ms": (
+            args.gateway_broker_control_response_timeout_ms
+        ),
+        "gateway_broker_telemetry_response_timeout_ms": (
+            args.gateway_broker_telemetry_response_timeout_ms
+        ),
         "overall": operation_summary(overall, args.summary_max_error_lines),
         "operations": {
             name: operation_summary(entry, args.summary_max_error_lines)

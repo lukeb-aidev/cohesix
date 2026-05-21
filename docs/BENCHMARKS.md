@@ -33,6 +33,20 @@ All reported runs used real end-to-end execution:
 
 No `--mock` mode was used for reported results.
 
+### Gateway Timeout Contract
+- `hive-gateway` keeps broker queue admission bounded at `5000 ms`; queue saturation is reported as `HTTP 429`.
+- Broker response time is a separate deadline. The as-built default is `120000 ms` for both control and telemetry so slow but valid hardware-backed console operations are not misclassified as queue backpressure.
+- Response deadlines can be overridden with `--broker-control-response-timeout-ms` and `--broker-telemetry-response-timeout-ms`, or the matching environment variables `HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS` and `HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS`.
+- `scripts/rest_perf_harness.py` forwards these settings via `--gateway-broker-control-response-timeout-ms` and `--gateway-broker-telemetry-response-timeout-ms`; the older `--gateway-broker-control-timeout-ms` and `--gateway-broker-telemetry-timeout-ms` spellings remain accepted.
+- A broker response deadline miss is reported as `HTTP 504`, while `HTTP 503` remains reserved for unavailable transport.
+
+### Pi 4 Wi-Fi Benchmark Separation
+- Pi 4 Wi-Fi results must be reported in three lanes: raw direct `cohsh` over TCP/Wi-Fi, REST gateway over the same Pi backend, and QEMU REST as a semantic/capacity reference only.
+- The latest direct Pi `cohsh` artifact (`out/bench/pi4-cohsh-direct-20260519T212828Z/`) proved successful direct scripts and about `43.9 ms` average ping RTT for that run.
+- The latest repaired Pi REST gateway artifact (`out/bench/pi4-rest-gateway-repair-20260519T214321Z/`) measured about `1.447 s` average, `2.690 s` p95, `6.502 s` max, and zero errors.
+- The QEMU fixed27 reference (`out/bench/qemu-rest-fixed27-20260518T000007Z/`) measured about `0.00885 s` average and `0.0261 s` p95, making the latest Pi Wi-Fi REST run roughly `164x` slower on average and `103x` slower at p95.
+- These numbers are diagnostic baselines, not post-change proof. Any improved-performance claim requires a fresh Pi run that also proves live driver TCBs, Wi-Fi DHCP, clean serial, USB/local-seat responsiveness, and HDMI responsiveness under load.
+
 ### Runtime/Config Changes Under Test
 - `apps/root-task/src/ninedoor.rs`
   - `MAX_WORKERS` raised to `1500`.

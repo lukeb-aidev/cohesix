@@ -3631,6 +3631,16 @@ const fn control_plane_linux_firstread_remainder_request_len(frame_len: usize) -
 }
 
 #[inline]
+const fn runtime_frame_request_len(frame_len: usize, capacity: usize) -> Option<usize> {
+    let request_len = control_plane_frame_request_len(frame_len);
+    if request_len <= capacity {
+        Some(request_len)
+    } else {
+        None
+    }
+}
+
+#[inline]
 const fn control_plane_write_uses_incrementing_addr() -> bool {
     false
 }
@@ -18611,6 +18621,41 @@ impl SdioHost {
         Ok(())
     }
 
+    fn read_runtime_frame_with_block_shape(
+        &mut self,
+        frame_len: usize,
+        out: &mut [u8],
+    ) -> Result<(), HalError> {
+        let Some(request_len) = runtime_frame_request_len(frame_len, out.len()) else {
+            return Err(HalError::Unsupported("cyw43-runtime-read-oversize"));
+        };
+        log::trace!(
+            "[pi4-wifi] runtime-rx block-f2-read frame_len={} request_len={} padded={}",
+            frame_len,
+            request_len,
+            yn(request_len != frame_len),
+        );
+        let result = self.with_control_plane_function2_port(|this, function_addr| {
+            this.io_extended(
+                SdioFunction::Function2,
+                function_addr,
+                control_plane_read_uses_incrementing_addr(),
+                false,
+                &mut out[..request_len],
+            )
+        });
+        if let Err(err) = &result {
+            if control_plane_frame_transfer_error_needs_terminate(err) {
+                self.recover_failed_function2_frame_transfer(
+                    "runtime-rx-block-read",
+                    false,
+                    "linux-rxfail",
+                );
+            }
+        }
+        result
+    }
+
     fn ack_runtime_rx_irq_after_frame_drain(&mut self, stage: &'static str) {
         self.runtime_frame_read_needs_irq_ack = false;
         if let Err(err) = self.clear_sdio_irq_source_for_firmware_channel(stage, true, false) {
@@ -18991,7 +19036,12 @@ impl SdioHost {
             return Err(HalError::Unsupported("cyw43-frame-oversize"));
         }
         let ack_runtime_rx_after_drain = self.runtime_frame_read_needs_irq_ack;
-        if let Err(err) = self.read_frame_with_linux_request_shape(frame_len, out) {
+        let read_result = if ack_runtime_rx_after_drain {
+            self.read_runtime_frame_with_block_shape(frame_len, out)
+        } else {
+            self.read_frame_with_linux_request_shape(frame_len, out)
+        };
+        if let Err(err) = read_result {
             if ack_runtime_rx_after_drain {
                 self.runtime_frame_read_needs_irq_ack = false;
             }
@@ -25938,6 +25988,16 @@ mod tests {
         assert_ne!(write.transfer_mode & SDHCI_TRNS_BLK_CNT_EN, 0);
         assert_ne!(write.transfer_mode & SDHCI_TRNS_MULTI, 0);
         assert_eq!(write.transfer_mode & SDHCI_TRNS_READ, 0);
+    }
+
+    #[test]
+    fn runtime_frame_request_len_uses_single_block_aligned_read() {
+        assert_eq!(runtime_frame_request_len(64, 8192), Some(64));
+        assert_eq!(runtime_frame_request_len(1448, 8192), Some(1536));
+        assert_eq!(runtime_frame_request_len(2064, 8192), Some(2560));
+        assert_eq!(runtime_frame_request_len(8191, 8192), Some(8192));
+        assert_eq!(runtime_frame_request_len(8192, 8192), Some(8192));
+        assert_eq!(runtime_frame_request_len(8193, 8192), None);
     }
 
     #[test]

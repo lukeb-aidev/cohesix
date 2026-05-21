@@ -164,8 +164,15 @@ dedicated driver task uses seL4 scheduling contexts when the active MCS kernel
 profile provides them. On non-MCS profiles, the same HAL contract is enforced
 with TCB priority/domain policy plus bounded IPC and poll turns.
 
-The current as-built substrate creates root-owned seL4 TCBs for every built-in
-hardware contract during boot:
+The current source path attempts to create root-owned seL4 TCBs for every
+built-in hardware contract during boot. A boot counts as dedicated-driver-task
+execution only when the breadcrumbs below prove live TCBs, valid cap/fault/
+revoke/scheduling/affinity fields, and hot-path dispatch through those TCBs.
+The May 20 Pi 4 capture reached Wi-Fi DHCP but is explicitly pre-closure
+evidence: all nine `DRIVER_TASK_BOOT` attempts failed with `seL4_DeleteFirst`,
+`live_tcb_count=0`, and the hot paths remained root-task compatibility. The
+current code treats boot-seeded intermediate page-table collisions as existing
+VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 
 | Contract | Role | Manifest affinity target | Current VSpace | Current hot path |
 | --- | --- | --- | --- | --- |
@@ -179,7 +186,7 @@ hardware contract during boot:
 | `sdio-host` | SDIO host for CYW43 | `sdio-host` | shared root VSpace | boot-created TCB and affinity contract; CYW43 poll currently contains the SDIO service turn |
 | `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | shared root VSpace | boot-created TCB and affinity contract; USB/local-seat poll currently contains the VL805 service turn |
 
-For each created driver TCB, the HAL allocates the TCB object, child CNode,
+For each successfully created driver TCB, the HAL allocates the TCB object, child CNode,
 command endpoint, notification, IPC frame, stack frame, and fault endpoint
 slot; installs a restricted child CSpace; binds the remote IPC buffer; applies
 the contract priority; applies manifest-selected per-driver affinity through
@@ -192,13 +199,13 @@ The current substrate intentionally does not yet prove driver VSpace isolation.
 Driver TCBs run with the root VSpace until driver code, data, IPC buffers, and
 rings are mapped into dedicated driver VSpaces. This is an explicit remaining
 isolation proof field, not an excuse for root-task hot paths. Serial, USB,
-HDMI, and active NIC service callbacks now execute on live driver TCBs when the
-TCB is available; fallback to root-task compatibility is preserved only for
-availability failure and is recorded as compatibility evidence. `sdio-host` and
-`pcie-root` have live boot-created driver TCBs and per-driver affinity contracts
-today; their bus operations are still reached through the CYW43 and
-USB/local-seat service callbacks until standalone bus-operation queues are split
-out.
+HDMI, and active NIC service callbacks are routed through live driver TCBs only
+when the boot-created TCB is available; fallback to root-task compatibility is
+preserved only for availability failure and is recorded as compatibility
+evidence. `sdio-host` and `pcie-root` have declared boot-created driver TCB and
+per-driver affinity contracts; their bus operations are still reached through
+the CYW43 and USB/local-seat service callbacks until standalone bus-operation
+queues are split out and hardware proof shows live TCB ownership.
 
 Boot logs must expose the distinction with these breadcrumbs:
 
@@ -228,6 +235,13 @@ contracts before the driver is serviced. USB/local-seat and serial are
 network-control and network-data budgeting so EAPOL, DHCP, and TCP ACK progress
 cannot be hidden behind bulk RX/TX work, while neither class can starve physical
 input.
+
+The CYW43 runtime data path now separates conservative control-plane Function 2
+reply reads from runtime data/glom reads. Control replies keep the Linux-derived
+64-byte first-read plus bounded remainder shape. Runtime RX uses a single
+512-byte block-aligned Function 2 request into an 8192-byte bounded frame buffer
+and deaggregates at most 16 glom subframes into a 16-entry bounded queue before
+yielding back to the driver-service budget.
 
 Root-task compatibility remains only as a fail-safe and diagnostic path. If a
 service callback cannot be sent to its driver TCB, the current service turn

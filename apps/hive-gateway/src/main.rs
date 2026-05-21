@@ -63,8 +63,9 @@ const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
 const DEFAULT_PROC_CACHE_TTL_MS: u64 = 500;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
-const CONTROL_POOL_WAIT_LIMIT_MS: u64 = 5_000;
-const TELEMETRY_POOL_WAIT_LIMIT_MS: u64 = 5_000;
+const BROKER_QUEUE_WAIT_LIMIT_MS: u64 = 5_000;
+const DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS: u64 = 120_000;
 const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
 const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
@@ -140,6 +141,18 @@ struct Cli {
     /// Override pooled telemetry session capacity for this gateway process.
     #[arg(long)]
     pool_telemetry_sessions: Option<u16>,
+    /// Max milliseconds to wait for a control broker response after enqueue.
+    #[arg(
+        long = "broker-control-response-timeout-ms",
+        alias = "broker-control-timeout-ms"
+    )]
+    broker_control_response_timeout_ms: Option<u64>,
+    /// Max milliseconds to wait for a telemetry broker response after enqueue.
+    #[arg(
+        long = "broker-telemetry-response-timeout-ms",
+        alias = "broker-telemetry-timeout-ms"
+    )]
+    broker_telemetry_response_timeout_ms: Option<u64>,
     /// Use the in-process mock NineDoor backend.
     #[arg(long, default_value_t = false)]
     mock: bool,
@@ -157,6 +170,7 @@ struct GatewayInner {
     request_auth_token: String,
     status: Mutex<GatewayStatus>,
     shutdown: Arc<AtomicBool>,
+    broker_timeouts: BrokerTimeouts,
     bounds: BoundsResponse,
     policy: CohshPolicy,
     broker: Arc<BrokerMetrics>,
@@ -323,6 +337,21 @@ impl BrokerMetrics {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BrokerTimeouts {
+    control_response_ms: u64,
+    telemetry_response_ms: u64,
+}
+
+impl BrokerTimeouts {
+    fn response_ms(self, kind: PoolKind) -> u64 {
+        match kind {
+            PoolKind::Control => self.control_response_ms,
+            PoolKind::Telemetry => self.telemetry_response_ms,
+        }
+    }
+}
+
 #[derive(Default)]
 struct ProcReadCache {
     entries: HashMap<String, ProcReadCacheEntry>,
@@ -463,6 +492,7 @@ async fn main() -> Result<()> {
             request_auth_token: config.request_auth_token.clone(),
             status: Mutex::new(GatewayStatus::default()),
             shutdown,
+            broker_timeouts: config.broker_timeouts,
             bounds,
             policy,
             broker: broker_metrics,
@@ -519,6 +549,7 @@ struct GatewayConfig {
     ticket: Option<String>,
     pool_control_sessions: Option<u16>,
     pool_telemetry_sessions: Option<u16>,
+    broker_timeouts: BrokerTimeouts,
     mock: bool,
     allow_non_loopback_bind: bool,
 }
@@ -569,6 +600,28 @@ impl GatewayConfig {
             cli.pool_telemetry_sessions,
             "HIVE_GATEWAY_POOL_TELEMETRY_SESSIONS",
         );
+        let broker_control_response_timeout_ms = broker_response_timeout_ms(
+            env_override_opt_u64(
+                cli.broker_control_response_timeout_ms,
+                &[
+                    "HIVE_GATEWAY_BROKER_CONTROL_RESPONSE_TIMEOUT_MS",
+                    "HIVE_GATEWAY_BROKER_CONTROL_TIMEOUT_MS",
+                ],
+            ),
+            DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS,
+            "broker control response timeout",
+        )?;
+        let broker_telemetry_response_timeout_ms = broker_response_timeout_ms(
+            env_override_opt_u64(
+                cli.broker_telemetry_response_timeout_ms,
+                &[
+                    "HIVE_GATEWAY_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS",
+                    "HIVE_GATEWAY_BROKER_TELEMETRY_TIMEOUT_MS",
+                ],
+            ),
+            DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS,
+            "broker telemetry response timeout",
+        )?;
         let allow_non_loopback_bind =
             cli.allow_non_loopback_bind || env_flag("HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND");
         let auth_token = normalize_required_secret("tcp auth token", auth_token, mock)?;
@@ -584,6 +637,10 @@ impl GatewayConfig {
             ticket,
             pool_control_sessions,
             pool_telemetry_sessions,
+            broker_timeouts: BrokerTimeouts {
+                control_response_ms: broker_control_response_timeout_ms,
+                telemetry_response_ms: broker_telemetry_response_timeout_ms,
+            },
             mock,
             allow_non_loopback_bind,
         })
@@ -630,6 +687,33 @@ fn env_override_opt_u16(value: Option<u16>, key: &str) -> Option<u16> {
         return None;
     };
     env_value.trim().parse::<u16>().ok().filter(|v| *v > 0)
+}
+
+fn env_override_opt_u64(value: Option<u64>, keys: &[&str]) -> Option<u64> {
+    if value.is_some() {
+        return value;
+    }
+    for key in keys {
+        let Ok(env_value) = env::var(key) else {
+            continue;
+        };
+        let trimmed = env_value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(parsed) = trimmed.parse::<u64>() {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
+fn broker_response_timeout_ms(value: Option<u64>, default_ms: u64, label: &str) -> Result<u64> {
+    let timeout_ms = value.unwrap_or(default_ms);
+    if timeout_ms < BROKER_QUEUE_WAIT_LIMIT_MS {
+        anyhow::bail!("{label} must be >= broker queue wait limit {BROKER_QUEUE_WAIT_LIMIT_MS}ms");
+    }
+    Ok(timeout_ms)
 }
 
 fn seed_relay_metrics_from_env(metrics: &BrokerMetrics) {
@@ -1023,11 +1107,7 @@ async fn shutdown_signal(state: AppState) {
 
 impl AppState {
     fn submit_broker(&self, kind: PoolKind, request: BrokerRequest) -> Result<BrokerResponse> {
-        let timeout_ms = match kind {
-            PoolKind::Control => CONTROL_POOL_WAIT_LIMIT_MS,
-            PoolKind::Telemetry => TELEMETRY_POOL_WAIT_LIMIT_MS,
-        };
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let queue_deadline = Instant::now() + Duration::from_millis(BROKER_QUEUE_WAIT_LIMIT_MS);
         let tx = match kind {
             PoolKind::Control => &self.inner.broker_client.control_tx,
             PoolKind::Telemetry => &self.inner.broker_client.telemetry_tx,
@@ -1056,7 +1136,7 @@ impl AppState {
                     if self.inner.shutdown.load(Ordering::SeqCst) {
                         return Err(anyhow::anyhow!("gateway broker is shutting down"));
                     }
-                    if Instant::now() >= deadline {
+                    if Instant::now() >= queue_deadline {
                         self.inner
                             .broker
                             .timeout_rejections
@@ -1076,15 +1156,16 @@ impl AppState {
                 }
             }
         }
-        let now = Instant::now();
-        let remaining = deadline.saturating_duration_since(now);
+        let response_timeout_ms = self.inner.broker_timeouts.response_ms(kind);
+        let response_deadline = Instant::now() + Duration::from_millis(response_timeout_ms);
+        let remaining = response_deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             self.inner
                 .broker
                 .timeout_rejections
                 .fetch_add(1, Ordering::Relaxed);
             return Err(anyhow::anyhow!(
-                "gateway backpressure: broker response timed out for {kind:?}"
+                "gateway timeout: broker response timed out for {kind:?} after {response_timeout_ms}ms"
             ));
         }
         match response_rx.recv_timeout(remaining) {
@@ -1095,7 +1176,7 @@ impl AppState {
                     .timeout_rejections
                     .fetch_add(1, Ordering::Relaxed);
                 Err(anyhow::anyhow!(
-                    "gateway backpressure: broker response timed out for {kind:?}"
+                    "gateway timeout: broker response timed out for {kind:?} after {response_timeout_ms}ms"
                 ))
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -1845,6 +1926,9 @@ fn response_transport_err(
     if message.contains("gateway backpressure") {
         return response_err(verb, path, message, StatusCode::TOO_MANY_REQUESTS);
     }
+    if message.contains("gateway timeout") {
+        return response_err(verb, path, message, StatusCode::GATEWAY_TIMEOUT);
+    }
     if let Some(ack) = extract_ack_error(&message) {
         return response_err(verb, path, ack, StatusCode::OK);
     }
@@ -1949,6 +2033,56 @@ mod tests {
     }
 
     #[test]
+    fn response_transport_err_maps_broker_response_timeout_to_gateway_timeout() {
+        let err =
+            anyhow!("gateway timeout: broker response timed out for Telemetry after 120000ms");
+        let (status, body) = response_transport_err("LS", "/", err);
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(body.0.status, "ERR");
+    }
+
+    #[test]
+    fn broker_timeout_defaults_cover_slow_pi_console_responses() {
+        let control = broker_response_timeout_ms(
+            None,
+            DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS,
+            "broker control response timeout",
+        )
+        .expect("default control timeout");
+        let telemetry = broker_response_timeout_ms(
+            None,
+            DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS,
+            "broker telemetry response timeout",
+        )
+        .expect("default telemetry timeout");
+        assert!(control >= 120_000);
+        assert!(telemetry >= 120_000);
+        assert!(control > BROKER_QUEUE_WAIT_LIMIT_MS);
+        assert!(telemetry > BROKER_QUEUE_WAIT_LIMIT_MS);
+    }
+
+    #[test]
+    fn broker_response_timeout_rejects_values_below_queue_wait() {
+        let err = broker_response_timeout_ms(
+            Some(BROKER_QUEUE_WAIT_LIMIT_MS - 1),
+            DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS,
+            "broker control response timeout",
+        )
+        .expect_err("timeout below queue wait should fail");
+        assert!(err.to_string().contains("broker queue wait limit"));
+    }
+
+    #[test]
+    fn broker_timeouts_select_response_timeout_by_pool_kind() {
+        let timeouts = BrokerTimeouts {
+            control_response_ms: 11_000,
+            telemetry_response_ms: 22_000,
+        };
+        assert_eq!(timeouts.response_ms(PoolKind::Control), 11_000);
+        assert_eq!(timeouts.response_ms(PoolKind::Telemetry), 22_000);
+    }
+
+    #[test]
     fn cacheable_read_path_includes_proc_host_and_gpu() {
         assert!(is_cacheable_read_path("/proc/root/reachable"));
         assert!(is_cacheable_read_path("/host/systemd/ssh.service/status"));
@@ -2038,6 +2172,10 @@ mod tests {
             ticket: None,
             pool_control_sessions: Some(3),
             pool_telemetry_sessions: Some(12),
+            broker_timeouts: BrokerTimeouts {
+                control_response_ms: DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS,
+                telemetry_response_ms: DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS,
+            },
             mock: true,
             allow_non_loopback_bind: false,
         };

@@ -50,6 +50,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GatewayResponse"
+        "429":
+          description: Gateway broker queue backpressure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "503":
+          description: Gateway transport unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "504":
+          description: Gateway broker response timed out.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
   /v1/fs/cat:
     get:
       summary: Read file contents (CAT).
@@ -74,6 +92,24 @@ paths:
                 $ref: "#/components/schemas/GatewayResponse"
         "400":
           description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "429":
+          description: Gateway broker queue backpressure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "503":
+          description: Gateway transport unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "504":
+          description: Gateway broker response timed out.
           content:
             application/json:
               schema:
@@ -106,6 +142,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GatewayResponse"
+        "429":
+          description: Gateway broker queue backpressure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "503":
+          description: Gateway transport unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "504":
+          description: Gateway broker response timed out.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
   /v1/fs/echo:
     post:
       summary: Append a single line (ECHO).
@@ -133,6 +187,24 @@ paths:
                 $ref: "#/components/schemas/GatewayResponse"
         "400":
           description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "429":
+          description: Gateway broker queue backpressure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "503":
+          description: Gateway transport unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayResponse"
+        "504":
+          description: Gateway broker response timed out.
           content:
             application/json:
               schema:

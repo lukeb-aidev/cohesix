@@ -10,6 +10,7 @@ import json
 import pathlib
 import socket
 import sys
+from typing import Optional
 
 MODULE_PATH = (
     pathlib.Path(__file__).resolve().parents[1]
@@ -213,8 +214,8 @@ def test_telemetry_append_rotates_segment_on_quota() -> None:
         status: str,
         path: str,
         *,
-        lines: list[str] | None = None,
-        error: str | None = None,
+        lines: Optional[list[str]] = None,
+        error: Optional[str] = None,
     ) -> rest_perf.GatewayResponse:
         return rest_perf.GatewayResponse(
             status=status,
@@ -631,3 +632,24 @@ def test_parse_args_no_retries_alias_disables_transient_retries() -> None:
     assert not args.transient_retries
     assert args.scenario == "telemetry-1mb"
     assert abs(args.error_budget_rate - 0.01) < 1e-9
+
+
+def test_parse_args_accepts_gateway_broker_timeout_overrides() -> None:
+    original_argv = list(sys.argv)
+    try:
+        sys.argv = [
+            "rest_perf_harness.py",
+            "--mode",
+            "simulate",
+            "--auth-token",
+            "bootstrap",
+            "--gateway-broker-control-timeout-ms",
+            "120000",
+            "--gateway-broker-telemetry-response-timeout-ms",
+            "180000",
+        ]
+        args = rest_perf.parse_args()
+    finally:
+        sys.argv = original_argv
+    assert args.gateway_broker_control_response_timeout_ms == 120000
+    assert args.gateway_broker_telemetry_response_timeout_ms == 180000

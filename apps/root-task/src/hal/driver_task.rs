@@ -222,9 +222,7 @@ pub extern "C" fn driver_task_entry(task_key: usize) -> ! {
     }
     loop {
         let mut badge: sel4_sys::seL4_Word = 0;
-        // SAFETY: The driver task CSpace is populated with a command endpoint
-        // at `DRIVER_TASK_CHILD_COMMAND_SLOT` before the TCB is resumed.
-        let _ = unsafe { sel4_sys::seL4_Recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge) };
+        let _ = crate::sel4::recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge);
         let _ = badge;
         let result = service_pending_driver_task_command(task_key);
         // SAFETY: The command was delivered by `seL4_Call`; the kernel
@@ -232,10 +230,7 @@ pub extern "C" fn driver_task_entry(task_key: usize) -> ! {
         // mirrors the already-published completion slot result.
         unsafe {
             sel4_sys::seL4_SetMR(0, result as sel4_sys::seL4_Word);
-            #[cfg(target_os = "none")]
-            sel4_sys::seL4_Reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1));
         }
-        #[cfg(not(target_os = "none"))]
         crate::sel4::reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1));
         DRIVER_TASK_ENTRY_HEARTBEATS.fetch_add(1, Ordering::AcqRel);
     }
@@ -257,16 +252,7 @@ pub fn wait_for_driver_task_start(task_key: usize, spins: usize) -> bool {
         if DRIVER_TASK_STARTED_TASK_MASK.load(Ordering::Acquire) & mask != 0 {
             return true;
         }
-        #[cfg(target_os = "none")]
-        {
-            // SAFETY: Yield has no memory operand and only donates the current
-            // scheduling slice while waiting for the child TCB startup bit.
-            unsafe { sel4_sys::seL4_Yield() };
-        }
-        #[cfg(not(target_os = "none"))]
-        {
-            sel4_sys::seL4_Yield();
-        }
+        crate::sel4::yield_now();
     }
     DRIVER_TASK_STARTED_TASK_MASK.load(Ordering::Acquire) & mask != 0
 }
