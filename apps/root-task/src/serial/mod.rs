@@ -300,17 +300,23 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            // SAFETY: The context pointer is `self`, and the root TCB waits
-            // synchronously for the serial driver TCB to finish this bounded
-            // service turn before touching the port again.
-            if let Some(result) = unsafe {
-                crate::hal::driver_task::run_driver_task_service(
-                    contract,
-                    self as *mut Self as usize,
-                    serial_poll_io_driver_task::<D, RX, TX, LINE>,
-                )
-            } {
-                return result != 0;
+            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
+                // SAFETY: This transitional callback path is admitted only for
+                // QEMU/host compatibility. Physical Pi 4 steady-state driver
+                // service must use the pointer-free ring-backed path.
+                if let Some(result) = unsafe {
+                    crate::hal::driver_task::run_driver_task_service(
+                        contract,
+                        self as *mut Self as usize,
+                        serial_poll_io_driver_task::<D, RX, TX, LINE>,
+                    )
+                } {
+                    return result != 0;
+                }
+            }
+            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+                self.telemetry.driver_task_budget_overrun();
+                return false;
             }
             crate::hal::driver_task::record_driver_task_service(
                 contract,
@@ -368,18 +374,24 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            // SAFETY: The context pointer is `self`, and the root TCB waits
-            // synchronously for the serial driver TCB to finish this bounded
-            // TX flush before touching the port again.
-            if unsafe {
-                crate::hal::driver_task::run_driver_task_service(
-                    contract,
-                    self as *mut Self as usize,
-                    serial_flush_tx_driver_task::<D, RX, TX, LINE>,
-                )
+            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
+                // SAFETY: This transitional callback path is admitted only for
+                // QEMU/host compatibility. Physical Pi 4 steady-state driver
+                // service must use the pointer-free ring-backed path.
+                if unsafe {
+                    crate::hal::driver_task::run_driver_task_service(
+                        contract,
+                        self as *mut Self as usize,
+                        serial_flush_tx_driver_task::<D, RX, TX, LINE>,
+                    )
+                }
+                .is_some()
+                {
+                    return;
+                }
             }
-            .is_some()
-            {
+            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+                self.telemetry.driver_task_budget_overrun();
                 return;
             }
             crate::hal::driver_task::record_driver_task_service(

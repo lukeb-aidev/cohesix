@@ -5127,11 +5127,16 @@ fn bootstrap<P: Platform>(
                 let mut line = heapless::String::<192>::new();
                 let _ = write!(
                     line,
-                    "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured={} failed={} live_tcb_count={} vspace=shared-root ipc_abi={} pointer_free_ipc={}",
+                    "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured={} failed={} live_tcb_count={} vspace={} ipc_abi={} pointer_free_ipc={}",
                     report.configured_count,
                     report.failed_count,
                     report.live_tcb_count,
-                    crate::hal::driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+                    if report.vspace_proof { "isolated" } else { "shared-root" },
+                    if report.pointer_free_ipc_proof {
+                        crate::hal::driver_task::DriverTaskIpcAbi::SharedRingCommand.as_str()
+                    } else {
+                        crate::hal::driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str()
+                    },
                     if report.pointer_free_ipc_proof { "yes" } else { "no" },
                 );
                 console.writeln_prefixed(line.as_str());

@@ -35,6 +35,48 @@ pub enum DriverTaskKind {
     PcieRoot,
 }
 
+/// Runtime family used to decide whether compatibility dispatch is allowed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverTaskRuntimeProfile {
+    /// Physical Pi 4 hardware profile.
+    Pi4Hardware,
+    /// QEMU/virt compatibility profile.
+    QemuCompatibility,
+    /// Host tests and non-kernel builds.
+    HostTest,
+}
+
+impl DriverTaskRuntimeProfile {
+    /// Stable diagnostic label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pi4Hardware => "pi4-hardware",
+            Self::QemuCompatibility => "qemu-compatibility",
+            Self::HostTest => "host-test",
+        }
+    }
+}
+
+/// Current profile used by steady-state driver service admission.
+pub const CURRENT_DRIVER_TASK_RUNTIME_PROFILE: DriverTaskRuntimeProfile = if cfg!(all(
+    feature = "kernel",
+    target_arch = "aarch64",
+    target_os = "none",
+    not(feature = "net-backend-virtio")
+)) {
+    DriverTaskRuntimeProfile::Pi4Hardware
+} else if cfg!(all(
+    feature = "kernel",
+    target_arch = "aarch64",
+    target_os = "none",
+    feature = "net-backend-virtio"
+)) {
+    DriverTaskRuntimeProfile::QemuCompatibility
+} else {
+    DriverTaskRuntimeProfile::HostTest
+};
+
 impl DriverTaskKind {
     /// Stable role label used by Pi 4 driver-task proof tooling.
     #[must_use]
@@ -129,6 +171,10 @@ pub struct DriverTaskBootstrapReport {
     pub affinity_applied_count: usize,
     /// Whether every configured per-driver affinity was applied successfully.
     pub affinity_proof: bool,
+    /// Driver TCBs whose TCB space uses a non-root VSpace.
+    pub isolated_vspace_count: usize,
+    /// Driver TCBs that completed a fixed-layout command/completion ring proof.
+    pub pointer_free_ipc_count: usize,
     /// Whether driver TCBs run in isolated driver VSpaces.
     pub vspace_proof: bool,
     /// Whether driver service turns use pointer-free shared command rings.
@@ -200,13 +246,74 @@ pub fn record_driver_task_service(contract: DriverTaskContract, isolation: Drive
     if role_bit == 0 {
         return;
     }
+    if driver_task_service_counts_as_hot_path(isolation) {
+        DRIVER_TASK_HOT_PATH_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+    } else {
+        DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+    }
+}
+
+/// Records a service turn that completed through the pointer-free ring ABI.
+///
+/// This is the only runtime accounting path that may credit a hardware hot
+/// path as fully dedicated once the driver state boundary moves behind the
+/// shared command/completion ring.
+#[cfg(feature = "kernel")]
+pub fn record_driver_task_ring_hot_path(contract: DriverTaskContract) {
+    let role_bit = driver_task_role_bit(contract.kind);
+    if role_bit != 0 {
+        DRIVER_TASK_HOT_PATH_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+    }
+}
+
+#[must_use]
+pub const fn driver_task_service_counts_as_hot_path(isolation: DriverTaskIsolation) -> bool {
     match isolation {
-        DriverTaskIsolation::DedicatedSeL4Task => {
-            DRIVER_TASK_HOT_PATH_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
-        }
-        DriverTaskIsolation::RootTaskCompatibility => {
-            DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
-        }
+        DriverTaskIsolation::DedicatedSeL4Task => true,
+        DriverTaskIsolation::RootTaskCompatibility => false,
+    }
+}
+
+/// Returns whether the transitional callback-pointer ABI may serve a
+/// steady-state hardware turn for a profile.
+///
+/// Physical Pi 4 builds must not use callback dispatch for steady-state
+/// hardware paths. Early/emergency UART writes are outside this policy because
+/// they run before the driver-task substrate exists.
+#[must_use]
+pub const fn callback_dispatch_allowed_for_profile(profile: DriverTaskRuntimeProfile) -> bool {
+    match profile {
+        DriverTaskRuntimeProfile::Pi4Hardware => false,
+        DriverTaskRuntimeProfile::QemuCompatibility | DriverTaskRuntimeProfile::HostTest => true,
+    }
+}
+
+/// Returns whether a root-owned compatibility hot path may run for a profile.
+#[must_use]
+pub const fn root_fallback_allowed_for_profile(profile: DriverTaskRuntimeProfile) -> bool {
+    match profile {
+        DriverTaskRuntimeProfile::Pi4Hardware => false,
+        DriverTaskRuntimeProfile::QemuCompatibility | DriverTaskRuntimeProfile::HostTest => true,
+    }
+}
+
+/// Current-build admission for callback-pointer steady-state service turns.
+#[must_use]
+pub const fn steady_state_callback_dispatch_allowed(_contract: DriverTaskContract) -> bool {
+    callback_dispatch_allowed_for_profile(CURRENT_DRIVER_TASK_RUNTIME_PROFILE)
+}
+
+/// Current-build admission for root-owned steady-state compatibility turns.
+#[must_use]
+pub const fn steady_state_root_fallback_allowed(_contract: DriverTaskContract) -> bool {
+    root_fallback_allowed_for_profile(CURRENT_DRIVER_TASK_RUNTIME_PROFILE)
+}
+
+#[cfg(feature = "kernel")]
+fn record_driver_task_callback_compatibility(contract: DriverTaskContract) {
+    let role_bit = driver_task_role_bit(contract.kind);
+    if role_bit != 0 {
+        DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
     }
 }
 
@@ -276,6 +383,117 @@ pub extern "C" fn driver_task_entry(task_key: usize) -> ! {
     }
 }
 
+#[cfg(all(
+    feature = "kernel",
+    target_arch = "aarch64",
+    target_os = "none",
+    not(sel4_config_kernel_mcs)
+))]
+core::arch::global_asm!(
+    r#"
+    .section .driver_task_text, "ax", %progbits
+    .balign 16
+    .global cohesix_driver_task_isolated_entry
+    .type cohesix_driver_task_isolated_entry, %function
+cohesix_driver_task_isolated_entry:
+    mov x20, x0
+1:
+    mov x0, {child_command_slot}
+    ldr x7, ={sys_recv}
+    svc #0
+
+    ldr x9, ={ring_vaddr}
+    ldr w10, [x9]
+    add x11, x9, {completion_offset}
+    str w10, [x11]
+    mov w12, {completion_code}
+    strh w12, [x11, #4]
+    strh wzr, [x11, #6]
+    str w20, [x11, #8]
+    str xzr, [x11, #12]
+
+    b 1b
+    .size cohesix_driver_task_isolated_entry, . - cohesix_driver_task_isolated_entry
+    "#,
+    child_command_slot = const DRIVER_TASK_CHILD_COMMAND_SLOT,
+    completion_code = const DriverTaskCompletionCode::Progress as u16,
+    completion_offset = const DRIVER_TASK_RING_COMPLETION_OFFSET,
+    ring_vaddr = const DRIVER_TASK_RING_VADDR,
+    sys_recv = const sel4_sys::seL4_SysRecv,
+);
+
+#[cfg(all(
+    feature = "kernel",
+    target_arch = "aarch64",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
+core::arch::global_asm!(
+    r#"
+    .section .driver_task_text, "ax", %progbits
+    .balign 16
+    .global cohesix_driver_task_isolated_entry
+    .type cohesix_driver_task_isolated_entry, %function
+cohesix_driver_task_isolated_entry:
+1:
+    wfe
+    b 1b
+    .size cohesix_driver_task_isolated_entry, . - cohesix_driver_task_isolated_entry
+    "#,
+);
+
+/// Whether the driver-local trampoline can complete the ring smoke ABI.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub const fn isolated_trampoline_supported() -> bool {
+    cfg!(all(
+        target_arch = "aarch64",
+        target_os = "none",
+        not(sel4_config_kernel_mcs)
+    ))
+}
+
+/// Returns the entry PC for the driver-local isolated trampoline.
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[must_use]
+pub fn isolated_trampoline_entry() -> usize {
+    extern "C" {
+        fn cohesix_driver_task_isolated_entry();
+    }
+    cohesix_driver_task_isolated_entry as *const () as usize
+}
+
+/// Host-build placeholder for tests that inspect the layout without a kernel.
+#[cfg(any(
+    not(feature = "kernel"),
+    not(target_arch = "aarch64"),
+    not(target_os = "none")
+))]
+#[must_use]
+pub const fn isolated_trampoline_entry() -> usize {
+    0
+}
+
+/// Returns the page-aligned linker section containing only trampoline code.
+#[cfg(all(feature = "kernel", target_os = "none"))]
+#[must_use]
+pub fn isolated_trampoline_range() -> core::ops::Range<usize> {
+    extern "C" {
+        static __driver_task_text_start: u8;
+        static __driver_task_text_end: u8;
+    }
+    let start = core::ptr::addr_of!(__driver_task_text_start) as usize;
+    let end = core::ptr::addr_of!(__driver_task_text_end) as usize;
+    start..end
+}
+
+/// Host-build placeholder for tests that inspect the layout without a kernel.
+#[cfg(any(not(feature = "kernel"), not(target_os = "none")))]
+#[must_use]
+pub const fn isolated_trampoline_range() -> core::ops::Range<usize> {
+    0..0
+}
+
 /// Wait briefly for a newly resumed driver TCB to execute its entry trampoline.
 #[cfg(feature = "kernel")]
 #[must_use]
@@ -323,7 +541,12 @@ pub const DEDICATED_DRIVER_TASK_SUBSTRATE_READY: bool = true;
 pub const DEDICATED_DRIVER_TASKS_DEFAULT_ENABLED: bool = true;
 
 /// Current as-built live-hot-path state for the dedicated driver-task default.
-pub const DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_READY: bool = true;
+///
+/// Live TCB-backed callback dispatch is not strong isolation because it still
+/// passes root-memory pointers. This stays false until every Pi 4 hardware
+/// hot path is owned by a driver task and serviced through the pointer-free
+/// command/completion ring ABI.
+pub const DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_READY: bool = false;
 
 /// Stable rejection reason emitted while default-dedicated mode lacks live TCBs.
 pub const DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_MISSING: &str =
@@ -340,6 +563,24 @@ pub const DRIVER_TASK_CHILD_COMMAND_SLOT: sel4_sys::seL4_CPtr = 2;
 /// Child CSpace slot used for device/doorbell notification delivery.
 #[cfg(feature = "kernel")]
 pub const DRIVER_TASK_CHILD_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr = 3;
+
+/// Fixed driver-local virtual address for the root/driver command page.
+pub const DRIVER_TASK_RING_VADDR: usize = 0x7000_0000;
+
+/// Fixed driver-local virtual address for the seL4 IPC buffer page.
+pub const DRIVER_TASK_IPC_VADDR: usize = 0x7000_1000;
+
+/// Fixed driver-local virtual address for the bottom of the trampoline stack.
+pub const DRIVER_TASK_STACK_BOTTOM_VADDR: usize = 0x7000_2000;
+
+/// Fixed driver-local virtual address for the top of the trampoline stack.
+pub const DRIVER_TASK_STACK_TOP_VADDR: usize = 0x7000_3000;
+
+/// Offset of the first fixed-layout completion record within the ring page.
+pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
+
+/// One page is enough for the current smoke command and completion records.
+pub const DRIVER_TASK_RING_PAGE_BYTES: usize = 4096;
 
 /// Small dedicated CSpace radix for bootstrap driver tasks.
 #[cfg(feature = "kernel")]
@@ -431,6 +672,7 @@ pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 #[cfg(feature = "kernel")]
 struct DriverTaskCommandSlot {
     endpoint: AtomicUsize,
+    ring_root_ptr: AtomicUsize,
     handler: AtomicUsize,
     context: AtomicUsize,
     request_seq: AtomicUsize,
@@ -444,6 +686,7 @@ impl DriverTaskCommandSlot {
     const fn new() -> Self {
         Self {
             endpoint: AtomicUsize::new(0),
+            ring_root_ptr: AtomicUsize::new(0),
             handler: AtomicUsize::new(0),
             context: AtomicUsize::new(0),
             request_seq: AtomicUsize::new(0),
@@ -535,6 +778,79 @@ pub fn publish_driver_task_command_endpoint(contract: DriverTaskContract, endpoi
     slot.endpoint.store(endpoint, Ordering::Release);
 }
 
+/// Publish the root mapping of the fixed command/completion ring for a driver.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_ring(contract: DriverTaskContract, ring_root_ptr: usize) {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
+}
+
+/// Execute a fixed-layout command over the pointer-free shared-ring ABI.
+///
+/// This transport is intentionally narrower than the transitional callback
+/// service path. It is used by the isolated QEMU smoke task to prove the ABI
+/// mechanics without crediting a hardware hot path until the driver state has
+/// moved behind that ring.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_command(
+    contract: DriverTaskContract,
+    mut command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let endpoint = slot.endpoint.load(Ordering::Acquire);
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if endpoint == 0 || ring_root_ptr == 0 {
+        return None;
+    }
+    if slot.active.swap(1, Ordering::AcqRel) != 0 {
+        return None;
+    }
+
+    let request = slot
+        .request_seq
+        .load(Ordering::Relaxed)
+        .wrapping_add(1)
+        .max(1);
+    command.sequence = request as u32;
+    let completion_reset =
+        DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand);
+    let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+    let completion_ptr =
+        (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+
+    // SAFETY: `ring_root_ptr` is the root mapping of one HAL-owned frame that
+    // was also mapped into the driver VSpace at `DRIVER_TASK_RING_VADDR`. The
+    // fixed records are page-local, primitive-only, and naturally aligned.
+    unsafe {
+        core::ptr::write_volatile(completion_ptr, completion_reset);
+        core::ptr::write_volatile(command_ptr, command);
+        sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
+    }
+
+    let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
+    let mut completion = completion_reset;
+    for _ in 0..256 {
+        crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
+        crate::sel4::yield_now();
+        // SAFETY: The completion pointer addresses the same validated ring
+        // page; a matching sequence means the isolated trampoline observed the
+        // command through the shared frame.
+        completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+        if completion.sequence == request as u32 {
+            break;
+        }
+    }
+
+    slot.active.store(0, Ordering::Release);
+    (completion.sequence == request as u32).then_some(completion)
+}
+
 #[cfg(feature = "kernel")]
 fn service_pending_driver_task_command(task_key: usize) -> usize {
     let Some(slot) = slot_for_task_key(task_key) else {
@@ -577,7 +893,7 @@ pub unsafe fn run_driver_task_service(
     handler: DriverTaskServiceHandler,
 ) -> Option<usize> {
     let task_key = driver_task_contract_key(contract)?;
-    let role_bit = driver_task_task_key_role_bit(task_key)?;
+    driver_task_task_key_role_bit(task_key)?;
     let slot = slot_for_task_key(task_key)?;
     if DRIVER_TASK_STARTED_TASK_MASK.load(Ordering::Acquire) & (1usize << task_key) == 0 {
         return None;
@@ -617,8 +933,7 @@ pub unsafe fn run_driver_task_service(
         .then(|| slot.result.load(Ordering::Acquire));
     slot.active.store(0, Ordering::Release);
     if completed.is_some() {
-        record_driver_task_service(contract, DriverTaskIsolation::DedicatedSeL4Task);
-        DRIVER_TASK_HOT_PATH_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+        record_driver_task_callback_compatibility(contract);
     }
     completed
 }
@@ -1193,6 +1508,89 @@ impl DriverTaskOpcode {
     }
 }
 
+/// Pi 4 hardware hot paths that must move behind pointer-free rings before
+/// strongest dedicated-driver isolation may be claimed.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverTaskHotPath {
+    /// UART receive/transmit service.
+    SerialConsole = 1,
+    /// USB HID keyboard polling and report delivery.
+    UsbKeyboard = 2,
+    /// HDMI text/framebuffer submission.
+    HdmiText = 3,
+    /// GENET RX/TX descriptor service.
+    GenetNic = 4,
+    /// CYW43 SDPCM RX/TX frame service.
+    Cyw43Wifi = 5,
+    /// SDIO command/data/interrupt service beneath CYW43.
+    SdioHost = 6,
+    /// PCIe root/VL805 doorbell and configuration service.
+    PcieRoot = 7,
+}
+
+impl DriverTaskHotPath {
+    /// Primitive wire identifier carried in `DriverTaskCommandRecord::arg0`.
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        self as u32
+    }
+
+    /// Stable diagnostic label for the migration target.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SerialConsole => "serial-console",
+            Self::UsbKeyboard => "usb-keyboard",
+            Self::HdmiText => "hdmi-text",
+            Self::GenetNic => "genet-nic",
+            Self::Cyw43Wifi => "cyw43-wifi",
+            Self::SdioHost => "sdio-host",
+            Self::PcieRoot => "pcie-root",
+        }
+    }
+
+    /// Driver-task contract that owns this hot-path target.
+    #[must_use]
+    pub const fn contract(self) -> DriverTaskContract {
+        match self {
+            Self::SerialConsole => SERIAL_DRIVER_TASK_CONTRACT,
+            Self::UsbKeyboard => USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            Self::HdmiText => HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            Self::GenetNic => GENET_DRIVER_TASK_CONTRACT,
+            Self::Cyw43Wifi => CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            Self::SdioHost => SDIO_HOST_DRIVER_TASK_CONTRACT,
+            Self::PcieRoot => PCIE_ROOT_DRIVER_TASK_CONTRACT,
+        }
+    }
+
+    /// Shared-ring opcode admitted for this hot path.
+    #[must_use]
+    pub const fn opcode(self) -> DriverTaskOpcode {
+        match self {
+            Self::HdmiText => DriverTaskOpcode::SubmitFrame,
+            _ => DriverTaskOpcode::Service,
+        }
+    }
+
+    /// Role bit that must be credited by the hardware-owned ring service.
+    #[must_use]
+    pub const fn role_bit(self) -> usize {
+        driver_task_role_bit(self.contract().kind)
+    }
+}
+
+/// Complete Pi 4 hot-path migration catalog.
+pub const PI4_DRIVER_TASK_HOT_PATHS: [DriverTaskHotPath; 7] = [
+    DriverTaskHotPath::SerialConsole,
+    DriverTaskHotPath::UsbKeyboard,
+    DriverTaskHotPath::HdmiText,
+    DriverTaskHotPath::GenetNic,
+    DriverTaskHotPath::Cyw43Wifi,
+    DriverTaskHotPath::SdioHost,
+    DriverTaskHotPath::PcieRoot,
+];
+
 /// Fault code encoded in the pointer-free shared-ring ABI.
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1323,6 +1721,29 @@ impl DriverTaskCommandRecord {
                 len: 0,
                 flags: 0,
             },
+        }
+    }
+
+    /// Builds a pointer-free service command for a declared Pi 4 hot path.
+    ///
+    /// `arg0` carries the `DriverTaskHotPath` wire id and `arg1` carries the
+    /// required role bit. Frame-bearing commands must provide a descriptor;
+    /// non-frame commands use a zero-length descriptor.
+    #[must_use]
+    pub const fn pi4_hot_path(
+        sequence: u32,
+        hot_path: DriverTaskHotPath,
+        budget: DriverTaskBudgetGrant,
+        frame: DriverFrameDescriptor,
+    ) -> Self {
+        Self {
+            sequence,
+            opcode: hot_path.opcode().as_u16(),
+            flags: frame.flags,
+            arg0: hot_path.as_u32(),
+            arg1: hot_path.role_bit() as u32,
+            budget,
+            frame,
         }
     }
 
@@ -1787,6 +2208,11 @@ pub fn emit_boot_contract_proof() {
     use heapless::String;
 
     let proof = driver_task_runtime_proof();
+    let proof_ipc_abi = if proof.pointer_free_ipc_proof {
+        DriverTaskIpcAbi::SharedRingCommand
+    } else {
+        CURRENT_DRIVER_TASK_IPC_ABI
+    };
     let mut line = String::<192>::new();
     let _ = write!(
         line,
@@ -1828,7 +2254,7 @@ pub fn emit_boot_contract_proof() {
         proof.affinity_configured_count,
         proof.affinity_applied_count,
         if proof.vspace_proof { "isolated" } else { "shared-root" },
-        CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+        proof_ipc_abi.as_str(),
         if proof.pointer_free_ipc_proof { "yes" } else { "no" },
         if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
             == REQUIRED_DRIVER_TASK_ROLE_MASK
@@ -1871,7 +2297,7 @@ pub fn emit_boot_contract_proof() {
             } else {
                 "shared-root"
             },
-            CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+            proof_ipc_abi.as_str(),
             if proof.pointer_free_ipc_proof {
                 "yes"
             } else {
@@ -1899,7 +2325,7 @@ pub fn emit_boot_contract_proof() {
             } else {
                 "shared-root"
             },
-            CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+            proof_ipc_abi.as_str(),
             if proof.pointer_free_ipc_proof {
                 "yes"
             } else {
@@ -1962,7 +2388,7 @@ pub fn emit_boot_contract_proof() {
         if proof.sched_proof { "pass" } else { "fail" },
         if proof.affinity_proof { "pass" } else { "fail" },
         if proof.vspace_proof { "isolated" } else { "shared-root" },
-        CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+        proof_ipc_abi.as_str(),
         if proof.pointer_free_ipc_proof { "yes" } else { "no" },
         proof.live_tcb_role_mask,
         proof.hot_path_role_mask,
@@ -2031,6 +2457,9 @@ mod tests {
             DEDICATED_DRIVER_TASK_SUBSTRATE_READY,
             summary.dedicated_sel4_tasks > 0
         );
+        const {
+            assert!(!DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_READY);
+        }
         assert!(!dedicated_driver_task_acceptance_ready());
     }
 
@@ -2153,6 +2582,20 @@ mod tests {
         assert_eq!(core::mem::align_of::<DriverTaskCommandRecord>(), 4);
         assert_eq!(core::mem::size_of::<DriverTaskCompletionRecord>(), 20);
         assert_eq!(core::mem::align_of::<DriverTaskCompletionRecord>(), 4);
+        assert!(
+            DRIVER_TASK_RING_COMPLETION_OFFSET >= core::mem::size_of::<DriverTaskCommandRecord>()
+        );
+        assert!(
+            DRIVER_TASK_RING_COMPLETION_OFFSET + core::mem::size_of::<DriverTaskCompletionRecord>()
+                <= DRIVER_TASK_RING_PAGE_BYTES
+        );
+        assert_eq!(DRIVER_TASK_RING_VADDR & 0xfff, 0);
+        assert_eq!(DRIVER_TASK_IPC_VADDR & 0xfff, 0);
+        assert_eq!(DRIVER_TASK_STACK_BOTTOM_VADDR & 0xfff, 0);
+        assert_eq!(
+            DRIVER_TASK_STACK_TOP_VADDR - DRIVER_TASK_STACK_BOTTOM_VADDR,
+            4096
+        );
 
         let budget = DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         assert_eq!(budget.max_ops, 192);
@@ -2182,6 +2625,105 @@ mod tests {
             DriverTaskFaultCode::RejectedCommand.as_str(),
             "rejected-command"
         );
+    }
+
+    #[test]
+    fn pi4_hot_path_command_catalog_is_pointer_free_and_complete() {
+        assert_eq!(PI4_DRIVER_TASK_HOT_PATHS.len(), 7);
+        let mut role_mask = 0usize;
+        let mut saw_serial = false;
+        let mut saw_usb = false;
+        let mut saw_display = false;
+        let mut saw_genet = false;
+        let mut saw_cyw43 = false;
+        let mut saw_sdio = false;
+        let mut saw_pcie = false;
+
+        for (index, hot_path) in PI4_DRIVER_TASK_HOT_PATHS.iter().copied().enumerate() {
+            let contract = hot_path.contract();
+            assert_eq!(contract.validate(), Ok(()), "{hot_path:?}");
+            let role_bit = hot_path.role_bit();
+            assert_ne!(role_bit, 0, "{hot_path:?}");
+            role_mask |= role_bit;
+
+            let budget = DriverTaskBudgetGrant::from_contract(contract);
+            let frame = if hot_path == DriverTaskHotPath::HdmiText {
+                DriverFrameDescriptor::new(256, 80, 0x1).unwrap()
+            } else {
+                DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                }
+            };
+            let command =
+                DriverTaskCommandRecord::pi4_hot_path(index as u32 + 1, hot_path, budget, frame);
+            assert_eq!(command.sequence, index as u32 + 1);
+            assert_eq!(command.opcode, hot_path.opcode().as_u16());
+            assert_eq!(command.arg0, hot_path.as_u32());
+            assert_eq!(command.arg1, role_bit as u32);
+            assert_eq!(command.budget, budget);
+            assert_eq!(command.frame, frame);
+
+            match hot_path {
+                DriverTaskHotPath::SerialConsole => saw_serial = true,
+                DriverTaskHotPath::UsbKeyboard => saw_usb = true,
+                DriverTaskHotPath::HdmiText => saw_display = true,
+                DriverTaskHotPath::GenetNic => saw_genet = true,
+                DriverTaskHotPath::Cyw43Wifi => saw_cyw43 = true,
+                DriverTaskHotPath::SdioHost => saw_sdio = true,
+                DriverTaskHotPath::PcieRoot => saw_pcie = true,
+            }
+        }
+
+        assert_eq!(
+            role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK,
+            REQUIRED_DRIVER_TASK_ROLE_MASK
+        );
+        assert!(saw_serial);
+        assert!(saw_usb);
+        assert!(saw_display);
+        assert!(saw_genet);
+        assert!(saw_cyw43);
+        assert!(saw_sdio);
+        assert!(saw_pcie);
+    }
+
+    #[test]
+    fn callback_pointer_services_do_not_credit_strong_hot_paths() {
+        assert!(!driver_task_service_counts_as_hot_path(
+            DriverTaskIsolation::RootTaskCompatibility
+        ));
+        assert!(driver_task_service_counts_as_hot_path(
+            DriverTaskIsolation::DedicatedSeL4Task
+        ));
+        assert!(!CURRENT_DRIVER_TASK_IPC_ABI.is_pointer_free());
+    }
+
+    #[test]
+    fn pi4_hardware_profile_disallows_steady_state_compatibility_paths() {
+        assert_eq!(
+            DriverTaskRuntimeProfile::Pi4Hardware.as_str(),
+            "pi4-hardware"
+        );
+        assert!(!callback_dispatch_allowed_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware
+        ));
+        assert!(!root_fallback_allowed_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware
+        ));
+        assert!(callback_dispatch_allowed_for_profile(
+            DriverTaskRuntimeProfile::QemuCompatibility
+        ));
+        assert!(root_fallback_allowed_for_profile(
+            DriverTaskRuntimeProfile::QemuCompatibility
+        ));
+        assert!(callback_dispatch_allowed_for_profile(
+            DriverTaskRuntimeProfile::HostTest
+        ));
+        assert!(root_fallback_allowed_for_profile(
+            DriverTaskRuntimeProfile::HostTest
+        ));
     }
 
     #[test]

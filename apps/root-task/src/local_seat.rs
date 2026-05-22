@@ -322,27 +322,35 @@ impl LocalSeatRuntime {
     pub fn mirror_line(&mut self, line: &str) {
         #[cfg(feature = "kernel")]
         {
-            let mut context = DisplayMirrorTaskContext {
-                runtime: self as *mut Self as usize,
-                line_ptr: line.as_ptr() as usize,
-                line_len: line.len(),
-            };
-            // SAFETY: The context points at `self` plus the borrowed `line`;
-            // root waits synchronously until the HDMI driver TCB finishes this
-            // bounded mirror operation.
-            if unsafe {
-                crate::hal::driver_task::run_driver_task_service(
-                    crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
-                    &mut context as *mut DisplayMirrorTaskContext as usize,
-                    display_mirror_driver_task,
-                )
+            let contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
+            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
+                let mut context = DisplayMirrorTaskContext {
+                    runtime: self as *mut Self as usize,
+                    line_ptr: line.as_ptr() as usize,
+                    line_len: line.len(),
+                };
+                // SAFETY: This transitional callback path is admitted only for
+                // QEMU/host compatibility. Physical Pi 4 steady-state display
+                // service must use the pointer-free ring-backed path.
+                if unsafe {
+                    crate::hal::driver_task::run_driver_task_service(
+                        contract,
+                        &mut context as *mut DisplayMirrorTaskContext as usize,
+                        display_mirror_driver_task,
+                    )
+                }
+                .is_some()
+                {
+                    return;
+                }
             }
-            .is_some()
-            {
+            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+                self.driver_task_budget_overruns =
+                    self.driver_task_budget_overruns.saturating_add(1);
                 return;
             }
             crate::hal::driver_task::record_driver_task_service(
-                crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                contract,
                 crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
             );
         }
@@ -511,18 +519,25 @@ impl LocalSeatRuntime {
         let contract = driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            // SAFETY: The context pointer is `self`, and root waits
-            // synchronously for the USB/local-seat driver TCB before touching
-            // the runtime again.
-            if unsafe {
-                crate::hal::driver_task::run_driver_task_service(
-                    contract,
-                    self as *mut Self as usize,
-                    usb_keyboard_poll_driver_task,
-                )
+            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
+                // SAFETY: This transitional callback path is admitted only for
+                // QEMU/host compatibility. Physical Pi 4 steady-state USB
+                // service must use the pointer-free ring-backed path.
+                if unsafe {
+                    crate::hal::driver_task::run_driver_task_service(
+                        contract,
+                        self as *mut Self as usize,
+                        usb_keyboard_poll_driver_task,
+                    )
+                }
+                .is_some()
+                {
+                    return;
+                }
             }
-            .is_some()
-            {
+            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+                self.driver_task_budget_overruns =
+                    self.driver_task_budget_overruns.saturating_add(1);
                 return;
             }
             crate::hal::driver_task::record_driver_task_service(

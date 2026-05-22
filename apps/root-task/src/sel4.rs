@@ -1626,9 +1626,33 @@ pub fn user_image_vaddr_to_paddr(vaddr: usize) -> Option<usize> {
     Some(page_paddr.saturating_add(offset & (PAGE_SIZE - 1)))
 }
 
+/// Returns the boot-provided user-image frame cap covering a virtual address.
+#[cfg(all(feature = "kernel", target_os = "none"))]
+#[must_use]
+pub fn user_image_frame_cap_for_vaddr(vaddr: usize) -> Option<seL4_CPtr> {
+    let bootinfo = runtime_bootinfo();
+    let base = user_image_base_vaddr();
+    if vaddr < base {
+        return None;
+    }
+    let offset = vaddr - base;
+    let index = offset >> PAGE_BITS;
+    let start = bootinfo.userImageFrames.start as usize;
+    let end = bootinfo.userImageFrames.end as usize;
+    let slot = start.saturating_add(index);
+    (slot < end).then_some(slot as seL4_CPtr)
+}
+
 #[cfg(any(not(feature = "kernel"), not(target_os = "none")))]
 #[must_use]
 pub fn user_image_vaddr_to_paddr(_vaddr: usize) -> Option<usize> {
+    None
+}
+
+/// Host-build placeholder for user-image frame cap resolution.
+#[cfg(any(not(feature = "kernel"), not(target_os = "none")))]
+#[must_use]
+pub fn user_image_frame_cap_for_vaddr(_vaddr: usize) -> Option<seL4_CPtr> {
     None
 }
 
@@ -3106,6 +3130,9 @@ const DMA_LOW_GUARD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_TABLES: usize = 64;
 const MAX_PAGE_DIRECTORIES: usize = 32;
 const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
+const MAX_DRIVER_VSPACE_PAGE_TABLES: usize = 12;
+const MAX_DRIVER_VSPACE_PAGE_DIRECTORIES: usize = 6;
+const MAX_DRIVER_VSPACE_PAGE_UPPER_DIRECTORIES: usize = 3;
 pub(crate) const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = sel4_sys::seL4_ARM_ExecuteNever;
 
 /// Returns the exclusive virtual address range reserved for device page tables and mappings.
@@ -4539,6 +4566,190 @@ impl<'a> KernelEnv<'a> {
         assign_vspace_asid(sel4_sys::seL4_CapInitThreadASIDPool, vspace)
     }
 
+    /// Copies a capability into a fresh init-CNode slot with the supplied rights.
+    pub fn copy_cap_to_new_slot(
+        &mut self,
+        source: seL4_CPtr,
+        rights: sel4_sys::seL4_CapRights,
+    ) -> Result<seL4_CPtr, seL4_Error> {
+        let slot = self.allocate_slot();
+        let depth = word_bits() as u8;
+        let err = cnode_copy_depth(
+            self.init_cnode_cap(),
+            slot,
+            depth,
+            self.init_cnode_cap(),
+            source,
+            depth,
+            rights,
+        );
+        if err == seL4_NoError {
+            Ok(slot)
+        } else {
+            Err(err)
+        }
+    }
+
+    /// Maps a copied page capability into a non-root VSpace.
+    pub fn map_page_copy_into_vspace(
+        &mut self,
+        source_frame: seL4_CPtr,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<seL4_CPtr, seL4_Error> {
+        self.ensure_page_table_in_vspace(vspace, vaddr, tracker)?;
+        let frame_copy = self.copy_cap_to_new_slot(source_frame, rights)?;
+        map_page_into_vspace(frame_copy, vspace, vaddr, rights, attr)?;
+        Ok(frame_copy)
+    }
+
+    /// Ensures that all intermediate page-table objects exist in a target VSpace.
+    pub fn ensure_page_table_in_vspace(
+        &mut self,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<(), seL4_Error> {
+        self.ensure_page_directory_in_vspace(vspace, vaddr, tracker)?;
+        let pt_base = PageTableBookkeeper::<MAX_DRIVER_VSPACE_PAGE_TABLES>::base_for(vaddr);
+        if tracker.page_tables.contains_base(pt_base) {
+            return Ok(());
+        }
+        let pt_slot = self.allocate_translation_table_for_vaddr(
+            pt_base,
+            vaddr,
+            RetypeKind::PageTable { vaddr: pt_base },
+        )?;
+        match map_page_table_into_vspace(pt_slot, vspace, pt_base, seL4_ARM_Page_Default) {
+            Ok(()) => {
+                tracker
+                    .page_tables
+                    .remember_base(pt_base)
+                    .map_err(|_| seL4_NotEnoughMemory)?;
+                Ok(())
+            }
+            Err(err) if Self::mapping_already_present(err) => {
+                tracker
+                    .page_tables
+                    .remember_base(pt_base)
+                    .map_err(|_| seL4_NotEnoughMemory)?;
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn ensure_page_directory_in_vspace(
+        &mut self,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<(), seL4_Error> {
+        let pd_base =
+            PageDirectoryBookkeeper::<MAX_DRIVER_VSPACE_PAGE_DIRECTORIES>::base_for(vaddr);
+        if tracker.page_directories.contains_base(pd_base) {
+            return Ok(());
+        }
+        self.ensure_page_upper_directory_in_vspace(vspace, vaddr, tracker)?;
+        let pd_slot = self.allocate_translation_table_for_vaddr(
+            pd_base,
+            vaddr,
+            RetypeKind::PageDirectory { vaddr: pd_base },
+        )?;
+        match map_page_table_into_vspace(pd_slot, vspace, pd_base, seL4_ARM_Page_Default) {
+            Ok(()) => {
+                tracker
+                    .page_directories
+                    .remember_base(pd_base)
+                    .map_err(|_| seL4_NotEnoughMemory)?;
+                Ok(())
+            }
+            Err(err) if Self::mapping_already_present(err) => {
+                tracker
+                    .page_directories
+                    .remember_base(pd_base)
+                    .map_err(|_| seL4_NotEnoughMemory)?;
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn ensure_page_upper_directory_in_vspace(
+        &mut self,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<(), seL4_Error> {
+        let pud_base =
+            PageUpperDirectoryBookkeeper::<MAX_DRIVER_VSPACE_PAGE_UPPER_DIRECTORIES>::base_for(
+                vaddr,
+            );
+        if tracker.page_upper_directories.contains_base(pud_base) {
+            return Ok(());
+        }
+        let pud_slot = self.allocate_translation_table_for_vaddr(
+            pud_base,
+            vaddr,
+            RetypeKind::PageUpperDirectory { vaddr: pud_base },
+        )?;
+        match map_page_table_into_vspace(pud_slot, vspace, pud_base, seL4_ARM_Page_Default) {
+            Ok(()) => {
+                tracker
+                    .page_upper_directories
+                    .remember_base(pud_base)
+                    .map_err(|_| seL4_NotEnoughMemory)?;
+                Ok(())
+            }
+            Err(err) if Self::mapping_already_present(err) => {
+                tracker
+                    .page_upper_directories
+                    .remember_base(pud_base)
+                    .map_err(|_| seL4_NotEnoughMemory)?;
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn allocate_translation_table_for_vaddr(
+        &mut self,
+        table_base: usize,
+        mapping_vaddr: usize,
+        kind: RetypeKind,
+    ) -> Result<seL4_CPtr, seL4_Error> {
+        let level = match kind {
+            RetypeKind::PageTable { .. } => "driver_page_table",
+            RetypeKind::PageDirectory { .. } => "driver_page_directory",
+            RetypeKind::PageUpperDirectory { .. } => "driver_page_upper_directory",
+            _ => "driver_page_table",
+        };
+        let reserved = self.reserve_page_table_for_vaddr(table_base, mapping_vaddr, level)?;
+        let slot = self.allocate_slot();
+        let trace = self.prepare_retype_trace(
+            &reserved,
+            slot,
+            seL4_ARM_PageTableObject as seL4_Word,
+            PAGE_TABLE_BITS as seL4_Word,
+            kind,
+        );
+        self.record_retype(trace, RetypeStatus::Pending);
+        match self.retype_page_table(reserved.cap(), &trace) {
+            Ok(()) => {
+                self.record_retype(trace, RetypeStatus::Ok);
+                Ok(slot)
+            }
+            Err(err) => {
+                self.record_retype(trace, RetypeStatus::Err(err));
+                self.release_reserved_page_table(&reserved);
+                Err(err)
+            }
+        }
+    }
+
     /// Maps a physical device frame into the root task's device window.
     #[track_caller]
     pub fn map_device(&mut self, paddr: usize) -> Result<DeviceFrame, seL4_Error> {
@@ -5960,6 +6171,43 @@ type PageTableBookkeeper<const N: usize> = TranslationBookkeeper<N, PAGE_TABLE_A
 type PageDirectoryBookkeeper<const N: usize> = TranslationBookkeeper<N, PAGE_DIRECTORY_ALIGN>;
 type PageUpperDirectoryBookkeeper<const N: usize> =
     TranslationBookkeeper<N, PAGE_UPPER_DIRECTORY_ALIGN>;
+
+/// Per-target-VSpace intermediate table tracker for isolated driver mappings.
+#[cfg(feature = "kernel")]
+#[derive(Clone)]
+pub struct VSpaceTableTracker {
+    page_tables: PageTableBookkeeper<MAX_DRIVER_VSPACE_PAGE_TABLES>,
+    page_directories: PageDirectoryBookkeeper<MAX_DRIVER_VSPACE_PAGE_DIRECTORIES>,
+    page_upper_directories: PageUpperDirectoryBookkeeper<MAX_DRIVER_VSPACE_PAGE_UPPER_DIRECTORIES>,
+}
+
+#[cfg(feature = "kernel")]
+impl VSpaceTableTracker {
+    /// Creates an empty tracker for one isolated target VSpace.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            page_tables: PageTableBookkeeper::new(),
+            page_directories: PageDirectoryBookkeeper::new(),
+            page_upper_directories: PageUpperDirectoryBookkeeper::new(),
+        }
+    }
+
+    /// Number of intermediate translation objects installed so far.
+    #[must_use]
+    pub fn mapped_table_count(&self) -> usize {
+        self.page_tables.count()
+            + self.page_directories.count()
+            + self.page_upper_directories.count()
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl Default for VSpaceTableTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(test)]
 mod tests {

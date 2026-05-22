@@ -27,6 +27,14 @@ SECTIONS
     *(.text .text.*)
   } :text
 
+  . = ALIGN(0x1000);
+  PROVIDE(__driver_task_text_start = .);
+  .driver_task_text : ALIGN(0x1000) {
+    KEEP(*(.driver_task_text .driver_task_text.*))
+    . = ALIGN(0x1000);
+  } :text
+  PROVIDE(__driver_task_text_end = .);
+
   .rodata : {
     *(.rodata .rodata.*)
     *(.gnu.linkonce.r.*)

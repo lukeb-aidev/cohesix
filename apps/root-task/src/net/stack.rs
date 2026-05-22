@@ -5668,22 +5668,28 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         let contract = D::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            let mut context = NetDriverTaskContext::<D> {
-                stack: self as *mut NetStack<D> as usize,
-                budget: 0,
-                now_ms,
-                _marker: core::marker::PhantomData,
-            };
-            // SAFETY: The context points at `self`; root waits synchronously
-            // for the active NIC driver TCB before touching the stack again.
-            if let Some(result) = unsafe {
-                crate::hal::driver_task::run_driver_task_service(
-                    contract,
-                    &mut context as *mut NetDriverTaskContext<D> as usize,
-                    net_poll_driver_task::<D>,
-                )
-            } {
-                return result != 0;
+            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
+                let mut context = NetDriverTaskContext::<D> {
+                    stack: self as *mut NetStack<D> as usize,
+                    budget: 0,
+                    now_ms,
+                    _marker: core::marker::PhantomData,
+                };
+                // SAFETY: This transitional callback path is admitted only for
+                // QEMU/host compatibility. Physical Pi 4 steady-state NIC
+                // service must use a pointer-free frame ring below smoltcp.
+                if let Some(result) = unsafe {
+                    crate::hal::driver_task::run_driver_task_service(
+                        contract,
+                        &mut context as *mut NetDriverTaskContext<D> as usize,
+                        net_poll_driver_task::<D>,
+                    )
+                } {
+                    return result != 0;
+                }
+            }
+            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+                return false;
             }
             crate::hal::driver_task::record_driver_task_service(
                 contract,
@@ -5701,23 +5707,28 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         let contract = D::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            let mut context = NetDriverTaskContext::<D> {
-                stack: self as *mut NetStack<D> as usize,
-                budget: budget as *mut DriverServiceBudget as usize,
-                now_ms,
-                _marker: core::marker::PhantomData,
-            };
-            // SAFETY: The context points at `self` and the caller-owned budget;
-            // root waits synchronously for the active NIC driver TCB before
-            // touching either object again.
-            if let Some(result) = unsafe {
-                crate::hal::driver_task::run_driver_task_service(
-                    contract,
-                    &mut context as *mut NetDriverTaskContext<D> as usize,
-                    net_poll_budgeted_driver_task::<D>,
-                )
-            } {
-                return unpack_net_poll_result(result);
+            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
+                let mut context = NetDriverTaskContext::<D> {
+                    stack: self as *mut NetStack<D> as usize,
+                    budget: budget as *mut DriverServiceBudget as usize,
+                    now_ms,
+                    _marker: core::marker::PhantomData,
+                };
+                // SAFETY: This transitional callback path is admitted only for
+                // QEMU/host compatibility. Physical Pi 4 steady-state NIC
+                // service must use a pointer-free frame ring below smoltcp.
+                if let Some(result) = unsafe {
+                    crate::hal::driver_task::run_driver_task_service(
+                        contract,
+                        &mut context as *mut NetDriverTaskContext<D> as usize,
+                        net_poll_budgeted_driver_task::<D>,
+                    )
+                } {
+                    return unpack_net_poll_result(result);
+                }
+            }
+            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+                return Err(DriverServiceBudgetError::OperationsExhausted);
             }
             crate::hal::driver_task::record_driver_task_service(
                 contract,

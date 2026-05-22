@@ -54,7 +54,9 @@ use crate::hal::driver_task::{
     VIRTIO_NET_DRIVER_TASK_CONTRACT,
 };
 #[cfg(feature = "kernel")]
-use crate::sel4::{self, DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame};
+use crate::sel4::{
+    self, DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame, VSpaceTableTracker,
+};
 #[cfg(feature = "kernel")]
 use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
@@ -1240,9 +1242,15 @@ struct KernelDriverTaskHandle {
     fault_slot: seL4_CPtr,
     ipc_frame: seL4_CPtr,
     stack_frame: seL4_CPtr,
+    ring_frame: Option<seL4_CPtr>,
+    vspace: Option<seL4_CPtr>,
+    code_frame: Option<seL4_CPtr>,
     ipc_vaddr: usize,
+    ring_vaddr: usize,
     stack_top: usize,
     affinity_core: Option<u8>,
+    vspace_isolated: bool,
+    pointer_free_ipc: bool,
     started: bool,
 }
 
@@ -1260,6 +1268,12 @@ fn add_driver_task_handle_to_report(
         report.affinity_configured_count = report.affinity_configured_count.saturating_add(1);
         report.affinity_applied_count = report.affinity_applied_count.saturating_add(1);
     }
+    if handle.vspace_isolated {
+        report.isolated_vspace_count = report.isolated_vspace_count.saturating_add(1);
+    }
+    if handle.pointer_free_ipc {
+        report.pointer_free_ipc_count = report.pointer_free_ipc_count.saturating_add(1);
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -1276,9 +1290,9 @@ fn finalize_driver_task_bootstrap_report(
     report.affinity_proof = all_configured
         && report.affinity_configured_count == expected_count
         && report.affinity_configured_count == report.affinity_applied_count;
-    report.vspace_proof = false;
+    report.vspace_proof = all_configured && report.isolated_vspace_count == expected_count;
     report.pointer_free_ipc_proof =
-        driver_task::CURRENT_DRIVER_TASK_IPC_ABI.is_pointer_free() && report.vspace_proof;
+        report.vspace_proof && report.pointer_free_ipc_count == expected_count;
 }
 
 #[cfg(feature = "kernel")]
@@ -1366,7 +1380,7 @@ impl<'a> KernelHal<'a> {
                         continue;
                     }
                     add_driver_task_handle_to_report(&mut report, &handle);
-                    let mut line = heapless::String::<320>::new();
+                    let mut line = heapless::String::<512>::new();
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
@@ -1466,7 +1480,7 @@ impl<'a> KernelHal<'a> {
         };
 
         for contract in DRIVER_TASK_BOOTSTRAP_CONTRACTS {
-            match self.create_driver_task(*contract, fault_endpoint) {
+            match self.create_isolated_driver_task(*contract, fault_endpoint) {
                 Ok(handle) => {
                     if self.driver_tasks.push(handle).is_err() {
                         report.failed_count = report.failed_count.saturating_add(1);
@@ -1485,11 +1499,11 @@ impl<'a> KernelHal<'a> {
 
                     add_driver_task_handle_to_report(&mut report, &handle);
 
-                    let mut line = heapless::String::<320>::new();
+                    let mut line = heapless::String::<512>::new();
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root ipc_abi={} proof=partial",
+                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} proof={}",
                             handle.contract.name,
                             handle.contract.kind.proof_role(),
                             handle.tcb,
@@ -1501,7 +1515,12 @@ impl<'a> KernelHal<'a> {
                                 Some(core) => core as i32,
                                 None => -1,
                             },
-                            driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+                            if handle.vspace_isolated { "isolated" } else { "shared-root" },
+                            handle.vspace.unwrap_or(0),
+                            handle.ring_vaddr,
+                            driver_task::DriverTaskIpcAbi::SharedRingCommand.as_str(),
+                            if handle.pointer_free_ipc { "yes" } else { "no" },
+                            if handle.pointer_free_ipc { "ring" } else { "partial" },
                         ),
                     );
                     crate::bootstrap::log::force_uart_line(line.as_str());
@@ -1663,10 +1682,247 @@ impl<'a> KernelHal<'a> {
             fault_slot: driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
             ipc_frame: ipc_frame.cap(),
             stack_frame: stack_frame.cap(),
+            ring_frame: None,
+            vspace: None,
+            code_frame: None,
             ipc_vaddr,
+            ring_vaddr: 0,
             stack_top,
             affinity_core,
+            vspace_isolated: false,
+            pointer_free_ipc: false,
             started,
+        })
+    }
+
+    fn create_isolated_driver_task(
+        &mut self,
+        contract: DriverTaskContract,
+        fault_endpoint: seL4_CPtr,
+    ) -> Result<KernelDriverTaskHandle, HalError> {
+        contract.validate().map_err(HalError::DriverTaskContract)?;
+        if !driver_task::isolated_trampoline_supported() {
+            return Err(HalError::Unsupported("driver-task-isolated-trampoline"));
+        }
+
+        let role_bit = driver_task::driver_task_role_bit(contract.kind);
+        if role_bit == 0 {
+            return Err(HalError::Unsupported("driver-task-role"));
+        }
+        let task_key = driver_task::driver_task_contract_key(contract)
+            .ok_or(HalError::Unsupported("driver-task-key"))?;
+
+        let trampoline_range = driver_task::isolated_trampoline_range();
+        let page_bytes = 1usize << sel4::PAGE_BITS;
+        if trampoline_range.start == 0
+            || trampoline_range.end <= trampoline_range.start
+            || trampoline_range.start & (page_bytes - 1) != 0
+            || trampoline_range.end - trampoline_range.start > page_bytes
+        {
+            return Err(HalError::Unsupported("driver-task-trampoline-layout"));
+        }
+
+        let root_cnode = self.env.init_cnode_cap();
+        let root_depth = sel4::word_bits() as u8;
+        let child_depth = driver_task::DRIVER_TASK_CHILD_CNODE_RADIX_BITS;
+        let child_cnode = self.env.alloc_cnode(child_depth).map_err(HalError::Sel4)?;
+        let tcb = self.env.alloc_tcb().map_err(HalError::Sel4)?;
+        let command_endpoint = self.env.alloc_endpoint().map_err(HalError::Sel4)?;
+        let notification = self.env.alloc_notification().map_err(HalError::Sel4)?;
+        let vspace = self.env.alloc_vspace_root().map_err(HalError::Sel4)?;
+        self.env
+            .assign_vspace_asid_from_init_pool(vspace)
+            .map_err(HalError::Sel4)?;
+
+        let mut code_frame = self
+            .env
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .map_err(HalError::Sel4)?;
+        let mut ring_frame = self
+            .env
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .map_err(HalError::Sel4)?;
+        let mut ipc_frame = self
+            .env
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .map_err(HalError::Sel4)?;
+        let mut stack_frame = self
+            .env
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .map_err(HalError::Sel4)?;
+
+        code_frame.as_mut_slice().fill(0);
+        // SAFETY: The linker script page-aligns `.driver_task_text`, the range
+        // check above bounds it to one mapped user-image page, and this copy
+        // reads only that page into a HAL-owned frame.
+        let source =
+            unsafe { core::slice::from_raw_parts(trampoline_range.start as *const u8, page_bytes) };
+        code_frame.as_mut_slice().copy_from_slice(source);
+        ring_frame.as_mut_slice().fill(0);
+        ipc_frame.as_mut_slice().fill(0);
+        stack_frame.as_mut_slice().fill(0);
+
+        let badge = 0xD000 | (role_bit as seL4_Word);
+        let fault_err = sel4::cnode_mint_depth(
+            child_cnode,
+            driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+            child_depth,
+            root_cnode,
+            fault_endpoint,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+            badge,
+        );
+        if fault_err != seL4_NoError {
+            return Err(HalError::Sel4(fault_err));
+        }
+
+        let endpoint_err = sel4::cnode_mint_depth(
+            child_cnode,
+            driver_task::DRIVER_TASK_CHILD_COMMAND_SLOT,
+            child_depth,
+            root_cnode,
+            command_endpoint,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+            0,
+        );
+        if endpoint_err != seL4_NoError {
+            return Err(HalError::Sel4(endpoint_err));
+        }
+        driver_task::publish_driver_task_command_endpoint(contract, command_endpoint as usize);
+        driver_task::publish_driver_task_ring(contract, ring_frame.ptr().as_ptr() as usize);
+
+        let notification_err = sel4::cnode_mint_depth(
+            child_cnode,
+            driver_task::DRIVER_TASK_CHILD_NOTIFICATION_SLOT,
+            child_depth,
+            root_cnode,
+            notification,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+            0,
+        );
+        if notification_err != seL4_NoError {
+            return Err(HalError::Sel4(notification_err));
+        }
+
+        let mut tracker = VSpaceTableTracker::new();
+        let code_rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
+        let data_rights = sel4_sys::seL4_CapRights_ReadWrite;
+        self.env
+            .map_page_copy_into_vspace(
+                code_frame.cap(),
+                vspace,
+                trampoline_range.start,
+                code_rights,
+                sel4_sys::seL4_ARM_Page_Default,
+                &mut tracker,
+            )
+            .map_err(HalError::Sel4)?;
+        self.env
+            .map_page_copy_into_vspace(
+                ring_frame.cap(),
+                vspace,
+                driver_task::DRIVER_TASK_RING_VADDR,
+                data_rights,
+                sel4_sys::seL4_ARM_Page_Default,
+                &mut tracker,
+            )
+            .map_err(HalError::Sel4)?;
+        self.env
+            .map_page_copy_into_vspace(
+                ipc_frame.cap(),
+                vspace,
+                driver_task::DRIVER_TASK_IPC_VADDR,
+                data_rights,
+                sel4_sys::seL4_ARM_Page_Default,
+                &mut tracker,
+            )
+            .map_err(HalError::Sel4)?;
+        self.env
+            .map_page_copy_into_vspace(
+                stack_frame.cap(),
+                vspace,
+                driver_task::DRIVER_TASK_STACK_BOTTOM_VADDR,
+                data_rights,
+                sel4_sys::seL4_ARM_Page_Default,
+                &mut tracker,
+            )
+            .map_err(HalError::Sel4)?;
+
+        let guard_bits = sel4::word_bits().saturating_sub(child_depth as seL4_Word);
+        let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
+        sel4::set_tcb_space(
+            tcb,
+            driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+            child_cnode,
+            cspace_root_data,
+            vspace,
+            0,
+        )
+        .map_err(HalError::Sel4)?;
+
+        self.env
+            .bind_remote_ipc_buffer(tcb, ipc_frame.cap(), driver_task::DRIVER_TASK_IPC_VADDR)
+            .map_err(HalError::Sel4)?;
+
+        let priority = contract.sel4_priority();
+        sel4::set_tcb_sched_params(tcb, sel4_sys::seL4_CapInitThreadTCB, priority, priority)
+            .map_err(HalError::Sel4)?;
+        sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, priority)
+            .map_err(HalError::Sel4)?;
+
+        let affinity_target =
+            driver_affinity_target(contract).ok_or(HalError::Unsupported("driver-affinity"))?;
+        let affinity_policy = affinity::policy();
+        let affinity_core =
+            affinity::apply_driver_tcb_affinity(tcb, affinity_target, &affinity_policy)
+                .map_err(HalError::Affinity)?;
+
+        sel4::bind_tcb_notification(tcb, notification).map_err(HalError::Sel4)?;
+        sel4::write_tcb_registers(
+            tcb,
+            driver_task::isolated_trampoline_entry(),
+            driver_task::DRIVER_TASK_STACK_TOP_VADDR,
+            task_key as seL4_Word,
+            false,
+        )
+        .map_err(HalError::Sel4)?;
+        sel4::resume_tcb(tcb).map_err(HalError::Sel4)?;
+
+        let command = driver_task::DriverTaskCommandRecord::service(
+            0,
+            driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        );
+        let completion = driver_task::run_driver_task_ring_command(contract, command);
+        let pointer_free_ipc = matches!(
+            completion,
+            Some(done)
+                if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                    && done.result == task_key as u32
+        );
+
+        Ok(KernelDriverTaskHandle {
+            contract,
+            role_bit,
+            tcb,
+            cnode: child_cnode,
+            command_endpoint,
+            notification,
+            fault_slot: driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+            ipc_frame: ipc_frame.cap(),
+            stack_frame: stack_frame.cap(),
+            ring_frame: Some(ring_frame.cap()),
+            vspace: Some(vspace),
+            code_frame: Some(code_frame.cap()),
+            ipc_vaddr: driver_task::DRIVER_TASK_IPC_VADDR,
+            ring_vaddr: driver_task::DRIVER_TASK_RING_VADDR,
+            stack_top: driver_task::DRIVER_TASK_STACK_TOP_VADDR,
+            affinity_core,
+            vspace_isolated: true,
+            pointer_free_ipc,
+            started: pointer_free_ipc,
         })
     }
 
@@ -2049,11 +2305,35 @@ mod tests {
             fault_slot: super::driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
             ipc_frame: 0x104,
             stack_frame: 0x105,
+            ring_frame: None,
+            vspace: None,
+            code_frame: None,
             ipc_vaddr: 0x4000_0000,
+            ring_vaddr: 0,
             stack_top: 0x4000_1000,
             affinity_core,
+            vspace_isolated: false,
+            pointer_free_ipc: false,
             started,
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn fake_isolated_driver_task_handle(
+        contract: super::DriverTaskContract,
+        started: bool,
+        affinity_core: Option<u8>,
+    ) -> super::KernelDriverTaskHandle {
+        let mut handle = fake_driver_task_handle(contract, started, affinity_core);
+        handle.vspace = Some(0x200);
+        handle.ring_frame = Some(0x201);
+        handle.code_frame = Some(0x202);
+        handle.ring_vaddr = super::driver_task::DRIVER_TASK_RING_VADDR;
+        handle.ipc_vaddr = super::driver_task::DRIVER_TASK_IPC_VADDR;
+        handle.stack_top = super::driver_task::DRIVER_TASK_STACK_TOP_VADDR;
+        handle.vspace_isolated = true;
+        handle.pointer_free_ipc = started;
+        handle
     }
 
     #[cfg(feature = "kernel")]
@@ -2112,6 +2392,39 @@ mod tests {
         assert!(!report.vspace_proof);
         assert!(!report.pointer_free_ipc_proof);
         assert_eq!(report.broad_caps_leaked, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_task_bootstrap_report_proves_isolated_ring_only_for_all_contracts() {
+        let mut report = super::DriverTaskBootstrapReport::default();
+        for contract in super::DRIVER_TASK_BOOTSTRAP_CONTRACTS {
+            let handle = fake_isolated_driver_task_handle(*contract, true, Some(3));
+            super::add_driver_task_handle_to_report(&mut report, &handle);
+        }
+        super::finalize_driver_task_bootstrap_report(
+            &mut report,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
+        );
+
+        assert_eq!(
+            report.isolated_vspace_count,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len()
+        );
+        assert_eq!(
+            report.pointer_free_ipc_count,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len()
+        );
+        assert!(report.vspace_proof);
+        assert!(report.pointer_free_ipc_proof);
+
+        report.pointer_free_ipc_count -= 1;
+        super::finalize_driver_task_bootstrap_report(
+            &mut report,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
+        );
+        assert!(report.vspace_proof);
+        assert!(!report.pointer_free_ipc_proof);
     }
 
     #[cfg(feature = "kernel")]
