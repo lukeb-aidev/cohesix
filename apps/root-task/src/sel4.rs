@@ -103,6 +103,7 @@ const SEL4_ARM_PAGE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_SmallPageObject 
 const SEL4_ARM_LARGE_PAGE_OBJECT_WORD: seL4_Word =
     sel4_sys::seL4_ARM_LargePageObjectType as seL4_Word;
 const SEL4_ARM_PAGE_TABLE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_PageTableObject as seL4_Word;
+const SEL4_ARM_VSPACE_OBJECT_WORD: seL4_Word = sel4_sys::seL4_ARM_VSpaceObject as seL4_Word;
 // Local-seat DMA frame trace can generate thousands of UART lines during USB
 // enumeration; keep it opt-in for targeted diagnostics.
 const LOCAL_SEAT_DMA_FRAME_VERBOSE_LOGS: bool = false;
@@ -1509,6 +1510,75 @@ pub fn page_get_address(_frame: seL4_CPtr) -> Result<usize, seL4_Error> {
     Err(sel4_sys::seL4_IllegalOperation)
 }
 
+/// Assigns an ASID from an existing ASID pool to a newly created VSpace root.
+#[cfg(feature = "kernel")]
+pub fn assign_vspace_asid(asid_pool: seL4_CPtr, vspace: seL4_CPtr) -> Result<(), seL4_Error> {
+    // SAFETY: The caller supplies kernel capabilities naming an ASID pool and a
+    // VSpace cap. seL4 validates both caps and whether the VSpace already has an ASID.
+    let err = unsafe { sel4_sys::seL4_ARM_ASIDPool_Assign(asid_pool, vspace) };
+    if err == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[vspace] asid-assign failed pool=0x{asid_pool:04x} vspace=0x{vspace:04x} err={err} ({name})",
+            name = error_name(err),
+        );
+        Err(err)
+    }
+}
+
+/// Maps a page capability into an explicitly supplied VSpace.
+#[cfg(feature = "kernel")]
+pub fn map_page_into_vspace(
+    frame_cap: seL4_CPtr,
+    vspace: seL4_CPtr,
+    vaddr: usize,
+    rights: sel4_sys::seL4_CapRights,
+    attr: sel4_sys::seL4_ARM_VMAttributes,
+) -> Result<(), seL4_Error> {
+    KernelEnv::assert_page_aligned(vaddr);
+    let vaddr_word =
+        sel4_sys::seL4_Word::try_from(vaddr).expect("virtual address must fit in seL4_Word");
+    // SAFETY: `frame_cap` names a page capability, `vspace` names the target
+    // VSpace, and `vaddr` is page-aligned. seL4 validates page-table presence,
+    // rights, attributes, and authority.
+    let err = unsafe { sel4_sys::seL4_ARM_Page_Map(frame_cap, vspace, vaddr_word, rights, attr) };
+    if err == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[vspace] page-map failed frame=0x{frame_cap:04x} vspace=0x{vspace:04x} vaddr=0x{vaddr:016x} err={err} ({name})",
+            name = error_name(err),
+        );
+        Err(err)
+    }
+}
+
+/// Maps a page-table capability into an explicitly supplied VSpace.
+#[cfg(feature = "kernel")]
+pub fn map_page_table_into_vspace(
+    page_table: seL4_CPtr,
+    vspace: seL4_CPtr,
+    vaddr: usize,
+    attr: sel4_sys::seL4_ARM_VMAttributes,
+) -> Result<(), seL4_Error> {
+    KernelEnv::assert_page_aligned(vaddr);
+    let vaddr_word = sel4_sys::seL4_Word::try_from(vaddr)
+        .expect("page-table virtual address must fit in seL4_Word");
+    // SAFETY: `page_table` and `vspace` are caller-supplied kernel caps, and
+    // seL4 validates that the table can be installed at the requested address.
+    let err = unsafe { sel4_sys::seL4_ARM_PageTable_Map(page_table, vspace, vaddr_word, attr) };
+    if err == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[vspace] page-table-map failed table=0x{page_table:04x} vspace=0x{vspace:04x} vaddr=0x{vaddr:016x} err={err} ({name})",
+            name = error_name(err),
+        );
+        Err(err)
+    }
+}
+
 #[cfg(not(feature = "kernel"))]
 /// Host stub used when page address queries require the kernel feature.
 pub fn page_get_address(_frame: seL4_CPtr) -> Result<usize, seL4_Error> {
@@ -2487,6 +2557,7 @@ fn objtype_name(t: seL4_Word) -> &'static str {
         x if x == SEL4_ARM_PAGE_OBJECT_WORD => "seL4_ARM_Page",
         x if x == SEL4_ARM_LARGE_PAGE_OBJECT_WORD => "seL4_ARM_LargePage",
         x if x == SEL4_ARM_PAGE_TABLE_OBJECT_WORD => "seL4_ARM_PageTableObject",
+        x if x == SEL4_ARM_VSPACE_OBJECT_WORD => "seL4_ARM_VSpaceObject",
         _ => "<?>",
     }
 }
@@ -2522,6 +2593,7 @@ pub fn object_type_name(object_type: seL4_ObjectType) -> &'static str {
         sel4_sys::seL4_ARM_PageObjectType => "seL4_ARM_Page",
         sel4_sys::seL4_ARM_LargePageObjectType => "seL4_ARM_LargePage",
         sel4_sys::seL4_ARM_PageTableObjectType => "seL4_ARM_PageTableObject",
+        sel4_sys::seL4_ARM_VSpaceObjectType => "seL4_ARM_VSpaceObject",
         _ => "<?>",
     }
 }
@@ -3944,6 +4016,8 @@ pub enum RetypeKind {
         /// Virtual base address of the page upper directory's mapping range.
         vaddr: usize,
     },
+    /// A root VSpace object that will receive an ASID before driver use.
+    VSpaceRoot,
 }
 
 /// Detailed snapshot of the parameters used for a `seL4_Untyped_Retype` call.
@@ -4424,6 +4498,45 @@ impl<'a> KernelEnv<'a> {
                 Err(err.into_sel4_error())
             }
         }
+    }
+
+    /// Retypes and returns an AArch64 VSpace root object in the init CSpace.
+    pub fn alloc_vspace_root(&mut self) -> Result<seL4_CPtr, seL4_Error> {
+        let reserved = self
+            .untyped
+            .reserve_ram(sel4_sys::seL4_VSpaceBits as u8)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let slot = self.allocate_slot();
+        let trace = self.prepare_retype_trace(
+            &reserved,
+            slot,
+            sel4_sys::seL4_ARM_VSpaceObject as seL4_Word,
+            sel4_sys::seL4_VSpaceBits as seL4_Word,
+            RetypeKind::VSpaceRoot,
+        );
+        self.record_retype(trace, RetypeStatus::Pending);
+        match cspace_sys::untyped_retype_into_init_root(
+            reserved.cap() as seL4_CPtr,
+            sel4_sys::seL4_ARM_VSpaceObject as seL4_Word,
+            sel4_sys::seL4_VSpaceBits as seL4_Word,
+            slot,
+        ) {
+            Ok(()) => {
+                self.record_retype(trace, RetypeStatus::Ok);
+                Ok(slot)
+            }
+            Err(err) => {
+                let sel4_err = err.into_sel4_error();
+                self.record_retype(trace, RetypeStatus::Err(sel4_err));
+                self.untyped.release(&reserved);
+                Err(sel4_err)
+            }
+        }
+    }
+
+    /// Assigns an ASID from the boot-provided root ASID pool to a VSpace cap.
+    pub fn assign_vspace_asid_from_init_pool(&self, vspace: seL4_CPtr) -> Result<(), seL4_Error> {
+        assign_vspace_asid(sel4_sys::seL4_CapInitThreadASIDPool, vspace)
     }
 
     /// Maps a physical device frame into the root task's device window.
@@ -5903,6 +6016,20 @@ mod tests {
         }
 
         assert_eq!(error_name(42), "seL4_UnknownError");
+    }
+
+    #[test]
+    fn aarch64_vspace_and_asid_objects_are_page_sized() {
+        assert_eq!(
+            objtype_name(SEL4_ARM_VSPACE_OBJECT_WORD),
+            "seL4_ARM_VSpaceObject"
+        );
+        assert_eq!(
+            object_type_name(sel4_sys::seL4_ARM_VSpaceObjectType),
+            "seL4_ARM_VSpaceObject"
+        );
+        assert_eq!(sel4_sys::seL4_VSpaceBits as usize, PAGE_BITS);
+        assert_eq!(sel4_sys::seL4_ASIDPoolBits as usize, PAGE_BITS);
     }
 
     #[test]

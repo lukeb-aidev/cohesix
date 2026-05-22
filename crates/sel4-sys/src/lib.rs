@@ -1218,6 +1218,119 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_ARM_PageTable_Unmap(pt: seL4_ARM_PageTable) -> seL4_Error {
+        let mut mr0 = 0;
+        let mut mr1 = 0;
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+
+        let tag = seL4_MessageInfo_new(
+            arch_invocation_label_ARMPageTableUnmap as seL4_Word,
+            0,
+            0,
+            0,
+        );
+        let output_tag = seL4_CallWithMRs(pt, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_Page_Unmap(page: seL4_ARM_Page) -> seL4_Error {
+        let mut mr0 = 0;
+        let mut mr1 = 0;
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+
+        let tag = seL4_MessageInfo_new(arch_invocation_label_ARMPageUnmap as seL4_Word, 0, 0, 0);
+        let output_tag = seL4_CallWithMRs(page, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_ASIDControl_MakePool(
+        service: seL4_ARM_ASIDControl,
+        untyped: seL4_Untyped,
+        root: seL4_CNode,
+        index: seL4_Word,
+        depth: u8,
+    ) -> seL4_Error {
+        seL4_SetCap(0, untyped);
+        seL4_SetCap(1, root);
+
+        let mut mr0 = index;
+        let mut mr1 = (depth as seL4_Word) & 0xff;
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+
+        let tag = seL4_MessageInfo_new(
+            arch_invocation_label_ARMASIDControlMakePool as seL4_Word,
+            0,
+            2,
+            2,
+        );
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_ASIDPool_Assign(
+        service: seL4_ARM_ASIDPool,
+        vspace: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, vspace);
+
+        let mut mr0 = 0;
+        let mut mr1 = 0;
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+
+        let tag = seL4_MessageInfo_new(
+            arch_invocation_label_ARMASIDPoolAssign as seL4_Word,
+            0,
+            1,
+            0,
+        );
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_TCB_SetSpace(
         service: seL4_TCB,
         fault_ep: seL4_CPtr,
@@ -1622,6 +1735,8 @@ mod imp {
         _object_seL4_ARM_LargePageObject as seL4_ObjectType;
     pub const seL4_ARM_PageTableObject: seL4_ObjectType =
         _object_seL4_ARM_PageTableObject as seL4_ObjectType;
+    pub const seL4_ARM_VSpaceObject: seL4_ObjectType =
+        _mode_object_seL4_ARM_VSpaceObject as seL4_ObjectType;
     pub const seL4_ARM_SmallPageObject: seL4_ObjectType = seL4_ARM_Page;
     pub const seL4_UntypedObjectType: seL4_ObjectType = seL4_UntypedObject;
     pub const seL4_TCBObjectType: seL4_ObjectType = seL4_TCBObject;
@@ -1631,6 +1746,7 @@ mod imp {
     pub const seL4_ARM_PageObjectType: seL4_ObjectType = seL4_ARM_Page;
     pub const seL4_ARM_LargePageObjectType: seL4_ObjectType = seL4_ARM_LargePage;
     pub const seL4_ARM_PageTableObjectType: seL4_ObjectType = seL4_ARM_PageTableObject;
+    pub const seL4_ARM_VSpaceObjectType: seL4_ObjectType = seL4_ARM_VSpaceObject;
 
     pub const seL4_CapNull: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapNull as seL4_CPtr;
     pub const seL4_CapInitThreadTCB: seL4_CPtr =
@@ -1879,6 +1995,8 @@ mod imp {
     pub type seL4_TCB = seL4_CPtr;
     pub type seL4_Untyped = seL4_CPtr;
     pub type seL4_VSpace = seL4_CPtr;
+    pub type seL4_ARM_ASIDControl = seL4_CPtr;
+    pub type seL4_ARM_ASIDPool = seL4_CPtr;
     pub type seL4_ARM_Page = seL4_CPtr;
     pub type seL4_ARM_PageTable = seL4_CPtr;
 
@@ -1912,6 +2030,12 @@ mod imp {
     pub const invocation_label_TCBResume: seL4_Word = 12;
     pub const invocation_label_TCBBindNotification: seL4_Word = 13;
     pub const invocation_label_TCBUnbindNotification: seL4_Word = 14;
+    pub const arch_invocation_label_ARMPageTableMap: seL4_Word = 37;
+    pub const arch_invocation_label_ARMPageTableUnmap: seL4_Word = 38;
+    pub const arch_invocation_label_ARMPageMap: seL4_Word = 39;
+    pub const arch_invocation_label_ARMPageUnmap: seL4_Word = 40;
+    pub const arch_invocation_label_ARMASIDControlMakePool: seL4_Word = 46;
+    pub const arch_invocation_label_ARMASIDPoolAssign: seL4_Word = 47;
     pub const seL4_CapInitThreadSC: seL4_CPtr = 14;
     pub const seL4_CapSMC: seL4_CPtr = 15;
     pub const seL4_NumInitialCaps: seL4_CPtr = seL4_CapSMC + 1;
@@ -1923,11 +2047,15 @@ mod imp {
     pub const seL4_EndpointObject: seL4_Word = 2;
     pub const seL4_NotificationObject: seL4_Word = 3;
     pub const seL4_CapTableObject: seL4_Word = 4;
-    pub const seL4_ARM_SmallPageObject: seL4_Word = 6;
-    pub const seL4_ARM_LargePageObject: seL4_Word = 7;
-    pub const seL4_ARM_PageTableObject: seL4_Word = 8;
+    pub const seL4_ARM_HugePageObject: seL4_Word = 5;
+    pub const seL4_ARM_VSpaceObject: seL4_Word = 6;
+    pub const seL4_ARM_SmallPageObject: seL4_Word = 7;
+    pub const seL4_ARM_LargePageObject: seL4_Word = 8;
+    pub const seL4_ARM_PageTableObject: seL4_Word = 9;
     pub const seL4_EndpointBits: seL4_Word = 4;
     pub const seL4_NotificationBits: seL4_Word = 5;
+    pub const seL4_VSpaceBits: seL4_Word = 12;
+    pub const seL4_ASIDPoolBits: seL4_Word = 12;
 
     #[repr(usize)]
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1937,6 +2065,8 @@ mod imp {
         seL4_EndpointObject = seL4_EndpointObject as usize,
         seL4_NotificationObject = seL4_NotificationObject as usize,
         seL4_CapTableObject = seL4_CapTableObject as usize,
+        seL4_ARM_HugePageObject = seL4_ARM_HugePageObject as usize,
+        seL4_ARM_VSpaceObject = seL4_ARM_VSpaceObject as usize,
         seL4_ARM_Page = seL4_ARM_SmallPageObject as usize,
         seL4_ARM_LargePage = seL4_ARM_LargePageObject as usize,
         seL4_ARM_PageTableObject = seL4_ARM_PageTableObject as usize,
@@ -1952,6 +2082,7 @@ mod imp {
     pub const seL4_ARM_LargePageObjectType: seL4_ObjectType = seL4_ObjectType::seL4_ARM_LargePage;
     pub const seL4_ARM_PageTableObjectType: seL4_ObjectType =
         seL4_ObjectType::seL4_ARM_PageTableObject;
+    pub const seL4_ARM_VSpaceObjectType: seL4_ObjectType = seL4_ObjectType::seL4_ARM_VSpaceObject;
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -2681,21 +2812,74 @@ mod imp {
     #[inline(always)]
     pub unsafe fn seL4_ARM_Page_Map(
         _page: seL4_ARM_Page,
-        _vspace: seL4_VSpace,
-        _vaddr: seL4_Word,
-        _rights: seL4_CapRights_t,
-        _attr: seL4_ARM_VMAttributes,
+        vspace: seL4_VSpace,
+        vaddr: seL4_Word,
+        rights: seL4_CapRights_t,
+        attr: seL4_ARM_VMAttributes,
     ) -> seL4_Error {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(arch_invocation_label_ARMPageMap, 0, 1, 3);
+        (*ipc).caps_or_badges[0] = vspace;
+        (*ipc).msg[0] = vaddr;
+        (*ipc).msg[1] = rights.raw();
+        (*ipc).msg[2] = attr.0;
         seL4_NoError
     }
 
     #[inline(always)]
     pub unsafe fn seL4_ARM_PageTable_Map(
         _pt: seL4_ARM_PageTable,
-        _vspace: seL4_VSpace,
-        _vaddr: seL4_Word,
-        _attr: seL4_ARM_VMAttributes,
+        vspace: seL4_VSpace,
+        vaddr: seL4_Word,
+        attr: seL4_ARM_VMAttributes,
     ) -> seL4_Error {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(arch_invocation_label_ARMPageTableMap, 0, 1, 2);
+        (*ipc).caps_or_badges[0] = vspace;
+        (*ipc).msg[0] = vaddr;
+        (*ipc).msg[1] = attr.0;
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_PageTable_Unmap(_pt: seL4_ARM_PageTable) -> seL4_Error {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(arch_invocation_label_ARMPageTableUnmap, 0, 0, 0);
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_Page_Unmap(_page: seL4_ARM_Page) -> seL4_Error {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(arch_invocation_label_ARMPageUnmap, 0, 0, 0);
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_ASIDControl_MakePool(
+        _service: seL4_ARM_ASIDControl,
+        untyped: seL4_Untyped,
+        root: seL4_CNode,
+        index: seL4_Word,
+        depth: u8,
+    ) -> seL4_Error {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(arch_invocation_label_ARMASIDControlMakePool, 0, 2, 2);
+        (*ipc).caps_or_badges[0] = untyped;
+        (*ipc).caps_or_badges[1] = root;
+        (*ipc).msg[0] = index;
+        (*ipc).msg[1] = seL4_Word::from(depth);
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_ASIDPool_Assign(
+        _service: seL4_ARM_ASIDPool,
+        vspace: seL4_CPtr,
+    ) -> seL4_Error {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(arch_invocation_label_ARMASIDPoolAssign, 0, 1, 0);
+        (*ipc).caps_or_badges[0] = vspace;
         seL4_NoError
     }
 
@@ -2740,6 +2924,17 @@ mod tests {
         let ipc = unsafe { seL4_GetIPCBuffer() };
         // SAFETY: The synthetic IPC buffer has a fixed message array and tests pass valid indices.
         unsafe { (*ipc).msg[index] }
+    }
+
+    #[test]
+    fn aarch64_host_object_numbers_match_generated_kernel_layout() {
+        assert_eq!(seL4_ARM_HugePageObject, 5);
+        assert_eq!(seL4_ARM_VSpaceObject as seL4_Word, 6);
+        assert_eq!(seL4_ARM_SmallPageObject as seL4_Word, 7);
+        assert_eq!(seL4_ARM_LargePageObject as seL4_Word, 8);
+        assert_eq!(seL4_ARM_PageTableObject as seL4_Word, 9);
+        assert_eq!(seL4_VSpaceBits, 12);
+        assert_eq!(seL4_ASIDPoolBits, 12);
     }
 
     #[test]
@@ -2831,5 +3026,87 @@ mod tests {
         assert_eq!(tag.label(), invocation_label_TCBResume);
         assert_eq!(tag.extra_caps(), 0);
         assert_eq!(tag.length(), 0);
+    }
+
+    #[test]
+    fn arm_page_map_and_unmap_use_kernel_invocation_shapes() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        let rights = seL4_CapRights_t::new(0, 1, 1, 0);
+
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result =
+            unsafe { seL4_ARM_Page_Map(0x22, 0x33, 0x4000_0000, rights, seL4_ARM_PageCacheable) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), arch_invocation_label_ARMPageMap);
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 3);
+        assert_eq!(host_cap(0), 0x33);
+        assert_eq!(host_mr(0), 0x4000_0000);
+        assert_eq!(host_mr(1), rights.raw());
+        assert_eq!(host_mr(2), seL4_ARM_PageCacheable.0);
+
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_ARM_Page_Unmap(0x22) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), arch_invocation_label_ARMPageUnmap);
+        assert_eq!(tag.extra_caps(), 0);
+        assert_eq!(tag.length(), 0);
+    }
+
+    #[test]
+    fn arm_page_table_map_and_unmap_use_kernel_invocation_shapes() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result =
+            unsafe { seL4_ARM_PageTable_Map(0x44, 0x55, 0x8000_0000, seL4_ARM_Page_Default) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), arch_invocation_label_ARMPageTableMap);
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 2);
+        assert_eq!(host_cap(0), 0x55);
+        assert_eq!(host_mr(0), 0x8000_0000);
+        assert_eq!(host_mr(1), seL4_ARM_Page_Default.0);
+
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_ARM_PageTable_Unmap(0x44) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), arch_invocation_label_ARMPageTableUnmap);
+        assert_eq!(tag.extra_caps(), 0);
+        assert_eq!(tag.length(), 0);
+    }
+
+    #[test]
+    fn arm_asid_pool_calls_use_kernel_invocation_shapes() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_ARM_ASIDControl_MakePool(0x60, 0x61, 0x62, 0x63, 64) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), arch_invocation_label_ARMASIDControlMakePool);
+        assert_eq!(tag.extra_caps(), 2);
+        assert_eq!(tag.length(), 2);
+        assert_eq!(host_cap(0), 0x61);
+        assert_eq!(host_cap(1), 0x62);
+        assert_eq!(host_mr(0), 0x63);
+        assert_eq!(host_mr(1), 64);
+
+        // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
+        let result = unsafe { seL4_ARM_ASIDPool_Assign(0x70, 0x71) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), arch_invocation_label_ARMASIDPoolAssign);
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 0);
+        assert_eq!(host_cap(0), 0x71);
     }
 }

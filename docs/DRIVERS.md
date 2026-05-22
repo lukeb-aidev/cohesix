@@ -218,16 +218,20 @@ on the command endpoint. Root dispatches bounded service callbacks through the
 per-driver endpoint and waits only for that bounded turn to complete.
 
 The current substrate intentionally does not yet prove driver VSpace isolation.
-Driver TCBs run with the root VSpace until driver code, data, IPC buffers, and
-rings are mapped into dedicated driver VSpaces. This is an explicit remaining
-isolation proof field, not an excuse for root-task hot paths. Serial, USB,
-HDMI, and active NIC service callbacks are routed through live driver TCBs only
-when the boot-created TCB is available; fallback to root-task compatibility is
-preserved only for availability failure and is recorded as compatibility
-evidence. `sdio-host` and `pcie-root` have declared boot-created driver TCB and
-per-driver affinity contracts; their bus operations are still reached through
-the CYW43 and USB/local-seat service callbacks until standalone bus-operation
-queues are split out and hardware proof shows live TCB ownership.
+Low-level seL4 wrappers now exist for allocating AArch64 VSpace roots,
+assigning an ASID from the boot ASID pool, and mapping pages/page tables into a
+non-root VSpace. Driver TCBs still run with the root VSpace until the live
+driver-task image is split into a driver-local trampoline/code mapping plus
+only the driver stack, IPC/ring frames, and declared device/shared buffers. This
+is an explicit remaining isolation proof field, not an excuse for root-task hot
+paths. Serial, USB, HDMI, and active NIC service callbacks are routed through
+live driver TCBs only when the boot-created TCB is available; fallback to
+root-task compatibility is preserved only for availability failure and is
+recorded as compatibility evidence. `sdio-host` and `pcie-root` have declared
+boot-created driver TCB and per-driver affinity contracts; their bus operations
+are still reached through the CYW43 and USB/local-seat service callbacks until
+standalone bus-operation queues are split out and hardware proof shows live TCB
+ownership.
 
 Boot logs must expose the distinction with these breadcrumbs:
 
