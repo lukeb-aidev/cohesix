@@ -98,6 +98,8 @@ pub struct DriverTaskRuntimeProof {
     pub affinity_proof: bool,
     /// Whether active driver TCBs use isolated driver VSpaces.
     pub vspace_proof: bool,
+    /// Whether driver service turns use pointer-free shared command rings.
+    pub pointer_free_ipc_proof: bool,
     /// Count of broad authority caps intentionally leaked into driver CSpaces.
     pub broad_caps_leaked: usize,
 }
@@ -129,6 +131,8 @@ pub struct DriverTaskBootstrapReport {
     pub affinity_proof: bool,
     /// Whether driver TCBs run in isolated driver VSpaces.
     pub vspace_proof: bool,
+    /// Whether driver service turns use pointer-free shared command rings.
+    pub pointer_free_ipc_proof: bool,
     /// Count of broad authority caps intentionally leaked into driver CSpaces.
     pub broad_caps_leaked: usize,
 }
@@ -150,6 +154,8 @@ pub fn publish_driver_task_bootstrap_report(report: DriverTaskBootstrapReport) {
     DRIVER_TASK_AFFINITY_APPLIED_COUNT.store(report.affinity_applied_count, Ordering::Release);
     DRIVER_TASK_AFFINITY_PROOF.store(report.affinity_proof as usize, Ordering::Release);
     DRIVER_TASK_VSPACE_PROOF.store(report.vspace_proof as usize, Ordering::Release);
+    DRIVER_TASK_POINTER_FREE_IPC_PROOF
+        .store(report.pointer_free_ipc_proof as usize, Ordering::Release);
     DRIVER_TASK_BROAD_CAPS_LEAKED.store(report.broad_caps_leaked, Ordering::Release);
 }
 
@@ -176,6 +182,7 @@ pub fn driver_task_runtime_proof() -> DriverTaskRuntimeProof {
             affinity_applied_count: DRIVER_TASK_AFFINITY_APPLIED_COUNT.load(Ordering::Acquire),
             affinity_proof: DRIVER_TASK_AFFINITY_PROOF.load(Ordering::Acquire) != 0,
             vspace_proof: DRIVER_TASK_VSPACE_PROOF.load(Ordering::Acquire) != 0,
+            pointer_free_ipc_proof: DRIVER_TASK_POINTER_FREE_IPC_PROOF.load(Ordering::Acquire) != 0,
             broad_caps_leaked: DRIVER_TASK_BROAD_CAPS_LEAKED.load(Ordering::Acquire),
         };
     }
@@ -211,6 +218,39 @@ pub fn record_driver_task_service(contract: DriverTaskContract, isolation: Drive
 /// framework.
 #[cfg(feature = "kernel")]
 pub type DriverTaskServiceHandler = unsafe fn(usize) -> usize;
+
+/// Service IPC ABI installed for driver-task dispatch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverTaskIpcAbi {
+    /// Transitional ABI: root stores a function pointer and root-memory context.
+    CallbackPointer,
+    /// Final isolation ABI: commands and completions live in shared bounded rings.
+    SharedRingCommand,
+}
+
+impl DriverTaskIpcAbi {
+    /// Stable boot-proof label for this ABI.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CallbackPointer => "callback-pointer",
+            Self::SharedRingCommand => "shared-ring-command",
+        }
+    }
+
+    /// Whether this ABI can cross isolated driver VSpaces.
+    #[must_use]
+    pub const fn is_pointer_free(self) -> bool {
+        matches!(self, Self::SharedRingCommand)
+    }
+}
+
+/// Current as-built service ABI.
+///
+/// This remains the transitional callback ABI until the live service path moves
+/// to shared command/completion rings. Full dedicated-driver isolation must fail
+/// closed while this constant is `CallbackPointer`.
+pub const CURRENT_DRIVER_TASK_IPC_ABI: DriverTaskIpcAbi = DriverTaskIpcAbi::CallbackPointer;
 
 /// Entry point for bootstrap-created driver TCBs.
 #[cfg(feature = "kernel")]
@@ -359,6 +399,8 @@ static DRIVER_TASK_AFFINITY_APPLIED_COUNT: AtomicUsize = AtomicUsize::new(0);
 static DRIVER_TASK_AFFINITY_PROOF: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_VSPACE_PROOF: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_POINTER_FREE_IPC_PROOF: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_BROAD_CAPS_LEAKED: AtomicUsize = AtomicUsize::new(usize::MAX);
 #[cfg(feature = "kernel")]
@@ -1082,6 +1124,7 @@ pub trait ScheduledHardwareDriver {
 }
 
 /// Shared-buffer descriptor passed over bounded driver-task rings.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DriverFrameDescriptor {
     /// Offset into the role-owned shared buffer arena.
@@ -1099,6 +1142,335 @@ impl DriverFrameDescriptor {
             return Err(DriverTaskRingError::FrameTooLarge);
         }
         Ok(Self { offset, len, flags })
+    }
+}
+
+/// Primitive budget grant encoded in the pointer-free shared-ring ABI.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTaskBudgetGrant {
+    /// Maximum HAL operations admitted for the command.
+    pub max_ops: u16,
+    /// Maximum frames, packets, reports, or rows admitted for the command.
+    pub max_frames: u16,
+    /// Maximum bytes admitted for the command.
+    pub max_bytes: u32,
+}
+
+impl DriverTaskBudgetGrant {
+    /// Encodes a contract budget for shared-ring dispatch.
+    #[must_use]
+    pub const fn from_contract(contract: DriverTaskContract) -> Self {
+        Self {
+            max_ops: contract.budget.max_ops_per_turn,
+            max_frames: contract.budget.max_frames_per_turn,
+            max_bytes: contract.budget.max_bytes_per_turn,
+        }
+    }
+}
+
+/// Command opcode encoded in the pointer-free shared-ring ABI.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverTaskOpcode {
+    /// Service pending device work up to the supplied budget.
+    Service = 1,
+    /// Acknowledge a badged IRQ/notification event.
+    Irq = 2,
+    /// Transmit or render a shared-buffer frame.
+    SubmitFrame = 3,
+    /// Flush completion state without admitting bulk data progress.
+    Flush = 4,
+    /// Stop accepting work so root can suspend/revoke the task.
+    Shutdown = 5,
+}
+
+impl DriverTaskOpcode {
+    /// Primitive wire value for shared-ring records.
+    #[must_use]
+    pub const fn as_u16(self) -> u16 {
+        self as u16
+    }
+}
+
+/// Fault code encoded in the pointer-free shared-ring ABI.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverTaskFaultCode {
+    /// No specific fault.
+    None = 0,
+    /// Command opcode or arguments were not admitted by the driver task.
+    RejectedCommand = 1,
+    /// The driver exhausted its assigned service budget.
+    BudgetExhausted = 2,
+    /// Device state made the command impossible to complete.
+    DeviceUnavailable = 3,
+    /// Driver task observed an internal invariant violation.
+    InternalInvariant = 4,
+}
+
+impl DriverTaskFaultCode {
+    /// Primitive wire value for shared-ring records.
+    #[must_use]
+    pub const fn as_u16(self) -> u16 {
+        self as u16
+    }
+
+    /// Stable diagnostic label for host-side proof tooling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::RejectedCommand => "rejected-command",
+            Self::BudgetExhausted => "budget-exhausted",
+            Self::DeviceUnavailable => "device-unavailable",
+            Self::InternalInvariant => "internal-invariant",
+        }
+    }
+}
+
+/// Command record for the final pointer-free driver-task shared-ring ABI.
+///
+/// The record intentionally contains only fixed-width integer fields and
+/// shared-buffer offsets. It is suitable for mapping into isolated driver
+/// VSpaces once the live callback dispatch path is replaced.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTaskCommandRecord {
+    /// Monotonic root-assigned sequence number.
+    pub sequence: u32,
+    /// `DriverTaskOpcode` encoded as a primitive value.
+    pub opcode: u16,
+    /// Role-specific primitive flags.
+    pub flags: u16,
+    /// Opcode-specific primitive argument.
+    pub arg0: u32,
+    /// Second opcode-specific primitive argument.
+    pub arg1: u32,
+    /// Per-command service budget.
+    pub budget: DriverTaskBudgetGrant,
+    /// Shared-buffer descriptor for frame-bearing commands.
+    pub frame: DriverFrameDescriptor,
+}
+
+impl DriverTaskCommandRecord {
+    /// Builds a service command.
+    #[must_use]
+    pub const fn service(sequence: u32, budget: DriverTaskBudgetGrant) -> Self {
+        Self {
+            sequence,
+            opcode: DriverTaskOpcode::Service.as_u16(),
+            flags: 0,
+            arg0: 0,
+            arg1: 0,
+            budget,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        }
+    }
+
+    /// Builds an IRQ acknowledgement command.
+    #[must_use]
+    pub const fn irq(sequence: u32, irq: u32, budget: DriverTaskBudgetGrant) -> Self {
+        Self {
+            sequence,
+            opcode: DriverTaskOpcode::Irq.as_u16(),
+            flags: 0,
+            arg0: irq,
+            arg1: 0,
+            budget,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        }
+    }
+
+    /// Builds a shared-frame submission command.
+    #[must_use]
+    pub const fn submit_frame(
+        sequence: u32,
+        frame: DriverFrameDescriptor,
+        budget: DriverTaskBudgetGrant,
+    ) -> Self {
+        Self {
+            sequence,
+            opcode: DriverTaskOpcode::SubmitFrame.as_u16(),
+            flags: frame.flags,
+            arg0: 0,
+            arg1: 0,
+            budget,
+            frame,
+        }
+    }
+
+    /// Builds a flush command.
+    #[must_use]
+    pub const fn flush(sequence: u32, budget: DriverTaskBudgetGrant) -> Self {
+        Self {
+            sequence,
+            opcode: DriverTaskOpcode::Flush.as_u16(),
+            flags: 0,
+            arg0: 0,
+            arg1: 0,
+            budget,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        }
+    }
+
+    /// Builds a shutdown command.
+    #[must_use]
+    pub const fn shutdown(sequence: u32) -> Self {
+        Self {
+            sequence,
+            opcode: DriverTaskOpcode::Shutdown.as_u16(),
+            flags: 0,
+            arg0: 0,
+            arg1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 1,
+                max_frames: 1,
+                max_bytes: 1,
+            },
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        }
+    }
+}
+
+/// Completion code encoded in the pointer-free shared-ring ABI.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverTaskCompletionCode {
+    /// Device service made progress.
+    Progress = 1,
+    /// A frame/report is available for root-owned protocol processing.
+    FrameReady = 2,
+    /// Command completed without more work.
+    Idle = 3,
+    /// The driver exhausted its assigned service budget.
+    BudgetExhausted = 4,
+    /// The driver task faulted or rejected a command.
+    Fault = 5,
+}
+
+impl DriverTaskCompletionCode {
+    /// Primitive wire value for shared-ring records.
+    #[must_use]
+    pub const fn as_u16(self) -> u16 {
+        self as u16
+    }
+}
+
+/// Completion record for the final pointer-free driver-task shared-ring ABI.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTaskCompletionRecord {
+    /// Command sequence number being completed.
+    pub sequence: u32,
+    /// `DriverTaskCompletionCode` encoded as a primitive value.
+    pub code: u16,
+    /// `DriverTaskFaultCode` or role-specific primitive detail.
+    pub detail: u16,
+    /// Role-specific primitive result.
+    pub result: u32,
+    /// Shared-buffer descriptor for frame-bearing completions.
+    pub frame: DriverFrameDescriptor,
+}
+
+impl DriverTaskCompletionRecord {
+    /// Builds a progress completion.
+    #[must_use]
+    pub const fn progress(sequence: u32, result: u32) -> Self {
+        Self {
+            sequence,
+            code: DriverTaskCompletionCode::Progress.as_u16(),
+            detail: DriverTaskFaultCode::None.as_u16(),
+            result,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        }
+    }
+
+    /// Builds a frame-ready completion.
+    #[must_use]
+    pub const fn frame_ready(sequence: u32, frame: DriverFrameDescriptor) -> Self {
+        Self {
+            sequence,
+            code: DriverTaskCompletionCode::FrameReady.as_u16(),
+            detail: DriverTaskFaultCode::None.as_u16(),
+            result: frame.len as u32,
+            frame,
+        }
+    }
+
+    /// Builds an idle completion.
+    #[must_use]
+    pub const fn idle(sequence: u32) -> Self {
+        Self {
+            sequence,
+            code: DriverTaskCompletionCode::Idle.as_u16(),
+            detail: DriverTaskFaultCode::None.as_u16(),
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        }
+    }
+
+    /// Builds a budget-exhausted completion.
+    #[must_use]
+    pub const fn budget_exhausted(sequence: u32, reason: DriverServiceBudgetError) -> Self {
+        Self {
+            sequence,
+            code: DriverTaskCompletionCode::BudgetExhausted.as_u16(),
+            detail: match reason {
+                DriverServiceBudgetError::ZeroCharge => 1,
+                DriverServiceBudgetError::OperationsExhausted => 2,
+                DriverServiceBudgetError::BytesExhausted => 3,
+                DriverServiceBudgetError::FramesExhausted => 4,
+                DriverServiceBudgetError::BlockingForbidden => 5,
+                DriverServiceBudgetError::BlockingExhausted => 6,
+            },
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        }
+    }
+
+    /// Builds a fault completion.
+    #[must_use]
+    pub const fn fault(sequence: u32, fault: DriverTaskFaultCode) -> Self {
+        Self {
+            sequence,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: fault.as_u16(),
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        }
     }
 }
 
@@ -1129,10 +1501,13 @@ pub enum DriverTaskCompletion {
     /// The driver exhausted its assigned service budget.
     BudgetExhausted(DriverServiceBudgetError),
     /// The driver task faulted or rejected a command.
-    Fault(&'static str),
+    Fault(DriverTaskFaultCode),
 }
 
-/// Bounded no-alloc ring used at the driver-task IPC boundary.
+/// Bounded no-alloc model ring used by driver-task admission tests.
+///
+/// This is not the fixed-layout shared-memory ABI; live isolated VSpace IPC
+/// must use `DriverTaskCommandRecord` and `DriverTaskCompletionRecord`.
 pub struct DriverTaskRing<T, const N: usize> {
     queue: Deque<T, N>,
     drops: u64,
@@ -1377,6 +1752,15 @@ pub fn builtin_isolation_summary() -> DriverTaskIsolationSummary {
 pub fn dedicated_driver_task_acceptance_ready() -> bool {
     let summary = builtin_isolation_summary();
     let proof = driver_task_runtime_proof();
+    driver_task_acceptance_ready_for(summary, proof)
+}
+
+/// Evaluates dedicated-driver-task acceptance from explicit proof inputs.
+#[must_use]
+pub const fn driver_task_acceptance_ready_for(
+    summary: DriverTaskIsolationSummary,
+    proof: DriverTaskRuntimeProof,
+) -> bool {
     proof.substrate_active
         && proof.capset_proof
         && proof.fault_proof
@@ -1384,6 +1768,7 @@ pub fn dedicated_driver_task_acceptance_ready() -> bool {
         && proof.sched_proof
         && proof.affinity_proof
         && proof.vspace_proof
+        && proof.pointer_free_ipc_proof
         && proof.broad_caps_leaked == 0
         && proof.live_tcb_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
             == REQUIRED_DRIVER_TASK_ROLE_MASK
@@ -1430,7 +1815,7 @@ pub fn emit_boot_contract_proof() {
     let mut line = String::<384>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_SUBSTRATE active={} profile=pi4-uboot-aarch64 task_count={} failed_count={} live_tcb_count={} root_authority_retained=yes fault_endpoint_ready={} revoke_ready={} broad_caps_leaked={} sched={} affinity={} affinity_configured={} affinity_applied={} vspace={} live_hot_paths={}",
+        "DRIVER_TASK_SUBSTRATE active={} profile=pi4-uboot-aarch64 task_count={} failed_count={} live_tcb_count={} root_authority_retained=yes fault_endpoint_ready={} revoke_ready={} broad_caps_leaked={} sched={} affinity={} affinity_configured={} affinity_applied={} vspace={} ipc_abi={} pointer_free_ipc={} live_hot_paths={}",
         if proof.substrate_active { "yes" } else { "no" },
         proof.configured_count,
         proof.failed_count,
@@ -1443,6 +1828,8 @@ pub fn emit_boot_contract_proof() {
         proof.affinity_configured_count,
         proof.affinity_applied_count,
         if proof.vspace_proof { "isolated" } else { "shared-root" },
+        CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+        if proof.pointer_free_ipc_proof { "yes" } else { "no" },
         if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
             == REQUIRED_DRIVER_TASK_ROLE_MASK
         {
@@ -1454,7 +1841,7 @@ pub fn emit_boot_contract_proof() {
     crate::bootstrap::log::force_uart_line(line.as_str());
 
     for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
-        let mut line = String::<256>::new();
+        let mut line = String::<320>::new();
         let status = if contract.validate().is_ok() {
             "valid"
         } else {
@@ -1465,7 +1852,7 @@ pub fn emit_boot_contract_proof() {
         let hot_path = role_bit != 0 && proof.hot_path_role_mask & role_bit != 0;
         let _ = write!(
             line,
-            "SCHED_CONTRACT contract={} status={} service_class={} isolation={} requested_isolation={} live_tcb={} hot_path={} priority={} service_order={} max_ops={} max_bytes={} max_frames={} max_service_us={}",
+            "SCHED_CONTRACT contract={} status={} service_class={} isolation={} requested_isolation={} live_tcb={} hot_path={} priority={} service_order={} max_ops={} max_bytes={} max_frames={} max_service_us={} vspace={} ipc_abi={} pointer_free_ipc={}",
             contract.name,
             status,
             contract.class.as_str(),
@@ -1479,13 +1866,24 @@ pub fn emit_boot_contract_proof() {
             contract.budget.max_bytes_per_turn,
             contract.budget.max_frames_per_turn,
             contract.max_service_us(),
+            if proof.vspace_proof {
+                "isolated"
+            } else {
+                "shared-root"
+            },
+            CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+            if proof.pointer_free_ipc_proof {
+                "yes"
+            } else {
+                "no"
+            },
         );
         crate::bootstrap::log::force_uart_line(line.as_str());
 
-        let mut line = String::<256>::new();
+        let mut line = String::<320>::new();
         let _ = write!(
             line,
-            "DRIVER_TASK role={} contract={} isolation={} requested_isolation={} live_tcb={} hot_path={} capset={} fault_probe={} revoke_ready={} priority={}",
+            "DRIVER_TASK role={} contract={} isolation={} requested_isolation={} live_tcb={} hot_path={} capset={} fault_probe={} revoke_ready={} priority={} vspace={} ipc_abi={} pointer_free_ipc={}",
             contract.kind.proof_role(),
             contract.name,
             contract.isolation.as_str(),
@@ -1496,6 +1894,17 @@ pub fn emit_boot_contract_proof() {
             if proof.fault_proof { "pass" } else { "fail" },
             if proof.revoke_proof { "yes" } else { "no" },
             contract.sel4_priority(),
+            if proof.vspace_proof {
+                "isolated"
+            } else {
+                "shared-root"
+            },
+            CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+            if proof.pointer_free_ipc_proof {
+                "yes"
+            } else {
+                "no"
+            },
         );
         crate::bootstrap::log::force_uart_line(line.as_str());
     }
@@ -1527,6 +1936,8 @@ pub fn emit_boot_contract_proof() {
         "driver-task-affinity-not-proven"
     } else if !proof.vspace_proof {
         "driver-task-vspace-isolation-not-proven"
+    } else if !proof.pointer_free_ipc_proof {
+        "driver-task-pointer-free-ipc-not-proven"
     } else if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
         != REQUIRED_DRIVER_TASK_ROLE_MASK
     {
@@ -1538,7 +1949,7 @@ pub fn emit_boot_contract_proof() {
     };
     let _ = write!(
         line,
-        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
+        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} ipc_abi={} pointer_free_ipc={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
         if ready { "yes" } else { "no" },
         reason,
         MIN_DEDICATED_PI4_DRIVER_TASKS,
@@ -1551,6 +1962,8 @@ pub fn emit_boot_contract_proof() {
         if proof.sched_proof { "pass" } else { "fail" },
         if proof.affinity_proof { "pass" } else { "fail" },
         if proof.vspace_proof { "isolated" } else { "shared-root" },
+        CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+        if proof.pointer_free_ipc_proof { "yes" } else { "no" },
         proof.live_tcb_role_mask,
         proof.hot_path_role_mask,
         proof.compatibility_service_role_mask,
@@ -1622,6 +2035,53 @@ mod tests {
     }
 
     #[test]
+    fn isolated_vspace_still_requires_pointer_free_ipc_for_acceptance() {
+        let summary = DriverTaskIsolationSummary {
+            contracts: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            requested_dedicated_sel4_tasks: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            root_task_compatibility: 0,
+            dedicated_sel4_tasks: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+        };
+        let proof = DriverTaskRuntimeProof {
+            substrate_active: true,
+            configured_count: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            failed_count: 0,
+            live_tcb_count: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            live_tcb_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
+            hot_path_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
+            compatibility_service_role_mask: 0,
+            capset_proof: true,
+            fault_proof: true,
+            revoke_proof: true,
+            sched_proof: true,
+            affinity_configured_count: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            affinity_applied_count: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            affinity_proof: true,
+            vspace_proof: true,
+            pointer_free_ipc_proof: false,
+            broad_caps_leaked: 0,
+        };
+        assert!(!driver_task_acceptance_ready_for(summary, proof));
+
+        let proof = DriverTaskRuntimeProof {
+            pointer_free_ipc_proof: true,
+            ..proof
+        };
+        assert!(driver_task_acceptance_ready_for(summary, proof));
+    }
+
+    #[test]
+    fn current_driver_task_ipc_abi_is_transitional_callback_pointer() {
+        assert_eq!(
+            CURRENT_DRIVER_TASK_IPC_ABI,
+            DriverTaskIpcAbi::CallbackPointer
+        );
+        assert_eq!(CURRENT_DRIVER_TASK_IPC_ABI.as_str(), "callback-pointer");
+        assert!(!CURRENT_DRIVER_TASK_IPC_ABI.is_pointer_free());
+        assert!(DriverTaskIpcAbi::SharedRingCommand.is_pointer_free());
+    }
+
+    #[test]
     fn service_budget_fails_closed_on_exhaustion() {
         let mut budget = DriverServiceBudget::new(SERIAL_DRIVER_TASK_CONTRACT).unwrap();
         assert_eq!(budget.charge_ops(64), Ok(()));
@@ -1680,6 +2140,47 @@ mod tests {
         assert_eq!(
             DriverFrameDescriptor::new(64, (MAX_DRIVER_TASK_FRAME_BYTES + 1) as u16, 0),
             Err(DriverTaskRingError::FrameTooLarge)
+        );
+    }
+
+    #[test]
+    fn shared_ring_wire_records_are_fixed_pointer_free_layout() {
+        assert_eq!(core::mem::size_of::<DriverFrameDescriptor>(), 8);
+        assert_eq!(core::mem::align_of::<DriverFrameDescriptor>(), 4);
+        assert_eq!(core::mem::size_of::<DriverTaskBudgetGrant>(), 8);
+        assert_eq!(core::mem::align_of::<DriverTaskBudgetGrant>(), 4);
+        assert_eq!(core::mem::size_of::<DriverTaskCommandRecord>(), 32);
+        assert_eq!(core::mem::align_of::<DriverTaskCommandRecord>(), 4);
+        assert_eq!(core::mem::size_of::<DriverTaskCompletionRecord>(), 20);
+        assert_eq!(core::mem::align_of::<DriverTaskCompletionRecord>(), 4);
+
+        let budget = DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        assert_eq!(budget.max_ops, 192);
+        assert_eq!(budget.max_frames, 64);
+        assert_eq!(budget.max_bytes, 65_536);
+
+        let frame = DriverFrameDescriptor::new(4096, 1500, 0x20).unwrap();
+        let command = DriverTaskCommandRecord::submit_frame(7, frame, budget);
+        assert_eq!(command.sequence, 7);
+        assert_eq!(command.opcode, DriverTaskOpcode::SubmitFrame.as_u16());
+        assert_eq!(command.flags, 0x20);
+        assert_eq!(command.frame, frame);
+
+        let completion = DriverTaskCompletionRecord::frame_ready(7, frame);
+        assert_eq!(completion.sequence, 7);
+        assert_eq!(
+            completion.code,
+            DriverTaskCompletionCode::FrameReady.as_u16()
+        );
+        assert_eq!(completion.result, 1500);
+        assert_eq!(completion.frame, frame);
+
+        let fault = DriverTaskCompletionRecord::fault(7, DriverTaskFaultCode::RejectedCommand);
+        assert_eq!(fault.code, DriverTaskCompletionCode::Fault.as_u16());
+        assert_eq!(fault.detail, DriverTaskFaultCode::RejectedCommand.as_u16());
+        assert_eq!(
+            DriverTaskFaultCode::RejectedCommand.as_str(),
+            "rejected-command"
         );
     }
 

@@ -1277,6 +1277,8 @@ fn finalize_driver_task_bootstrap_report(
         && report.affinity_configured_count == expected_count
         && report.affinity_configured_count == report.affinity_applied_count;
     report.vspace_proof = false;
+    report.pointer_free_ipc_proof =
+        driver_task::CURRENT_DRIVER_TASK_IPC_ABI.is_pointer_free() && report.vspace_proof;
 }
 
 #[cfg(feature = "kernel")]
@@ -1368,7 +1370,7 @@ impl<'a> KernelHal<'a> {
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root",
+                            "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root ipc_abi={}",
                             handle.contract.name,
                             handle.contract.kind.proof_role(),
                             handle.tcb,
@@ -1380,6 +1382,7 @@ impl<'a> KernelHal<'a> {
                                 Some(core) => core as i32,
                                 None => -1,
                             },
+                            driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
                         ),
                     );
                     crate::bootstrap::log::force_uart_line(line.as_str());
@@ -1486,7 +1489,7 @@ impl<'a> KernelHal<'a> {
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root proof=partial",
+                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root ipc_abi={} proof=partial",
                             handle.contract.name,
                             handle.contract.kind.proof_role(),
                             handle.tcb,
@@ -1498,6 +1501,7 @@ impl<'a> KernelHal<'a> {
                                 Some(core) => core as i32,
                                 None => -1,
                             },
+                            driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
                         ),
                     );
                     crate::bootstrap::log::force_uart_line(line.as_str());
@@ -2106,6 +2110,7 @@ mod tests {
         );
         assert!(report.affinity_proof);
         assert!(!report.vspace_proof);
+        assert!(!report.pointer_free_ipc_proof);
         assert_eq!(report.broad_caps_leaked, 0);
     }
 
@@ -2136,6 +2141,7 @@ mod tests {
         assert!(!report.sched_proof);
         assert!(report.affinity_proof);
         assert!(!report.vspace_proof);
+        assert!(!report.pointer_free_ipc_proof);
     }
 
     #[cfg(feature = "kernel")]
@@ -2165,6 +2171,7 @@ mod tests {
         assert!(!report.sched_proof);
         assert!(!report.affinity_proof);
         assert!(!report.vspace_proof);
+        assert!(!report.pointer_free_ipc_proof);
     }
 
     #[test]

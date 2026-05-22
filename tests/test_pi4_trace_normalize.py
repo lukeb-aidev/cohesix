@@ -319,6 +319,8 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_USB_DEDICATED": "no",
         "DRIVER_TASK_DISPLAY_DEDICATED": "no",
         "DRIVER_TASK_NET_DEDICATED": "no",
+        "DRIVER_TASK_SDIO_DEDICATED": "no",
+        "DRIVER_TASK_PCIE_DEDICATED": "no",
         "DRIVER_TASK_SUBSTRATE_READY": "no",
         "DRIVER_TASK_FAILED_COUNT": 0,
         "DRIVER_TASK_CAPSET_PROOF": "no",
@@ -329,6 +331,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_AFFINITY_CONFIGURED": 0,
         "DRIVER_TASK_AFFINITY_APPLIED": 0,
         "DRIVER_TASK_VSPACE_PROOF": "no",
+        "DRIVER_TASK_POINTER_FREE_IPC_PROOF": "no",
         "DRIVER_TASK_ACTIVE_NET": "unknown",
         "DRIVER_TASK_BUDGET_OVERRUNS": 0,
         "DRIVER_TASK_LATENCY_PROOFS": 0,
@@ -346,7 +349,7 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
         [
             "netstats: mode=static policy=wired active=wired standby=wifi "
             "addr_src=static ip=192.168.1.50 gateway=192.168.1.1 dhcp=off",
-            "DRIVER_TASK contract=serial service_class=realtime isolation=dedicated-sel4-task max_service_us=40 observed_service_us=18",
+            "DRIVER_TASK contract=serial service_class=realtime isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=40 observed_service_us=18",
             "SCHED_CONTRACT contract=genet service_class=network-data isolation=root-task-compatibility max_service_us=120 service_us=90",
             "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=root-task-compatibility-contracts-active required=4 dedicated=1 compatibility=1",
             "SERIAL_ECHO p95_us=800 max_gap_us=1200",
@@ -367,6 +370,8 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["DRIVER_TASK_USB_DEDICATED"] == "no"
     assert record["DRIVER_TASK_DISPLAY_DEDICATED"] == "no"
     assert record["DRIVER_TASK_NET_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_SDIO_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_PCIE_DEDICATED"] == "no"
     assert record["DRIVER_TASK_SUBSTRATE_READY"] == "no"
     assert record["DRIVER_TASK_CAPSET_PROOF"] == "no"
     assert record["DRIVER_TASK_FAULT_PROOF"] == "no"
@@ -376,6 +381,7 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["DRIVER_TASK_AFFINITY_CONFIGURED"] == 0
     assert record["DRIVER_TASK_AFFINITY_APPLIED"] == 0
     assert record["DRIVER_TASK_VSPACE_PROOF"] == "no"
+    assert record["DRIVER_TASK_POINTER_FREE_IPC_PROOF"] == "no"
     assert record["DRIVER_TASK_ACTIVE_NET"] == "unknown"
     assert record["DRIVER_TASK_BUDGET_OVERRUNS"] == 0
     assert record["DRIVER_TASK_LATENCY_PROOFS"] == 2
@@ -395,28 +401,41 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
             "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
             "broad_caps_leaked=0 sched=yes affinity=per-driver "
             "affinity_configured=9 affinity_applied=9 "
-            "vspace=isolated live_hot_paths=yes",
+            "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes live_hot_paths=yes",
             "DRIVER_TASK role=serial contract=driver-serial isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated "
             "capset=console-transport unexpected_caps=0 fault_probe=pass revoke_ready=yes "
             "priority=240 observed_service_us=18",
             "DRIVER_TASK role=usb contract=driver-usb isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated "
             "capset=device-only unexpected_caps=0 fault_probe=pass revoke_ready=yes "
             "priority=240 observed_service_us=22",
             "DRIVER_TASK role=display contract=driver-display isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated "
             "capset=display-sink unexpected_caps=0 fault_probe=pass revoke_ready=yes "
             "priority=120 observed_service_us=44",
             "DRIVER_TASK role=net contract=driver-wifi isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated "
             "active_net=cyw43 capset=network-frame-transport unexpected_caps=0 "
             "fault_probe=pass revoke_ready=yes priority=160 observed_service_us=73",
+            "DRIVER_TASK role=sdio contract=sdio-host isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated "
+            "capset=device-only unexpected_caps=0 fault_probe=pass revoke_ready=yes "
+            "priority=180 observed_service_us=47",
+            "DRIVER_TASK role=pcie contract=pcie-root isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated "
+            "capset=device-only unexpected_caps=0 fault_probe=pass revoke_ready=yes "
+            "priority=170 observed_service_us=51",
             "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes substrate=active capset=pass "
-            "fault=pass revoke=pass sched=pass affinity=pass active_net=cyw43 required=4 "
-            "dedicated=4 compatibility=0",
+            "fault=pass revoke=pass sched=pass affinity=pass active_net=cyw43 required=6 "
+            "dedicated=6 compatibility=0 vspace=isolated ipc_abi=shared-ring-command "
+            "pointer_free_ipc=yes",
         ]
     )
 
     record = normalizer.summarize_gates(events).to_record()
-    assert record["DRIVER_TASK_CONTRACTS"] == 4
-    assert record["DRIVER_TASK_DEDICATED"] == 4
+    assert record["DRIVER_TASK_CONTRACTS"] == 6
+    assert record["DRIVER_TASK_DEDICATED"] == 6
     assert record["DRIVER_TASK_DEDICATED_READY"] == "yes"
     assert record["DRIVER_TASK_SUBSTRATE_READY"] == "yes"
     assert record["DRIVER_TASK_CAPSET_PROOF"] == "yes"
@@ -428,8 +447,81 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
     assert record["DRIVER_TASK_AFFINITY_CONFIGURED"] == 9
     assert record["DRIVER_TASK_AFFINITY_APPLIED"] == 9
     assert record["DRIVER_TASK_VSPACE_PROOF"] == "yes"
+    assert record["DRIVER_TASK_POINTER_FREE_IPC_PROOF"] == "yes"
     assert record["DRIVER_TASK_LIVE_HOT_PATHS"] == "yes"
+    assert record["DRIVER_TASK_SDIO_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_PCIE_DEDICATED"] == "yes"
     assert record["DRIVER_TASK_ACTIVE_NET"] == "cyw43"
+
+
+def test_gate_summary_explicit_pointer_free_ipc_no_overrides_abi_label() -> None:
+    """A contradictory proof line must fail closed on the explicit proof field."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SUBSTRATE active=yes task_count=9 failed_count=0 live_tcb_count=9 "
+            "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
+            "broad_caps_leaked=0 sched=yes affinity=per-driver "
+            "affinity_configured=9 affinity_applied=9 "
+            "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=no live_hot_paths=yes",
+            "DRIVER_TASK role=serial contract=driver-serial isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated capset=console-transport "
+            "unexpected_caps=0 fault_probe=pass revoke_ready=yes priority=240 "
+            "observed_service_us=18",
+            "DRIVER_TASK role=usb contract=driver-usb isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated capset=device-only unexpected_caps=0 "
+            "fault_probe=pass revoke_ready=yes priority=240 observed_service_us=22",
+            "DRIVER_TASK role=display contract=driver-display isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated capset=display-sink unexpected_caps=0 "
+            "fault_probe=pass revoke_ready=yes priority=120 observed_service_us=44",
+            "DRIVER_TASK role=net contract=driver-wifi isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated active_net=cyw43 "
+            "capset=network-frame-transport unexpected_caps=0 fault_probe=pass "
+            "revoke_ready=yes priority=160 observed_service_us=73",
+            "DRIVER_TASK role=sdio contract=sdio-host isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated capset=device-only unexpected_caps=0 "
+            "fault_probe=pass revoke_ready=yes priority=180 observed_service_us=47",
+            "DRIVER_TASK role=pcie contract=pcie-root isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated capset=device-only unexpected_caps=0 "
+            "fault_probe=pass revoke_ready=yes priority=170 observed_service_us=51",
+            "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes substrate=active capset=pass "
+            "fault=pass revoke=pass sched=pass affinity=pass vspace=isolated "
+            "ipc_abi=shared-ring-command pointer_free_ipc=no required=6 "
+            "dedicated=6 compatibility=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_POINTER_FREE_IPC_PROOF"] == "no"
+    assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
+
+
+def test_gate_summary_requires_live_hot_path_for_dedicated_role() -> None:
+    """Static contract isolation alone must not prove dedicated hot-path ownership."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK role=net contract=driver-wifi isolation=dedicated-sel4-task "
+            "live_tcb=no hot_path=root-task-compatibility observed_service_us=73",
+            "DRIVER_TASK role=sdio contract=sdio-host isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=root-task-compatibility observed_service_us=47",
+            "DRIVER_TASK role=pcie contract=pcie-root isolation=dedicated-sel4-task "
+            "live_tcb=no hot_path=dedicated observed_service_us=51",
+            "DRIVER_TASK role=serial contract=driver-serial isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=18",
+            "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+            "service_max_us=40",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_DEDICATED"] == 5
+    assert record["DRIVER_TASK_SERIAL_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_USB_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_NET_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_SDIO_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_PCIE_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_LATENCY_PROOFS"] == 4
 
 
 def test_gate_summary_counts_driver_task_budget_overruns() -> None:

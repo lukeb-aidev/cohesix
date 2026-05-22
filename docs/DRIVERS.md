@@ -173,9 +173,13 @@ When the explicit `qemu-driver-task-smoke` feature is enabled, QEMU may run a
 post-network smoke probe after virtio networking is online; that probe creates
 the full nine-contract driver-task set and publishes partial live-TCB proof.
 That is useful for exercising the seL4 task mechanics under QEMU, but it is not
-Pi 4 hardware proof and cannot satisfy the full dedicated-driver-task closure gate. A
-boot counts as dedicated-driver-task execution only when the breadcrumbs below
-prove live TCBs, valid cap/fault/revoke/scheduling/affinity fields, and hot-path
+Pi 4 hardware proof and cannot satisfy the full dedicated-driver-task closure gate.
+The no-USB QEMU smoke profile is the smallest local runtime attempt while the
+full USB smoke image remains above the current elfloader placement ceiling; an
+`image load address overlaps with ELF-loader` failure is an image-placement
+blocker, not driver-task proof. A boot counts as dedicated-driver-task execution
+only when the breadcrumbs below prove live TCBs, valid
+cap/fault/revoke/scheduling/affinity fields, and hot-path
 dispatch through those TCBs.
 The May 20 Pi 4 capture reached Wi-Fi DHCP but is explicitly pre-closure
 evidence: all nine `DRIVER_TASK_BOOT` attempts failed with `seL4_DeleteFirst`,
@@ -194,6 +198,15 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
 | `sdio-host` | SDIO host for CYW43 | `sdio-host` | shared root VSpace | boot-created TCB and affinity contract; CYW43 poll currently contains the SDIO service turn |
 | `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | shared root VSpace | boot-created TCB and affinity contract; USB/local-seat poll currently contains the VL805 service turn |
+
+The Pi 4 manifest default pins both network dataplane driver contracts to the
+fourth core (`core=3`): `root_task.affinity.drivers.bcmgenet-v5=3` and
+`root_task.affinity.drivers.cyw43455=3`. `coh-rtc` emits those fields into the
+generated `DRIVER_AFFINITY_POLICY`; HAL maps the `bcmgenet-v5` and `cyw43455`
+contracts to `DriverAffinityTarget::BcmGenetV5` / `DriverAffinityTarget::Cyw43455`
+and calls `seL4_TCB_SetAffinity` before the driver TCB is resumed. A boot may
+claim the fourth-core placement only when the corresponding `DRIVER_TASK_BOOT`
+line reports `affinity_core=3` and the aggregate affinity proof remains applied.
 
 For each successfully created driver TCB, the HAL allocates the TCB object, child CNode,
 command endpoint, notification, IPC frame, stack frame, and fault endpoint
@@ -219,7 +232,7 @@ queues are split out and hardware proof shows live TCB ownership.
 Boot logs must expose the distinction with these breadcrumbs:
 
 - `DRIVER_TASK_DEFAULT requested=dedicated required=yes substrate_active=<yes|no> live_hot_paths=<yes|no>`
-- `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=shared-root`
+- `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=shared-root ipc_abi=<abi>`
 - `DRIVER_TASK_BOOT contract=<name> role=<role> status=failed err=<reason>` for any failed creation path
 - `DRIVER_TASK_BOOT status=skipped reason=qemu-virtio-pre-net-resource-guard`
   for QEMU virtio compatibility boots that preserve pre-network resources for
@@ -230,9 +243,13 @@ Boot logs must expose the distinction with these breadcrumbs:
   full-contract QEMU partial report and must still fail full Pi 4
   dedicated-driver-task acceptance because Pi hardware roles, VSpace isolation,
   and hardware hot-path ownership are not proved.
-- `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> live_hot_paths=<yes|no>`
+- `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured=<n> failed=<n> live_tcb_count=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no>`
+  is also emitted through the root console path during QEMU smoke runs so the
+  proof remains visible after the boot logger switches away from early UART.
+- `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> live_hot_paths=<yes|no>`
 - one `SCHED_CONTRACT` line per built-in contract, including `live_tcb` and
-  `hot_path`
+  `hot_path`; role-specific dedicated proof is credited only when both fields
+  prove live dedicated dispatch
 - one `DRIVER_TASK` line per role, including `capset`, `fault_probe`, and
   `revoke_ready`
 - `DRIVER_TASK_SUMMARY` with contract, compatibility, live-role, hot-path, and
@@ -243,9 +260,17 @@ Boot logs must expose the distinction with these breadcrumbs:
 Substrate proof is fail-closed for acceptance. A partial bootstrap may still
 show useful `DRIVER_TASK_BOOT` evidence for the TCBs that started, but closure
 requires the expected nine-task count, `failed_count=0`, live TCB count,
-required role mask, per-driver affinity count, zero leaked broad caps, and all
-proof booleans demanded by `scripts/pi4_gate_proof.sh --require-driver-task-proof`.
-An aggregate task count alone is never sufficient.
+required role mask, per-driver affinity count, zero leaked broad caps, all
+proof booleans demanded by `scripts/pi4_gate_proof.sh --require-driver-task-proof`,
+and `DRIVER_TASK_POINTER_FREE_IPC_PROOF=yes`. Pointer callbacks into root-task
+memory are compatibility evidence only; full VSpace isolation requires a
+pointer-free shared command/completion ABI. The code-level ABI contract is now
+spelled as fixed-layout `DriverTaskCommandRecord` and
+`DriverTaskCompletionRecord` records containing only primitive opcodes,
+sequence numbers, service budgets, fault codes, and shared-buffer offsets.
+Those records are not live runtime proof while `CURRENT_DRIVER_TASK_IPC_ABI`
+still reports `callback-pointer`. An aggregate task count alone is never
+sufficient.
 
 The HAL rejects missing, zero-budget, non-preemptible, or unbounded-blocking
 contracts before the driver is serviced. USB/local-seat and serial are

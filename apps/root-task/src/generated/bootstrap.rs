@@ -28,7 +28,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "f772aa0554a2457458b451102f8634be3b6ffa753834dba2f3f97f922e75cb12";
+    "e00c28f436bcb0323bb1d82f279471136d2a9902ba6397fc8803123988f9cd80";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -123,7 +123,7 @@ pub const DRIVER_AFFINITY_POLICY: DriverAffinityPolicy = DriverAffinityPolicy {
     serial: Some(1),
     usb_local_seat: Some(1),
     hdmi_text: Some(2),
-    bcmgenet_v5: Some(2),
+    bcmgenet_v5: Some(3),
     cyw43455: Some(3),
     rtl8139: Some(2),
     virtio_net: Some(3),
@@ -531,7 +531,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 36] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=bdd02b671876b5f9fc0c96c7750c46cc20988cdd3c8841be6b1c585ca65ae3da",
+    "manifest.sha256=c0040ba75c4fadbebdb8fcd8983ad6ee807988ef1a83056b20320405a0513af8",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

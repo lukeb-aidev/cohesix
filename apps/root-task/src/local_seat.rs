@@ -9,26 +9,51 @@
 
 extern crate alloc;
 
-#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 use crate::bootstrap::log as boot_log;
 use crate::console::{Command, CommandParser, ConsoleError};
 use crate::generated::{self, HardwareDeviceKind};
 use crate::hal::driver_task::{
     DriverServiceBudget, DriverTaskContract, USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
 };
-#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 use crate::local_seat_pi4::{
     Pi4FramebufferHint, Pi4LocalSeat, Pi4LocalSeatHints, Pi4SeatError, UsbProbePreflightStatus,
 };
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
-#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 use core::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LOCAL_SEAT_POLL_LOGGED: AtomicBool = AtomicBool::new(false);
-#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LOCAL_SEAT_DATA_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Maximum number of queued keyboard bytes retained by the local-seat runtime.
@@ -148,7 +173,12 @@ pub struct LocalSeatRuntime {
     driver_task_budget_overruns: u64,
     backend_keyboard_polling_enabled: bool,
     backend_keyboard_poll_deferred_logged: bool,
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     backend: Option<Pi4LocalSeat>,
 }
 
@@ -239,7 +269,12 @@ impl LocalSeatRuntime {
             // a platform keyboard backend can still wedge during first probe.
             backend_keyboard_polling_enabled: false,
             backend_keyboard_poll_deferred_logged: false,
-            #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
             backend: None,
         }
     }
@@ -327,7 +362,12 @@ impl LocalSeatRuntime {
         }
         self.mirrored_lines.push_back(mirrored);
 
-        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
         if let Some(backend) = self.backend.as_mut() {
             backend.write_line(truncated);
         }
@@ -379,7 +419,12 @@ impl LocalSeatRuntime {
     }
 
     /// Predict the first prompt-safe USB probe route before xHCI MMIO starts.
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     #[must_use]
     pub(crate) fn backend_keyboard_probe_preflight_status(
         &self,
@@ -393,7 +438,12 @@ impl LocalSeatRuntime {
     /// background polling unless the caller had already enabled it or the
     /// keyboard comes online during the probe.
     pub fn probe_backend_keyboard_once(&mut self) -> LocalSeatKeyboardProbeResult {
-        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
         {
             let mut result = LocalSeatKeyboardProbeResult::BackendUnavailable;
             let was_enabled = self.backend_keyboard_polling_enabled;
@@ -421,7 +471,12 @@ impl LocalSeatRuntime {
             }
             return result;
         }
-        #[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
         {
             LocalSeatKeyboardProbeResult::BackendUnavailable
         }
@@ -440,7 +495,12 @@ impl LocalSeatRuntime {
             );
         }
 
-        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
         if let Some(backend) = self.backend.as_mut() {
             backend.write_bytes(bytes);
         }
@@ -488,7 +548,12 @@ impl LocalSeatRuntime {
             return;
         }
         {
-            #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
             {
                 if !LOCAL_SEAT_POLL_LOGGED.swap(true, Ordering::AcqRel) {
                     boot_log::force_uart_line("[local-seat] runtime keyboard poll active");
@@ -545,25 +610,45 @@ impl LocalSeatRuntime {
     /// Returns whether a physical backend is attached to this runtime.
     #[must_use]
     pub fn backend_attached(&self) -> bool {
-        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
         {
             return self.backend.is_some();
         }
-        #[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
         {
             false
         }
     }
 
     /// Attach a platform backend (HDMI text + keyboard ingress) to this runtime.
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     pub fn attach_backend(&mut self, backend: Pi4LocalSeat) {
         self.backend = Some(backend);
     }
 
     /// Publish the attached HDMI sink for boot-progress banners once runtime
     /// storage is stable.
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     pub fn register_boot_progress_backend(&mut self) {
         if let Some(backend) = self.backend.as_mut() {
             backend.register_boot_progress_display();
@@ -571,12 +656,22 @@ impl LocalSeatRuntime {
     }
 
     /// Host-test no-op for boot-progress backend publication.
-    #[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+    #[cfg(not(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )))]
     pub fn register_boot_progress_backend(&mut self) {}
 
     /// Preseed platform keyboard MMIO windows after core boot mappings settle.
     pub fn preseed_backend_keyboard_mmio(&mut self) {
-        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
         if let Some(backend) = self.backend.as_mut() {
             backend.preseed_keyboard_mmio();
         }
@@ -627,7 +722,12 @@ unsafe fn usb_keyboard_poll_driver_task(context: usize) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalSeatBackendError {
     /// Platform backend initialisation failed with a Pi4-specific reason.
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     Pi4(Pi4SeatError),
     /// No local-seat backend is available on this profile/target.
     Unsupported,
@@ -638,7 +738,12 @@ impl LocalSeatBackendError {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
             Self::Pi4(err) => err.as_str(),
             Self::Unsupported => "unsupported",
         }
@@ -646,7 +751,12 @@ impl LocalSeatBackendError {
 }
 
 /// Try to attach a concrete platform backend to a local-seat runtime.
-#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 pub fn attach_platform_backend(
     runtime: &mut LocalSeatRuntime,
     hal: &mut crate::hal::KernelHal<'_>,
@@ -674,7 +784,12 @@ pub fn attach_platform_backend(
 }
 
 /// Host/test profile backend attach path (always unavailable).
-#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
 #[cfg(feature = "kernel")]
 pub fn attach_platform_backend(
     _runtime: &mut LocalSeatRuntime,
@@ -738,6 +853,7 @@ impl LocalSeatError {
 pub const fn runtime_backend_available() -> bool {
     cfg!(all(
         feature = "kernel",
+        feature = "usb",
         target_arch = "aarch64",
         target_os = "none"
     ))

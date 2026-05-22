@@ -2457,7 +2457,7 @@ impl Default for DriverAffinityPolicy {
             serial: Some(1),
             usb_local_seat: Some(1),
             hdmi_text: Some(2),
-            bcmgenet_v5: Some(2),
+            bcmgenet_v5: Some(3),
             cyw43455: Some(3),
             rtl8139: Some(2),
             virtio_net: Some(3),
@@ -2501,12 +2501,27 @@ mod tests {
         assert_eq!(policy.drivers.serial, Some(1));
         assert_eq!(policy.drivers.usb_local_seat, Some(1));
         assert_eq!(policy.drivers.hdmi_text, Some(2));
-        assert_eq!(policy.drivers.bcmgenet_v5, Some(2));
+        assert_eq!(policy.drivers.bcmgenet_v5, Some(3));
         assert_eq!(policy.drivers.cyw43455, Some(3));
         assert_eq!(policy.drivers.rtl8139, Some(2));
         assert_eq!(policy.drivers.virtio_net, Some(3));
         assert_eq!(policy.drivers.sdio_host, Some(3));
         assert_eq!(policy.drivers.pcie_root, Some(2));
+    }
+
+    #[test]
+    fn pi4_manifest_places_genet_and_wifi_on_fourth_core() {
+        let manifest_path = repo_root()
+            .join("configs/root_task_pi4_uboot_aarch64.toml")
+            .canonicalize()
+            .expect("Pi 4 manifest path");
+        let manifest = load_manifest(&manifest_path).expect("load Pi 4 manifest");
+        assert_eq!(manifest.root_task.affinity.max_cores, 4);
+        assert_eq!(manifest.root_task.affinity.drivers.bcmgenet_v5, Some(3));
+        assert_eq!(manifest.root_task.affinity.drivers.cyw43455, Some(3));
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("Pi 4 driver affinity must validate");
     }
 
     #[test]

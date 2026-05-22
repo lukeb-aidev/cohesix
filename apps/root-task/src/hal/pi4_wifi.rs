@@ -19,7 +19,12 @@ use super::{
     WIFI_HT_PHASE_RECORD_CAPACITY,
 };
 use crate::bootstrap::log as boot_log;
-#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 use crate::local_seat_pi4::{
     usb_boot_activity_active, usb_runtime_first_byte_seen, usb_runtime_keyboard_ready_seen,
     wifi_progress_advance_loops, wifi_progress_tick,
@@ -28,27 +33,52 @@ use crate::rust_alloc::vec::Vec;
 use crate::sel4::{page_get_address, DeviceFrame, PAGE_BITS};
 use spin::Mutex;
 
-#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
 #[inline]
 fn wifi_progress_advance_loops(_loops: usize) {}
 
-#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
 #[inline]
 fn wifi_progress_tick() {}
 
-#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
 #[inline]
 fn usb_boot_activity_active() -> bool {
     false
 }
 
-#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
 #[inline]
 fn usb_runtime_first_byte_seen() -> bool {
     false
 }
 
-#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
 #[inline]
 fn usb_runtime_keyboard_ready_seen() -> bool {
     false

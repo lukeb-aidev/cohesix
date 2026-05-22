@@ -15,7 +15,7 @@
 - `root_task.affinity.drivers.serial`: `1`
 - `root_task.affinity.drivers.usb-local-seat`: `1`
 - `root_task.affinity.drivers.hdmi-text`: `2`
-- `root_task.affinity.drivers.bcmgenet-v5`: `2`
+- `root_task.affinity.drivers.bcmgenet-v5`: `3`
 - `root_task.affinity.drivers.cyw43455`: `3`
 - `root_task.affinity.drivers.rtl8139`: `2`
 - `root_task.affinity.drivers.virtio-net`: `3`
@@ -208,7 +208,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `bdd02b671876b5f9fc0c96c7750c46cc20988cdd3c8841be6b1c585ca65ae3da`
+- `manifest.sha256`: `c0040ba75c4fadbebdb8fcd8983ad6ee807988ef1a83056b20320405a0513af8`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -270,4 +270,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `bdd02b671876b5f9fc0c96c7750c46cc20988cdd3c8841be6b1c585ca65ae3da`)._
+_Generated from `configs/root_task.toml` (sha256: `c0040ba75c4fadbebdb8fcd8983ad6ee807988ef1a83056b20320405a0513af8`)._

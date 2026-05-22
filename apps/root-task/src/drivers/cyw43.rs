@@ -24,7 +24,12 @@ use crate::hal::{
     Cyw43Hal, HalError, Hardware, SdioBusWidth, SdioFunction, WifiFirmwareBundle, WifiPowerState,
     WifiResetState,
 };
-#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 use crate::local_seat_pi4::{wifi_progress_begin, wifi_progress_finish, wifi_progress_tick};
 use crate::net::{
     wifi_boot_join_should_defer, ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError,
@@ -1795,15 +1800,30 @@ pub(crate) fn debug_retry_transport_and_firmware(
     debug_load_firmware_from_transport(state)
 }
 
-#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
 #[inline]
 fn wifi_progress_begin() {}
 
-#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
 #[inline]
 fn wifi_progress_tick() {}
 
-#[cfg(not(all(feature = "kernel", target_arch = "aarch64", target_os = "none")))]
+#[cfg(not(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+)))]
 #[inline]
 fn wifi_progress_finish() {}
 

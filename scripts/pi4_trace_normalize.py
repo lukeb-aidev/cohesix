@@ -260,6 +260,8 @@ class GateSummary:
     driver_task_usb_dedicated: bool = False
     driver_task_display_dedicated: bool = False
     driver_task_net_dedicated: bool = False
+    driver_task_sdio_dedicated: bool = False
+    driver_task_pcie_dedicated: bool = False
     driver_task_substrate_ready: bool = False
     driver_task_failed_count: int = 0
     driver_task_capset_proof: bool = False
@@ -270,6 +272,7 @@ class GateSummary:
     driver_task_affinity_configured: int = 0
     driver_task_affinity_applied: int = 0
     driver_task_vspace_proof: bool = False
+    driver_task_pointer_free_ipc_proof: bool = False
     driver_task_active_net: str = "unknown"
     driver_task_budget_overruns: int = 0
     driver_task_latency_proofs: int = 0
@@ -337,6 +340,12 @@ class GateSummary:
             "DRIVER_TASK_NET_DEDICATED": (
                 "yes" if self.driver_task_net_dedicated else "no"
             ),
+            "DRIVER_TASK_SDIO_DEDICATED": (
+                "yes" if self.driver_task_sdio_dedicated else "no"
+            ),
+            "DRIVER_TASK_PCIE_DEDICATED": (
+                "yes" if self.driver_task_pcie_dedicated else "no"
+            ),
             "DRIVER_TASK_SUBSTRATE_READY": (
                 "yes" if self.driver_task_substrate_ready else "no"
             ),
@@ -360,6 +369,9 @@ class GateSummary:
             "DRIVER_TASK_AFFINITY_APPLIED": self.driver_task_affinity_applied,
             "DRIVER_TASK_VSPACE_PROOF": (
                 "yes" if self.driver_task_vspace_proof else "no"
+            ),
+            "DRIVER_TASK_POINTER_FREE_IPC_PROOF": (
+                "yes" if self.driver_task_pointer_free_ipc_proof else "no"
             ),
             "DRIVER_TASK_ACTIVE_NET": self.driver_task_active_net,
             "DRIVER_TASK_BUDGET_OVERRUNS": self.driver_task_budget_overruns,
@@ -4019,7 +4031,22 @@ def classify_driver_task_role(label: str) -> str | None:
         )
     ):
         return "net"
+    if "sdio" in normalized or "sdhci" in normalized or "mmc" in normalized:
+        return "sdio"
+    if "pcie" in normalized or "pci-root" in normalized or "vl805" in normalized:
+        return "pcie"
     return None
+
+
+def _pointer_free_ipc_proven(fields: dict[str, str]) -> bool:
+    explicit = fields.get("pointer_free_ipc")
+    if explicit is not None:
+        return explicit.lower() in {"yes", "pass", "true", "1"}
+    return fields.get("ipc_abi", "").lower() in {
+        "pointer-free",
+        "ring-command",
+        "shared-ring-command",
+    }
 
 
 def summarize_driver_task_proofs(
@@ -4035,6 +4062,8 @@ def summarize_driver_task_proofs(
     bool,  # usb dedicated
     bool,  # display dedicated
     bool,  # net dedicated
+    bool,  # sdio dedicated
+    bool,  # pcie dedicated
     bool,  # substrate_ready
     int,  # failed_count
     bool,  # capset_proof
@@ -4045,6 +4074,7 @@ def summarize_driver_task_proofs(
     int,  # affinity_configured
     int,  # affinity_applied
     bool,  # vspace_proof
+    bool,  # pointer_free_ipc_proof
     str,  # active_net
     int,  # budget_overruns
     int,  # latency_proofs
@@ -4060,8 +4090,9 @@ def summarize_driver_task_proofs(
     contracts: set[str] = set()
     dedicated_contracts: set[str] = set()
     compatibility_contracts: set[str] = set()
-    dedicated_roles: set[str] = set()
-    dedicated_ready = False
+    dedicated_hot_roles: set[str] = set()
+    dedicated_ready_claimed = False
+    acceptance_compatibility_count: int | None = None
     substrate_ready = False
     failed_count = 0
     capset_proof = False
@@ -4072,6 +4103,7 @@ def summarize_driver_task_proofs(
     affinity_configured = 0
     affinity_applied = 0
     vspace_proof = False
+    pointer_free_ipc_proof = False
     active_net = "unknown"
     budget_overruns = 0
     latency_proofs = 0
@@ -4127,12 +4159,22 @@ def summarize_driver_task_proofs(
                 "root-task",
                 "compatibility",
             }
+            live_tcb = fields.get("live_tcb", "").lower() in {"yes", "true", "1", "pass"}
+            hot_path = fields.get("hot_path", "").lower() in {
+                "dedicated",
+                "dedicated-sel4-task",
+                "yes",
+                "true",
+                "1",
+                "pass",
+            }
             for name in contract_names:
                 if dedicated:
                     dedicated_contracts.add(name)
-                    role = classify_driver_task_role(name)
-                    if role is not None:
-                        dedicated_roles.add(role)
+                    if live_tcb and hot_path:
+                        role = classify_driver_task_role(name)
+                        if role is not None:
+                            dedicated_hot_roles.add(role)
                 elif compatibility:
                     compatibility_contracts.add(name)
             if "driver_task_summary" in raw:
@@ -4145,7 +4187,15 @@ def summarize_driver_task_proofs(
                     for index in range(compatibility_summary):
                         compatibility_contracts.add(f"summary-compatibility-{index}")
             if "driver_task_acceptance" in raw:
-                dedicated_ready = fields.get("dedicated_ready", "").lower() == "yes"
+                dedicated_ready_claimed |= (
+                    fields.get("dedicated_ready", "").lower() == "yes"
+                )
+                parsed_compatibility = parse_hex_int(fields.get("compatibility"))
+                if parsed_compatibility is not None:
+                    acceptance_compatibility_count = max(
+                        acceptance_compatibility_count or 0,
+                        parsed_compatibility,
+                    )
                 substrate_ready |= fields.get("substrate", "").lower() in {"active", "yes", "pass"}
                 capset_proof |= fields.get("capset", "").lower() == "pass"
                 fault_proof |= fields.get("fault", "").lower() == "pass"
@@ -4157,6 +4207,7 @@ def summarize_driver_task_proofs(
                     "yes",
                 }
                 vspace_proof |= fields.get("vspace", "").lower() in {"isolated", "yes", "pass"}
+                pointer_free_ipc_proof |= _pointer_free_ipc_proven(fields)
                 live_hot_paths |= _truthy_field(fields.get("live_hot_paths"))
                 active_net = fields.get("active_net", active_net)
             if "driver_task_substrate" in raw:
@@ -4184,6 +4235,7 @@ def summarize_driver_task_proofs(
                     "yes",
                 }
                 vspace_proof |= fields.get("vspace", "").lower() in {"isolated", "yes", "pass"}
+                pointer_free_ipc_proof |= _pointer_free_ipc_proven(fields)
                 live_hot_paths |= _truthy_field(fields.get("live_hot_paths"))
             unexpected_caps = parse_hex_int(fields.get("unexpected_caps"))
             if unexpected_caps == 0:
@@ -4211,7 +4263,6 @@ def summarize_driver_task_proofs(
                     "latency_us",
                     "max_latency_us",
                     "service_us",
-                    "service_max_us",
                     "p95_us",
                     "p99_us",
                 )
@@ -4227,6 +4278,25 @@ def summarize_driver_task_proofs(
             usb_burst_drops = 0 if drops is None else drops
         if line_has_hdmi_responsiveness(raw, fields):
             hdmi_responsive = True
+    required_roles = {"serial", "usb", "display", "net", "sdio", "pcie"}
+    compatibility_free = not compatibility_contracts and (
+        acceptance_compatibility_count in {None, 0}
+    )
+    dedicated_ready = (
+        dedicated_ready_claimed
+        and substrate_ready
+        and failed_count == 0
+        and capset_proof
+        and fault_proof
+        and revoke_proof
+        and sched_proof
+        and affinity_proof
+        and vspace_proof
+        and pointer_free_ipc_proof
+        and live_hot_paths
+        and compatibility_free
+        and required_roles.issubset(dedicated_hot_roles)
+    )
     return (
         default_requested,
         live_hot_paths,
@@ -4234,10 +4304,12 @@ def summarize_driver_task_proofs(
         len(dedicated_contracts),
         len(compatibility_contracts),
         dedicated_ready,
-        "serial" in dedicated_roles,
-        "usb" in dedicated_roles,
-        "display" in dedicated_roles,
-        "net" in dedicated_roles,
+        "serial" in dedicated_hot_roles,
+        "usb" in dedicated_hot_roles,
+        "display" in dedicated_hot_roles,
+        "net" in dedicated_hot_roles,
+        "sdio" in dedicated_hot_roles,
+        "pcie" in dedicated_hot_roles,
         substrate_ready,
         failed_count,
         capset_proof,
@@ -4248,6 +4320,7 @@ def summarize_driver_task_proofs(
         affinity_configured,
         affinity_applied,
         vspace_proof,
+        pointer_free_ipc_proof,
         active_net,
         budget_overruns,
         latency_proofs,
@@ -4384,6 +4457,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_usb_dedicated,
         driver_task_display_dedicated,
         driver_task_net_dedicated,
+        driver_task_sdio_dedicated,
+        driver_task_pcie_dedicated,
         driver_task_substrate_ready,
         driver_task_failed_count,
         driver_task_capset_proof,
@@ -4394,6 +4469,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_affinity_configured,
         driver_task_affinity_applied,
         driver_task_vspace_proof,
+        driver_task_pointer_free_ipc_proof,
         driver_task_active_net,
         driver_task_budget_overruns,
         driver_task_latency_proofs,
@@ -4440,6 +4516,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_usb_dedicated=driver_task_usb_dedicated,
         driver_task_display_dedicated=driver_task_display_dedicated,
         driver_task_net_dedicated=driver_task_net_dedicated,
+        driver_task_sdio_dedicated=driver_task_sdio_dedicated,
+        driver_task_pcie_dedicated=driver_task_pcie_dedicated,
         driver_task_substrate_ready=driver_task_substrate_ready,
         driver_task_failed_count=driver_task_failed_count,
         driver_task_capset_proof=driver_task_capset_proof,
@@ -4450,6 +4528,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_affinity_configured=driver_task_affinity_configured,
         driver_task_affinity_applied=driver_task_affinity_applied,
         driver_task_vspace_proof=driver_task_vspace_proof,
+        driver_task_pointer_free_ipc_proof=driver_task_pointer_free_ipc_proof,
         driver_task_active_net=driver_task_active_net,
         driver_task_budget_overruns=driver_task_budget_overruns,
         driver_task_latency_proofs=driver_task_latency_proofs,

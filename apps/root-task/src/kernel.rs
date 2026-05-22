@@ -3508,13 +3508,17 @@ fn bootstrap<P: Platform>(
     };
 
     let mut build_line = heapless::String::<192>::new();
-    let mut feature_report = heapless::String::<96>::new();
+    let mut feature_report = heapless::String::<128>::new();
     for (idx, (label, enabled)) in [
         ("kernel", profile::KERNEL),
         ("bootstrap-trace", cfg!(feature = "bootstrap-trace")),
         ("serial-console", profile::SERIAL_CONSOLE),
         ("net", profile::NET),
         ("net-console", profile::NET_CONSOLE),
+        (
+            "qemu-driver-task-smoke",
+            cfg!(feature = "qemu-driver-task-smoke"),
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -4843,17 +4847,39 @@ fn bootstrap<P: Platform>(
                         boot_log::force_uart_line(ok_line.as_str());
                         check_bootinfo(&mut boot_guard, "[mark] net.init.ready-line");
                         boot_guard.record_invariant("net-console.ready");
+                        let active_backend_label = status.backend;
                         let virtio_selected = cfg!(feature = "net-backend-virtio")
-                            && net_backend_label == "virtio-net";
+                            && active_backend_label == "virtio-net";
                         if should_bootstrap_qemu_post_net_driver_task_smoke(
                             cfg!(feature = "net-backend-virtio"),
                             cfg!(feature = "qemu-driver-task-smoke"),
                             true,
-                            net_backend_label,
+                            active_backend_label,
                         ) {
                             let _ = hal.bootstrap_qemu_post_net_driver_task_smoke(fault_ep_slot);
+                        } else if cfg!(feature = "qemu-driver-task-smoke") {
+                            let mut line = heapless::String::<192>::new();
+                            let reason = if !cfg!(feature = "net-backend-virtio") {
+                                "not-qemu-virtio-compat"
+                            } else if active_backend_label != "virtio-net" {
+                                "backend-not-virtio"
+                            } else {
+                                "post-net-condition-not-met"
+                            };
+                            let _ = write!(
+                                line,
+                                "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=skipped reason={} backend={} net_ready=yes",
+                                reason, active_backend_label,
+                            );
+                            boot_log::force_uart_line(line.as_str());
                         }
-                        (Some(stack), virtio_selected, None, net_backend_label, None)
+                        (
+                            Some(stack),
+                            virtio_selected,
+                            None,
+                            active_backend_label,
+                            None,
+                        )
                     }
                     Err(err) => {
                         let (reason, err_code) = match err {
@@ -5088,6 +5114,29 @@ fn bootstrap<P: Platform>(
             let mut listen = heapless::String::<64>::new();
             let _ = write!(listen, "[console] tcp listen :{CONSOLE_TCP_PORT}");
             console.writeln_prefixed(listen.as_str());
+            if cfg!(feature = "qemu-driver-task-smoke") {
+                let mut line = heapless::String::<128>::new();
+                let _ = write!(
+                    line,
+                    "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=attempt backend={}",
+                    net_backend_label,
+                );
+                boot_log::force_uart_line(line.as_str());
+                console.writeln_prefixed(line.as_str());
+                let report = hal.bootstrap_qemu_post_net_driver_task_smoke(fault_ep_slot);
+                let mut line = heapless::String::<192>::new();
+                let _ = write!(
+                    line,
+                    "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured={} failed={} live_tcb_count={} vspace=shared-root ipc_abi={} pointer_free_ipc={}",
+                    report.configured_count,
+                    report.failed_count,
+                    report.live_tcb_count,
+                    crate::hal::driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+                    if report.pointer_free_ipc_proof { "yes" } else { "no" },
+                );
+                console.writeln_prefixed(line.as_str());
+                crate::hal::driver_task::emit_boot_contract_proof();
+            }
         } else {
             let detail = net_init_error
                 .as_ref()

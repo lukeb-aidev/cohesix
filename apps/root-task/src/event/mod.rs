@@ -2872,7 +2872,7 @@ where
                     polling_enabled,
                     Some("action=diag-before-probe"),
                 );
-                #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+                #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
                 {
                     if let Some(preflight) = self
                         .local_seat
@@ -2927,7 +2927,7 @@ where
             }
             UsbDebugCommand::ProbeKeyboard => {
                 self.emit_console_line("usb: probing local-seat keyboard now");
-                #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+                #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
                 {
                     if let Some(preflight) = self
                         .local_seat
@@ -2977,7 +2977,12 @@ where
         );
     }
 
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     fn emit_usb_probe_preflight(&mut self, status: crate::local_seat_pi4::UsbProbePreflightStatus) {
         let route_line = format_message(format_args!(
             "usb: golden_path preflight route={} attempt={}/{} current={} next={} origin={} handoff={} seed={} halt_guard={} publish_guard={}",
@@ -3081,7 +3086,7 @@ where
             self.metrics.local_seat_output_keyboard_polls,
         ));
         self.emit_console_line(pump_line.as_str());
-        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         {
             let ownership = self
                 .local_seat
@@ -3093,19 +3098,19 @@ where
                 );
             self.emit_usb_ownership_contract(&ownership);
         }
-        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         let diag_exact_issue = crate::local_seat_pi4::latest_xhci_diag_status()
             .as_ref()
             .and_then(|status| status.exact_issue);
-        #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let diag_exact_issue = None;
-        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         let (mut verdict, mut focus) =
             Self::usb_capture_verdict(backend_attached, polling_enabled, diag_exact_issue);
-        #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let (verdict, focus) =
             Self::usb_capture_verdict(backend_attached, polling_enabled, diag_exact_issue);
-        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         if let Some(route) = crate::local_seat_pi4::latest_usb_probe_route_status() {
             let route_line = format_message(format_args!(
                 "usb: golden_path route={} attempt={}/{} current={} next={} proof_gate={} target_gate=10 origin={} handoff={} seed={} halt_guard={} publish_guard={}",
@@ -3233,7 +3238,7 @@ where
         }
         let verdict_line = format_message(format_args!("usb: verdict={verdict} focus={focus}"));
         self.emit_console_line(verdict_line.as_str());
-        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         if let Some(diag) = crate::local_seat_pi4::latest_xhci_diag_status() {
             let mut diag_line =
                 format_message(format_args!("usb: xhci stage=0x{:04x}", diag.stage));
@@ -3260,19 +3265,19 @@ where
             }
             self.emit_console_line(values_line.as_str());
         }
-        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         if let Some(history) = crate::local_seat_pi4::latest_xhci_diag_history_status() {
             self.emit_usb_xhci_diag_history(&history);
         } else {
             self.emit_console_line("usb: xhci_recent total=0 count=0 focus=latest-xhci-diag");
         }
-        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         if let Some(ports) = crate::local_seat_pi4::latest_xhci_root_port_status() {
             self.emit_usb_root_ports(&ports);
         } else {
             self.emit_console_line("usb: ports cached=no count=0 connected_mask=0x0000");
         }
-        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         {
             let runtime = crate::local_seat_pi4::latest_usb_runtime_proof_status();
             let runtime_line = format_message(format_args!(
@@ -3322,7 +3327,12 @@ where
         }
     }
 
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     fn emit_usb_xhci_diag_history(
         &mut self,
         history: &crate::local_seat_pi4::UsbXhciDiagHistoryStatus,
@@ -3361,7 +3371,12 @@ where
         }
     }
 
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     fn emit_usb_root_ports(&mut self, ports: &crate::local_seat_pi4::UsbRootPortStatus) {
         let summary = format_message(format_args!(
             "usb: ports cached=yes count={} connected_mask=0x{:04x}",
@@ -3382,7 +3397,12 @@ where
         }
     }
 
-    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     fn emit_usb_ownership_contract(
         &mut self,
         status: &crate::local_seat_pi4::UsbOwnershipContractStatus,

@@ -12,6 +12,8 @@ source "${script_dir}/test_plan_common.sh"
 tp_init
 tp_require_stage_done 1
 tp_stage_begin 2 "host-fast"
+export CARGO_INCREMENTAL=0
+tp_log "INFO  CARGO_INCREMENTAL=0 for deterministic macOS host-fast cargo commands"
 
 host_matrix=(
   "cargo test -p coh --features mock"
@@ -22,13 +24,13 @@ host_matrix=(
   "cargo test -p cohsh --test transcripts"
   "cargo test -p cohsh --test control_plane"
   "cargo test -p cohsh"
-  "cargo check -p swarmui --bin swarmui"
+  "CARGO_INCREMENTAL=0 cargo check -p swarmui --bin swarmui"
   "python3 scripts/ci/check_swarmui_dependencies.py"
-  "cargo test -p swarmui --test dependency_policy"
-  "cargo test -p swarmui --test transcript"
-  "cargo test -p swarmui --test console_parity"
-  "cargo test -p swarmui --test security"
-  "cargo test -p swarmui --test tauri2_config"
+  "CARGO_INCREMENTAL=0 cargo test -p swarmui --test dependency_policy"
+  "CARGO_INCREMENTAL=0 cargo test -p swarmui --test transcript"
+  "CARGO_INCREMENTAL=0 cargo test -p swarmui --test console_parity"
+  "CARGO_INCREMENTAL=0 cargo test -p swarmui --test security"
+  "CARGO_INCREMENTAL=0 cargo test -p swarmui --test tauri2_config"
   "cargo test -p host-sidecar-bridge"
   "cargo test -p host-ticket-agent"
   "cargo test -p nine-door --test ui_security"
@@ -45,7 +47,7 @@ host_matrix=(
   "cargo test -p nine-door --test integration"
   "cargo test -p cohsh-core --test trace"
   "cargo test -p cohsh --test trace"
-  "cargo test -p swarmui --test trace"
+  "CARGO_INCREMENTAL=0 cargo test -p swarmui --test trace"
   "cargo run -p coh --features mock -- doctor --mock"
   "cargo test -p hive-gateway"
   "cargo test -p tests"
@@ -73,7 +75,7 @@ host_matrix=(
   "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/SMP_build\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu"
   "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/build_UBOOT\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4"
   "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture"
-  "CARGO_INCREMENTAL=0 cargo test --workspace"
+  "CARGO_INCREMENTAL=0 cargo test --workspace --exclude swarmui"
 )
 
 for command in "${host_matrix[@]}"; do

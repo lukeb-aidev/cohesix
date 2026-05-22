@@ -523,7 +523,7 @@ mod tests {
                 serial: Some(1),
                 usb_local_seat: Some(1),
                 hdmi_text: Some(2),
-                bcmgenet_v5: Some(2),
+                bcmgenet_v5: Some(3),
                 cyw43455: Some(3),
                 rtl8139: Some(2),
                 virtio_net: Some(3),
@@ -554,7 +554,7 @@ mod tests {
         );
         assert_eq!(
             select_driver_core(&policy, DriverAffinityTarget::BcmGenetV5),
-            Some(2)
+            Some(3)
         );
         assert_eq!(
             select_driver_core(&policy, DriverAffinityTarget::Cyw43455),
